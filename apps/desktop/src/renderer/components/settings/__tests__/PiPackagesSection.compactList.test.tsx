@@ -63,7 +63,11 @@ describe('PiPackagesSection compact installed list', () => {
     });
     expect(screen.getAllByRole('switch')).toHaveLength(6);
     expect(screen.getAllByRole('button', { name: 'settings.piPackages.showDetails' })).toHaveLength(6);
-    expect(screen.getByLabelText('settings.piPackages.rowStatus.noticeCount')).toBeTruthy();
+    expect(
+      screen
+        .getAllByText('settings.piPackages.rowStatus.noticeCount')
+        .some((element) => element.classList.contains('sr-only')),
+    ).toBe(true);
     expect(screen.queryByText('settings.piPackages.status.extensionSupported')).toBeNull();
     expect(screen.queryByText('npm:sample-extension-1')).toBeNull();
 

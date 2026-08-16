@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
-import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, Puzzle, RefreshCw, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -14,6 +13,8 @@ import {
   isRelativeLocalPiPackageSource,
   shouldShowPiPackagePostMutationNotice,
 } from '@/../shared/piPackages';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -29,8 +30,23 @@ const ACTION_CLASS = cn(
   'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-12 font-medium',
   'border border-[var(--settings-theme-card-border)]',
   'text-[var(--settings-section-sublabel)] transition-colors hover:bg-sidebar-item-hover',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
   'disabled:cursor-not-allowed disabled:opacity-50',
 );
+
+const ICON_ACTION_CLASS = cn(
+  'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
+  'text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+  'disabled:cursor-not-allowed disabled:opacity-50',
+);
+
+type PiPackagesLoadState = 'loading' | 'ready' | 'error';
+
+interface PiPackageBusyOperation {
+  action: PiPackageMutationAction;
+  source: string;
+}
 
 function resourceLabel(kind: PiPackageResourceKind, t: ReturnType<typeof useTranslation>['t']): string {
   return t(`settings.piPackages.resources.${kind}`);
@@ -112,70 +128,98 @@ export function PiPackagesSection() {
   const [source, setSource] = useState('');
   const [packages, setPackages] = useState<PiPackageView[]>([]);
   const [available, setAvailable] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [loadState, setLoadState] = useState<PiPackagesLoadState>('loading');
   const [pendingInstall, setPendingInstall] = useState<string | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<PiPackageView | null>(null);
   const [compatibilityNotice, setCompatibilityNotice] = useState<PiPackageView | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<PiPackageBusyOperation | null>(null);
   const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
+  const mountedRef = useRef(false);
+  const hasLoadedRef = useRef(false);
+  const loadGenerationRef = useRef(0);
+  const mutationInFlightRef = useRef(false);
+  const tRef = useRef(t);
+  tRef.current = t;
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
+    if (!hasLoadedRef.current) setLoadState('loading');
     try {
       const result = await window.electronAPI.maker.listPiPackages();
+      if (!mountedRef.current || generation !== loadGenerationRef.current) return;
+      hasLoadedRef.current = true;
       setAvailable(result.available);
       setPackages(result.packages);
+      setLoadState('ready');
     } catch {
-      toast.error(t('settings.piPackages.operationFailed'));
-    } finally {
-      setLoading(false);
+      if (!mountedRef.current || generation !== loadGenerationRef.current) return;
+      if (!hasLoadedRef.current) setLoadState('error');
+      toast.error(tRef.current('settings.piPackages.operationFailed'));
     }
-  };
-
-  useEffect(() => {
-    void load();
   }, []);
 
-  useEffect(() => window.electronAPI.maker.onPiPackagesChanged(() => {
+  useEffect(() => {
+    mountedRef.current = true;
     void load();
-  }), []);
+    const unsubscribe = window.electronAPI.maker.onPiPackagesChanged(() => {
+      void load();
+    });
+    return () => {
+      mountedRef.current = false;
+      loadGenerationRef.current += 1;
+      unsubscribe();
+    };
+  }, [load]);
 
   const runMutation = async (
     action: PiPackageMutationAction,
     packageSource: string,
     options?: { confirmed?: boolean; enabled?: boolean },
-  ) => {
-    if (busy) return;
-    setBusy(`${action}:${packageSource}`);
+  ): Promise<boolean> => {
+    if (mutationInFlightRef.current) return false;
+    mutationInFlightRef.current = true;
+    setBusy({ action, source: packageSource });
     try {
       const result = await window.electronAPI.maker.mutatePiPackage({
         action,
         source: packageSource,
         ...options,
       });
-      setAvailable(result.available);
-      setPackages(result.packages);
-      if (action === 'install') {
-        setSource('');
+      if (mountedRef.current) {
+        // Any older refresh started before this mutation must not overwrite the
+        // authoritative mutation receipt when it eventually resolves.
+        loadGenerationRef.current += 1;
+        hasLoadedRef.current = true;
+        setLoadState('ready');
+        setAvailable(result.available);
+        setPackages(result.packages);
+        if (action === 'install') setSource('');
+        if (
+          (action === 'install' || action === 'update') &&
+          result.affectedPackage &&
+          shouldShowPiPackagePostMutationNotice(result.affectedPackage)
+        ) {
+          setCompatibilityNotice(result.affectedPackage);
+        }
       }
-      if (
-        (action === 'install' || action === 'update') &&
-        result.affectedPackage &&
-        shouldShowPiPackagePostMutationNotice(result.affectedPackage)
-      ) {
-        setCompatibilityNotice(result.affectedPackage);
-      }
+      // Toasts are app-level feedback: even if the user leaves this panel while
+      // the host mutation is running, they still need the final outcome.
       toast.success(t(`settings.piPackages.success.${action}`));
+      return true;
     } catch {
       toast.error(t('settings.piPackages.operationFailed'));
+      return false;
     } finally {
-      setBusy(null);
-      setPendingInstall(null);
-      setPendingRemoval(null);
+      mutationInFlightRef.current = false;
+      if (mountedRef.current) setBusy(null);
     }
   };
 
   const installSource = source.trim();
-  const empty = useMemo(() => !loading && available && packages.length === 0, [available, loading, packages]);
+  const empty = useMemo(
+    () => loadState === 'ready' && available && packages.length === 0,
+    [available, loadState, packages],
+  );
   const toggleDetails = (packageSource: string) => {
     setExpandedSources((current) => {
       const next = new Set(current);
@@ -183,6 +227,46 @@ export function PiPackagesSection() {
       else next.add(packageSource);
       return next;
     });
+  };
+  const closeDialogUnlessMutating = (close: () => void) => (open: boolean) => {
+    if (!open && !mutationInFlightRef.current) close();
+  };
+  const confirmInstall = async () => {
+    const packageSource = pendingInstall;
+    if (!packageSource) return;
+    if (await runMutation('install', packageSource, { confirmed: true })) {
+      if (mountedRef.current) setPendingInstall(null);
+    }
+  };
+  const confirmRemoval = async () => {
+    const packageSource = pendingRemoval?.source;
+    if (!packageSource) return;
+    if (await runMutation('remove', packageSource)) {
+      if (mountedRef.current) setPendingRemoval(null);
+    }
+  };
+  const confirmCompatibilityNotice = async () => {
+    const notice = compatibilityNotice;
+    if (!notice) return;
+    if (!notice.requiresExtensionApproval) {
+      setCompatibilityNotice(null);
+      return;
+    }
+    if (
+      await runMutation('set-enabled', notice.source, {
+        enabled: true,
+        confirmed: true,
+      })
+    ) {
+      if (mountedRef.current) setCompatibilityNotice(null);
+    }
+  };
+  const disableCompatibilityNoticePackage = async () => {
+    const notice = compatibilityNotice;
+    if (!notice?.enabled) return;
+    if (await runMutation('set-enabled', notice.source, { enabled: false })) {
+      if (mountedRef.current) setCompatibilityNotice(null);
+    }
   };
 
   return (
@@ -217,7 +301,7 @@ export function PiPackagesSection() {
             />
             <button
               type="button"
-              disabled={!available || !installSource || Boolean(busy)}
+              disabled={loadState !== 'ready' || !available || !installSource || Boolean(busy)}
               onClick={() => {
                 if (isRelativeLocalPiPackageSource(installSource)) {
                   toast.error(t('settings.piPackages.relativePathUnsupported'));
@@ -243,7 +327,32 @@ export function PiPackagesSection() {
           {t('settings.piPackages.installedSectionTitle')}
         </h3>
 
-        {!available && (
+        {loadState === 'loading' && (
+          <div
+            role="status"
+            className="flex items-center justify-center gap-2 rounded-xl border border-[var(--settings-theme-card-border)] px-5 py-8 text-12 text-[var(--settings-section-desc)]"
+          >
+            <Spinner size={15} />
+            {t('settings.piPackages.loading')}
+          </div>
+        )}
+
+        {loadState === 'error' && (
+          <div
+            role="alert"
+            className="flex flex-col items-center gap-3 rounded-xl border border-[var(--settings-theme-card-border)] px-5 py-8 text-center"
+          >
+            <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
+              {t('settings.piPackages.loadFailed')}
+            </p>
+            <button type="button" onClick={() => void load()} className={ACTION_CLASS}>
+              <RefreshCw size={14} />
+              {t('settings.piPackages.retry')}
+            </button>
+          </div>
+        )}
+
+        {loadState === 'ready' && !available && (
           <p className="text-12 text-[var(--settings-section-desc)]">{t('settings.piPackages.piUnavailable')}</p>
         )}
 
@@ -255,7 +364,7 @@ export function PiPackagesSection() {
 
         <div className={packages.length > 0 ? CARD_CLASS : undefined}>
           {packages.map((pkg) => {
-            const packageBusy = Boolean(busy?.endsWith(`:${pkg.source}`));
+            const packageBusy = busy?.source === pkg.source;
             const packageManageable = pkg.manageable !== false;
             const expanded = expandedSources.has(pkg.source);
             const noticeCount = packageCompatibilityNoticeCount(pkg);
@@ -266,7 +375,7 @@ export function PiPackagesSection() {
                     type="button"
                     onClick={() => toggleDetails(pkg.source)}
                     aria-expanded={expanded}
-                    className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
+                    className="flex min-w-0 flex-1 items-baseline gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
                   >
                     <span className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]">
                       {pkg.name}
@@ -283,17 +392,31 @@ export function PiPackagesSection() {
                         : t('settings.piPackages.rowStatus.compatible')}
                   </span>
                   {packageManageable && noticeCount > 0 && (
+                    <>
+                      <span
+                        className="flex shrink-0 items-center text-[var(--warning-fg)] xl:hidden"
+                        title={t('settings.piPackages.rowStatus.noticeCount', { count: noticeCount })}
+                        aria-hidden="true"
+                      >
+                        <AlertTriangle size={14} />
+                      </span>
+                      <span className="sr-only">
+                        {t('settings.piPackages.rowStatus.noticeCount', { count: noticeCount })}
+                      </span>
+                    </>
+                  )}
+                  {packageBusy && (
                     <span
-                      className="flex shrink-0 items-center text-[var(--warning-fg)] xl:hidden"
-                      aria-label={t('settings.piPackages.rowStatus.noticeCount', { count: noticeCount })}
-                      title={t('settings.piPackages.rowStatus.noticeCount', { count: noticeCount })}
+                      role="status"
+                      aria-label={t('settings.piPackages.operationInProgress', { name: pkg.name })}
+                      className="flex shrink-0 text-[var(--settings-section-desc)]"
                     >
-                      <AlertTriangle size={14} aria-hidden />
+                      <Spinner size={14} />
                     </span>
                   )}
                   <Switch
                     checked={pkg.enabled}
-                    disabled={packageBusy || !packageManageable}
+                    disabled={Boolean(busy) || !packageManageable}
                     onCheckedChange={(enabled) => {
                       if (enabled && pkg.requiresExtensionApproval) {
                         setCompatibilityNotice(pkg);
@@ -305,19 +428,20 @@ export function PiPackagesSection() {
                   />
                   <button
                     type="button"
-                    disabled={packageBusy || !packageManageable}
+                    disabled={Boolean(busy) || !packageManageable}
                     onClick={() => void runMutation('update', pkg.source)}
                     aria-label={t('settings.piPackages.updateAria', { name: pkg.name })}
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-busy={packageBusy && busy?.action === 'update'}
+                    className={ICON_ACTION_CLASS}
                   >
                     <RefreshCw size={14} />
                   </button>
                   <button
                     type="button"
-                    disabled={packageBusy || !packageManageable}
+                    disabled={Boolean(busy) || !packageManageable}
                     onClick={() => setPendingRemoval(pkg)}
                     aria-label={t('settings.piPackages.removeAria', { name: pkg.name })}
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    className={ICON_ACTION_CLASS}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -330,7 +454,7 @@ export function PiPackagesSection() {
                         ? t('settings.piPackages.collapseDetails', { name: pkg.name })
                         : t('settings.piPackages.showDetails', { name: pkg.name })
                     }
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover"
+                    className={ICON_ACTION_CLASS}
                   >
                     {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                   </button>
@@ -366,109 +490,47 @@ export function PiPackagesSection() {
         </div>
       </section>
 
-      <AlertDialog.Root open={pendingRemoval !== null} onOpenChange={(open) => !open && setPendingRemoval(null)}>
-        <AlertDialog.Portal>
-          <AlertDialog.Overlay className="fixed inset-0 z-[100] bg-black/35" />
-          <AlertDialog.Content
-            className={cn(
-              'fixed left-1/2 top-1/2 z-[101] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',
-              'rounded-2xl border border-[var(--confirm-border)] bg-[var(--confirm-bg)] p-5 shadow-xl',
-            )}
-          >
-            <AlertDialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
-              {t('settings.piPackages.uninstallTitle')}
-            </AlertDialog.Title>
-            <AlertDialog.Description className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-              {t('settings.piPackages.uninstallDescription', { name: pendingRemoval?.name ?? '' })}
-            </AlertDialog.Description>
-            <div className="mt-5 flex justify-end gap-2">
-              <AlertDialog.Cancel asChild>
-                <button type="button" className={ACTION_CLASS}>
-                  {t('settings.piPackages.cancel')}
-                </button>
-              </AlertDialog.Cancel>
-              <AlertDialog.Action asChild>
-                <button
-                  type="button"
-                  className={cn(ACTION_CLASS, 'bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]')}
-                  onClick={() => pendingRemoval && void runMutation('remove', pendingRemoval.source)}
-                >
-                  {t('settings.piPackages.confirmUninstall')}
-                </button>
-              </AlertDialog.Action>
-            </div>
-          </AlertDialog.Content>
-        </AlertDialog.Portal>
-      </AlertDialog.Root>
+      <ConfirmDialog
+        open={pendingRemoval !== null}
+        onOpenChange={closeDialogUnlessMutating(() => setPendingRemoval(null))}
+        title={t('settings.piPackages.uninstallTitle')}
+        description={t('settings.piPackages.uninstallDescription', { name: pendingRemoval?.name ?? '' })}
+        confirmText={t('settings.piPackages.confirmUninstall')}
+        cancelText={t('settings.piPackages.cancel')}
+        confirmVariant="destructive"
+        loading={busy?.action === 'remove'}
+        onConfirm={() => void confirmRemoval()}
+        onCancel={() => setPendingRemoval(null)}
+      />
 
-      <AlertDialog.Root open={pendingInstall !== null} onOpenChange={(open) => !open && setPendingInstall(null)}>
-        <AlertDialog.Portal>
-          <AlertDialog.Overlay className="fixed inset-0 z-[100] bg-black/35" />
-          <AlertDialog.Content
-            className={cn(
-              'fixed left-1/2 top-1/2 z-[101] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',
-              'rounded-2xl border border-[var(--confirm-border)] bg-[var(--confirm-bg)] p-5 shadow-xl',
-            )}
-          >
-            <AlertDialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
-              {t('settings.piPackages.confirmTitle')}
-            </AlertDialog.Title>
-            <AlertDialog.Description className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-              {t('settings.piPackages.confirmDescription', { source: pendingInstall ?? '' })}
-            </AlertDialog.Description>
-            <div className="mt-5 flex justify-end gap-2">
-              <AlertDialog.Cancel asChild>
-                <button type="button" className={ACTION_CLASS}>
-                  {t('settings.piPackages.cancel')}
-                </button>
-              </AlertDialog.Cancel>
-              <AlertDialog.Action asChild>
-                <button
-                  type="button"
-                  className={cn(ACTION_CLASS, 'bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]')}
-                  onClick={() => pendingInstall && void runMutation('install', pendingInstall, { confirmed: true })}
-                >
-                  {t('settings.piPackages.confirmInstall')}
-                </button>
-              </AlertDialog.Action>
-            </div>
-          </AlertDialog.Content>
-        </AlertDialog.Portal>
-      </AlertDialog.Root>
+      <ConfirmDialog
+        open={pendingInstall !== null}
+        onOpenChange={closeDialogUnlessMutating(() => setPendingInstall(null))}
+        title={t('settings.piPackages.confirmTitle')}
+        description={t('settings.piPackages.confirmDescription', { source: pendingInstall ?? '' })}
+        confirmText={t('settings.piPackages.confirmInstall')}
+        cancelText={t('settings.piPackages.cancel')}
+        loading={busy?.action === 'install'}
+        onConfirm={() => void confirmInstall()}
+        onCancel={() => setPendingInstall(null)}
+      />
 
-      <AlertDialog.Root
+      <ConfirmDialog
         open={compatibilityNotice !== null}
-        onOpenChange={(open) => !open && setCompatibilityNotice(null)}
-      >
-        <AlertDialog.Portal>
-          <AlertDialog.Overlay className="fixed inset-0 z-[100] bg-black/35" />
-          <AlertDialog.Content
-            className={cn(
-              'fixed left-1/2 top-1/2 z-[101] max-h-[min(680px,calc(100vh-32px))]',
-              'w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto',
-              'rounded-2xl border border-[var(--confirm-border)] bg-[var(--confirm-bg)] p-5 shadow-xl',
-            )}
-          >
-            <div className="flex items-start gap-3">
-              <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[var(--confirm-title)]" />
-              <div className="min-w-0">
-                <AlertDialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
-                  {t('settings.piPackages.compatibilityNoticeTitle')}
-                </AlertDialog.Title>
-                <AlertDialog.Description className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-                  {t('settings.piPackages.compatibilityNoticeDescription', {
-                    name: compatibilityNotice?.name ?? '',
-                  })}
-                </AlertDialog.Description>
-              </div>
-            </div>
-            <div className="mt-4 flex flex-col gap-2">
-              {compatibilityNotice?.warning && (
+        onOpenChange={closeDialogUnlessMutating(() => setCompatibilityNotice(null))}
+        title={t('settings.piPackages.compatibilityNoticeTitle')}
+        description={t('settings.piPackages.compatibilityNoticeDescription', {
+          name: compatibilityNotice?.name ?? '',
+        })}
+        content={
+          compatibilityNotice ? (
+            <div className="flex flex-col gap-2">
+              {compatibilityNotice.warning && (
                 <div className="rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5 text-12 text-[var(--confirm-desc)]">
                   {t(`settings.piPackages.warning.${compatibilityNotice.warning}`)}
                 </div>
               )}
-              {compatibilityNotice?.requiresExtensionApproval && (
+              {compatibilityNotice.requiresExtensionApproval && (
                 <div className="rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
                   <p className="text-12 font-medium text-[var(--confirm-title)]">
                     {t('settings.piPackages.extensionApprovalTitle')}
@@ -478,13 +540,13 @@ export function PiPackagesSection() {
                   </p>
                 </div>
               )}
-              {compatibilityNotice?.runtimeRequirements?.map((requirement) => (
+              {compatibilityNotice.runtimeRequirements?.map((requirement) => (
                 <RuntimeRequirementDetails
                   key={`${requirement.packageName}:${requirement.range}`}
                   requirement={requirement}
                 />
               ))}
-              {compatibilityNotice?.resources
+              {compatibilityNotice.resources
                 .filter((resource) => resource.compatibility !== 'supported')
                 .map((resource, index) => (
                   <ResourceCompatibilityDetails
@@ -492,55 +554,34 @@ export function PiPackagesSection() {
                     resource={resource}
                   />
                 ))}
+              <p className="mt-1 text-11 leading-[1.45] text-[var(--confirm-desc)]">
+                {t('settings.piPackages.parserDisclaimer')}
+              </p>
             </div>
-            <p className="mt-3 text-11 leading-[1.45] text-[var(--confirm-desc)]">
-              {t('settings.piPackages.parserDisclaimer')}
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              {(compatibilityNotice?.requiresExtensionApproval || compatibilityNotice?.enabled) && (
-                <button
-                  type="button"
-                  className={ACTION_CLASS}
-                  disabled={Boolean(busy)}
-                  onClick={() => {
-                    const packageSource = compatibilityNotice?.source;
-                    setCompatibilityNotice(null);
-                    if (packageSource && compatibilityNotice?.enabled) {
-                      void runMutation('set-enabled', packageSource, { enabled: false });
-                    }
-                  }}
-                >
-                  {compatibilityNotice?.requiresExtensionApproval
-                    ? t('settings.piPackages.keepDisabled')
-                    : t('settings.piPackages.disableAfterInstall')}
-                </button>
-              )}
-              <button
-                type="button"
-                className={cn(ACTION_CLASS, 'bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]')}
-                disabled={Boolean(busy)}
-                onClick={() => {
-                  const packageSource = compatibilityNotice?.source;
-                  const requiresApproval = compatibilityNotice?.requiresExtensionApproval;
-                  setCompatibilityNotice(null);
-                  if (packageSource && requiresApproval) {
-                    void runMutation('set-enabled', packageSource, {
-                      enabled: true,
-                      confirmed: true,
-                    });
-                  }
-                }}
-              >
-                {compatibilityNotice?.requiresExtensionApproval
-                  ? t('settings.piPackages.approveAndEnable')
-                  : compatibilityNotice?.enabled
-                    ? t('settings.piPackages.keepEnabled')
-                    : t('settings.piPackages.done')}
-              </button>
-            </div>
-          </AlertDialog.Content>
-        </AlertDialog.Portal>
-      </AlertDialog.Root>
+          ) : undefined
+        }
+        maxWidth={520}
+        describeContent
+        confirmText={
+          compatibilityNotice?.requiresExtensionApproval
+            ? t('settings.piPackages.approveAndEnable')
+            : compatibilityNotice?.enabled
+              ? t('settings.piPackages.keepEnabled')
+              : t('settings.piPackages.done')
+        }
+        cancelText={t('settings.piPackages.keepDisabled')}
+        showCancel={Boolean(compatibilityNotice?.requiresExtensionApproval)}
+        tertiaryText={
+          !compatibilityNotice?.requiresExtensionApproval && compatibilityNotice?.enabled
+            ? t('settings.piPackages.disableAfterInstall')
+            : undefined
+        }
+        confirmIcon={compatibilityNotice?.requiresExtensionApproval ? <AlertTriangle size={15} /> : undefined}
+        loading={busy?.action === 'set-enabled'}
+        onConfirm={() => void confirmCompatibilityNotice()}
+        onCancel={() => setCompatibilityNotice(null)}
+        onTertiary={() => void disableCompatibilityNoticePackage()}
+      />
     </div>
   );
 }

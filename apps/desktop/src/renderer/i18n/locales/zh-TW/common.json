@@ -2548,6 +2548,10 @@
         "unmanageable": "請在 Pi 中管理"
       },
       "operationFailed": "Pi 擴充功能操作失敗，請檢查來源或網路後重試。",
+      "loading": "正在載入 Pi 擴充功能…",
+      "loadFailed": "暫時無法讀取 Pi 擴充功能，請檢查連線後重試。",
+      "retry": "重試",
+      "operationInProgress": "正在處理 {{name}}…",
       "confirmTitle": "安裝第三方 Pi 擴充功能？",
       "confirmDescription": "{{source}} 可能包含第三方程式碼。安裝與更新不會執行 npm 生命週期腳本；若發現可執行的擴充程式碼，會先保持停用，等你看完檢查結果後再明確啟用。",
       "confirmInstall": "了解風險並安裝",
