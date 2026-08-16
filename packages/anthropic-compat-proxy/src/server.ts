@@ -67,11 +67,11 @@ const UPSTREAM_SOCKET_TIMEOUT_MS = 10 * 60 * 1000;
 // 半开(TCP 已建连、无数据、不 close,如网关假死 / 中间设备丢包)时内核不会触发
 // 任何超时,客户端会永远挂在流式响应上(pi/CC 会话「生成中」卡死,重启才能恢复)。
 // 这里在响应已开始、但持续 idleMs 收不到任何字节时主动 destroy 上游请求,让客户端
-// 收到截断并立即失败收尾。默认 300s —— 与 CC 侧 CLAUDE_STREAM_IDLE_TIMEOUT_MS 对齐
-// (env-builder.ts:90s 会误杀 Opus xhigh/max 长 thinking,已从默认 90s 提到 300s);
-// 外层看门狗必须高于内层自愈预算,否则半开修掉的同时会把本来可自愈的慢流变成
-// 用户可见失败。可经 ProxyOptions.upstreamStreamIdleTimeoutMs 覆盖(0 禁用,测试用短值)。
-const UPSTREAM_STREAM_IDLE_TIMEOUT_MS = 300 * 1000;
+// 收到截断并立即失败收尾。默认 31min —— 高于 CC / Codex 侧最长约 30min 的
+// 内层恢复预算;可经 ProxyOptions.upstreamStreamIdleTimeoutMs 覆盖(0 禁用,测试用短值)。
+const UPSTREAM_STREAM_IDLE_TIMEOUT_MS = 31 * 60 * 1000;
+const UPSTREAM_STREAM_IDLE_SLICE_MS = 60 * 1000;
+const UPSTREAM_STREAM_IDLE_SUSPEND_GAP_MS = 30 * 1000;
 
 // WebSocket 这里只等 HTTP 101 握手，不应沿用允许长时间生成的 10 分钟超时。
 // 中间代理静默丢弃 Upgrade 时尽快回 426，让 Codex 原生 transport 降到 HTTP。
@@ -858,9 +858,30 @@ function forward(
   // 流式请求在收到上游响应头之前也可能半开:这种情况下不会进入 response
   // 回调,因此必须从请求发出时就启动同一个空闲看门狗,否则仍会等 socket 超时。
   let upstreamHeaderTimer: NodeJS.Timeout | null = null;
-  if (requestDeclaredStream && streamIdleTimeoutMs > 0) {
+  let upstreamHeaderRemainingMs = streamIdleTimeoutMs;
+  const armUpstreamHeaderSlice = (): void => {
+    const slice = Math.min(upstreamHeaderRemainingMs, UPSTREAM_STREAM_IDLE_SLICE_MS);
+    const startedAt = Date.now();
     upstreamHeaderTimer = setTimeout(() => {
       upstreamHeaderTimer = null;
+      const elapsed = Date.now() - startedAt;
+      if (elapsed > slice + UPSTREAM_STREAM_IDLE_SUSPEND_GAP_MS) {
+        logger.info?.('upstream stream idle watchdog skipped a suspended header slice', {
+          reqId,
+          method,
+          path: upstreamPathname,
+          sliceMs: slice,
+          elapsedMs: elapsed,
+        });
+        upstreamHeaderRemainingMs = streamIdleTimeoutMs;
+        armUpstreamHeaderSlice();
+        return;
+      }
+      upstreamHeaderRemainingMs -= Math.max(0, elapsed);
+      if (upstreamHeaderRemainingMs > 0) {
+        armUpstreamHeaderSlice();
+        return;
+      }
       logger.warn?.('upstream stream idle watchdog fired — no response headers', {
         reqId,
         method,
@@ -868,9 +889,10 @@ function forward(
         idleMs: streamIdleTimeoutMs,
       });
       upstreamReq.destroy(new Error(`upstream response headers timeout after ${streamIdleTimeoutMs}ms`));
-    }, streamIdleTimeoutMs);
+    }, slice);
     upstreamHeaderTimer.unref?.();
-  }
+  };
+  if (requestDeclaredStream && streamIdleTimeoutMs > 0) armUpstreamHeaderSlice();
   const clearUpstreamHeaderTimer = (): void => {
     if (upstreamHeaderTimer) {
       clearTimeout(upstreamHeaderTimer);
@@ -1269,6 +1291,7 @@ function forward(
     // 仅在流式响应路径上启用(SSE 请求 + 2xx),非流式 / 错误响应不引入额外行为。
     let streamIdleTimer: NodeJS.Timeout | null = null;
     let streamIdleFired = false;
+    let streamIdleRemainingMs = streamIdleTimeoutMs;
     // 对所有被 stream-validity gate 覆盖的 2xx 流式响应武装看门狗:含非 SSE 2xx
     // (网关可能回 JSON/HTML 错误体)。若只看 isSse,这类响应在半开时仍会悬挂到
     // 10 分钟 socket 超时而非 90s 看门狗(codex review P2)。非流式请求(未声明
@@ -1278,10 +1301,30 @@ function forward(
     if (isStreamingResponse && streamIdleTimeoutMs > 0) {
       const armStreamIdle = (): void => {
         if (upstreamResponseTerminal !== null || streamIdleFired) return;
-        streamIdleTimer?.unref?.();
+        const slice = Math.min(streamIdleRemainingMs, UPSTREAM_STREAM_IDLE_SLICE_MS);
+        const startedAt = Date.now();
         streamIdleTimer = setTimeout(() => {
           streamIdleTimer = null;
           if (upstreamResponseTerminal !== null || streamIdleFired) return;
+          const elapsed = Date.now() - startedAt;
+          if (elapsed > slice + UPSTREAM_STREAM_IDLE_SUSPEND_GAP_MS) {
+            logger.info?.('upstream stream idle watchdog skipped a suspended response slice', {
+              reqId,
+              method,
+              path: upstreamPathname,
+              status,
+              sliceMs: slice,
+              elapsedMs: elapsed,
+            });
+            streamIdleRemainingMs = streamIdleTimeoutMs;
+            armStreamIdle();
+            return;
+          }
+          streamIdleRemainingMs -= Math.max(0, elapsed);
+          if (streamIdleRemainingMs > 0) {
+            armStreamIdle();
+            return;
+          }
           streamIdleFired = true;
           logger.warn?.('upstream stream idle watchdog fired — destroying half-open upstream response', {
             reqId,
@@ -1297,7 +1340,7 @@ function forward(
           } catch {
             /* already destroyed */
           }
-        }, streamIdleTimeoutMs);
+        }, slice);
         streamIdleTimer.unref?.();
       };
       // 数据块一到就重置计时器;end/error/close 后清理。
@@ -1306,6 +1349,7 @@ function forward(
           clearTimeout(streamIdleTimer);
           streamIdleTimer = null;
         }
+        streamIdleRemainingMs = streamIdleTimeoutMs;
         if (upstreamResponseTerminal === null && !streamIdleFired) armStreamIdle();
       };
       const clearStreamIdle = (): void => {
