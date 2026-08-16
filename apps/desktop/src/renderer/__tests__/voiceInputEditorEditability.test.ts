@@ -11,11 +11,11 @@ const chatInputSource = readFileSync(
 describe('ChatInput voice lifecycle locks', () => {
   it('keeps the editor read-only for the entire voice lifecycle', () => {
     expect(chatInputSource).toContain(
-      'const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;',
+      'const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;',
     );
     expect(chatInputSource).toContain('editor?.setEditable(!composerMutationLocked);');
     expect(chatInputSource).toContain('if (composerMutationLockedRef.current) return true;');
-    expect(chatInputSource).toContain('active={voiceInput.isBusy}');
+    expect(chatInputSource).toContain('active={voiceBusyOnCurrentComposer}');
   });
 
   it('keeps attachments locked while leaving permission mode available', () => {

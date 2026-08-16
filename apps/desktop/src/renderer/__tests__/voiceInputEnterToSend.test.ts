@@ -63,7 +63,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
   });
 
   it('keeps finish-and-send enabled while listening before ASR draft arrives', () => {
-    expect(chatInputSource).toContain('!voiceInput.isListening && !canSend && !hasVoiceDraftText');
+    expect(chatInputSource).toContain(
+      '!voiceBusyOnCurrentComposer && !canSend && !hasVoiceDraftText',
+    );
   });
 
   it('routes Enter from the Tiptap editor through stop-and-send or stop-and-steer while listening', () => {
@@ -129,7 +131,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const handleClickSend = useCallback(',
       'voiceInputStopAndSendRef.current = handleClickSend;',
     );
-    expect(handleClickSendBlock).toContain('voiceInput.isBusy');
+    expect(handleClickSendBlock).toContain('voiceBusyOnCurrentComposer');
     expect(handleClickSendBlock).toContain(
       'voiceInputStopAndSendPromiseRef.current = stopAndSend;',
     );
@@ -146,13 +148,14 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const pendingStopAndSend = voiceInputStopAndSendPromiseRef.current;',
       "// storageKey actually changed — swap the editor's content.",
     );
-    expect(restoreEffectBlock).toContain('await pendingStopAndSend;');
+    expect(restoreEffectBlock).toContain('deferRestoreForLiveListening');
     expect(restoreEffectBlock).toContain(
       'await voiceInputStopRef.current({ waitForRefinement: true });',
     );
-    expect(restoreEffectBlock).toContain('if (isCurrentTransition()) {');
-    expect(restoreEffectBlock).toContain('restoreNextDraft();');
+    expect(restoreEffectBlock).toContain('frozenVoiceSendRef.current = {');
+    expect(restoreEffectBlock).toContain('serialized: serializeEditorContent(editor)');
     expect(restoreEffectBlock).toContain('pendingStopAndSend || voiceInputBusyRef.current');
+    expect(restoreEffectBlock).not.toContain('await pendingStopAndSend;');
     expect(chatInputSource).toContain('}, [editor, storageKey]);');
     expect(chatInputSource).not.toContain('}, [editor, storageKey, voiceInput.isBusy]);');
   });
@@ -168,6 +171,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(serializeGuard).toContain('editorOwnsSourceDraft({');
     expect(serializeGuard).toContain('editorStorageKey: storageKeyForDraftRef.current');
     expect(serializeGuard).not.toContain('latestStorageKeyRef.current !== sourceStorageKey');
+    expect(chatInputSource).toContain('frozenVoiceSendRef.current');
+    expect(chatInputSource).toContain('voiceInput.getLastRefinement()');
+    expect(chatInputSource).toContain('applyRefinementToSerializedText(');
 
     const effortSettleBlock = extractBetween(
       chatInputSource,

@@ -1,13 +1,11 @@
 /**
- * ChatInput reuses one Tiptap editor across session switches. While a voice
- * stop/refine/send is in flight, restoreNextDraft is deferred, so the route
- * / `storageKey` prop can already point at the next session while the editor
- * still holds the source session's document.
+ * ChatInput reuses one Tiptap editor across session switches. A send the user
+ * already requested must still go to that source session, even after the live
+ * editor has been swapped to the next task's draft.
  *
- * A send that the user already requested must go to that source session.
- * The route having moved on is not a reason to drop it. Abort only when the
- * live editor has already been swapped away (and there is no click-time
- * snapshot to send instead).
+ * Restore is immediate: the next task must not keep showing the source
+ * session's refining text or a locked Send button. The in-flight send then
+ * uses a frozen snapshot, optionally patched with the final refined span.
  */
 
 export function editorOwnsSourceDraft(input: {
@@ -16,4 +14,23 @@ export function editorOwnsSourceDraft(input: {
   sourceStorageKey: string | undefined;
 }): boolean {
   return !input.editorDestroyed && input.editorStorageKey === input.sourceStorageKey;
+}
+
+export function voiceLocksCurrentComposer(input: {
+  isBusy: boolean;
+  ownerStorageKey: string | undefined;
+  currentStorageKey: string | undefined;
+}): boolean {
+  return input.isBusy && input.ownerStorageKey === input.currentStorageKey;
+}
+
+export function applyRefinementToSerializedText(
+  text: string,
+  basedOnText: string,
+  refinedText: string,
+): string {
+  if (!basedOnText || basedOnText === refinedText) return text;
+  const index = text.lastIndexOf(basedOnText);
+  if (index === -1) return text;
+  return text.slice(0, index) + refinedText + text.slice(index + basedOnText.length);
 }

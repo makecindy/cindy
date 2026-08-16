@@ -115,7 +115,11 @@ import {
   getEffortChangeCoordinator,
   isSessionScopeCurrent,
 } from './effortChangeQueue';
-import { editorOwnsSourceDraft } from './composerSendOwnership';
+import {
+  applyRefinementToSerializedText,
+  editorOwnsSourceDraft,
+  voiceLocksCurrentComposer,
+} from './composerSendOwnership';
 import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './composerSendSnapshot';
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
@@ -267,7 +271,11 @@ import {
   type ComposerRenderSnapshot,
 } from './composerRenderGate';
 import { createComposerFrameScheduler } from './composerFrameScheduler';
-import { serializeEditorContent, serializeEditorSlice } from './composerContentSerialization';
+import {
+  serializeEditorContent,
+  serializeEditorSlice,
+  type SerializedComposerContent,
+} from './composerContentSerialization';
 import {
   composerDocumentContainsHostCapabilityChip,
   composerDocumentContainsList,
@@ -2851,14 +2859,36 @@ export function ChatInput({
     }
   }, [confirmDialog, t]);
 
+  const voiceOwnerStorageKeyRef = useRef<string | undefined>(undefined);
+  const frozenVoiceSendRef = useRef<{
+    sourceStorageKey: string;
+    serialized: SerializedComposerContent;
+  } | null>(null);
   const voiceInputOptions = useMemo(
-    () => ({ onMicrophonePermissionRequired: handleVoiceInputPermissionRequired }),
+    () => ({
+      onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
+      shouldApplyToEditor: () =>
+        voiceOwnerStorageKeyRef.current === undefined ||
+        voiceOwnerStorageKeyRef.current === storageKeyForDraftRef.current,
+    }),
     [handleVoiceInputPermissionRequired],
   );
 
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
+  if (voiceInput.isBusy) {
+    if (voiceOwnerStorageKeyRef.current === undefined) {
+      voiceOwnerStorageKeyRef.current = storageKeyForDraftRef.current ?? storageKey;
+    }
+  } else {
+    voiceOwnerStorageKeyRef.current = undefined;
+  }
   voiceDraftTextRef.current = voiceInput.draftText;
-  const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;
+  const voiceBusyOnCurrentComposer = voiceLocksCurrentComposer({
+    isBusy: voiceInput.isBusy,
+    ownerStorageKey: voiceOwnerStorageKeyRef.current,
+    currentStorageKey: storageKey,
+  });
+  const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
   composerMutationLockedRef.current = composerMutationLocked;
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
@@ -3299,29 +3329,32 @@ export function ChatInput({
   // While dictation holds the editor read-only the native caret disappears;
   // the decoration renders a mic-shaped caret at the insertion point instead
   // (listening = animated level bars, submitting/refining = spinner).
-  const voiceCaretState: VoiceInputCaretState | null = voiceInput.isListening
-    ? 'listening'
-    : voiceInput.isBusy
-      ? 'processing'
-      : null;
+  const voiceCaretState: VoiceInputCaretState | null = !voiceBusyOnCurrentComposer
+    ? null
+    : voiceInput.isListening
+      ? 'listening'
+      : voiceInput.isBusy
+        ? 'processing'
+        : null;
 
   useEffect(() => {
     setVoiceInputDraftDecoration(
       editor,
-      voiceInput.draftText,
-      voiceInput.draftSource,
-      voiceInput.draftRange,
+      voiceBusyOnCurrentComposer ? voiceInput.draftText : '',
+      voiceBusyOnCurrentComposer ? voiceInput.draftSource : null,
+      voiceBusyOnCurrentComposer ? voiceInput.draftRange : null,
       voiceCaretState,
     );
     // Caret-only (no draft text yet) must also stay visible: the insertion
     // point can sit outside the viewport when the composer is scrolled.
-    if (voiceInput.draftText || voiceCaretState) {
+    if (voiceBusyOnCurrentComposer && (voiceInput.draftText || voiceCaretState)) {
       requestAnimationFrame(() => {
         if (editor) scrollVoiceInputDraftEndIntoView(editor);
       });
     }
   }, [
     editor,
+    voiceBusyOnCurrentComposer,
     voiceCaretState,
     voiceInput.draftRange,
     voiceInput.draftSource,
@@ -3495,14 +3528,18 @@ export function ChatInput({
     };
 
     const pendingStopAndSend = voiceInputStopAndSendPromiseRef.current;
-    if (pendingStopAndSend || voiceInputBusyRef.current) {
+    const deferRestoreForLiveListening =
+      !pendingStopAndSend &&
+      voiceInputBusyRef.current &&
+      voiceInputStateRef.current === 'listening';
+    // Still listening and the user has not asked to send: wait for stop so the
+    // ASR text lands in the source document before we swap. After stop/refine
+    // (or stop-and-send) the next task must restore immediately — otherwise it
+    // keeps showing the source session's refining text and a locked Send.
+    if (deferRestoreForLiveListening) {
       void (async () => {
         try {
-          if (pendingStopAndSend) {
-            await pendingStopAndSend;
-          } else {
-            await voiceInputStopRef.current({ waitForRefinement: true });
-          }
+          await voiceInputStopRef.current({ waitForRefinement: true });
         } finally {
           if (isCurrentTransition()) {
             saveCurrentEditorDraft();
@@ -3512,6 +3549,12 @@ export function ChatInput({
       })();
       return () => {
         cancelled = true;
+      };
+    }
+    if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey) {
+      frozenVoiceSendRef.current = {
+        sourceStorageKey: prevEditorKey,
+        serialized: serializeEditorContent(editor),
       };
     }
 
@@ -4690,23 +4733,40 @@ export function ChatInput({
       try {
         let serializedContent = serializedAtClick;
         if (!serializedContent) {
-          await resolveSessionMessageReferencesForSend(editor);
-          // Local/SSH keeps the live editor until acceptance. Abort only when
-          // the reused editor has already been swapped to another session's
-          // document. A deferred restoreNextDraft (voice stop/refine/send)
-          // leaves storageKeyForDraftRef on the source while the route already
-          // points at the next session — that is still the source document.
           if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;
-          if (
-            !editorOwnsSourceDraft({
-              editorDestroyed: editor.isDestroyed,
-              editorStorageKey: storageKeyForDraftRef.current,
-              sourceStorageKey,
-            })
-          ) {
-            return;
+          const editorOwnsSource = editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          });
+          if (editorOwnsSource) {
+            await resolveSessionMessageReferencesForSend(editor);
+            if (
+              editorOwnsSourceDraft({
+                editorDestroyed: editor.isDestroyed,
+                editorStorageKey: storageKeyForDraftRef.current,
+                sourceStorageKey,
+              })
+            ) {
+              serializedContent = serializeEditorContent(editor);
+            }
           }
-          serializedContent = serializeEditorContent(editor);
+          if (!serializedContent) {
+            const frozen = frozenVoiceSendRef.current;
+            if (!frozen || frozen.sourceStorageKey !== sourceStorageKey) return;
+            const refinement = voiceInput.getLastRefinement();
+            serializedContent = {
+              ...frozen.serialized,
+              text: refinement
+                ? applyRefinementToSerializedText(
+                    frozen.serialized.text,
+                    refinement.basedOnText,
+                    refinement.refinedText,
+                  )
+                : frozen.serialized.text,
+            };
+            frozenVoiceSendRef.current = null;
+          }
         }
         const {
           text: editorText,
@@ -4720,7 +4780,13 @@ export function ChatInput({
         let agentReferences = serializedAgentReferences;
         const attachmentsForSend = optimisticallyClearRemoteComposer
           ? attachmentsBeforeOptimisticClear
-          : [...latestAttachmentsRef.current];
+          : editorOwnsSourceDraft({
+                editorDestroyed: editor.isDestroyed,
+                editorStorageKey: storageKeyForDraftRef.current,
+                sourceStorageKey,
+              })
+            ? [...latestAttachmentsRef.current]
+            : [...(sourceStorageKey ? (getComposerDraft(sourceStorageKey)?.attachments ?? []) : [])];
         const commentsForSend = optimisticallyClearRemoteComposer
           ? commentsBeforeOptimisticClear
           : [...browserCommentsRef.current];
@@ -5338,7 +5404,7 @@ export function ChatInput({
 
   const handleClickSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
-      if (voiceInput.isBusy) {
+      if (voiceBusyOnCurrentComposer) {
         const currentCanSend = !isEditorEmpty(editor) || hasAttachments;
         if (!voiceInput.isListening && !currentCanSend && voiceInput.draftText.trim().length === 0)
           return;
@@ -5372,6 +5438,7 @@ export function ChatInput({
       editor,
       handleVoiceInputStop,
       hasAttachments,
+      voiceBusyOnCurrentComposer,
       voiceInput.draftText,
       voiceInput.isBusy,
       voiceInput.isListening,
@@ -6766,9 +6833,10 @@ export function ChatInput({
   const hasMessage = !isEditorEmpty(editor);
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
   const canSend = hasMessage || hasAttachments || browserComments.length > 0;
-  const hasVoiceDraftText = voiceInput.draftText.trim().length > 0;
+  const hasVoiceDraftText =
+    voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
   // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
-  // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、voiceInput.isBusy 及远程只读/锁定状态。
+  // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
   const showRecommendationOverlay =
     recommendationEnabled &&
     !!recommendedPrompt &&
@@ -6790,9 +6858,9 @@ export function ChatInput({
     // host 尚未完成切换意图登记时不能发送，否则 maker:send 可能先被旧引擎消费。
     agentSwitchInFlight ||
     sendDispatchInFlight ||
-    (!voiceInput.isListening && !canSend && !hasVoiceDraftText) ||
-    voiceInput.state === 'submitting' ||
-    voiceInput.state === 'refining',
+    (!voiceBusyOnCurrentComposer && !canSend && !hasVoiceDraftText) ||
+    (voiceBusyOnCurrentComposer &&
+      (voiceInput.state === 'submitting' || voiceInput.state === 'refining')),
   );
   // Send / Stop 双槽语义 (voice busy = voiceInput.isBusy = listening|submitting|refining,
   // 判定为何用 isBusy 而不是 isListening 见下方第三段):
@@ -6819,9 +6887,9 @@ export function ChatInput({
   // (listening + submitting + refining), 让槽位从开录到润色结束保持不变; 润色期间主槽是
   // 禁用态 Send (见 sendButtonDisabled), 停止任务的能力由次槽 Stop 承担.
   const mainSlotIsStop =
-    showStopButton && (sendDispatchInFlight || (!canSend && !voiceInput.isBusy));
+    showStopButton && (sendDispatchInFlight || (!canSend && !voiceBusyOnCurrentComposer));
   const showSecondaryStop =
-    showStopButton && (canSend || voiceInput.isBusy) && !sendDispatchInFlight;
+    showStopButton && (canSend || voiceBusyOnCurrentComposer) && !sendDispatchInFlight;
   useEffect(() => {
     voiceInputCanStopAndSendRef.current = !sendButtonDisabled;
     composerCanSubmitRef.current = !sendButtonDisabled;
@@ -7212,7 +7280,7 @@ export function ChatInput({
             {/* Editor — 用负 margin 向右破出容器的 px-[11px],让 scrollbar 贴到圆角边;
              内层 ProseMirror 加 pr-[11px] 作为文字 gutter,视觉上文字宽度与原先一致。 */}
             <VoiceInputPointerHintLayer
-              active={voiceInput.isBusy}
+              active={voiceBusyOnCurrentComposer}
               state={voiceInput.state}
               className="w-full"
             >
@@ -7227,9 +7295,11 @@ export function ChatInput({
                     'w-[calc(100%+11px)] -mr-[11px]',
                     // Disabled gets the same visual cue as the old textarea
                     composerMutationLocked && 'cursor-not-allowed opacity-60',
-                    voiceInput.isBusy && 'cursor-default',
+                    voiceBusyOnCurrentComposer && 'cursor-default',
                   )}
-                  data-voice-draft-active={voiceInput.draftText ? 'true' : undefined}
+                  data-voice-draft-active={
+                    voiceBusyOnCurrentComposer && voiceInput.draftText ? 'true' : undefined
+                  }
                 />
                 {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
                     py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
@@ -7469,10 +7539,14 @@ export function ChatInput({
                     />
                   )}
                   <VoiceInputButton
-                    state={voiceInput.state}
+                    state={voiceBusyOnCurrentComposer ? voiceInput.state : 'idle'}
                     // The surrounding controls stay locked during voice input, but
                     // this control must remain enabled so the recording can stop.
-                    disabled={composerEditorLocked || !editor}
+                    disabled={
+                      composerEditorLocked ||
+                      !editor ||
+                      (voiceInput.isBusy && !voiceBusyOnCurrentComposer)
+                    }
                     shortcutLabel={voiceInputShortcutLabel}
                     onStart={handleVoiceInputStart}
                     onStop={handleVoiceInputPlainStop}

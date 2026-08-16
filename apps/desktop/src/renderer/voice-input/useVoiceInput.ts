@@ -123,6 +123,11 @@ const STOP_WAIT_REFINEMENT_FAILSAFE_MS = 90_000;
 const START_READY_STOP_TIMEOUT_MS = 10_000;
 const INLINE_ERROR_AUTO_DISMISS_MS = 8_000;
 
+export type VoiceInputRefinementSnapshot = {
+  basedOnText: string;
+  refinedText: string;
+};
+
 export type UseVoiceInputResult = {
   state: VoiceInputState;
   draftText: string;
@@ -131,6 +136,7 @@ export type UseVoiceInputResult = {
   lastError: string | null;
   isListening: boolean;
   isBusy: boolean;
+  getLastRefinement: () => VoiceInputRefinementSnapshot | null;
   start: () => Promise<void>;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
   cancel: () => Promise<void>;
@@ -154,6 +160,8 @@ type StopCompletionWaiter = {
 
 export type UseVoiceInputOptions = {
   onMicrophonePermissionRequired?: (error: string) => void | Promise<void>;
+  /** When false, keep refining in the background but do not write the live editor. */
+  shouldApplyToEditor?: () => boolean;
 };
 
 /**
@@ -211,8 +219,11 @@ export function useVoiceInput(
   const applyingVoiceTextRef = useRef(false);
   const editorRef = useRef<Editor | null>(editor);
   const disabledRef = useRef(Boolean(disabled));
+  const optionsRef = useRef(options);
+  const lastRefinementRef = useRef<VoiceInputRefinementSnapshot | null>(null);
   editorRef.current = editor;
   disabledRef.current = Boolean(disabled);
+  optionsRef.current = options;
 
   const setVoiceState = useCallback((next: VoiceInputState) => {
     stateRef.current = next;
@@ -810,6 +821,7 @@ export function useVoiceInput(
   }, [readEditorSnapshot]);
 
   const insertSubmittedText = useCallback((text: string): { start: number; end: number } | null => {
+    if (optionsRef.current?.shouldApplyToEditor?.() === false) return null;
     const current = editorRef.current;
     if (!current || current.isDestroyed) return null;
     current.commands.focus();
@@ -834,6 +846,7 @@ export function useVoiceInput(
   }, [clampEditorTextRange]);
 
   const applyRefinedText = useCallback((event: Extract<VoiceInputRendererEvent, { type: 'refined' }>): boolean => {
+    if (optionsRef.current?.shouldApplyToEditor?.() === false) return false;
     const segmentId = event.range.segmentIds[0];
     const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
     const current = editorRef.current;
@@ -1000,6 +1013,7 @@ export function useVoiceInput(
           // lookup keyed by segmentId binds the preview to its target text,
           // exactly like the 'refined' / 'submitted' paths.
           {
+            if (optionsRef.current?.shouldApplyToEditor?.() === false) break;
             const segmentId = event.range.segmentIds[0];
             const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
             const current = editorRef.current;
@@ -1018,6 +1032,14 @@ export function useVoiceInput(
           }
           break;
         case 'refined':
+          {
+            const segmentId = event.range.segmentIds[0];
+            const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
+            lastRefinementRef.current = {
+              basedOnText: event.segment.basedOnText ?? range?.submittedText ?? '',
+              refinedText: event.text,
+            };
+          }
           if (applyRefinedText(event)) {
             recordVisibleTextChanged({
               runId: event.runId,
@@ -1184,6 +1206,7 @@ export function useVoiceInput(
     runIdRef.current = null;
     ownedRunIdRef.current = null;
     submittedRangesRef.current.clear();
+    lastRefinementRef.current = null;
     sentAudioMsRef.current = 0;
     terminalOutcomeRef.current = 'success';
     systemAudioMuteGateOpenRef.current = true;
@@ -1633,6 +1656,7 @@ export function useVoiceInput(
     lastError,
     isListening: state === 'listening',
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
+    getLastRefinement: () => lastRefinementRef.current,
     start,
     stop: stopWithGate,
     cancel,
