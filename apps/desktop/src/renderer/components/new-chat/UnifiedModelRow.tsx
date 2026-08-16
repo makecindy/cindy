@@ -49,7 +49,6 @@ export function UnifiedModelRow({
   selected,
   active,
   isFavoriteRow,
-  emphasizeTriple,
   justFavorited,
   interactionDisabled,
   effortLabelOf,
@@ -73,7 +72,6 @@ export function UnifiedModelRow({
   selected: boolean;
   active: boolean;
   isFavoriteRow: boolean;
-  emphasizeTriple: boolean;
   justFavorited: boolean;
   interactionDisabled: boolean;
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
@@ -349,10 +347,9 @@ export function UnifiedModelRow({
             引擎不再进右簇 —— 行首徽标已承载。 */}
         <span
           title={tripleTitle}
-          className={cn(
-            'ml-auto flex shrink-0 items-center gap-2 text-12',
-            emphasizeTriple ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
-          )}
+          // 外侧簇颜色恒定(Chris 2026-08-16 实测:调过思考深度后行右侧不该变色;
+          // 「已自定义」的信号由浮层底栏承载,不再用行内提亮表达)。
+          className="ml-auto flex shrink-0 items-center gap-2 text-12 text-[var(--text-tertiary)]"
         >
           {config.fast && (
             <Zap
@@ -504,10 +501,8 @@ export function UnifiedModelRow({
         <span
           title={tripleTitle}
           data-unified-triple
-          className={cn(
-            'ml-auto flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12',
-            emphasizeTriple ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
-          )}
+          // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,同 badge 样式)。
+          className="ml-auto flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 text-[var(--text-tertiary)]"
         >
           <engineOption.Mark size={12} className="shrink-0" />
           {config.effort && <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>}

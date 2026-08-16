@@ -39,7 +39,6 @@ import {
   wireModelIdOf,
   buildUnifiedListSections,
   buildUnifiedRail,
-  isRecommendedFavoriteConfig,
   priceTierOf,
   railItemKey,
   resolveFavoriteRowConfig,
@@ -860,13 +859,6 @@ export function UnifiedModelPanel({
                     selected={isSelectedRow(row.anchor, row.entry)}
                     active={sameAnchor(flyAnchor, row.anchor)}
                     isFavoriteRow={!!row.favorite}
-                    // 三元组提亮一档的两种情形:模型行有自定义配置;收藏条目不是推荐配置
-                    // (规格 §1.2 / §1.5 —— 与默认不同的东西要一眼看得出来)。
-                    emphasizeTriple={
-                      row.favorite
-                        ? !isRecommendedFavoriteConfig(row.entry, config)
-                        : config.customized
-                    }
                     justFavorited={justFavorited === key}
                     {...(priceDisplay ? { priceDisplay } : {})}
                     {...(subscriptionRow
