@@ -17,6 +17,7 @@ describe('derivePiRuntimeFromClaudeRuntime', () => {
           supportsImageInput: true,
           reasoning: true,
           reasoningEfforts: ['high'],
+          reasoningDefaultEffort: 'high',
         },
       ],
     });

@@ -127,6 +127,7 @@
       "chipMetrics": "用量指示器",
       "memory": "记忆",
       "subagentModels": "Subagent",
+      "visionBridge": "视觉桥",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
       "composer": "消息输入",
@@ -308,6 +309,7 @@
         "statusInstalled": "已安装",
         "statusNotInstalled": "未安装",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "安装",
           "reinstall": "重新安装",
@@ -466,13 +468,18 @@
         "hint": "置顶任务以卡片形式展示，含执行状态摘要，卡片高度随摘要长短错落；侧栏拉宽时自动分 2~3 列。",
         "aria": "切换侧边栏卡片模式"
       },
+      "sidebarMainListMode": {
+        "label": "任务列表显示方式",
+        "hint": "侧边栏主列表（置顶以外）的显示形态：文字为紧凑单行，列表为带预览的两行。",
+        "aria": "切换任务列表显示方式"
+      },
       "layout": {
         "label": "面板布局",
         "hint": "面板位置和宽度会保留到下次启动。如果布局变得难以使用，可以恢复默认排列。",
         "reset": "恢复默认布局",
         "resetSuccess": "已恢复默认面板布局",
         "resetFailed": "无法恢复默认面板布局",
-        "saved": "面板位置已保存；可在“设置 → 外观”中恢复默认布局",
+        "saved": "面板位置已保存；可在“设置 → 通用”的“外观”区域恢复默认布局",
         "saveFailed": "无法保存面板位置"
       }
     },
@@ -979,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "监听权限",
-          "tooltip": "用于监听 Fn、单独 Command / Option / Control 以及带 Fn 的语音输入快捷键。普通组合键和 F1-F24 单键通常不需要。已授权表示当前运行中的 App 可以监听快捷键；开发版可能由 Terminal 承载授权。"
+          "tooltip": "用于监听 Fn、单独 Command / Option / Control、带 Fn 的快捷键，以及 F1-F24 单键按住说话的松键事件。普通组合键不需要。已授权表示当前运行中的 App 可以监听快捷键；开发版可能由 Terminal 承载授权。"
         },
         "accessibility": {
           "label": "自动输入",
@@ -1476,7 +1483,11 @@
           "confirmTitle": "确认覆盖",
           "confirmSubtitle": "选择从 {{source}} 复制的字段。",
           "source": "来源",
-          "columns": { "field": "字段", "source": "来源值", "target": "当前值" },
+          "columns": {
+            "field": "字段",
+            "source": "来源值",
+            "target": "当前值"
+          },
           "fields": {
             "endpointBundle": "端点与 API 协议",
             "baseUrl": "基础 URL",
@@ -1503,7 +1514,11 @@
           "targetReady_other": "可填充 {{count}} 个字段",
           "targetIncompatible_one": "{{count}} 个字段不兼容",
           "targetIncompatible_other": "{{count}} 个字段不兼容",
-          "status": { "needsConfirm": "需要确认", "ready": "可以填充", "incompatible": "不兼容" },
+          "status": {
+            "needsConfirm": "需要确认",
+            "ready": "可以填充",
+            "incompatible": "不兼容"
+          },
           "secretIndependent": "复制到 {{target}} 的独立本地密钥",
           "overwriteCurrent": "替换当前值",
           "fillEmpty": "填充当前空字段",
@@ -1547,6 +1562,7 @@
         "refreshAdded": "已发现 {{count}} 个新模型",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试",
+        "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "disableModel": "停用此模型",
         "enableModel": "启用此模型",
         "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
@@ -2305,7 +2321,7 @@
       "title": "Subagent",
       "description": "分别设置 Claude Code 和 Codex 执行子任务时使用的默认模型，并为 Codex Subagent 配置运行护栏。设置按入口生效，不会为每个模型单独保存。",
       "unspecified": "不指定（跟随原逻辑）",
-      "hint": "可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效；Codex 的修改在空闲时立即重启生效，有任务运行时会在本地 Codex 会话全部空闲后自动应用。",
+      "hint": "Claude Code Subagent 只支持指定模型，推理强度沿用 Claude Code 原生逻辑。可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效；Codex 的修改在空闲时立即重启生效，有任务运行时会在本地 Codex 会话全部空闲后自动应用。",
       "codexV2ModelHint": "Subagent 默认模型必须是 Codex 自身模型目录内的模型，目录外的模型（如经兼容桥接入的第三方模型）会被 Codex 拒绝；Sol / Terra（Multi-Agent V2）进一步只接受 V2 目录模型（当前为 gpt-5.6-sol 与 gpt-5.6-terra），旧版（V1）无 V2 限制。",
       "saveFailed": "保存 Subagent 设置失败",
       "guardrails": {
@@ -2414,6 +2430,37 @@
     "compatMode": {
       "title": "小技巧",
       "description": "一些功能性开关，部分需要新建任务才会生效(具体见各 cell 说明)。"
+    },
+    "visionBridge": {
+      "title": "视觉桥",
+      "description": "让纯文本模型获得看图能力：用单独的多模态模型把图片转成文字描述后再交给纯文本模型。",
+      "enableLabel": "启用视觉桥",
+      "enableHint": "关闭时所有模型行为与之前完全一致。开启后，下方勾选的模型会把图片经视觉后端转成文字描述。启用后，发送给这些模型的图片以及同消息文字提示会发送给你选择的视觉后端。",
+      "enableAria": "切换视觉桥",
+      "toast": {
+        "saved": "视觉桥设置已保存",
+        "saveFailed": "保存视觉桥设置失败"
+      },
+      "capability": {
+        "vision": "已知支持视觉",
+        "noVision": "已知纯文本",
+        "unknown": "视觉能力未知"
+      },
+      "targetModels": {
+        "label": "走视觉桥的模型",
+        "hint": "纯文本模型（如 DeepSeek）默认已勾选。也可以勾选支持视觉的模型——例如故意用更廉价的描述模型来节省 token。",
+        "empty": "暂无可用的模型。",
+        "toggleAria": "切换 {{model}} 的视觉桥"
+      },
+      "backends": {
+        "label": "视觉后端模型",
+        "hint": "选择最多两个把图片转文字的多模态模型。第二个（备用）可选。",
+        "primary": "主后端",
+        "fallback": "备用",
+        "unset": "未选择",
+        "noBackup": "无备用",
+        "hintSecondary": "优先使用主后端。主后端失败且配置了备用时切换到备用。两者都失败时图片无法识别，会以文字提示代替并提醒你。"
+      }
     },
     "chatEmbedding": {
       "cell": {
@@ -3141,7 +3188,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupPermissionLabel": "群聊新建任务权限档",
+        "groupPermissionDescription": "群里新建任务时统一使用的权限档（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限档只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
       }
     },
     "shortcuts": {
@@ -3432,6 +3481,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "需要重新确认权限",
+        "action": "重新确认权限",
+        "actionAria": "重新确认插件「{{name}}」的权限",
+        "noticeTitle": "需要重新确认权限",
+        "bodyLegacy": "Cindy 没有这个插件的权限确认记录，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyInvalid": "这个插件的权限确认记录已损坏，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyBuiltinRestart": "这个内置插件的权限记录出了点问题。重启 Cindy 即可自动恢复，无需其他操作。"
+      },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
       "emptyHint": "可从插件市场安装，或点击右上角导入 .cindy 文件",
@@ -3486,6 +3544,7 @@
         "uninstalled": "已卸载「{{name}}」",
         "installedAsleep": "已安装「{{name}}」（已停用，可随时在此启用）",
         "updated": "「{{name}}」已更新到 v{{version}}",
+        "reapproved": "已恢复「{{name}}」",
         "exported": "已导出「{{name}}」的 .cindy 文件",
         "exportFailed": "导出「{{name}}」失败，请重试",
         "projectDisabled": "已在此项目停用「{{name}}」",
@@ -3505,6 +3564,7 @@
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。将安装到本机，可随时卸载。",
         "enableNow": "安装后立即生效",
         "enableNowOpenPanel": "安装后立即生效并打开面板",
+        "manualCount": "随包手册 {{count}} 篇",
         "expandDescription": "展开完整介绍",
         "collapseDescription": "收起介绍"
       },
@@ -3627,6 +3687,7 @@
         "fileInvalid": "不是合法的 .cindy 插件文件",
         "hostUnsupported": "这个插件需要当前版本尚未提供的 Cindy 能力。请先升级 Cindy，再重新安装。",
         "alreadyInstalled": "这个插件已经安装",
+        "approvalRequired": "需要重新确认这个插件的权限后才能继续",
         "commandConflict": "它的指令和已装插件撞名了，先卸载占用方或让作者改名",
         "idReserved": "该 id 使用了官方保留前缀 cindy-，仅随应用内置的插件可用",
         "sourceMissing": "找不到所选文件",
@@ -3741,6 +3802,11 @@
         "confirm": "更新",
         "cancel": "取消"
       },
+      "reapproveConfirm": {
+        "title": "重新确认「{{name}}」的权限？",
+        "body": "按下方清单重新授权这个已安装的插件，无需重新提供安装包文件。",
+        "confirm": "确认并恢复"
+      },
       "pick": {
         "dialogTitle": "选择文件夹",
         "dialogMessage": "插件「{{name}}」请求你选择一个文件夹"
@@ -3757,6 +3823,7 @@
       },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
+        "collapseDiff": "收起",
         "description": "普通更新会自动完成；真实包请求新增权限时需要逐项确认。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排队中",
@@ -3766,7 +3833,13 @@
         "statusFailed": "更新失败",
         "background": "后台继续",
         "doneAction": "完成",
-        "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成"
+        "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成",
+        "permissionChanged": "权限变更",
+        "rereview": "重新审阅",
+        "reviewDiff": "查看",
+        "reviewOutdated": "审查过期",
+        "approve": "同意",
+        "skip": "跳过"
       }
     },
     "mcp": {
@@ -4772,7 +4845,10 @@
         "localOnly": "本条消息的精确变更暂不支持远程任务。",
         "partialNotice": "本条消息包含无法精确追踪的命令或工具写入；以下仅展示已精确捕获的部分，不能视为完整补丁。",
         "emptyTitle": "没有已记录的变更",
-        "emptyDesc": "这条消息记录的补丁中没有可显示的文件变更。"
+        "emptyDesc": "这条消息记录的补丁中没有可显示的文件变更。",
+        "crossSessionSwitchDisabled": "正在审查协作任务中的这条消息，不能在当前任务中切换来源。",
+        "previewUnavailable": "这条消息记录的是历史变更，无法可靠预览当前磁盘中的文件内容。",
+        "snapshotPatchUnavailable": "历史变更快照不能生成面向当前 worktree 的 git apply 命令。"
       },
       "fileCount_one": "{{count}} 个文件",
       "fileCount_other": "{{count}} 个文件",
@@ -4830,6 +4906,7 @@
         "in-progress": "git 操作进行中",
         "agent-running": "Agent 正在运行",
         "disabled": "审查不可用",
+        "historical-snapshot": "历史变更快照为只读",
         "remote-device": "远程设备任务仅支持查看",
         "remote-ssh": "SSH 工作区审查仅支持查看"
       },
@@ -5543,6 +5620,7 @@
         "context": "{{value}} 上下文",
         "codexCompatibilityMode": "Codex 兼容模式",
         "price": "{{input}}/{{output}} / 百万",
+        "subscriptionBadgeCompact": "订阅",
         "fastBadge": "快速"
       },
       "source": {
@@ -5726,6 +5804,7 @@
       "startFailed": "开启协同失败",
       "startFailedContinue": "开启协同失败，已改为单任务继续",
       "createWorkerRefreshFailed": "Worker 状态刷新失败，请稍后重试",
+      "assignmentFailed": "Worker 已创建，但无法确认任务是否派发成功。请先查看 Worker 面板，再决定是否重试",
       "openHint": "召集 Worker 协作",
       "disabledHint": "协同模式已关闭，请在设置中重新启用",
       "unavailableHint": "暂时无法确认协同设置，请稍后重试",
@@ -5885,6 +5964,7 @@
       "alwaysAllowScoped": "本任务都允许 {{scope}}",
       "alwaysAllowScopedHint": "作用于整个任务，且只限这里列出的范围。",
       "alwaysAllowSessionHint": "作用于整个任务，不只是这一次请求。",
+      "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
       "ruleSeparator": "、"
     },
     "deviceSwitcher": {
@@ -6066,6 +6146,11 @@
     "imageMissing": {
       "title": "图片已丢失"
     },
+    "visionBridge": {
+      "analyzing": "正在识别图片中…（{{count}} 张）",
+      "fallback": "视觉桥使用了备用视觉后端（主后端不可用），图片识别可能受影响",
+      "unavailable": "视觉桥当前不可用，图片无法识别，已以文字提示代替"
+    },
     "newMessageIndicator": {
       "aria": "回到底部，查看 {{count}} 条新消息",
       "label_one": "{{count}} 条新消息",
@@ -6168,7 +6253,10 @@
       "networkShowRaw": "查看原始错误",
       "networkHideRaw": "收起原始错误",
       "silentStopContinue": "继续",
-      "silentStopContinueTitle": "继续当前任务"
+      "silentStopContinueTitle": "继续当前任务",
+      "piTransportClosed": "远端 Pi 连接已中断（SSH 通道关闭）。远端任务仍在运行，重新连接后可以继续。",
+      "piManagerUnavailable": "远端 Pi 管理器未就绪，请稍后重试；若持续失败请到「设置 → 远端机器」重新安装 Pi。",
+      "piBundledNodeMissing": "远端缺少运行环境（Node.js）。请到「设置 → 远端机器」展开该主机，先在 Claude Code 或 Codex 行点击「安装」（会附带 Node.js），再创建 Pi 任务。"
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
@@ -6585,6 +6673,8 @@
       "automationSent": "由自动化发送",
       "automationSentNamed": "由自动化「{{name}}」发送",
       "automationViewTask": "查看自动化",
+      "orcaFromLead": "来自 Lead 的消息",
+      "orcaFromWorker": "来自 Worker 的消息",
       "expandLongMessage": "展开全文",
       "collapseLongMessage": "收起",
       "sessionReference": {
@@ -6650,20 +6740,22 @@
       }
     },
     "upgradeBanner": {
-      "description": "远端 {{hostId}} 的 cc-manager 有新版本可用 — 升级会中断该机器上当前所有 Claude Code 远端任务",
-      "upgrading": "正在升级远端 {{hostId}} 的 cc-manager…",
+      "description": "远端 {{hostId}} 的 {{manager}} 有新版本可用 — 升级会中断该机器上当前所有远端任务",
+      "upgrading": "正在升级远端 {{hostId}} 的 {{manager}}…",
       "upgrade": "立即升级",
-      "upgradeTitle": "下载并启动新版本 cc-manager（会中断当前任务）",
+      "upgradeTitle": "下载并启动新版本 {{manager}}（会中断当前任务）",
       "dismissTitle": "暂不升级（下次启动会再次提示）",
       "failed": "升级失败：{{message}}",
-      "daemonNotReady": "cc-manager 升级完成，但远端 daemon 暂未启动 — 请手动重新发送消息"
+      "daemonNotReady": "{{manager}} 升级完成，但远端 daemon 暂未启动 — 请手动重新发送消息"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
+      "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远端任务无法访问本机地址。请改用 Cindy AI 网关，或选择远端主机可达的模型供应商。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。"
     },
@@ -6935,7 +7027,7 @@
         "remoteSettings": "远程连接设置",
         "multiSelect": "多选",
         "deselect": "取消勾选",
-        "menuTrigger": "远程机器",
+        "menuTrigger": "任务范围",
         "selectedCount_one": "{{count}} 台机器",
         "selectedCount_other": "{{count}} 台机器"
       },
@@ -6954,6 +7046,8 @@
         "awaitingPluginSetup": "等待插件设置"
       },
       "showAllSessions": "显示全部 {{count}} 项",
+      "allSessions": "全部任务",
+      "scopeLocalSessions": "本机任务",
       "dialogues": "对话",
       "newDialogue": "新任务",
       "dialoguesToggleExpand": "展开对话",
@@ -6971,12 +7065,10 @@
       "projects": "项目",
       "newProject": "新建项目",
       "createProjectFailed": "新建项目失败",
-      "projectsSectionToggleExpand": "展开项目",
-      "projectsSectionToggleCollapse": "收起项目",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
-      "filterAria": "整理侧边栏（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
-      "organizeSidebar": "整理侧边栏",
+      "filterAria": "侧边栏显示设置（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
+      "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
       "filterStatus": {
@@ -6990,8 +7082,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "项目",
-        "date": "日期"
+        "project": "按项目分组",
+        "flat": "平铺",
+        "device": "按设备分组",
+        "dialogue": "对话归为一组"
+      },
+      "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
+      "deviceGroup": {
+        "local": "本机",
+        "offline": "离线",
+        "collapse": "收起该设备",
+        "expand": "展开该设备"
+      },
+      "foldAll": {
+        "collapseGroups": "收起所有分组",
+        "collapseProjects": "收起项目分组",
+        "collapseDevices": "收起设备分组",
+        "expandAll": "展开所有分组"
       },
       "filterLastActivity": {
         "1d": "1 天",
@@ -7001,10 +7108,12 @@
         "all": "全部"
       },
       "filterSortBy": {
-        "recency": "最近优先",
-        "time": "最早优先",
+        "recency": "按时间排序",
         "manual": "手动排序",
-        "alphabetic": "字母排序"
+        "priority": "优先级"
+      },
+      "filterSortByTip": {
+        "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
       "filterStatusHeading": "状态",
       "filterAgentHeading": "Agent",
@@ -7013,6 +7122,24 @@
       "filterSortByHeading": "排序",
       "filterProjectsHeading": "项目",
       "filterAllProjects": "所有项目",
+      "filterHeading": "筛选",
+      "filterSummaryNone": "无",
+      "filterSummaryActive": "{{count}} 项生效",
+      "filterReset": "重置筛选",
+      "displayHeading": "显示",
+      "taskInfoHeading": "任务信息",
+      "taskInfoSummaryNone": "无",
+      "taskInfoSummarySeparator": "、",
+      "taskInfo": {
+        "time": "时间",
+        "pr": "PR 状态",
+        "tokens": "Token",
+        "cost": "费用"
+      },
+      "taskInfoTip": {
+        "tokens": "累计 Token",
+        "cost": "累计费用"
+      },
       "dateGroup": {
         "today": "今天",
         "yesterday": "昨天",
@@ -9005,6 +9132,7 @@
       "archiveWorkerAria": "归档 Worker {{name}}",
       "createWorker": "创建新 Worker",
       "hardLimitHint": "已达硬上限 {{count}} 个 · 归档现有 Worker 后可继续创建",
+      "hardLimitSettingsHint": "已达硬上限 {{count}} 个 · 点击前往协同设置调整",
       "softLimitHint": "已超过软上限 {{count}} 个 · Worker 过多会增加内存占用",
       "settingsCollaboration": "设置 · 协同",
       "layoutMenuLabel": "Worker 列表显示方式",
@@ -9290,13 +9418,20 @@
         "endsAt": "套餐将于 {{date}} 结束",
         "cancelAction": "取消订阅",
         "cancelConfirmTitle": "取消当前订阅？",
-        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至 {{date}}，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
-        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至本计费周期结束，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至 {{date}}，之后不再续费。本计费周期结束前无法购买新套餐。",
+        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至本计费周期结束，之后不再续费。本计费周期结束前无法购买新套餐。",
         "cancelConfirmAction": "确认取消",
         "cancelSuccess": "已取消自动续费，当前套餐可使用至 {{date}}。",
         "cancelSuccessWithoutDate": "已取消自动续费，当前套餐将在本计费周期结束后到期。",
         "cancelNotSupported": "当前订阅暂不支持取消。",
-        "cancelFailed": "取消订阅失败，请稍后重试。"
+        "cancelFailed": "取消订阅失败，请稍后重试。",
+        "resumeAction": "恢复订阅",
+        "resumeConfirmTitle": "恢复当前订阅？",
+        "resumeConfirmDescription": "恢复后将在续费日自动续费。",
+        "resumeConfirmAction": "恢复订阅",
+        "resumeSuccess": "已恢复订阅，将按原计划自动续费。",
+        "resumeNotAvailable": "当前订阅暂不支持恢复，请查看最新订阅状态后重试。",
+        "resumeFailed": "未能恢复订阅，请稍后重试。"
       },
       "topupCard": {
         "action": "余额充值"

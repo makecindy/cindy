@@ -19,7 +19,8 @@
     "allowOnce": "1回だけ許可",
     "allowOnceAccessibility": "権限リクエストを1回だけ許可",
     "allowOnceConfirm": "1回だけ許可を確認",
-    "highRisk": "高リスク"
+    "highRisk": "高リスク",
+    "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。"
   },
   "planMode": {
     "label": "プランモード",

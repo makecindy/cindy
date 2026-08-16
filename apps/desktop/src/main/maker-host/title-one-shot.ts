@@ -59,6 +59,12 @@ const log = createLogger('maker-host:title-one-shot');
 const TITLE_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
 const TITLE_MAX_TOKENS = 32;
+/**
+ * XD 网关思考模型(Hy3 / DeepSeek 等)默认会先写 reasoning_content。
+ * 标题只要短正文;不关思考时 32 token 会全部烧掉,content 仍是空串。
+ * 网关认 OpenAI 兼容的 thinking.type=disabled;官方 no_think / enable_thinking=false 无效。
+ */
+const TITLE_GATEWAY_THINKING = { type: 'disabled' } as const;
 /** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
 const TITLE_OUTPUT_MAX_CHARS = 256;
 /**
@@ -346,6 +352,7 @@ async function fetchGatewayTitle(
     body: JSON.stringify({
       model: modelId,
       max_tokens: TITLE_MAX_TOKENS,
+      thinking: TITLE_GATEWAY_THINKING,
       messages: [{ role: 'user', content: prompt }],
     }),
   });

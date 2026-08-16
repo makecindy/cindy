@@ -23,6 +23,12 @@ export type IpcErrorCode =
   | 'REMOTE_PROVIDER_UPDATING'
   | 'REMOTE_PROVIDER_UNSUPPORTED'
   | 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
+  // 远端 Pi 会话启动时 Cindy AI gateway endpoint 未就绪(登录后自动下发):
+  // renderer 走 logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE。
+  | 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'
+  // 远端 Pi 会话选了 baseUrl 指向本机 loopback 的 BYOM provider(Ollama 等):
+  // 远端进程连不到本机服务, 创建时拒绝并引导换网关/远端可达 BYOM。
+  | 'REMOTE_LOCAL_ONLY_PROVIDER'
   // 远端切模/切来源需要不同路由(claude-code setModel 守卫):提示重建会话。
   | 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE'
   | 'NO_LIVE_QUERY'
@@ -174,7 +180,9 @@ export type IpcErrorCode =
   | 'MODEL_ACCESS_FAILED' // 拉取/轮换失败(网络或服务端错误),可重试
   | 'MODEL_ACCESS_DISABLED' // 服务端灰度未启用(503)——走手填兜底
   | 'MODEL_ACCESS_UNSUPPORTED' // 企业未接入(403)——XD 网关不可用,不重试
+  | 'MODEL_CATALOG_FETCH_DISABLED' // 模型目录远程拉取被禁用(XDT_DISABLE_MODELS_FETCH),未发起请求
   | 'PLAN_CHANGE_NOT_AVAILABLE' // 当前订阅不能切换到目标套餐，可返回候选列表重选
+  | 'RESUME_NOT_AVAILABLE' // 当前订阅已到期、渠道协议失效或状态不可恢复
   // 钉钉机器人连接
   | 'DINGTALK_AUTH_FAILED' // Client ID / Client Secret 被钉钉拒绝
   | 'DINGTALK_NETWORK_FAILED' // 钉钉凭证校验接口不可达
@@ -236,6 +244,8 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REMOTE_PROVIDER_UPDATING',
   'REMOTE_PROVIDER_UNSUPPORTED',
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
+  'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE',
+  'REMOTE_LOCAL_ONLY_PROVIDER',
   'REMOTE_MODEL_SWITCH_ROUTE_CHANGE',
   'NO_LIVE_QUERY',
   'STALE_DIFF',
@@ -357,7 +367,9 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'MODEL_ACCESS_FAILED',
   'MODEL_ACCESS_DISABLED',
   'MODEL_ACCESS_UNSUPPORTED',
+  'MODEL_CATALOG_FETCH_DISABLED',
   'PLAN_CHANGE_NOT_AVAILABLE',
+  'RESUME_NOT_AVAILABLE',
   'DINGTALK_AUTH_FAILED',
   'DINGTALK_NETWORK_FAILED',
   'DINGTALK_STREAM_CONNECTION_FAILED',

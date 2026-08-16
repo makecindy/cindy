@@ -102,6 +102,8 @@ vi.mock('@cindy/anthropic-compat-proxy', () => ({
   stripEncryptedContentFromBody: () => null,
   stripImageGenerationItemsWithoutIdFromBody: () => null,
   stripNonAnthropicFields: mockState.stripNonAnthropicFields,
+  // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
+  createVisionBridgeTransform: () => (() => null),
   createInstructionsRegistry: () => {
     const map = new Map<string, string>();
     return {
@@ -212,7 +214,8 @@ describe('withCodexUpstreamRecording', () => {
     const { buildUserProvider } = await import('@cindy/model-providers');
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
-    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setSessionProvider, clearSessionProvider } =
+      await import('../session-provider-store.js');
     setCustomProviders([
       buildUserProvider({
         id: 'kimi-moonshot',
@@ -525,6 +528,75 @@ describe('decideCodexRoute', () => {
 });
 
 describe('chatBridgeCapabilitiesForRoute', () => {
+  it('fails closed before a pending target reaches the old custom local bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const {
+      setCustomProviderKeyReader,
+      setPendingCredentialSwitchReader,
+    } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://provider-a.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'shared-model', name: 'Shared Model' }],
+          },
+        },
+      }),
+    ]);
+    const readKey = vi.fn(() => 'provider-a-key');
+    setCustomProviderKeyReader(readKey);
+    setPendingCredentialSwitchReader(() => ({
+      model: 'shared-model',
+      providerId: 'provider-b',
+    }));
+    host.registerComposed('session-pending-bridge', 'thread-pending-bridge', 'PRODUCT_PROMPT');
+    setSessionProvider('session-pending-bridge', 'provider-a');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const body = { model: 'shared-model', input: [{ role: 'user', content: 'hello' }] };
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-pending-bridge' },
+      };
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      expect(readKey).not.toHaveBeenCalled();
+      expect(mockState.createResponsesChatHandler).not.toHaveBeenCalled();
+
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision!.localHandler!({
+        rawBody: Buffer.from(JSON.stringify(body)),
+        parsedBody: body,
+        ctx,
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(
+        503,
+        expect.objectContaining({ 'retry-after': '1' }),
+      );
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'provider_switch_pending' },
+      });
+    } finally {
+      host.unregister('session-pending-bridge');
+      clearSessionProvider('session-pending-bridge');
+      setPendingCredentialSwitchReader(() => undefined);
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('does not forward unsupported passthrough fields into the translator', async () => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     const capabilities = chatBridgeCapabilitiesForRoute(
@@ -1874,8 +1946,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -3791,7 +3863,11 @@ describe('codex proxy host', () => {
 
   it('normalizes implicit-source xAI Codex requests before forwarding', async () => {
     const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog, setXaiDiscoveredModels } = await import('../active-catalog.js');
     const { clearSessionProvider } = await import('../session-provider-store.js');
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([{ id: 'xai/grok-code-fast' }]);
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
       dispose: vi.fn(async () => undefined),
@@ -3800,33 +3876,38 @@ describe('codex proxy host', () => {
     host.registerComposed('session-xai-implicit', 'thread-xai-implicit', 'PRODUCT_PROMPT');
     clearSessionProvider('session-xai-implicit');
 
-    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    let current: unknown = {
-      model: 'xai/grok-code-fast',
-      instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
-      reasoning: { effort: 'high', summary: 'auto' },
-      input: [
-        { type: 'reasoning', encrypted_content: 'gAAA' },
-        { role: 'user', content: 'hello' },
-      ],
-    };
-    const ctx = {
-      method: 'POST',
-      url: '/responses',
-      headers: { 'thread-id': 'thread-xai-implicit' },
-    };
-    for (const transform of transforms) {
-      const next = transform(current, ctx);
-      if (next !== null && next !== undefined) current = next;
-    }
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'xai/grok-code-fast',
+        instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
+        reasoning: { effort: 'high', summary: 'auto' },
+        input: [
+          { type: 'reasoning', encrypted_content: 'gAAA' },
+          { role: 'user', content: 'hello' },
+        ],
+      };
+      const ctx = {
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xai-implicit' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
 
-    expect(current).toEqual({
-      model: 'grok-code-fast',
-      input: [
-        { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
-        { type: 'message', role: 'user', content: 'hello' },
-      ],
-    });
+      expect(current).toEqual({
+        model: 'grok-code-fast',
+        input: [
+          { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
+          { type: 'message', role: 'user', content: 'hello' },
+        ],
+      });
+    } finally {
+      setXaiDiscoveredModels(null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
 
   it('leaves non-xai/ bodies untouched in explicit xAI sessions (transform 与路由 scope 门同源, #890 review)', async () => {
@@ -3928,7 +4009,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(13); // encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(14); // encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
@@ -4127,5 +4208,152 @@ describe('codex proxy host', () => {
     await Promise.all([first, second]);
 
     expect(host.getCodexProxyEndpoint()).toBe('http://127.0.0.1:43210');
+  });
+});
+
+/**
+ * 额度回调的安装门(#2626)。桥的 localHandler 绕开 compat-proxy 的转发层, 转发层上的
+ * rate-limit observer 看不到这些响应, 只能由 host 在这里回喂 —— 但必须只对
+ * 「内置 Anthropic + 订阅 OAuth + 官方 hostname」这一种路由安装, 其余形态误装会把
+ * 别的账号 / 别的上游的数据写进 Claude 订阅快照。
+ */
+describe('createModelRoutingTransform —— Anthropic 桥的额度回调安装门', () => {
+  it('installs the quota callback for builtin Anthropic subscription OAuth and feeds the shared recorder', async () => {
+    const host = await freshCodexProxyHost();
+    const {
+      getActiveCatalog,
+      setAnthropicDiscoveredModels,
+      setXdGatewayModels,
+    } = await import('../active-catalog.js');
+    const {
+      setProviderOAuthTokenReader,
+      setProviderViewsReader,
+    } = await import('../provider-route.js');
+    const { clearSessionProvider } = await import('../session-provider-store.js');
+    const {
+      resetClaudeRateLimitHeadersDedup,
+      setClaudeRateLimitHeadersListener,
+    } = await import('../claude-rate-limit-headers-observer.js');
+
+    const model: import('@cindy/model-providers').CatalogModel = {
+      id: 'claude-quota-callback',
+      name: 'Quota Callback',
+      group: 'anthropic',
+      contextWindow: 200_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+      status: 'active',
+    };
+    setAnthropicDiscoveredModels([model]);
+    setXdGatewayModels([{ id: model.id, agents: ['claude-code'] }]);
+    setProviderViewsReader(async () => getActiveCatalog().providers.map((provider) => ({
+      ...provider,
+      connected: provider.id === 'anthropic',
+    })));
+    setProviderOAuthTokenReader((providerId, agent) => (
+      providerId === 'anthropic' && agent === 'codex' ? 'claude-subscription-token' : null
+    ));
+    host.registerComposed('session-quota-callback', 'thread-quota-callback', 'PRODUCT_PROMPT');
+    clearSessionProvider('session-quota-callback');
+    host.setCodexProxyGatewayKeyReader(() => null);
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    resetClaudeRateLimitHeadersDedup();
+    const listener = vi.fn();
+    setClaudeRateLimitHeadersListener(listener);
+
+    try {
+      await Promise.resolve(host.createModelRoutingTransform()(
+        { model: model.id, input: [{ role: 'user', content: 'hello' }] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-quota-callback' },
+        },
+      ));
+
+      const config = (mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+        {
+          onUpstreamResponse?: (info: {
+            status: number;
+            responseHeaders: Headers;
+            requestHeaders: Readonly<Record<string, string>>;
+          }) => void;
+        },
+      ]>).at(-1)?.[0];
+      expect(config?.onUpstreamResponse).toBeTypeOf('function');
+
+      // 回调真的把 headers 喂到了共用入口 —— 只断言「装上了」会漏掉接错线的情形。
+      config?.onUpstreamResponse?.({
+        status: 200,
+        responseHeaders: new Headers({
+          'anthropic-ratelimit-unified-5h-utilization': '0.34',
+          'anthropic-ratelimit-unified-status': 'allowed',
+        }),
+        requestHeaders: { authorization: 'Bearer claude-subscription-token' },
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][0].fiveHour.utilization).toBeCloseTo(34, 5);
+      expect(listener.mock.calls[0][0].source).toBe('unified-headers');
+      expect(listener.mock.calls[0][1]).toBe('claude-subscription-token');
+    } finally {
+      host.unregister('session-quota-callback');
+      clearSessionProvider('session-quota-callback');
+      setProviderOAuthTokenReader(() => null);
+      setProviderViewsReader(async () => []);
+      setAnthropicDiscoveredModels([]);
+      setXdGatewayModels([]);
+      host.setCodexProxyGatewayKeyReader(() => null);
+      setClaudeRateLimitHeadersListener(() => undefined);
+    }
+  });
+
+  it('does not install it for a custom anthropic-compatible provider on an API key', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'anthropic-compatible',
+        name: 'Anthropic Compatible',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://messages.provider.example/v1',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'claude-compatible', name: 'Claude Compatible' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'provider-key');
+    host.registerComposed('session-quota-gate-custom', 'thread-quota-gate-custom', 'PRODUCT_PROMPT');
+    setSessionProvider('session-quota-gate-custom', 'anthropic-compatible');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'claude-compatible' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-quota-gate-custom' },
+        },
+      ));
+
+      const config = (mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+        { upstreamBase: string; onUpstreamResponse?: unknown },
+      ]>).at(-1)?.[0];
+      expect(config?.upstreamBase).toBe('https://messages.provider.example/v1');
+      // 非官方 hostname + 非订阅 OAuth:两道门任一不满足都不装
+      expect(config?.onUpstreamResponse).toBeUndefined();
+    } finally {
+      host.unregister('session-quota-gate-custom');
+      clearSessionProvider('session-quota-gate-custom');
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
   });
 });

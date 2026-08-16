@@ -349,6 +349,31 @@ export function planNavRailTicks(entryCount: number, availableHeightPx: number):
 }
 
 /**
+ * 计算刻度线宽度。悬浮或 scrub 时，以目标为中心向两侧逐级收缩 1～3 根；
+ * 当前阅读位置仍保留自己的加长反馈，避免交互态覆盖阅读态。
+ */
+export function planNavRailTickWidth(input: {
+  distance: number | null;
+  isActive: boolean;
+  inView: boolean;
+  isAutomation?: boolean;
+}): string {
+  // 所有状态共享同一条 26px 轨道；hover/scrub 的渐进伸缩由渲染层
+  // 的 scaleX 负责，避免普通态出现不一致的横条长度。
+  void input;
+  return 'w-[26px]';
+}
+
+export function planNavRailTickProgress(distance: number | null): number {
+  if (distance === null) return 0;
+  if (distance === 0) return 1;
+  if (distance === 1) return 0.7;
+  if (distance === 2) return 0.4;
+  if (distance === 3) return 0.2;
+  return 0;
+}
+
+/**
  * 导航条是否有横向空间:内容列(maxWidth 截断后)左侧的实际留白够不够。
  * 内容列由 mx-auto 居中,留白 = (容器宽 - 内容实际宽) / 2。
  */

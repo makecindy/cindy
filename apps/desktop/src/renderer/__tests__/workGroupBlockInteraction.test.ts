@@ -38,6 +38,15 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     expect(source).not.toMatch(/AgentActionsBlock/);
   });
 
+  it('exposes thinking rows as viewport child anchors', () => {
+    expect(source).toMatch(
+      /function ThinkingActivityRow[\s\S]*data-message-client-id=\{activity\.key\}/,
+    );
+    expect(source).toMatch(
+      /function ExpandedThinkingRow[\s\S]*data-message-client-id=\{message\.clientId\}/,
+    );
+  });
+
   it('完成态内层工作组递归复用 WorkGroupBlock', () => {
     expect(source).toMatch(/child\.kind === 'group'[\s\S]*?<WorkGroupBlock/);
   });

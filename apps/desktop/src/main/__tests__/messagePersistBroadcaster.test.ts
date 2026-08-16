@@ -29,6 +29,13 @@ vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
+vi.mock('../localDb/codexPlanState.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../localDb/codexPlanState.js')>()),
+  markCodexPlanInterrupted: vi.fn(async () => undefined),
+  writeCodexPlanTerminal: vi.fn(async () => undefined),
+  writeCodexPlanUpdate: vi.fn(async () => undefined),
+}));
+
 const { mockSend } = vi.hoisted(() => ({ mockSend: vi.fn() }));
 const ownerScopeState = vi.hoisted(() => ({
   current: true,
@@ -51,6 +58,11 @@ import {
   patchMessageAgentMetaWithResult,
   updateMessageContent,
 } from '../localDb/ipc/messages.js';
+import {
+  markCodexPlanInterrupted,
+  writeCodexPlanTerminal,
+  writeCodexPlanUpdate,
+} from '../localDb/codexPlanState.js';
 import {
   recordMediaToolResult,
   __resetMediaToolResultPoolForTesting,
@@ -112,6 +124,121 @@ beforeEach(() => {
 });
 
 describe('update_plan tool_use persistence', () => {
+  it('persists native Codex plan state without relying on the session agent cache', async () => {
+    noteSessionAgentKind(SESSION, 'codex');
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-state',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Persist state', status: 'in_progress' }] },
+      },
+      null,
+    );
+    await flushWrites();
+
+    expect(writeCodexPlanUpdate).toHaveBeenCalledWith(SESSION, {
+      turnId: 'turn-state',
+      plan: [{ step: 'Persist state', status: 'in_progress' }],
+    });
+  });
+
+  it('does not restore a queued plan update after /clear advances the session boundary', async () => {
+    noteSessionAgentKind(SESSION, 'codex');
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-before-clear',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Old plan', status: 'in_progress' }] },
+      },
+      null,
+    );
+    noteSessionClearBoundary(SESSION, Date.now());
+
+    await flushWrites();
+
+    expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a late old-turn plan update that arrives after /clear', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      noteTurnStarted(SESSION);
+      noteSessionAgentKind(SESSION, 'codex');
+
+      nowSpy.mockReturnValue(1_700_000_001_000);
+      noteSessionClearBoundary(SESSION, Date.now());
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:late-old-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Late old plan', status: 'in_progress' }] },
+        },
+        null,
+      );
+
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('rejects an old-turn plan update without a token after a new turn has started', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      noteTurnStarted(SESSION, 1);
+      noteSessionAgentKind(SESSION, 'codex');
+
+      nowSpy.mockReturnValue(1_700_000_001_000);
+      noteSessionClearBoundary(SESSION, Date.now());
+      resetTurnPersistState(SESSION);
+
+      nowSpy.mockReturnValue(1_700_000_002_000);
+      noteTurnStarted(SESSION, 2);
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:late-replaced-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Late replaced plan', status: 'in_progress' }] },
+        },
+        null,
+        'turn',
+      );
+
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:current-replacement-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Current plan', status: 'in_progress' }] },
+        },
+        null,
+        'turn',
+        undefined,
+        2,
+      );
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).toHaveBeenCalledWith(SESSION, {
+        turnId: 'current-replacement-turn',
+        plan: [{ step: 'Current plan', status: 'in_progress' }],
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('updates the existing tool_use row when Codex repeats update_plan with the same toolUseId', async () => {
     const firstPersistId = onToolUseEvent(
       SESSION,
@@ -190,7 +317,7 @@ describe('update_plan tool_use persistence', () => {
     );
   });
 
-  it('seals a successful turn plan as-is so reload cannot resurrect it', async () => {
+  it('keeps a successful turn with open plan steps available for reconciliation', async () => {
     const persistId = onToolUseEvent(
       SESSION,
       {
@@ -216,6 +343,14 @@ describe('update_plan tool_use persistence', () => {
     })).toBe(true);
 
     await flushWrites();
+    expect(writeCodexPlanTerminal).toHaveBeenCalledWith(SESSION, {
+      turnId: 'turn-1',
+      plan: [
+        { step: 'Inspect', status: 'completed' },
+        { step: 'Start dev', status: 'in_progress' },
+      ],
+      state: 'interrupted',
+    });
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       persistId,
@@ -329,6 +464,9 @@ describe('update_plan tool_use persistence', () => {
     expect(persistCodexPlanOnTerminalError(SESSION, 'turn-current')).toBe(true);
     await flushWrites();
 
+    expect(markCodexPlanInterrupted).toHaveBeenCalledTimes(1);
+    expect(markCodexPlanInterrupted).toHaveBeenCalledWith(SESSION, 'turn-current');
+
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       currentPersistId,
@@ -340,6 +478,13 @@ describe('update_plan tool_use persistence', () => {
       expect.anything(),
       expect.objectContaining({ toolUseId: 'plan:turn-old' }),
     );
+  });
+
+  it('does not mutate durable plan state when an id-less error has no owned plan turn', async () => {
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(false);
+    await flushWrites();
+
+    expect(markCodexPlanInterrupted).not.toHaveBeenCalled();
   });
 
   it('carries repeated update_plan snapshots into the terminal write', async () => {
@@ -431,6 +576,11 @@ describe('update_plan tool_use persistence', () => {
     })).toBe(true);
 
     await flushWrites();
+    expect(writeCodexPlanTerminal).toHaveBeenCalledWith(SESSION, {
+      turnId: 'turn-complete',
+      plan: [{ step: 'Ship', status: 'completed' }],
+      state: 'sealed',
+    });
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       persistId,

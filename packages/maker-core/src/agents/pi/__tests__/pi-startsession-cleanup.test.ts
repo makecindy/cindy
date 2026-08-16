@@ -28,24 +28,43 @@ const knobs = vi.hoisted(() => ({
   spawnedArgs: [] as string[][],
 }));
 
+vi.mock('../transport.js', () => ({
+  createPiStdioTransport: (opts: {
+    args: string[];
+    env: Record<string, string | undefined>;
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
+    // spawn 参数/隔离 configHome 断言移到 transport 工厂(spawn 行为在 stdio transport)。
+    knobs.spawnedEnvs.push({ ...(opts.env ?? {}) });
+    knobs.spawnedArgs.push([...(opts.args ?? [])]);
+    if (knobs.ctorThrows) throw new Error('spawn failed (mock)');
+    opts.onProcessSpawned?.(1234);
+    return {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 1234,
+      isClosed: () => false,
+    };
+  },
+  attachJsonlReader: () => {},
+}));
+
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
     constructor(opts: unknown) {
-      // 捕获 onExit 以便单测模拟进程异常退出(crash);捕获 env 以断言每会话隔离 configHome。
+      // 捕获 onExit 以便单测模拟进程异常退出(crash)。
       const o = opts as
         | {
             onExit?: typeof knobs.onExit;
             onEvent?: typeof knobs.onEvent;
-            env?: Record<string, string | undefined>;
-            args?: string[];
           }
         | undefined;
       knobs.onExit = o?.onExit ?? null;
       knobs.onEvent = o?.onEvent ?? null;
-      knobs.spawnedEnvs.push({ ...(o?.env ?? {}) });
-      knobs.spawnedArgs.push([...(o?.args ?? [])]);
-      if (knobs.ctorThrows) throw new Error('spawn failed (mock)');
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
       if (cmd.type === 'get_state') {
@@ -257,8 +276,10 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(args).not.toContain('--no-skills');
     expect(args).not.toContain('--skill');
     expect(repeatedArgValues(args, '--extension')).toEqual([
-      path.join(configHome, 'extensions', 'cindy-bridge.ts'),
-      path.join(configHome, 'extensions', 'cindy-subagent.ts'),
+      // 轮 40-w4-t15:argv 里的 extension 路径是 posix join(远端派生路径统一
+      // POSIX),对比也用 posix —— 平台 path.join 在 Windows 拼反斜杠不匹配。
+      path.posix.join(configHome, 'extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'extensions', 'cindy-subagent.ts'),
     ]);
     await vi.waitFor(() => {
       expect(handle.getRuntimeCapabilities?.()?.projectResources).toEqual({
@@ -464,7 +485,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const s2Index = indexForSession('s2');
     const home1 = knobs.spawnedEnvs[s1Index].PI_CODING_AGENT_DIR as string;
     const home2 = knobs.spawnedEnvs[s2Index].PI_CODING_AGENT_DIR as string;
-    const runTmp = path.join(agentHome, 'run-tmp');
+    // 轮 40-w4-t5:configHome 用 posix join —— 对比也用 posix(平台 path.join 在
+    // Windows 拼 \ 与 / 不匹配)。
+    const runTmp = path.posix.join(agentHome, 'run-tmp');
     // 两个会话各自独立的 configHome(都在 run-tmp 下,hex 不同),各有自己的 models.json。
     expect(home1).not.toBe(home2);
     expect(home1.startsWith(runTmp)).toBe(true);
@@ -531,11 +554,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
-      path.join(approvedHome, 'extensions', 'cindy-bridge.ts'),
-      path.join(approvedHome, 'extensions', 'cindy-subagent.ts'),
+      path.posix.join(approvedHome, 'extensions', 'cindy-bridge.ts'),
+      path.posix.join(approvedHome, 'extensions', 'cindy-subagent.ts'),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([
-      path.join(reviewHome, 'extensions', 'cindy-bridge.ts'),
+      path.posix.join(reviewHome, 'extensions', 'cindy-bridge.ts'),
     ]);
     expect(resolvePiProjectTrustInput).toHaveBeenCalledOnce();
     expect(resolvePiProjectTrustInput).toHaveBeenCalledWith(expect.objectContaining({

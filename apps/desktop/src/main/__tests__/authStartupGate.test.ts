@@ -68,6 +68,24 @@ describe('awaitWithStartupTimeout', () => {
     expect(onLateResult).toHaveBeenCalledWith('late-login');
   });
 
+  it('supports an async timeout recovery before returning the fallback', async () => {
+    const flow = new Promise<string>(() => undefined);
+    const recovery = vi.fn(async () => {
+      await Promise.resolve();
+    });
+    const p = awaitWithStartupTimeout(flow, {
+      timeoutMs: 1000,
+      onTimeout: async () => {
+        await recovery();
+        return 'recovered-fallback';
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(p).resolves.toBe('recovered-fallback');
+    expect(recovery).toHaveBeenCalledOnce();
+  });
+
   it('超时:flow 迟到 reject 时回调 onLateError,rejection 被消化', async () => {
     let rejectFlow!: (err: unknown) => void;
     const flow = new Promise<string>((_r, rej) => {

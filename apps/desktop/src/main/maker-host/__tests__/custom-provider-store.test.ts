@@ -92,6 +92,10 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
   it('rejects bad / reserved ids', () => {
     expect(validateCustomProviderConfig({ ...valid, id: 'Bad Id' }).ok).toBe(false);
     expect(validateCustomProviderConfig({ ...valid, id: 'xd' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }, { allowLegacyXai: true }).ok).toBe(
+      true,
+    );
     // 'cindy' 撞 pi 网关 provider id,必须保留
     expect(validateCustomProviderConfig({ ...valid, id: 'cindy' }).ok).toBe(false);
   });
@@ -178,6 +182,88 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     }
   });
 
+  it('accepts a same-origin model route and rejects unsafe route variants', () => {
+    const config = (route: unknown) => ({
+      ...valid,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'glm-5.3', name: 'GLM-5.3', route }],
+        },
+      },
+    });
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://evil.example/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://user:secret@open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({ baseUrl: 'https://open.bigmodel.cn/api/v1', wireProtocol: 'bogus' }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('accepts supported per-model piApi values only on a Pi runtime', () => {
+    for (const piApi of [
+      'anthropic-messages',
+      'openai-responses',
+      'openai-completions',
+      'google-generative-ai',
+    ]) {
+      expect(validateCustomProviderConfig({
+        id: 'pi-api',
+        name: 'Pi API',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://example.com/v1',
+            models: [{ id: 'm', name: 'M', piApi }],
+          },
+        },
+      }).ok).toBe(true);
+    }
+    expect(validateCustomProviderConfig({
+      id: 'bad-pi-api',
+      name: 'Bad Pi API',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://example.com/v1',
+          models: [{ id: 'm', name: 'M', piApi: 'claude-v1' }],
+        },
+      },
+    }).ok).toBe(false);
+    expect(validateCustomProviderConfig({
+      id: 'wrong-runtime-pi-api',
+      name: 'Wrong runtime Pi API',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          models: [{ id: 'm', name: 'M', piApi: 'openai-responses' }],
+        },
+      },
+    }).ok).toBe(false);
+  });
+
   it('accepts only explicit, non-empty, valid Pi reasoning effort capabilities', () => {
     const config = (model: Record<string, unknown>, agent: 'pi' | 'codex' = 'pi') => ({
       id: 'reasoning-provider',
@@ -195,6 +281,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         config({
           reasoning: true,
           reasoningEfforts: ['low', 'high', 'xhigh'],
+          reasoningDefaultEffort: 'high',
         }),
       ),
     ).toEqual({ ok: true });
@@ -216,6 +303,11 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       ).ok,
     ).toBe(false);
     expect(validateCustomProviderConfig(config({ reasoningEfforts: ['high'] })).ok).toBe(false);
+    expect(validateCustomProviderConfig(config({
+      reasoning: true,
+      reasoningEfforts: ['low', 'high'],
+      reasoningDefaultEffort: 'max',
+    })).ok).toBe(false);
     expect(
       validateCustomProviderConfig(
         config(
@@ -360,6 +452,199 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ]);
   });
 
+  it('round-trips the Pi official catalog provider id without adding it to other runtimes', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'official-pi',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        },
+      },
+    });
+    expect((await getCustomProvider('official-pi'))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    expect(validateCustomProviderConfig({
+      id: 'bad-catalog-runtime',
+      name: 'Bad',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    }).ok).toBe(false);
+  });
+
+  it('clears the Pi catalog marker when any write path changes saved model metadata', async () => {
+    mountDb();
+    const original = await createCustomProvider({
+      id: 'official-pi-edited',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-chat',
+          piCatalogProviderId: 'deepseek',
+          models: [{
+            id: 'deepseek-v4-pro',
+            name: 'DeepSeek V4 Pro',
+            contextWindow: 1_000_000,
+            reasoning: true,
+            reasoningEfforts: ['high', 'max'],
+            reasoningDefaultEffort: 'high',
+          }],
+        },
+      },
+    });
+    const edited: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: {
+          ...original.runtimes.pi!,
+          models: [{
+            ...original.runtimes.pi!.models[0]!,
+            name: 'My DeepSeek',
+            contextWindow: 64_000,
+            supportsImageInput: true,
+            reasoningEfforts: ['low'],
+            reasoningDefaultEffort: 'low',
+          }],
+        },
+      },
+    };
+    expect((await updateCustomProvider('official-pi-edited', {
+      ...original,
+      name: 'Renamed provider only',
+    }))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    const defaultProtocolRoundTrip: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: { ...original.runtimes.pi!, wireProtocol: undefined },
+      },
+    };
+    expect((await updateCustomProvider('official-pi-edited', defaultProtocolRoundTrip))
+      ?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    expect((await updateCustomProvider('official-pi-edited', {
+      ...defaultProtocolRoundTrip,
+      runtimes: {
+        ...defaultProtocolRoundTrip.runtimes,
+        pi: {
+          ...defaultProtocolRoundTrip.runtimes.pi!,
+          wireProtocol: 'anthropic-messages',
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+
+    await updateCustomProvider('official-pi-edited', original);
+    expect((await updateCustomProvider('official-pi-edited', edited))?.runtimes.pi)
+      .not.toHaveProperty('piCatalogProviderId');
+
+    const second = await createCustomProvider({
+      ...original,
+      id: 'official-pi-discovered',
+    });
+    expect(await updateCustomProviderIfUnchanged(
+      second.id,
+      second,
+      {
+        ...second,
+        runtimes: {
+          ...second.runtimes,
+          pi: {
+            ...second.runtimes.pi!,
+            models: [
+              ...second.runtimes.pi!.models,
+              { id: 'new-from-models-url', name: 'New model' },
+            ],
+          },
+        },
+      },
+    )).toBe(true);
+    expect((await getCustomProvider(second.id))?.runtimes.pi?.piCatalogProviderId)
+      .toBe('deepseek');
+
+    const replaced = await createCustomProvider({
+      ...original,
+      id: 'official-pi-replaced',
+    });
+    expect((await updateCustomProvider(replaced.id, {
+      ...replaced,
+      runtimes: {
+        ...replaced.runtimes,
+        pi: {
+          ...replaced.runtimes.pi!,
+          models: [{
+            id: 'deepseek-v4-flash',
+            name: 'My Flash Model',
+            contextWindow: 64_000,
+            supportsImageInput: true,
+            reasoning: true,
+            reasoningEfforts: ['low'],
+            reasoningDefaultEffort: 'low',
+          }],
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+    expect((await getCustomProvider(replaced.id))?.runtimes.pi).toMatchObject({
+      models: [{
+        id: 'deepseek-v4-flash',
+        name: 'My Flash Model',
+        contextWindow: 64_000,
+        supportsImageInput: true,
+        reasoning: true,
+        reasoningEfforts: ['low'],
+        reasoningDefaultEffort: 'low',
+      }],
+    });
+
+    const deleted = await createCustomProvider({
+      ...original,
+      id: 'official-pi-deleted',
+    });
+    expect((await updateCustomProvider(deleted.id, {
+      ...deleted,
+      runtimes: {
+        ...deleted.runtimes,
+        pi: { ...deleted.runtimes.pi!, models: [] },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+    const deletedSnapshot = await getCustomProvider(deleted.id);
+    expect((await updateCustomProvider(deleted.id, {
+      ...deletedSnapshot!,
+      runtimes: {
+        ...deletedSnapshot!.runtimes,
+        pi: {
+          ...deletedSnapshot!.runtimes.pi!,
+          models: deleted.runtimes.pi!.models,
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+
+    const duplicate = await createCustomProvider({
+      ...original,
+      id: 'official-pi-duplicate',
+    });
+    expect((await updateCustomProvider(duplicate.id, {
+      ...duplicate,
+      runtimes: {
+        ...duplicate.runtimes,
+        pi: {
+          ...duplicate.runtimes.pi!,
+          models: [
+            { ...duplicate.runtimes.pi!.models[0]!, name: 'Edited first duplicate' },
+            duplicate.runtimes.pi!.models[0]!,
+          ],
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+  });
+
   it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
     mountDb();
     await createCustomProvider({
@@ -375,6 +660,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
               name: 'Reasoner',
               reasoning: true,
               reasoningEfforts: ['low', 'high', 'xhigh'],
+              reasoningDefaultEffort: 'xhigh',
             },
             { id: 'legacy', name: 'Legacy' },
             { id: 'explicit-off', name: 'Explicit off', reasoning: false },
@@ -388,10 +674,37 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         name: 'Reasoner',
         reasoning: true,
         reasoningEfforts: ['low', 'high', 'xhigh'],
+        reasoningDefaultEffort: 'xhigh',
       },
       { id: 'legacy', name: 'Legacy' },
       { id: 'explicit-off', name: 'Explicit off' },
     ]);
+  });
+
+  it('round-trips a per-model Pi protocol correction', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'deepseek-pi',
+      name: 'DeepSeek Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-responses',
+          models: [{
+            id: 'deepseek-v4-pro',
+            name: 'DeepSeek V4 Pro',
+            piApi: 'openai-responses',
+          }],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('deepseek-pi'))?.runtimes.pi?.models).toEqual([{
+      id: 'deepseek-v4-pro',
+      name: 'DeepSeek V4 Pro',
+      piApi: 'openai-responses',
+    }]);
   });
 
   it('round-trips an explicit Chat Completions protocol', async () => {
@@ -483,6 +796,34 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     });
     expect((await getCustomProvider('openrouter'))?.runtimes.codex?.requestPath)
       .toBe('/tenant/acme/v2/infer?stream=1');
+  });
+
+  it('round-trips a validated model-specific route', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'glm-5.3',
+              name: 'GLM-5.3',
+              route: {
+                baseUrl: 'https://open.bigmodel.cn/api/v1',
+                wireProtocol: 'openai-responses',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.models[0]?.route).toEqual({
+      baseUrl: 'https://open.bigmodel.cn/api/v1',
+      wireProtocol: 'openai-responses',
+    });
   });
 
   it('strips requestPath from Pi native runtime records', async () => {

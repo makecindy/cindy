@@ -89,6 +89,100 @@ function rpcRequest(method = 'echo', params: unknown = { value: 1 }) {
   return { type: 'node-request', method, params };
 }
 
+describe('nodeRuntimeBroker owner boundary races', () => {
+  it('owner boundary change during startup kills the worker and fails closed', async () => {
+    let generation = 1;
+    const invalidated = vi.fn();
+    const ghost = fakeGhost();
+    const child = new FakeNodeProcess(undefined, false);
+    const spawnProcess = vi.fn(() => child as unknown as NodeWorkerProcess);
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess,
+      ownerScope: {
+        capture: () => generation,
+        isCurrent: (scope) => scope === generation,
+        isStable: (scope) => scope === generation,
+        onInvalidated: invalidated,
+      },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest('startup'));
+    await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1));
+    generation = 2;
+    child.emit('spawn');
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(child.killed).toBe(true);
+    expect(invalidated).toHaveBeenCalledWith('node-ghost');
+  });
+
+  it('owner boundary change before a response discards the response and stops the worker', async () => {
+    let generation = 1;
+    const invalidated = vi.fn();
+    const ghost = fakeGhost();
+    const child = new FakeNodeProcess();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      ownerScope: {
+        capture: () => generation,
+        isCurrent: (scope) => scope === generation,
+        isStable: (scope) => scope === generation,
+        onInvalidated: invalidated,
+      },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest('response'));
+    await vi.waitFor(() => expect(child.received).toHaveLength(1));
+    generation = 2;
+    child.send({ jsonrpc: '2.0', id: child.received[0].id, result: { stale: true } });
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'PROCESS_EXITED' });
+    expect(child.killed).toBe(true);
+    expect(invalidated).toHaveBeenCalledWith('node-ghost');
+  });
+
+  it('a stale owner callback does not stop a fresh worker for the same ghost', async () => {
+    let generation = 1;
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const staleChild = new FakeNodeProcess(undefined, false);
+    const freshChild = new FakeNodeProcess(undefined, false);
+    const invalidated = vi.fn();
+    const spawnProcess = vi.fn(
+      () => (spawnProcess.mock.calls.length === 1 ? staleChild : freshChild) as unknown as NodeWorkerProcess,
+    );
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess,
+      ownerScope: {
+        capture: () => generation,
+        isCurrent: (scope) => scope === generation,
+        isStable: (scope) => scope === generation,
+        onInvalidated: invalidated,
+      },
+    });
+
+    const firstStart = broker.startResident(ghost);
+    await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1));
+    staleChild.emit('spawn');
+    await firstStart;
+    generation = 2;
+    broker.stop('node-ghost');
+    const secondStart = broker.startResident(ghost);
+    await vi.waitFor(() => expect(spawnProcess.mock.calls.length).toBeGreaterThanOrEqual(2));
+    freshChild.emit('spawn');
+    await secondStart;
+
+    staleChild.stderr.write('stale owner callback\n');
+    await vi.waitFor(() => expect(staleChild.killed).toBe(true));
+
+    expect(freshChild.killed).toBe(false);
+    expect(broker.stateOf('node-ghost')).toBe('running');
+    expect(invalidated).not.toHaveBeenCalled();
+  });
+});
+
 function makeAutoReplyProcess(methods?: string[]) {
   const process = new FakeNodeProcess((message) => {
     if (typeof message.method === 'string') methods?.push(message.method);

@@ -37,8 +37,10 @@ import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
+import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
+import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
@@ -188,7 +190,9 @@ export function AuthProvider({
       setModelFavoritesOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
+      setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
+      setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();
@@ -357,6 +361,7 @@ export function AuthProvider({
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);
@@ -371,6 +376,7 @@ export function AuthProvider({
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);

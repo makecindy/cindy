@@ -20,6 +20,7 @@ export const BILLING_INVOKE = {
   CREATE_SUBSCRIPTION: 'billing:create-subscription',
   GET_CURRENT_SUBSCRIPTION: 'billing:get-current-subscription',
   CANCEL_CURRENT_SUBSCRIPTION: 'billing:cancel-current-subscription',
+  RESUME_CURRENT_SUBSCRIPTION: 'billing:resume-current-subscription',
   REFRESH_SUBSCRIPTION_PURCHASE: 'billing:refresh-subscription-purchase',
   QUOTE_PLAN_CHANGE: 'billing:quote-plan-change',
   CONFIRM_PLAN_CHANGE: 'billing:confirm-plan-change',
@@ -165,6 +166,8 @@ export type BillingSubscription = {
   currentPeriodEndAt: string | null;
   entitlementValidUntil: string | null;
   cancelAtPeriodEnd: boolean;
+  /** 取消待到期且账期未过的订阅是否可恢复（服务端下发；旧服务端无此字段）。 */
+  resumable?: boolean;
   effectivePlan: {
     version: 1;
     product: {
@@ -236,6 +239,7 @@ export interface BillingRendererApi {
   }) => Promise<BillingSubscription>;
   getCurrentSubscription: () => Promise<BillingCurrentSubscription>;
   cancelCurrentSubscription: () => Promise<BillingSubscription>;
+  resumeCurrentSubscription: () => Promise<BillingSubscription>;
   refreshSubscriptionPurchase: (payload: {
     purchaseAttemptId: string;
   }) => Promise<BillingSubscription>;

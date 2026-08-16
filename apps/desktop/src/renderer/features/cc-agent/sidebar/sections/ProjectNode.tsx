@@ -80,6 +80,13 @@ export interface ProjectNodeProps {
   selectedSessionIds?: ReadonlySet<string>;
   /** Sidebar 内容过滤态或时间升序排序下强制展示全部 session entry。 */
   disableSessionCollapse: boolean;
+  /**
+   * 隐藏标题右侧的远程机器标注(设备名 / SSH endpoint)。
+   * 「按设备分组」开启时列表已经按设备切段、段头写着设备名,行内再标一遍是重复
+   * (2026-08-12 用户裁决)。远程图标仍保留——它表达「这是远程项目 + 连接状态」,
+   * 不重复归属信息。置顶区不受分组影响,照常显示。
+   */
+  hideRemoteMachineLabel?: boolean;
   onToggle: (projectKey: string) => void;
   /** Project pin is independent from conversation pin state. */
   isProjectPinned: boolean;
@@ -124,6 +131,7 @@ export function ProjectNode({
   scheduleSessionIndex,
   selectedSessionIds,
   disableSessionCollapse,
+  hideRemoteMachineLabel = false,
   onToggle,
   isProjectPinned,
   onToggleProjectPin,
@@ -266,7 +274,12 @@ export function ProjectNode({
           }
         }}
         onContextMenu={(e) => {
-          if (isEditingName) return;
+          if (isEditingName) {
+            // 同 SessionItem:编辑态放行系统可编辑菜单,但拦下冒泡,避免与滚动
+            // 容器的空白处整理菜单叠弹(2026-08-13 实机回归)。
+            e.stopPropagation();
+            return;
+          }
           e.preventDefault();
           e.stopPropagation();
           setMenuPos({ x: e.clientX, y: e.clientY });
@@ -325,7 +338,9 @@ export function ProjectNode({
               )}
             />
           ) : (
-            <span className="min-w-0 flex-1 truncate">{project.displayName}</span>
+            // shrink 而非 flex-1:让远程图标紧跟项目名,不被推到行尾
+            // (2026-08-12 用户裁决,与会话行的标题 + 远程图标同款)。
+            <span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>
           )}
           {!isEditingName && isDeviceLink ? (
             <Tip text={remoteIdentity?.displayLabel ?? project.deviceLinkDeviceId ?? ''}>
@@ -340,7 +355,8 @@ export function ProjectNode({
               <RemoteProjectIcon kind="ssh" className="text-[var(--folder-item-icon)]" />
             </Tip>
           ) : null}
-          {!isEditingName && remoteIdentity ? (
+          {/* 远程机器标注:按设备分组时段头已写明归属,行内不再重复(hideRemoteMachineLabel)。 */}
+          {!isEditingName && remoteIdentity && !hideRemoteMachineLabel ? (
             <span
               title={remoteIdentity.displayLabel}
               className="max-w-[45%] shrink truncate text-11 text-[var(--cmd-palette-item-meta)]"

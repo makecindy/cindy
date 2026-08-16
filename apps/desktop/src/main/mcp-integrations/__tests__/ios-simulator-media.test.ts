@@ -5,6 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { IOSSimulatorCommandRunner } from '@cindy/ios-simulator-runtime';
 
+// The media capture defaults its owner-scope check to isAppSessionBoundaryPending(),
+// which fails closed on an uncommitted owner. This suite exercises recording
+// behavior, not boundary transitions; owner-changed paths are covered by tests
+// that pass explicit isOwnerScopeCurrent overrides.
+vi.mock('../../appSessionState.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return { ...actual, isAppSessionBoundaryPending: () => false };
+});
+
 import { IOSSimulatorMediaCapture } from '../ios-simulator-media';
 
 afterEach(() => {

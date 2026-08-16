@@ -6536,19 +6536,6 @@ function currentIOSSimulatorHost(): IOSSimulatorHost | null {
   return defaultIOSSimulatorRuntime?.host ?? null;
 }
 
-/**
- * Whether this process installed the Host Simulator runtime, which means Cindy
- * may hold simulator ownership right now.
- *
- * Synchronous and side-effect free by contract: it must never initialize the
- * Host, because the plugin gate's whole point is that an absent plugin leaves
- * the runtime untouched. A shutting-down runtime still counts as active so
- * in-flight cleanup keeps its protection.
- */
-export function isIOSSimulatorHostRuntimeActive(): boolean {
-  return currentIOSSimulatorHost() !== null || defaultIOSSimulatorRuntimeClosing;
-}
-
 export function getIOSSimulatorSessionStatus(
   sessionId: string,
 ): Promise<IOSSimulatorSessionStatus> {

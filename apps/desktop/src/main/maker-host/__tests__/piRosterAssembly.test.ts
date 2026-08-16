@@ -76,13 +76,20 @@ vi.mock('../../logger.js', () => ({
   }),
 }));
 
+// args 经 createTransport → createPiStdioTransport 传递(不在 PiRpcProcess 构造
+// 参数里, 自轮 22 起); 测试从 stdio transport 的 opts 捕获 spawn args。
+vi.mock('../../../../../../packages/maker-core/src/agents/pi/transport.js', () => ({
+  createPiStdioTransport: (opts: { args: string[] }) => {
+    state.args = opts.args;
+    return {} as never;
+  },
+}));
+
 vi.mock('../../../../../../packages/maker-core/src/agents/pi/rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
 
-    constructor(opts: { args: string[] }) {
-      state.args = opts.args;
-    }
+    constructor(_opts: Record<string, unknown>) {}
 
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown }> {
       if (cmd.type === 'get_state') {
