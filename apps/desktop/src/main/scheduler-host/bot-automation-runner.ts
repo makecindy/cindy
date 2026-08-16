@@ -45,6 +45,7 @@ import type {
 } from '../../shared/botAutomation.js';
 import {
   normalizeBotAutomationExecutionPolicy,
+  normalizeBotDurableNoteNamespace,
   parseBotAutomationExecutionPlan,
 } from '../../shared/botAutomation.js';
 import type {
@@ -164,6 +165,7 @@ async function buildAutomationExecutionPlan(input: {
   version: typeof botProfileVersions.$inferSelect;
   binding: typeof botProjectBindings.$inferSelect | undefined;
   executionPolicyJson: string;
+  durableNoteNamespace: string;
   targetRouteId: string | null;
   targetRouteOwnerGeneration: number | null;
   targetSessionId: string | null;
@@ -230,6 +232,7 @@ async function buildAutomationExecutionPlan(input: {
     createdAt: input.createdAt,
     deadlineAt: input.createdAt + policy.timeoutMs,
     botId: input.profile.id,
+    durableNoteNamespace: input.durableNoteNamespace,
     profile: capabilitySnapshot({
       profileVersion: input.profile.currentVersion,
       capabilitiesJson: input.version.capabilitiesJson,
@@ -685,12 +688,19 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
 
       const createdAt = Date.now();
       const automationRunId = randomUUID();
+      const durableNoteNamespace = normalizeBotDurableNoteNamespace(
+        link.durableNoteNamespace ?? `automation:${link.id}`,
+      );
+      if (!durableNoteNamespace) {
+        throw new Error('Bot automation Durable Note namespace is invalid');
+      }
       const executionPlan = await buildAutomationExecutionPlan({
         db,
         profile,
         version,
         binding,
         executionPolicyJson: link.executionPolicyJson,
+        durableNoteNamespace,
         targetRouteId: link.targetRouteId,
         targetRouteOwnerGeneration: targetRouteOwnerGenerationSnapshot,
         targetSessionId: targetSessionIdSnapshot,

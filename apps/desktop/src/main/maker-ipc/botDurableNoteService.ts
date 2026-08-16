@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq } from 'drizzle-orm';
 
-import { normalizeBotDurableNoteNamespace } from '../../shared/botAutomation.js';
+import {
+  normalizeBotDurableNoteNamespace,
+  parseBotAutomationExecutionPlan,
+} from '../../shared/botAutomation.js';
 
 import { getDbClient } from '../localDb/client/current.js';
 import {
-  botAutomationLinks,
   botAutomationRuns,
   botDurableNotes,
   botSessionLinks,
@@ -36,7 +38,11 @@ async function resolveBotContext(callerSessionId: string): Promise<{
   };
 } | {
   ok: false;
-  errorCode: 'NOT_A_BOT_SESSION' | 'BOT_SESSION_INACTIVE' | 'BOT_SESSION_READ_ONLY';
+  errorCode:
+    | 'NOT_A_BOT_SESSION'
+    | 'BOT_SESSION_INACTIVE'
+    | 'BOT_SESSION_READ_ONLY'
+    | 'AUTOMATION_NAMESPACE_SNAPSHOT_UNAVAILABLE';
   message: string;
 }> {
   const db = getDbClient().drizzle;
@@ -45,15 +51,12 @@ async function resolveBotContext(callerSessionId: string): Promise<{
       botId: botSessionLinks.botId,
       role: botSessionLinks.role,
       sessionStatus: sessions.status,
-      defaultNamespace: botAutomationLinks.durableNoteNamespace,
+      automationRunId: botAutomationRuns.id,
+      executionPlanJson: botAutomationRuns.executionPlanJson,
     })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .leftJoin(botAutomationRuns, eq(botAutomationRuns.sessionId, sessions.id))
-    .leftJoin(
-      botAutomationLinks,
-      eq(botAutomationLinks.id, botAutomationRuns.automationLinkId),
-    )
     .where(and(eq(botSessionLinks.sessionId, callerSessionId), eq(sessions.source, 'bot')))
     .limit(1);
   if (!row) {
@@ -65,9 +68,21 @@ async function resolveBotContext(callerSessionId: string): Promise<{
   if (row.role !== 'canonical' && row.role !== 'route') {
     return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前 Bot 历史任务为只读状态' };
   }
+  let defaultNamespace: string | null = null;
+  if (row.automationRunId) {
+    const plan = parseBotAutomationExecutionPlan(row.executionPlanJson);
+    if (!plan?.durableNoteNamespace) {
+      return {
+        ok: false,
+        errorCode: 'AUTOMATION_NAMESPACE_SNAPSHOT_UNAVAILABLE',
+        message: '当前 Automation 任务缺少冻结的 Durable Note namespace，不能安全访问长期状态',
+      };
+    }
+    defaultNamespace = plan.durableNoteNamespace;
+  }
   return {
     ok: true,
-    context: { botId: row.botId, defaultNamespace: row.defaultNamespace },
+    context: { botId: row.botId, defaultNamespace },
   };
 }
 

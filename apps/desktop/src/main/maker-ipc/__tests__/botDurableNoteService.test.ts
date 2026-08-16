@@ -55,7 +55,8 @@ describe('botDurableNoteService', () => {
       CREATE TABLE bot_automation_runs (
         id TEXT PRIMARY KEY,
         automation_link_id TEXT NOT NULL,
-        session_id TEXT
+        session_id TEXT,
+        execution_plan_json TEXT NOT NULL DEFAULT '{}'
       );
       INSERT INTO sessions (id, source) VALUES
         ('a-main', 'bot'), ('b-main', 'bot'), ('ordinary', 'desktop');
@@ -122,7 +123,13 @@ describe('botDurableNoteService', () => {
       INSERT INTO bot_session_links (id, bot_id, session_id, created_at)
       VALUES ('a:a-automation', 'bot-a', 'a-automation', 2);
       INSERT INTO bot_automation_links VALUES ('automation-a', 'nightly');
-      INSERT INTO bot_automation_runs VALUES ('run-a', 'automation-a', 'a-automation');
+      INSERT INTO bot_automation_runs VALUES (
+        'run-a',
+        'automation-a',
+        'a-automation',
+        '{"version":1,"createdAt":1,"deadlineAt":2,"botId":"bot-a","durableNoteNamespace":"nightly","profile":{},"workspace":null,"delivery":{},"limits":{},"delegation":{"targets":[]}}'
+      );
+      UPDATE bot_automation_links SET durable_note_namespace = 'renamed' WHERE id = 'automation-a';
     `);
     expect(await setBotDurableNote({
       callerSessionId: 'a-automation',
@@ -146,20 +153,23 @@ describe('botDurableNoteService', () => {
     })).resolves.toMatchObject({ ok: true, note: { value: 7 } });
   });
 
-  it('fails closed when legacy Automation data contains an invalid bound namespace', async () => {
+  it('fails closed when a legacy Automation run has no namespace snapshot', async () => {
     h.sqlite!.exec(`
       INSERT INTO sessions (id, source) VALUES ('a-invalid-automation', 'bot');
       INSERT INTO bot_session_links (id, bot_id, session_id, created_at)
       VALUES ('a:a-invalid-automation', 'bot-a', 'a-invalid-automation', 3);
       INSERT INTO bot_automation_links VALUES ('automation-invalid', '../escape');
       INSERT INTO bot_automation_runs VALUES
-        ('run-invalid', 'automation-invalid', 'a-invalid-automation');
+        ('run-invalid', 'automation-invalid', 'a-invalid-automation', '{}');
     `);
     await expect(setBotDurableNote({
       callerSessionId: 'a-invalid-automation',
       key: 'cursor',
       value: 1,
-    })).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'AUTOMATION_NAMESPACE_SNAPSHOT_UNAVAILABLE',
+    });
   });
 
   it('rejects durable-state access from archived and read-only Bot history tasks', async () => {

@@ -154,6 +154,8 @@ export interface BotAutomationExecutionPlan {
   createdAt: number;
   deadlineAt: number;
   botId: string;
+  /** Frozen per-Automation durable state scope. Missing only on legacy runs. */
+  durableNoteNamespace?: string;
   profile: BotDelegationCapabilitySnapshot;
   workspace: BotDelegationWorkspaceSnapshot | null;
   delivery: {

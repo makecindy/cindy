@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BOT_DURABLE_NOTE_NAMESPACE_MAX_CHARS,
   normalizeBotDurableNoteNamespace,
+  parseBotAutomationExecutionPlan,
 } from '../botAutomation';
 
 describe('Bot automation durable-note namespace', () => {
@@ -17,5 +18,20 @@ describe('Bot automation durable-note namespace', () => {
     expect(normalizeBotDurableNoteNamespace('contains space')).toBeNull();
     expect(normalizeBotDurableNoteNamespace('x'.repeat(BOT_DURABLE_NOTE_NAMESPACE_MAX_CHARS + 1)))
       .toBeNull();
+  });
+
+  it('preserves the frozen namespace in an Automation execution plan', () => {
+    expect(parseBotAutomationExecutionPlan({
+      version: 1,
+      createdAt: 1,
+      deadlineAt: 2,
+      botId: 'bot-a',
+      durableNoteNamespace: 'automation:daily',
+      profile: {},
+      workspace: null,
+      delivery: {},
+      limits: {},
+      delegation: { targets: [] },
+    })?.durableNoteNamespace).toBe('automation:daily');
   });
 });
