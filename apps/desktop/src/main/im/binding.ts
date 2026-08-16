@@ -204,19 +204,6 @@ export class SqliteBindingStore implements BindingStore<string> {
     return out;
   }
 
-  /**
-   * 某 (channel, bot) 名下全部 active 接管的 identity 快照 —— 渠道层做
-   * 「群主流消息落进哪个接管」这类跨 userId 的裁决用(如飞书群 /ctr 接管
-   * 路由)。n 极小(单 owner 同时接管数), O(n) 扫 reverse 即可。
-   */
-  listIdentities(channel: string, botContextId: string): IdentityKey[] {
-    const out: IdentityKey[] = [];
-    for (const id of this.reverse.values()) {
-      if (id.channel === channel && id.botContextId === botContextId) out.push(id);
-    }
-    return out;
-  }
-
   attach(
     identity: IdentityKey,
     value: string,

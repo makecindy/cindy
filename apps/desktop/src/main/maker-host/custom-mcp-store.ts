@@ -46,6 +46,20 @@ export function isUnsafeMcpServerId(id: string): boolean {
 }
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
+const HTTP_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Claude Code requires custom HTTP header values to be printable ASCII. Keep
+ * this check at the persisted-config boundary so an invalid value cannot be
+ * saved and fail later during a non-interactive MCP startup.
+ */
+function isPrintableAsciiHeaderValue(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code > 0x7e) return false;
+  }
+  return true;
+}
 
 /** 验证结果：ok 或带 code + message（供 handler 映射成 throwIpcError）。 */
 export type ValidationResult =
@@ -104,6 +118,13 @@ export function validateCustomMcpConfig(
     for (const [k, v] of Object.entries(c.headers as Record<string, unknown>)) {
       if (typeof k !== 'string' || typeof v !== 'string') {
         return invalid('headers must be string→string');
+      }
+      const headerName = k.trim();
+      if (headerName.length > 0 && !HTTP_HEADER_NAME_RE.test(headerName)) {
+        return invalid('header names must be valid HTTP tokens');
+      }
+      if (!isPrintableAsciiHeaderValue(v)) {
+        return invalid('header values must contain printable ASCII characters');
       }
     }
   }

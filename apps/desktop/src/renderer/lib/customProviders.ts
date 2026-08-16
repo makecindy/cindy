@@ -11,7 +11,13 @@
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
 
-import { DEFAULT_CUSTOM_CONTEXT_WINDOW, PI_REASONING_EFFORTS } from '@cindy/model-providers';
+import {
+  DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  effectivePiWireProtocol,
+  PI_REASONING_EFFORTS,
+  preservesPiCatalogModels,
+  storedCustomProviderId,
+} from '@cindy/model-providers';
 import type {
   AgentKind,
   CatalogModel,
@@ -19,7 +25,32 @@ import type {
   PiReasoningEffort,
   ProviderView,
   ProviderRuntimeModelConfig,
+  ProviderWireProtocol,
 } from '@cindy/model-providers';
+
+interface PiCatalogRouteDraft {
+  baseUrl: string;
+  wireProtocol?: ProviderWireProtocol;
+  piCatalogProviderId?: string;
+  models?: readonly ProviderRuntimeModelConfig[];
+}
+
+/** The catalog marker is valid while the route and every existing model's capability fields stay unchanged. */
+export function piCatalogProviderIdAfterRouteEdit(
+  agent: AgentKind,
+  previous: PiCatalogRouteDraft,
+  next: PiCatalogRouteDraft,
+): string | undefined {
+  const marker = next.piCatalogProviderId;
+  if (agent !== 'pi' || !marker || marker !== previous.piCatalogProviderId) return marker;
+  const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  return normalizeBaseUrl(previous.baseUrl) === normalizeBaseUrl(next.baseUrl)
+    && effectivePiWireProtocol(previous.wireProtocol)
+      === effectivePiWireProtocol(next.wireProtocol)
+    && preservesPiCatalogModels(previous.models, next.models)
+    ? marker
+    : undefined;
+}
 
 /** 开启 Pi reasoning 时的保守常用档位；xhigh/max 仍需用户明确勾选。 */
 export const DEFAULT_PI_CUSTOM_REASONING_EFFORTS: readonly PiReasoningEffort[] = [
@@ -44,6 +75,33 @@ export function replaceCustomProviderModelId(
   return { id: nextId, name: model.name };
 }
 
+/**
+ * A preset piApi is upstream metadata, not a second user choice. Once the user
+ * explicitly chooses a PI runtime protocol, remove those hidden per-model
+ * defaults so the saved runtime protocol becomes authoritative.
+ */
+export function clearCustomProviderModelPiApiOverrides(
+  models: readonly ProviderRuntimeModelConfig[],
+): ProviderRuntimeModelConfig[] {
+  return models.map((model) => {
+    if (!model.piApi) return model;
+    const next = { ...model };
+    delete next.piApi;
+    return next;
+  });
+}
+
+/** PI always persists the selected protocol, including its common Chat default. */
+export function customProviderWireProtocolForSave(
+  agent: AgentKind,
+  wireProtocol: ProviderWireProtocol,
+  defaultWireProtocol: ProviderWireProtocol,
+): ProviderWireProtocol | undefined {
+  return agent === 'pi' || wireProtocol !== defaultWireProtocol
+    ? wireProtocol
+    : undefined;
+}
+
 export function setCustomProviderModelSupportsImageInput(
   models: readonly ProviderRuntimeModelConfig[],
   targetIndex: number,
@@ -66,6 +124,7 @@ export function setCustomProviderModelReasoning(
       const rest = { ...model };
       delete rest.reasoning;
       delete rest.reasoningEfforts;
+      delete rest.reasoningDefaultEffort;
       return rest;
     }
     return {
@@ -91,10 +150,14 @@ export function setCustomProviderModelReasoningEffort(
     const selected = new Set(current);
     if (enabled) selected.add(effort);
     else selected.delete(effort);
-    return {
+    const next = {
       ...model,
       reasoningEfforts: PI_REASONING_EFFORTS.filter((candidate) => selected.has(candidate)),
     };
+    if (!enabled && model.reasoningDefaultEffort === effort) {
+      delete next.reasoningDefaultEffort;
+    }
+    return next;
   });
 }
 
@@ -113,8 +176,10 @@ export function customProviderModelConfigFromCatalogModel(
     | 'contextWindowExplicit'
     | 'defaultEnabled'
     | 'supportsImageInput'
+    | 'piApi'
+    | 'route'
   > &
-    Partial<Pick<CatalogModel, 'efforts'>>,
+    Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
 ): ProviderRuntimeModelConfig {
   const reasoningEfforts =
@@ -126,12 +191,19 @@ export function customProviderModelConfigFromCatalogModel(
   return {
     id: model.id,
     name: model.name,
+    ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
+    ...(model.route ? { route: { ...model.route } } : {}),
     ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
     ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),
     ...(reasoningEfforts.length > 0 ? { reasoning: true, reasoningEfforts } : {}),
+    ...(agent === 'pi'
+      && model.defaultEffort
+      && reasoningEfforts.includes(model.defaultEffort as PiReasoningEffort)
+      ? { reasoningDefaultEffort: model.defaultEffort as PiReasoningEffort }
+      : {}),
   };
 }
 
@@ -151,10 +223,11 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
         : {}),
       ...(routing?.headerOverrideState ? { headersState: routing.headerOverrideState } : {}),
       ...(routing?.modelsUrl ? { modelsUrl: routing.modelsUrl } : {}),
+      ...(routing?.piCatalogProviderId ? { piCatalogProviderId: routing.piCatalogProviderId } : {}),
     };
   }
   return {
-    id: p.id,
+    id: storedCustomProviderId(p.id),
     name: p.name,
     ...(p.auth.method === 'oauth' && p.auth.oauth
       ? { auth: { method: 'oauth' as const, oauth: p.auth.oauth } }
@@ -201,7 +274,7 @@ export async function readCustomProviderKey(
   agent: AgentKind,
 ): Promise<string | null> {
   const value = await window.electronAPI.safeStorageRead(
-    customProviderSecretStorageKey(providerId, agent),
+    customProviderSecretStorageKey(storedCustomProviderId(providerId), agent),
   );
   return value && value.length > 0 ? value : null;
 }
@@ -223,10 +296,13 @@ export async function updateCustomProvider(
   config: CustomProviderConfig,
   keys: RuntimeKeys,
 ): Promise<void> {
-  await window.electronAPI.maker.updateCustomProvider(config, keys);
+  await window.electronAPI.maker.updateCustomProvider(
+    { ...config, id: storedCustomProviderId(config.id) },
+    keys,
+  );
 }
 
 /** 删除：main 在同一 provider mutation queue 内清配置与所有凭证。 */
 export async function deleteCustomProvider(providerId: string): Promise<void> {
-  await window.electronAPI.maker.deleteCustomProvider(providerId);
+  await window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId));
 }

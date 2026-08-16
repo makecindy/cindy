@@ -1363,6 +1363,51 @@ describe('computer mcp integration', () => {
     );
   });
 
+  it('rotates and retries when cua-driver rejects a call because the named session has ended', async () => {
+    mcpCallToolMock.mockImplementation((call: { name: string; arguments: Record<string, unknown> }) => {
+      if (call.name === 'end_session') {
+        return { content: [{ type: 'text', text: '{"ok":true}' }] };
+      }
+      if (call.name === 'list_windows') {
+        const generation = driverSessionGeneration(
+          String(call.arguments.session),
+          'session-ended-rejected',
+        );
+        if (generation === 0) {
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `session '${String(call.arguments.session)}' has ended; tool call '${call.name}' was rejected`,
+            }],
+          };
+        }
+        return {
+          content: [{ type: 'text', text: '{"ok":true,"windows":[{"window_id":9}]}' }],
+        };
+      }
+      throw new Error(`unexpected call ${call.name}`);
+    });
+
+    await expect(callComputerDriverTool('list_windows', {
+      session: 'caller-supplied',
+    }, { sessionId: 'session-ended-rejected' })).resolves.toEqual({
+      ok: true,
+      windows: [{ window_id: 9 }],
+    });
+
+    expect(mcpConnectMock).toHaveBeenCalledTimes(2);
+    expect(mcpCloseMock).toHaveBeenCalledTimes(1);
+    const listCalls = mcpCallToolMock.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call?.name === 'list_windows');
+    expectDriverSessionGenerations(
+      listCalls.map((call) => (call?.arguments as { session: string }).session),
+      'session-ended-rejected',
+      [0, 1],
+    );
+  });
+
   it('rotates the driver session and retries once when cua-driver reports not connected', async () => {
     mcpCallToolMock
       .mockRejectedValueOnce(new Error('Not connected'))

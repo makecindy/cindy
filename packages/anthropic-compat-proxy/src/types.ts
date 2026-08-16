@@ -38,6 +38,9 @@ export interface RequestTransformCtx {
 /**
  * 请求 body transform。
  *
+ * 允许返回 Promise（视觉桥等需要出网调用的 transform 用）。引擎用 isPromiseLike
+ * 统一 await：同步 transform 返回值原样通过，语义与 async 化前逐字节一致。
+ *
  * @returns
  *   - 新的 body 对象 → 代理用它替换原 body 转发上游
  *   - null            → 不改写,这一步跳过(还会继续跑后续 transform;全部跳过则字节透传)
@@ -45,7 +48,7 @@ export interface RequestTransformCtx {
 export type RequestTransform = (
   body: unknown,
   ctx: RequestTransformCtx,
-) => unknown | null;
+) => unknown | null | Promise<unknown | null>;
 
 /**
  * 本地 handler —— 路由决策命中 `localHandler` 时,代理**不转发上游**,由 handler 直接消费

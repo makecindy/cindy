@@ -196,6 +196,7 @@ const DEVICE_LINK_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
 const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   // Auto 档下审阅器没跑起来(与「模型判定动作危险」不同,后者刻意保持静默)。
   'AUTO_REVIEW_UNAVAILABLE',
+  'AUTO_REVIEW_CONFIRM_UNDELIVERED',
 ] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
@@ -642,6 +643,7 @@ export interface PendingPermission {
   displayName?: string;
   description?: string;
   suggestions?: unknown[];
+  autoReviewUnavailable?: boolean;
 }
 
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
@@ -915,6 +917,40 @@ interface RemoteOptimisticSendScope {
 }
 
 let nextRemoteOptimisticRecoverySequence = 0;
+
+/** 各 session「正在识别图片中」toast id（duration 0 手动 dismiss），按 sessionId 隔离，
+ *  避免不同会话/窗口的输出互相误 dismiss；agent 首个输出或失败收口时清理对应 session。 */
+const _visionBridgeToastIds = new Map<string, string>();
+
+/** 清理指定 session 的「正在识别图片中」toast（dismiss 找不到 id 时是 no-op，安全）。 */
+function dismissVisionBridgeToast(sessionId: string): void {
+  const id = _visionBridgeToastIds.get(sessionId);
+  if (id) {
+    toast.dismiss(id);
+    _visionBridgeToastIds.delete(sessionId);
+  }
+}
+
+/** 视觉桥用户提示事件 reason 枚举（识别中 / fallback / 不可用）。 */
+const VISION_BRIDGE_REASONS = new Set([
+  'vision-bridge-recognizing',
+  'vision-bridge-fallback',
+  'vision-bridge-unavailable',
+]);
+
+/**
+ * 视觉桥提示事件判定：reason 命中枚举 且 source 是 main 合成的 'vision-bridge' 专用来源
+ * 且 isTerminal === false。三重校验避免把普通 agent / 远程转发的 error（含伪造 reason）
+ * 误当视觉桥提示弹 toast，或吞掉真实终态错误。
+ */
+function isVisionBridgeReason(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  const { type, data, source } = event as { type?: string; data?: unknown; source?: unknown };
+  if (type !== 'error' || source !== 'vision-bridge') return false;
+  const reason = (data as { reason?: unknown } | null)?.reason;
+  if (typeof reason !== 'string' || !VISION_BRIDGE_REASONS.has(reason)) return false;
+  return (data as { isTerminal?: unknown } | null)?.isTerminal === false;
+}
 
 function captureRemoteOptimisticSendScope(
   sessionId: string,
@@ -3169,6 +3205,8 @@ function isBeforeOrAtRendererClearBoundary(sessionId: string, createdAt: string)
  * explicitly free a specific session.
  */
 function _purgeSession(sessionId: string): void {
+  // session 删除/归档/驱逐：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   discardPendingTextDelta(sessionId);
   discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
@@ -4203,7 +4241,7 @@ function isTerminalErrorData(data: unknown): boolean {
 
 function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex' | 'pi',
+  source?: string,
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -4534,6 +4572,7 @@ export function handleStreamEvent(
   };
   switch (event.type) {
     case 'text': {
+      dismissVisionBridgeToast(event.sessionId);
       const { text, isFinal, isFullText } = event.data as {
         text: string;
         isFinal: boolean;
@@ -4823,6 +4862,7 @@ export function handleStreamEvent(
     }
 
     case 'tool_use': {
+      dismissVisionBridgeToast(event.sessionId);
       const { toolUseId, toolName, input } = event.data as {
         toolUseId: string;
         toolName: string;
@@ -4919,6 +4959,9 @@ export function handleStreamEvent(
     }
 
     case 'done': {
+      // turn 终态兜底清理：done 时清掉该 session 的「正在识别图片中」toast，
+      // 即使没有 text/tool_use 也不残留（视觉桥要么已结束要么被放弃）。
+      dismissVisionBridgeToast(event.sessionId);
       // silent-stop:上游空内容消息静默收尾,main 守卫 1.5s 后会自动续跑(或弹耗尽横幅)。
       // 保持 isRunning=true,避免 renderer 的 500ms 完成去抖触发假完成通知。守卫非续跑
       // 决策通过 exhausted terminal error 广播到达 renderer,那时才正确设 isRunning=false。
@@ -5038,11 +5081,40 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
+        imageCount,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
+        imageCount?: number;
       };
+      // 视觉桥用户提示（正在识别 / fallback / 不可用）：toast 展示，完全不改 turn 状态
+      // （不设 recoverableError、不阻断开流），零阻断。用 isVisionBridgeReason 三重校验
+      // （source==='vision-bridge' + isTerminal:false + reason 枚举）——普通 agent / 远程
+      // 转发的同名 reason error 不通过校验，继续走普通 error 处理（不吞真实错误）。
+      if (isVisionBridgeReason(event)) {
+        if (reason === 'vision-bridge-recognizing') {
+          const count = typeof imageCount === 'number' && imageCount > 0 ? imageCount : 1;
+          // 先清旧 id 再存新：连续 recognizing（多图/多 turn）不残留上一张的 loading toast。
+          dismissVisionBridgeToast(event.sessionId);
+          _visionBridgeToastIds.set(
+            event.sessionId,
+            toast.info(i18n.t('chat.visionBridge.analyzing', { count }), { duration: 0 }),
+          );
+          return state;
+        }
+        // fallback / unavailable：识别结束（失败或降级），清掉对应 session 的 loading toast，
+        // 避免「正在识别中」与「已回退」同时挂着。
+        dismissVisionBridgeToast(event.sessionId);
+        if (reason === 'vision-bridge-fallback') {
+          toast.warning(i18n.t('chat.visionBridge.fallback'), { duration: 5000 });
+          return state;
+        }
+        if (reason === 'vision-bridge-unavailable') {
+          toast.warning(i18n.t('chat.visionBridge.unavailable'), { duration: 6000 });
+          return state;
+        }
+      }
       const safeErrMsgRaw = redactSensitiveText(errMsgRaw);
       const safeErrMsg =
         typeof errorStatus === 'number' &&
@@ -5066,6 +5138,9 @@ export function handleStreamEvent(
                 ? i18n.t('logic.errors.codexAutoReviewUnavailable')
                 : decodeRemoteErrorMessage(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
+      // 终态错误 = turn 收口（含失败）：清掉该 session 的「正在识别图片中」toast，
+      // 避免视觉桥未输出就终结时 loading toast 残留（done/abort/terminal error 兜底）。
+      if (isTerminalError) dismissVisionBridgeToast(event.sessionId);
       if (!isTerminalError) {
         // Codex app-server 的有限重连进度是进行态，不是用户需要处理的错误。
         // 复用 Cindy 自动接管活动行的视觉通道，固定 clientId 原地更新 N/M；
@@ -5215,6 +5290,7 @@ export function handleStreamEvent(
         displayName?: string;
         description?: string;
         suggestions?: unknown[];
+        autoReviewUnavailable?: boolean;
       };
       return {
         ...state,
@@ -5226,6 +5302,7 @@ export function handleStreamEvent(
           displayName: data.displayName,
           description: data.description,
           suggestions: data.suggestions,
+          autoReviewUnavailable: data.autoReviewUnavailable === true,
         },
       };
     }
@@ -5766,7 +5843,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi';
+    source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
   };
@@ -5814,7 +5891,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -6275,6 +6352,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const persistId = payload.persistId;
     const resolvedContent = payload.resolvedContent;
 
+    // 视觉桥提示只信本机 main 直发：远端（device-link 转发）入站的 source:'vision-bridge'
+    // 事件一律丢弃——source 是 main 合成标记不是防伪签名，已配对远端可伪造；不转发远端
+    // 视觉桥提示（它属于发起会话所在设备的本地 UI 反馈）。
+    if (ingress.remoteDeviceId && isVisionBridgeReason(event)) {
+      return;
+    }
+
     if (isTextDeltaEvent(event)) {
       enqueueTextDeltaPayload(sessionId, event, persistId, ingress);
       return;
@@ -6285,7 +6369,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // session_id: 老链路是单独 IPC channel, 新链路融进 maker:event (Claude / Codex 同源)
     if (event.type === 'session_id') {
       const sdkSessionId = typeof event.data === 'string' ? event.data : undefined;
-      if (!sdkSessionId) return;
+      // 轮 21-W1 HIGH:与 maker-core 侧同款 fail-closed —— 空串/超长/含控制字符
+      // 的 sessionId 不得写入内存与持久化(resume 权威键被污染会跨会话误路由)。
+      if (!sdkSessionId || sdkSessionId.length > 4096 || /[\r\n\0]/.test(sdkSessionId)) return;
       const current = getOrCreateState(sessionId);
       if (current.sdkSessionId === sdkSessionId) return;
       setState(sessionId, (s) => ({ ...s, sdkSessionId }));
@@ -6491,6 +6577,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // MEM-OPT-1: trim non-active sessions after turn completes
       queueMicrotask(() => _trimMessagesIfNeeded(sessionId));
     }
+    // 视觉桥用户提示事件（source==='vision-bridge' + reason 枚举 + isTerminal:false）：
+    // 已在 dispatchStreamEventPayload 的 case 'error' 分流为 toast，不进 error-banner /
+    // recoverableError 链路（否则会被误渲染成「SDK error surfaced」错误横幅）。三重校验
+    // 保证不吞真实终态错误、不把普通 agent/远程 error 误当视觉桥提示。
+    if (event.type === 'error' && isVisionBridgeReason(event)) {
+      return;
+    }
     if (event.type === 'error') {
       const errData = (event.data as { message?: string; sdkError?: string }) ?? {};
       const errMsg = redactSensitiveText(errData.message ?? '');
@@ -6621,6 +6714,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const persistId = payload.persistId;
 
     if (request.kind === 'permission') {
+      const metadata = request.metadata as Record<string, unknown> | undefined;
       const data: CCAgentPermissionRequestPayload = {
         sessionId,
         requestId: request.requestId,
@@ -6630,6 +6724,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         displayName: typeof request.displayName === 'string' ? request.displayName : undefined,
         description: typeof request.description === 'string' ? request.description : undefined,
         suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
+        autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
       };
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'permission_request', data }),
@@ -6766,7 +6861,15 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   };
 
   const handleLiveInteractionRequestRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
-    if (!isCurrentLiveIngress(ingress)) return;
+    if (!isCurrentLiveIngress(ingress)) {
+      const payload = raw as { sessionId?: unknown; request?: { requestId?: unknown; kind?: unknown } } | null;
+      log.warn('dropped stale live interaction request', {
+        sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
+        requestId: typeof payload?.request?.requestId === 'string' ? payload.request.requestId : undefined,
+        kind: typeof payload?.request?.kind === 'string' ? payload.request.kind : undefined,
+      });
+      return;
+    }
     const sessionId = (raw as { sessionId?: unknown } | null)?.sessionId;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
       bumpInteractionReconcileEpoch(sessionId);
@@ -12221,6 +12324,9 @@ function stopSession(
   },
 ): void {
   if (!sessionId) return;
+  // Stop/abort 乐观终态：立即清掉该 session 的「正在识别图片中」toast，
+  // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
+  dismissVisionBridgeToast(sessionId);
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
@@ -12573,6 +12679,8 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
 }
 
 async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string): Promise<void> {
+  // /clear 清空会话：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   // Pin the clear lifecycle to the last known device before any await. The
   // mirror is intentionally cleared below, so live origin lookup is no longer
   // reliable for either clearSession or closeSession.
@@ -13442,12 +13550,23 @@ async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
       ? s
       : { ...s, planModeEnabled: enabled, planModeRev: s.planModeRev + 1 },
   );
+  // 轮 40-w4-t17 HIGH-1:runtime setPlanMode 失败必须 fail-closed —— 旧实现只
+  // catch 记日志, 继续持久化 DB, UI/DB 显示已开启但 PI runtime 实际未进入
+  // plan mode(状态分叉, 下一条消息以普通模式执行)。
   const runtimePush = window.electronAPI.maker
     .setPlanMode(sessionId, enabled)
     .catch((err: unknown) => {
-      log.warn('setPlanMode IPC failed:', err);
+      // 回滚乐观值, 不持久化, UI 不谎报。
+      setState(sessionId, (s) =>
+        s.planModeEnabled === enabled
+          ? { ...s, planModeEnabled: previous, planModeRev: s.planModeRev + 1 }
+          : s,
+      );
+      log.warn('setPlanMode runtime push failed — plan mode not applied', err);
+      throw err;
     });
   try {
+    await runtimePush;
     await sessionService.update(sessionId, { planModeEnabled: enabled });
   } catch (err) {
     // 持久化失败 → 回滚乐观值(store + runtime 尽力), UI 不谎报已开启。
@@ -13570,6 +13689,8 @@ function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
  */
 function closeSessionQuery(sessionId: string): void {
   if (!sessionId) return;
+  // 会话关闭：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   makerApiFor(sessionId)
     .closeSession(sessionId)
     .catch((err) => log.warn('maker.closeSession failed:', err));
@@ -13804,12 +13925,14 @@ function getAgentSwitchIntentRev(sessionId: string): number {
 function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
+  // 轮 42 P1(codex-connector):pi 遗漏 —— main 的 performSessionAgentSwitch 与
+  // AgentSwitchIntentRecord.target 都支持 'pi', 这里收窄成 cc/codex 会把
+  // 等待下轮的 Pi switch 意图归一化成 null, pending 状态在 renderer 丢失。
   if (
-    item.targetAgentKind !== 'claude-code' &&
-    item.targetAgentKind !== 'codex' &&
-    item.targetAgentKind !== 'pi'
-  )
-    return null;
+    item.targetAgentKind !== 'claude-code'
+    && item.targetAgentKind !== 'codex'
+    && item.targetAgentKind !== 'pi'
+  ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
   // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。

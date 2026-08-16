@@ -9,6 +9,9 @@
  *   - ack emoji: REACTION_PROCESSING
  *   - 群 lane(senderId = `g/{chatId}[/{threadId}]`, @cindy/im feishu/codec.ts):
  *     群主流 @ 入站即开话题(每话题一个会话, 群 lane 仅开话题失败的降级路径);
+ *     **`/ctr` 接管严格按话题记账**: binding 的 userId 就是话题 lane, 一个话题
+ *     一份接管, 群主流的 @ 恒开新话题走该话题自己的会话(不会被任何接管吃掉);
+ *     要跟接管会话说话就在那个话题里说 —— 群主流不是接管的入口;
  *     群里新建的会话一律用渠道设置「群聊新建任务权限档」(sessions.permissionModeFor,
  *     `/ctr` 新建走 cardActionHandler 读同一设置);
  *     群轮次挂「非只读即确认」策略 + 触发时按页回翻群历史(50/页, 最多 5 页,
@@ -21,15 +24,9 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
-import {
-  decodeFeishuLaneUserId,
-  encodeFeishuLaneUserId,
-  type FeishuIM,
-  type FeishuLane,
-} from '@cindy/im';
+import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
-import { bindingStore } from '../binding';
 import { readImDefaultSettings } from '../defaultSettingsStore';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { createLogger } from '../../logger';
@@ -182,83 +179,10 @@ async function resolveChatName(feishuIm: FeishuIM, chatId: string): Promise<stri
   return name;
 }
 
-// ── 群主流 @ 开话题的「thread 前上下文」取数 lane 记忆 ────────────────────────
-// 开话题事件(groupContextLane)若是 slash(如 /ctr), prepareAgentTurnText 不会
-// 被调用, 群主流上下文取数 lane 随之丢失;记下来, 由话题里第一条 agent 消息
-// 领走(take 后即删, 只补一次 — 与开话题事件「只有首条消息看群主流」的口径
-// 一致)。TTL + 上限兜底, 防用户开话题后永不发消息造成的无界增长。
-
-const MAIN_FLOW_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
-const MAIN_FLOW_CONTEXT_MAX_ENTRIES = 64;
-const mainFlowContextLanes = new Map<string, { ts: number; lane: FeishuLane }>();
-
-function rememberMainFlowContextLane(topicLaneUserId: string, mainFlowLane: FeishuLane): void {
-  const now = Date.now();
-  for (const [laneId, entry] of mainFlowContextLanes) {
-    if (now - entry.ts > MAIN_FLOW_CONTEXT_TTL_MS) mainFlowContextLanes.delete(laneId);
-  }
-  while (mainFlowContextLanes.size > MAIN_FLOW_CONTEXT_MAX_ENTRIES) {
-    let oldestKey: string | undefined;
-    let oldestTs = Number.POSITIVE_INFINITY;
-    for (const [laneId, entry] of mainFlowContextLanes) {
-      if (entry.ts < oldestTs) {
-        oldestTs = entry.ts;
-        oldestKey = laneId;
-      }
-    }
-    if (oldestKey === undefined) break;
-    mainFlowContextLanes.delete(oldestKey);
-  }
-  mainFlowContextLanes.set(topicLaneUserId, { ts: now, lane: mainFlowLane });
-}
-
-/** 领取话题 lane 记忆的群主流取数 lane(一次性, 领完即删);无则返回 undefined。 */
-function takeMainFlowContextLane(topicLaneUserId: string): FeishuLane | undefined {
-  const entry = mainFlowContextLanes.get(topicLaneUserId);
-  if (!entry) return undefined;
-  mainFlowContextLanes.delete(topicLaneUserId);
-  return entry.lane;
-}
-
-/**
- * 群主流消息的 /ctr 接管路由裁决(transport lane 覆写钩子的 host 侧实现)。
- *
- * 本群存在且仅存在一个「话题 lane 的活跃接管」时, 群主流消息直接落进该
- * 接管话题 —— 不再开新话题, 会话状态进 /ctr 接管的 desktop session, 回复
- * 也回接管话题(见 wsClient 钩子注释)。多个接管并存时歧义, 回落默认
- * 开话题行为; slash 命令(如 /ctr 本身)恒回落, 让控制流照常拿新话题 lane。
- * binding 可能刚被收回(detach 与消息并发) — 确认存活才接管路由。
- *
- * 回复锚点用 attach 时记录的 /ctr 控制卡 messageId(attachCardIds, 恒在
- * 接管话题内) —— 群主流的触发消息不是话题内消息, 拿它当锚点会让回复
- * 落进群主流(outbound 的 fail-closed 不变量, review P1)。
- */
-export function resolveGroupTakeoverLane(args: {
-  chatId: string;
-  botAppId: string;
-  text: string;
-}): { laneUserId: string; replyAnchorMessageId?: string } | null {
-  if (args.text.trimStart().startsWith('/')) return null;
-  const candidates = bindingStore
-    .listIdentities('feishu', args.botAppId)
-    .map((id) => decodeFeishuLaneUserId(id.userId))
-    .filter((l): l is FeishuLane => l !== null && l.chatId === args.chatId && l.threadId !== '');
-  if (candidates.length !== 1) return null;
-  const lane = candidates[0];
-  if (!lane) return null;
-  const laneUserId = encodeFeishuLaneUserId(lane.chatId, lane.threadId);
-  const identity = { channel: 'feishu', botContextId: args.botAppId, userId: laneUserId };
-  if (!bindingStore.get(identity)) return null;
-  const anchor = bindingStore.getAttachCardMessageId(identity);
-  return anchor ? { laneUserId, replyAnchorMessageId: anchor } : { laneUserId };
-}
-
 export function buildFeishuAdapter(
   feishuIm: FeishuIM,
   config: ImOrchestratorConfig,
 ): ImChannelAdapter {
-  // 群主流消息的 /ctr 接管路由: 接管存在时消息落进接管话题, 不再开新话题。
-  feishuIm.setGroupMainFlowLaneOverride(resolveGroupTakeoverLane);
   const isLark = () => feishuIm.getService() === 'lark';
   const conversationPrefix = () => (isLark() ? '[Lark·DM] ' : '[飞书·DM] ');
   const groupPrefix = (threadId: string) =>
@@ -362,21 +286,6 @@ export function buildFeishuAdapter(
     processingEmoji: REACTION_PROCESSING,
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
 
-    // ── /ctr 流程的「thread 前上下文」记忆 ─────────────────────────────────
-    // 群主流 @ 开新话题时, 触发事件带 groupContextLane(群主流取数 lane)——
-    // 但 /ctr 是 slash 命令, 不走 prepareAgentTurnText, 开话题那条事件攒下的
-    // 上下文取数 lane 直接浪费; 流程结束后话题里的第一条消息只按话题容器拉
-    // 历史, thread 创建前的群主流讨论就此丢失。这里在 slash 事件时记住
-    // 「话题 lane → 群主流 lane」, 话题里的第一条 agent 消息把它领走
-    // (take, 一次性)当取数 lane 用 — 与开话题事件的 groupContextLane 同语义。
-    // 只记话题 lane(群主流降级 lane 的话题消息本就按群主流取数, 无需补);
-    // TTL + 上限防泄漏。DM 事件无 groupContextLane, 不受影响。
-    onSlashCommandEvent: (event) => {
-      if (!event.groupContextLane) return;
-      const lane = decodeFeishuLaneUserId(event.senderId);
-      if (!lane || !lane.threadId) return;
-      rememberMainFlowContextLane(event.senderId, event.groupContextLane);
-    },
     // 群轮次(speaker 存在)统一挂强确认策略 — 群历史前缀携带成员可控文本,
     // 注入可借 owner 轮次的宽松档执行危险操作; 确认卡经 deliverToOwnerDm
     // 改投 owner 私聊, 点击也只认 owner。DM 不挂, owner 私聊保持全速。
@@ -392,12 +301,15 @@ export function buildFeishuAdapter(
       const lane = decodeFeishuLaneUserId(event.senderId);
       if (!lane) return null;
       // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
-      // IMMessageEvent.groupContextLane) — 新话题是空的, 群历史仍按群主流
-      // 拉取, 「总结上面」等依赖上文的消息才能拿到上下文。
-      // 开话题事件本身是 slash(如 /ctr)时不经过这里: 取数 lane 由
-      // onSlashCommandEvent 记住, 话题里第一条 agent 消息来此领走。
-      const contextLane =
-        event.groupContextLane ?? takeMainFlowContextLane(event.senderId) ?? lane;
+      // IMMessageEvent.groupContextLane) — 触发消息发在群主流(只是回复被折成
+      // 了新话题), 所以群历史仍按群主流拉取, 「总结上面」才拿得到上下文。
+      //
+      // 话题里发的消息一律按**话题容器**取数(contextLane = lane): 会话里只看
+      // 会话。`/ctr` 曾把「开话题之前的群主流讨论」记下来补给话题里第一条消息,
+      // 已按产品裁决去掉 —— 它让 /ctr 后的第一句要回翻整条群主流(5 页 + 每页
+      // 一次模型判断), 首句实测被拖到 87s; 而话题的语义本就是「另起一摊」,
+      // 需要群里的上文时在群主流里 @ 即可。
+      const contextLane = event.groupContextLane ?? lane;
       const built = await buildFeishuGroupContext({
         lane: contextLane,
         triggerMessageId: event.messageId,

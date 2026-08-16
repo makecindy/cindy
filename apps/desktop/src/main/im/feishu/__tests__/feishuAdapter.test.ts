@@ -8,7 +8,7 @@
  *   - 默认 title / ack emoji
  *   - 群 lane prepareAgentTurnText: 分页拉历史 + 相关性早停 + 失败通知 owner
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import os from 'node:os';
 import path from 'node:path';
@@ -19,11 +19,6 @@ const scopeMocks = vi.hoisted(() => ({
   join: null as unknown as (...parts: string[]) => string,
   claimLegacy: vi.fn(),
   utilityText: vi.fn(),
-  listIdentities: vi.fn<
-    () => Array<{ channel: string; botContextId: string; userId: string }>
-  >(() => []),
-  bindingGet: vi.fn<() => string | null>(() => null),
-  getAttachCardMessageId: vi.fn<() => string | null>(() => null),
   readImDefaultSettings: vi.fn<(channel?: string) => { groupPermissionMode: string }>(() => ({
     groupPermissionMode: 'auto',
   })),
@@ -49,13 +44,6 @@ vi.mock('../../../utility-model/oneShotCandidates.js', () => ({
 vi.mock('../../../maker-host/index.js', () => ({
   getMaker: () => ({}),
 }));
-vi.mock('../../binding', () => ({
-  bindingStore: {
-    listIdentities: scopeMocks.listIdentities,
-    get: scopeMocks.bindingGet,
-    getAttachCardMessageId: scopeMocks.getAttachCardMessageId,
-  },
-}));
 // 群 lane 的新建会话权限档来自渠道设置(defaultSettingsStore 拽 electron/存储层,
 // 单测只钉住「读到什么就用什么」)。
 vi.mock('../../defaultSettingsStore', () => ({
@@ -69,7 +57,8 @@ import type {
   IMMessageEvent,
   IMStatus,
 } from '@cindy/im';
-import { buildFeishuAdapter, resolveGroupTakeoverLane } from '../adapter';
+import { getResolvedMainLocale, setMainLocale } from '../../../i18n';
+import { buildFeishuAdapter } from '../adapter';
 import { formatHistoryTime } from '../groupContext';
 
 const getService = vi.fn<() => 'feishu' | 'lark'>(() => 'feishu');
@@ -88,7 +77,6 @@ const sendMarkdownText = vi.fn<(_userId: string, _text: string) => Promise<{ mes
 );
 const getChatName = vi.fn<(chatId: string) => Promise<string | null>>(async () => null);
 const getStatus = vi.fn<() => IMStatus>(() => ({ kind: 'connected', appId: 'cli_abc' }));
-const setGroupMainFlowLaneOverride = vi.fn();
 const fakeIm = {
   getService,
   fetchChatHistoryPage,
@@ -97,7 +85,6 @@ const fakeIm = {
   sendMarkdownText,
   getChatName,
   getStatus,
-  setGroupMainFlowLaneOverride,
 } as unknown as FeishuIM;
 
 function groupEvent(overrides?: Partial<IMMessageEvent>): IMMessageEvent {
@@ -148,6 +135,27 @@ describe('feishu ImChannelAdapter characterization', () => {
   it('channel / source 恒为 feishu', () => {
     expect(adapter.channel).toBe('feishu');
     expect(adapter.sessions.source).toBe('feishu');
+  });
+
+  it('权限模式不兼容提示在发送时跟随当前语言', () => {
+    const originalLocale = getResolvedMainLocale();
+    const copy = adapter.ui.error?.permissionModeUnsupported;
+    expect(copy).toBeTypeOf('function');
+    if (typeof copy !== 'function') throw new Error('missing permission mode copy');
+
+    try {
+      setMainLocale('en');
+      expect(copy('acceptEdits')).toBe(
+        'The current Agent cannot run on this channel in this permission mode, so messages cannot be processed. Send /permission to choose a supported mode.',
+      );
+
+      setMainLocale('zh-CN');
+      expect(copy('acceptEdits')).toBe(
+        '当前 Agent 不支持以此权限模式在该渠道运行，消息将无法处理。请发送 /permission 调整权限模式。',
+      );
+    } finally {
+      setMainLocale(originalLocale);
+    }
   });
 
   it('session id 格式 feishu_{botAppId}_{openId} — 跨重启稳定, 老用户续上历史', () => {
@@ -359,62 +367,27 @@ describe('feishu group lane adapter hooks', () => {
     expect(result?.agentText).toContain('群主流背景');
   });
 
-  it('prepareAgentTurnText: /ctr 开话题事件记忆的群主流取数 lane 被话题首条消息领走(一次性)', async () => {
-    // 群主流 @ "/ctr" 开新话题: slash 不经过 prepareAgentTurnText, 取数 lane
-    // 由 onSlashCommandEvent 记住; 流程结束后话题里第一条 agent 消息按群主流
-    // 拉历史(thread 创建前的上下文), 第二条起回到话题容器。
-    adapter.onSlashCommandEvent?.(
-      groupEvent({
-        senderId: 'g/oc_chat9/omt_ctr1',
-        groupContextLane: { chatId: 'oc_chat9', threadId: '' },
-      }),
-    );
+  /**
+   * 会话里只看会话(产品裁决)。
+   *
+   * 曾经的行为: /ctr 开话题事件把群主流取数 lane 记下来, 由话题里第一条消息
+   * 领走 —— 于是首句要回翻整条群主流(最多 5 页, 每页一次模型相关性判断),
+   * 实测把首句拖到 87s 才开始跑。需要群里的上文就在群主流 @ 机器人。
+   */
+  it('prepareAgentTurnText: /ctr 后话题里的第一条消息也只按话题容器取数', async () => {
     fetchChatHistoryPage.mockResolvedValueOnce(
-      historyPage([historyEntry({ messageId: 'om_h1', threadId: '', text: '群主流背景' })]),
+      historyPage([historyEntry({ messageId: 'om_h1', threadId: 'omt_ctr1', text: '话题内消息' })]),
     );
     const first = await adapter.prepareAgentTurnText?.(
-      groupEvent({ senderId: 'g/oc_chat9/omt_ctr1' }),
-    );
-    expect(fetchChatHistoryPage).toHaveBeenCalledWith(
-      expect.objectContaining({ chatId: 'oc_chat9' }),
-    );
-    expect(fetchChatHistoryPage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ threadId: 'omt_ctr1' }),
-    );
-    expect(first?.agentText).toContain('群主流背景');
-
-    // 一次性: 第二条消息回到话题容器。
-    fetchChatHistoryPage.mockResolvedValueOnce(
-      historyPage([historyEntry({ messageId: 'om_h2', threadId: 'omt_ctr1', text: '话题内消息' })]),
-    );
-    const second = await adapter.prepareAgentTurnText?.(
       groupEvent({ senderId: 'g/oc_chat9/omt_ctr1' }),
     );
     expect(fetchChatHistoryPage).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatId: 'oc_chat9', threadId: 'omt_ctr1' }),
     );
-    expect(second?.agentText).toContain('话题内消息');
-    expect(second?.agentText).not.toContain('群主流背景');
+    expect(first?.agentText).toContain('话题内消息');
   });
 
-  it('prepareAgentTurnText: 话题内 slash 事件无 groupContextLane, 不建立记忆(走话题容器)', async () => {
-    adapter.onSlashCommandEvent?.(groupEvent({ senderId: 'g/oc_chat10/omt_ctr2' }));
-    fetchChatHistoryPage.mockResolvedValueOnce(
-      historyPage([historyEntry({ messageId: 'om_h1', threadId: 'omt_ctr2', text: '话题内消息' })]),
-    );
-    const result = await adapter.prepareAgentTurnText?.(
-      groupEvent({ senderId: 'g/oc_chat10/omt_ctr2' }),
-    );
-    expect(fetchChatHistoryPage).toHaveBeenCalledWith(
-      expect.objectContaining({ chatId: 'oc_chat10', threadId: 'omt_ctr2' }),
-    );
-    expect(result?.agentText).toContain('话题内消息');
-  });
-
-  it('prepareAgentTurnText: DM slash 事件不受记忆机制影响', async () => {
-    adapter.onSlashCommandEvent?.(
-      groupEvent({ senderId: 'ou_owner', groupContextLane: { chatId: 'oc_chat11', threadId: '' } }),
-    );
+  it('prepareAgentTurnText: DM 不拼群上下文', async () => {
     fetchChatHistoryPage.mockClear();
     const result = await adapter.prepareAgentTurnText?.(
       groupEvent({ senderId: 'ou_owner', speaker: undefined }),
@@ -430,6 +403,9 @@ describe('feishu group lane adapter hooks', () => {
         historyEntry({ messageId: 'om_h3', threadId: 'omt_other', text: '别的话题' }),
       ]),
     );
+    // utilityText 的 mock.calls 跨用例累积(suite 无逐例 reset), 判断调用要按
+    // 本用例自己的窗口数 —— 否则会数到前面群主流用例的那次判断。
+    scopeMocks.utilityText.mockClear();
     const result = await adapter.prepareAgentTurnText?.(
       groupEvent({ senderId: 'g/oc_chat1/omt_t1' }),
     );
@@ -438,6 +414,13 @@ describe('feishu group lane adapter hooks', () => {
     );
     expect(result?.agentText).toContain('话题内消息');
     expect(result?.agentText).not.toContain('别的话题');
+    // 话题里**不做**相关性判断: 话题容器天然就是一个话题, 每页一次的模型判断
+    // 只有群主流需要。这几次调用串在首轮关键路径上, 轻量模型一慢就是干等。
+    // (注入扫描仍照常跑 —— 话题里也是群成员能发言的地方。)
+    const judgeCalls = scopeMocks.utilityText.mock.calls.filter((call) =>
+      String(call[1] ?? '').includes('只回答一个词'),
+    );
+    expect(judgeCalls).toHaveLength(0);
   });
 
   it('prepareAgentTurnText: 发言人名字消毒; 伪造上下文标签的消息整条过滤', async () => {
@@ -526,83 +509,5 @@ describe('feishu group lane adapter hooks', () => {
     expect(fetchChatHistoryPage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chatId: 'ou_owner' }),
     );
-  });
-});
-
-describe('resolveGroupTakeoverLane — 群主流消息的 /ctr 接管路由', () => {
-  beforeEach(() => {
-    scopeMocks.listIdentities.mockReset();
-    scopeMocks.bindingGet.mockReset();
-    scopeMocks.getAttachCardMessageId.mockReset();
-    scopeMocks.listIdentities.mockReturnValue([]);
-    scopeMocks.bindingGet.mockReturnValue(null);
-    scopeMocks.getAttachCardMessageId.mockReturnValue(null);
-  });
-
-  function identity(userId: string) {
-    return { channel: 'feishu', botContextId: 'cli_abc', userId };
-  }
-
-  it('本群唯一话题接管且 binding 存活 → 返回接管 lane + 话题内回复锚点(attach 卡片)', () => {
-    scopeMocks.listIdentities.mockReturnValue([
-      identity('g/oc_chat1/omt_ctr'),
-      identity('ou_dm_user'), // 私聊 identity 不是 lane, 不参与候选
-    ]);
-    scopeMocks.bindingGet.mockReturnValue('sess-1');
-    scopeMocks.getAttachCardMessageId.mockReturnValue('om_card_ctr');
-
-    expect(
-      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
-    ).toEqual({ laneUserId: 'g/oc_chat1/omt_ctr', replyAnchorMessageId: 'om_card_ctr' });
-  });
-
-  it('attach 卡片缺失(旧 binding 行)时返回 lane 但不给锚点(transport 复用 held 锚点)', () => {
-    scopeMocks.listIdentities.mockReturnValue([identity('g/oc_chat1/omt_ctr')]);
-    scopeMocks.bindingGet.mockReturnValue('sess-1');
-    scopeMocks.getAttachCardMessageId.mockReturnValue(null);
-
-    expect(
-      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
-    ).toEqual({ laneUserId: 'g/oc_chat1/omt_ctr' });
-  });
-
-  it('多个话题接管并存 → 歧义, 回落 null(默认开话题)', () => {
-    scopeMocks.listIdentities.mockReturnValue([
-      identity('g/oc_chat1/omt_ctr'),
-      identity('g/oc_chat1/omt_other'),
-    ]);
-    scopeMocks.bindingGet.mockReturnValue('sess-1');
-
-    expect(
-      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
-    ).toBeNull();
-  });
-
-  it('slash 命令恒回落且不查 binding', () => {
-    expect(
-      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '/ctr' }),
-    ).toBeNull();
-    expect(scopeMocks.listIdentities).not.toHaveBeenCalled();
-  });
-
-  it('binding 已收回(get 为 null)→ 回落 null', () => {
-    scopeMocks.listIdentities.mockReturnValue([identity('g/oc_chat1/omt_ctr')]);
-    scopeMocks.bindingGet.mockReturnValue(null);
-
-    expect(
-      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
-    ).toBeNull();
-  });
-
-  it('非本 chat / 群主流 lane(无话题)的接管不参与候选', () => {
-    scopeMocks.listIdentities.mockReturnValue([
-      identity('g/oc_other_chat/omt_ctr'),
-      identity('g/oc_chat1'), // 群主流 lane(开话题失败的降级路径)
-    ]);
-    scopeMocks.bindingGet.mockReturnValue('sess-1');
-
-    expect(
-      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
-    ).toBeNull();
   });
 });

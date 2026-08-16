@@ -10,7 +10,10 @@ import {
   findPaneById,
   findSplitChildByPanelKind,
   insertRootSplitPane,
+  moveGhostPaneToRootByKind,
   removeRootSplitPaneByKind,
+  stackGhostPaneByKind,
+  swapPanesByKind,
   swapRootSplitChildrenByKind,
   transferSplitFraction,
   setPaneCollapsed,
@@ -140,8 +143,10 @@ describe('validateLayout · 结构性不变量', () => {
 
   it('chat-main 标记 collapsed 被拒(主区不可折叠)', () => {
     const layout = makeLayout((l) => {
-      const chat = (l.content as { children: { node: LayoutNode }[] }).children[0]
-        .node as Extract<LayoutNode, { type: 'pane' }>;
+      const chat = (l.content as { children: { node: LayoutNode }[] }).children[0].node as Extract<
+        LayoutNode,
+        { type: 'pane' }
+      >;
       chat.collapsed = true;
     });
     expect(validateLayout(layout).ok).toBe(false);
@@ -201,7 +206,14 @@ describe('validateLayout · 结构性不变量', () => {
 
   it('v1 float 非空被拒', () => {
     const layout = makeLayout((l) => {
-      (l.float as unknown[]).push({ id: 'f', panelKind: 'right-tabs', x: 0, y: 0, width: 1, height: 1 });
+      (l.float as unknown[]).push({
+        id: 'f',
+        panelKind: 'right-tabs',
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+      });
     });
     expect(validateLayout(layout).ok).toBe(false);
   });
@@ -315,7 +327,9 @@ describe('setSplitChildFraction', () => {
     expect(children[0].fraction).toBeCloseTo(0.6);
     expect(children[1].fraction).toBeCloseTo(0.4);
     // 原树保持默认占比(0.5/0.5,B1b-1 对齐右栏既有 50/50 默认)。
-    expect((layout.content as { children: { fraction: number }[] }).children[0].fraction).toBeCloseTo(0.5);
+    expect(
+      (layout.content as { children: { fraction: number }[] }).children[0].fraction,
+    ).toBeCloseTo(0.5);
   });
 
   it('split 不存在 / index 越界 / fraction 非法均被拒且返回原引用', () => {
@@ -340,8 +354,14 @@ describe('insertRootSplitPane / removeRootSplitPaneByKind(加装/卸载)', () =>
       { index: 1, fraction: 0.2 },
     );
     expect(r.applied).toBe(true);
-    const children = (r.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }).children;
-    expect(children.map((c) => c.node.panelKind)).toEqual(['chat-main', 'ghost:hello', 'right-tabs']);
+    const children = (
+      r.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }
+    ).children;
+    expect(children.map((c) => c.node.panelKind)).toEqual([
+      'chat-main',
+      'ghost:hello',
+      'right-tabs',
+    ]);
     expect(children.reduce((a, c) => a + c.fraction, 0)).toBeCloseTo(1);
     expect(children[1].fraction).toBeCloseTo(0.2);
     expect(validateLayout(r.layout)).toEqual({ ok: true });
@@ -351,9 +371,15 @@ describe('insertRootSplitPane / removeRootSplitPaneByKind(加装/卸载)', () =>
 
   it('index 越界夹取到末尾;fraction 夹取进 [0.05, 0.8]', () => {
     const layout = createDefaultLayout();
-    const r = insertRootSplitPane(layout, { id: 'x', panelKind: 'ghost:x' }, { index: 99, fraction: 5 });
+    const r = insertRootSplitPane(
+      layout,
+      { id: 'x', panelKind: 'ghost:x' },
+      { index: 99, fraction: 5 },
+    );
     expect(r.applied).toBe(true);
-    const children = (r.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }).children;
+    const children = (
+      r.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }
+    ).children;
     expect(children[2].node.panelKind).toBe('ghost:x');
     expect(children[2].fraction).toBeLessThanOrEqual(0.8);
   });
@@ -367,10 +393,16 @@ describe('insertRootSplitPane / removeRootSplitPaneByKind(加装/卸载)', () =>
 
   it('卸载:移除目标并归一份额;round-trip 加装→卸载回到两块', () => {
     const layout = createDefaultLayout();
-    const added = insertRootSplitPane(layout, { id: 'demo-hello', panelKind: 'ghost:hello' }, { index: 1 });
+    const added = insertRootSplitPane(
+      layout,
+      { id: 'demo-hello', panelKind: 'ghost:hello' },
+      { index: 1 },
+    );
     const removed = removeRootSplitPaneByKind(added.layout, 'ghost:hello');
     expect(removed.applied).toBe(true);
-    const children = (removed.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }).children;
+    const children = (
+      removed.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }
+    ).children;
     expect(children.map((c) => c.node.panelKind)).toEqual(['chat-main', 'right-tabs']);
     expect(children.reduce((a, c) => a + c.fraction, 0)).toBeCloseTo(1);
   });
@@ -384,7 +416,11 @@ describe('insertRootSplitPane / removeRootSplitPaneByKind(加装/卸载)', () =>
 
   it('卸载 chat-main 被出口校验拒绝(即使块数足够)', () => {
     const layout = createDefaultLayout();
-    const added = insertRootSplitPane(layout, { id: 'demo-hello', panelKind: 'ghost:hello' }, { index: 1 });
+    const added = insertRootSplitPane(
+      layout,
+      { id: 'demo-hello', panelKind: 'ghost:hello' },
+      { index: 1 },
+    );
     const r = removeRootSplitPaneByKind(added.layout, 'chat-main');
     expect(r.applied).toBe(false);
   });
@@ -400,8 +436,14 @@ describe('swapRootSplitChildrenByKind(N 面板换位)', () => {
     );
     const r = swapRootSplitChildrenByKind(added.layout, 'chat-main', 'right-tabs');
     expect(r.applied).toBe(true);
-    const children = (r.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }).children;
-    expect(children.map((c) => c.node.panelKind)).toEqual(['right-tabs', 'ghost:hello', 'chat-main']);
+    const children = (
+      r.layout.content as { children: { fraction: number; node: { panelKind: string } }[] }
+    ).children;
+    expect(children.map((c) => c.node.panelKind)).toEqual([
+      'right-tabs',
+      'ghost:hello',
+      'chat-main',
+    ]);
     // fraction 跟着面板走:hello 仍是 0.2。
     expect(children[1].fraction).toBeCloseTo(0.2);
     expect(validateLayout(r.layout)).toEqual({ ok: true });
@@ -414,6 +456,143 @@ describe('swapRootSplitChildrenByKind(N 面板换位)', () => {
   });
 });
 
+function layoutWithTwoGhostPanes(): Layout {
+  const alpha = insertRootSplitPane(
+    createDefaultLayout(),
+    { id: 'ghost-alpha', panelKind: 'ghost:alpha' },
+    { index: 0, fraction: 0.2 },
+  );
+  const beta = insertRootSplitPane(
+    alpha.layout,
+    { id: 'ghost-beta', panelKind: 'ghost:beta' },
+    { index: 1, fraction: 0.25 },
+  );
+  expect(alpha.applied).toBe(true);
+  expect(beta.applied).toBe(true);
+  return beta.layout;
+}
+
+describe('插件面板 grid 停靠', () => {
+  it('把两个根级插件上下合并为 column，外层宽度继承双方份额之和', () => {
+    const layout = layoutWithTwoGhostPanes();
+    const before = (layout.content as SplitNode).children;
+    const alphaWidth = before[0].fraction;
+    const betaWidth = before[1].fraction;
+
+    const result = stackGhostPaneByKind(layout, 'ghost:alpha', 'ghost:beta', 'before');
+
+    expect(result.applied).toBe(true);
+    const root = result.layout.content as SplitNode;
+    expect(root.direction).toBe('row');
+    expect(root.children).toHaveLength(3);
+    expect(root.children[0].fraction).toBeCloseTo(alphaWidth + betaWidth);
+    expect(root.children[0].node).toMatchObject({ type: 'split', direction: 'column' });
+    const column = root.children[0].node as SplitNode;
+    expect(
+      column.children.map((child) => child.node.type === 'pane' && child.node.panelKind),
+    ).toEqual(['ghost:alpha', 'ghost:beta']);
+    expect(column.children.map((child) => child.fraction)).toEqual([0.5, 0.5]);
+    expect(validateLayout(result.layout)).toEqual({ ok: true });
+    expect(layout.content).not.toEqual(result.layout.content);
+  });
+
+  it('同一纵向列内上下拖动只调整顺序，保留每块高度份额', () => {
+    const stacked = stackGhostPaneByKind(
+      layoutWithTwoGhostPanes(),
+      'ghost:alpha',
+      'ghost:beta',
+      'before',
+    );
+    const column = (stacked.layout.content as SplitNode).children[0].node as SplitNode;
+    column.children[0].fraction = 0.35;
+    column.children[1].fraction = 0.65;
+
+    const reordered = stackGhostPaneByKind(stacked.layout, 'ghost:alpha', 'ghost:beta', 'after');
+
+    expect(reordered.applied).toBe(true);
+    const nextColumn = (reordered.layout.content as SplitNode).children[0].node as SplitNode;
+    expect(
+      nextColumn.children.map((child) => child.node.type === 'pane' && child.node.panelKind),
+    ).toEqual(['ghost:beta', 'ghost:alpha']);
+    expect(nextColumn.children.map((child) => child.fraction)).toEqual([0.65, 0.35]);
+  });
+
+  it('从两块等分 column 抽回根横排时，恢复为两份相同列宽并折叠单子节点 split', () => {
+    const stacked = stackGhostPaneByKind(
+      layoutWithTwoGhostPanes(),
+      'ghost:alpha',
+      'ghost:beta',
+      'before',
+    );
+
+    const result = moveGhostPaneToRootByKind(stacked.layout, 'ghost:alpha', 'chat-main', 'before');
+
+    expect(result.applied).toBe(true);
+    const root = result.layout.content as SplitNode;
+    expect(
+      root.children.map((child) => child.node.type === 'pane' && child.node.panelKind),
+    ).toEqual(['ghost:beta', 'ghost:alpha', 'chat-main', 'right-tabs']);
+    expect(root.children[0].fraction).toBeCloseTo(root.children[1].fraction);
+    expect(validateLayout(result.layout)).toEqual({ ok: true });
+  });
+
+  it('中心交换支持纵向列中的插件槽位，且不会改变槽位高度', () => {
+    const withGamma = insertRootSplitPane(
+      layoutWithTwoGhostPanes(),
+      { id: 'ghost-gamma', panelKind: 'ghost:gamma' },
+      { index: 2, fraction: 0.1 },
+    );
+    const stacked = stackGhostPaneByKind(withGamma.layout, 'ghost:alpha', 'ghost:beta', 'before');
+    const rootBefore = stacked.layout.content as SplitNode;
+    const columnBefore = rootBefore.children[0].node as SplitNode;
+    columnBefore.children[0].fraction = 0.4;
+    columnBefore.children[1].fraction = 0.6;
+
+    const result = swapPanesByKind(stacked.layout, 'ghost:alpha', 'ghost:gamma');
+
+    expect(result.applied).toBe(true);
+    const root = result.layout.content as SplitNode;
+    const column = root.children[0].node as SplitNode;
+    expect(column.children[0].node).toMatchObject({ panelKind: 'ghost:gamma' });
+    expect(column.children.map((child) => child.fraction)).toEqual([0.4, 0.6]);
+    expect(walkPanes(result.layout).map((pane) => pane.panelKind)).toContain('ghost:alpha');
+    expect(validateLayout(result.layout)).toEqual({ ok: true });
+  });
+
+  it('内置面板可与整个插件纵向列交换，但仍拒绝进入列内槽位', () => {
+    const stacked = stackGhostPaneByKind(
+      layoutWithTwoGhostPanes(),
+      'ghost:alpha',
+      'ghost:beta',
+      'before',
+    );
+    const before = stacked.layout.content as SplitNode;
+    const columnFraction = before.children[0].fraction;
+    const chatFraction = before.children[1].fraction;
+
+    expect(swapPanesByKind(stacked.layout, 'chat-main', 'ghost:alpha').applied).toBe(false);
+    const result = swapRootSplitChildrenByKind(stacked.layout, 'chat-main', 'ghost:alpha');
+    expect(result.applied).toBe(true);
+    const root = result.layout.content as SplitNode;
+    expect(root.children[0].node).toMatchObject({ type: 'pane', panelKind: 'chat-main' });
+    expect(root.children[0].fraction).toBeCloseTo(chatFraction);
+    expect(root.children[1].node).toMatchObject({ type: 'split', direction: 'column' });
+    expect(root.children[1].fraction).toBeCloseTo(columnFraction);
+    expect(countPanelKind(result.layout, 'chat-main')).toBe(1);
+    expect(validateLayout(result.layout)).toEqual({ ok: true });
+  });
+
+  it('上下停靠拒绝内置面板或缺失目标，保持 chat-main 不变量', () => {
+    const layout = layoutWithTwoGhostPanes();
+    expect(stackGhostPaneByKind(layout, 'chat-main', 'ghost:alpha', 'before').applied).toBe(false);
+    expect(stackGhostPaneByKind(layout, 'ghost:alpha', 'ghost:missing', 'after').applied).toBe(
+      false,
+    );
+    expect(validateLayout(layout)).toEqual({ ok: true });
+    expect(countPanelKind(layout, 'chat-main')).toBe(1);
+  });
+});
+
 describe('transferSplitFraction(缝把手拖宽提交)', () => {
   it('只动缝两侧邻居:from 减 to 增,第三方不受影响,总和保持 1', () => {
     const layout = createDefaultLayout();
@@ -422,10 +601,14 @@ describe('transferSplitFraction(缝把手拖宽提交)', () => {
       { id: 'demo-hello', panelKind: 'ghost:hello' },
       { index: 1, fraction: 0.2 },
     );
-    const before = (added.layout.content as { children: { fraction: number }[] }).children.map((c) => c.fraction);
+    const before = (added.layout.content as { children: { fraction: number }[] }).children.map(
+      (c) => c.fraction,
+    );
     const r = transferSplitFraction(added.layout, 'root', 1, 2, 0.1);
     expect(r.applied).toBe(true);
-    const after = (r.layout.content as { children: { fraction: number }[] }).children.map((c) => c.fraction);
+    const after = (r.layout.content as { children: { fraction: number }[] }).children.map(
+      (c) => c.fraction,
+    );
     expect(after[0]).toBeCloseTo(before[0]); // chat 不动
     expect(after[1]).toBeCloseTo(before[1] - 0.1);
     expect(after[2]).toBeCloseTo(before[2] + 0.1);
@@ -484,7 +667,10 @@ describe('findSplitChildByPanelKind', () => {
       id: 'root',
       direction: 'row',
       children: [
-        { fraction: 0.5, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+        {
+          fraction: 0.5,
+          node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 },
+        },
         {
           fraction: 0.5,
           node: {

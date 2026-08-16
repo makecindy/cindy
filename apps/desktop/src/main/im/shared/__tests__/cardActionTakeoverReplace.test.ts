@@ -989,7 +989,11 @@ describe('control:new 新建会话（非 threadScoped 分支 — feishu 实际�
     attach(im)();
     await registeredHandler(handler)({
       messageId: 'ctr-new',
-      senderId: 'ou_user1',
+      // 群卡回调的 senderId 是**发卡那条话题 lane**(transport 侧
+      // outbound.resolveCardLane 归一) —— 接管只跟话题走。群 chatId + 私聊
+      // open_id 的组合是「卡片认不出自己在哪条话题」的失效态, 会被 fail-closed
+      // 拦掉(见 cardActionGroupLaneGuard.test.ts), 不是群 /ctr 的正常形态。
+      senderId: 'g/oc_12345/omt_t1',
       chatId: 'oc_12345',
       buttonId: 'control:new',
       scopeKey: '',
@@ -1050,7 +1054,8 @@ describe('control:new 新建会话（非 threadScoped 分支 — feishu 实际�
       degraded: false,
     });
 
-    await pressControlNew(makeIm(), { chatId: 'ou_peer_openid' });
+    // 私聊卡: chatId 是对方 open_id, senderId 也是 open_id(私聊不登记 lane)。
+    await pressControlNew(makeIm(), { chatId: 'ou_peer_openid', senderId: 'ou_user1' });
 
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({

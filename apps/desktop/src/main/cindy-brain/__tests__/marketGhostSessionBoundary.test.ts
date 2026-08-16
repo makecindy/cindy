@@ -191,4 +191,61 @@ describe('market Ghost session boundary', () => {
     expect(body).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
     expect(body).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });
+
+  it('Ghost 媒体在途守卫注入 durable owner 组合条件,而不是退化成只看进程内边界', () => {
+    const helperStart = source.indexOf('function isGhostBoundaryPending(): boolean {');
+    expect(helperStart).toBeGreaterThan(-1);
+    const helperEnd = source.indexOf('\n}\n', helperStart);
+    const helperBody = source.slice(helperStart, helperEnd);
+    // helper 必须是组合条件:进程内 App boundary + durable projection owner 稳定性。
+    expect(helperBody).toContain('isAppSessionBoundaryPending()');
+    expect(helperBody).toContain('isGhostSkillProjectionBoundaryStableForOwner');
+    // 两处 Ghost 专属消费点(xAI 通道与 GhostCindySlot)都必须走 helper。
+    const injections =
+      source.match(/isOwnerBoundaryPending: \(\) => isGhostBoundaryPending\(\)/g)?.length ?? 0;
+    expect(injections).toBeGreaterThanOrEqual(2);
+  });
+
+  it('Ghost 媒体持久化写入守卫(resolveOwnedMedia/saveGhostMedia)也用 durable owner 组合条件', () => {
+    // 这两处是 GhostCindySlot 的 deps,内部 assertStillValid 会在 ingestMedia 的
+    // await 边界反复断言。持久化写入守卫必须和入口/生成守卫一样用 isGhostBoundaryPending,
+    // 否则另一实例在落盘窗口翻转 durable owner 时,字节仍会被登记为 ghost-gallery ref。
+    const resolveStart = source.indexOf('resolveOwnedMedia: async (ghostId, hash, ownerScopeKey)');
+    const saveStart = source.indexOf('saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey');
+    expect(resolveStart).toBeGreaterThan(-1);
+    expect(saveStart).toBeGreaterThan(-1);
+    const resolveBody = source.slice(resolveStart, resolveStart + 700);
+    const saveBody = source.slice(saveStart, saveStart + 700);
+    const combinedGuard = 'isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey';
+    expect(resolveBody).toContain(combinedGuard);
+    expect(saveBody).toContain(combinedGuard);
+    // 持久化守卫不得退化回只看进程内边界的旧写法。
+    expect(source).not.toContain('isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey');
+  });
+
+  it('networkSlot 的 saveGhostMedia(as:media fetch 落仓)也用 durable owner 组合条件', () => {
+    // networkSlot 与 cindy 槽是两个独立实现,签名不带 ownerScopeKey(在函数体开头
+    // 捕获)。它的落仓路径(ghost-gallery 作品归属 + recordGhostCallMedia)必须同样
+    // 有 durable owner 守卫 + assertStillValid + 补偿 journal,否则 as:'media' fetch
+    // 读取窗口内 durable owner 翻转时仍会落仓到错误 owner 的画廊。
+    const networkStart = source.indexOf('saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) =>');
+    expect(networkStart).toBeGreaterThan(-1);
+    const networkBody = source.slice(networkStart, networkStart + 1800);
+    expect(networkBody).toContain('const ownerScopeKey = activeOwnerScopeKey();');
+    expect(networkBody).toContain('isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey');
+    expect(networkBody).toContain('assertStillValid: assertOwnerScopeCurrent');
+    expect(networkBody).toContain('refCompensationScope: captureMediaRefCompensationScope(ownerScopeKey)');
+  });
+
+  it('depositMedia(ghost-deposit 寄存器落仓)也用 durable owner 组合条件', () => {
+    // 寄存器引用按 ghostId 落到 owner 作用域账本(originKind:'user' 但 refId 仍是意识),
+    // 落仓窗口翻转全局 owner 时必须 fail closed,与 saveGhostMedia 同口径。
+    const depositStart = source.indexOf('depositMedia: async ({ ghostId, buffer, mimeType, label }) =>');
+    expect(depositStart).toBeGreaterThan(-1);
+    const depositBody = source.slice(depositStart, depositStart + 1800);
+    expect(depositBody).toContain('const ownerScopeKey = activeOwnerScopeKey();');
+    expect(depositBody).toContain('isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey');
+    expect(depositBody).toContain('assertStillValid: assertOwnerScopeCurrent');
+    expect(depositBody).toContain('refCompensationScope: captureMediaRefCompensationScope(ownerScopeKey)');
+  });
 });

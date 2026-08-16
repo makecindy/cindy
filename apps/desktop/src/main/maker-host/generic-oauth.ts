@@ -830,7 +830,7 @@ export async function discoverGenericOAuthModels(
 }
 
 /**
- * 解析 OpenAI / Anthropic「列模型」响应的三种形状（`{data:[{id}]}` / `{models:[{id}]}` /
+ * 解析 OpenAI / Anthropic「列模型」响应的三种形状（`{data:[{id}]}` / `{models:[{id|slug}]}` /
  * 字符串数组）为去重后的 `{id, name, contextWindow?}[]`；无法识别返回 null。显示名优先取
  * 条目的 `display_name`（Anthropic 形状）/ `name` 字段，缺省回退 id。
  * contextWindow 尽力从常见字段读取（OpenRouter `context_length` / 通用 `context_window` /
@@ -856,8 +856,12 @@ export function parseModelsListResponse(
     const id =
       typeof item === 'string'
         ? item
-        : item && typeof item === 'object' && typeof (item as { id?: unknown }).id === 'string'
-          ? (item as { id: string }).id
+        : item && typeof item === 'object'
+          ? typeof (item as { id?: unknown }).id === 'string'
+            ? (item as { id: string }).id
+            : typeof (item as { slug?: unknown }).slug === 'string'
+              ? (item as { slug: string }).slug
+              : null
           : null;
     if (!id || seen.has(id)) continue;
     seen.add(id);

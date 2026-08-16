@@ -117,10 +117,14 @@ import {
 } from './capability-routing.js';
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
+  annotatePermissionRequestForUnavailableReview,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
+  createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
+  isAutoReviewUnavailableMetadata,
+  isSystemPermissionDenialReason,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -232,18 +236,19 @@ function legacyToSdkModelString(model: string): string {
   return model;
 }
 
-/**
- * ToolLoopGuard 必须基于 maker-core 对外暴露的 model id 判断。
- * SDK 字符串会被 toSdkModelString 改写(例如 Sonnet 5 变成 claude-sonnet-5[1m]),
- * 容易把 provider 细节和公开模型选择混在一起; host 注入的 DeepSeek id
- * 当前为 deepseek/deepseek-v4-pro 与 deepseek/deepseek-v4-flash。
- */
-function isDeepSeekModel(model: string): boolean {
-  return model.startsWith('deepseek/');
-}
-
 function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
+}
+
+/**
+ * 结果感知的硬中断目前只覆盖既有 DeepSeek 与原生 Claude 系列。
+ * 其他 provider-routed 模型需要独立确认产品口径,不能因共用 Claude Code harness
+ * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…);sidechain 的
+ * 判断来自 SDK 流内的原始 id(可能是裸 deepseek-… 形态,同 toSdkModelString 的双形态),
+ * 因此 DeepSeek 按家族前缀匹配,不带 [1m] 的 SDK 改写。
+ */
+function shouldUseToolLoopGuard(model: string): boolean {
+  return model.startsWith('deepseek') || model.startsWith('claude-');
 }
 
 /** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
@@ -1568,6 +1573,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       settled: boolean;
       /** prompt-each-time 高风险审批: 切到宽松模式时也不接受 dismissAllPending('allow')。 */
       forcePrompt?: boolean;
+      /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
+      unavailableHandoff?: boolean;
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
@@ -1595,6 +1602,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           resolve,
           settled: false,
           ...(opts?.forcePrompt ? { forcePrompt: true } : {}),
+          ...(req.kind === 'permission' && isAutoReviewUnavailableMetadata(req.metadata)
+            ? { unavailableHandoff: true }
+            : {}),
         };
         pendingInteractions.set(req.requestId, entry);
         const finalize = (d: InteractionDecision) => {
@@ -1632,6 +1642,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         const decision = effectiveResolveAs === 'allow' && entry.kind !== 'ask_user_question'
           ? ({ kind: entry.kind, behavior: 'allow' } as InteractionDecision)
           : safeDefaultDecision(entry.kind, reason);
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+          autoReviewConfirmUndeliveredNotice.notify();
+        }
         entry.settled = true;
         pendingInteractions.delete(requestId);
         entry.resolve(decision);
@@ -1647,6 +1660,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     function dismissSinglePending(requestId: string, reason: string): void {
       const entry = pendingInteractions.get(requestId);
       if (!entry || entry.settled) return;
+      if (entry.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
       entry.settled = true;
       pendingInteractions.delete(requestId);
       entry.resolve(safeDefaultDecision(entry.kind, reason));
@@ -1894,6 +1908,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
       const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = turnPolicyForcePrompt;
+      let unavailableHandoff = false;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
@@ -1928,7 +1943,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           // AI `ask` and deterministic red-line verdicts are never persisted.
           // 审阅器故障降级来的 ask 额外发一条会话级提示:用户需要知道自己为什么
           // 突然开始被问,否则 Auto 档看起来像坏了。
-          if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+          if (autoDecision.unavailable) {
+            autoReviewUnavailableNotice.notify();
+            unavailableHandoff = true;
+          }
           forcePrompt = true;
         }
       } else {
@@ -1937,8 +1955,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         forcePrompt = forcePrompt || mcpApprovalPolicy === 'prompt-each-time';
       }
-      const decision = await dispatchInteraction({
-        kind: 'permission',
+      const permissionRequest = {
+        kind: 'permission' as const,
         requestId: options.toolUseID,
         toolName,
         input: input as Record<string, unknown>,
@@ -1955,7 +1973,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),
           ...(options.agentID ? { agentID: options.agentID } : {}),
         },
-      }, { forcePrompt });
+      };
+      const decision = await dispatchInteraction(
+        unavailableHandoff
+          ? annotatePermissionRequestForUnavailableReview(permissionRequest)
+          : permissionRequest,
+        { forcePrompt },
+      );
+      notifyIfAutoReviewConfirmUndelivered(unavailableHandoff, decision);
       if (decision.kind !== 'permission') {
         log.warn('permission got mismatched decision', { tool: toolName, decKind: decision.kind });
         return { behavior: 'deny', message: 'resolver kind mismatch' };
@@ -2096,16 +2121,33 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574)。走既有的非终止 error 事件 +
     // `[CODE]` 约定,不新增事件类型;逐条提示会把 Auto 退化成比 Ask 更烦的东西,所以去重。
-    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+    const emitAutoReviewRuntimeNotice = (message: string): void => {
       eventQueue.push({
         type: 'error',
         data: { message, isTerminal: false },
         source: 'claude-code',
       });
-    });
+    };
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
+    const autoReviewConfirmUndeliveredNotice =
+      createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
+    const notifyIfAutoReviewConfirmUndelivered = (
+      unavailableHandoff: boolean,
+      decision: InteractionDecision,
+    ): void => {
+      if (!unavailableHandoff) return;
+      if (decision.kind !== 'permission') {
+        autoReviewConfirmUndeliveredNotice.notify();
+        return;
+      }
+      if (decision.behavior === 'deny' && isSystemPermissionDenialReason(decision.reason)) {
+        autoReviewConfirmUndeliveredNotice.notify();
+      }
+    };
     const reviewAutoAction = (
       action: ReviewableAction,
       workspaceRoots: string[],
@@ -2131,9 +2173,38 @@ export class ClaudeCodeAgent extends BaseAgent {
       autoReviewDecisionCache.set(key, pending);
       return pending;
     };
-    let toolLoopGuard: ToolLoopGuard | null = isDeepSeekModel(mutableModel)
-      ? new ToolLoopGuard()
-      : null;
+    // guard 桶常驻(每 turn 清空):适用性不再是会话级一票制,而是每个 scope 单独判。
+    const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
+    /**
+     * guard 适用性判定用的模型:sidechain 用该 subagent 的实际模型
+     * (Agent 异步回执的 resolvedModel 优先,其次 sidechain 流内消息的 model),
+     * 两者都未知时回落会话模型(维持旧行为);顶层恒用会话模型。
+     * 否则 claude 会话下的 provider-routed subagent 会被越权硬中断,
+     * provider-routed 会话下的 claude subagent 反而失去保护(PR #2779 review 指出)。
+     * runtimeState 声明在后,仅在 forward loop 回调期调用,无 TDZ 风险。
+     */
+    const toolLoopGuardModelForScope = (parentToolUseId?: string): string => {
+      if (parentToolUseId) {
+        const sidechainModel =
+          runtimeState.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
+          ?? runtimeState.streamModelByParentToolUseId.get(parentToolUseId);
+        if (sidechainModel) return sidechainModel;
+      }
+      return mutableModel;
+    };
+    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard | null => {
+      if (!shouldUseToolLoopGuard(toolLoopGuardModelForScope(parentToolUseId))) return null;
+      const scopeKey = parentToolUseId ?? null;
+      let guard = toolLoopGuards.get(scopeKey);
+      if (!guard) {
+        guard = new ToolLoopGuard();
+        toolLoopGuards.set(scopeKey, guard);
+      }
+      return guard;
+    };
+    const resetToolLoopGuards = (): void => {
+      toolLoopGuards.clear();
+    };
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'default';
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
@@ -2503,7 +2574,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkSessionId,
       });
       beginNewTurn();
-      toolLoopGuard?.resetTurn();
+      resetToolLoopGuards();
       turnInFlight = true;
       inputQueue.push({
         type: 'user',
@@ -2945,6 +3016,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               params.input ?? {},
             );
             let remoteForcePrompt = remoteTurnPolicyForcePrompt;
+            let remoteUnavailableHandoff = false;
             if (
               mutablePermissionMode === 'auto'
               && remoteToolName
@@ -2969,7 +3041,10 @@ export class ClaudeCodeAgent extends BaseAgent {
                 };
               }
               // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
-              if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+              if (autoDecision.unavailable) {
+                autoReviewUnavailableNotice.notify();
+                remoteUnavailableHandoff = true;
+              }
               remoteForcePrompt = true;
             } else {
               if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
@@ -2977,8 +3052,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';
             }
-            const decision = await dispatchWithTimeout({
-              kind: 'permission',
+            const remotePermissionRequest = {
+              kind: 'permission' as const,
               requestId: params.requestId,
               toolName: params.toolName ?? 'unknown',
               input: params.input ?? {},
@@ -2989,7 +3064,20 @@ export class ClaudeCodeAgent extends BaseAgent {
                 ? undefined
                 : this.normalizeSessionPermissionSuggestions(params.suggestions),
               metadata: params.metadata ?? {},
-            }, { forcePrompt: remoteForcePrompt });
+            };
+            let decision: InteractionDecision;
+            try {
+              decision = await dispatchWithTimeout(
+                remoteUnavailableHandoff
+                  ? annotatePermissionRequestForUnavailableReview(remotePermissionRequest)
+                  : remotePermissionRequest,
+                { forcePrompt: remoteForcePrompt },
+              );
+            } catch {
+              if (remoteUnavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+              return { kind: 'permission', behavior: 'deny', reason: 'approval_timeout' };
+            }
+            notifyIfAutoReviewConfirmUndelivered(remoteUnavailableHandoff, decision);
             if (decision.kind !== 'permission') {
               return { kind: 'permission', behavior: 'deny', reason: 'resolver kind mismatch' };
             }
@@ -4151,7 +4239,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 消息"(assistant / stream_event)为证据补登记；若 provider 已给上一
             // done 锁存 continuation claim，result-only 也能证明自动续 turn 已开始。
             // 随后镜像 send 入口的
-            // per-turn 状态重置(beginNewTurn + toolLoopGuard.resetTurn),否则 guard
+            // per-turn 状态重置(beginNewTurn + resetToolLoopGuards),否则 guard
             // 会带着上一轮的陈旧计数误判。
             // 排除两种非新 turn 场景:
             //  - interruptRequested:watchdog / tool-loop 已 q.interrupt(),SDK 残留
@@ -4194,7 +4282,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 sdkSessionId,
               });
               beginNewTurn();
-              toolLoopGuard?.resetTurn();
+              resetToolLoopGuards();
               turnInFlight = true;
             }
             noteUpstreamResponseActivity(typeof rawType === 'string' ? rawType : 'unknown');
@@ -4234,19 +4322,26 @@ export class ClaudeCodeAgent extends BaseAgent {
                 }
                 completeTranslatedTurnEnd();
               },
-              onToolUseStart: (id: string, toolName?: unknown, input?: unknown) => {
+              onToolUseStart: (
+                id: string,
+                toolName?: unknown,
+                input?: unknown,
+                parentToolUseId?: string,
+              ) => {
                 pendingToolIds.add(id);
-                toolLoopGuard?.onToolUse(id, toolName, input);
+                getToolLoopGuard(parentToolUseId)?.onToolUse(id, toolName, input);
                 clearUpstreamResponseIdle();
               },
-              onToolResultDone: (id: string, output: string) => {
+              onToolResultDone: (id: string, output: string, parentToolUseId?: string) => {
                 pendingToolIds.delete(id);
                 if (turnInFlight) {
-                  const verdict = toolLoopGuard?.onToolResult(id, output);
+                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(id, output);
                   if (verdict?.kind === 'hard') {
                     const loopHint = verdict.reason === 'consecutive'
                       ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
                       : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
+                    // 报错归属:sidechain 命中时报 subagent 实际模型,不冤枉会话模型。
+                    const loopModel = toolLoopGuardModelForScope(parentToolUseId);
                     // 与 upstream-idle watchdog 同款兜底: tool-loop 中断 = "整个 turn 序列已死",
                     // bridge counter 归零避免 filter 吞掉本条 error / counter 永久停在 >0。
                     // 实践上 bridge /compact turn 不用 tool, 该分支难以触发, 归零是防御性一致。
@@ -4267,14 +4362,14 @@ export class ClaudeCodeAgent extends BaseAgent {
                       type: 'error',
                       data: {
                         message:
-                          `上游模型 ${mutableModel} ${loopHint},疑似陷入死循环,` +
+                          `上游模型 ${loopModel} ${loopHint},疑似陷入死循环,` +
                           `已自动中断当前 turn。可以直接发下一条消息继续,` +
                           `已完成的 tool result 都保留。`,
                         isTerminal: true,
                         reason: 'tool_use_loop_detected',
                         loopKind: verdict.reason,
                         loopCount: verdict.count,
-                        model: mutableModel,
+                        model: loopModel,
                       },
                       source: 'claude-code',
                     });
@@ -4608,7 +4703,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 全新 query + startForwardLoop 等价于 startSession 首次起 q 的空闲态。
       if (replayInput) {
         beginNewTurn();
-        toolLoopGuard?.resetTurn();
+        resetToolLoopGuards();
         turnInFlight = true;
       }
       try {
@@ -5145,7 +5240,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
         beginNewTurn();
-        toolLoopGuard?.resetTurn();
+        resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
         sendInAcceptPhase = true;
@@ -5814,6 +5909,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因(目录解析失败、provider 被停用
         // 等);若换完又不可用,值得再提醒一次。
         autoReviewUnavailableNotice.reset();
+        autoReviewConfirmUndeliveredNotice.reset();
         if (
           !isControlBlocked
           && mutablePermissionMode === 'auto'
@@ -5853,7 +5949,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             triggerAutoCompactIfNeeded();
           }
         }
-        toolLoopGuard = isDeepSeekModel(mutableModel) ? new ToolLoopGuard() : null;
+        // 适用性在 getToolLoopGuard 里按已更新的 mutableModel 逐 scope 判,这里只清状态。
+        resetToolLoopGuards();
       },
 
       async setEffort(newEffort: Effort) {
@@ -5918,6 +6015,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (newMode !== mutablePermissionMode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewConfirmUndeliveredNotice.reset();
         }
         // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
         // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。

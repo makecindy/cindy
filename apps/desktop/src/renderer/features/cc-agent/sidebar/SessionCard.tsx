@@ -175,6 +175,10 @@ export function SessionCard({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
+  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
+  // 状态槽。只并入 phase=running,与 SessionItem / 折叠 rail 同一口径;
+  // needs-interaction 继续由右侧 awaiting 表达。
+  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
   const rightStatusKind =
     remoteRightStatus ??
     resolveSidebarRightStatus({
@@ -557,7 +561,7 @@ export function SessionCard({
     <span className={CARD_TITLE_STATUS_SLOT_CLASS} aria-hidden>
       <SessionStatusIcon
         session={session}
-        isRunning={isRunning}
+        isRunning={leftIconRunning}
         isAttached={isAttached}
         hasAttentionNotification={hasAttentionNotification}
         isActive={isActive}
@@ -655,10 +659,9 @@ export function SessionCard({
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
-        'group/card relative w-full overflow-hidden text-left',
-        splitDragEnabled && !needsSplitDragHandle
-          ? 'cursor-grab active:cursor-grabbing'
-          : 'cursor-pointer',
+        // 侧栏任务本身是可点击导航。拖拽能力不改变 hover 光标；
+        // grab 只在真正拖动中由 Sortable / 系统拖拽态负责。
+        'group/card relative w-full overflow-hidden text-left cursor-pointer',
         variant === 'list'
           ? cn(
               // 扁平行(类 Telegram / 对话列表):无描边、无卡片底色,仅 hover/active 行底色。
@@ -712,17 +715,14 @@ export function SessionCard({
             />
           )}
           <div className="flex items-center gap-1.5">
-            {/* 标题槽固定沿用常态时间槽的 20px 高度。改名框本身是 24px，编辑时
-                绝对定位居中覆盖文字槽位，不参与布局计算，避免整条置顶任务被撑高。
+            {/* 标题槽固定 22px，对齐文字模式 14px 标题的一行高。改名框本身是 24px，
+                编辑时绝对定位居中覆盖文字槽位，不参与布局计算，避免整条任务被撑高。
                 状态 / Agent / 自动化图标始终留在文字槽左侧，编辑态也不改变标题起点。 */}
             <div
               data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
               data-no-drag={splitDragHandleActive ? 'true' : undefined}
               draggable={splitDragHandleActive}
-              className={cn(
-                'relative flex h-5 min-w-0 flex-1 items-center gap-0',
-                splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
-              )}
+              className="relative flex h-[22px] min-w-0 flex-1 items-center gap-0"
             >
               <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
               {isEditing ? (
@@ -738,7 +738,7 @@ export function SessionCard({
                     setIsEditing(false);
                   }}
                   containerClassName="relative min-w-0 flex-1 self-stretch"
-                  inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-13 font-semibold text-foreground"
+                  inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-sm font-medium text-foreground"
                   activeForeground={isActive}
                 />
               ) : (
@@ -746,7 +746,7 @@ export function SessionCard({
                   <span
                     className={cn(
                       'min-w-0 truncate',
-                      'text-13 font-semibold leading-[1.3] tracking-[-0.005em]',
+                      'text-sm font-medium leading-[1.3]',
                       isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
                     )}
                   >
@@ -764,20 +764,21 @@ export function SessionCard({
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
-                      size={11}
+                      size={12}
                       strokeWidth={1.8}
                       connectionStatus={remoteIconConnectionStatus}
                       className={
                         isActive
                           ? 'text-sidebar-item-active-foreground'
-                          : 'text-[var(--text-tertiary)]'
+                          : 'text-sidebar-action-icon'
                       }
                     />
                   )}
                   {sourceLabel ? (
                     <span
+                      title={sourceLabel}
                       className={cn(
-                        'min-w-0 truncate text-11 font-normal',
+                        'min-w-0 truncate text-xs font-normal',
                         isActive
                           ? 'text-sidebar-item-active-foreground/70'
                           : 'text-[var(--cmd-palette-item-meta)]',
@@ -813,6 +814,7 @@ export function SessionCard({
                 canUnarchive={!remoteWritesBlocked}
                 onUnarchive={handleUnarchiveSelect}
                 yieldToOrdinalBadge={ordinalBadgeLabel != null}
+                ordinalBadgeLabel={ordinalBadgeLabel}
               />
             )}
           </div>
@@ -825,9 +827,8 @@ export function SessionCard({
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
             className={cn(
-              'mt-1 overflow-hidden text-11 leading-[1.45]',
+              'mt-1 overflow-hidden text-xs leading-[1.45]',
               '[display:-webkit-box] [-webkit-line-clamp:1] [-webkit-box-orient:vertical]',
-              splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
               rightStatusKind !== 'time' && 'pr-5',
               awaitingText
                 ? isActive
@@ -917,10 +918,7 @@ export function SessionCard({
             data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
-            className={cn(
-              'relative',
-              splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
-            )}
+            className="relative"
           >
             <div
               className={cn(
@@ -972,7 +970,6 @@ export function SessionCard({
                 'mt-[4px] text-11 leading-[1.4]',
                 '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
                 'text-[var(--text-secondary)]',
-                splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
               )}
               style={{ WebkitLineClamp: cardPreviewLineClamp }}
             >
@@ -992,7 +989,7 @@ export function SessionCard({
           >
             <SessionStatusIcon
               session={session}
-              isRunning={isRunning}
+              isRunning={leftIconRunning}
               isAttached={isAttached}
               hasAttentionNotification={hasAttentionNotification}
               isActive={isActive}
@@ -1195,6 +1192,7 @@ function TimeActionsSlot({
   onArchiveNow,
   onUnarchive,
   yieldToOrdinalBadge = false,
+  ordinalBadgeLabel,
 }: {
   sessionId: string;
   /** 任务信息复选(C 期)需要读 totalTokenUsage / totalMoney 等字段。 */
@@ -1213,6 +1211,7 @@ function TimeActionsSlot({
   onUnarchive: () => void;
   /** mod+1..9 序号徽标出现时让位:徽标独占右缘,不与时间/badge 并排。 */
   yieldToOrdinalBadge?: boolean;
+  ordinalBadgeLabel?: string | null;
 }) {
   const { t } = useTranslation();
   // 任务信息复选(C / C' 期):与 SessionItem 的时间槽同源;默认仅 time 与旧渲染等价。
@@ -1228,12 +1227,13 @@ function TimeActionsSlot({
     infoPrRef != null,
   );
   return (
-    <div className="group/slot relative ml-auto flex h-5 shrink-0 items-center justify-end">
+    <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
+      <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
       {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
       <div
         className={cn(
           // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
-          'flex items-center gap-1 transition-opacity duration-[120ms]',
+          'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
           !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
           (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
           // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
@@ -1245,13 +1245,23 @@ function TimeActionsSlot({
           pieces={infoPieces}
           prRef={infoPrRef}
           isActive={isActive}
-          className={cn(
-            'text-10 font-medium leading-none',
-            !isActive && 'text-[var(--text-tertiary)]',
-          )}
+          className="leading-none"
         />
       </div>
 
+      {canQuickArchive && archivePending && (
+        <span
+          aria-hidden
+          className="invisible col-start-1 row-start-1 inline-flex h-[22px] w-max min-w-14 items-center justify-center whitespace-nowrap rounded-full px-[9px] text-11 font-semibold"
+        >
+          {t('ccAgent.sidebar.sessionMenu.archived')}
+        </span>
+      )}
+      {yieldToOrdinalBadge && ordinalBadgeLabel ? (
+        <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
+          <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+        </span>
+      ) : null}
       {canQuickArchive && archivePending && (
         <button
           ref={confirmPillRef}
@@ -1277,46 +1287,59 @@ function TimeActionsSlot({
       )}
 
       {!archivePending && (
-        <div
-          // 渐显(120ms)配 pointer-events 守卫:淡出期间按钮不占鼠标位置,
-          // 不会拦下卡片点击;键盘焦点不受 pointer-events 影响。
-          className={cn(
-            'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
-            'transition-opacity duration-[120ms]',
-            menuOpen
-              ? 'opacity-100'
-              : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
-          )}
-        >
-          <CardAction
-            variant="list"
-            isActive={isActive}
-            label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-            onClick={onOpenMenu}
+        <>
+          <div
+            aria-hidden
+            className={cn(
+              'invisible col-start-1 row-start-1 flex h-[22px] items-center gap-0.5',
+              !menuOpen && 'hidden group-hover/card:flex group-focus-within/slot:flex',
+            )}
           >
-            <EllipsisVertical size={14} strokeWidth={2} />
-          </CardAction>
-          {isArchived && canUnarchive ? (
+            <span className="size-5 shrink-0" />
+            {(isArchived && canUnarchive) || canQuickArchive ? <span className="size-5 shrink-0" /> : null}
+          </div>
+          <div
+            // 渐显(120ms)配 pointer-events 守卫:淡出期间按钮不占鼠标位置,
+            // 不会拦下卡片点击;键盘焦点不受 pointer-events 影响。
+            className={cn(
+              'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
+              'transition-opacity duration-[120ms]',
+              menuOpen
+                ? 'opacity-100'
+                : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
+            )}
+          >
             <CardAction
               variant="list"
               isActive={isActive}
-              label={t('ccAgent.sidebar.sessionMenu.unarchive')}
-              onClick={() => onUnarchive()}
+              label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+              onClick={onOpenMenu}
             >
-              <Undo size={14} strokeWidth={2} />
+              <EllipsisVertical size={14} strokeWidth={2} />
             </CardAction>
-          ) : canQuickArchive ? (
-            <CardAction
-              variant="list"
-              isActive={isActive}
-              label={t('ccAgent.sidebar.sessionMenu.archived')}
-              onClick={() => setArchivePending(true)}
-            >
-              <Archive size={14} strokeWidth={2} />
-            </CardAction>
-          ) : null}
-        </div>
+            {isArchived && canUnarchive ? (
+              <CardAction
+                variant="list"
+                isActive={isActive}
+                label={t('ccAgent.sidebar.sessionMenu.unarchive')}
+                onClick={() => onUnarchive()}
+              >
+                <Undo size={14} strokeWidth={2} />
+              </CardAction>
+            ) : canQuickArchive ? (
+              <CardAction
+                variant="list"
+                isActive={isActive}
+                label={t('ccAgent.sidebar.sessionMenu.archived')}
+                onClick={() => setArchivePending(true)}
+              >
+                <Archive size={14} strokeWidth={2} />
+              </CardAction>
+            ) : null}
+          </div>
+        </>
       )}
+      </div>
     </div>
   );
 }

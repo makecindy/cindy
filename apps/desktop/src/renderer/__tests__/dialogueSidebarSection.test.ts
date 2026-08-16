@@ -72,6 +72,14 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     expect(projectsSectionSource).toContain("filter.sortBy === 'manual' ? (");
   });
 
+  it('holds the current priority rank before click-path attention clear', () => {
+    const clickHandler = extractHandlerBlock(sidebarSource, 'handleSessionClick');
+    expect(clickHandler.indexOf('holdSidebarViewedPriority')).toBeGreaterThan(-1);
+    expect(clickHandler.indexOf('holdSidebarViewedPriority')).toBeLessThan(
+      clickHandler.indexOf('clearNotification(id)'),
+    );
+  });
+
   it('offers the dialogue group as an opt-in toggle, not a fixed section', () => {
     expect(mainListModelSource).toContain('groupDialogue');
     expect(projectsSectionSource).toContain('DialogueGroupNode');

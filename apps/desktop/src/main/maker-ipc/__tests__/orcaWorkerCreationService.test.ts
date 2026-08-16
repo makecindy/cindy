@@ -2289,9 +2289,10 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  it('rejects Pi workers for a remote lead before bootstrap (pi sessions are local-only)', async () => {
-    // codex-connector 回归:PiAgent.startSession 对 remoteHostId 一律 NotSupportedError,
-    // 不在 preflight 拒绝会让远程 Lead + Pi 组合在 bootstrap 期落成笼统 INTERNAL。
+  it('allows Pi workers for a remote lead (pi SSH remote runtime landed — round 42)', async () => {
+    // 轮 42:原闸(pi sessions are local-only)写于 Pi SSH remote 能力落地前;
+    // 现 remote pi 全链路可用,worker 继承 lead.remoteHostId 走通用 remote 路径,
+    // preflight 不再拒绝,直接进 bootstrap。
     const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
@@ -2300,19 +2301,22 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
         pi: [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
       })),
     });
-    await expect(
-      service.createWorker({
-        leadSessionId: 'lead-1',
-        role: 'developer',
-        agent: 'pi',
-        label: 'pi-dev',
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'INVALID_PARAMS',
-      message: expect.stringContaining('local-only'),
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'pi',
+      label: 'pi-dev',
     });
-    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true });
+    // worker bootstrap 继承 lead 的 remoteHostId + workingDir(同远端主机 spawn)。
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'pi',
+        remoteHostId: 'remote-host-1',
+        workingDir: '/srv/repo',
+        orcaRole: 'worker',
+      }),
+    );
   });
 });
 

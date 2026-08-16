@@ -228,14 +228,6 @@ export interface ImChannelAdapter {
   turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
-  /**
-   * slash 命令事件的渠道钩子 — 在 handleSlashCommand 之前调用。飞书用它记住
-   * 「群主流 @ 开话题」事件带的群主流取数 lane(groupContextLane): /ctr 等
-   * slash 不经过 prepareAgentTurnText, 开话题那条事件攒下的 thread 前上下文
-   * 会丢失; 记住后由话题里第一条 agent 消息领走(见 adapter 实现)。
-   * 其它渠道不实现即 no-op。
-   */
-  onSlashCommandEvent?(event: IMMessageEvent): void;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────
@@ -422,6 +414,13 @@ export interface ImUiTextPack {
       resolvedSessionPick: (sessionTitle: string, workspaceName: string) => string;
       resolvedNewSession: (workspaceName: string) => string;
       attachFailed: (reason: string) => string;
+      /**
+       * 群卡片认不出「自己发在哪条话题里」时的收口文案(飞书: 应用重启后
+       * 老卡再被点, 回调 senderId 回落成点击人的私聊 open_id)。此时**不能**
+       * 按它建绑定 —— 会把群里的接管挂到私聊身份上。缺省时回落
+       * attachFailed(通用错因), 不实现该场景的渠道无需提供。
+       */
+      staleGroupCard?: string;
       sessionBusyOldCardPlaceholder: string;
       sessionBusyPrompts: ReadonlyArray<(sessionTitle: string) => string>;
       takeoverLoadingPrompts: ReadonlyArray<(sessionTitle: string) => string>;

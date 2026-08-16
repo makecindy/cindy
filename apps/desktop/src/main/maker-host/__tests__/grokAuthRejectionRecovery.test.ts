@@ -51,6 +51,7 @@ vi.mock('../outbound-fetch.js', () => ({
 }));
 
 import {
+  getGrokOAuthCredentialGeneration,
   logoutGrok,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
@@ -100,8 +101,22 @@ afterEach(() => {
 });
 
 describe('recoverGrokAuthAfterRejection', () => {
+  it('凭证边界代际单调推进,重复清理或登出不会复活旧任务', () => {
+    const initial = getGrokOAuthCredentialGeneration();
+    resetGrokOAuthMemoryCache();
+    const afterReset = getGrokOAuthCredentialGeneration();
+    logoutGrok();
+    const afterLogout = getGrokOAuthCredentialGeneration();
+    logoutGrok();
+
+    expect(afterReset).toBeGreaterThan(initial);
+    expect(afterLogout).toBeGreaterThan(afterReset);
+    expect(getGrokOAuthCredentialGeneration()).toBeGreaterThan(afterLogout);
+  });
+
   it('刷新成功即自愈,凭证换成新 token 且不登出', async () => {
     seedCredentials();
+    const generation = getGrokOAuthCredentialGeneration();
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -115,6 +130,7 @@ describe('recoverGrokAuthAfterRejection', () => {
 
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('refreshed');
     expect(readStored()?.access_token).toBe('fresh-access-token');
+    expect(getGrokOAuthCredentialGeneration()).toBe(generation);
   });
 
   it('refresh_token 被服务端作废时清空凭证', async () => {

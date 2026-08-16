@@ -16,7 +16,6 @@ import {
   ClaudeCodeAgent,
   CodexAgent,
   configureDefaultImageResizer,
-  type AutoReviewRequest,
   type McpProvider,
 } from '@cindy/maker-core';
 import {
@@ -30,6 +29,7 @@ import {
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
 import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
+import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
@@ -63,11 +63,32 @@ import {
   writeCodexHistoryHasProductPrompt,
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
+import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
+import {
+  getVisionBridgeController,
+  setVisionBridgeController,
+} from '../vision-bridge/vision-bridge-controller.js';
+import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
+import * as blobStore from '../cindy-media/blobStore.js';
+import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
+import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
-import { getRemoteSshPool } from '../remote-ssh/index.js';
-import { getRemoteAgentProxyEnv, reconcileCodexAgentProxyEnv } from '../remote-ssh/agent-proxy.js';
+import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
+import {
+  getRemoteAgentProxyEnv,
+  reconcileCodexAgentProxyEnv,
+} from '../remote-ssh/agent-proxy.js';
+import {
+  createSshPiDaemonTransport,
+  createRemotePiFileOps,
+  resolveRemotePiBinaryPath,
+} from './pi-remote-transport.js';
+import { ensurePiManagerInstalled } from './pi-manager-client.js';
+import { createPiRemoteProviderForwardLease } from './pi-remote-provider-forward.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -110,8 +131,10 @@ import {
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
-import { findCatalogModel, resolveAutoReviewBudget } from './auto-review-budget.js';
-import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import {
+  AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
+  createAutoReviewModelRouter,
+} from './auto-review-model-router.js';
 import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
@@ -133,6 +156,7 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
+import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
 import { getIOSSimulatorMcpDeps } from '../mcp-integrations/ios-simulator.js';
 import { readContactsSettings } from './contacts-settings-store.js';
 import { createIOSSimulatorCodexDynamicToolProvider } from './ios-simulator-codex-dynamic-tools.js';
@@ -234,20 +258,8 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
-
-/**
- * 本次审核请求的额度。按模型能力自适应:能关思考的走紧凑档,强制思考的
- * (以及目录里查不到的)给足思考+结论的空间 —— 固定 384 token 会让 DeepSeek
- * 这类模型正文恒为空。详见 auto-review-budget.ts。
- */
-function autoReviewBudgetFor(request: AutoReviewRequest) {
-  return resolveAutoReviewBudget(findCatalogModel(
-    getActiveCatalog().providers,
-    request.providerId,
-    request.agentKind,
-    request.model,
-  ));
-}
+/** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
+let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
 let providerAccessRuntimeRefreshListener: (() => void) | null = null;
 
@@ -256,24 +268,15 @@ export function setProviderAccessRuntimeRefreshListener(listener: (() => void) |
   providerAccessRuntimeRefreshListener = listener;
 }
 
+const requestAutoReviewText = createAutoReviewModelRouter({
+  logger: desktopMakerLogger,
+});
+
 const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
-  // 重试守卫必须按同一份额度计时,否则放宽额度的那一档会被自己的守卫切断。
-  resolveRequestTimeoutMs: (request) => autoReviewBudgetFor(request).timeoutMs,
-  requestText: async (request, prompt) => {
-    const maker = _maker;
-    if (!maker) return null;
-    const budget = autoReviewBudgetFor(request);
-    const result = await requestUtilityText(maker, prompt, {
-      providerId: request.providerId?.trim() || undefined,
-      agentKind: request.agentKind,
-      model: request.model,
-      maxTokens: budget.maxTokens,
-      timeoutMs: budget.timeoutMs,
-      ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
-    });
-    return result.ok ? result.text : null;
-  },
+  managesRetries: true,
+  resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
+  requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
 });
 
 /**
@@ -400,6 +403,14 @@ const forcedFreshCcBridgeSessions = new Set<string>();
  * 的 query (codex-connector R22 P2)。open 成功后从集合移除。
  */
 const staleInvalidatedCcSessions = new Set<string>();
+/**
+ * Pi 远端 MCP forward 的远端端口首选基数。独立于 codex 的
+ * DEFAULT_REMOTE_PORT_START(47921,见 codex-remote-mcp.ts)与 RemoteHost 的
+ * agent-proxy 基数(17893)—— 避免与两者的扫描窗口冲突。Pi 不写
+ * remote-mcp-forwards.json(那是 codex 的单槽位,共享会互相覆盖),每次
+ * ensureRemoteForward 顺延探测,断线重连由 RemoteHost re-arm 保持。
+ */
+const PI_MCP_FORWARD_PORT_START = 47981;
 /**
  * 本进程见过的 bridge 实例 — ensureCodexMcpBridgeStartedForRemote 据此检测
  * bridge 重建并清空 forcedFreshCcBridgeSessions (旧 bridge 的
@@ -639,6 +650,61 @@ export function getPluginRegistry() {
  * MCP 由 @cindy/mcps 包提供 server/tool 定义，desktop main 在这里注入 token、
  * OAuth、缓存、bot 发送等宿主能力，再交给 maker-core 的 ClaudeCodeAgent。
  */
+
+/**
+ * 视觉桥用户提示广播（层 B + 层 D 共用）。
+ * renderer 仅信任 `source: 'vision-bridge'`，避免普通错误事件误触发视觉桥提示。
+ */
+const VISION_BRIDGE_DEDUP_MS = 2_000;
+const _visionBridgeDedup = new Map<string, number>();
+
+function broadcastVisionBridgeEvent(
+  sessionId: string,
+  reason: 'vision-bridge-recognizing' | 'vision-bridge-fallback' | 'vision-bridge-unavailable',
+  extra: { imageCount?: number } = {},
+): void {
+  if (reason === 'vision-bridge-recognizing') {
+    for (const key of _visionBridgeDedup.keys()) {
+      if (key.startsWith(`${sessionId}|`)) _visionBridgeDedup.delete(key);
+    }
+  } else {
+    const key = `${sessionId}|${reason}`;
+    const now = Date.now();
+    const last = _visionBridgeDedup.get(key);
+    if (last !== undefined && now - last < VISION_BRIDGE_DEDUP_MS) return;
+    _visionBridgeDedup.set(key, now);
+  }
+
+  const message = reason === 'vision-bridge-recognizing'
+    ? '正在识别图片中…'
+    : reason === 'vision-bridge-fallback'
+      ? '视觉桥使用了备用视觉后端（主后端不可用）'
+      : '视觉桥当前不可用，图片无法转成文字描述，已以文字提示代替';
+  const payload = {
+    sessionId,
+    event: {
+      type: 'error' as const,
+      data: {
+        message,
+        isTerminal: false,
+        reason,
+        ...(extra.imageCount !== undefined ? { imageCount: extra.imageCount } : {}),
+      },
+      source: 'vision-bridge',
+    },
+  };
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
+    } catch (error) {
+      desktopMakerLogger.child('vision-bridge').warn('vision bridge event broadcast failed', {
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
 export function getMaker(): Maker {
   if (!_maker) {
     // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
@@ -1507,6 +1573,11 @@ export function getMaker(): Maker {
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
+      // 轮 27 HIGH-1:认证边界变更必须失效 PI MCP bridge —— 否则其 server
+      // factories 冻结的 provider 仍带旧账号 token, 新 pi 会话直到下一次
+      // contacts/plugin/memory 变更才重建(generation-lease 模型下活动会话
+      // 继续用旧桥是安全的, 这里只影响新会话)。
+      invalidatePiEnvironment();
     });
     // 登录成功也要对称重启本地 host:网关 key fallback 下 host 可能在 OAuth 登录前
     // 就以 env-key 形态跑着("auth gate 挡住未授权 spawn"的老前提在该场景不成立),
@@ -1520,6 +1591,8 @@ export function getMaker(): Maker {
       clearChatgptBridgeCredentialCache();
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth login');
       await broadcastCodexRuntimeRoute();
+      // 轮 27 HIGH-1:登录也是认证边界, 与登出对称失效 PI bridge。
+      invalidatePiEnvironment();
       // 这里刻意**不**补拉:登录路径的清单收口在 maker-ipc/auth.ts,它会在 live 拉取没
       // applied 时回退读 models_cache（cache miss 即清空,防串号）。在这里并发补拉会与那次
       // 清空交错,刚拉到的清单可能被空 cache 覆盖。补拉挂在那条收口之后,顺序确定。
@@ -1530,6 +1603,8 @@ export function getMaker(): Maker {
     desktopCodexAuthAdapter.setOnOAuthBindingClaimed(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
       await requestCodexModelBackfill();
+      // 轮 27 HIGH-1:凭证认领也是认证边界。
+      invalidatePiEnvironment();
     });
     // codex CLI 在 stderr 报 refresh_token 失效时, agent 会调 auth.invalidate() →
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
@@ -1573,6 +1648,8 @@ export function getMaker(): Maker {
           /* no-op */
         }
       }
+      // 轮 27 HIGH-1:凭证失效广播同属认证边界。
+      invalidatePiEnvironment();
     });
     // Claude 同款:订阅 refresh token 被服务端作废(invalid_grant)时,adapter.invalidate()
     // 清态后经这里广播,UI 立刻进「请重新登录」而不是连环 401 的假连接状态。
@@ -1595,6 +1672,8 @@ export function getMaker(): Maker {
           /* no-op */
         }
       }
+      // 轮 27 HIGH-1:Claude 凭证失效同样失效 PI bridge。
+      invalidatePiEnvironment();
     });
     // 预热 codex-home 骨架 + 与本机 codex CLI reconcile 凭证。原本挂在
     // DesktopCodexAuthAdapter 构造函数里(import 即写盘),会让所有传递性 import 到
@@ -1642,6 +1721,210 @@ export function getMaker(): Maker {
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,
+      // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
+      resolvePiVisionBridgeEnv: (model) =>
+        buildPiVisionBridgeEnv(
+          {
+            getProviderById: (providerId) =>
+              getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
+            readCustomProviderKey,
+            readGatewayKey: readClaudeApiKey,
+            resolveBackendRoute: (providerId, modelId) =>
+              resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
+            fetch: outboundFetch,
+          },
+          model,
+        ),
+      // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
+      // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
+      // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
+      // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
+      getRemotePiTransport: async (
+        remoteHostId,
+        {
+          binaryPath: _localBinaryPath,
+          remoteBinaryPath: providedRemoteBinaryPath,
+          args,
+          cwd,
+          env,
+          logger,
+          sessionId,
+          hostProxyForwards,
+        },
+      ) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        if (remoteHost.getStatus() !== 'ready') {
+          throw new Error(`remote SSH host "${remoteHostId}" is not connected (status=${remoteHost.getStatus()}) — connect it under Settings → Remote first`);
+        }
+        // 远端必须用远端安装的 pi 二进制(probe 出 $INSTALL_DIR/pi/pi),不能用本地
+        // binaryPath —— 那是本机 userData 下的路径,远端不存在(连带 plan-mode 扩展
+        // 路径与 subagent 二进制 env 都指向远端才能工作)。
+        // 轮 29 MEDIUM:优先用 PiAgent startSession 已 resolve 并传入的
+        // remoteBinaryPath(接口契约「host 已 probe」)—— 只在缺失时自己 probe
+        // 兜底, 避免两次 resolve 语义分叉(cache 失效窗口)。
+        const remoteBinaryPath = providedRemoteBinaryPath ?? await resolveRemotePiBinaryPath(remoteHost);
+        // daemon 持久模式:远端 pi-manager(TS 单例 daemon)持有 pi 进程,ssh 断链后
+        // 会话继续跑,重连 attach(对齐 codex app-server daemon / cc-mgr)。
+        // 首次 ensure 前确保 pi-manager bundle 装好 + daemon 在跑。
+        // daemon session key = maker sessionId(同一会话重连 attach 到同一 daemon 进程)。
+        // onEvent(轮 15 缺口 3/6):install 进度转发 silent install toast —— 首次
+        // 使用 pi remote 时 1-3s 的 bundle 上传/daemon spawn 不再静默。
+        await ensurePiManagerInstalled(remoteHost, desktopMakerLogger, (event) => {
+          const hostId = remoteHost.id;
+          if (event.kind === 'error') {
+            broadcastSilentInstallStatus({ hostId, agentKind: 'pi', phase: 'failed', message: event.message });
+          } else if (event.kind === 'ready') {
+            broadcastSilentInstallStatus({ hostId, agentKind: 'pi', phase: 'done' });
+          } else {
+            // install-upload 是 pi-manager 专属 kind, SILENT_INSTALL_STATUS 的
+            // eventKind union 不含它(轮 32 MEDIUM 类型对齐) —— 归入 install-log
+            // (renderer phaseText 对未知 kind 保持上次文案, 映射后走通用阶段)。
+            broadcastSilentInstallStatus({
+              hostId,
+              agentKind: 'pi',
+              phase: 'progress',
+              eventKind: event.kind === 'install-upload' ? 'install-log' : event.kind,
+            });
+          }
+        });
+        const providerForwardLease = createPiRemoteProviderForwardLease(
+          (spec) => remoteHost.ensureRemoteForward(spec),
+        );
+        try {
+          for (const spec of hostProxyForwards ?? []) {
+            await providerForwardLease.ensure(spec);
+          }
+        } catch (error) {
+          await Promise.allSettled([providerForwardLease.releaseAll()]);
+          throw error;
+        }
+        let transport;
+        try {
+          transport = createSshPiDaemonTransport({
+            remoteHost,
+            binaryPath: remoteBinaryPath,
+            args,
+            cwd,
+            env,
+            logger,
+            daemonSessionId: sessionId ?? undefined,
+          });
+        } catch (error) {
+          await providerForwardLease.releaseAll();
+          throw error;
+        }
+        transport.ensureHostProxyForward = providerForwardLease.ensure;
+        if (transport.killRemoteSession) {
+          const killRemoteSession = transport.killRemoteSession.bind(transport);
+          transport.killRemoteSession = async () => {
+            try {
+              await killRemoteSession();
+            } finally {
+              await providerForwardLease.releaseAll();
+            }
+          };
+        } else {
+          const close = transport.close.bind(transport);
+          transport.close = async (reason?: string) => {
+            try {
+              await close(reason);
+            } finally {
+              await providerForwardLease.releaseAll();
+            }
+          };
+        }
+        return transport;
+      },
+      // 远端 Pi 的 agentHome 文件操作:models.json / extensions / perm / subagent 快照 /
+      // resume stat 都落到远端机器(pi 进程在远端读)。经 SSH stdin 管道写文件(cat > 原子
+      // 写 + chmod),stat 走 statRemotePath 同款脚本,mkdir 走 mkdir -p —— 与 cc-manager
+      // bundle 上传同模式,路径绝对不拼进命令行(防 ps / 日志泄漏)。
+      getRemotePiFileOps: (remoteHostId) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        return createRemotePiFileOps(remoteHost);
+      },
+      // 远端 pi 二进制路径:probe(远端 `pi --version`)+ cache。
+      resolveRemotePiBinaryPath: async (remoteHostId) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        return resolveRemotePiBinaryPath(remoteHost);
+      },
+      // 远端会话:MCP bridge 经 SSH remote-forward 隧道化,远端 pi 够到本地
+      // in-process MCP(cindy_orca / orca_worker_bridge / cindy_memory / ghost)。
+      // 改 URL 前缀为 remote-forward 地址,identity/token 不变。
+      // collab 全局禁用由 piEnvironment 按 server 名精确剥除 orca 类工具
+      // (CC/Codex 同闸门, R5 配置审计 H-7);此处不整体 skip —— 整体 skip 会
+      // 连 cindy_memory / ghost / 外部 HTTP MCP 一起误杀。
+      remotePiSkipMcpBridge: () => false,
+      // 把本地 bridge 的 loopback URL(http://127.0.0.1:<localPort>/mcp/<name>)
+      // 改写为远端 remote-forward 地址(http://127.0.0.1:<remotePort>/mcp/<name>)。
+      //
+      // **不复用 ensureRemoteMcpForward**:它写 remote-mcp-forwards.json 的
+      // per-host 单槽位(bridgeLocalPort/remotePort),Pi 与 Codex 各自独立 bridge
+      // (不同 localPort),后调用方会关掉前调用方的 forward —— 同 host 上两 agent
+      // 的 MCP 隧道互相踩踏(R2 MCP BUG-1)。Pi 用 host.ensureRemoteForward 直接建
+      // 独立 forward,远端端口从独立基数(PI_MCP_FORWARD_PORT_START)顺延。
+      rewriteRemotePiMcpBridgeUrl: async (remoteHostId, localUrl) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        // 用 URL 解析改端口再序列化, 避免字符串 replace 误伤 query 参数
+        // (R2 MCP BUG-3) 与 Number('')=0 传非法端口 (R2 MCP BUG-7)。
+        const u = new URL(localUrl);
+        const localPort = u.port;
+        if (!localPort || Number.isNaN(Number(localPort)) || Number(localPort) <= 0) {
+          throw new Error(`pi bridge URL has no usable port: ${localUrl}`);
+        }
+        const fwd = await remoteHost.ensureRemoteForward({
+          localHost: '127.0.0.1',
+          localPort: Number(localPort),
+          preferredRemotePort: PI_MCP_FORWARD_PORT_START,
+        });
+        u.port = String(fwd.remotePort);
+        // 轮 24 HIGH-2:close 由 pi-host 在会话 dispose 时调用 —— 防 forward
+        // 随会话累积耗尽远端端口(fwd.close 幂等, RemoteHost 内部有 dedup)。
+        return { url: u.toString(), close: () => void fwd.close() };
+      },
+      // 「Agent 流量走本地 Proxy」:远端 pi 的 LLM 流量经 SSH remote-forward 走本地代理
+      // (与 CC 远端同机制;pref 关闭时 getRemoteAgentProxyEnv 返回 null → 直连)。
+      getRemotePiAgentProxyEnv: async (remoteHostId) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        return getRemoteAgentProxyEnv(remoteHost);
+      },
+    });
+
+    setVisionGatewayKeyReader(readClaudeApiKey);
+    _visionBridgeInstance = createVisionBridge({
+      getProviderById: (providerId) =>
+        getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
+      readCustomProviderKey,
+      readGatewayKey: readClaudeApiKey,
+      resolveGatewayEndpoint: () => effectiveXdGatewayBaseUrl() || null,
+      resolveBackendRoute: (providerId, modelId) =>
+        resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
+      fetch: outboundFetch,
+      logger: desktopMakerLogger.child('vision-bridge'),
+      onStart: (sessionId, imageCount) => {
+        broadcastVisionBridgeEvent(sessionId, 'vision-bridge-recognizing', { imageCount });
+      },
+      onNote: (_note, sessionId, kind) => {
+        broadcastVisionBridgeEvent(
+          sessionId,
+          kind === 'fallback' ? 'vision-bridge-fallback' : 'vision-bridge-unavailable',
+        );
+      },
     });
 
     _maker = new Maker({
@@ -1653,6 +1936,7 @@ export function getMaker(): Maker {
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
       makerMemory: makerMemoryManager,
+      visionBridge: _visionBridgeInstance.hook,
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
@@ -1728,6 +2012,10 @@ export function getMaker(): Maker {
         },
       },
     });
+    setVisionBridgeController({
+      shouldBridge: _visionBridgeInstance.isTargetModel,
+      describeImage: _visionBridgeInstance.describeImage,
+    });
     // 存量已登录用户补拉:maker 首次就绪后,若 Codex 已登录但当前无 codex 模型
     // (从没跑过会话、models_cache 未生成),fire-and-forget 触发一次 live model/list。
     // 不阻塞 getMaker 返回 / 启动(类比 refreshAnthropicModelsFromHttp 的后台刷新)。
@@ -1799,8 +2087,15 @@ export function resetMaker(): void {
   // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。
   _codexModelBackfill = null;
   _initialCustomMcpRefresh = undefined;
+  setVisionBridgeController(null);
+  _visionBridgeInstance?.dispose();
+  _visionBridgeInstance = null;
   resetPluginRegistry();
   resetCustomMcpRegistry();
+  // 轮 27 MEDIUM-2:resetMaker 是 account 边界收口 —— PI bridge 必须一并
+  // 失效, 否则旧账号的 MCP server factories 残留(显式耦合, 防未来新调用点
+  // 漏掉 teardownAuthAccountBoundary 链上的 shutdownPiEnvironment)。
+  invalidatePiEnvironment();
 }
 
 /**

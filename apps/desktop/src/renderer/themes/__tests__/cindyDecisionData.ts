@@ -286,7 +286,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'settings-integration-avatar-bg': { light: '#FDFDF8', dark: '#1D1D1D' },
   'settings-logout-bg': { light: '#FDFDF8', dark: '#1F1F1F' },
   'settings-menu-bg-hover': { light: '#E8E8E3', dark: '#282828' }, // 2026-08 §9 更新;沿革: 用户改稿 2026-07-21:原值贴着页底(#EDEDED/#2A2828)不可见,light 压暗 / dark 提亮到 ~5-6% 亮度差
-  'settings-menu-bg-selected': { light: '#F6F6F1', dark: '#1D1D1D' },
+  'settings-menu-bg-selected': { light: '#F6F6F1', dark: '#282828' }, // 2026-08-13: dark 从页底锚定 #1D1D1D 抬到卡片之上,与 settings-menu-bg-hover 同档
   'settings-source-link': { light: '#1D4ED8', dark: '#93C5FD' },
   'settings-theme-auto-dark': { light: '#181818', dark: '#181818' },
   'sidebar-action-icon': { light: '60.0 2.1% 52.4%', dark: '0 0% 43.5%' }, // 2026-08 §9 更新;沿革: E1D 侧栏层级 #9A9DA3/#6F6F6F

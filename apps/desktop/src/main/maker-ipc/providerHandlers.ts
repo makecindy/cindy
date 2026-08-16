@@ -17,6 +17,7 @@
 import {
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  runtimeCustomProviderId,
   type AgentKind,
   type CustomProviderConfig,
   type ProviderModelDiscoveryFailure,
@@ -1314,7 +1315,7 @@ export function registerProviderHandlers(
 
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, async (event, input: unknown, keyInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
-    const v = validateCustomProviderConfig(input);
+    const v = validateCustomProviderConfig(input, { allowLegacyXai: true });
     if (!v.ok) throwIpcError(v.code, v.message);
     const keys = parseRuntimeKeys(keyInput);
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
@@ -1401,6 +1402,7 @@ export function registerProviderHandlers(
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
+    const runtimeProviderId = runtimeCustomProviderId(providerId);
     const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(providerId, async () => {
       // 同类 delete 也会在 per-provider 队列后写 owner-scoped 凭证。
@@ -1439,9 +1441,9 @@ export function registerProviderHandlers(
             // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
             // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
             restoreDisableOverrides =
-              deps.stageClearProviderDisableOverrides?.(providerId) ?? null;
+              deps.stageClearProviderDisableOverrides?.(runtimeProviderId) ?? null;
             restorePriceOverrides =
-              deps.stageClearProviderModelPriceOverrides?.(providerId) ?? null;
+              deps.stageClearProviderModelPriceOverrides?.(runtimeProviderId) ?? null;
             assertProviderMutationOwner(ownerAtIngress);
             restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
             if (!restoreOAuthCredentials) {
