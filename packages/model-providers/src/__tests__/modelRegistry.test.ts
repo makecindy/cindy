@@ -72,22 +72,22 @@ describe("model registry", () => {
   });
 
   it("normalizes the ChatGPT bridge id and selects OpenAI long-context bands", () => {
+    // 2026-08-16 随上游目录收敛:XD 网关不再拆独立条目,而是作为 `openai/*` 条目的
+    // 额外 route;窗口等元数据**以服务端目录快照为准**(本地不再维护拆分值,快照
+    // 08-14 起两条路由同为 372K)。这里只锁「同一条目、双路由可解析」的结构。
     expect(
       findModelRegistryRoute(registry, "openai", "gpt-5.6-sol", "codex"),
     ).toMatchObject({
       entry: {
         contextWindow: 1_050_000,
         maxOutputTokens: 128_000,
-        // ChatGPT 包月路由下 codex 的真实上限是 272K(Chris 2026-08-13 裁决)。
-        // 372K 是 **XD 网关**路由的值,已随条目拆分搬到独立的 `xd/gpt-5.6-sol`
-        // 条目 —— 带 perAgent 窗口覆盖的条目不得跨包月 / 网关路由共享。
-        perAgent: { codex: { contextWindow: 272_000 } },
+        perAgent: { codex: { contextWindow: 372_000 } },
       },
     });
     expect(
       findModelRegistryRoute(registry, "xd", "gpt-5.6-sol", "codex"),
     ).toMatchObject({
-      entry: { id: "xd/gpt-5.6-sol", perAgent: { codex: { contextWindow: 372_000 } } },
+      entry: { id: "openai/gpt-5.6-sol", perAgent: { codex: { contextWindow: 372_000 } } },
     });
     expect(
       resolveModelReferencePrice(registry, "openai", "chatgpt/gpt-5.6-sol", {

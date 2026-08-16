@@ -19,7 +19,7 @@
           "supportsFastMode": false
         },
         "codex": {
-          "contextWindow": 272000,
+          "contextWindow": 372000,
           "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
@@ -60,31 +60,7 @@
               }
             }
           ]
-        }
-      ]
-    },
-    {
-      "id": "xd/gpt-5.6-sol",
-      "name": "GPT-5.6-Sol",
-      "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.6-Sol for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
-      "sortOrder": 18,
-      "supportsFastMode": true,
-      "perAgent": {
-        "claude-code": {
-          "supportsFastMode": false
         },
-        "codex": {
-          "contextWindow": 372000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
-        }
-      },
-      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-sol",
@@ -109,7 +85,7 @@
           "supportsFastMode": false
         },
         "codex": {
-          "contextWindow": 272000,
+          "contextWindow": 372000,
           "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
@@ -150,31 +126,7 @@
               }
             }
           ]
-        }
-      ]
-    },
-    {
-      "id": "xd/gpt-5.6-terra",
-      "name": "GPT-5.6-Terra",
-      "status": "active",
-      "group": "gpt",
-      "description": "GPT-5.6-Terra for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "high",
-      "sortOrder": 19,
-      "supportsFastMode": true,
-      "perAgent": {
-        "claude-code": {
-          "supportsFastMode": false
         },
-        "codex": {
-          "contextWindow": 372000,
-          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
-        }
-      },
-      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-terra",
@@ -192,11 +144,6 @@
       "efforts": ["low", "medium", "high", "xhigh", "max"],
       "defaultEffort": "high",
       "sortOrder": 17,
-      "perAgent": {
-        "codex": {
-          "contextWindow": 272000
-        }
-      },
       "routes": [
         {
           "providerId": "openai",
@@ -234,20 +181,7 @@
               }
             }
           ]
-        }
-      ]
-    },
-    {
-      "id": "xd/gpt-5.6-luna",
-      "name": "GPT-5.6-Luna",
-      "status": "active",
-      "group": "gpt",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh", "max"],
-      "defaultEffort": "medium",
-      "sortOrder": 17,
-      "routes": [
+        },
         {
           "providerId": "xd",
           "modelId": "gpt-5.6-luna",
@@ -312,32 +246,7 @@
               }
             }
           ]
-        }
-      ]
-    },
-    {
-      "id": "xd/gpt-5.5",
-      "name": "GPT-5.5",
-      "status": "active",
-      "group": "gpt",
-      "description": "OpenAI Codex (GPT-5.5) for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
-      "sortOrder": 20,
-      "supportsFastMode": true,
-      "defaultEnabled": false,
-      "perAgent": {
-        "claude-code": {
-          "contextWindow": 1050000,
-          "supportsFastMode": false
         },
-        "codex": {
-          "contextWindow": 272000
-        }
-      },
-      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.5",
@@ -361,9 +270,6 @@
       "perAgent": {
         "claude-code": {
           "supportsFastMode": false
-        },
-        "codex": {
-          "contextWindow": 272000
         }
       },
       "routes": [
@@ -401,28 +307,7 @@
               }
             }
           ]
-        }
-      ]
-    },
-    {
-      "id": "xd/gpt-5.4",
-      "name": "GPT-5.4",
-      "status": "active",
-      "group": "gpt",
-      "description": "OpenAI Codex (GPT-5.4) for coding tasks",
-      "contextWindow": 1050000,
-      "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
-      "sortOrder": 21,
-      "supportsFastMode": true,
-      "defaultEnabled": false,
-      "perAgent": {
-        "claude-code": {
-          "supportsFastMode": false
-        }
-      },
-      "routes": [
+        },
         {
           "providerId": "xd",
           "modelId": "gpt-5.4",
@@ -446,9 +331,6 @@
       "perAgent": {
         "claude-code": {
           "supportsFastMode": false
-        },
-        "codex": {
-          "contextWindow": 272000
         }
       },
       "routes": [
@@ -471,28 +353,7 @@
               }
             }
           ]
-        }
-      ]
-    },
-    {
-      "id": "xd/gpt-5.4-mini",
-      "name": "GPT-5.4-Mini",
-      "status": "active",
-      "group": "gpt",
-      "description": "Faster, lighter Codex variant — speed-optimized for quick edits",
-      "contextWindow": 400000,
-      "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "high",
-      "sortOrder": 22,
-      "supportsFastMode": true,
-      "defaultEnabled": false,
-      "perAgent": {
-        "claude-code": {
-          "supportsFastMode": false
-        }
-      },
-      "routes": [
+        },
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-mini",
@@ -1750,11 +1611,6 @@
       "defaultEffort": "high",
       "sortOrder": 101,
       "defaultEnabled": false,
-      "perAgent": {
-        "codex": {
-          "contextWindow": 272000
-        }
-      },
       "routes": [
         {
           "providerId": "openai",
@@ -1775,22 +1631,7 @@
               }
             }
           ]
-        }
-      ]
-    },
-    {
-      "id": "xd/gpt-5.4-nano",
-      "name": "GPT-5.4-Nano",
-      "status": "active",
-      "group": "gpt",
-      "description": "OpenAI GPT-5.4 nano for simple, high-volume tasks",
-      "contextWindow": 400000,
-      "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
-      "defaultEffort": "medium",
-      "sortOrder": 101,
-      "defaultEnabled": false,
-      "routes": [
+        },
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-nano",
