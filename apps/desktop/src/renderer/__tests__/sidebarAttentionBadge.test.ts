@@ -15,7 +15,10 @@ import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
-import { resolveSidebarRightStatus } from '../features/cc-agent/sidebar/sidebarRightStatus';
+import {
+  projectSidebarSessionActivity,
+  resolveSidebarRightStatus,
+} from '../features/cc-agent/sidebar/sidebarRightStatus';
 import { SessionStatusIcon } from '../features/cc-agent/sidebar/SessionStatusIcon';
 
 vi.mock('react-i18next', () => ({
@@ -60,56 +63,66 @@ function attentionDot(container: HTMLElement): Element | undefined {
 
 describe('sidebar right status priority', () => {
   it('keeps error/awaiting above running and running above unread-done', () => {
+    const resolve = (input: Parameters<typeof projectSidebarSessionActivity>[0]) =>
+      resolveSidebarRightStatus(projectSidebarSessionActivity(input));
     // error(chat 侧错误终止)压过 running 与其它一切
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: 'error',
       isUrgentFromContext: false,
       isRunning: true,
       hasAttentionNotification: true,
     })).toBe('error');
     // 定时任务失败未读(attentionKind 缺失,由 urgency context 注入)同样是 error 档
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: undefined,
       isUrgentFromContext: true,
       isRunning: true,
       hasAttentionNotification: true,
     })).toBe('error');
     // awaiting(ask-user / 权限 / 计划审阅)压过 running,但低于 error
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: 'awaiting',
       isUrgentFromContext: false,
       isRunning: true,
       hasAttentionNotification: true,
     })).toBe('awaiting');
     // running 压过完成未读
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: 'done',
       isUrgentFromContext: false,
       isRunning: true,
       hasAttentionNotification: true,
     })).toBe('running');
     // 完成未读(含 attentionKind 缺失的定时任务未读)→ done
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: 'done',
       isUrgentFromContext: false,
       isRunning: false,
       hasAttentionNotification: true,
     })).toBe('done');
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: undefined,
       isUrgentFromContext: false,
       isRunning: false,
       hasAttentionNotification: true,
     })).toBe('done');
     // 没有任何 attention → time
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: undefined,
       isUrgentFromContext: false,
       isRunning: false,
       hasAttentionNotification: false,
     })).toBe('time');
     // attention 已被查看清零(hasAttentionNotification=false)时,残留 kind 不生效
-    expect(resolveSidebarRightStatus({
+    expect(resolve({
+      sessionId: 'session-1',
       attentionKind: 'error',
       isUrgentFromContext: false,
       isRunning: false,

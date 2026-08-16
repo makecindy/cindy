@@ -1726,9 +1726,19 @@ describe('CodexAgent capability routing', () => {
     });
 
     const handlers = host.getThreadHandlers();
-    if (!handlers?.mcpServerElicitation) {
+    if (!handlers?.mcpServerElicitation || !handlers.itemStarted) {
       throw new Error('expected mcpServerElicitation handler');
     }
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-mcp',
+      item: {
+        id: 'contacts-call-1',
+        type: 'mcpToolCall',
+        server: 'cindy_contacts',
+        tool: 'call_tool',
+      },
+    });
     handlers.turnStarted?.({
       threadId: 'start-thread-id',
       turn: { id: 'early-capability-turn' },
@@ -1798,7 +1808,12 @@ describe('CodexAgent capability routing', () => {
       content: '查一下我和康康的飞书消息',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.mcpServerElicitation) {
+    if (
+      !handlers?.mcpServerElicitation
+      || !handlers.itemStarted
+      || !handlers.itemUpdated
+      || !handlers.itemCompleted
+    ) {
       throw new Error('expected mcpServerElicitation handler');
     }
     handlers.itemStarted?.({
@@ -11268,6 +11283,16 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (!handlers?.mcpServerElicitation) {
       throw new Error('expected mcpServerElicitation handler');
     }
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-mcp',
+      item: {
+        id: 'contacts-call-1',
+        type: 'mcpToolCall',
+        server: 'cindy_contacts',
+        tool: 'call_tool',
+      },
+    });
     const result = await handlers.mcpServerElicitation({
       threadId: 'start-thread-id',
       turnId: 'turn-wechat-mcp',
@@ -11289,9 +11314,76 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(resolver).toHaveBeenCalledOnce();
     expect(resolver.mock.calls[0]?.[0]).toMatchObject({
       kind: 'permission',
+      toolUseId: 'contacts-call-1',
       toolName: 'mcp:cindy_contacts',
       suggestions: undefined,
     });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-mcp',
+      item: {
+        id: 'contacts-call-2',
+        type: 'mcpToolCall',
+        server: 'cindy_contacts',
+        tool: 'call_tool',
+      },
+    });
+    await handlers.mcpServerElicitation({
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-mcp',
+      serverName: 'cindy_contacts',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_params: {
+          name: 'contacts_delete',
+          args: { id: 'contact-2' },
+        },
+      },
+      message: 'Allow another tool call',
+      requestedSchema: {},
+    });
+    expect(resolver.mock.calls[1]?.[0]).not.toHaveProperty('toolUseId');
+    for (const itemId of ['contacts-call-1', 'contacts-call-2']) {
+      handlers.itemCompleted({
+        threadId: 'start-thread-id',
+        turnId: 'turn-wechat-mcp',
+        item: {
+          id: itemId,
+          type: 'mcpToolCall',
+          server: 'cindy_contacts',
+          tool: 'call_tool',
+          status: 'completed',
+        },
+      } as never);
+    }
+    handlers.itemUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-mcp',
+      item: {
+        id: 'contacts-call-2',
+        type: 'mcpToolCall',
+        server: 'cindy_contacts',
+        tool: 'call_tool',
+        status: 'inProgress',
+      },
+    } as never);
+    await handlers.mcpServerElicitation({
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-mcp',
+      serverName: 'cindy_contacts',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_params: {
+          name: 'contacts_delete',
+          args: { id: 'contact-3' },
+        },
+      },
+      message: 'Allow a late tool call',
+      requestedSchema: {},
+    });
+    expect(resolver.mock.calls[2]?.[0]).not.toHaveProperty('toolUseId');
     await handle.close();
   });
 
@@ -13167,7 +13259,19 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(resumeParams.dynamicTools).toBeUndefined();
 
     const handlers = resumeHost.getThreadHandlers();
-    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+    if (!handlers?.dynamicToolCall || !handlers.itemStarted) {
+      throw new Error('expected dynamicToolCall handler');
+    }
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-ios',
+      item: {
+        id: 'call-ios',
+        type: 'dynamicToolCall',
+        namespace: null,
+        tool: 'cindy_ios_simulator__call_tool',
+      },
+    });
     const result = await handlers.dynamicToolCall(
       {
         threadId: 'resume-thread-id',
@@ -13283,6 +13387,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     handle.setInteractionResolver(async (request) => {
       expect(request).toMatchObject({
         kind: 'permission',
+        toolUseId: 'call-ios',
         toolName: 'dynamic:cindy_ios_simulator:call_tool',
         title: disclosure.title,
         description: disclosure.description,
@@ -15063,9 +15168,19 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.dynamicToolCall || !handlers.requestUserInput) {
+    if (!handlers?.dynamicToolCall || !handlers.requestUserInput || !handlers.itemStarted) {
       throw new Error('expected user input handlers');
     }
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'dynamic-call-1',
+        type: 'dynamicToolCall',
+        namespace: null,
+        tool: 'cindy__ask_user_question',
+      },
+    });
     let requestCount = 0;
     const pendingDecision = deferred<InteractionDecision>();
     handle.setInteractionResolver(async (req) => {
@@ -15073,6 +15188,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(req).toMatchObject({
         kind: 'ask_user_question',
         requestId: 'req-dynamic',
+        toolUseId: 'dynamic-call-1',
       });
       return pendingDecision.promise;
     });

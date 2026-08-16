@@ -181,7 +181,12 @@ describe("cindy_helper MCP server", () => {
           getSessionRuntime: vi.fn(async () => ({
             ok: true as const,
             runtime: {
-              active: false,
+              sessionId: "target",
+              phase: "idle" as const,
+              recordStatus: "active" as const,
+              attention: false,
+              workflow: null,
+              source: "persisted" as const,
               turnGeneration: null,
               startedAtMs: null,
               lastActivityAtMs: null,

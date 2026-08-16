@@ -1,8 +1,9 @@
 import type {
   AgentKind,
   SessionGracefulStopResult,
-  SessionRuntimeSnapshot,
+  SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
+import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import {
   updateQueuedMessageText,
@@ -36,19 +37,20 @@ export type SessionStopResult =
   | Failure<'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY'>;
 
 export type SessionRuntimeResult =
-  { ok: true; runtime: SessionRuntimeSnapshot } | Failure<'NOT_FOUND'>;
+  { ok: true; runtime: SessionActivitySnapshot } | Failure<'NOT_FOUND'>;
 
 export interface SessionControlLiveSession {
   agentKind: AgentKind;
   capabilities: { sameTurnSteer: { supported: boolean } };
   isTurnRunning(): boolean;
   requestGracefulStop(): Promise<SessionGracefulStopResult>;
-  getRuntimeSnapshot(): SessionRuntimeSnapshot;
+  getTurnControlSnapshot(): SessionTurnControlSnapshot;
 }
 
 export interface SessionControlServiceDeps {
   sessionExists(sessionId: string): Promise<boolean>;
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
+  getSessionActivitySnapshot(sessionId: string): Promise<SessionActivitySnapshot>;
   assertExternalInputAllowed(sessionId: string): Promise<void>;
   createQueuedMessage(params: {
     targetSessionId: string;
@@ -65,15 +67,6 @@ export interface SessionControlServiceDeps {
   removeQueuedMessage(sessionId: string, clientId: string): boolean;
   createId(): string;
 }
-
-const INACTIVE_RUNTIME: SessionRuntimeSnapshot = {
-  active: false,
-  turnGeneration: null,
-  startedAtMs: null,
-  lastActivityAtMs: null,
-  currentActionSummary: null,
-  gracefulStopState: 'none',
-};
 
 export function createSessionControlService(deps: SessionControlServiceDeps) {
   const queueControl = createSessionQueueControlService({
@@ -200,10 +193,15 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     async getSessionRuntime(params: { targetSessionId: string }): Promise<SessionRuntimeResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const activity = await deps.getSessionActivitySnapshot(params.targetSessionId);
+      const control = deps.getLiveSession(params.targetSessionId)?.getTurnControlSnapshot();
       return {
         ok: true,
-        runtime:
-          deps.getLiveSession(params.targetSessionId)?.getRuntimeSnapshot() ?? INACTIVE_RUNTIME,
+        runtime: {
+          ...activity,
+          turnGeneration: control?.turnGeneration ?? null,
+          gracefulStopState: control?.gracefulStopState ?? 'none',
+        },
       };
     },
   };

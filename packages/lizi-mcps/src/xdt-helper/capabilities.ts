@@ -95,7 +95,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【队列所有权】只能修改或撤回当前调用 session 自己通过 send_to_session 投递、且尚未进入 consuming 的消息；Orca、scheduler、用户或其它 session 的消息都会 fail-closed 拒绝。Orca worker 队列控制与这里复用同一底层生命周期实现。',
       '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。',
       '【停止】stop_session_turn 是请求式优雅停止：当前并行工具全部收尾后才发送 provider 软中断；不关闭 transport、不重建 session、不硬杀进程，超时未确认会返回 unconfirmed。',
-      '【探针】get_session_runtime 返回 turn 是否活跃、generation、开始时间、最后活动时间、当前动作摘要和停止状态；动作摘要有界且不包含提示词正文、工具参数或凭证。',
+      '【探针】get_session_runtime 返回统一 phase、记录状态、标题工作流语义、turn generation、开始时间、最后活动时间、当前动作摘要和停止状态；动作摘要有界且不包含提示词正文、工具参数或凭证。',
     ].join(' '),
   },
   {

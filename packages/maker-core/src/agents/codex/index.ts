@@ -4487,6 +4487,7 @@ export class CodexAgent extends BaseAgent {
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
       activeToolContexts.clear();
+      completedActiveToolTurns.clear();
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();
@@ -5345,6 +5346,7 @@ export class CodexAgent extends BaseAgent {
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
+    const completedActiveToolTurns = new Map<string, string | null | undefined>();
     // A single model turn can surface the same visible question through both
     // the native requestUserInput request and the dynamic-tool compatibility
     // path. Join an in-flight interaction, then replay its submitted answers
@@ -6549,12 +6551,15 @@ export class CodexAgent extends BaseAgent {
       return stringFromMeta(recordFromUnknown(context.toolParams), 'name');
     }
 
-    function mcpToolPluginId(
+    function matchingActiveMcpTools(
       params: McpServerElicitationRequestParams,
-    ): string | null | undefined {
+    ): Array<{ itemId: string; context: ActiveToolContext }> {
       const toolName = stringFromMeta(mcpElicitationMeta(params), 'tool_name');
-      const matches: ActiveToolContext[] = [];
-      for (const context of activeToolContexts.values()) {
+      const matches: Array<{
+        itemId: string;
+        context: ActiveToolContext;
+      }> = [];
+      for (const [itemId, context] of activeToolContexts) {
         if (
           context.type !== 'mcpToolCall' ||
           context.turnId !== params.turnId ||
@@ -6563,15 +6568,30 @@ export class CodexAgent extends BaseAgent {
         ) {
           continue;
         }
-        matches.push(context);
+        matches.push({ itemId, context });
       }
+      return matches;
+    }
+
+    function mcpToolPluginId(
+      params: McpServerElicitationRequestParams,
+    ): string | null | undefined {
+      const toolName = stringFromMeta(mcpElicitationMeta(params), 'tool_name');
+      const matches = matchingActiveMcpTools(params);
       if (matches.length === 0 || (!toolName && matches.length !== 1)) {
         return undefined;
       }
-      const pluginId = matches[0]?.pluginId;
-      return matches.every((context) => context.pluginId === pluginId)
+      const pluginId = matches[0]?.context.pluginId;
+      return matches.every(({ context }) => context.pluginId === pluginId)
         ? pluginId
         : undefined;
+    }
+
+    function activeMcpToolUseId(
+      params: McpServerElicitationRequestParams,
+    ): string | undefined {
+      const matches = matchingActiveMcpTools(params);
+      return matches.length === 1 ? matches[0]?.itemId : undefined;
     }
 
     const classifyMcpToolApprovalPolicy = (
@@ -6718,6 +6738,7 @@ export class CodexAgent extends BaseAgent {
       const meta = mcpElicitationMeta(params);
       const toolTitle = stringFromMeta(meta, 'tool_title');
       const innerToolName = mcpInnerToolName(params);
+      const toolUseId = activeMcpToolUseId(params);
       const requestId = `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
       const decision = await awaitApprovalDecision(
         params.threadId,
@@ -6727,6 +6748,7 @@ export class CodexAgent extends BaseAgent {
         {
           kind: 'permission',
           requestId,
+          ...(toolUseId ? { toolUseId } : {}),
           toolName: `mcp:${params.serverName}`,
           input: policyPermissionInput,
           title:
@@ -6743,6 +6765,7 @@ export class CodexAgent extends BaseAgent {
         {
           forcePrompt:
             turnPolicyForcePrompt || approvalPolicy === 'prompt-each-time',
+          ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
 
@@ -6834,12 +6857,38 @@ export class CodexAgent extends BaseAgent {
     function noteActiveToolContext(item: unknown, turnId?: string | null): void {
       const active = activeToolContextFromItem(item, turnId);
       if (!active) return;
+      if (completedActiveToolTurns.get(active.id) === turnId) return;
       activeToolContexts.set(active.id, active.ctx);
+    }
+
+    function completeActiveToolContext(item: unknown, turnId?: string | null): void {
+      if (!item || typeof item !== 'object') return;
+      const itemId = typeof (item as Record<string, unknown>).id === 'string'
+        ? (item as Record<string, unknown>).id as string
+        : '';
+      if (!itemId) return;
+      activeToolContexts.delete(itemId);
+      completedActiveToolTurns.set(itemId, turnId);
+    }
+
+    function activeDynamicToolUseId(params: DynamicToolCallParams): string | undefined {
+      const matches = [...activeToolContexts.entries()].filter(([, context]) =>
+        context.type === 'dynamicToolCall'
+        && context.turnId === params.turnId
+        && context.namespace === params.namespace
+        && context.tool === params.tool,
+      );
+      const exact = matches.find(([itemId]) => itemId === params.callId);
+      if (exact) return exact[0];
+      return matches.length === 1 ? matches[0]?.[0] : undefined;
     }
 
     function clearActiveToolContextsForTurn(turnId: string): void {
       for (const [itemId, ctx] of activeToolContexts) {
         if (ctx.turnId === turnId) activeToolContexts.delete(itemId);
+      }
+      for (const [itemId, completedTurnId] of completedActiveToolTurns) {
+        if (completedTurnId === turnId) completedActiveToolTurns.delete(itemId);
       }
       // Lifecycle callers dismiss the broker entries first. Wake joined waiters
       // before dropping the lookup maps so they can observe that their request
@@ -7161,6 +7210,7 @@ export class CodexAgent extends BaseAgent {
           success: false,
         };
       }
+      const toolUseId = activeDynamicToolUseId(params);
       if (isAskUserDynamicTool(params)) {
         const requestId = String(meta.requestId);
         // 挂起期间服务端已取消本请求 (greptile R13 P1): 直接回失败响应, 不注册
@@ -7193,6 +7243,7 @@ export class CodexAgent extends BaseAgent {
               questions,
               params.turnId,
               () => dynamicToolBroker.has({ connectionId, requestId: meta.requestId }),
+              toolUseId,
             );
             settle(dynamicToolResponseFromUserInput(response));
           },
@@ -7227,6 +7278,7 @@ export class CodexAgent extends BaseAgent {
           {
             kind: 'permission',
             requestId,
+            ...(toolUseId ? { toolUseId } : {}),
             toolName: `dynamic:${serverName}:${toolName}`,
             input: { serverName, toolName, toolParams: params.arguments },
             title: hostApprovalPresentation?.title ?? `Allow Codex to use ${serverName}?`,
@@ -7234,7 +7286,10 @@ export class CodexAgent extends BaseAgent {
               hostApprovalPresentation?.description ??
               `Codex requested ${serverName}.${toolName}.`,
           },
-          { forcePrompt: approvalPolicy === 'prompt-each-time' },
+          {
+            forcePrompt: approvalPolicy === 'prompt-each-time',
+            ...(toolUseId ? { itemId: toolUseId } : {}),
+          },
         );
         if (decision !== 'accept' && decision !== 'acceptForSession') {
           return {
@@ -9009,6 +9064,7 @@ export class CodexAgent extends BaseAgent {
         dismissAllPending('app_server_force_retired', 'deny');
         dismissAllPendingUserInput('transport_error');
         activeToolContexts.clear();
+        completedActiveToolTurns.clear();
         capabilitySelectionTextByTurnId.clear();
         capabilitySelectionTextByThreadId.clear();
         descendantParentThreadByThreadId.clear();
@@ -9495,7 +9551,7 @@ export class CodexAgent extends BaseAgent {
           clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
           producedOutputTurnIds.add(params.turnId);
         }
-        noteActiveToolContext(params.item, params.turnId);
+        completeActiveToolContext(params.item, params.turnId);
         // This late item belongs to an already-terminal parent. The parent
         // cleanup already cleared its pending tools; touching the shared
         // lifecycle set here would re-arm the currently active turn's idle
@@ -9675,6 +9731,7 @@ export class CodexAgent extends BaseAgent {
           subagentLiveCards.clear();
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
+          completedActiveToolTurns.clear();
           capabilitySelectionTextByTurnId.clear();
           capabilitySelectionTextByThreadId.clear();
           descendantParentThreadByThreadId.clear();
@@ -9963,6 +10020,7 @@ export class CodexAgent extends BaseAgent {
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
       activeToolContexts.clear();
+      completedActiveToolTurns.clear();
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();

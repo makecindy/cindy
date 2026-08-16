@@ -48,6 +48,7 @@
     "./schedule-model": "./src/scheduleModel.ts",
     "./schedule-types": "./src/scheduleTypes.ts",
     "./session-action-strip": "./src/sessionActionStrip.ts",
+    "./session-activity": "./src/sessionActivity.ts",
     "./session-controls": "./src/sessionControls.ts",
     "./session-identity": "./src/sessionIdentity.ts",
     "./session-list": "./src/sessionList.ts",

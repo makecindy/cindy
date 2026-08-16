@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
@@ -34,12 +35,24 @@ function setup(opts?: {
   steerAccepted?: boolean;
   queueItem?: AgentInputQueuedMessage;
 }) {
-  const runtime = {
-    active: true,
-    turnGeneration: 3,
+  const activity: SessionActivitySnapshot = {
+    sessionId: 'target',
+    phase: 'running' as const,
+    recordStatus: 'active' as const,
+    attention: false,
+    workflow: null,
+    source: 'live' as const,
     startedAtMs: 1,
     lastActivityAtMs: 2,
     currentActionSummary: '正在思考',
+    turnGeneration: null,
+    gracefulStopState: 'none' as const,
+  };
+  const control = {
+    active: true,
+    turnGeneration: 3,
+    activeToolCount: 0,
+    pendingInteractionCount: 0,
     gracefulStopState: 'none' as const,
   };
   const live = {
@@ -50,7 +63,7 @@ function setup(opts?: {
       status: 'waiting-for-safe-point' as const,
       turnGeneration: 3,
     })),
-    getRuntimeSnapshot: vi.fn(() => runtime),
+    getTurnControlSnapshot: vi.fn(() => control),
   };
   const getLiveSession = vi.fn<() => typeof live | null>(() => live);
   const queueItem =
@@ -63,6 +76,7 @@ function setup(opts?: {
   const deps = {
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
+    getSessionActivitySnapshot: vi.fn(async () => activity),
     assertExternalInputAllowed: vi.fn(async () => undefined),
     createQueuedMessage: vi.fn(
       async ({
@@ -186,7 +200,7 @@ describe('session control domain service', () => {
     ).resolves.toMatchObject({ ok: false, errorCode: 'NO_ACTIVE_TURN' });
   });
 
-  it('requests graceful stop without hard-abort semantics and reports offline runtime as inactive', async () => {
+  it('merges canonical activity with live stop control without hard-abort semantics', async () => {
     const { live, service } = setup();
     await expect(service.stopSessionTurn({ targetSessionId: 'target' })).resolves.toEqual({
       ok: true,
@@ -196,11 +210,29 @@ describe('session control domain service', () => {
     expect(live.requestGracefulStop).toHaveBeenCalledOnce();
     await expect(service.getSessionRuntime({ targetSessionId: 'target' })).resolves.toEqual({
       ok: true,
-      runtime: expect.objectContaining({ active: true, currentActionSummary: '正在思考' }),
+      runtime: expect.objectContaining({
+        phase: 'running',
+        currentActionSummary: '正在思考',
+        turnGeneration: 3,
+        gracefulStopState: 'none',
+      }),
     });
 
     const offline = setup();
     offline.deps.getLiveSession.mockReturnValue(null);
+    offline.deps.getSessionActivitySnapshot.mockResolvedValue({
+      sessionId: 'target',
+      phase: 'completed',
+      recordStatus: 'archived',
+      startedAtMs: 1,
+      lastActivityAtMs: 2,
+      currentActionSummary: '上次运行已正常结束',
+      attention: false,
+      workflow: null,
+      turnGeneration: null,
+      gracefulStopState: 'none',
+      source: 'persisted',
+    });
     await expect(offline.service.stopSessionTurn({ targetSessionId: 'target' })).resolves.toEqual({
       ok: true,
       status: 'no-active-turn',
@@ -208,7 +240,12 @@ describe('session control domain service', () => {
     await expect(offline.service.getSessionRuntime({ targetSessionId: 'target' })).resolves.toEqual(
       {
         ok: true,
-        runtime: expect.objectContaining({ active: false, gracefulStopState: 'none' }),
+        runtime: expect.objectContaining({
+          phase: 'completed',
+          recordStatus: 'archived',
+          turnGeneration: null,
+          gracefulStopState: 'none',
+        }),
       },
     );
   });

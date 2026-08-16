@@ -16,6 +16,8 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import type { SessionGracefulStopState } from '@cindy/maker-shared/session-activity';
+export type { SessionGracefulStopState } from '@cindy/maker-shared/session-activity';
 import type {
   Effort,
   PermissionMode,
@@ -291,19 +293,11 @@ export type SessionSendResult =
   | { accepted: true }
   | { accepted: false; reason: 'cancelled-before-dispatch' };
 
-export type SessionGracefulStopState =
-  | 'none'
-  | 'waiting-for-safe-point'
-  | 'requesting'
-  | 'requested'
-  | 'unconfirmed';
-
-export interface SessionRuntimeSnapshot {
+export interface SessionTurnControlSnapshot {
   active: boolean;
   turnGeneration: number | null;
-  startedAtMs: number | null;
-  lastActivityAtMs: number | null;
-  currentActionSummary: string | null;
+  activeToolCount: number;
+  pendingInteractionCount: number;
   gracefulStopState: SessionGracefulStopState;
 }
 
@@ -314,29 +308,14 @@ export type SessionGracefulStopResult =
   | { status: 'requested'; turnGeneration: number }
   | { status: 'unconfirmed'; turnGeneration: number; reason: string };
 
-type TurnRuntimeState = {
+type TurnControlState = {
   generation: number;
-  startedAtMs: number;
-  lastActivityAtMs: number;
-  currentActionSummary: string;
-  activeTools: Map<string, string>;
+  activeToolIds: Set<string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
   gracefulStopState: SessionGracefulStopState;
   gracefulStopPromise: Promise<SessionGracefulStopResult> | null;
 };
-
-const MAX_RUNTIME_TOOL_LABEL_CHARS = 80;
-
-function runtimeToolLabel(value: unknown): string {
-  if (typeof value !== 'string') return '工具';
-  const normalized = value.replace(/\s+/gu, ' ').trim();
-  if (!normalized) return '工具';
-  const chars = Array.from(normalized);
-  return chars.length <= MAX_RUNTIME_TOOL_LABEL_CHARS
-    ? normalized
-    : `${chars.slice(0, MAX_RUNTIME_TOOL_LABEL_CHARS).join('')}…`;
-}
 
 type SendReservation = {
   phase: 'accepting' | 'dispatching';
@@ -421,8 +400,8 @@ export class Session {
   /** 已为哪个 turn 代号排过 abort 复核；同一 turn 上重复 abort 不重复排。 */
   private abortRecoveryScheduledFor: number | null = null;
   private lastEventType: string | null = null;
-  /** 当前产品 turn 的只读活动投影；terminal/失败 dispatch 时按 generation 清理。 */
-  private turnRuntimeState: TurnRuntimeState | null = null;
+  /** 优雅停止所需的 turn 控制事实；不承担 UI/MCP 会话状态投影。 */
+  private turnControlState: TurnControlState | null = null;
 
   constructor(opts: SessionOptions) {
     this.id = opts.id;
@@ -616,7 +595,7 @@ export class Session {
       originInstalled = true;
       this.startEventLoopIfNeeded();
       try {
-        this.beginTurnRuntime(reservedTurnGeneration);
+        this.beginTurnControl(reservedTurnGeneration);
         onDispatching?.();
         await this.handle.send(msg, {
           ...handleOpts,
@@ -678,7 +657,7 @@ export class Session {
           });
         }
       }
-      if (!turnDispatched) this.clearTurnRuntime(reservedTurnGeneration);
+      if (!turnDispatched) this.clearTurnControl(reservedTurnGeneration);
     }
   }
 
@@ -766,52 +745,51 @@ export class Session {
     }
   }
 
-  getRuntimeSnapshot(): SessionRuntimeSnapshot {
-    const runtime = this.turnRuntimeState;
-    if (!runtime) {
+  getTurnControlSnapshot(): SessionTurnControlSnapshot {
+    const control = this.turnControlState;
+    if (!control) {
       return {
         active: false,
         turnGeneration: null,
-        startedAtMs: null,
-        lastActivityAtMs: null,
-        currentActionSummary: null,
+        activeToolCount: 0,
+        pendingInteractionCount: 0,
         gracefulStopState: 'none',
       };
     }
     return {
       active: true,
-      turnGeneration: runtime.generation,
-      startedAtMs: runtime.startedAtMs,
-      lastActivityAtMs: runtime.lastActivityAtMs,
-      currentActionSummary: runtime.currentActionSummary,
-      gracefulStopState: runtime.gracefulStopState,
+      turnGeneration: control.generation,
+      activeToolCount: control.activeToolIds.size + control.anonymousActiveTools,
+      pendingInteractionCount: [...control.pendingInteractionToolIds.values()]
+        .reduce((sum, count) => sum + count, 0),
+      gracefulStopState: control.gracefulStopState,
     };
   }
 
   async requestGracefulStop(): Promise<SessionGracefulStopResult> {
-    const runtime = this.turnRuntimeState;
-    if (!runtime || runtime.generation !== this.turnGeneration || !this.isHandleTurnRunning()) {
+    const control = this.turnControlState;
+    if (!control || control.generation !== this.turnGeneration || !this.isHandleTurnRunning()) {
       return { status: 'no-active-turn' };
     }
     if (!this.handle.requestGracefulStop) {
       return { status: 'unsupported', reason: 'provider-not-supported' };
     }
-    if (runtime.gracefulStopPromise) return runtime.gracefulStopPromise;
-    if (runtime.gracefulStopState === 'requested') {
-      return { status: 'requested', turnGeneration: runtime.generation };
+    if (control.gracefulStopPromise) return control.gracefulStopPromise;
+    if (control.gracefulStopState === 'requested') {
+      return { status: 'requested', turnGeneration: control.generation };
     }
-    if (runtime.gracefulStopState === 'unconfirmed') {
+    if (control.gracefulStopState === 'unconfirmed') {
       return {
         status: 'unconfirmed',
-        turnGeneration: runtime.generation,
+        turnGeneration: control.generation,
         reason: 'provider-did-not-confirm',
       };
     }
-    if (!this.isGracefulStopSafePoint(runtime)) {
-      runtime.gracefulStopState = 'waiting-for-safe-point';
-      return { status: 'waiting-for-safe-point', turnGeneration: runtime.generation };
+    if (!this.isGracefulStopSafePoint(control)) {
+      control.gracefulStopState = 'waiting-for-safe-point';
+      return { status: 'waiting-for-safe-point', turnGeneration: control.generation };
     }
-    return this.issueGracefulStop(runtime);
+    return this.issueGracefulStop(control);
   }
 
   /**
@@ -890,7 +868,7 @@ export class Session {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
-      this.turnRuntimeState = null;
+      this.turnControlState = null;
       this.eventListeners.clear();
       this.interactionListener = null;
       if (closeSucceeded) {
@@ -922,7 +900,7 @@ export class Session {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
-      this.turnRuntimeState = null;
+      this.turnControlState = null;
       this.clearTerminalErrorDrain();
       this.setStatus('closed');
       this.eventListeners.clear();
@@ -1403,14 +1381,10 @@ export class Session {
     void this.runEventLoop();
   }
 
-  private beginTurnRuntime(generation: number): void {
-    const now = Date.now();
-    this.turnRuntimeState = {
+  private beginTurnControl(generation: number): void {
+    this.turnControlState = {
       generation,
-      startedAtMs: now,
-      lastActivityAtMs: now,
-      currentActionSummary: '正在启动',
-      activeTools: new Map(),
+      activeToolIds: new Set(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
       gracefulStopState: 'none',
@@ -1418,8 +1392,8 @@ export class Session {
     };
   }
 
-  private clearTurnRuntime(generation: number): void {
-    if (this.turnRuntimeState?.generation === generation) this.turnRuntimeState = null;
+  private clearTurnControl(generation: number): void {
+    if (this.turnControlState?.generation === generation) this.turnControlState = null;
   }
 
   /**
@@ -1429,53 +1403,48 @@ export class Session {
    */
   private observeInteractionStarted(
     request: InteractionRequest,
-  ): { runtime: TurnRuntimeState; toolUseId: string | null } | null {
-    const runtime = this.turnRuntimeState;
-    if (!runtime || runtime.generation !== this.turnGeneration) return null;
+  ): { control: TurnControlState; toolUseId: string | null } | null {
+    const control = this.turnControlState;
+    if (!control || control.generation !== this.turnGeneration) return null;
     const toolUseId = request.toolUseId?.trim() || null;
     if (toolUseId) {
-      runtime.pendingInteractionToolIds.set(
+      control.pendingInteractionToolIds.set(
         toolUseId,
-        (runtime.pendingInteractionToolIds.get(toolUseId) ?? 0) + 1,
+        (control.pendingInteractionToolIds.get(toolUseId) ?? 0) + 1,
       );
     }
-    runtime.lastActivityAtMs = Date.now();
-    runtime.currentActionSummary = '等待用户确认';
     if (
-      runtime.gracefulStopState === 'waiting-for-safe-point' &&
-      this.isGracefulStopSafePoint(runtime)
+      control.gracefulStopState === 'waiting-for-safe-point' &&
+      this.isGracefulStopSafePoint(control)
     ) {
-      void this.issueGracefulStop(runtime);
+      void this.issueGracefulStop(control);
     }
-    return { runtime, toolUseId };
+    return { control, toolUseId };
   }
 
   private observeInteractionSettled(
-    observation: { runtime: TurnRuntimeState; toolUseId: string | null } | null,
+    observation: { control: TurnControlState; toolUseId: string | null } | null,
   ): void {
-    if (!observation || this.turnRuntimeState !== observation.runtime) return;
-    const { runtime, toolUseId } = observation;
+    if (!observation || this.turnControlState !== observation.control) return;
+    const { control, toolUseId } = observation;
     if (toolUseId) {
-      const remaining = (runtime.pendingInteractionToolIds.get(toolUseId) ?? 0) - 1;
-      if (remaining > 0) runtime.pendingInteractionToolIds.set(toolUseId, remaining);
-      else runtime.pendingInteractionToolIds.delete(toolUseId);
+      const remaining = (control.pendingInteractionToolIds.get(toolUseId) ?? 0) - 1;
+      if (remaining > 0) control.pendingInteractionToolIds.set(toolUseId, remaining);
+      else control.pendingInteractionToolIds.delete(toolUseId);
     }
-    runtime.lastActivityAtMs = Date.now();
-    const remaining = [...runtime.activeTools.values()].at(-1);
-    runtime.currentActionSummary = remaining ? `正在运行工具 ${remaining}` : '正在运行';
   }
 
-  private isGracefulStopSafePoint(runtime: TurnRuntimeState): boolean {
-    if (runtime.anonymousActiveTools > 0) return false;
+  private isGracefulStopSafePoint(control: TurnControlState): boolean {
+    if (control.anonymousActiveTools > 0) return false;
     return (
-      runtime.activeTools.size === 0 ||
-      [...runtime.activeTools.keys()].every((id) => runtime.pendingInteractionToolIds.has(id))
+      control.activeToolIds.size === 0 ||
+      [...control.activeToolIds].every((id) => control.pendingInteractionToolIds.has(id))
     );
   }
 
-  private issueGracefulStop(runtime: TurnRuntimeState): Promise<SessionGracefulStopResult> {
-    if (runtime.gracefulStopPromise) return runtime.gracefulStopPromise;
-    runtime.gracefulStopState = 'requesting';
+  private issueGracefulStop(control: TurnControlState): Promise<SessionGracefulStopResult> {
+    if (control.gracefulStopPromise) return control.gracefulStopPromise;
+    control.gracefulStopState = 'requesting';
     const abortController = new AbortController();
     const request = Promise.resolve().then(() =>
       this.handle.requestGracefulStop!({ signal: abortController.signal }),
@@ -1485,10 +1454,10 @@ export class Session {
       const timeout = setTimeout(() => {
         settled = true;
         abortController.abort();
-        if (this.turnRuntimeState === runtime) runtime.gracefulStopState = 'unconfirmed';
+        if (this.turnControlState === control) control.gracefulStopState = 'unconfirmed';
         resolve({
           status: 'unconfirmed',
-          turnGeneration: runtime.generation,
+          turnGeneration: control.generation,
           reason: 'provider-confirmation-timeout',
         });
       }, 5_000);
@@ -1498,50 +1467,46 @@ export class Session {
           clearTimeout(timeout);
           if (settled) return;
           settled = true;
-          if (this.turnRuntimeState === runtime) runtime.gracefulStopState = 'requested';
-          resolve({ status: 'requested', turnGeneration: runtime.generation });
+          if (this.turnControlState === control) control.gracefulStopState = 'requested';
+          resolve({ status: 'requested', turnGeneration: control.generation });
         },
         (error) => {
           clearTimeout(timeout);
           if (settled) return;
           settled = true;
-          if (this.turnRuntimeState === runtime) runtime.gracefulStopState = 'unconfirmed';
+          if (this.turnControlState === control) control.gracefulStopState = 'unconfirmed';
           this.logger.warn('graceful stop request failed', {
-            turnGeneration: runtime.generation,
+            turnGeneration: control.generation,
             error: String(error),
           });
           resolve({
             status: 'unconfirmed',
-            turnGeneration: runtime.generation,
+            turnGeneration: control.generation,
             reason: 'provider-request-failed',
           });
         },
       );
     });
-    runtime.gracefulStopPromise = result;
+    control.gracefulStopPromise = result;
     return result;
   }
 
-  private observeTurnActivity(event: AgentEvent, observedGeneration: number): void {
-    const runtime = this.turnRuntimeState;
-    if (!runtime || runtime.generation !== observedGeneration || event.turnScope === 'background') return;
-    runtime.lastActivityAtMs = Date.now();
+  private observeTurnControl(event: AgentEvent, observedGeneration: number): void {
+    const control = this.turnControlState;
+    if (!control || control.generation !== observedGeneration || event.turnScope === 'background') return;
     const data = event.data && typeof event.data === 'object'
       ? event.data as Record<string, unknown>
       : {};
     if (event.type === 'tool_use') {
       const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : null;
-      const toolName = runtimeToolLabel(data.toolName);
       // Some providers expose display-only tool-shaped snapshots (for example,
       // Codex native plan updates). They have no matching tool_result and must
       // not occupy the graceful-stop safe-point lifecycle.
       if (data.runtimeActivity === 'snapshot') {
-        runtime.currentActionSummary = toolName === 'update_plan' ? '正在更新计划' : '正在更新状态';
         return;
       }
-      if (toolUseId) runtime.activeTools.set(toolUseId, toolName);
-      else runtime.anonymousActiveTools += 1;
-      runtime.currentActionSummary = `正在运行工具 ${toolName}`;
+      if (toolUseId) control.activeToolIds.add(toolUseId);
+      else control.anonymousActiveTools += 1;
       return;
     }
     if (event.type === 'tool_result_full' || event.type === 'tool_result') {
@@ -1551,26 +1516,17 @@ export class Session {
           ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
           : []),
       ];
-      for (const id of ids) runtime.activeTools.delete(id);
-      if (ids.length === 0 && runtime.anonymousActiveTools > 0) {
-        runtime.anonymousActiveTools -= 1;
+      for (const id of ids) control.activeToolIds.delete(id);
+      if (ids.length === 0 && control.anonymousActiveTools > 0) {
+        control.anonymousActiveTools -= 1;
       }
-      const remaining = [...runtime.activeTools.values()].at(-1);
-      runtime.currentActionSummary = remaining ? `正在运行工具 ${remaining}` : '正在处理工具结果';
       if (
-        this.isGracefulStopSafePoint(runtime) &&
-        runtime.gracefulStopState === 'waiting-for-safe-point'
+        this.isGracefulStopSafePoint(control) &&
+        control.gracefulStopState === 'waiting-for-safe-point'
       ) {
-        void this.issueGracefulStop(runtime);
+        void this.issueGracefulStop(control);
       }
-      return;
     }
-    if (event.type === 'thinking') runtime.currentActionSummary = '正在思考';
-    else if (event.type === 'text') runtime.currentActionSummary = '正在生成回复';
-    else if (event.type === 'interaction_request') runtime.currentActionSummary = '等待用户确认';
-    else if (event.type === 'agent_task_update') runtime.currentActionSummary = '正在处理子任务';
-    else if (event.type === 'image') runtime.currentActionSummary = '正在处理图片';
-    else if (event.type === 'status') runtime.currentActionSummary = '正在运行';
   }
 
   /**
@@ -1587,7 +1543,7 @@ export class Session {
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     const isCurrentGeneration = observedGeneration === this.turnGeneration;
-    this.observeTurnActivity(event, observedGeneration);
+    this.observeTurnControl(event, observedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
     if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
@@ -1642,7 +1598,7 @@ export class Session {
     }
     const listenerEvent = redactEventForListeners(event);
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
-      this.clearTurnRuntime(observedGeneration);
+      this.clearTurnControl(observedGeneration);
     }
     if (isTerminal && !isBackgroundEvent) {
       try {
@@ -2030,7 +1986,7 @@ export class Session {
     this.sendReservation = null;
     this.currentTurnOrigin = null;
     this.currentTurnAttemptToken = null;
-    this.turnRuntimeState = null;
+    this.turnControlState = null;
     this.setStatus('closed');
     this.eventListeners.clear();
     this.statusListeners.clear();

@@ -553,6 +553,174 @@ describe('AgentIslandService native publishing', () => {
     );
   });
 
+  it('exposes the canonical snapshot and emits per-session transition edges', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: {
+        failed: false,
+        headless: true,
+        publish: () => true,
+        suspend: () => undefined,
+      },
+    });
+    const transitions = vi.fn();
+    const unsubscribe = service.subscribeSessionActivity(transitions);
+
+    service.setEnabled(false);
+    service.handleUserPrompt(
+      {
+        sessionId: 'canonical',
+        agentKind: 'codex',
+      },
+      'run tests',
+    );
+    service.handleSessionMetadataPatch('canonical', {
+      title: '🚧#2804 会话控制面 · 待bot',
+    });
+
+    const canonicalSnapshot = service.getSessionActivitySnapshot('canonical');
+    expect(canonicalSnapshot).toMatchObject({
+      sessionId: 'canonical',
+      phase: 'running',
+      recordStatus: 'active',
+      currentActionSummary: '正在处理新消息',
+      source: 'live',
+      workflow: {
+        key: 'awaiting-bot',
+        label: '待bot',
+        waitingOn: 'automation',
+      },
+    });
+    expect(canonicalSnapshot).not.toHaveProperty('compactDetail');
+    expect(JSON.stringify(canonicalSnapshot)).not.toContain('run tests');
+    expect(transitions).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      sessionId: 'canonical',
+      previous: null,
+      current: expect.objectContaining({ phase: 'running' }),
+      changedAtMs: expect.any(Number),
+    }));
+    expect(transitions).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 'canonical',
+      previous: expect.objectContaining({ workflow: null }),
+      current: expect.objectContaining({
+        workflow: expect.objectContaining({ key: 'awaiting-bot' }),
+      }),
+    }));
+
+    service.resetRuntimeState();
+    expect(transitions).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 'canonical',
+      previous: expect.objectContaining({ phase: 'running' }),
+      current: null,
+    }));
+
+    unsubscribe();
+    transitions.mockClear();
+    service.handleUserPrompt({ sessionId: 'after-unsubscribe', agentKind: 'codex' }, 'continue');
+    expect(transitions).not.toHaveBeenCalled();
+  });
+
+  it('resets the canonical turn start time when a completed session starts again', async () => {
+    vi.useFakeTimers();
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: {
+          failed: false,
+          headless: true,
+          publish: () => true,
+          suspend: () => undefined,
+        },
+      });
+      const meta = { sessionId: 'reused', agentKind: 'codex' as const };
+
+      vi.setSystemTime(1_000);
+      service.handleUserPrompt(meta, 'first');
+      expect(service.getSessionActivitySnapshot(meta.sessionId)?.startedAtMs).toBe(1_000);
+      service.handleAgentEvent(meta, doneEvent());
+
+      vi.setSystemTime(2_000);
+      service.handleUserPrompt(meta, 'second');
+      expect(service.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({
+        phase: 'running',
+        startedAtMs: 2_000,
+        lastActivityAtMs: 2_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets the canonical turn start time when a new turn is first observed from an agent event', async () => {
+    vi.useFakeTimers();
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: {
+          failed: false,
+          headless: true,
+          publish: () => true,
+          suspend: () => undefined,
+        },
+      });
+      const meta = { sessionId: 'event-reused', agentKind: 'codex' as const };
+
+      vi.setSystemTime(1_000);
+      service.handleUserPrompt(meta, 'first');
+      service.handleAgentEvent(meta, doneEvent());
+
+      vi.setSystemTime(2_000);
+      service.handleAgentEvent(meta, {
+        type: 'status',
+        source: 'codex',
+        data: { isRunning: true, status: 'Thinking...' },
+      });
+      expect(service.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({
+        phase: 'running',
+        startedAtMs: 2_000,
+        lastActivityAtMs: 2_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not emit a canonical transition for display-only detail changes', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: {
+          failed: false,
+          headless: true,
+          publish: () => true,
+          suspend: () => undefined,
+        },
+      });
+      const transitions = vi.fn();
+      service.subscribeSessionActivity(transitions);
+      service.setEnabled(false);
+
+      service.handleUserPrompt({ sessionId: 'detail-only', agentKind: 'codex' }, 'first body');
+      expect(transitions).toHaveBeenCalledTimes(1);
+      transitions.mockClear();
+
+      service.handleUserPrompt({ sessionId: 'detail-only', agentKind: 'codex' }, 'second body');
+      expect(service.getSessionActivitySnapshot('detail-only')).toMatchObject({
+        phase: 'running',
+        currentActionSummary: '正在处理新消息',
+      });
+      expect(transitions).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('replays current compact activity for late sessions subscribers', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({

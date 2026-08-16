@@ -1,4 +1,5 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
@@ -21,14 +22,7 @@ export type SessionSteerErrorCode =
 
 export type SessionStopErrorCode = 'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY';
 
-export interface SessionRuntimeSnapshot {
-  active: boolean;
-  turnGeneration: number | null;
-  startedAtMs: number | null;
-  lastActivityAtMs: number | null;
-  currentActionSummary: string | null;
-  gracefulStopState: 'none' | 'waiting-for-safe-point' | 'requesting' | 'requested' | 'unconfirmed';
-}
+export type SessionRuntimeSnapshot = SessionActivitySnapshot;
 
 export interface SessionControlDeps {
   getSessionContext: () => LiziMcpSessionContext;
@@ -216,7 +210,8 @@ export function registerGetSessionRuntimeTool(
     name: 'get_session_runtime',
     category: 'control',
     description:
-      '只读查询本机 session 的当前 turn 活动状态、开始时间、最后活动时间、动作摘要和优雅停止状态；' +
+      '只读查询本机 session 的统一状态：记录生命周期、运行/等待/正常结束/出错结束、标题工作流语义、' +
+      '开始时间、最后活动时间、动作摘要和优雅停止状态；' +
       '不返回提示词正文、工具参数或凭证。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
@@ -227,7 +222,12 @@ export function registerGetSessionRuntimeTool(
       const runtime = result.runtime;
       return okPayload({
         session_id,
-        active: runtime.active,
+        phase: runtime.phase,
+        active: runtime.phase === 'running' || runtime.phase === 'needs-interaction',
+        record_status: runtime.recordStatus ?? null,
+        source: runtime.source,
+        attention: runtime.attention,
+        workflow: runtime.workflow,
         turn_generation: runtime.turnGeneration,
         started_at: runtime.startedAtMs === null ? null : new Date(runtime.startedAtMs).toISOString(),
         last_activity_at:

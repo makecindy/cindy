@@ -41,7 +41,12 @@ function setup(opts?: { sessionId?: string | undefined }) {
     getSessionRuntime: vi.fn(async () => ({
       ok: true as const,
       runtime: {
-        active: true,
+        sessionId: 'target-session',
+        phase: 'running' as const,
+        recordStatus: 'active' as const,
+        attention: false,
+        workflow: null,
+        source: 'live' as const,
         turnGeneration: 7,
         startedAtMs: Date.parse('2026-08-16T01:00:00.000Z'),
         lastActivityAtMs: Date.parse('2026-08-16T01:00:05.000Z'),
@@ -140,7 +145,12 @@ describe('cindy_helper session control tools', () => {
     }))).toEqual({
       ok: true,
       session_id: 'target-session',
+      phase: 'running',
       active: true,
+      record_status: 'active',
+      source: 'live',
+      attention: false,
+      workflow: null,
       turn_generation: 7,
       started_at: '2026-08-16T01:00:00.000Z',
       last_activity_at: '2026-08-16T01:00:05.000Z',

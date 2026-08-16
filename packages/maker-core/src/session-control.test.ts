@@ -96,32 +96,39 @@ function createSession(stub: ReturnType<typeof createHandle>): Session {
   });
 }
 
-describe('Session control plane runtime state', () => {
-  it('tracks start/activity/action without exposing tool arguments and clears at terminal', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+function waitForSessionEvent(session: Session, type: AgentEvent['type']): Promise<void> {
+  return new Promise((resolve) => {
+    const unsubscribe = session.onEvent((event) => {
+      if (event.type !== type) return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+describe('Session graceful-stop control state', () => {
+  it('tracks only stop-control facts and clears them at terminal', async () => {
     const stub = createHandle();
     const session = createSession(stub);
 
-    expect(session.getRuntimeSnapshot()).toEqual({
+    expect(session.getTurnControlSnapshot()).toEqual({
       active: false,
       turnGeneration: null,
-      startedAtMs: null,
-      lastActivityAtMs: null,
-      currentActionSummary: null,
+      activeToolCount: 0,
+      pendingInteractionCount: 0,
       gracefulStopState: 'none',
     });
 
     await session.send('start');
-    expect(session.getRuntimeSnapshot()).toMatchObject({
+    expect(session.getTurnControlSnapshot()).toEqual({
       active: true,
       turnGeneration: 1,
-      startedAtMs: 1_000,
-      lastActivityAtMs: 1_000,
-      currentActionSummary: '正在启动',
+      activeToolCount: 0,
+      pendingInteractionCount: 0,
+      gracefulStopState: 'none',
     });
 
-    vi.setSystemTime(1_250);
+    const toolObserved = waitForSessionEvent(session, 'tool_use');
     stub.push({
       type: 'tool_use',
       data: {
@@ -130,17 +137,14 @@ describe('Session control plane runtime state', () => {
         input: { command: 'secret-token-value' },
       },
     });
-    await vi.waitFor(() => {
-      const summary = session.getRuntimeSnapshot().currentActionSummary;
-      expect(summary).toMatch(/^正在运行工具 Bash x+…$/);
-      expect(Array.from(summary ?? '').length).toBeLessThanOrEqual(88);
-    });
-    expect(session.getRuntimeSnapshot().lastActivityAtMs).toBeGreaterThanOrEqual(1_250);
-    expect(JSON.stringify(session.getRuntimeSnapshot())).not.toContain('secret-token-value');
+    await toolObserved;
+    expect(session.getTurnControlSnapshot()).toMatchObject({ activeToolCount: 1 });
+    expect(JSON.stringify(session.getTurnControlSnapshot())).not.toContain('secret-token-value');
 
+    const doneObserved = waitForSessionEvent(session, 'done');
     stub.push({ type: 'done', data: {} });
-    await vi.waitFor(() => expect(session.getRuntimeSnapshot().active).toBe(false));
-    vi.useRealTimers();
+    await doneObserved;
+    expect(session.getTurnControlSnapshot().active).toBe(false);
   });
 
   it('waits for every active tool result before issuing one soft stop request', async () => {
@@ -149,9 +153,7 @@ describe('Session control plane runtime state', () => {
     await session.send('start');
     stub.push({ type: 'tool_use', data: { toolUseId: 'tool-1', toolName: 'Read' } });
     stub.push({ type: 'tool_use', data: { toolUseId: 'tool-2', toolName: 'Write' } });
-    await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('正在运行工具 Write');
-    });
+    await vi.waitFor(() => expect(session.getTurnControlSnapshot().activeToolCount).toBe(2));
 
     await expect(session.requestGracefulStop()).resolves.toEqual({
       status: 'waiting-for-safe-point',
@@ -160,15 +162,13 @@ describe('Session control plane runtime state', () => {
     expect(stub.requestGracefulStop).not.toHaveBeenCalled();
 
     stub.push({ type: 'tool_result_full', data: { toolUseId: 'tool-1', fullText: 'done' } });
-    await vi.waitFor(() =>
-      expect(session.getRuntimeSnapshot().lastActivityAtMs).toBeGreaterThan(0),
-    );
+    await vi.waitFor(() => expect(session.getTurnControlSnapshot().activeToolCount).toBe(1));
     expect(stub.requestGracefulStop).not.toHaveBeenCalled();
 
     stub.push({ type: 'tool_result', data: { toolUseIds: ['tool-2'], summary: 'done' } });
     await vi.waitFor(() => expect(stub.requestGracefulStop).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().gracefulStopState).toBe('requested');
+      expect(session.getTurnControlSnapshot().gracefulStopState).toBe('requested');
     });
     await expect(session.requestGracefulStop()).resolves.toEqual({
       status: 'requested',
@@ -181,6 +181,7 @@ describe('Session control plane runtime state', () => {
     const snapshotStub = createHandle();
     const snapshotSession = createSession(snapshotStub);
     await snapshotSession.send('start');
+    const snapshotObserved = waitForSessionEvent(snapshotSession, 'tool_use');
     snapshotStub.push({
       type: 'tool_use',
       data: {
@@ -189,9 +190,8 @@ describe('Session control plane runtime state', () => {
         runtimeActivity: 'snapshot',
       },
     });
-    await vi.waitFor(() => {
-      expect(snapshotSession.getRuntimeSnapshot().currentActionSummary).toBe('正在更新计划');
-    });
+    await snapshotObserved;
+    expect(snapshotSession.getTurnControlSnapshot().activeToolCount).toBe(0);
 
     await expect(snapshotSession.requestGracefulStop()).resolves.toEqual({
       status: 'requested',
@@ -206,11 +206,7 @@ describe('Session control plane runtime state', () => {
       type: 'tool_use',
       data: { toolUseId: 'plan-call-1', toolName: 'update_plan' },
     });
-    await vi.waitFor(() => {
-      expect(toolSession.getRuntimeSnapshot().currentActionSummary).toBe(
-        '正在运行工具 update_plan',
-      );
-    });
+    await vi.waitFor(() => expect(toolSession.getTurnControlSnapshot().activeToolCount).toBe(1));
 
     await expect(toolSession.requestGracefulStop()).resolves.toEqual({
       status: 'waiting-for-safe-point',
@@ -237,9 +233,7 @@ describe('Session control plane runtime state', () => {
     );
     await session.send('start');
     stub.push({ type: 'tool_use', data: { toolUseId: 'tool-1', toolName: 'Bash' } });
-    await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('正在运行工具 Bash');
-    });
+    await vi.waitFor(() => expect(session.getTurnControlSnapshot().activeToolCount).toBe(1));
 
     const firstInteraction = stub.requestInteraction({
       kind: 'permission',
@@ -256,7 +250,7 @@ describe('Session control plane runtime state', () => {
       input: { command: 'echo safe again' },
     });
     await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('等待用户确认');
+      expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(2);
       expect(settleInteractions).toHaveLength(2);
     });
 
@@ -295,9 +289,7 @@ describe('Session control plane runtime state', () => {
     await session.send('start');
     stub.push({ type: 'tool_use', data: { toolUseId: 'tool-waiting', toolName: 'Write' } });
     stub.push({ type: 'tool_use', data: { toolUseId: 'tool-running', toolName: 'Bash' } });
-    await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('正在运行工具 Bash');
-    });
+    await vi.waitFor(() => expect(session.getTurnControlSnapshot().activeToolCount).toBe(2));
 
     const interaction = stub.requestInteraction({
       kind: 'permission',
@@ -307,7 +299,7 @@ describe('Session control plane runtime state', () => {
       input: { file_path: '/repo/result.txt' },
     });
     await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('等待用户确认');
+      expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(1);
     });
 
     await expect(session.requestGracefulStop()).resolves.toEqual({
@@ -339,9 +331,7 @@ describe('Session control plane runtime state', () => {
     );
     await session.send('start');
     stub.push({ type: 'tool_use', data: { toolUseId: 'tool-running', toolName: 'Bash' } });
-    await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('正在运行工具 Bash');
-    });
+    await vi.waitFor(() => expect(session.getTurnControlSnapshot().activeToolCount).toBe(1));
 
     pendingInteractions.push(stub.requestInteraction({
       kind: 'permission',
@@ -357,7 +347,7 @@ describe('Session control plane runtime state', () => {
       input: {},
     }));
     await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('等待用户确认');
+      expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(1);
     });
 
     await expect(session.requestGracefulStop()).resolves.toEqual({
@@ -420,7 +410,7 @@ describe('Session control plane runtime state', () => {
       });
       expect(stub.abort).not.toHaveBeenCalled();
       expect(providerSignal?.aborted).toBe(true);
-      expect(session.getRuntimeSnapshot().gracefulStopState).toBe('unconfirmed');
+      expect(session.getTurnControlSnapshot().gracefulStopState).toBe('unconfirmed');
     } finally {
       vi.useRealTimers();
     }
@@ -431,15 +421,13 @@ describe('Session control plane runtime state', () => {
     const session = createSession(stub);
     await session.send('start');
     stub.push({ type: 'tool_use', data: { toolUseId: 'tool-old', toolName: 'Bash' } });
-    await vi.waitFor(() => {
-      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('正在运行工具 Bash');
-    });
+    await vi.waitFor(() => expect(session.getTurnControlSnapshot().activeToolCount).toBe(1));
     await expect(session.requestGracefulStop()).resolves.toMatchObject({
       status: 'waiting-for-safe-point',
     });
 
     stub.push({ type: 'done', data: {} });
-    await vi.waitFor(() => expect(session.getRuntimeSnapshot().active).toBe(false));
+    await vi.waitFor(() => expect(session.getTurnControlSnapshot().active).toBe(false));
     expect(stub.requestGracefulStop).not.toHaveBeenCalled();
   });
 });

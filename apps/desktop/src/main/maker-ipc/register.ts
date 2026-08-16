@@ -151,6 +151,7 @@ import {
   createSessionControlService,
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
+import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
 import {
   listAtBrowserTabs,
   parseAtContextCatalogRequest,
@@ -1554,7 +1555,7 @@ interface OrcaCollabService {
       }
   >;
   getSessionRuntime: (params: { targetSessionId: string }) => Promise<
-    | { ok: true; runtime: ReturnType<Session['getRuntimeSnapshot']> }
+    | { ok: true; runtime: Awaited<ReturnType<typeof readCanonicalSessionActivity>> }
     | {
         ok: false;
         errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL';
@@ -9853,6 +9854,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionExists: async (sessionId) =>
       (await maker.getSessionMeta(sessionId).catch(() => null)) !== null,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
+    getSessionActivitySnapshot: readCanonicalSessionActivity,
     assertExternalInputAllowed: assertReviewExternalInputAllowed,
     createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
       const meta = await maker.getSessionMeta(targetSessionId).catch(() => null);
