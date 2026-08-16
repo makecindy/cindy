@@ -910,6 +910,7 @@ describe('CodexAgent permissions', () => {
         threadId: 'start-thread-id',
         turnId: 'turn-wechat-policy',
         itemId: 'cmd-risky',
+        approvalId: 'approval-risky',
         command: 'rm -rf build',
         cwd: '/repo',
       }),
@@ -917,6 +918,8 @@ describe('CodexAgent permissions', () => {
     expect(resolver).toHaveBeenCalledOnce();
     expect(resolver.mock.calls[0]?.[0]).toMatchObject({
       kind: 'permission',
+      requestId: 'approval-risky',
+      toolUseId: 'cmd-risky',
       toolName: 'exec',
       input: { command: 'rm -rf build' },
       suggestions: undefined,
@@ -7768,6 +7771,58 @@ describe('CodexAgent MCP thread context hooks', () => {
         await vi.advanceTimersByTimeAsync(40_000);
         expect(turnStartCount(host)).toBe(1);
 
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('gracefully stops the logical turn while an overload retry is pending', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-graceful-stop',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(events).toContainEqual(expect.objectContaining({
+          type: 'error',
+          data: expect.objectContaining({
+            isTerminal: true,
+            reason: 'codex-turn-replay-retry-aborted',
+          }),
+        }));
+        expect(events).toContainEqual(expect.objectContaining({
+          type: 'status',
+          data: expect.objectContaining({ isRunning: false }),
+        }));
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
         await handle.close();
       } finally {
         vi.useRealTimers();
@@ -21084,6 +21139,75 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 
+  it('graceful stop interrupt 被拒绝后重新武装同一 turn 的 idle watchdog', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let interruptAttempts = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-stop-rejected' } };
+        if (method === Method.TurnInterrupt) {
+          interruptAttempts += 1;
+          if (interruptAttempts === 1) return Promise.reject(new Error('interrupt rejected'));
+          return {};
+        }
+        return undefined;
+      });
+      const handle = await startIdleSession(agent, 'session-stop-rejected-watchdog');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+
+      await expect(handle.requestGracefulStop?.()).rejects.toThrow('interrupt rejected');
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      expect(interruptAttempts).toBeGreaterThanOrEqual(2);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('graceful stop 确认超时后重新武装同一 turn 的 idle watchdog', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let interruptAttempts = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-stop-timeout' } };
+        if (method === Method.TurnInterrupt) {
+          interruptAttempts += 1;
+          if (interruptAttempts === 1) return new Promise<never>(() => undefined);
+          return {};
+        }
+        return undefined;
+      });
+      const handle = await startIdleSession(agent, 'session-stop-timeout-watchdog');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+
+      const controller = new AbortController();
+      const stop = handle.requestGracefulStop?.({ signal: controller.signal });
+      controller.abort();
+      await expect(stop).rejects.toThrow('confirmation timed out');
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      expect(interruptAttempts).toBeGreaterThanOrEqual(2);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('工具执行期间停表:长命令不会被误杀', async () => {
     vi.useFakeTimers();
     try {
@@ -21670,6 +21794,57 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         Method.TurnInterrupt,
         expect.objectContaining({ turnId: 'turn-1' }),
       ]);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('graceful stop interrupt 被拒绝后重新武装同一 turn 的 reconnect watchdog', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let interruptAttempts = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-reconnect-stop-rejected' } };
+        if (method === Method.TurnInterrupt) {
+          interruptAttempts += 1;
+          if (interruptAttempts === 1) return Promise.reject(new Error('interrupt rejected'));
+          return {};
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-stop-rejected',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const seen: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) seen.push(event);
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-reconnect-stop-rejected' },
+      } as never);
+      handlers.error?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-reconnect-stop-rejected',
+        error: { message: 'Reconnecting... 1/5' },
+        willRetry: true,
+      } as never);
+
+      await expect(handle.requestGracefulStop?.()).rejects.toThrow('interrupt rejected');
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+
+      expect(interruptAttempts).toBeGreaterThanOrEqual(2);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
       await handle.close();
     } finally {
       vi.useRealTimers();

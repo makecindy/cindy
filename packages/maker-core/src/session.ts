@@ -321,7 +321,7 @@ type TurnRuntimeState = {
   currentActionSummary: string;
   activeTools: Map<string, string>;
   anonymousActiveTools: number;
-  pendingInteractionToolIds: Set<string>;
+  pendingInteractionToolIds: Map<string, number>;
   gracefulStopState: SessionGracefulStopState;
   gracefulStopPromise: Promise<SessionGracefulStopResult> | null;
 };
@@ -1412,7 +1412,7 @@ export class Session {
       currentActionSummary: '正在启动',
       activeTools: new Map(),
       anonymousActiveTools: 0,
-      pendingInteractionToolIds: new Set(),
+      pendingInteractionToolIds: new Map(),
       gracefulStopState: 'none',
       gracefulStopPromise: null,
     };
@@ -1429,24 +1429,37 @@ export class Session {
    */
   private observeInteractionStarted(
     request: InteractionRequest,
-  ): { runtime: TurnRuntimeState; requestId: string } | null {
+  ): { runtime: TurnRuntimeState; toolUseId: string | null } | null {
     const runtime = this.turnRuntimeState;
     if (!runtime || runtime.generation !== this.turnGeneration) return null;
-    runtime.pendingInteractionToolIds.add(request.requestId);
+    const toolUseId = request.toolUseId?.trim() || null;
+    if (toolUseId) {
+      runtime.pendingInteractionToolIds.set(
+        toolUseId,
+        (runtime.pendingInteractionToolIds.get(toolUseId) ?? 0) + 1,
+      );
+    }
     runtime.lastActivityAtMs = Date.now();
     runtime.currentActionSummary = '等待用户确认';
-    if (runtime.gracefulStopState === 'waiting-for-safe-point') {
+    if (
+      runtime.gracefulStopState === 'waiting-for-safe-point' &&
+      this.isGracefulStopSafePoint(runtime)
+    ) {
       void this.issueGracefulStop(runtime);
     }
-    return { runtime, requestId: request.requestId };
+    return { runtime, toolUseId };
   }
 
   private observeInteractionSettled(
-    observation: { runtime: TurnRuntimeState; requestId: string } | null,
+    observation: { runtime: TurnRuntimeState; toolUseId: string | null } | null,
   ): void {
     if (!observation || this.turnRuntimeState !== observation.runtime) return;
-    const { runtime, requestId } = observation;
-    runtime.pendingInteractionToolIds.delete(requestId);
+    const { runtime, toolUseId } = observation;
+    if (toolUseId) {
+      const remaining = (runtime.pendingInteractionToolIds.get(toolUseId) ?? 0) - 1;
+      if (remaining > 0) runtime.pendingInteractionToolIds.set(toolUseId, remaining);
+      else runtime.pendingInteractionToolIds.delete(toolUseId);
+    }
     runtime.lastActivityAtMs = Date.now();
     const remaining = [...runtime.activeTools.values()].at(-1);
     runtime.currentActionSummary = remaining ? `正在运行工具 ${remaining}` : '正在运行';
@@ -1463,11 +1476,15 @@ export class Session {
   private issueGracefulStop(runtime: TurnRuntimeState): Promise<SessionGracefulStopResult> {
     if (runtime.gracefulStopPromise) return runtime.gracefulStopPromise;
     runtime.gracefulStopState = 'requesting';
-    const request = Promise.resolve().then(() => this.handle.requestGracefulStop!());
+    const abortController = new AbortController();
+    const request = Promise.resolve().then(() =>
+      this.handle.requestGracefulStop!({ signal: abortController.signal }),
+    );
     const result = new Promise<SessionGracefulStopResult>((resolve) => {
       let settled = false;
       const timeout = setTimeout(() => {
         settled = true;
+        abortController.abort();
         if (this.turnRuntimeState === runtime) runtime.gracefulStopState = 'unconfirmed';
         resolve({
           status: 'unconfirmed',

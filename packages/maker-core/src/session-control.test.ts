@@ -24,7 +24,10 @@ function createLogger() {
   return logger;
 }
 
-function createHandle(opts?: { gracefulStop?: () => Promise<void>; supported?: boolean }) {
+function createHandle(opts?: {
+  gracefulStop?: (opts?: { signal?: AbortSignal }) => Promise<void>;
+  supported?: boolean;
+}) {
   let running = false;
   const pending: AgentEvent[] = [];
   let notify: (() => void) | null = null;
@@ -177,11 +180,11 @@ describe('Session control plane runtime state', () => {
   it('treats a pending interaction as a safe stop boundary and exposes it in runtime state', async () => {
     const stub = createHandle();
     const session = createSession(stub);
-    let settleInteraction!: (decision: InteractionDecision) => void;
+    const settleInteractions: Array<(decision: InteractionDecision) => void> = [];
     session.setInteractionListener(
       () =>
         new Promise<InteractionDecision>((resolve) => {
-          settleInteraction = resolve;
+          settleInteractions.push(resolve);
         }),
     );
     await session.send('start');
@@ -190,15 +193,31 @@ describe('Session control plane runtime state', () => {
       expect(session.getRuntimeSnapshot().currentActionSummary).toBe('正在运行工具 Bash');
     });
 
-    const interaction = stub.requestInteraction({
+    const firstInteraction = stub.requestInteraction({
       kind: 'permission',
-      requestId: 'tool-1',
+      requestId: 'approval-1',
+      toolUseId: 'tool-1',
       toolName: 'Bash',
       input: { command: 'echo safe' },
     });
+    const secondInteraction = stub.requestInteraction({
+      kind: 'permission',
+      requestId: 'approval-2',
+      toolUseId: 'tool-1',
+      toolName: 'Bash',
+      input: { command: 'echo safe again' },
+    });
     await vi.waitFor(() => {
       expect(session.getRuntimeSnapshot().currentActionSummary).toBe('等待用户确认');
+      expect(settleInteractions).toHaveLength(2);
     });
+
+    settleInteractions[0]?.({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'first approval settled',
+    });
+    await firstInteraction;
 
     await expect(session.requestGracefulStop()).resolves.toEqual({
       status: 'requested',
@@ -207,12 +226,12 @@ describe('Session control plane runtime state', () => {
     expect(stub.requestGracefulStop).toHaveBeenCalledOnce();
     expect(stub.abort).not.toHaveBeenCalled();
 
-    settleInteraction({
+    settleInteractions[1]?.({
       kind: 'permission',
       behavior: 'deny',
       reason: 'graceful stop',
     });
-    await interaction;
+    await secondInteraction;
   });
 
   it('waits for a parallel running tool even when another tool is awaiting permission', async () => {
@@ -234,7 +253,8 @@ describe('Session control plane runtime state', () => {
 
     const interaction = stub.requestInteraction({
       kind: 'permission',
-      requestId: 'tool-waiting',
+      requestId: 'approval-waiting',
+      toolUseId: 'tool-waiting',
       toolName: 'Write',
       input: { file_path: '/repo/result.txt' },
     });
@@ -260,6 +280,46 @@ describe('Session control plane runtime state', () => {
       reason: 'graceful stop',
     });
     await interaction;
+  });
+
+  it('does not treat a missing or unrelated interaction tool id as a safe stop boundary', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const pendingInteractions: Array<Promise<InteractionDecision>> = [];
+    session.setInteractionListener(
+      () => new Promise<InteractionDecision>(() => undefined),
+    );
+    await session.send('start');
+    stub.push({ type: 'tool_use', data: { toolUseId: 'tool-running', toolName: 'Bash' } });
+    await vi.waitFor(() => {
+      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('正在运行工具 Bash');
+    });
+
+    pendingInteractions.push(stub.requestInteraction({
+      kind: 'permission',
+      requestId: 'tool-running',
+      toolName: 'Bash',
+      input: {},
+    }));
+    pendingInteractions.push(stub.requestInteraction({
+      kind: 'permission',
+      requestId: 'approval-other',
+      toolUseId: 'tool-other',
+      toolName: 'Write',
+      input: {},
+    }));
+    await vi.waitFor(() => {
+      expect(session.getRuntimeSnapshot().currentActionSummary).toBe('等待用户确认');
+    });
+
+    await expect(session.requestGracefulStop()).resolves.toEqual({
+      status: 'waiting-for-safe-point',
+      turnGeneration: 1,
+    });
+    expect(stub.requestGracefulStop).not.toHaveBeenCalled();
+
+    // Keep the deliberately hanging interaction promises referenced until the assertion completes.
+    expect(pendingInteractions).toHaveLength(2);
   });
 
   it('reports unsupported, no-active-turn and provider failure without falling back to abort', async () => {
@@ -292,8 +352,12 @@ describe('Session control plane runtime state', () => {
   it('bounds a hanging provider stop request and reports it as unconfirmed', async () => {
     vi.useFakeTimers();
     try {
+      let providerSignal: AbortSignal | undefined;
       const stub = createHandle({
-        gracefulStop: () => new Promise<void>(() => undefined),
+        gracefulStop: (opts) => {
+          providerSignal = opts?.signal;
+          return new Promise<void>(() => undefined);
+        },
       });
       const session = createSession(stub);
       await session.send('start');
@@ -307,6 +371,7 @@ describe('Session control plane runtime state', () => {
         reason: 'provider-confirmation-timeout',
       });
       expect(stub.abort).not.toHaveBeenCalled();
+      expect(providerSignal?.aborted).toBe(true);
       expect(session.getRuntimeSnapshot().gracefulStopState).toBe('unconfirmed');
     } finally {
       vi.useRealTimers();

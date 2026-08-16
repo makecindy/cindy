@@ -1781,6 +1781,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const decision = await dispatchInteraction({
           kind: 'ask_user_question',
           requestId: options.toolUseID,
+          toolUseId: options.toolUseID,
           questions,
         });
         if (decision.kind !== 'ask_user_question') {
@@ -1816,6 +1817,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const decision = await dispatchInteraction({
           kind: 'plan_review',
           requestId: options.toolUseID,
+          toolUseId: options.toolUseID,
           plan,
           planFilePath,
         });
@@ -1958,6 +1960,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const permissionRequest = {
         kind: 'permission' as const,
         requestId: options.toolUseID,
+        toolUseId: options.toolUseID,
         toolName,
         input: input as Record<string, unknown>,
         title: hostApprovalPresentation?.title ?? options.title,
@@ -2906,6 +2909,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               const decision = await dispatchWithTimeout({
                 kind: 'ask_user_question',
                 requestId: params.requestId,
+                toolUseId: params.requestId,
                 questions: (params.questions ?? askInput.questions ?? []) as AskUserQuestionItem[],
               });
               if (decision.kind !== 'ask_user_question') {
@@ -2930,6 +2934,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               const decision = await dispatchWithTimeout({
                 kind: 'plan_review',
                 requestId: params.requestId,
+                toolUseId: params.requestId,
                 plan,
                 planFilePath: params.planFilePath ?? planInput.planFilePath,
               });
@@ -3055,6 +3060,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             const remotePermissionRequest = {
               kind: 'permission' as const,
               requestId: params.requestId,
+              toolUseId: params.requestId,
               toolName: params.toolName ?? 'unknown',
               input: params.input ?? {},
               title: remoteHostApprovalPresentation?.title ?? params.title,

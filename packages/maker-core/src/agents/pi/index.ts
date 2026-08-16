@@ -3527,6 +3527,7 @@ export class PiAgent extends BaseAgent {
           const permissionRequest = {
             kind: 'permission' as const,
             requestId: id,
+            toolUseId: id,
             toolName,
             input,
             ...(hostApprovalPresentation?.title

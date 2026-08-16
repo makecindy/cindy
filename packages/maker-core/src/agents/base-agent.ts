@@ -1495,7 +1495,7 @@ export interface AgentSessionHandle {
    * Query、transport 或子进程，也不得升级为 kill/rebuild。Session 层负责等到当前
    * 工具结果边界再调用，并对悬挂/失败做有界的 unconfirmed 降级。
    */
-  requestGracefulStop?(): Promise<void>;
+  requestGracefulStop?(opts?: { signal?: AbortSignal }): Promise<void>;
 
   /** Provider turn identity when the adapter exposes one (currently Codex). */
   getCurrentTurnId?(): string | null;

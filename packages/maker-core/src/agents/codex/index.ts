@@ -6426,6 +6426,7 @@ export class CodexAgent extends BaseAgent {
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
+        toolUseId: params.itemId,
         toolName: 'exec',
         input: commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
         title: 'Allow Codex to run this command?',
@@ -6461,6 +6462,7 @@ export class CodexAgent extends BaseAgent {
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'fileChange', {
         kind: 'permission',
         requestId,
+        toolUseId: params.itemId,
         toolName: 'file_change',
         input: { grantRoot: params.grantRoot ?? null },
         title: 'Allow Codex to change files?',
@@ -6773,6 +6775,7 @@ export class CodexAgent extends BaseAgent {
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
+        ...(params.itemId ? { toolUseId: params.itemId } : {}),
         toolName: 'permissions',
         input: { permissions: params.permissions },
         title: 'Allow Codex to use these permissions?',
@@ -6897,6 +6900,7 @@ export class CodexAgent extends BaseAgent {
       questions: ToolRequestUserInputQuestion[],
       turnId?: string | null,
       isRequestPending: () => boolean = () => true,
+      toolUseId?: string,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -6938,7 +6942,7 @@ export class CodexAgent extends BaseAgent {
             turnId,
           });
           return isRequestPending()
-            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending)
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId)
             : emptyUserInputResponse(questions);
         }
         return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
@@ -6948,6 +6952,7 @@ export class CodexAgent extends BaseAgent {
         const decision = await dispatchInteraction({
           kind: 'ask_user_question',
           requestId,
+          ...(toolUseId ? { toolUseId } : {}),
           questions: questionsToAskUserItems(questions),
         });
         if (decision.kind !== 'ask_user_question') {
@@ -7038,6 +7043,7 @@ export class CodexAgent extends BaseAgent {
       const decision = await dispatchInteraction({
         kind: 'permission',
         requestId,
+        toolUseId: params.itemId,
         toolName,
         input: {
           itemId: params.itemId,
@@ -7110,6 +7116,7 @@ export class CodexAgent extends BaseAgent {
                 questions,
                 params.turnId,
                 () => userInputBroker.has({ connectionId, requestId: meta.requestId }),
+                params.itemId,
               );
           settle(response);
         },
@@ -8497,29 +8504,34 @@ export class CodexAgent extends BaseAgent {
      * 闩, Codex coordinator 刻意等这个事件而不自解锁, hook runner 要等一小时硬超时
      * (review #844 greptile P1)。
      */
-    const settleCancelledOverloadRetry = (
+    const settleOverloadRetryLogicalTurn = (
       state: NonNullable<typeof overloadRetry>,
-      reason: string,
-    ): void => {
-      if (closed || overloadRetry !== state) return;
-      discardOverloadRetry(`settle:${reason}`);
+      opts: {
+        reason: string;
+        message: string;
+        eventReason: string;
+        logMessage: string;
+      },
+    ): boolean => {
+      if (closed || overloadRetry !== state) return false;
+      discardOverloadRetry(`settle:${opts.reason}`);
       // 重投的 turnStarted 已先于响应到达时, currentTurnId 指着一个真实在跑的
       // server turn —— 必须一起收掉, 否则它会在调用方按"已取消"处理后继续执行工具。
-      teardownActiveTurnForCancellation(reason);
+      teardownActiveTurnForCancellation(opts.reason);
       markInFlightStartsTerminallySettled();
       // 还有 turn/start 在飞时同理: 它的响应晚于本次收口回来, 不隔离就会被正常激活。
       // 全部隔离而不只是最新那个: 取消的语义是"这一轮什么都别再跑"。
       quarantineAllInFlightStarts();
-      log.info('codex overload retry cancelled via send signal — settling logical turn', {
-        reason,
+      log.info(opts.logMessage, {
+        reason: opts.reason,
         threadId,
       });
       eventQueue.push({
         type: 'error',
         data: {
-          message: 'Codex turn cancelled while waiting for an automatic retry',
+          message: opts.message,
           isTerminal: true,
-          reason: 'codex-turn-replay-retry-cancelled',
+          reason: opts.eventReason,
         },
         source: 'codex',
       });
@@ -8528,7 +8540,30 @@ export class CodexAgent extends BaseAgent {
         data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
         source: 'codex',
       });
+      return true;
     };
+
+    const settleCancelledOverloadRetry = (
+      state: NonNullable<typeof overloadRetry>,
+      reason: string,
+    ): void => {
+      settleOverloadRetryLogicalTurn(state, {
+        reason,
+        message: 'Codex turn cancelled while waiting for an automatic retry',
+        eventReason: 'codex-turn-replay-retry-cancelled',
+        logMessage: 'codex overload retry cancelled via send signal — settling logical turn',
+      });
+    };
+
+    const settleStoppedOverloadRetry = (
+      state: NonNullable<typeof overloadRetry>,
+      reason: string,
+    ): boolean => settleOverloadRetryLogicalTurn(state, {
+      reason,
+      message: 'Codex turn stopped while waiting for an automatic retry',
+      eventReason: 'codex-turn-replay-retry-aborted',
+      logMessage: 'codex overload retry stopped — settling logical turn',
+    });
 
     /**
      * 零产出 provider 终态错误的退避重投调度。
@@ -10854,19 +10889,71 @@ export class CodexAgent extends BaseAgent {
         setAutoReviewIntent(message.content);
       },
 
-      async requestGracefulStop() {
+      async requestGracefulStop(stopOpts) {
+        const retryState = overloadRetry;
+        if (
+          retryState &&
+          overloadRetryPending(retryState) &&
+          settleStoppedOverloadRetry(
+            retryState,
+            'graceful stop while an automatic retry was pending',
+          )
+        ) {
+          return;
+        }
         if (closed || !currentTurnId) throw new Error('No active Codex turn to stop');
         if (skipIfStaleHost('turn/interrupt')) {
           throw new Error('Codex host is stale');
         }
         const turnId = currentTurnId;
+        const hadReconnectWatchdog =
+          reconnectStallTurnId === turnId &&
+          (reconnectStallTimer !== null || reconnectStallRemainingMs > 0);
+        let watchdogsRestored = false;
+        const restoreWatchdogsIfStillRunning = (): void => {
+          if (
+            watchdogsRestored ||
+            closed ||
+            !isTurnInFlight ||
+            currentTurnId !== turnId
+          ) {
+            return;
+          }
+          watchdogsRestored = true;
+          armUpstreamIdle();
+          if (hadReconnectWatchdog) armReconnectStall(turnId);
+        };
         turnInterruptOrigins.set(turnId, { source: 'user-stop' });
         resetUpstreamIdleForTurnEnd();
         dismissAllPending('turn_interrupted', 'deny');
         dismissPendingUserInputForTurn(turnId, 'turn_interrupted');
         try {
-          await host.request(Method.TurnInterrupt, { threadId, turnId });
+          const interruptRequest = host.request(Method.TurnInterrupt, { threadId, turnId });
+          await new Promise<void>((resolve, reject) => {
+            const onAbort = () => {
+              cleanup();
+              restoreWatchdogsIfStillRunning();
+              reject(new Error('Codex graceful stop confirmation timed out'));
+            };
+            const cleanup = () => stopOpts?.signal?.removeEventListener('abort', onAbort);
+            if (stopOpts?.signal?.aborted) {
+              onAbort();
+              return;
+            }
+            stopOpts?.signal?.addEventListener('abort', onAbort, { once: true });
+            interruptRequest.then(
+              () => {
+                cleanup();
+                resolve();
+              },
+              (error) => {
+                cleanup();
+                reject(error instanceof Error ? error : new Error(String(error)));
+              },
+            );
+          });
         } catch (error) {
+          restoreWatchdogsIfStillRunning();
           if (turnInterruptOrigins.get(turnId)?.source === 'user-stop') {
             turnInterruptOrigins.delete(turnId);
           }
@@ -10879,7 +10966,14 @@ export class CodexAgent extends BaseAgent {
         // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。
         // 放在 currentTurnId 判空之前：重投等待期间 turn 已死、currentTurnId 为
         // null，此时正是最需要响应 Stop 的时刻（否则计时器到点又发一个新 turn）。
-        const hadPendingRetry = overloadRetryPending();
+        const retryState = overloadRetry;
+        if (
+          retryState &&
+          overloadRetryPending(retryState) &&
+          settleStoppedOverloadRetry(retryState, 'stopped while an automatic retry was pending')
+        ) {
+          return;
+        }
         discardOverloadRetry('aborted');
         if (closed) return;
         if (currentTurnId) {
@@ -10887,41 +10981,6 @@ export class CodexAgent extends BaseAgent {
           // instead of merely deleting policy provenance so late blocked-item
           // notifications cannot re-arm it before turn/completed arrives.
           turnInterruptOrigins.set(currentTurnId, { source: 'user-stop' });
-        }
-        // 有挂起重投时的 Stop **必须**由这里显式收口逻辑 turn —— desktop 的
-        // SessionTurnActivityTracker 只在收到终态事件后才释放派发闩，Codex
-        // coordinator 也刻意等这个事件而不自己解锁，hook runner 同样等到一小时硬
-        // 超时才罢休。不发的话会话永久忙、后续消息无法派发（review #844 codex P1）。
-        //
-        // 两种排序都要覆盖:
-        //  - 退避等待中: server 侧没有 turn 可 interrupt (currentTurnId 为 null);
-        //  - 重投的 turnStarted 已先于它的响应到达: currentTurnId 非空, 但**不能**
-        //    像普通 Stop 那样把收口交给 turn/completed —— 随后到达的重投响应会走
-        //    cancelledMidFlight 把同一个 id 落墓碑, handleTurnCompleted 于是把唯一
-        //    那条完成事件压掉, 派发闩永远不释放（review #844 codex P1）。这里自己
-        //    落墓碑 + interrupt + 推终态, 保证恰好一次收口。
-        if (hadPendingRetry) {
-          teardownActiveTurnForCancellation('stopped while an automatic retry was pending');
-          markInFlightStartsTerminallySettled();
-          // turn/start 还在飞时按下 Stop: 这里马上会推终态事件, 而那个 RPC 的响应随后
-          // 才回来。不武装隔离的话 handleTurnStartResp 会照常激活它 —— 用户看到
-          // 「已停止」, 工具还在跑(review #844 codex P1)。
-          quarantineAllInFlightStarts();
-          eventQueue.push({
-            type: 'error',
-            data: {
-              message: 'Codex turn stopped while waiting for an automatic retry',
-              isTerminal: true,
-              reason: 'codex-turn-replay-retry-aborted',
-            },
-            source: 'codex',
-          });
-          eventQueue.push({
-            type: 'status',
-            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
-            source: 'codex',
-          });
-          return;
         }
         if (!currentTurnId) return;
         if (skipIfStaleHost('turn/interrupt')) return;
