@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from 'react';
 import {
   ArrowLeft,
   BatteryCharging,
@@ -50,10 +57,33 @@ import {
   type WorkLouderCodexConnectionStatus,
   type WorkLouderCodexKeycapId,
   type WorkLouderCodexLayout,
+  type WorkLouderCodexPreviewInput,
   type WorkLouderCodexPreviewPart,
   type WorkLouderCodexSettingsPatch,
   type WorkLouderCodexState,
 } from '../../../shared/workLouderCodex';
+
+function applyPreviewInput(
+  input: WorkLouderCodexPreviewInput,
+  setPressedParts: Dispatch<SetStateAction<ReadonlySet<WorkLouderCodexPreviewPart>>>,
+  setEncoderTurns: Dispatch<SetStateAction<number>>,
+  setAnalogStick: Dispatch<SetStateAction<{ angle: number; distance: number } | null>>,
+): void {
+  setPressedParts((current) => {
+    const next = new Set(current);
+    if (input.pressed) next.add(input.part);
+    else next.delete(input.part);
+    return next;
+  });
+  if (input.part === 'encoder' && input.turn) {
+    const turn = input.turn;
+    setEncoderTurns((current) => current + turn);
+  }
+  if (input.part === 'analog') {
+    const distance = input.distance ?? 0;
+    setAnalogStick(distance > 0 ? { angle: input.angle ?? 0, distance } : null);
+  }
+}
 
 /** After a merge/split, write the edited assignment onto the still-visible slot. */
 function visibleCommandSlotAfterMicrophoneSplit(
@@ -146,6 +176,8 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   const [pressedParts, setPressedParts] = useState<ReadonlySet<WorkLouderCodexPreviewPart>>(
     () => new Set(),
   );
+  const [encoderTurns, setEncoderTurns] = useState(0);
+  const [analogStick, setAnalogStick] = useState<{ angle: number; distance: number } | null>(null);
   const settings = state?.settings ?? WORKLOUDER_CODEX_DEFAULT_SETTINGS;
   const enabledSkills = useMemo(
     () => skills.filter((skill) => skill.kind === 'skill' && !skill.parseError),
@@ -173,12 +205,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
 
   useEffect(() => {
     const unsubscribe = window.electronAPI?.workLouderCodex?.onPreviewInput?.((input) => {
-      setPressedParts((current) => {
-        const next = new Set(current);
-        if (input.pressed) next.add(input.part);
-        else next.delete(input.part);
-        return next;
-      });
+      applyPreviewInput(input, setPressedParts, setEncoderTurns, setAnalogStick);
     });
     return () => unsubscribe?.();
   }, []);
@@ -423,6 +450,8 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
             canEdit={(key) => !key.startsWith('AG') || settings.agentSource === 'custom'}
             onEditKeycap={openPartEditor}
             pressedParts={pressedParts}
+            encoderTurns={encoderTurns}
+            analogStick={analogStick}
           />
         </div>
       </SettingsCard>

@@ -339,10 +339,14 @@ describe('WorkLouderCodexLightingController', () => {
     hidRef.current?.({ key: 'ACT06', act: 1 });
     hidRef.current?.({ key: 'ACT06', act: 0 });
     hidRef.current?.({ key: 'ENC_CW', act: 2 });
+    hidRef.current?.({ key: 'ENC_CC', act: 2 });
+    hidRef.current?.({ key: 'ENC', act: 1 });
 
     expect(preview).toHaveBeenCalledWith({ part: 'ACT06', pressed: true });
     expect(preview).toHaveBeenCalledWith({ part: 'ACT06', pressed: false });
-    expect(preview).not.toHaveBeenCalledWith(expect.objectContaining({ part: 'encoder' }));
+    expect(preview).toHaveBeenCalledWith({ part: 'encoder', pressed: false, turn: 1 });
+    expect(preview).toHaveBeenCalledWith({ part: 'encoder', pressed: false, turn: -1 });
+    expect(preview).toHaveBeenCalledWith({ part: 'encoder', pressed: true });
     expect(dispatch).toHaveBeenCalled();
   });
 
@@ -375,15 +379,17 @@ describe('WorkLouderCodexLightingController', () => {
 
     hidRef.current?.({ key: 'AG00', act: 1 });
     hidRef.current?.({ key: 'ACT06', act: 1 });
+    hidRef.current?.({ key: 'ENC_CW', act: 2 });
 
     expect(preview).toHaveBeenCalledWith({ part: 'AG00', pressed: true });
     expect(preview).toHaveBeenCalledWith({ part: 'ACT06', pressed: true });
+    expect(preview).toHaveBeenCalledWith({ part: 'encoder', pressed: false, turn: 1 });
     expect(activateSession).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
   });
 
   describe('joystick scrolling', () => {
-    function makeStick() {
+    function makeStick(preview = vi.fn()) {
       const stickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
         current: null,
       };
@@ -399,9 +405,15 @@ describe('WorkLouderCodexLightingController', () => {
         }),
         dispose: vi.fn(async () => undefined),
       };
-      const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+      const controller = new WorkLouderCodexLightingController(
+        sink,
+        vi.fn(),
+        undefined,
+        dispatch,
+        preview,
+      );
       controller.start();
-      return { stickRef, dispatch, controller };
+      return { stickRef, dispatch, controller, preview };
     }
 
     // Angles come from joystickDirection(): up is 0.625–0.875.
@@ -502,6 +514,35 @@ describe('WorkLouderCodexLightingController', () => {
       expect(commands).toHaveLength(1);
       expect(commands[0][0].commandId).toBe('toggleSidebar');
       expect(dispatch.mock.calls.some((call) => call[0].type === 'scroll')).toBe(false);
+    });
+
+    it('mirrors the raw stick angle and distance onto the settings preview', () => {
+      const { stickRef, dispatch, preview, controller } = makeStick();
+      controller.setLayoutPreviewActive(true);
+
+      stickRef.current?.({ angle: 0.75, distance: 0.8 });
+      stickRef.current?.({ angle: 0.12, distance: 0.6 });
+      stickRef.current?.({ angle: 0.75, distance: 0 });
+
+      expect(preview).toHaveBeenNthCalledWith(1, {
+        part: 'analog',
+        pressed: true,
+        angle: 0.75,
+        distance: 0.8,
+      });
+      expect(preview).toHaveBeenNthCalledWith(2, {
+        part: 'analog',
+        pressed: true,
+        angle: 0.12,
+        distance: 0.6,
+      });
+      expect(preview).toHaveBeenNthCalledWith(3, {
+        part: 'analog',
+        pressed: false,
+        angle: 0.75,
+        distance: 0,
+      });
+      expect(dispatch).not.toHaveBeenCalled();
     });
   });
 

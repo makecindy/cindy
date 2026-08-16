@@ -6,8 +6,10 @@ import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 import {
+  WORKLOUDER_CODEX_ENCODER_DETENT_DEG,
   WORKLOUDER_CODEX_KEYCAP_IDS,
   isWorkLouderCodexDoubleKeycap,
+  workLouderCodexStickPreviewOffset,
   type WorkLouderCodexAgentSlotState,
   type WorkLouderCodexCommandSlot,
   type WorkLouderCodexKeycapId,
@@ -52,6 +54,10 @@ export interface WorkLouderCodexKeyboardLayoutProps {
   canEdit?(key: WorkLouderCodexEditableKey): boolean;
   onEditKeycap?(slot: WorkLouderCodexEditableKey): void;
   pressedParts?: ReadonlySet<WorkLouderCodexPreviewPart>;
+  /** Cumulative encoder detents since the settings page opened. */
+  encoderTurns?: number;
+  /** Live stick report. Distance 0 keeps the cap centred. */
+  analogStick?: { angle: number; distance: number } | null;
 }
 
 /**
@@ -72,6 +78,8 @@ export function WorkLouderCodexKeyboardLayout({
   canEdit,
   onEditKeycap,
   pressedParts,
+  encoderTurns = 0,
+  analogStick = null,
 }: WorkLouderCodexKeyboardLayoutProps) {
   const editHandlerFor = (key: WorkLouderCodexEditableKey) =>
     canEdit && !canEdit(key) ? undefined : onEditKeycap;
@@ -140,7 +148,7 @@ export function WorkLouderCodexKeyboardLayout({
           rounded="full"
           className="bg-transparent shadow-none"
         >
-          <Encoder label={labels.encoder} />
+          <Encoder label={labels.encoder} turns={encoderTurns} />
         </BoardPart>
         {agentKeys.slice(0, 2).map((slot, index) => renderAgentKey(slot, index))}
         <BoardPart
@@ -151,7 +159,7 @@ export function WorkLouderCodexKeyboardLayout({
           onEdit={editHandlerFor('analog')}
           className="bg-transparent shadow-none"
         >
-          <AnalogStick label={labels.analogStick} />
+          <AnalogStick label={labels.analogStick} analog={analogStick} />
         </BoardPart>
       </div>
 
@@ -292,27 +300,46 @@ function KeyHint({ hint }: { hint: WorkLouderCodexKeyHint }) {
  * The stick sits in a square housing the size of a keycap, with a small black
  * thumb cap in the middle — it is not a bare circle like the encoder.
  */
-function AnalogStick({ label }: { label: string }) {
+function AnalogStick({
+  label,
+  analog,
+}: {
+  label: string;
+  analog: { angle: number; distance: number } | null;
+}) {
+  const distance = analog?.distance ?? 0;
+  const angle = analog?.angle ?? 0;
+  const offset = workLouderCodexStickPreviewOffset(angle, distance);
   return (
     <span
       aria-hidden="true"
       title={label}
-      className="flex size-full items-center justify-center rounded-xl bg-[var(--wl-stick-housing)] shadow-[var(--wl-command-shadow)]"
+      data-stick-angle={distance > 0 ? String(angle) : undefined}
+      data-stick-distance={String(distance)}
+      className="relative flex size-full items-center justify-center rounded-xl bg-[var(--wl-stick-housing)] shadow-[var(--wl-command-shadow)]"
     >
-      <span className="block size-[72%] rounded-full bg-[var(--wl-stick-cap)] shadow-[inset_0_-1px_2px_rgb(255_255_255/0.12),0_1px_2px_rgb(0_0_0/0.28)]" />
+      <span
+        data-testid="worklouder-codex-stick-cap"
+        className="block size-[72%] rounded-full bg-[var(--wl-stick-cap)] shadow-[inset_0_-1px_2px_rgb(255_255_255/0.12),0_1px_2px_rgb(0_0_0/0.28)]"
+        style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
+      />
     </span>
   );
 }
 
 /** The encoder is a round wheel that stands proud of the board. */
-function Encoder({ label }: { label: string }) {
+function Encoder({ label, turns }: { label: string; turns: number }) {
   return (
     <span
       aria-hidden="true"
       title={label}
+      data-encoder-turns={String(turns)}
       className="block size-full overflow-hidden rounded-full bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]"
+      style={{ transform: `rotate(${turns * WORKLOUDER_CODEX_ENCODER_DETENT_DEG}deg)` }}
     >
-      <span className="block size-full bg-gradient-to-br from-white/[0.14] to-transparent" />
+      <span className="relative block size-full bg-gradient-to-br from-white/[0.14] to-transparent">
+        <span className="absolute left-1/2 top-[3px] h-[22%] w-[2px] -translate-x-1/2 rounded-full bg-white/55" />
+      </span>
     </span>
   );
 }

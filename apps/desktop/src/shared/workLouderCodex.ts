@@ -131,6 +131,44 @@ export type WorkLouderCodexPreviewPart =
 export interface WorkLouderCodexPreviewInput {
   part: WorkLouderCodexPreviewPart;
   pressed: boolean;
+  /** Encoder detents: +1 is ENC_CW, −1 is ENC_CC. */
+  turn?: number;
+  /** Stick angle on the hardware circle, 0–1. 0 is right, 0.25 down, 0.5 left, 0.75 up. */
+  angle?: number;
+  /** Stick deflection, 0–1. */
+  distance?: number;
+}
+
+/** One detent on the drawn encoder. The hardware reports ticks, not a continuous angle. */
+export const WORKLOUDER_CODEX_ENCODER_DETENT_DEG = 18;
+
+/** How far the drawn stick cap travels at full deflection, in pixels. */
+export const WORKLOUDER_CODEX_STICK_PREVIEW_TRAVEL_PX = 10;
+
+/**
+ * Pixel offset for the settings-page stick cap.
+ *
+ * The hardware circle is clockwise from the right, which matches screen
+ * coordinates: x grows right, y grows down.
+ */
+export function workLouderCodexStickPreviewOffset(
+  angle: number,
+  distance: number,
+  radius: number = WORKLOUDER_CODEX_STICK_PREVIEW_TRAVEL_PX,
+): { x: number; y: number } {
+  if (!Number.isFinite(angle) || !Number.isFinite(distance) || !Number.isFinite(radius)) {
+    return { x: 0, y: 0 };
+  }
+  const travel = Math.max(0, Math.min(1, distance));
+  const theta = angle * Math.PI * 2;
+  return {
+    x: snapPreviewPx(Math.cos(theta) * travel * radius),
+    y: snapPreviewPx(Math.sin(theta) * travel * radius),
+  };
+}
+
+function snapPreviewPx(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 export type WorkLouderCodexAnalogDirection = (typeof WORKLOUDER_CODEX_ANALOG_DIRECTIONS)[number];
 export type WorkLouderCodexEncoderAction = (typeof WORKLOUDER_CODEX_ENCODER_ACTIONS)[number];

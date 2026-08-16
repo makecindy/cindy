@@ -294,7 +294,14 @@ export class WorkLouderCodexLightingController {
 
   private handleHidInput(event: WorkLouderCodexHidEvent): void {
     this.handleDeviceActivity();
-    this.emitPreviewInput(previewPartForHidKey(event.key, this.settings.layout.separateMicrophoneKeys), event.act);
+    if (event.key.startsWith('ENC')) {
+      this.emitEncoderPreview(event);
+    } else {
+      this.emitKeyPreview(
+        previewPartForHidKey(event.key, this.settings.layout.separateMicrophoneKeys),
+        event.act,
+      );
+    }
     if (this.layoutPreviewActive) return;
     const agentMatch = /^AG0([0-5])$/.exec(event.key);
     if (agentMatch) {
@@ -444,7 +451,7 @@ export class WorkLouderCodexLightingController {
   private handleJoystickInput(event: WorkLouderCodexJoystickEvent): void {
     this.handleDeviceActivity();
     const direction = joystickDirection(event);
-    this.emitPreviewInput('analog', direction ? 1 : 0);
+    this.emitStickPreview(event);
     if (this.layoutPreviewActive) return;
 
     // Scrolling follows the stick continuously — held means keep scrolling, and
@@ -704,10 +711,32 @@ export class WorkLouderCodexLightingController {
     for (const listener of this.stateListeners) listener(state);
   }
 
-  private emitPreviewInput(part: WorkLouderCodexPreviewPart | null, act: number): void {
+  private emitKeyPreview(part: WorkLouderCodexPreviewPart | null, act: number): void {
     if (!part) return;
     if (act !== 0 && act !== 1) return;
     this.dispatchPreviewInput({ part, pressed: act === 1 });
+  }
+
+  private emitEncoderPreview(event: WorkLouderCodexHidEvent): void {
+    if (event.act === 2 && (event.key === 'ENC_CW' || event.key === 'ENC_CC')) {
+      this.dispatchPreviewInput({
+        part: 'encoder',
+        pressed: this.encoderPressed,
+        turn: event.key === 'ENC_CW' ? 1 : -1,
+      });
+      return;
+    }
+    if (event.act !== 0 && event.act !== 1) return;
+    this.dispatchPreviewInput({ part: 'encoder', pressed: event.act === 1 });
+  }
+
+  private emitStickPreview(event: WorkLouderCodexJoystickEvent): void {
+    this.dispatchPreviewInput({
+      part: 'analog',
+      pressed: event.distance > 0,
+      angle: event.angle,
+      distance: event.distance,
+    });
   }
 }
 

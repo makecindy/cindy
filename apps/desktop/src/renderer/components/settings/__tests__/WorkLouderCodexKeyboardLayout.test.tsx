@@ -70,6 +70,45 @@ describe('WorkLouderCodexKeyboardLayout', () => {
     expect(screen.getByRole('button', { name: /^APPR/ }).getAttribute('aria-pressed')).toBe('false');
   });
 
+  it('turns the encoder by each detent and moves the stick by angle and distance', () => {
+    const settings = createWorkLouderCodexDefaultSettings();
+    const { rerender } = render(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots()}
+        labels={LABELS}
+        encoderTurns={2}
+        analogStick={{ angle: 0.75, distance: 1 }}
+        onEditKeycap={vi.fn()}
+      />,
+    );
+
+    const encoder = screen.getByRole('button', { name: /旋钮/ }).querySelector('[data-encoder-turns]');
+    const stick = screen.getByTestId('worklouder-codex-stick-cap');
+    expect(encoder?.getAttribute('data-encoder-turns')).toBe('2');
+    expect((encoder as HTMLElement | null)?.style.transform).toBe('rotate(36deg)');
+    expect(stick.getAttribute('style')).toContain('translate(0px, -10px)');
+
+    rerender(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots()}
+        labels={LABELS}
+        encoderTurns={-1}
+        analogStick={{ angle: 0.5, distance: 0.5 }}
+        onEditKeycap={vi.fn()}
+      />,
+    );
+
+    const moved = screen.getByTestId('worklouder-codex-stick-cap');
+    expect(
+      screen.getByRole('button', { name: /旋钮/ }).querySelector('[data-encoder-turns]')?.getAttribute(
+        'data-encoder-turns',
+      ),
+    ).toBe('-1');
+    expect(moved.getAttribute('style')).toContain('translate(-5px, 0px)');
+  });
+
   it('puts the encoder and the stick in the corners they occupy on the device', () => {
     const settings = createWorkLouderCodexDefaultSettings();
     const { container } = render(

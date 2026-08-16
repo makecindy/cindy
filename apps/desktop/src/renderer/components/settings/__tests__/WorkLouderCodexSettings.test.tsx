@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -14,6 +14,15 @@ const mocks = vi.hoisted(() => ({
   openInputMonitoringSettings: vi.fn(),
   reload: vi.fn(),
   setLayoutPreviewActive: vi.fn(),
+  previewListeners: [] as Array<
+    (input: {
+      part: string;
+      pressed: boolean;
+      turn?: number;
+      angle?: number;
+      distance?: number;
+    }) => void
+  >,
   /** Which rule the six task keys follow; drives whether they are clickable. */
   agentSource: 'recent' as string,
   layout: null as ReturnType<typeof createWorkLouderCodexDefaultSettings>['layout'] | null,
@@ -69,11 +78,26 @@ describe('WorkLouderCodexSettings', () => {
     vi.clearAllMocks();
     mocks.agentSource = 'recent';
     mocks.layout = createWorkLouderCodexDefaultSettings().layout;
+    mocks.previewListeners = [];
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
         workLouderCodex: {
           setLayoutPreviewActive: mocks.setLayoutPreviewActive,
+          onPreviewInput: (
+            callback: (input: {
+              part: string;
+              pressed: boolean;
+              turn?: number;
+              angle?: number;
+              distance?: number;
+            }) => void,
+          ) => {
+            mocks.previewListeners.push(callback);
+            return () => {
+              mocks.previewListeners = mocks.previewListeners.filter((item) => item !== callback);
+            };
+          },
         },
       },
     });
@@ -356,5 +380,29 @@ describe('WorkLouderCodexSettings', () => {
         }),
       }),
     });
+  });
+
+  it('draws encoder turns and stick travel from live preview input', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    act(() => {
+      for (const listener of mocks.previewListeners) {
+        listener({ part: 'encoder', pressed: false, turn: 1 });
+        listener({ part: 'encoder', pressed: false, turn: 1 });
+        listener({ part: 'analog', pressed: true, angle: 0, distance: 1 });
+      }
+    });
+
+    expect(
+      screen
+        .getByRole('button', {
+          name: /settings\.shortcuts\.workLouderCodex\.layout\.keyboard\.encoder/,
+        })
+        .querySelector('[data-encoder-turns]')
+        ?.getAttribute('data-encoder-turns'),
+    ).toBe('2');
+    expect(screen.getByTestId('worklouder-codex-stick-cap').getAttribute('style')).toContain(
+      'translate(10px, 0px)',
+    );
   });
 });
