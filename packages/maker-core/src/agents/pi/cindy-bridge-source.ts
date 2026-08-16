@@ -52,6 +52,7 @@ const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
+const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
 const MAX_PI_PACKAGE_SOURCE_LENGTH = 2_048;
 
@@ -63,6 +64,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
   PI_PACKAGE_MANAGEMENT_ENV,
+  PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
   'PI_CODING_AGENT_DIR',
 ]);
@@ -83,9 +85,17 @@ function withoutPiSecrets(env: Record<string, string | undefined>): Record<strin
   return clean;
 }
 
-function commandMutatesPiPackages(command: unknown): boolean {
-  if (typeof command !== 'string') return false;
-  return /(?:^|[\n;&|])\s*(?:(?:command|exec|env|sudo)\s+)?(?:"[^"\n]*\/pi"|'[^'\n]*\/pi'|[^\s;&|]*\/pi|pi)\s+(?:install|update|remove)(?:\s|$)/i.test(command);
+function isolatedBashEnvironment(
+  env: Record<string, string | undefined>,
+  bashPackageHome: string | undefined,
+): Record<string, string | undefined> {
+  if (!bashPackageHome || !path.isAbsolute(bashPackageHome)) {
+    throw new Error('Cindy isolated Pi package home is unavailable');
+  }
+  const clean = withoutPiSecrets(env);
+  delete clean.PI_PACKAGE_DIR;
+  clean.PI_CODING_AGENT_DIR = bashPackageHome;
+  return clean;
 }
 
 function managedRipgrepPath(): string {
@@ -985,6 +995,8 @@ function rgGlob(
 }
 
 export default async function cindyBridge(pi: any) {
+  const bashPackageHome = process.env[PI_BASH_PACKAGE_HOME_ENV];
+  delete process.env[PI_BASH_PACKAGE_HOME_ENV];
   // 主 Pi 不传 --tools：那个白名单也会筛掉动态 MCP 与 subagent。改由 bridge 注册
   // 专用只读工具；子代理仍用自己的 read,grep,find,ls 白名单收紧能力面。
   const grepTool = createGrepTool(process.cwd());
@@ -1037,7 +1049,7 @@ export default async function cindyBridge(pi: any) {
     spawnHook: ({ command, cwd, env }) => ({
       command,
       cwd,
-      env: withoutPiSecrets(env),
+      env: isolatedBashEnvironment(env, bashPackageHome),
     }),
   });
   pi.registerTool({
@@ -1261,12 +1273,6 @@ export default async function cindyBridge(pi: any) {
     if (event.toolName === 'bash' && commandReadsProcessEnviron(event.input?.command)) {
       return { block: true, reason: 'Cindy blocks reading process environment (/proc/*/environ), even with Full access.' };
     }
-    if (event.toolName === 'bash' && commandMutatesPiPackages(event.input?.command)) {
-      return {
-        block: true,
-        reason: 'Cindy blocks Pi package CLI mutations because they target Pi user storage instead of Cindy managed Pi extensions. Use cindy_pi_extension when available; otherwise explain that Pi extension management is unavailable for this task.',
-      };
-    }
     // 凭证/密钥路径的内置只读工具(read/grep/find/ls)在 Pi 父进程内执行,而父进程 env
     // 必须保留代理会话 token 与 BYOM keys($ENV 请求期解析、bridge client 使用)。Full
     // access 若放行 read /proc/self/environ 这类路径,模型可直接取 token 调回环代理,
@@ -1281,7 +1287,11 @@ export default async function cindyBridge(pi: any) {
     // ordinary tool permissions. Full Access may bypass normal tool prompts,
     // but it must not let model-authored install/update/remove requests mutate
     // the host-owned extension store without an explicit user decision.
-    if (permission.mode === 'bypassPermissions' && event.toolName !== 'cindy_pi_extension') return;
+    // This tool cannot mutate by itself: its host channel authenticates the
+    // runtime capability and obtains a separate real user decision before it
+    // issues a one-shot store grant. Let it reach that boundary in every mode.
+    if (event.toolName === 'cindy_pi_extension') return;
+    if (permission.mode === 'bypassPermissions') return;
     if (READONLY_BUILTINS.has(event.toolName) && !credentialRead) return;
     let approved = false;
     try {

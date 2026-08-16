@@ -70,6 +70,7 @@ import {
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getActiveCatalog, resolveXdPiGatewayWireProtocol } from './active-catalog.js';
 import { mutatePiPackage, resolveManagedPiPackageResources } from './pi-package-store.js';
+import { issuePiPackageMutationGrant } from './pi-package-mutation-grant.js';
 
 const log = createLogger('pi-host');
 
@@ -1285,10 +1286,22 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
-    mutatePiManagedPackage: (request) => mutatePiPackage({
-      ...request,
-      ...(request.action === 'install' ? { confirmed: true } : {}),
-    }),
+    mutatePiManagedPackage: (request) => {
+      if (
+        request.authorization !== 'exact-user-command' &&
+        request.authorization !== 'confirmed-tool-call'
+      ) {
+        throw new Error('Pi extension mutation is missing host-trusted authorization');
+      }
+      const storeRequest = {
+        action: request.action,
+        source: request.source,
+      } as const;
+      return mutatePiPackage(
+        storeRequest,
+        request.action === 'remove' ? undefined : issuePiPackageMutationGrant(storeRequest),
+      );
+    },
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),

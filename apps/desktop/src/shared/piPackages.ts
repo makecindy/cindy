@@ -126,8 +126,6 @@ export function isRelativeLocalPiPackageSource(value: string): boolean {
 export interface PiPackageMutationRequest {
   action: PiPackageMutationAction;
   source: string;
-  /** Renderer confirmation that arbitrary third-party extension code may run. */
-  confirmed?: boolean;
   enabled?: boolean;
 }
 

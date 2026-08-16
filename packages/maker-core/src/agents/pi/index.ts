@@ -157,6 +157,7 @@ const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
 const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
+const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 /** 轮 42 P1:models.json 内容指纹(远端 daemon 启动身份的一部分, 值无凭证)。 */
 const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
 /** 远端权限/Extra Dir 快照指纹 —— 档位变则 envHash 变, daemon 重启而非覆盖热读文件。 */
@@ -1542,6 +1543,8 @@ export class PiAgent extends BaseAgent {
       authProviderId,
       { remote, fileOps },
     );
+    const bashPackageHome = joinRemotePosixPath(configHome, 'bash-package-home');
+    await mkdirp(bashPackageHome);
     const sessionDir = joinRemotePosixPath(agentHome, 'sessions');
     await mkdirp(sessionDir);
 
@@ -2177,6 +2180,7 @@ export class PiAgent extends BaseAgent {
           PI_SESSION_ID_ENV,
           PI_SESSION_TOKEN_ENV,
           ...(piPackageManagementToken ? [PI_PACKAGE_MANAGEMENT_ENV] : []),
+          PI_BASH_PACKAGE_HOME_ENV,
           ...(visionBridgeEnv ? Object.keys(visionBridgeEnv) : []),
           ...Object.keys(authEnv),
           ...Object.keys(nativeEnv),
@@ -2215,6 +2219,7 @@ export class PiAgent extends BaseAgent {
         ...(proxySessionToken !== undefined ? { [PI_SESSION_TOKEN_ENV]: proxySessionToken } : {}),
         [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),
         PI_CODING_AGENT_DIR: configHome,
+        [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
@@ -2559,6 +2564,7 @@ export class PiAgent extends BaseAgent {
             result: await this.deps.mutatePiManagedPackage!({
               action: command.action,
               source: resolvedSource,
+              authorization: 'exact-user-command',
             }),
           };
         } catch (error) {
@@ -3925,10 +3931,56 @@ export class PiAgent extends BaseAgent {
           ) {
             throw new Error('Invalid Cindy Pi extension request.');
           }
+          const approved = await new Promise<boolean>((resolve) => {
+            if (!context.resolver) {
+              this.deps.logger.warn('pi extension mutation has no interaction resolver', {
+                action,
+                sessionId: context.sessionId,
+              });
+              resolve(false);
+              return;
+            }
+            let settled = false;
+            let unregister: (() => void) | null = null;
+            const finish = (value: boolean): void => {
+              if (settled) return;
+              settled = true;
+              unregister?.();
+              resolve(value);
+            };
+            unregister = context.registerPendingPrompt(`${id}:pi-extension-mutation`, {
+              forcePrompt: true,
+              settle: (resolveAs) => finish(resolveAs === 'allow'),
+            });
+            Promise.resolve()
+              .then(() =>
+                context.resolver!({
+                  kind: 'permission',
+                  requestId: `${id}:pi-extension-mutation`,
+                  toolName: 'cindy_pi_extension',
+                  input: { action, source },
+                }),
+              )
+              .then((decision) => {
+                finish(decision.kind === 'permission' && decision.behavior === 'allow');
+              })
+              .catch((error) => {
+                this.deps.logger.warn('pi extension mutation confirmation failed', {
+                  action,
+                  message: error instanceof Error ? error.message : String(error),
+                });
+                finish(false);
+              });
+          });
+          if (!approved) {
+            proc.send({ type: 'extension_ui_response', id, cancelled: true });
+            return;
+          }
           const result = boundedPiManagedPackageToolResult(
             await mutate({
               action,
               source: resolvePiManagedPackageSource(source, context.workingDir),
+              authorization: 'confirmed-tool-call',
             }),
           );
           proc.send({

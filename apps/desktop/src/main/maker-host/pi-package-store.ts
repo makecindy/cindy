@@ -30,6 +30,11 @@ import {
   analyzePiExtensionCompatibility,
   evaluatePiRuntimeRequirements,
 } from './pi-package-compatibility.js';
+import {
+  consumePiPackageMutationGrant,
+  piPackageMutationNeedsGrant,
+  type PiPackageMutationGrant,
+} from './pi-package-mutation-grant.js';
 
 const log = createLogger('pi-package-store');
 interface PicomatchOptions {
@@ -1135,7 +1140,16 @@ function mutationCommandSource(
     : requestedSource;
 }
 
-export async function mutatePiPackage(request: PiPackageMutationRequest): Promise<PiPackageMutationResult> {
+export async function mutatePiPackage(
+  request: PiPackageMutationRequest,
+  grant?: PiPackageMutationGrant,
+): Promise<PiPackageMutationResult> {
+  if (piPackageMutationNeedsGrant(request)) {
+    // The grant is an in-process, one-shot capability issued only after Main
+    // observed a real user decision (or an exact whole user command). Renderer
+    // booleans and Full Access never cross this boundary.
+    consumePiPackageMutationGrant(request, grant);
+  }
   const source = requireSource(request.source);
   if (request.action === 'install' && isRelativeLocalPiPackageSource(source)) {
     throw new Error('Relative local Pi package sources require a task working directory');
@@ -1148,7 +1162,6 @@ export async function mutatePiPackage(request: PiPackageMutationRequest): Promis
     await inspectionPromise?.catch(() => undefined);
     let affectedSource: string | undefined;
     if (request.action === 'install') {
-      if (request.confirmed !== true) throw new Error('Pi package installation requires confirmation');
       mutationMayHaveChangedState = true;
       // Reinstalling an existing source can replace executable code. Revoke
       // before invoking Pi so even a partially failed install cannot inherit a
@@ -1217,9 +1230,6 @@ export async function mutatePiPackage(request: PiPackageMutationRequest): Promis
       const disabled = new Set(state.disabledSources);
       const approved = new Set(state.approvedExtensionSources);
       if (request.enabled) {
-        if (target.requiresExtensionApproval && request.confirmed !== true) {
-          throw new Error('Pi extension package requires explicit approval');
-        }
         if (target.resources.some((resource) => resource.kind === 'extension')) {
           approved.add(target.source);
         }

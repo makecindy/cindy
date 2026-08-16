@@ -40,6 +40,35 @@ type ReviewSearchHelpers = {
   ) => Promise<string[]>;
 };
 
+function loadBashIsolationHelper(
+  pathImpl: typeof path,
+): (
+  env: Record<string, string | undefined>,
+  home: string | undefined,
+) => Record<string, string | undefined> {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function withoutPiSecrets');
+  const end = source.indexOf('function managedRipgrepPath');
+  if (start < 0 || end <= start) throw new Error('bash isolation helper was not found');
+  const executableSource = [
+    "const SECRET_ENV_NAMES = new Set(['PI_CODING_AGENT_DIR', 'CINDY_PI_PACKAGE_MANAGEMENT', 'CINDY_PI_BASH_PACKAGE_HOME']);",
+    source.slice(start, end),
+    '(globalThis as any).isolatedBashEnvironment = isolatedBashEnvironment;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = { path: pathImpl };
+  runInNewContext(compiled, context);
+  return context.isolatedBashEnvironment as (
+    env: Record<string, string | undefined>,
+    home: string | undefined,
+  ) => Record<string, string | undefined>;
+}
+
 function loadReviewSearchHelpers(
   workingDir: string,
   overrides: {
@@ -192,21 +221,58 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
   });
 
-  it('hard-blocks Pi package CLI mutations from the model-facing bash tool', () => {
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('commandMutatesPiPackages');
+  it('routes every bash spelling of the Pi CLI into an isolated package home', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('commandMutatesPiPackages');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "event.toolName === 'bash' && commandMutatesPiPackages",
+      "const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME'",
     );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Use cindy_pi_extension');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('clean.PI_CODING_AGENT_DIR = bashPackageHome');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('delete clean.PI_PACKAGE_DIR');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       'delete process.env[PI_PACKAGE_MANAGEMENT_ENV]',
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('token: piPackageManagementToken');
+
+    const commands = [
+      'pi install npm:context-mode',
+      "sh -c 'pi install npm:context-mode'",
+      'p=pi; "$p" install npm:context-mode',
+      '/opt/cindy/pi install npm:context-mode',
+    ];
+    for (const command of commands) {
+      const isolate = loadBashIsolationHelper(path);
+      const env = isolate(
+        {
+          PI_CODING_AGENT_DIR: '/real/runtime-home',
+          PI_PACKAGE_DIR: '/cindy/managed-package-home',
+          CINDY_PI_PACKAGE_MANAGEMENT: 'secret',
+          COMMAND_CANARY: command,
+        },
+        '/isolated/bash-pi-home',
+      );
+      expect(env).toMatchObject({
+        PI_CODING_AGENT_DIR: '/isolated/bash-pi-home',
+        COMMAND_CANARY: command,
+      });
+      expect(env.PI_PACKAGE_DIR).toBeUndefined();
+      expect(env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain('/real/runtime-home');
+      expect(JSON.stringify(env)).not.toContain('/cindy/managed-package-home');
+    }
+
+    const isolateWindows = loadBashIsolationHelper(path.win32);
+    expect(
+      isolateWindows({ PI_CODING_AGENT_DIR: 'C:\\real' }, 'D:\\isolated').PI_CODING_AGENT_DIR,
+    ).toBe('D:\\isolated');
+    expect(() => isolateWindows({}, 'relative\\home')).toThrow(/unavailable/);
   });
 
   it('does not let Full Access bypass Cindy-managed extension confirmation', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "permission.mode === 'bypassPermissions' && event.toolName !== 'cindy_pi_extension'",
+      "if (event.toolName === 'cindy_pi_extension') return;",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "if (permission.mode === 'bypassPermissions') return;",
     );
   });
 

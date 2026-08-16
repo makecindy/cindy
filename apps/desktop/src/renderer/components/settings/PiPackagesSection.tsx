@@ -174,7 +174,7 @@ export function PiPackagesSection() {
   const runMutation = async (
     action: PiPackageMutationAction,
     packageSource: string,
-    options?: { confirmed?: boolean; enabled?: boolean },
+    options?: { enabled?: boolean },
   ): Promise<boolean> => {
     if (mutationInFlightRef.current) return false;
     mutationInFlightRef.current = true;
@@ -234,7 +234,7 @@ export function PiPackagesSection() {
   const confirmInstall = async () => {
     const packageSource = pendingInstall;
     if (!packageSource) return;
-    if (await runMutation('install', packageSource, { confirmed: true })) {
+    if (await runMutation('install', packageSource)) {
       if (mountedRef.current) setPendingInstall(null);
     }
   };
@@ -255,7 +255,6 @@ export function PiPackagesSection() {
     if (
       await runMutation('set-enabled', notice.source, {
         enabled: true,
-        confirmed: true,
       })
     ) {
       if (mountedRef.current) setCompatibilityNotice(null);

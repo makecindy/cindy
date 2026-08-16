@@ -101,7 +101,32 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
+async function mutateAuthorized(
+  store: typeof import('../pi-package-store.js'),
+  request: import('../../../shared/piPackages.js').PiPackageMutationRequest,
+) {
+  const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
+  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request));
+}
+
 describe('Pi package executable-code boundary', () => {
+  it('binds mutation grants to one exact request and rejects replay', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
+    const request = { action: 'install' as const, source };
+    const grant = issuePiPackageMutationGrant(request);
+
+    await expect(store.mutatePiPackage({ action: 'update', source }, grant)).rejects.toThrow(
+      /invalid or expired/i,
+    );
+    await expect(store.mutatePiPackage(request, grant)).rejects.toThrow(/invalid or expired/i);
+
+    const fresh = issuePiPackageMutationGrant(request);
+    await expect(store.mutatePiPackage(request, fresh)).resolves.toMatchObject({ changed: true });
+    await expect(store.mutatePiPackage(request, fresh)).rejects.toThrow(/invalid or expired/i);
+  });
+
   it('holds Extension packages disabled until explicit approval and revokes approval on update', async () => {
     const { root, source } = await createPackage();
     const store = await import('../pi-package-store.js');
@@ -112,12 +137,18 @@ describe('Pi package executable-code boundary', () => {
       enabled: false,
       requiresExtensionApproval: true,
     });
-    await expect(store.mutatePiPackage({
-      action: 'set-enabled', source, enabled: true,
-    })).rejects.toThrow(/explicit approval/);
+    await expect(
+      store.mutatePiPackage({
+        action: 'set-enabled',
+        source,
+        enabled: true,
+      }),
+    ).rejects.toThrow(/explicit authorization/);
 
-    const approved = await store.mutatePiPackage({
-      action: 'set-enabled', source, enabled: true, confirmed: true,
+    const approved = await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
     });
     expect(approved.affectedPackage).toMatchObject({ source, enabled: true });
     expect(approved.affectedPackage?.requiresExtensionApproval).toBeUndefined();
@@ -127,7 +158,7 @@ describe('Pi package executable-code boundary', () => {
       packageRoots: [canonicalRoot],
     });
 
-    const updated = await store.mutatePiPackage({ action: 'update', source });
+    const updated = await mutateAuthorized(store, { action: 'update', source });
     expect(updated.affectedPackage).toMatchObject({
       source,
       enabled: false,
@@ -144,8 +175,10 @@ describe('Pi package executable-code boundary', () => {
       disabledSources: [source, 'npm:keep-disabled'],
     }));
     const store = await import('../pi-package-store.js');
-    await store.mutatePiPackage({
-      action: 'set-enabled', source, enabled: true, confirmed: true,
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
     });
     const migrated = JSON.parse(await fs.readFile(
       path.join(stateDir, 'cindy-package-state.json'),
@@ -157,7 +190,7 @@ describe('Pi package executable-code boundary', () => {
       approvedExtensionSources: [source],
     });
 
-    await store.mutatePiPackage({ action: 'install', source, confirmed: true });
+    await mutateAuthorized(store, { action: 'install', source });
     const installSpawn = runtime.spawns.find(({ args }) => args.includes('install'));
     expect(installSpawn?.env.npm_config_ignore_scripts).toBe('true');
     expect(installSpawn?.env.NPM_CONFIG_IGNORE_SCRIPTS).toBe('true');
@@ -168,10 +201,9 @@ describe('Pi package executable-code boundary', () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
 
-    await store.mutatePiPackage({
+    await mutateAuthorized(store, {
       action: 'install',
       source: source.slice(4),
-      confirmed: true,
     });
     expect(runtime.spawns.find(({ args }) => args.includes('install'))?.args)
       .toContain(source);
@@ -180,11 +212,12 @@ describe('Pi package executable-code boundary', () => {
   it('rejects task-relative local paths at the context-free Settings boundary', async () => {
     const store = await import('../pi-package-store.js');
 
-    await expect(store.mutatePiPackage({
-      action: 'install',
-      source: './extensions/context-mode',
-      confirmed: true,
-    })).rejects.toThrow(/working directory/);
+    await expect(
+      mutateAuthorized(store, {
+        action: 'install',
+        source: './extensions/context-mode',
+      }),
+    ).rejects.toThrow(/working directory/);
     expect(runtime.spawns).toEqual([]);
   });
 
@@ -194,30 +227,30 @@ describe('Pi package executable-code boundary', () => {
     const listener = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
 
-    await store.mutatePiPackage({ action: 'install', source, confirmed: true });
+    await mutateAuthorized(store, { action: 'install', source });
     expect(listener).toHaveBeenCalledTimes(1);
 
     unsubscribe();
-    await store.mutatePiPackage({ action: 'update', source });
+    await mutateAuthorized(store, { action: 'update', source });
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes open settings when a failed update has already revoked approval', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
-    await store.mutatePiPackage({
+    await mutateAuthorized(store, {
       action: 'set-enabled',
       source,
       enabled: true,
-      confirmed: true,
     });
     const listener = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
 
     runtime.exitCode = 1;
     runtime.stderr = 'update failed';
-    await expect(store.mutatePiPackage({ action: 'update', source }))
-      .rejects.toThrow(/update failed/);
+    await expect(mutateAuthorized(store, { action: 'update', source })).rejects.toThrow(
+      /update failed/,
+    );
     expect(listener).toHaveBeenCalledTimes(1);
 
     runtime.exitCode = 0;
@@ -237,16 +270,14 @@ describe('Pi package executable-code boundary', () => {
     runtime.listOutput = `User packages:\n  ${normalizedSource}\n    ${root}\n`;
     const store = await import('../pi-package-store.js');
 
-    await store.mutatePiPackage({
+    await mutateAuthorized(store, {
       action: 'set-enabled',
       source: normalizedSource,
       enabled: true,
-      confirmed: true,
     });
-    const reinstalled = await store.mutatePiPackage({
+    const reinstalled = await mutateAuthorized(store, {
       action: 'install',
       source: root,
-      confirmed: true,
     });
 
     expect(reinstalled.affectedPackage).toMatchObject({
@@ -255,7 +286,7 @@ describe('Pi package executable-code boundary', () => {
       requiresExtensionApproval: true,
     });
 
-    await store.mutatePiPackage({ action: 'update', source: normalizedSource });
+    await mutateAuthorized(store, { action: 'update', source: normalizedSource });
     await store.mutatePiPackage({ action: 'remove', source: normalizedSource });
     const canonicalRoot = await fs.realpath(root);
     expect(runtime.spawns.find(({ args }) => args.includes('update'))?.args)
@@ -266,11 +297,12 @@ describe('Pi package executable-code boundary', () => {
 
   it('rejects URL sources that would persist embedded credentials', async () => {
     const store = await import('../pi-package-store.js');
-    await expect(store.mutatePiPackage({
-      action: 'install',
-      source: 'https://user:secret@example.com/acme/package.git',
-      confirmed: true,
-    })).rejects.toThrow(/credentials/);
+    await expect(
+      mutateAuthorized(store, {
+        action: 'install',
+        source: 'https://user:secret@example.com/acme/package.git',
+      }),
+    ).rejects.toThrow(/credentials/);
     expect(runtime.spawns).toEqual([]);
   });
 

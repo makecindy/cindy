@@ -512,6 +512,10 @@ import {
   mutatePiPackage,
   onPiPackagesChanged,
 } from '../maker-host/pi-package-store.js';
+import {
+  issuePiPackageMutationGrant,
+  piPackageMutationNeedsGrant,
+} from '../maker-host/pi-package-mutation-grant.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
 import {
@@ -6093,8 +6097,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof payload.source !== 'string' || payload.source.length > 2_048) {
       throwIpcError('INVALID_PARAMS', 'invalid Pi extension source');
     }
-    if (payload.confirmed !== undefined && typeof payload.confirmed !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'confirmed must be a boolean');
+    if (Object.prototype.hasOwnProperty.call(payload, 'confirmed')) {
+      throwIpcError('INVALID_PARAMS', 'Renderer confirmation is not accepted');
     }
     if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
@@ -6102,10 +6106,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const request: PiPackageMutationRequest = {
       action,
       source: payload.source,
-      ...(typeof payload.confirmed === 'boolean' ? { confirmed: payload.confirmed } : {}),
       ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
     };
-    return mutatePiPackage(request);
+    if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
+
+    const source = request.source.trim();
+    const copy =
+      request.action === 'set-enabled'
+        ? {
+            title: t('settings.piPackages.extensionApprovalTitle'),
+            message: t('settings.piPackages.extensionApprovalDescription'),
+            confirm: t('settings.piPackages.approveAndEnable'),
+          }
+        : request.action === 'update'
+          ? {
+              title: t('settings.piPackages.updateConfirmTitle'),
+              message: t('settings.piPackages.updateConfirmDescription').replace(
+                '{{source}}',
+                source,
+              ),
+              confirm: t('settings.piPackages.confirmUpdate'),
+            }
+          : {
+              title: t('settings.piPackages.confirmTitle'),
+              message: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
+              confirm: t('settings.piPackages.confirmInstall'),
+            };
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      type: 'warning' as const,
+      title: copy.title,
+      message: copy.title,
+      detail: copy.message,
+      buttons: [copy.confirm, t('settings.piPackages.cancel')],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    };
+    const decision = owner
+      ? await dialog.showMessageBox(owner, options)
+      : await dialog.showMessageBox(options);
+    if (decision.response !== 0) {
+      throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+    }
+    return mutatePiPackage(request, issuePiPackageMutationGrant(request));
   });
 
   ipcMain.handle(

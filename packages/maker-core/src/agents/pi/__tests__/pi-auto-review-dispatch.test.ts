@@ -387,12 +387,19 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model: 'm',
     });
     try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({
+          kind: 'permission',
+          behavior: 'allow',
+        })) as never,
+      );
       expect(captured.env.CINDY_PI_PACKAGE_MANAGEMENT).toMatch(/^[A-Za-z0-9_-]{40,}$/);
       fireManagedPackageRequest('pkg-1', 'install', ' npm:context-mode ');
       const response = await waitForResponse('pkg-1');
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: 'npm:context-mode',
+        authorization: 'confirmed-tool-call',
       });
       expect(JSON.parse(String(response.value))).toMatchObject({
         ok: true,
@@ -401,6 +408,73 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           affectedPackage: { source: 'npm:context-mode', enabled: false },
         },
       });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('fails closed when managed extension confirmation is denied or the callback fails', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-confirm-failure-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+    });
+    try {
+      const deny = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+      handle.setInteractionResolver?.(deny as never);
+      fireManagedPackageRequest('pkg-denied', 'install', 'npm:denied');
+      expect(await waitForResponse('pkg-denied')).toMatchObject({
+        cancelled: true,
+      });
+
+      const fail = vi.fn(async () => {
+        throw new Error('confirmation unavailable');
+      });
+      handle.setInteractionResolver?.(fail as never);
+      fireManagedPackageRequest('pkg-failed', 'update', 'npm:failed');
+      expect(await waitForResponse('pkg-failed')).toMatchObject({
+        cancelled: true,
+      });
+
+      expect(deny).toHaveBeenCalledOnce();
+      expect(fail).toHaveBeenCalledOnce();
+      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not turn a pending extension confirmation into approval after a permission switch', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-permission-switch-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      let resolverStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        resolverStarted = resolve;
+      });
+      handle.setInteractionResolver?.(
+        vi.fn(async () => {
+          resolverStarted();
+          return new Promise<never>(() => undefined);
+        }) as never,
+      );
+      fireManagedPackageRequest('pkg-switch', 'install', 'npm:switch');
+      await started;
+      await handle.setPermissionMode?.('bypassPermissions');
+      expect(await waitForResponse('pkg-switch')).toMatchObject({
+        cancelled: true,
+      });
+      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
     } finally {
       await handle.close();
     }
@@ -794,6 +868,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: 'npm:context-mode',
+        authorization: 'exact-user-command',
       });
       const prompt = captured.requests.find((request) => request.type === 'prompt');
       expect(prompt?.message).toContain('[Cindy internal Pi extension operation receipt]');
@@ -890,6 +965,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/context-mode'),
+        authorization: 'exact-user-command',
       });
 
       await handle.send({
@@ -899,13 +975,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/file-context-mode'),
+        authorization: 'exact-user-command',
       });
 
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({
+          kind: 'permission',
+          behavior: 'allow',
+        })) as never,
+      );
       fireManagedPackageRequest('pkg-relative', 'update', '../shared/pi-extension');
       await waitForResponse('pkg-relative');
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'update',
         source: path.resolve(cwd, '../shared/pi-extension'),
+        authorization: 'confirmed-tool-call',
       });
     } finally {
       await handle.close();
@@ -930,6 +1014,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.win32.resolve(workingDir, 'C:extensions\\context-mode'),
+        authorization: 'exact-user-command',
       });
     } finally {
       await handle.close();
@@ -1014,6 +1099,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt).toContain('"outputTruncated":true');
       expect(prompt).toContain('"detailsOmitted":"receipt-size-limit"');
 
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({
+          kind: 'permission',
+          behavior: 'allow',
+        })) as never,
+      );
       fireManagedPackageRequest('pkg-large', 'install', 'npm:oversized-extension');
       const response = await waitForResponse('pkg-large');
       const parsed = JSON.parse(String(response.value));
@@ -1425,9 +1516,13 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(bridge).toContain('createFindTool,');
     expect(bridge).toContain('createGrepTool,');
     expect(bridge).toContain('createLsTool,');
-    expect(bridge).toContain('env: withoutPiSecrets(env)');
+    expect(bridge).toContain('const clean = withoutPiSecrets(env)');
+    expect(bridge).toContain('clean.PI_CODING_AGENT_DIR = bashPackageHome');
     expect(bridge).toContain('exposeSessionEnvironment: false');
     expect(bridge).toContain("'CINDY_PI_PERMISSION_FILE'");
+    expect(captured.env.CINDY_PI_BASH_PACKAGE_HOME).toBe(
+      path.join(configHome, 'bash-package-home'),
+    );
   });
 
   it('models.json carries real cost and maxTokens from the model descriptor', async () => {
