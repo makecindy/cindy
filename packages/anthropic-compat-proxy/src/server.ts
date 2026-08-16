@@ -855,6 +855,29 @@ function forward(
   }
   const upstreamReq = reqFn(upstreamOptions);
 
+  // 流式请求在收到上游响应头之前也可能半开:这种情况下不会进入 response
+  // 回调,因此必须从请求发出时就启动同一个空闲看门狗,否则仍会等 socket 超时。
+  let upstreamHeaderTimer: NodeJS.Timeout | null = null;
+  if (requestDeclaredStream && streamIdleTimeoutMs > 0) {
+    upstreamHeaderTimer = setTimeout(() => {
+      upstreamHeaderTimer = null;
+      logger.warn?.('upstream stream idle watchdog fired — no response headers', {
+        reqId,
+        method,
+        path: upstreamPathname,
+        idleMs: streamIdleTimeoutMs,
+      });
+      upstreamReq.destroy(new Error(`upstream response headers timeout after ${streamIdleTimeoutMs}ms`));
+    }, streamIdleTimeoutMs);
+    upstreamHeaderTimer.unref?.();
+  }
+  const clearUpstreamHeaderTimer = (): void => {
+    if (upstreamHeaderTimer) {
+      clearTimeout(upstreamHeaderTimer);
+      upstreamHeaderTimer = null;
+    }
+  };
+
   // ── 客户端中断传播 ────────────────────────────────────────────────────────
   // CC 掐流(stall 检测 / 用户 Stop / watchdog interrupt)时只会断开与本代理的
   // 连接;若不把中断传给上游,上游会把整段生成跑完并按全量输出计费(大上下文
@@ -927,6 +950,7 @@ function forward(
   });
 
   upstreamReq.on('response', (upstreamRes) => {
+    clearUpstreamHeaderTimer();
     // 请求已经因客户端断开或另一条 upstream error 路径收口时,不要再向同一个
     // ServerResponse 写 header/pipe;恢复上游读取以释放 socket。
     if (clientAborted || upstreamFailureHandled || clientRes.destroyed || upstreamResponseTerminal === 'client-aborted') {
@@ -1490,6 +1514,7 @@ function forward(
   });
 
   upstreamReq.on('error', (err) => {
+    clearUpstreamHeaderTimer();
     // 客户端主动断开触发的 destroy 是预期路径:客户端已不在,不写 502、不按
     // 上游故障记 error(上面 'close' 处已记过 info)。
     if (

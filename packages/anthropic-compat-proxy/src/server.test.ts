@@ -2720,6 +2720,34 @@ describe('流式响应空闲看门狗(上游半开兜底)', () => {
     expect(warns.some((w) => w.msg.includes('upstream stream idle watchdog fired'))).toBe(true);
   });
 
+  it('上游不返回响应头时,看门狗也会掐断半开请求', async () => {
+    const warns: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    const upstream = await startFakeUpstream(() => {
+      // 不写响应头、不发送正文、不结束响应:模拟上游请求阶段半开。
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      upstreamStreamIdleTimeoutMs: 50,
+      logger: {
+        warn: (msg, ctx) => warns.push({ msg, ctx }),
+      },
+    });
+
+    const operation = post(proxy.url, { model: 'test-model', stream: true });
+    const outcome = await Promise.race([
+      operation,
+      new Promise<'timeout'>((resolve) => {
+        setTimeout(() => resolve('timeout'), 2000);
+      }),
+    ]);
+
+    // 没有响应头也必须在 idle timeout 内结束,不能退回 10 分钟 socket 超时。
+    expect(outcome).not.toBe('timeout');
+    expect(outcome).toMatchObject({ status: 502 });
+    expect(warns.some((w) => w.msg.includes('upstream stream idle watchdog fired'))).toBe(true);
+  });
+
   it('非 SSE 2xx 半开也被看门狗掐断(不再等 10 分钟 socket 超时)', async () => {
     const warns: string[] = [];
     const upstream = await startFakeUpstream((_idx, _body, res) => {
