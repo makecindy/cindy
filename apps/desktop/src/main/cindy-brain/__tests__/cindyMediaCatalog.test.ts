@@ -106,6 +106,38 @@ describe('deriveCindyMediaConfig — 正常目录', () => {
       best: 'v1',
     });
   });
+
+  it('xAI 动态发现的两个视频模型原样进入候选并保留 provider 归属', () => {
+    const xai: CindyMediaProviderSlice = {
+      id: 'xai',
+      videoModels: [
+        { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+        { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+      ],
+    };
+
+    expect(deriveCindyMediaConfig([xai], 'video')).toEqual({
+      models: [
+        {
+          id: 'xai/grok-imagine-video',
+          label: 'Grok Imagine Video',
+          providerId: 'xai',
+          supportsEdit: true,
+        },
+        {
+          id: 'xai/grok-imagine-video-1.5',
+          label: 'Grok Imagine Video 1.5',
+          providerId: 'xai',
+          supportsEdit: true,
+        },
+      ],
+      defaults: {
+        standard: 'xai/grok-imagine-video',
+        draft: 'xai/grok-imagine-video',
+        best: 'xai/grok-imagine-video',
+      },
+    });
+  });
 });
 
 describe('deriveCindyMediaConfig — 空清单即不可用', () => {

@@ -56,10 +56,13 @@ import {
   DIALOGUE_GROUP_ALL_KEY,
 } from '../../hooks/helpers/sidebarFilterCore';
 import {
+  advanceViewedPriorityHold,
   buildMainListEntries,
+  holdViewedPriorityRank,
   splitEntriesByDevice,
   type MainListDeviceSection,
   type MainListEntry,
+  type ViewedPriorityHoldState,
 } from '../../lib/mainListModel';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
@@ -87,6 +90,22 @@ import type { SessionMoveTarget } from '../sessionMoveTarget';
 
 /** 设备段折叠/对话组折叠共用的段 key:本机段 'local',远程段用 deviceId。 */
 const deviceSectionKey = (deviceId: string | null) => deviceId ?? 'local';
+
+// 优先级排序的「看的时候钉住、离开后再落到已看过最前」是模块生命周期内的展示态,
+// 不落盘。放模块级而不是组件 ref:ProjectsSection 重挂(含 React Strict Mode
+// 双挂)不能丢掉正在看的档位,否则看的过程中会跳到其余档。
+export const viewedPriorityHold: ViewedPriorityHoldState = {
+  prevViewedId: undefined,
+  heldPriorityRanks: new Map(),
+  recentlyViewedAtMs: new Map(),
+};
+
+export function holdSidebarViewedPriority(
+  sessionId: string,
+  ctx: Parameters<typeof holdViewedPriorityRank>[2],
+): void {
+  holdViewedPriorityRank(viewedPriorityHold, sessionId, ctx);
+}
 
 /** 顶层条目折叠的「显示全部 N 项」页脚(单段路径与设备分组的每段共用同一份样式)。 */
 function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () => void }) {
@@ -132,6 +151,11 @@ export interface ProjectsSectionProps {
   collapsed: Set<string>;
   isAllCollapsed: boolean;
   activeSessionId?: string;
+  /**
+   * 当前注视中的任务(files 路由下 activeSessionId 为空,回落到被浏览文件所属任务)。
+   * 优先级排序用它钉住打开时的档位,离开后再落到已看过最前。
+   */
+  viewedSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
   /** /ctr 接管中的 sessionIds — SessionItem 用来切换左侧 icon */
   attachedSessionIds: ReadonlySet<string>;
@@ -197,6 +221,7 @@ export function ProjectsSection({
   collapsed,
   isAllCollapsed,
   activeSessionId,
+  viewedSessionId,
   runningSessionIds,
   attachedSessionIds,
   notifications,
@@ -293,6 +318,8 @@ export function ProjectsSection({
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   const remoteActivityRevision = useRemoteSessionActivityRevision();
+  // 正在看的任务 id:files 路由下回落到被浏览文件所属任务。
+  const viewedIdForSort = viewedSessionId ?? activeSessionId;
   const priorityContext = useMemo(() => {
     const running = new Set(runningSessionIds);
     const attention = new Set(notifications);
@@ -317,10 +344,20 @@ export function ProjectsSection({
     for (const project of projects) for (const session of project.sessions) considerRemote(session);
     for (const session of dialogues) considerRemote(session);
     for (const session of unclassified) considerRemote(session);
+
+    const hold = advanceViewedPriorityHold(
+      viewedPriorityHold,
+      viewedIdForSort,
+      { runningSessionIds: running, attentionSessionIds: attention, waitingSessionIds: waiting },
+      Date.now(),
+    );
+
     return {
       runningSessionIds: running,
       attentionSessionIds: attention,
       waitingSessionIds: waiting,
+      heldPriorityRanks: hold.heldPriorityRanks,
+      recentlyViewedAtMs: hold.recentlyViewedAtMs,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
   }, [
@@ -332,6 +369,7 @@ export function ProjectsSection({
     dialogues,
     unclassified,
     remoteActivityRevision,
+    viewedIdForSort,
   ]);
 
   // E 期「按设备分组」:有远程设备连接 + 开关开 → 按设备切段(本机在前,
@@ -405,11 +443,11 @@ export function ProjectsSection({
         showAll,
         disableCollapse: false,
         isFiltering: false,
-        isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === activeSessionId),
+        isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === viewedIdForSort),
         hasAttentionEntry: (entry) =>
           entrySessions(entry).some((s) => priorityContext.attentionSessionIds.has(s.id)),
       }),
-    [activeSessionId, entrySessions, priorityContext],
+    [viewedIdForSort, entrySessions, priorityContext],
   );
   const {
     visibleEntries: visibleMixedEntries,

@@ -101,11 +101,12 @@ export const SUBAGENT_GUARDRAIL_KEYS = [
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
 
 /**
- * 影响 codex spawn `-c` 注入的键。codexProviderId 是纯客户端展示维度、claude* 走
- * env 通道，均不在内——它们变更不需要重启共享的 codex app-server。
+ * 影响 codex spawn `-c` 注入或默认 Subagent Provider 路由的键。claude* 走 env 通道，
+ * 不在此列表内；Codex 模型或 Provider 变化都需要重启共享的 app-server。
  */
 export const CODEX_SPAWN_AFFECTING_KEYS = [
   'codex',
+  'codexProviderId',
   'codexEffort',
   'codexSubagentsEnabled',
   'codexUseCindySubagentPolicy',

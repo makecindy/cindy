@@ -16,15 +16,27 @@
  *   不改变上游何时委托的调度策略。
  * - `agents.max_depth` 仅旧版多代理(V1)生效,V2 忽略(UI hint 已注明)。
  * - `agents.default_subagent_model` 是兜底默认,模型仍可在 spawn 参数里显式覆盖。
- *   注入 Cindy 存储的 model id 原文:codex vendor 候选只有原生 slug 与 `codex/`
- *   折扣路由 id,`codex/` 前缀由 loopback proxy 在 HTTP 边界分流(decideCodexRoute),
- *   剥前缀反而会把折扣路由静默改道。
+ *   Codex 0.145 的 spawn_agent 模型白名单只接受运行时 slug（如 `gpt-5.6-terra`），
+ *   不接受客户端目录里的 `codex/` 路由前缀；因此写入 agents 配置前必须归一化。
+ *   出站供应商仍由会话/线程在 loopback proxy 的路由登记决定。
  *
  * TOML 值形态与 mcp-integrations/codexEnvironment.ts 一致:字符串带双引号,
  * 数字/布尔裸写。
  */
 
+import {
+  effectiveSourceIdForModel,
+  type ProviderView,
+} from '@cindy/model-providers';
+
 import type { SubagentModelSettings } from '../../shared/subagentModelSettings.js';
+import { rewriteProviderModelIdForRoute } from './provider-route.js';
+
+export interface CodexSubagentRouteSnapshot {
+  providerId: string;
+  catalogModel: string;
+  runtimeModel: string;
+}
 
 /**
  * 按需委托策略(Claude Code 式):替换上游按 effort 推导的内置 multi-agent 模式
@@ -53,7 +65,41 @@ function tomlString(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): string[] {
+/** 把 Cindy 目录模型 id 转成 Codex spawn_agent 白名单使用的运行时 slug。 */
+export function codexSubagentRuntimeModelId(
+  modelId: string,
+  providerId?: string | null,
+): string {
+  return rewriteProviderModelIdForRoute(providerId, 'codex', modelId);
+}
+
+export function resolveCodexSubagentRouteSnapshot(
+  settings: SubagentModelSettings,
+  remoteHostId?: string,
+  providerViews?: ProviderView[],
+): CodexSubagentRouteSnapshot | undefined {
+  if (remoteHostId || !settings.codexSubagentsEnabled) return undefined;
+  const catalogModel = settings.codex?.trim();
+  const explicitProviderId = settings.codexProviderId?.trim();
+  // Provider-less settings are a valid implicit route. Resolve them with the same connected,
+  // chat-eligible source priority as the model selector, then freeze that source for both the
+  // proxy route and Codex's spawn_agent runtime-model rewrite.
+  const providerId = explicitProviderId
+    || (catalogModel && providerViews
+      ? effectiveSourceIdForModel(providerViews, null, catalogModel, 'codex')
+      : null);
+  if (!catalogModel || !providerId) return undefined;
+  return {
+    providerId,
+    catalogModel,
+    runtimeModel: codexSubagentRuntimeModelId(catalogModel, providerId),
+  };
+}
+
+export function buildCodexSubagentSpawnArgs(
+  settings: SubagentModelSettings,
+  resolvedRoute?: CodexSubagentRouteSnapshot,
+): string[] {
   const args: string[] = [];
   if (!settings.codexSubagentsEnabled) {
     // 总开关关死后其余键无意义,不再注入。
@@ -70,7 +116,13 @@ export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): st
   }
   args.push('-c', 'features.multi_agent_v2.expose_spawn_agent_model_overrides=true');
   if (settings.codex) {
-    args.push('-c', `agents.default_subagent_model=${tomlString(settings.codex)}`);
+    const runtimeModel = resolvedRoute?.catalogModel === settings.codex.trim()
+      ? resolvedRoute.runtimeModel
+      : codexSubagentRuntimeModelId(settings.codex, settings.codexProviderId);
+    args.push(
+      '-c',
+      `agents.default_subagent_model=${tomlString(runtimeModel)}`,
+    );
   }
   if (settings.codexEffort) {
     args.push('-c', `agents.default_subagent_reasoning_effort=${tomlString(settings.codexEffort)}`);
