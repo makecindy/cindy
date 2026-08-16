@@ -704,34 +704,45 @@ export function UnifiedModelPanel({
   const [stickyLabel, setStickyLabel] = useState<{
     label: string;
     providerId: string | null;
+    /** 被下一组组头顶出时的位移(≤0,px)—— 1:1 跟随滚动,见 updateStickyLabel。 */
+    offset: number;
   } | null>(null);
   const updateStickyLabel = useCallback(() => {
     const list = listRef.current;
     if (!list) return;
+    // 真 sticky 力学(Chris 2026-08-16:「没在它出现就锁死…落下来把第一个模型挡住」
+    // ——离散阈值切换会让组头先跟滚一段再跳回钉住位,必须做成连续运动):
+    //   - 组头盒顶到达 SWITCH_AT(8px,此时其文字恰好落在钉住位 13px)即被题头卡
+    //     接管锁死,一到位就锁,不多跟一像素;
+    //   - 下一组组头盒顶贴上题头实底下缘(PUSH_AT = SWITCH_AT + 实底 38)后,把在位
+    //     题头 1:1 顶出(offset 随滚动连续变化),推满 38px 时正好轮到它自己锁进钉住位
+    //     —— 全程无跳变、无空窗。
+    const SWITCH_AT = 8;
+    const PUSH_AT = SWITCH_AT + 38;
     const listTop = list.getBoundingClientRect().top;
-    let current: { label: string; providerId: string | null } | null = null;
+    let current: { label: string; providerId: string | null; offset: number } | null = null;
     let nextTop: number | null = null;
     for (const el of list.querySelectorAll<HTMLElement>('[data-group-label]')) {
       const top = el.getBoundingClientRect().top - listTop;
-      // 标题文字未完全滚出前不接管(-12 让切换发生在文字贴顶时)。
-      if (top < -12) {
+      if (top < SWITCH_AT) {
         current = {
           label: el.dataset.groupLabel ?? '',
           providerId: el.dataset.groupProvider ?? null,
+          offset: 0,
         };
       } else {
         nextTop = top;
         break;
       }
     }
-    // 下一组的组头一进入题头区(题头总高 50px)上一组题头就提前退场,把组尾的行
-    // 和迎面而来的新组头都亮出来 —— 等到组员全走光了牌子还挂在那(Chris 2026-08-16
-    // 实测:「不要等最后一行模型名都没了,还在」)。退场到新组头自己滚出顶部(-12)
-    // 接管之间,顶部走原生滚动,无题头。
-    if (nextTop !== null && nextTop < 50) current = null;
+    if (current && nextTop !== null) {
+      current.offset = Math.min(0, Math.round(nextTop) - PUSH_AT);
+    }
     // 滚动每帧都会进来,内容没变就复用旧引用,不触发重渲染。
     setStickyLabel((prev) =>
-      prev?.label === current?.label && prev?.providerId === current?.providerId
+      prev?.label === current?.label &&
+      prev?.providerId === current?.providerId &&
+      prev?.offset === current?.offset
         ? prev
         : current,
     );
@@ -774,6 +785,9 @@ export function UnifiedModelPanel({
           style={{
             background:
               'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 38px, transparent)',
+            // 顶出位移由滚动位置直接驱动(1:1),不加 transition —— 与滚动逐帧同步,
+            // 补间动画反而会让它滞后于手指。
+            transform: `translateY(${stickyLabel.offset}px)`,
           }}
         >
           <div className="flex items-center gap-1.5">
