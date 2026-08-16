@@ -892,7 +892,70 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         wireId: 'grok-daily',
         api: 'openai-responses',
       });
+      expect(providers.find((provider) => provider.id === 'xai')).toMatchObject({
+        apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+        modelIdAliases: expect.objectContaining({
+          'xai/grok-daily': 'xai/grok-daily',
+          'grok-daily': 'xai/grok-daily',
+        }),
+      });
     }
+  });
+
+  it('keeps ChatGPT aliases pointed at namespaced spec ids, not bare wire ids', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.pi = [
+      {
+        id: 'chatgpt/gpt-5.7',
+        name: 'GPT-5.7',
+        contextWindow: 272_000,
+        efforts: [],
+        defaultEffort: null,
+        piApi: 'openai-responses',
+      },
+    ];
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map(),
+    ).providers.find((candidate) => candidate.id === 'openai-codex');
+    expect(provider?.modelIdAliases).toMatchObject({
+      'chatgpt/gpt-5.7': 'chatgpt/gpt-5.7',
+      'gpt-5.7': 'chatgpt/gpt-5.7',
+    });
+  });
+
+  it('writes pinned-Pi-missing Grok 4.6 as an openai-responses catalog addition', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
+    xai.models.pi = [
+      {
+        id: 'grok-4.6',
+        name: 'Grok 4.6',
+        contextWindow: 500_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: true,
+      },
+    ];
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-responses')]])]]),
+    ).providers.find((candidate) => candidate.id === 'xai');
+    expect(provider?.models).toEqual([
+      expect.objectContaining({
+        id: 'grok-4.6',
+        wireId: 'grok-4.6',
+        api: 'openai-responses',
+        catalogAddition: true,
+      }),
+    ]);
+    expect(provider?.modelIdAliases).toMatchObject({
+      'grok-4.6': 'grok-4.6',
+      'xai/grok-4.6': 'grok-4.6',
+    });
   });
 
   it('keeps missing daily rows while respecting models returned by a partial PI probe', () => {

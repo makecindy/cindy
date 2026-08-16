@@ -778,6 +778,227 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('reloads models.json via switch_session when SuperGrok appears after session start', async () => {
+    const xaiProvider = {
+      id: 'xai',
+      sourceProviderId: 'xai' as const,
+      name: 'xAI',
+      baseUrl: 'http://127.0.0.1:9/v1',
+      inheritModels: true,
+      apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+      modelIdAliases: {
+        'grok-4.6': 'grok-4.6',
+        'xai/grok-4.6': 'grok-4.6',
+      },
+      models: [{
+        id: 'grok-4.6',
+        wireId: 'grok-4.6',
+        name: 'Grok 4.6',
+        api: 'openai-responses' as const,
+        catalogAddition: true,
+        contextWindow: 500_000,
+      }],
+    };
+    let includeXai = false;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          { id: 'local-model', displayName: 'Local', contextWindow: 128_000, efforts: [], defaultEffort: null },
+          {
+            id: 'xai/grok-4.6',
+            displayName: 'Grok 4.6',
+            contextWindow: 500_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'medium',
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => (includeXai
+        ? { providers: [xaiProvider], env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' } }
+        : {
+            providers: [{
+              id: 'native-a',
+              name: 'Native A',
+              baseUrl: 'http://a.test',
+              api: 'openai-completions',
+              models: [{ id: 'local-model' }],
+            }],
+            env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+          }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'late-xai',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+    });
+    includeXai = true;
+    await handle.setModel!('xai/grok-4.6', { providerId: 'xai' });
+    expect(captured.requests).toContainEqual({
+      type: 'switch_session',
+      sessionPath: '/mock/s.jsonl',
+    });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'xai',
+      modelId: 'grok-4.6',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models: Array<{ id: string; api?: string }> }> };
+    expect(models.providers.xai?.models).toEqual([
+      expect.objectContaining({ id: 'grok-4.6', api: 'openai-responses' }),
+    ]);
+    await handle.close();
+  });
+
+  it('rolls models.json back when switch_session fails after an xAI catalog refresh', async () => {
+    const xaiProvider = {
+      id: 'xai',
+      sourceProviderId: 'xai' as const,
+      name: 'xAI',
+      baseUrl: 'http://127.0.0.1:9/v1',
+      inheritModels: true,
+      apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+      modelIdAliases: { 'xai/grok-4.6': 'grok-4.6', 'grok-4.6': 'grok-4.6' },
+      models: [{
+        id: 'grok-4.6',
+        wireId: 'grok-4.6',
+        api: 'openai-responses' as const,
+        catalogAddition: true,
+      }],
+    };
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'switch_session') {
+        return { success: false, error: 'reload failed' };
+      }
+      return { success: true, data: {} };
+    };
+    let includeXai = false;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          { id: 'local-model', displayName: 'Local', contextWindow: 128_000, efforts: [], defaultEffort: null },
+          { id: 'xai/grok-4.6', displayName: 'Grok 4.6', contextWindow: 500_000, efforts: [], defaultEffort: null },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => (includeXai
+        ? { providers: [xaiProvider], env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' } }
+        : {
+            providers: [{
+              id: 'native-a',
+              name: 'Native A',
+              baseUrl: 'http://a.test',
+              api: 'openai-completions',
+              models: [{ id: 'local-model' }],
+            }],
+            env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+          }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'xai-reload-rollback',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+    });
+    includeXai = true;
+    await expect(handle.setModel!('xai/grok-4.6', { providerId: 'xai' })).rejects.toThrow(/reload models/);
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, unknown> };
+    expect(models.providers.xai).toBeUndefined();
+    await handle.close();
+  });
+
+  it('refuses a live xAI refresh when the provider endpoint would change', async () => {
+    let call = 0;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          { id: 'xai/grok-4.5', displayName: 'Grok 4.5', contextWindow: 500_000, efforts: [], defaultEffort: null },
+          { id: 'xai/grok-4.6', displayName: 'Grok 4.6', contextWindow: 500_000, efforts: [], defaultEffort: null },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => {
+        call += 1;
+        return {
+          providers: [{
+            id: 'xai',
+            sourceProviderId: 'xai' as const,
+            name: 'xAI',
+            baseUrl: call === 1 ? 'http://127.0.0.1:9/v1' : 'http://evil.test/v1',
+            inheritModels: true,
+            apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+            modelIdAliases: {
+              'xai/grok-4.5': 'grok-4.5',
+              'grok-4.5': 'grok-4.5',
+              'xai/grok-4.6': 'grok-4.6',
+              'grok-4.6': 'grok-4.6',
+            },
+            models: call === 1
+              ? [{
+                  id: 'grok-4.5',
+                  wireId: 'grok-4.5',
+                  api: 'openai-responses' as const,
+                  catalogAddition: true,
+                }]
+              : [{
+                  id: 'grok-4.6',
+                  wireId: 'grok-4.6',
+                  api: 'openai-responses' as const,
+                  catalogAddition: true,
+                }],
+          }],
+          env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+        };
+      },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'xai-endpoint-guard',
+      workingDir: cwd,
+      model: 'xai/grok-4.5',
+      providerId: 'xai',
+    });
+    await expect(handle.setModel!('xai/grok-4.6', { providerId: 'xai' })).rejects.toThrow(
+      /cannot serve model/,
+    );
+    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
+    await handle.close();
+  });
+
   it('applies each native provider alias during provider-less compatibility routing', async () => {
     const provider = (id: string, aliases?: Record<string, string>) => ({
       id,

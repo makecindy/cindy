@@ -2555,6 +2555,113 @@ export class PiAgent extends BaseAgent {
      * setModel 的临界区正文。经 `setModelChain` 串行化后调用 —— 不要直接调它,
      * 并发进入会让 pending / 落定两次写交错。
      */
+    const writableNativeModels = (provider: PiNativeProviderSpec) =>
+      provider.inheritModels
+        ? provider.models.filter(
+            (model) => model.api !== undefined || model.catalogAddition === true,
+          )
+        : provider.models;
+    const nativeOffersModel = (providerId: string, modelId: string): boolean => {
+      const native = nativeProviderById.get(providerId);
+      if (!native) return false;
+      const nativeModel = resolveNativeModelId(providerId, modelId);
+      return writableNativeModels(native).some((candidate) => candidate.id === nativeModel);
+    };
+    const sameRecord = (
+      left?: Record<string, string>,
+      right?: Record<string, string>,
+    ): boolean => {
+      const a = left ?? {};
+      const b = right ?? {};
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      for (const key of keys) {
+        if (a[key] !== b[key]) return false;
+      }
+      return true;
+    };
+    const restoreNativeCatalog = async (
+      previousProviders: PiNativeProviderSpec[],
+    ): Promise<void> => {
+      nativeProviders = previousProviders;
+      nativeProviderById.clear();
+      nativeProviderBySourceId.clear();
+      for (const spec of previousProviders) {
+        if (spec.id === PI_PROVIDER_ID) continue;
+        nativeProviderById.set(spec.id, spec);
+        nativeProviderBySourceId.set(spec.sourceProviderId ?? spec.id, spec);
+      }
+      const written = await this.writeModelsJson(
+        configHome,
+        nativeProviders,
+        retainedRuntimeModel,
+        authProviderId,
+        { remote, fileOps },
+      );
+      gatewayApiByModel.clear();
+      for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
+      gatewayImageInputByModel.clear();
+      for (const [key, value] of written.gatewayImageInputByModel) {
+        gatewayImageInputByModel.set(key, value);
+      }
+    };
+    const refreshLiveXaiCatalog = async (
+      modelId: string,
+      providerId?: string | null,
+    ): Promise<boolean> => {
+      if (!this.deps.resolvePiNativeProviders) return false;
+      try {
+        const live = await this.deps.resolvePiNativeProviders({
+          workingDir: opts.workingDir,
+          remoteHostId: opts.remoteHostId,
+          providerId,
+          model: modelId,
+          resumeSessionId: sdkSessionId || opts.resumeSessionId,
+        });
+        const liveXai = live?.providers.find(
+          (provider) => (provider.sourceProviderId ?? provider.id) === 'xai',
+        );
+        if (!live || !liveXai) return false;
+        const currentXai = nativeProviderForSource('xai');
+        if (currentXai) {
+          if (currentXai.baseUrl !== liveXai.baseUrl) return false;
+          if (!sameRecord(currentXai.headers, liveXai.headers)) return false;
+        }
+        const envKey = liveXai.apiKeyEnvVar;
+        if (envKey) {
+          if (!(envKey in nativeEnv)) return false;
+          if (live.env[envKey] !== undefined && live.env[envKey] !== nativeEnv[envKey]) {
+            return false;
+          }
+        }
+        nativeProviderById.set(liveXai.id, liveXai);
+        nativeProviderBySourceId.set(liveXai.sourceProviderId ?? liveXai.id, liveXai);
+        nativeProviders = [
+          ...nativeProviders.filter(
+            (provider) => (provider.sourceProviderId ?? provider.id) !== 'xai',
+          ),
+          liveXai,
+        ];
+        const written = await this.writeModelsJson(
+          configHome,
+          nativeProviders,
+          retainedRuntimeModel,
+          authProviderId,
+          { remote, fileOps },
+        );
+        gatewayApiByModel.clear();
+        for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
+        gatewayImageInputByModel.clear();
+        for (const [key, value] of written.gatewayImageInputByModel) {
+          gatewayImageInputByModel.set(key, value);
+        }
+        return nativeOffersModel(liveXai.id, modelId);
+      } catch (err) {
+        this.deps.logger.warn('pi live xAI catalog refresh failed', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+    };
     const switchModel = async (
       model: string,
       setOpts?: { providerId?: string | null; effort?: Effort },
@@ -2613,12 +2720,12 @@ export class PiAgent extends BaseAgent {
         // 同路由不打 set_model，但仍要重试子代理快照：初始写失败或确认写失败
         // 留下 pending 时，心跳复用活进程必须能把文件重建/清 pending，
         // 否则扩展会一直 fail-closed。不带 pending，路由已确认。
-        const provider = resolveProviderForModel(model, requestedProviderId);
-        const wireModel = resolveWireModel(provider, model);
-        if (!(await writeSubagentRuntimeFile({ model: wireModel, provider }))) {
+        const sameRouteProvider = resolveProviderForModel(model, requestedProviderId);
+        const sameRouteWire = resolveWireModel(sameRouteProvider, model);
+        if (!(await writeSubagentRuntimeFile({ model: sameRouteWire, provider: sameRouteProvider }))) {
           deps.logger.warn('pi: same-route setModel could not refresh subagent snapshot', {
             model,
-            provider,
+            provider: sameRouteProvider,
           });
         }
         deps.logger.debug('pi: setModel no-op; already on requested route', {
@@ -2626,6 +2733,31 @@ export class PiAgent extends BaseAgent {
           providerId: requestedProviderId,
         });
         return;
+      }
+      const sourceHint = requestedProviderId
+        ?? (model.startsWith('xai/') ? 'xai' : undefined);
+      const liveProviderHint = sourceHint ? nativeProviderForSource(sourceHint) : undefined;
+      const needsXaiCatalogReload = sourceHint === 'xai'
+        && (!liveProviderHint || !nativeOffersModel(liveProviderHint.id, model));
+      if (needsXaiCatalogReload) {
+        const previousProviders = nativeProviders.slice();
+        const refreshed = await refreshLiveXaiCatalog(model, requestedProviderId);
+        if (refreshed && sdkSessionId) {
+          // Claude 热切先 applyFlagSettings 扩白名单;Pi 的 set_model 不重读 models.json,
+          // 但 switch_session 会 createRuntime → ModelConfig.load,等于无重启扩名单。
+          const reloaded = await proc.request({
+            type: 'switch_session',
+            sessionPath: sdkSessionId,
+          });
+          if (!reloaded.success) {
+            await restoreNativeCatalog(previousProviders);
+            throw new Error(
+              `pi: failed to reload models after catalog update: ${reloaded.error ?? 'unknown'}`,
+            );
+          }
+        } else if (!refreshed) {
+          await restoreNativeCatalog(previousProviders);
+        }
       }
       // 显式选一个启动快照 nativeProviderById 里“无法服务该 model”的 BYOM provider 时 fail
       // closed:要么该 provider 是会话启动后才新增的(不在快照),要么它虽在、但用户编辑
@@ -2641,6 +2773,17 @@ export class PiAgent extends BaseAgent {
       }
       const provider = resolveProviderForModel(model, requestedProviderId);
       const wireModel = resolveWireModel(provider, model);
+      if (
+        requestedProviderId
+        && requestedProviderId !== PI_PROVIDER_ID
+        && requestedProviderId !== 'xd'
+        && provider === PI_PROVIDER_ID
+      ) {
+        throw new Error(
+          `pi: provider '${requestedProviderId}' cannot serve model '${model}' even after reloading the live catalog; ` +
+            'restart the Pi session if the provider was added after this task started.',
+        );
+      }
       assertGatewayProtocolForModel(model, requestedProviderId);
       // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
       // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
