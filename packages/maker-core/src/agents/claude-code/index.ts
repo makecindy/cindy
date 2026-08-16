@@ -3872,14 +3872,16 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 逐个发起 stopTask,但不在这里等待 RPC:interrupt 必须先按控制通道顺序发出。
     // 返回每个 RPC 的 promise,供 interrupt ACK 后只退休真正成功的任务;失败任务
     // 仍留在本地账中,等待 provider 的真实 completed/stopped 事件继续记账。
+    const runningWakeTaskIds = (): string[] =>
+      [...runningBackgroundTasks.entries()]
+        .filter(([, info]) => info.wake)
+        .map(([taskId]) => taskId);
+
     function stopRunningWakeBackgroundTasks(
       reason: string,
     ): Array<{ taskId: string; promise: Promise<void> }> {
       if (runningBackgroundTasks.size === 0) return [];
-      const wakeIds: string[] = [];
-      for (const [taskId, info] of runningBackgroundTasks) {
-        if (info.wake) wakeIds.push(taskId);
-      }
+      const wakeIds = runningWakeTaskIds();
       if (wakeIds.length === 0) return [];
       // 远端老 daemon / 老 SDK 没有 stopTask:退化为原行为(interrupt-only),
       // proxy 活动检测 + 「全部停止」兜底仍在。
@@ -3923,6 +3925,45 @@ export class ClaudeCodeAgent extends BaseAgent {
         requests.push({ taskId, promise });
       }
       return requests;
+    }
+
+    async function settleWakeStopRequests(
+      requests: Array<{ taskId: string; promise: Promise<void> }>,
+    ): Promise<{ fulfilledWakeIds: string[]; rejectedWakeIds: string[] }> {
+      const settled = await Promise.allSettled(requests.map(({ promise }) => promise));
+      const fulfilledWakeIds: string[] = [];
+      const rejectedWakeIds: string[] = [];
+      requests.forEach(({ taskId }, index) => {
+        if (settled[index]?.status === 'fulfilled') fulfilledWakeIds.push(taskId);
+        else rejectedWakeIds.push(taskId);
+      });
+      return { fulfilledWakeIds, rejectedWakeIds };
+    }
+
+    async function waitForGracefulStopStep<T>(
+      promise: Promise<T>,
+      signal?: AbortSignal,
+    ): Promise<T> {
+      if (!signal) return promise;
+      if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+      return new Promise<T>((resolve, reject) => {
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException('aborted', 'AbortError'));
+        };
+        const cleanup = () => signal.removeEventListener('abort', onAbort);
+        signal.addEventListener('abort', onAbort, { once: true });
+        void promise.then(
+          (value) => {
+            cleanup();
+            resolve(value);
+          },
+          (error) => {
+            cleanup();
+            reject(error);
+          },
+        );
+      });
     }
 
     // ── Middle-turn 事件过滤 (Codex review 3534925347 / 3535259132 / 3535293200) ──
@@ -5418,7 +5459,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         armUpstreamResponseIdle();
       },
 
-      async requestGracefulStop() {
+      async requestGracefulStop(stopOpts) {
         if (canceledBridgeQueries.has(q)) {
           throw new Error('Claude query is no longer active');
         }
@@ -5430,8 +5471,40 @@ export class ClaudeCodeAgent extends BaseAgent {
         turnState.interruptRequested = true;
         turnState.interruptGeneration = generation;
         dismissAllPending('graceful_stop', 'deny');
+        // A parent result can leave the foreground idle while wake tasks still
+        // own an awaiting continuation. Interrupting that idle Query alone does
+        // not revoke the task-triggered follow-up turn. Share the same stopTask
+        // accounting as hard Stop, but keep graceful-stop fail-safe semantics:
+        // only confirmed task stops may close the local continuation contract,
+        // and any unsupported/rejected control request remains unconfirmed
+        // without closing the provider process.
+        const wakeIds = runningWakeTaskIds();
+        const stopRequests = stopRunningWakeBackgroundTasks('graceful_stop');
         try {
-          await q.interrupt();
+          await waitForGracefulStopStep(Promise.resolve().then(() => q.interrupt()), stopOpts?.signal);
+          const { fulfilledWakeIds, rejectedWakeIds } = await waitForGracefulStopStep(
+            settleWakeStopRequests(stopRequests),
+            stopOpts?.signal,
+          );
+          if (turnState.generation !== generation) return;
+          const fulfilledWakeIdSet = new Set(fulfilledWakeIds);
+          const unconfirmedWakeIds = runningWakeTaskIds().filter(
+            (taskId) => !fulfilledWakeIdSet.has(taskId),
+          );
+          if (
+            stopRequests.length !== wakeIds.length ||
+            rejectedWakeIds.length > 0 ||
+            unconfirmedWakeIds.length > 0
+          ) {
+            throw new Error('Claude graceful stop could not confirm all background task stops');
+          }
+          const stoppedClaim = markWakeTasksStopped(fulfilledWakeIds, 'graceful_stop');
+          const cancelledContinuation =
+            stoppedClaim ?? cancelActiveContinuation('graceful_stop');
+          if (cancelledContinuation) {
+            retireContinuationTasks(cancelledContinuation);
+            emitCancelledContinuationBoundary(cancelledContinuation, 'graceful_stop');
+          }
         } catch (error) {
           if (turnState.generation === generation) turnState.interruptRequested = false;
           throw error;
@@ -5539,10 +5612,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // stopTask and interrupt share an ordered control channel: an
           // interrupt ACK guarantees these earlier stop requests have settled,
           // so allSettled intentionally has no extra timeout here.
-          const settledStops = await Promise.allSettled(stopRequests.map(({ promise }) => promise));
-          const fulfilledWakeIds = stopRequests
-            .filter((_, index) => settledStops[index]?.status === 'fulfilled')
-            .map(({ taskId }) => taskId);
+          const { fulfilledWakeIds } = await settleWakeStopRequests(stopRequests);
           // interrupt ACK authorizes retiring only wake tasks whose stop RPC
           // also succeeded. Rejected stops remain tracked for provider events,
           // preserving their continuation contract instead of creating an
