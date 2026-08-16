@@ -236,7 +236,7 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(chatInputSource).toContain('saveComposerTextAfterAsyncTransition(');
     expect(chatInputSource).toContain('recoveryCheckpoint!');
     expect(chatInputSource).toContain(
-      'if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey)',
+      'if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey && voiceOwnerKey)',
     );
     expect(chatInputSource).toContain('}, [editor, storageKey]);');
     expect(chatInputSource).not.toContain('}, [editor, storageKey, voiceInput.isBusy]);');

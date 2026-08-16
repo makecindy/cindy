@@ -39,6 +39,28 @@ export function applyRefinementToSerializedText(
   return text.slice(0, index) + refinedText + text.slice(index + basedOnText.length);
 }
 
+/** Patch a frozen composer payload after ASR/refine lands off the live editor. */
+export function applyVoiceResultToSerializedText(
+  text: string,
+  submittedText: string,
+  refinedText: string,
+): string {
+  if (refinedText) {
+    const replaced = applyRefinementToSerializedText(
+      text,
+      submittedText || refinedText,
+      refinedText,
+    );
+    if (replaced !== text) return replaced;
+    if (text.includes(refinedText)) return text;
+    return text ? `${text}\n${refinedText}` : refinedText;
+  }
+  if (submittedText && !text.includes(submittedText)) {
+    return text ? `${text}\n${submittedText}` : submittedText;
+  }
+  return text;
+}
+
 /**
  * After a session switch the live attachment/comment refs belong to the next
  * task. A send that started on the source session must keep using the source

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyRefinementToSerializedText,
+  applyVoiceResultToSerializedText,
   editorOwnsSourceDraft,
   mergeDetachedVoiceTextIntoDocument,
   resolveSourceOwnedComposerExtras,
@@ -90,6 +91,23 @@ describe('applyRefinementToSerializedText', () => {
     expect(applyRefinementToSerializedText('hello', 'ASR', 'Hello.')).toBe('hello');
     expect(applyRefinementToSerializedText('hello', 'hello', 'hello')).toBe('hello');
     expect(applyRefinementToSerializedText('hello', '', 'Hello.')).toBe('hello');
+  });
+});
+
+describe('applyVoiceResultToSerializedText', () => {
+  it('appends submitted or refined text when the freeze happened before ASR landed', () => {
+    expect(applyVoiceResultToSerializedText('typed prefix', 'asr draft', '')).toBe(
+      'typed prefix\nasr draft',
+    );
+    expect(applyVoiceResultToSerializedText('typed prefix', 'asr draft', 'Asr draft.')).toBe(
+      'typed prefix\nAsr draft.',
+    );
+  });
+
+  it('replaces a submitted span that already made it into the freeze', () => {
+    expect(applyVoiceResultToSerializedText('typed asr draft', 'asr draft', 'Asr draft.')).toBe(
+      'typed Asr draft.',
+    );
   });
 });
 

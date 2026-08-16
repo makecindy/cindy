@@ -148,7 +148,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const pendingStopAndSend = voiceInputStopAndSendPromiseRef.current;',
       '// ── External draft writes for the CURRENT session',
     );
-    expect(restoreEffectBlock).toContain('wasListeningWithoutSend');
+    expect(restoreEffectBlock).toContain('wasBusyWithoutSend');
     expect(restoreEffectBlock).toContain('mergeDetachedVoiceTextIntoDocument(');
     expect(restoreEffectBlock).toContain(
       'await voiceInputStopRef.current({ waitForRefinement: true });',
@@ -159,7 +159,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(restoreEffectBlock).not.toContain('deferRestoreForLiveListening');
     expect(restoreEffectBlock).not.toContain('await pendingStopAndSend;');
     expect(restoreEffectBlock.indexOf('restoreNextDraft()')).toBeLessThan(
-      restoreEffectBlock.indexOf('wasListeningWithoutSend && prevEditorKey'),
+      restoreEffectBlock.indexOf('wasBusyWithoutSend && prevEditorKey'),
     );
     expect(chatInputSource).toContain('}, [editor, storageKey]);');
     expect(chatInputSource).not.toContain('}, [editor, storageKey, voiceInput.isBusy]);');
@@ -178,7 +178,8 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(serializeGuard).not.toContain('latestStorageKeyRef.current !== sourceStorageKey');
     expect(chatInputSource).toContain('frozenVoiceSendRef.current');
     expect(chatInputSource).toContain('voiceInput.getLastRefinement()');
-    expect(chatInputSource).toContain('applyRefinementToSerializedText(');
+    expect(chatInputSource).toContain('applyVoiceResultToSerializedText(');
+    expect(chatInputSource).toContain("frozenVoiceSend.kind !== 'send'");
     expect(chatInputSource).toContain('resolveSourceOwnedComposerExtras({');
     expect(chatInputSource).toContain('sourceAttachments:');
     expect(chatInputSource).toContain('sourceComments:');
@@ -238,7 +239,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(restoreEffectBlock).toContain('latestStorageKeyRef.current === storageKey');
     expect(restoreEffectBlock).toContain('if (!isCurrentTransition()) return;');
     expect(restoreEffectBlock).toContain('restoreNextDraft();');
-    expect(restoreEffectBlock).toContain('wasListeningWithoutSend');
+    expect(restoreEffectBlock).toContain('wasBusyWithoutSend');
 
     const waitForBusyCompletionBlock = extractBetween(
       voiceInputSource,
