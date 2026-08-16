@@ -117,6 +117,7 @@ function makerMock(authenticated: boolean): Maker {
 describe('utility one-shot candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fetchMock.mockReset();
     appCapabilities.mockReturnValue({ canUseCindyGateway: true } as never);
     readKey.mockReturnValue(null);
     readCodexCreds.mockRejectedValue(new Error('not authenticated'));
@@ -1664,6 +1665,30 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('cancels the Gateway HTTP request through the candidate signal', async () => {
+    readKey.mockReturnValue('xd-key');
+    const controller = new AbortController();
+    fetchMock.mockImplementationOnce((_url, init) =>
+      new Promise((_resolve, reject) => {
+        (init?.signal as AbortSignal | undefined)?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      }));
+
+    const pending = requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[0],
+      { timeoutMs: 12_000, signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not use the Gateway alias outside a Cindy cloud session', async () => {
     appCapabilities.mockReturnValue({ canUseCindyGateway: false } as never);
     readKey.mockReturnValue('xd-key');
@@ -1727,6 +1752,82 @@ describe('utility one-shot candidates', () => {
     expect(body).not.toHaveProperty('tools');
     expect(body).not.toHaveProperty('tool_choice');
     expect(body).not.toHaveProperty('parallel_tool_calls');
+  });
+
+  it('does not start OpenAI HTTP after credential refresh outlives the candidate', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'oauth' },
+        routing: {
+          codex: {
+            upstream: 'https://chatgpt.example/backend-api/codex',
+            authStrategy: 'oauth-passthrough',
+          },
+        },
+        models: {
+          codex: [{ id: 'gpt-5.4-nano', name: 'Nano', contextWindow: 272_000 }],
+        },
+      }],
+    } as never);
+    let resolveAuth: ((auth: { accessToken: string; accountId: string }) => void) | undefined;
+    readCodexCreds.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAuth = resolve;
+    }));
+    const controller = new AbortController();
+
+    const pending = requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[1],
+      { timeoutMs: 12_000, signal: controller.signal },
+    );
+    await Promise.resolve();
+    controller.abort();
+    resolveAuth?.({ accessToken: 'late-token', accountId: 'late-account' });
+
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start Anthropic HTTP after credential refresh outlives the candidate', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {
+          'claude-code': {
+            upstream: 'https://anthropic.example',
+            authStrategy: 'oauth-passthrough',
+          },
+        },
+        models: {
+          'claude-code': [{ id: 'claude-haiku-4-5', name: 'Haiku', contextWindow: 200_000 }],
+        },
+      }],
+    } as never);
+    let resolveOAuth: ((auth: { accessToken: string }) => void) | undefined;
+    readClaudeOAuth.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOAuth = resolve;
+    }));
+    const controller = new AbortController();
+
+    const pending = requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[3],
+      { timeoutMs: 12_000, signal: controller.signal },
+    );
+    await Promise.resolve();
+    controller.abort();
+    resolveOAuth?.({ accessToken: 'late-token' });
+
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('uses xAI OAuth and the selected xAI Responses route', async () => {

@@ -119,12 +119,11 @@ describe('dedicated Auto-review candidate policy', () => {
   it('moves to the next provider after a full candidate timeout instead of starving fallback', async () => {
     vi.useFakeTimers();
     const calls: string[] = [];
-    const requestCandidate = vi.fn((_prompt, candidate, opts) => {
+    const requestCandidate = vi.fn((_prompt, candidate) => {
       calls.push(candidate.id);
       if (candidate.id === 'cindy-gateway') {
-        return new Promise<UtilityTextResult>((resolve) => {
-          setTimeout(() => resolve(failed(candidate, 'timeout')), opts.timeoutMs);
-        });
+        // Simulates credential refresh that ignores AbortSignal and never settles.
+        return new Promise<UtilityTextResult>(() => undefined);
       }
       return Promise.resolve(succeeded(candidate, '{"verdict":"allow"}'));
     });
@@ -140,25 +139,27 @@ describe('dedicated Auto-review candidate policy', () => {
   it('aborts the in-flight request at the total deadline without starting another chain', async () => {
     vi.useFakeTimers();
     const observedSignals: AbortSignal[] = [];
-    const requestCandidate = vi.fn((_prompt, candidate, opts) => {
+    const repeatedCandidates = Array.from(
+      { length: 8 },
+      () => DEDICATED_AUTO_REVIEW_CANDIDATES[0],
+    );
+    const requestCandidate = vi.fn((_prompt, _candidate, opts) => {
       observedSignals.push(opts.signal as AbortSignal);
-      return new Promise<UtilityTextResult>((resolve) => {
-        opts.signal?.addEventListener(
-          'abort',
-          () => resolve(failed(candidate, 'timeout')),
-          { once: true },
-        );
-      });
+      return new Promise<UtilityTextResult>(() => undefined);
     });
-    const route = createAutoReviewModelRouter({ logger: logger(), requestCandidate });
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      candidates: repeatedCandidates,
+      requestCandidate,
+    });
 
     const pending = route('classify');
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
     await expect(pending).resolves.toBeNull();
-    expect(requestCandidate).toHaveBeenCalledTimes(1);
-    expect(observedSignals).toHaveLength(1);
-    expect(observedSignals[0]?.aborted).toBe(true);
+    expect(requestCandidate).toHaveBeenCalledTimes(5);
+    expect(observedSignals).toHaveLength(5);
+    expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
   });
 
   it('stops immediately when the owning reviewer aborts', async () => {

@@ -13,6 +13,7 @@ export const AUTO_REVIEW_CHAIN_TIMEOUT_MS = 52_000;
 export const AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS = AUTO_REVIEW_CHAIN_TIMEOUT_MS + 1_000;
 const AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS = 2;
 const AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS = 100;
+const AUTO_REVIEW_CANDIDATE_TIMEOUT = Symbol('auto-review-candidate-timeout');
 
 interface AutoReviewModelRouterLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
@@ -77,6 +78,58 @@ function candidateRequestFailure(
   };
 }
 
+function candidateTimeoutFailure(
+  candidate: DedicatedAutoReviewCandidate,
+): UtilityTextResult {
+  return {
+    ok: false,
+    reason: 'timeout',
+    attempts: [{
+      providerId: candidate.providerId,
+      model: candidate.model,
+      transport: candidate.transport,
+      status: 'failed',
+      reason: 'timeout',
+    }],
+  };
+}
+
+async function requestCandidateWithinTimeout(
+  requestCandidate: NonNullable<AutoReviewModelRouterDeps['requestCandidate']>,
+  prompt: string,
+  candidate: DedicatedAutoReviewCandidate,
+  timeoutMs: number,
+  chainSignal: AbortSignal,
+): Promise<UtilityTextResult> {
+  if (chainSignal.aborted) return candidateTimeoutFailure(candidate);
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abortFromChain: (() => void) | undefined;
+  const cutoff = new Promise<typeof AUTO_REVIEW_CANDIDATE_TIMEOUT>((resolve) => {
+    const abort = () => {
+      controller.abort();
+      resolve(AUTO_REVIEW_CANDIDATE_TIMEOUT);
+    };
+    abortFromChain = abort;
+    if (chainSignal.aborted) abort();
+    else chainSignal.addEventListener('abort', abort, { once: true });
+    timeout = setTimeout(abort, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([
+      requestCandidate(prompt, candidate, { timeoutMs, signal: controller.signal }),
+      cutoff,
+    ]);
+    return result === AUTO_REVIEW_CANDIDATE_TIMEOUT
+      ? candidateTimeoutFailure(candidate)
+      : result;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (abortFromChain) chainSignal.removeEventListener('abort', abortFromChain);
+  }
+}
+
 function safeFailureReason(result: UtilityTextResult): string {
   if (result.ok) return 'none';
   const failed = result.attempts.find((attempt) => attempt.status === 'failed');
@@ -118,10 +171,13 @@ export function createAutoReviewModelRouter(
           const attemptStartedAt = now();
           let result: UtilityTextResult;
           try {
-            result = await requestCandidate(prompt, candidate, {
-              timeoutMs: Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs),
-              signal: controller.signal,
-            });
+            result = await requestCandidateWithinTimeout(
+              requestCandidate,
+              prompt,
+              candidate,
+              Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs),
+              controller.signal,
+            );
           } catch {
             // Credential refresh and catalog probes are runtime boundaries too. A thrown
             // candidate must not skip the remaining controlled providers or leak details.

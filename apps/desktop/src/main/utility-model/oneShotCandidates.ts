@@ -345,6 +345,7 @@ export async function requestDedicatedAutoReviewCandidateText(
     missingCredentialMessage: 'The Auto-review provider is not authenticated.',
   };
 
+  if (opts.signal?.aborted) return cancelledUtilityTextResult(profile);
   if (isProviderDisabled(readModelDisableOverrides(), candidate.providerId)) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
@@ -683,6 +684,20 @@ function supportsXaiReasoning(model: string): boolean {
   return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
 }
 
+function cancelledUtilityTextResult(profile: UtilityModelProfile): UtilityTextResult {
+  return {
+    ok: false,
+    reason: 'timeout',
+    attempts: [{
+      providerId: profile.id,
+      model: profile.model,
+      transport: profile.transport,
+      status: 'failed',
+      reason: 'timeout',
+    }],
+  };
+}
+
 // 内置供应商的执行分支只认下面硬编码的 xd/anthropic/openai/xai 四家;钉档
 // 清单侧(textOneshotPinOptions.isRoutableForOneshot)按同一集合过滤——新增
 // 第五个聊天型内置供应商时两边一起动,否则清单会列出这里接不住的模型。
@@ -707,6 +722,7 @@ async function requestBuiltinProviderText(
     settingsTab: 'providers',
     missingCredentialMessage: 'The selected provider is not authenticated.',
   };
+  if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
   const routing = input.provider.routing[input.agentKind];
   if (!routing) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
@@ -751,6 +767,7 @@ async function requestBuiltinProviderText(
 
   if (input.provider.id === 'anthropic') {
     const oauth = await getValidClaudeAiOAuth();
+    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
     if (!oauth?.accessToken) {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
@@ -788,6 +805,7 @@ async function requestBuiltinProviderText(
     } catch {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
+    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
     if (!creds.accountId) {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
@@ -829,6 +847,7 @@ async function requestBuiltinProviderText(
     } catch {
       return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
     }
+    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
     return executeCandidates([{
       providerId: input.provider.id,
       model: input.model,
