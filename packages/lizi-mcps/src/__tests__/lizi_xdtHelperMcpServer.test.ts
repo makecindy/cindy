@@ -99,4 +99,61 @@ describe("cindy_helper MCP server", () => {
       await server.close();
     }
   });
+
+  it("discovers and calls the arbitrary session queue tool through the entry tools", async () => {
+    const listSessionQueue = vi.fn(async () => ({
+      ok: true as const,
+      messages: [],
+    }));
+    const server = createXdtHelperMcpServer(
+      {
+        sessionQueue: {
+          listSessionQueue,
+          listSessionQueuedCounts: vi.fn(async () => ({ ok: true as const, counts: {} })),
+        },
+      },
+      {
+        agentKind: "codex",
+        workingDir: "/repo",
+        sessionId: "dispatcher-session",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({
+      name: "cindy-helper-queue-test",
+      version: "0.0.0",
+    });
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const discovered = parsePayload(
+        await client.callTool({
+          name: "list_tools",
+          arguments: { category: "history" },
+        }),
+      );
+      expect((discovered.tools as Array<{ name: string }>).map((tool) => tool.name)).toContain(
+        "list_session_queue",
+      );
+
+      const result = await client.callTool({
+        name: "call_tool",
+        arguments: {
+          name: "list_session_queue",
+          args: { session_id: "session-1" },
+        },
+      });
+
+      expect(parsePayload(result)).toMatchObject({
+        ok: true,
+        session_id: "session-1",
+        queued_count: 0,
+        queue: [],
+      });
+      expect(listSessionQueue).toHaveBeenCalledWith("session-1");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

@@ -101,6 +101,11 @@ export {
   type ListSessionsToolDeps,
 } from './list_sessions.js';
 export {
+  registerListSessionQueueTool,
+  type SessionQueueDeps,
+  type SessionQueuedMessageEntry,
+} from './list_session_queue.js';
+export {
   registerGetChatHistoryTool,
   type GetChatHistoryToolDeps,
 } from './get_chat_history.js';

@@ -301,6 +301,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       logger: createLogger('mcp/cindy_helper'),
+      sessionQueue: {
+        listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
+        listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>
+          service.listSessionQueuedCounts(sessionIds)),
+      },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };

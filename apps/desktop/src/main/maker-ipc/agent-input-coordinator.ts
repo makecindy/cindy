@@ -61,6 +61,10 @@ import {
   RECOVERY_CHECKPOINT_MARKER,
   type RecoveryContextSnapshot,
 } from './recoveryCoordinator.js';
+import {
+  projectSessionQueueForInspection,
+  type SessionQueueInspectionEntry,
+} from './sessionQueueInspection.js';
 
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
@@ -884,6 +888,12 @@ export class AgentInputCoordinator {
 
   getProjection(sessionId: string): AgentInputProjection {
     return this.toProjection(sessionId, this.getState(sessionId));
+  }
+
+  /** Main-only inspection view for cindy_helper; never crosses renderer/device-link IPC. */
+  getQueueInspection(sessionId: string): SessionQueueInspectionEntry[] {
+    const state = this.getState(sessionId);
+    return projectSessionQueueForInspection(state.pendingQueue, state.steeringQueueClientIds);
   }
 
   /**

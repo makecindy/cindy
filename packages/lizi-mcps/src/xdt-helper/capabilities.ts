@@ -148,8 +148,8 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '聊天历史查询(给 LLM 自助拉本地对话数据)',
     oneLiner: 'agent 通过 MCP 工具拉本地 SQLite 里所有 session / message 原始数据,适合做用户级 memory / 知识库整理。',
     detail: [
-      `【是什么】${BRAND_NAME} 所有用户和 agent 的对话全部存在本地 SQLite(按 userId 物理隔离), 但用户原本看不到这些数据, 也无法让 agent 帮忙整理。cindy_helper 的 history 类工具开放了四个只读查询入口, 让 agent 能拿到原始 raw data 协助用户组织自己的 memory / 知识库系统。`,
-      '【四个工具】(1)list_workdirs: 列出所有出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据(不返消息内容); (3)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (4)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口。',
+      `【是什么】${BRAND_NAME} 所有用户和 agent 的对话全部存在本地 SQLite(按 userId 物理隔离), 但用户原本看不到这些数据, 也无法让 agent 帮忙整理。cindy_helper 的 history 类工具开放了五个只读查询入口, 让 agent 能拿到原始 raw data 与当前输入队列协助用户组织自己的 memory / 知识库系统。`,
+      '【五个工具】(1)list_workdirs: 列出所有出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据，并附当前 queuedCount; (3)list_session_queue: 按 session_id 查看尚未消费消息的位置、来源、入队时间、正文摘要与投递状态; (4)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (5)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口。',
       '【典型用法】"帮我总结这周和 agent 的讨论, 写成 memory 条目" → list_sessions({from: 周一 ISO}) 拿 sessionId 列表 → get_chat_history({session_ids: [...]}) 拿对话 → LLM 提炼成 memory。"我之前聊过 X / 上次怎么解决那个 bug"(只记得内容、不知道在哪) → search_chat_history({query}) 直接语义召回。"我在 xxx 项目里都聊过啥" → list_sessions({workdir}) → get_chat_history。',
       '【向量是增益不是依赖】search_chat_history 在用户没开 embedding / sqlite-vec 不可用时静默退化为纯 FTS, 搜索照常工作; 响应里 vector_used 标明向量是否生效。',
       '【分页】所有工具游标分页, 单次硬上限防炸 context, 但 hasMore + nextCursor 串联多次调用可拿全量, 不会丢信息。',

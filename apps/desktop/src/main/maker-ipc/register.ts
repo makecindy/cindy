@@ -144,6 +144,9 @@ import {
 import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
 import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
 import {
+  type SessionQueueInspectionEntry,
+} from './sessionQueueInspection.js';
+import {
   listAtBrowserTabs,
   parseAtContextCatalogRequest,
   readAtDesktopWindows,
@@ -1456,6 +1459,14 @@ type SendToSessionInternalResult =
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
+  listSessionQueue: (sessionId: string) => Promise<
+    | { ok: true; messages: SessionQueueInspectionEntry[] }
+    | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  listSessionQueuedCounts: (sessionIds: string[]) => Promise<
+    | { ok: true; counts: Record<string, number> }
+    | { ok: false; errorCode: 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
   sendToSession: (params: {
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
@@ -9724,6 +9735,54 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // tryGetOrcaCollabService() 拿到这些函数引用, 让 MCP tool
   // 走与 IPC handler 完全相同的业务路径。
   orcaCollabServiceHolder = {
+    listSessionQueue: async (sessionId) => {
+      try {
+        const meta = await maker.getSessionMeta(sessionId);
+        if (!meta) {
+          return { ok: false, errorCode: 'NOT_FOUND', message: `session ${sessionId} not found` };
+        }
+        await inputCoordinator.ensureQueueRestored(sessionId);
+        if (!inputCoordinator.isQueueRestored(sessionId)) {
+          return { ok: false, errorCode: 'INTERNAL', message: `queue restore incomplete for ${sessionId}` };
+        }
+        return {
+          ok: true,
+          messages: inputCoordinator.getQueueInspection(sessionId),
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          errorCode: /localDb not ready/i.test(message) ? 'HOST_NOT_READY' : 'INTERNAL',
+          message,
+        };
+      }
+    },
+    listSessionQueuedCounts: async (sessionIds) => {
+      try {
+        const counts: Record<string, number> = {};
+        const uniqueIds = [...new Set(sessionIds)];
+        for (let offset = 0; offset < uniqueIds.length; offset += 16) {
+          await Promise.all(
+            uniqueIds.slice(offset, offset + 16).map(async (sessionId) => {
+              await inputCoordinator.ensureQueueRestored(sessionId);
+              if (!inputCoordinator.isQueueRestored(sessionId)) {
+                throw new Error(`queue restore incomplete for ${sessionId}`);
+              }
+              counts[sessionId] = inputCoordinator.getProjection(sessionId).pendingQueue.length;
+            }),
+          );
+        }
+        return { ok: true, counts };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          errorCode: /localDb not ready/i.test(message) ? 'HOST_NOT_READY' : 'INTERNAL',
+          message,
+        };
+      }
+    },
     sendToSession: sendToSessionInternal,
     enableOrca: enableOrcaInternal,
     disableOrca: disableOrcaInternal,

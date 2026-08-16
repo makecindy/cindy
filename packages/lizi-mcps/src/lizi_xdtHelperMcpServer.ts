@@ -7,8 +7,9 @@
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
  *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现,分五类:
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
- *    - 'history' : 只读查询本地数据库聊天历史 (list_workdirs / list_sessions /
- *                  get_chat_history / search_chat_history)
+ *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
+ *                  list_sessions / list_session_queue / get_chat_history /
+ *                  search_chat_history)
  *    - 'control' : 会话状态控制 (set_current_session_title / rename_sessions /
  *                  archive_sessions / unarchive_sessions)
  *    - 'feedback': 官方反馈提交 (submit_github_issue)
@@ -40,6 +41,7 @@ import {
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerListSessionsTool,
+  registerListSessionQueueTool,
   registerGetChatHistoryTool,
   registerSearchChatHistoryTool,
   registerSubmitGithubIssueTool,
@@ -50,6 +52,7 @@ import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
+import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
@@ -70,7 +73,7 @@ const D_LIST_TOOLS =
   `传 category=cindy → ${BRAND_NAME} 自省类只读工具(get_capabilities / get_current_session_id);` +
   '传 category=control → 对话控制工具(set_current_session_title / rename_sessions);' +
   '传 category=history → 只读查询本地数据库聊天历史' +
-  '(list_workdirs / list_sessions / get_chat_history 按元数据捞, search_chat_history 按内容语义找),' +
+  '(list_workdirs / list_sessions / list_session_queue / get_chat_history 按元数据捞, search_chat_history 按内容语义找),' +
   '用于让用户基于自己的对话历史组织 memory / 知识库;' +
   `传 category=feedback → 用户要给 ${BRAND_NAME} 官方提 bug / 反馈 / 功能建议时用` +
   '(submit_github_issue,先与用户对话澄清缺失细节;Bug 可在用户同意后附脱敏诊断摘要;提交前会弹系统确认卡片,创建后可继续协助源码修复);' +
@@ -82,7 +85,7 @@ const D_LIST_TOOLS =
 
 const D_CALL_TOOL =
   '调用 cindy_helper 中的某个具体工具(如 get_capabilities / get_current_session_id / ' +
-  'set_current_session_title / rename_sessions / send_to_session / list_workdirs / list_sessions / get_chat_history / search_chat_history / submit_github_issue)。' +
+  'set_current_session_title / rename_sessions / send_to_session / list_workdirs / list_sessions / list_session_queue / get_chat_history / search_chat_history / submit_github_issue)。' +
   '先用 list_tools 拿工具名 + 简介。' +
   '错误码:`UNKNOWN_TOOL` = 工具名不存在;`INVALID_ARGS` = 参数 schema 校验失败(返回 schema 自纠);' +
   'tool 自身的业务错(如 NO_SESSION_CONTEXT / INVALID_FILTER / HOST_NOT_READY / INTERNAL)' +
@@ -221,6 +224,11 @@ export interface XdtHelperMcpDeps {
    */
   history?: XdtHelperHistoryDeps;
   /**
+   * 本机 session 输入队列的只读查询回调。host 注入后注册 list_session_queue，
+   * 并让 list_sessions 为每条 session 附带 queuedCount。
+   */
+  sessionQueue?: SessionQueueDeps;
+  /**
    * Session handoff 回调。host 注入后, send_to_session 工具注册到 handoff 类目(走
    * call_tool);不注入则工具不出现。此工具是 skill(如 maker-github-issue)做跨会话
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
@@ -301,9 +309,15 @@ export function createXdtHelperMcpServer(
   // History 类工具: 仅 host 注入了 history 回调时注册。
   if (deps.history) {
     registerListWorkdirsTool(registry, { history: deps.history });
-    registerListSessionsTool(registry, { history: deps.history });
+    registerListSessionsTool(registry, {
+      history: deps.history,
+      ...(deps.sessionQueue ? { sessionQueue: deps.sessionQueue } : {}),
+    });
     registerGetChatHistoryTool(registry, { history: deps.history });
     registerSearchChatHistoryTool(registry, { history: deps.history });
+  }
+  if (deps.sessionQueue) {
+    registerListSessionQueueTool(registry, deps.sessionQueue);
   }
 
   // Feedback 类工具: 仅 host 注入了 githubIssue 回调时注册。
