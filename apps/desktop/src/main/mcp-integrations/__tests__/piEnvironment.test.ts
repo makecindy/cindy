@@ -12,7 +12,7 @@
  * getPiExtraSpawnConfig 内部起真 codexHttpBridge,故这里做真 HTTP 往返。
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getLiziMcpSessionContext } from '@cindy/mcps';
 import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
@@ -416,6 +416,38 @@ describe('piEnvironment per-session identity', () => {
     config!.disposeSessionCtx!();
   });
 
+  it('derives a stable per-session bridge token across rebuilds (round 41 — envHash stability)', async () => {
+    // 回归(轮 41 CRITICAL):token 曾每次 randomBytes 新生成 → 断链重连重建
+    // spawn env 时 CINDY_PI_MCP_BRIDGE 必变 → envHash 必变 → daemon ensure
+    // 判配置变更 → kill + respawn —— "正常对话期间突然 kill"根因。同 session
+    // 两次构建(模拟断链重连)token 必须逐字节稳定,否则 attach 保活失效。
+    const configA = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'stable-token-session',
+      sessionInstanceId: 'inst-1',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    const configB = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'stable-token-session',
+      sessionInstanceId: 'inst-2',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(configA!.mcpBridge!.token).toBe(configB!.mcpBridge!.token);
+    expect(configA!.mcpBridge!.token).toMatch(/^[0-9a-f]{64}$/);
+    // 隔离性保持:不同 session 的 token 必须不同(HMAC 派生, 非全局固定值)。
+    const configOther = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'other-session',
+      sessionInstanceId: 'inst-1',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(configOther!.mcpBridge!.token).not.toBe(configA!.mcpBridge!.token);
+    configA!.disposeSessionCtx!();
+    configB!.disposeSessionCtx!();
+    configOther!.disposeSessionCtx!();
+  });
+
   it('fail-closes malformed or incomplete remote HTTP providers without hiding a valid provider', async () => {
     const logCanary = 'remote-secret-log-canary';
     const { logger, entries } = recordingLogger();
@@ -603,5 +635,34 @@ describe('piEnvironment per-session identity', () => {
     expect(config?.mcpBridge?.servers.map((server) => server.name)).toContain(
       'orca_worker_bridge',
     );
+  });
+
+  // ── 轮 40-w4 HIGH 回归保护:ensureBridge 成功路径的 30s 超时 timer 必须取消 ──
+  it('does not re-create the bridge when 30s elapse after a successful start (round 40-w4 HIGH)', async () => {
+    vi.useFakeTimers();
+    try {
+      // 首次调用:启动 bridge
+      const first = await getPiExtraSpawnConfig([makeProvider('cindy_probe')], noopLogger(), {
+        sessionId: 'sess-a',
+        workingDir: '/repo',
+      });
+      expect(first?.mcpBridge?.servers.length).toBeGreaterThan(0);
+
+      // 推进 30s —— 修复前:迟到 timer 清空 startPromise → 下次调用重建 bridge。
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // 再次调用:应命中已完成的 startPromise(缓存), 不重建。
+      const second = await getPiExtraSpawnConfig([makeProvider('cindy_probe')], noopLogger(), {
+        sessionId: 'sess-b',
+        workingDir: '/repo',
+      });
+      expect(second?.mcpBridge?.servers.length).toBeGreaterThan(0);
+      // 断言仍复用同一 bridge:两次返回的 URL 端口一致 = 未重建新 HTTP server
+      // (URL 的 ?session= 因 sessionId 不同而不同, 只比端口)。
+      const portOf = (u: string | undefined) => new URL(u ?? '').port;
+      expect(portOf(second?.mcpBridge?.servers[0]?.url)).toBe(portOf(first?.mcpBridge?.servers[0]?.url));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

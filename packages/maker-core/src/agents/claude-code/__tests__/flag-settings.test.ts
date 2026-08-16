@@ -15,16 +15,18 @@ describe('buildClaudeFlagSettings', () => {
           fastMode,
         });
         expect(settings.apiKeyHelper).toBe('');
+        expect(settings.attribution).toEqual({ commit: '', pr: '' });
       }
     }
   });
 
-  it('默认形态(无 memory override / fast 关)只含 showThinkingSummaries + apiKeyHelper', () => {
+  it('默认形态(无 memory override / fast 关)只含 showThinkingSummaries + apiKeyHelper + 空 attribution', () => {
     expect(
       buildClaudeFlagSettings({ showThinkingSummaries: true, fastMode: false }),
     ).toEqual({
       showThinkingSummaries: true,
       apiKeyHelper: '',
+      attribution: { commit: '', pr: '' },
     });
   });
 
@@ -34,6 +36,7 @@ describe('buildClaudeFlagSettings', () => {
     ).toEqual({
       showThinkingSummaries: false,
       apiKeyHelper: '',
+      attribution: { commit: '', pr: '' },
       autoMemoryEnabled: true,
       autoDreamEnabled: true,
     });

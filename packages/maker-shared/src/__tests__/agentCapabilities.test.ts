@@ -3,6 +3,7 @@ import {
   buildMobileModelSwitchConfirmation,
   buildSessionRuntimeOptions,
   categorizeMobileModel,
+  compactEnglishEffortLabel,
   normalizeMobileAgentCapabilities,
   reconcileRuntimeDraftWithCapabilities,
 } from '../agentCapabilities';
@@ -18,7 +19,7 @@ const desktopCapabilitiesPayload = {
       effortDisplayNames: { xhigh: 'Max' },
       defaultEffort: 'medium',
       supportsFastMode: true,
-      newSessionDefault: ['claude-code', 'invalid-agent', 'claude-code', 'codex'],
+      newSessionDefault: ['claude-code', 'invalid-agent', 'claude-code', 'codex', 'pi'],
     },
     {
       id: 'claude-haiku-4-6',
@@ -44,6 +45,19 @@ const desktopCapabilitiesPayload = {
 };
 
 describe('agent capabilities shared model', () => {
+  it('uses the same 2–3 letter English effort codes on desktop and mobile', () => {
+    expect(
+      ['minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'].map(
+        compactEnglishEffortLabel,
+      ),
+    ).toEqual(['Min', 'Lo', 'Mid', 'Hi', 'XHi', 'Ult', 'Max']);
+    expect(compactEnglishEffortLabel('extra-high')).toBe('XHi');
+    expect(compactEnglishEffortLabel('adaptive-fast', 'Adaptive Fast')).toBe('Adaptive Fast');
+    expect(compactEnglishEffortLabel('adaptive-safe', 'Adaptive Safe')).toBe('Adaptive Safe');
+    expect(compactEnglishEffortLabel('adaptive-fast')).toBe('adaptive-fast');
+    expect(compactEnglishEffortLabel('adaptive-safe')).toBe('adaptive-safe');
+  });
+
   it('normalizes desktop capability payloads for runtime controls', () => {
     const capabilities = normalizeMobileAgentCapabilities(desktopCapabilitiesPayload);
 
@@ -64,7 +78,7 @@ describe('agent capabilities shared model', () => {
       'plan',
     ]);
     expect(capabilities?.supportsSessionAgentSwitch).toBe(false);
-    expect(capabilities?.availableModels[0].newSessionDefault).toEqual(['claude-code', 'codex']);
+    expect(capabilities?.availableModels[0].newSessionDefault).toEqual(['claude-code', 'codex', 'pi']);
     expect('newSessionDefault' in (capabilities?.availableModels[1] ?? {})).toBe(false);
     expect(normalizeMobileAgentCapabilities({
       ...desktopCapabilitiesPayload,

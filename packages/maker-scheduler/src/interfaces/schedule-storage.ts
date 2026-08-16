@@ -63,12 +63,27 @@ export interface ScheduleStorage {
   ): Promise<Schedule | null>;
 
   /**
+   * Normalize an active schedule whose automatic claim marker is still the same
+   * orphan candidate observed by the scheduler. The implementation must be a
+   * compare-and-swap so a finishing owner cannot interleave between the startup
+   * running-row check and the re-arm write.
+   */
+  normalizeOrphanedAutomaticClaim(
+    id: string,
+    expectedActiveClaimRunId: string | undefined,
+    nextFireAt: number,
+  ): Promise<Schedule | null>;
+
+  /**
    * Finish a deferred runNow while atomically preserving a live automatic claim
-   * if one appeared after runNow read the schedule snapshot.
+   * if one appeared after runNow read the schedule snapshot. `deferredFiredAt`
+   * is the optimistic manual timestamp written by this deferred run; restore the
+   * snapshot only while lastFiredAt still equals that value.
    */
   deferRunNowWithLiveClaimGuard(
     id: string,
     previousLastFiredAt: number | undefined,
+    deferredFiredAt: number,
     retryAt: number,
   ): Promise<Schedule | null>;
 

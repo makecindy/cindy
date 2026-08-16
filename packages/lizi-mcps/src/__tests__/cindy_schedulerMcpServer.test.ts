@@ -151,6 +151,7 @@ class InMemoryStorage implements ScheduleStorage {
   async deferRunNowWithLiveClaimGuard(
     id: string,
     previousLastFiredAt: number | undefined,
+    deferredFiredAt: number,
     retryAt: number,
   ): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -160,11 +161,25 @@ class InMemoryStorage implements ScheduleStorage {
       await this.hasRunningRuns(id, { runId: ex.activeClaimRunId })
         ? ex.activeClaimRunId
         : undefined;
-    ex.lastFiredAt = previousLastFiredAt;
+    if (ex.lastFiredAt === deferredFiredAt) {
+      ex.lastFiredAt = previousLastFiredAt;
+    }
     if (liveClaimId === undefined) {
       ex.nextFireAt = retryAt;
     }
     ex.activeClaimRunId = liveClaimId;
+    return { ...ex };
+  }
+  async normalizeOrphanedAutomaticClaim(
+    id: string,
+    expectedActiveClaimRunId: string | undefined,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.status !== 'active' || ex.nextFireAt !== undefined) return null;
+    if (ex.activeClaimRunId !== expectedActiveClaimRunId) return null;
+    ex.nextFireAt = nextFireAt;
+    ex.activeClaimRunId = undefined;
     return { ...ex };
   }
   async pauseWithLiveClaimGuard(

@@ -751,6 +751,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/remote-file-service',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
+    // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。
+    'resources/pi-manager',
     // 第三方开源声明,由 scripts/generate-third-party-notices.mjs 生成
     // (pnpm licenses:generate),随安装包分发以满足各开源协议的署名义务。
     'resources/THIRD-PARTY-NOTICES.txt',
@@ -1036,6 +1038,53 @@ function buildMacVoiceInputModifierShortcutListener(platform: ForgePlatform, arc
   fs.chmodSync(dest, 0o755);
   const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
   console.log(`[forge:prePackage] macOS voice input modifier shortcut listener (${swiftArchLabel(arch, MACOS_VOICE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
+}
+
+function buildWindowsVoiceInputFunctionKeyListener(targetPlatform: string): void {
+  if (process.platform !== 'win32' || targetPlatform !== 'win32') return;
+  const sourceRoot = path.join(__dirname, 'native', 'voice-input', 'windows-function-key-listener');
+  const manifest = path.join(sourceRoot, 'Cargo.toml');
+  if (!fs.existsSync(manifest)) {
+    throw new Error(
+      `[forge] Windows voice input function key listener source missing at ${manifest}`,
+    );
+  }
+  const cargoBin = process.env.USERPROFILE
+    ? path.join(process.env.USERPROFILE, '.cargo', 'bin', 'cargo.exe')
+    : 'cargo';
+  const cargo = fs.existsSync(cargoBin) ? cargoBin : 'cargo';
+  const result = spawnSync(cargo, ['build', '--release', '--manifest-path', manifest], {
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw new Error(
+      `[forge] failed to invoke cargo (${cargo}) for Windows function key listener: ${result.error.message}`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[forge] Windows function key listener cargo build failed with exit code ${result.status}`,
+    );
+  }
+  const builtExe = path.join(
+    sourceRoot,
+    'target',
+    'release',
+    'cindy-windows-function-key-listener.exe',
+  );
+  const destDir = path.join(__dirname, 'resources', 'tools', 'voice-input');
+  const dest = path.join(destDir, 'cindy-windows-function-key-listener.exe');
+  if (!fs.existsSync(builtExe)) {
+    throw new Error(
+      `[forge] Windows function key listener build succeeded but ${builtExe} is missing`,
+    );
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.copyFileSync(builtExe, dest);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log(
+    `[forge:prePackage] Windows voice input function key listener -> ${dest} (${sizeMb} MB)`,
+  );
 }
 
 function buildMacAgentIslandHelper(platform: ForgePlatform, arch: ForgeArch): void {
@@ -1411,6 +1460,7 @@ const config: ForgeConfig = {
       }
       stageRipgrep(targetPlatform, targetArch);
       stageAndroidPlatformTools(targetPlatform, targetArch);
+      buildWindowsVoiceInputFunctionKeyListener(targetPlatform);
       buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
@@ -1498,6 +1548,19 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Stable-parent scaffold publish/cleanup runs in a utility process;
+          // the worker's cwd is the validated parent directory capability.
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/cindy-brain/ghostSnapshotWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Approval snapshot mutation is cwd-relative inside a stable-parent worker.
+          target: 'preload',
+        },
+        {
           entry: 'src/preload/preload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
@@ -1505,6 +1568,18 @@ const config: ForgeConfig = {
         {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 右侧栏独立子窗口专用 preload:最小权限 bridge,不加载主 preload 完整桥。
+          entry: 'src/preload/sidebarWindowPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 插件面板独立窗口专用 preload:最小权限 bridge。
+          entry: 'src/preload/ghostPanelWindowPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

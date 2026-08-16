@@ -558,9 +558,50 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     });
   }
 
+  async normalizeOrphanedAutomaticClaim(
+    id: string,
+    expectedActiveClaimRunId: string | undefined,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const db = this.getDb();
+    if (this.getDbClient) {
+      const updated = await this.getDbClient().tx('scheduler.normalizeOrphanedAutomaticClaim', {
+        scheduleId: id,
+        expectedActiveClaimRunId: expectedActiveClaimRunId ?? null,
+        nextFireAt,
+      });
+      if (!updated) return null;
+      return this.get(id);
+    }
+
+    const claimGuard =
+      expectedActiveClaimRunId === undefined
+        ? isNull(schedules.activeClaimRunId)
+        : eq(schedules.activeClaimRunId, expectedActiveClaimRunId);
+    const result = await db
+      .update(schedules)
+      .set({
+        nextFireAt,
+        activeClaimRunId: null,
+      })
+      .where(
+        and(
+          eq(schedules.id, id),
+          eq(schedules.status, 'active'),
+          isNull(schedules.nextFireAt),
+          claimGuard,
+        ),
+      )
+      .run();
+    const changes = (result as unknown as { changes?: number }).changes;
+    if (typeof changes === 'number' && changes === 0) return null;
+    return this.get(id);
+  }
+
   async deferRunNowWithLiveClaimGuard(
     id: string,
     previousLastFiredAt: number | undefined,
+    deferredFiredAt: number,
     retryAt: number,
   ): Promise<Schedule | null> {
     const db = this.getDb();
@@ -568,6 +609,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const updated = await this.getDbClient().tx('scheduler.deferRunNowWithLiveClaimGuard', {
         scheduleId: id,
         previousLastFiredAt: previousLastFiredAt ?? null,
+        deferredFiredAt,
         retryAt,
       });
       if (!updated) return null;
@@ -593,11 +635,19 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           .all().length > 0;
       const patch = liveClaim
         ? {
-            lastFiredAt: previousLastFiredAt ?? null,
+            lastFiredAt: sql`CASE
+              WHEN ${schedules.lastFiredAt} = ${deferredFiredAt}
+              THEN ${previousLastFiredAt ?? null}
+              ELSE ${schedules.lastFiredAt}
+            END`,
             activeClaimRunId: row.activeClaimRunId,
           }
         : {
-            lastFiredAt: previousLastFiredAt ?? null,
+            lastFiredAt: sql`CASE
+              WHEN ${schedules.lastFiredAt} = ${deferredFiredAt}
+              THEN ${previousLastFiredAt ?? null}
+              ELSE ${schedules.lastFiredAt}
+            END`,
             nextFireAt: retryAt,
             activeClaimRunId: null,
           };

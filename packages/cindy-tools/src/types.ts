@@ -6,7 +6,8 @@
  * 包内不感知 Electron / 沙箱 / DB(设计规范规则 2:package 解耦)。
  *
  * 首个成员:ghost 总机(docs/dev-rules/plugin-security-and-authoring.md 的网关模式)——
- * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_call,
+ * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_manual /
+ * ghost_call,
  * 已装意识的增删即时反映在 ghost_info / ghost_list 的**返回内容**里。
  * 工具面(名称/schema/基线描述)版本内恒定;完整描述(含花名册快照)
  * 会话内恒定。
@@ -126,6 +127,8 @@ export interface CindyGhostInfo {
   command?: string;
   /** 插件作者提供的召回线索，仅作数据；Host 优先取 whenToUse，缺省回落 description。 */
   recall?: string;
+  /** 随包手册的轻量一级索引；正文必须另行调用 ghost_manual 按需读取。 */
+  manual?: CindyGhostManualIndexItem[];
   tools: CindyGhostToolInfo[];
   /**
    * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
@@ -163,6 +166,28 @@ export type CindyGhostInfoResult =
   | CindyGhostInfoHostResult
   | { ok: false; errorCode: 'INTERNAL'; message: string; errorType?: string };
 
+/** ghost_info 与 ghost_manual 共用的手册索引/候选条目。 */
+export interface CindyGhostManualIndexItem {
+  /** 根索引为逻辑单元 name；未命中候选为可直接回填 path 的完整逻辑路径。 */
+  name: string;
+  description: string;
+}
+
+export type CindyGhostManualErrorCode =
+  | CindyGhostInfoErrorCode
+  | "MANUAL_PATH_NOT_FOUND"
+  | "MANUAL_UNAVAILABLE"
+  | "INTERNAL";
+
+/** ghost_manual 固定信封；失败态额外携带稳定 errorCode/message。 */
+export interface CindyGhostManualResult {
+  ok: boolean;
+  manual: CindyGhostManualIndexItem[];
+  content: string;
+  errorCode?: CindyGhostManualErrorCode;
+  message?: string;
+}
+
 export type CindyGhostCallResult =
   | {
       ok: true;
@@ -178,6 +203,14 @@ export type CindyGhostCallResult =
        * 收不到生成图)。
        */
       producedMedia?: string[];
+      /**
+       * 工具结果图片的文字描述(可选,host 视觉桥最佳努力附加)。纯文本模型
+       * 拿不到 cindy-media:// 图片内容只能看到 URL 文本——host 把图片经
+       * 外部多模态模型转成描述随结果带回,模型据此「看到」图而非幻觉编造。
+       * 仅 host 侧注入的视觉桥能力存在且命中时附加;渲染层/IM 出站只消费
+       * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
+       */
+      xdt_media_descriptions?: Array<{ url: string; description: string }>;
     }
   | {
       ok: false;
@@ -190,6 +223,10 @@ export type CindyGhostCallResult =
 /** ghost_forge_pack 的结构化失败分类(host 侧产生,原样透传给 agent)。 */
 export type CindyForgePackErrorCode =
   | 'DIR_NOT_FOUND' // 目录不存在或不是目录
+  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录不在当前会话工作目录内
+  | 'WORKDIR_NOT_LOCAL' // 当前会话工作目录在远端或无法证明为本地
+  | 'WORKDIR_READ_ONLY' // 当前会话禁止写入
+  | 'SOURCE_IS_INSTALLED_PLUGIN' // 源目录命中 Host 管理的已安装插件或批准状态根
   | 'MANIFEST_INVALID' // ghost.json 缺失 / 不合法(message 带具体原因)
   | 'ENTRY_MISSING' // 清单声明的 entry / panel.html 等文件不在目录里
   | 'TOO_LARGE' // 文件数或总体积超上限
@@ -226,7 +263,7 @@ export type CindyForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'INTERNAL';
       message: string;
     };
 
@@ -242,6 +279,13 @@ export interface CindyGhostsMcpDeps {
    * 判序：不存在 → 未登录 → 当前工作目录停用 → 未启用。
    */
   getAwakeGhost(ghostId: string): Promise<CindyGhostInfoHostResult>;
+  /**
+   * 读取已声明的随包手册；Host 每次调用都重新执行插件可见性判定，且不启动沙箱。
+   */
+  readGhostManual(request: {
+    ghostId: string;
+    path?: string;
+  }): Promise<CindyGhostManualResult>;
   /**
    * 把工具调用派进目标意识的电子脑并等待结果(按需拉起沙箱、超时、
    * 崩溃分类全在 host 侧处理)。

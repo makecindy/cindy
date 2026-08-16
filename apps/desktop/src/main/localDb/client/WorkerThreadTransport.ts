@@ -293,6 +293,8 @@ function dispatchTx(readyDb, payload) {
       return schedulerClaimDueFireAndInsertRun(readyDb, request.args);
     case 'scheduler.completeAutomaticClaim':
       return schedulerCompleteAutomaticClaim(readyDb, request.args);
+    case 'scheduler.normalizeOrphanedAutomaticClaim':
+      return schedulerNormalizeOrphanedAutomaticClaim(readyDb, request.args);
     case 'scheduler.deferRunNowWithLiveClaimGuard':
       return schedulerDeferRunNowWithLiveClaimGuard(readyDb, request.args);
     case 'scheduler.pauseWithLiveClaimGuard':
@@ -1053,6 +1055,7 @@ function schedulerDeferRunNowWithLiveClaimGuard(readyDb, args) {
   const payload = asRecord(args, 'scheduler.deferRunNowWithLiveClaimGuard args');
   const scheduleId = expectString(payload.scheduleId, 'scheduleId');
   const previousLastFiredAt = nullableNumber(payload.previousLastFiredAt);
+  const deferredFiredAt = expectNumber(payload.deferredFiredAt, 'deferredFiredAt');
   const retryAt = expectNumber(payload.retryAt, 'retryAt');
 
   return readyDb.transaction(() => {
@@ -1073,16 +1076,40 @@ function schedulerDeferRunNowWithLiveClaimGuard(readyDb, args) {
     const result = liveClaim
       ? readyDb
           .prepare(
-            "UPDATE schedules SET last_fired_at = ?, active_claim_run_id = ? WHERE id = ?",
+            "UPDATE schedules SET last_fired_at = CASE WHEN last_fired_at = ? THEN ? ELSE last_fired_at END, active_claim_run_id = ? WHERE id = ?",
           )
-          .run(previousLastFiredAt, activeClaimRunId, scheduleId)
+          .run(deferredFiredAt, previousLastFiredAt, activeClaimRunId, scheduleId)
       : readyDb
           .prepare(
-            "UPDATE schedules SET last_fired_at = ?, next_fire_at = ?, active_claim_run_id = NULL WHERE id = ?",
+            "UPDATE schedules SET last_fired_at = CASE WHEN last_fired_at = ? THEN ? ELSE last_fired_at END, next_fire_at = ?, active_claim_run_id = NULL WHERE id = ?",
           )
-          .run(previousLastFiredAt, retryAt, scheduleId);
+          .run(deferredFiredAt, previousLastFiredAt, retryAt, scheduleId);
     return result.changes > 0;
   })();
+}
+
+function schedulerNormalizeOrphanedAutomaticClaim(readyDb, args) {
+  const payload = asRecord(args, 'scheduler.normalizeOrphanedAutomaticClaim args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const expectedActiveClaimRunId = nullableString(payload.expectedActiveClaimRunId);
+  const nextFireAt = expectNumber(payload.nextFireAt, 'nextFireAt');
+  const claimPredicate =
+    expectedActiveClaimRunId === null
+      ? 'active_claim_run_id IS NULL'
+      : 'active_claim_run_id = ?';
+  const params =
+    expectedActiveClaimRunId === null
+      ? [nextFireAt, scheduleId]
+      : [nextFireAt, scheduleId, expectedActiveClaimRunId];
+  const result = readyDb
+    .prepare(
+      "UPDATE schedules " +
+        "SET next_fire_at = ?, active_claim_run_id = NULL " +
+        "WHERE id = ? AND status = 'active' AND next_fire_at IS NULL AND " +
+        claimPredicate,
+    )
+    .run(...params);
+  return result.changes > 0;
 }
 
 function schedulerPauseWithLiveClaimGuard(readyDb, args) {
@@ -1335,9 +1362,9 @@ function rewindCommit(readyDb, args) {
       rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
     }
     if (sdkSessionId) {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {
-      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0 WHERE id = ?').run(now, now, sessionId);
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL WHERE id = ?').run(now, now, sessionId);
     }
   })();
 }

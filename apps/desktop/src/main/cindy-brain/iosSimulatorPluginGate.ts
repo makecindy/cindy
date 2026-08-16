@@ -24,30 +24,6 @@ function pluginActionData(
 }
 
 /**
- * Whether the shell guard that blocks external `simctl` / `Simulator.app` use
- * should still apply.
- *
- * That guard exists to protect the ownership, admission, viewer and cleanup
- * contracts of Cindy's *embedded* simulator. With no plugin there is no embedded
- * simulator to protect, and blocking the user's own Xcode tooling — while
- * pointing them at a `cindy_ios_simulator` tool that this gate has just removed
- * — is a dead end rather than a boundary.
- *
- * The runtime condition is the safety half: a simulator instance booted while
- * the plugin was enabled stays Cindy-owned after it is disabled, and a shell
- * `simctl shutdown` would then race Cindy's own cleanup. `hostRuntimeActive` is
- * deliberately coarser than "an instance is live" because the Host exposes no
- * synchronous instance snapshot, and erring toward keeping the guard on is the
- * safe direction.
- */
-export function shouldEnforceIOSSimulatorShellPolicy(state: {
-  pluginAccessAllowed: boolean;
-  hostRuntimeActive: boolean;
-}): boolean {
-  return state.pluginAccessAllowed || state.hostRuntimeActive;
-}
-
-/**
  * Resolve the live product gate for Cindy's Host-owned iOS Simulator.
  *
  * The gateway remains discoverable so an Agent can explain how to install or
@@ -65,7 +41,7 @@ export function resolveIOSSimulatorPluginAccess(
       allowed: false,
       errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
       message:
-        "Cindy's embedded iOS Simulator requires the iOS Simulator plugin. Ask the user to open Plugins → Marketplace, install “iOS Simulator”, and enable it. Do not retry until the plugin is installed.",
+        "Cindy's embedded iOS Simulator requires the iOS Simulator plugin. The embedded route is unavailable until the user installs and enables “iOS Simulator” from Plugins → Marketplace; other iOS workflows are unaffected.",
       data: pluginActionData('not-installed', 'install-plugin'),
     };
   }
@@ -85,7 +61,7 @@ export function resolveIOSSimulatorPluginAccess(
       allowed: false,
       errorCode: 'IOS_SIMULATOR_DISABLED',
       message:
-        'The iOS Simulator plugin is disabled for the current project. Ask the user to enable it for this working directory before retrying.',
+        'The embedded iOS Simulator plugin is disabled for the current project. Enable it for this working directory before retrying the embedded tool; other iOS workflows are unaffected.',
       data: pluginActionData('disabled-in-workdir', 'enable-plugin', workdirDisabled),
     };
   }
@@ -96,7 +72,7 @@ export function resolveIOSSimulatorPluginAccess(
       allowed: false,
       errorCode: 'IOS_SIMULATOR_PLUGIN_DISABLED',
       message:
-        'The iOS Simulator plugin is installed but disabled. Ask the user to enable it on the Plugins page before retrying.',
+        'The embedded iOS Simulator plugin is installed but disabled. Enable it on the Plugins page before retrying the embedded tool; other iOS workflows are unaffected.',
       data: pluginActionData('disabled', 'enable-plugin', disabled),
     };
   }
@@ -105,7 +81,7 @@ export function resolveIOSSimulatorPluginAccess(
     allowed: false,
     errorCode: 'IOS_SIMULATOR_PLUGIN_DISABLED',
     message:
-      'The installed iOS Simulator plugin is unavailable in the current Cindy session. Ask the user to open the Plugins page and make the plugin available before retrying.',
+      'The installed embedded iOS Simulator plugin is unavailable in the current Cindy session. Make it available from the Plugins page before retrying the embedded tool; other iOS workflows are unaffected.',
     data: pluginActionData('session-unavailable', 'enable-plugin', candidates[0]),
   };
 }

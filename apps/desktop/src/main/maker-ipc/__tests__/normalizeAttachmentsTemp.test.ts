@@ -14,8 +14,13 @@ vi.mock('../../imageCacheStore.js', () => ({
 }));
 vi.mock('../../cindy-media/blobStore.js', () => ({
   resolveSafe: vi.fn(),
+  supportedMime: vi.fn(),
+  mimeForExt: vi.fn(),
 }));
-vi.mock('../../cindy-media/ledger.js', () => ({}));
+vi.mock('../../cindy-media/ledger.js', () => ({
+  removeRefById: vi.fn(),
+  deleteZeroRefBlobRecord: vi.fn(),
+}));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: vi.fn() }));
 vi.mock('../../device-link/mediaTransfer.js', () => ({
   downloadToFile: vi.fn(),
@@ -29,12 +34,19 @@ import {
   cleanupOrphanedTempAttachments,
   cleanupSessionTempAttachments,
   configureTempAttachmentOwner,
+  materializeDirectSendOssAttachments,
+  materializeQueuedOssAttachmentsDeferred,
   normalizeUserMessage,
 } from '../normalizeAttachments.js';
+import * as cindyMediaBlobStore from '../../cindy-media/blobStore.js';
+import { ingestMedia } from '../../cindy-media/ingest.js';
+import { downloadToFile, removeRemote } from '../../device-link/mediaTransfer.js';
+import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';
 
 const tempDirs: string[] = [];
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   tempRoot.value = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-review-inline-test-'));
   tempDirs.push(tempRoot.value);
   configureTempAttachmentOwner({
@@ -48,6 +60,210 @@ afterEach(async () => {
 });
 
 describe('inline attachment temporary files', () => {
+  it('marks directly materialized OSS images as desktop-host attachments', async () => {
+    const hash = 'a'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'materialized.png');
+    vi.mocked(downloadToFile).mockImplementationOnce(async (_ossKey, destination) => {
+      await fs.writeFile(destination, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    });
+    vi.mocked(cindyMediaBlobStore.supportedMime).mockReturnValue(true);
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+    vi.mocked(ingestMedia).mockResolvedValueOnce({
+      hash,
+      ext: '.png',
+      mimeType: 'image/png',
+      bytes: 4,
+      url: mediaUrl,
+      deduplicated: false,
+      refIds: ['ref-1'],
+    });
+    const ossRef = buildAttachmentOssRef({
+      ossKey: 'cindy/device-link/user/image.png',
+      mimeType: 'image/png',
+      originalName: 'image.png',
+    });
+
+    const materialized = await materializeDirectSendOssAttachments(
+      'direct-oss-image',
+      {
+        type: 'user',
+        content: [{ type: 'image', path: ossRef, mimeType: 'image/png' }],
+      },
+      undefined,
+    );
+
+    expect(materialized.message).toEqual({
+      type: 'user',
+      content: [{
+        type: 'image',
+        path: absPath,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+        base64: undefined,
+      }],
+    });
+    materialized.cleanupAfterAcceptance?.();
+    expect(removeRemote).toHaveBeenCalledWith('cindy/device-link/user/image.png');
+  });
+
+  it('marks queued OSS images as desktop-host attachments after materialization', async () => {
+    const hash = 'b'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'queued-materialized.png');
+    vi.mocked(downloadToFile).mockImplementationOnce(async (_ossKey, destination) => {
+      await fs.writeFile(destination, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    });
+    vi.mocked(cindyMediaBlobStore.supportedMime).mockReturnValue(true);
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+    vi.mocked(ingestMedia).mockResolvedValueOnce({
+      hash,
+      ext: '.png',
+      mimeType: 'image/png',
+      bytes: 4,
+      url: mediaUrl,
+      deduplicated: false,
+      refIds: ['ref-2'],
+    });
+    const ossRef = buildAttachmentOssRef({
+      ossKey: 'cindy/device-link/user/queued-image.png',
+      mimeType: 'image/png',
+      originalName: 'queued-image.png',
+    });
+
+    const materialized = await materializeQueuedOssAttachmentsDeferred(
+      'queued-oss-image',
+      {
+        clientId: 'queued-image-1',
+        files: [{
+          category: 'image',
+          ext: '.png',
+          path: ossRef,
+          mimeType: 'image/png',
+        }],
+      },
+    );
+
+    expect(materialized.item).toEqual({
+      clientId: 'queued-image-1',
+      files: [{
+        category: 'image',
+        ext: '.png',
+        path: absPath,
+        url: mediaUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+        base64: undefined,
+      }],
+      persistedContent: undefined,
+    });
+    materialized.cleanupAfterAcceptance?.();
+    expect(removeRemote).toHaveBeenCalledWith('cindy/device-link/user/queued-image.png');
+  });
+
+  it('marks queued local images as desktop-host attachments after materialization', async () => {
+    const sourcePath = path.join(tempRoot.value, 'device-link-local.png');
+    await fs.writeFile(sourcePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const hash = 'c'.repeat(64);
+    const mediaUrl = `cindy-media://blobs/${hash}.png`;
+    const absPath = path.join(tempRoot.value, 'queued-local-materialized.png');
+    vi.mocked(cindyMediaBlobStore.mimeForExt).mockReturnValue('image/png');
+    vi.mocked(cindyMediaBlobStore.resolveSafe).mockReturnValue({
+      absPath,
+      mimeType: 'image/png',
+      hash,
+    });
+    vi.mocked(ingestMedia).mockResolvedValueOnce({
+      hash,
+      ext: '.png',
+      mimeType: 'image/png',
+      bytes: 4,
+      url: mediaUrl,
+      deduplicated: false,
+      refIds: ['ref-3'],
+    });
+
+    const materialized = await materializeQueuedOssAttachmentsDeferred(
+      'queued-local-image',
+      {
+        clientId: 'queued-image-2',
+        files: [{
+          category: 'image',
+          ext: '.png',
+          path: sourcePath,
+          mimeType: 'image/png',
+        }],
+      },
+    );
+
+    expect(materialized.item).toEqual({
+      clientId: 'queued-image-2',
+      files: [{
+        category: 'image',
+        ext: '.png',
+        path: absPath,
+        url: mediaUrl,
+        mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
+        base64: undefined,
+      }],
+      persistedContent: undefined,
+    });
+    expect(downloadToFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps queued images on managed URLs instead of rematerializing their source paths', async () => {
+    const burnedUrl = 'xdt-image://queued-annotated/annotated.png';
+    const selectedUrl = 'xdt-image://queued-selected/selected.png';
+    const mediaUrl = `cindy-media://blobs/${'d'.repeat(64)}.png`;
+    const originalPath = path.join(tempRoot.value, 'original.png');
+    await fs.writeFile(originalPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const item = {
+      clientId: 'queued-annotated-image',
+      files: [
+        {
+          category: 'image',
+          ext: '.png',
+          path: originalPath,
+          url: selectedUrl,
+          mimeType: 'image/png',
+        },
+        {
+          category: 'image',
+          ext: '.png',
+          path: originalPath,
+          url: mediaUrl,
+          mimeType: 'image/png',
+        },
+        {
+          category: 'image',
+          ext: '.png',
+          path: originalPath,
+          url: burnedUrl,
+          mimeType: 'image/png',
+          annotated: true,
+        },
+      ],
+    };
+
+    const materialized = await materializeQueuedOssAttachmentsDeferred(
+      'queued-annotated-image',
+      item,
+    );
+
+    expect(materialized.item).toBe(item);
+    expect(ingestMedia).not.toHaveBeenCalled();
+    expect(downloadToFile).not.toHaveBeenCalled();
+  });
+
   it('writes private bytes and removes them even before Maker owns the session', async () => {
     const sessionId = 'reviewer-session';
     const normalized = await normalizeUserMessage(sessionId, {
@@ -66,7 +282,10 @@ describe('inline attachment temporary files', () => {
     }
     const imageBlock = normalized.content.find((block) => block.type === 'image');
     const imagePath = imageBlock?.path;
-    if (typeof imagePath !== 'string') throw new Error('expected materialized image path');
+    if (!imageBlock || typeof imagePath !== 'string') {
+      throw new Error('expected materialized image path');
+    }
+    expect(imageBlock.pathOrigin).toBe('desktop-host');
     const sessionTempDir = path.dirname(imagePath);
     const ownerRoot = path.dirname(sessionTempDir);
     const ownerRecord = JSON.parse(

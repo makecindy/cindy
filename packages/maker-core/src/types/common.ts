@@ -45,7 +45,7 @@ export type ReasoningDisplay = 'off' | 'summarized' | 'full';
  */
 export type UserContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'image'; path: string; mimeType?: string }
+  | { type: 'image'; path: string; mimeType?: string; pathOrigin?: 'desktop-host' }
   | { type: 'file'; path: string; mimeType?: string }
   | { type: 'mention'; name: string; path: string; kind?: 'file' | 'dir' | 'agent' };
 

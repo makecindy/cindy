@@ -30,6 +30,7 @@ import type {
   SessionTreeSnapshot,
 } from './types/capabilities.js';
 import { NotSupportedError } from './types/capabilities.js';
+import type { VisionBridgeHook } from './types/vision-bridge.js';
 import type {
   AgentEvent,
   InteractionRequest,
@@ -151,6 +152,12 @@ export interface SessionOptions {
    * 主要供测试注入短阈值，宿主正常不传。
    */
   turnStallMs?: number;
+  /**
+   * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在组装 UserMessage、交给
+   * handle 前调用一次，把用户贴图替换为视觉描述。host 不注入 = 完全跳过，字节级零干扰
+   * （见 docs/vision-bridge-design.md 层 B）。
+   */
+  visionBridge?: VisionBridgeHook;
 }
 
 function redactEventForListeners(event: AgentEvent): AgentEvent {
@@ -302,6 +309,8 @@ export class Session {
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
+  /** 视觉桥钩子（层 B）。缺省 = 未启用，send 完全跳过。 */
+  private readonly visionBridge: VisionBridgeHook | undefined;
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
@@ -381,6 +390,7 @@ export class Session {
     };
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
+    this.visionBridge = opts.visionBridge;
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
@@ -446,7 +456,7 @@ export class Session {
         return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
     }
-    const msg: UserMessage = typeof message === 'string'
+    let msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
     this.logger.debug('send', summarizeUserMessage(msg));
@@ -461,6 +471,12 @@ export class Session {
       throw this.createSessionRunningError();
     }
     if (this.isTurnRunning()) {
+      throw this.createSessionRunningError();
+    }
+    // 并发 send 守卫：已有一个 pre-dispatch reservation 在飞（视觉桥 await 阶段，
+    // handle 尚未 send → isTurnRunning 仍 false）时，拒绝新 send。否则并发 send 会覆盖
+    // this.sendReservation，让先进入视觉桥的 turn 白调外部视觉后端后才发现被取消。
+    if (this.sendReservation !== null) {
       throw this.createSessionRunningError();
     }
     const reservation: SendReservation = {
@@ -506,6 +522,26 @@ export class Session {
       this.ensureActive();
       const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
       if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
+      // 层 B：用户贴图主动调视觉（视觉桥钩子）。此时 turn guard 已通过、reservation 已
+      // 建立——并发 send 已被 isTurnRunning 挡住，不会在 guard 前浪费视觉调用；取消时
+      // reservation.abortController.signal 可中止视觉请求。钩子失败/未生效 → 原样透传。
+      if (this.visionBridge) {
+        // 传入 reservation abort signal：用户 Stop / 外部取消时中止视觉请求，避免浪费
+        // 外部视觉调用（多图最坏 图片数×timeout 才返回）。
+        msg = await this.bridgedVisionMessage(msg, reservation.abortController.signal);
+        // 视觉调用期间可能被外部取消，恢复后必须复查，避免越过取消边界发消息。
+        const cancelledAfterVision = finishCancelledBeforeDispatch();
+        if (cancelledAfterVision !== null) {
+          // 视觉桥对取消静默（不 warn 不 note），此处补一条低噪声 debug 让排障能区分
+          //「用户取消/拆离」与「配置没开/模型不命中」——取消类场景唯一留痕点。
+          this.logger.debug('vision bridge cancelled before dispatch', {
+            sessionId: this.id,
+            reason: 'cancelled-before-dispatch',
+            model: this.handle.model,
+          });
+          return cancelledAfterVision;
+        }
+      }
       reservation.phase = 'dispatching';
       // 越过 dispatch 边界才记 origin — cancelled-before-dispatch 早返回不会到这,
       // 不会污染下一个无 origin 的 turn。先存下当前值,handle.send 失败时**还原**而非
@@ -593,8 +629,35 @@ export class Session {
     }
   }
 
+  /**
+   * 层 B：若配置了视觉桥，把消息里的图片转成文字描述（send 与 steer 共用）。
+   * 钩子失败/未生效 → 原样透传（零干扰）。signal 可中止视觉请求（steer 通常无 signal）。
+   */
+  private async bridgedVisionMessage(msg: UserMessage, signal?: AbortSignal): Promise<UserMessage> {
+    if (!this.visionBridge) return msg;
+    try {
+      const bridged = await this.visionBridge(msg, {
+        model: this.handle.model,
+        signal,
+        sessionId: this.id,
+      });
+      if (bridged.applied) return bridged.message;
+      if (bridged.note) {
+        // 无论 applied 与否，note（fallback 生效 / 视觉桥不可用）都上报，避免静默。
+        this.logger.info('vision bridge note', { sessionId: this.id, note: bridged.note });
+      }
+    } catch (err) {
+      // 防御性兜底：视觉桥抛错绝不阻塞本轮，按未启用处理（host 实现应自吞，这里兜底）。
+      this.logger.warn('vision bridge threw, falling back to passthrough', {
+        sessionId: this.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return msg;
+  }
+
   async steer(message: UserMessage | string, opts?: SendOptions): Promise<void> {
-    const msg: UserMessage = typeof message === 'string'
+    let msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
     this.logger.debug('steer', summarizeUserMessage(msg));
@@ -603,6 +666,20 @@ export class Session {
       throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }
     if (!this.handle.isTurnRunning?.()) {
+      throw new Error(`Session ${this.id} has no active turn to steer`);
+    }
+    // 记录发起时的 turn generation：异步视觉转换期间原 turn 可能结束、同 Session
+    // 又启动新 turn。单看 isTurnRunning 会因新 turn 而通过，把迟到 steer 投给错误
+    // 的 turn（跨 turn 串线）。记录发起时代号，转换后必须「同一 generation 且仍
+    // 在跑」才投递。
+    const steerTurnGeneration = this.getTurnGeneration();
+    // 层 B：steer 追加图片同样走视觉桥（与 send 一致），否则纯文本模型收到的
+    // 原始 image block 会被后端忽略或拒绝（Greptile P1）。
+    msg = await this.bridgedVisionMessage(msg, opts?.signal);
+    // 异步视觉转换期间 turn 可能已完成/被中止（视觉后端慢、用户已切任务等）：
+    // 转换结果此时已无人接收，必须先复查原 turn 生命周期再调用 handle.steer，
+    // 否则底层以「No active turn to steer」拒绝或 Pi 把迟到消息交给已结束的 turn。
+    if (this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
     this.startEventLoopIfNeeded();
@@ -729,6 +806,10 @@ export class Session {
   async detach(): Promise<void> {
     if (this.status === 'closed') return;
     this.terminationStarted = true;
+    // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
+    // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
+    // 否则 handle.detach() 慢/挂起时，in-flight 视觉请求会继续拖住退出链。
+    this.cancelSendReservation(this.sendReservation);
     try {
       if (this.handle.detach) {
         await this.handle.detach();
@@ -899,11 +980,23 @@ export class Session {
       // The request may have queued before close() but reached the transport only after
       // shutdown started. Re-check at the serialized side-effect boundary.
       this.ensureActive();
+      const fromMode = this.permissionModeStateValue.mode;
       await this.handle.setPermissionMode!(mode);
       this.permissionModeStateValue = {
         mode,
         generation: this.permissionModeStateValue.generation + 1,
       };
+      // 轮 40-w4-t8 HIGH:权限档切换(尤其放宽到 Full access)是安全边界变更,
+      // 成功提交后必须审计 —— 事后能复盘谁/何时/从哪切到哪。
+      this.logger.info('audit: session permission mode changed', {
+        operation: 'session_permission_mode_change',
+        sessionId: this.id,
+        agentKind: this.agentKind,
+        fromMode,
+        toMode: mode,
+        generation: this.permissionModeStateValue.generation,
+        widenedToBypass: mode === 'bypassPermissions' && fromMode !== 'bypassPermissions',
+      });
       return this.permissionModeState;
     });
     const tracked = operation.finally(() => {

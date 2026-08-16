@@ -8,6 +8,7 @@ import {
   type TurnState,
 } from '../translator.js';
 import type { AgentEvent } from '../../../types/events.js';
+import { makeGhostManual64KiBFixture } from '../../shared/ghost-manual-fixture.js';
 
 function createTurnState(): TurnState {
   return {
@@ -48,6 +49,55 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator tool output normalization', () => {
+  it('preserves a 64KB ghost_manual JSON envelope as an MCP tool result', async () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_manual',
+              name: 'mcp__cindy__ghost_manual',
+              input: { ghost_id: 'manual-demo', path: 'ops' },
+            },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_manual', content: wire }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    const events = await drain(queue);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({
+      data: { fullText: wire },
+      source: 'claude-code',
+    });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText)).toEqual({
+      ok: true,
+      manual: [],
+      content,
+    });
+  });
+
   it('strips terminal control sequences from Bash tool_result content', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();

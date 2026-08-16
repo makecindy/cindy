@@ -27,7 +27,12 @@ import { EmbeddingError } from '@cindy/embedding-client';
 
 import type { createLogger } from '../logger';
 import type { DbClient } from '../localDb/client/DbClient';
-import { getProvider, type EmbeddingJobForProvider } from './providers';
+import {
+  getProvider,
+  isProviderSuspended,
+  listSuspendedProviderSources,
+  type EmbeddingJobForProvider,
+} from './providers';
 
 const TICK_INTERVAL_MS = 5_000;
 const BATCH_SIZE = 32;
@@ -176,15 +181,21 @@ export class EmbeddingWorker {
     this.suspendedWarned = false;
 
     const now = Date.now();
+    const suspendedSources = listSuspendedProviderSources();
+    const sourceFilter =
+      suspendedSources.length === 0
+        ? ''
+        : ` AND source NOT IN (${suspendedSources.map(() => '?').join(',')})`;
 
-    // 1. 取一批 pending job
+    // 1. 取一批 pending job。暂停的 consumer source 在 SQL 层排除,避免它的旧 job
+    // 占满 LIMIT 后饿死仍可用的插件 source。
     const jobs = await this.opts.getDbClient().query<JobRow>(
       `SELECT rowid, source, source_id, chunk_index, model_id, vec_table, attempts
            FROM embedding_jobs
-          WHERE status = 'pending' AND scheduled_at <= ?
+          WHERE status = 'pending' AND scheduled_at <= ?${sourceFilter}
           ORDER BY scheduled_at ASC
           LIMIT ?`,
-      [now, BATCH_SIZE],
+      [now, ...suspendedSources, BATCH_SIZE],
     );
 
     this.lastTickAt = now;
@@ -210,6 +221,8 @@ export class EmbeddingWorker {
     for (const [source, sourceJobs] of bySource.entries()) {
       // 退出检查点: stop() 已触发就立即收手, 不再碰 DB (让出锁给 db.backup)。
       if (this.aborted) return;
+      // query 后 availability 可能变化;动态 gate 防止快照里的旧 source 继续下单。
+      if (isProviderSuspended(source)) continue;
       const provider = getProvider(source);
       if (!provider) {
         // 没注册的 Provider 不动 status, 让用户 / 后续注册路径自然处理
@@ -233,6 +246,7 @@ export class EmbeddingWorker {
         }));
         texts = await provider.getTextsForJobs(arg);
       } catch (err) {
+        if (isProviderSuspended(source)) continue;
         // Provider 抛错: 整批走可重试错误 (与 embedding API 失败同语义)
         this.opts.log.error(
           JSON.stringify({
@@ -251,6 +265,7 @@ export class EmbeddingWorker {
       }
       // 退出检查点: getTextsForJobs 的 await 期间可能已触发 stop(), 写库前再确认。
       if (this.aborted) return;
+      if (isProviderSuspended(source)) continue;
       const textByRowid = new Map(texts.map((t) => [t.rowid, t.text]));
 
       // 3a. text === null 的 job 直接 done (不调 API)
@@ -258,6 +273,8 @@ export class EmbeddingWorker {
       if (noTextJobs.length > 0) {
         await this.markDoneNoVector(noTextJobs);
         doneCount += noTextJobs.length;
+        if (this.aborted) return;
+        if (isProviderSuspended(source)) continue;
       }
 
       const liveJobs = sourceJobs.filter((j) => (textByRowid.get(j.rowid) ?? null) !== null);
@@ -289,6 +306,7 @@ export class EmbeddingWorker {
           // 退出检查点: embed() 网络往返期间可能已触发 stop(), 绝不在 abort 后再开
           // 写事务 (这是保证 db.backup 无争用的关键)。该批 job 保持 pending, 下次续跑。
           if (this.aborted) return;
+          if (isProviderSuspended(source)) break;
           // 5. 同步事务: INSERT vec + UPDATE jobs
           await this.commitEmbeddings(modelJobs, res.embeddings);
           doneCount += modelJobs.length;
@@ -303,6 +321,8 @@ export class EmbeddingWorker {
             }),
           );
         } catch (err) {
+          // availability 可能在网络往返期间丢失;保留 pending,不要把它记成失败重试。
+          if (isProviderSuspended(source)) break;
           const code = err instanceof EmbeddingError ? err.code : 'UNKNOWN';
           const msg = err instanceof Error ? err.message : String(err);
           this.opts.log.error(

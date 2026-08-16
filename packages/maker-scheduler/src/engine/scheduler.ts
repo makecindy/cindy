@@ -508,12 +508,26 @@ export class Scheduler extends EventEmitter {
         continue;
       }
       if (next !== current.nextFireAt) {
-        const updated = await this.storage.update(current.id, {
-          nextFireAt: next,
-          activeClaimRunId: undefined,
-        });
-        if (updated) current = updated;
-        else current = { ...current, nextFireAt: next, activeClaimRunId: undefined };
+        if (current.nextFireAt === undefined && next !== undefined) {
+          const updated = await this.storage.normalizeOrphanedAutomaticClaim(
+            current.id,
+            current.activeClaimRunId,
+            next,
+          );
+          if (updated) {
+            current = updated;
+          } else {
+            const fresh = await this.storage.get(current.id);
+            if (fresh) current = fresh;
+          }
+        } else {
+          const updated = await this.storage.update(current.id, {
+            nextFireAt: next,
+            activeClaimRunId: undefined,
+          });
+          if (updated) current = updated;
+          else current = { ...current, nextFireAt: next, activeClaimRunId: undefined };
+        }
       }
       this.activeSchedules.set(current.id, current);
     }
@@ -1159,6 +1173,7 @@ export class Scheduler extends EventEmitter {
       const updated = await this.storage.deferRunNowWithLiveClaimGuard(
         schedule.id,
         schedule.lastFiredAt,
+        firedAt,
         retryAt,
       );
       if (updated && updated.status === 'active') {
@@ -1770,13 +1785,17 @@ export class Scheduler extends EventEmitter {
         }
         return;
       }
-      const updated = await this.storage.update(scheduleId, {
-        nextFireAt: next,
-        activeClaimRunId: undefined,
-      });
+      const updated = await this.storage.normalizeOrphanedAutomaticClaim(
+        scheduleId,
+        schedule.activeClaimRunId,
+        next,
+      );
       // 内存副本同步跟上,不等下一轮 30s DB 同步。
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(scheduleId, updated);
+      } else if (!updated) {
+        const fresh = await this.storage.get(scheduleId);
+        if (fresh && fresh.status === 'active') this.activeSchedules.set(scheduleId, fresh);
       }
       this.logger?.info?.('scheduler: rescheduled orphaned claim after sweep', {
         scheduleId,

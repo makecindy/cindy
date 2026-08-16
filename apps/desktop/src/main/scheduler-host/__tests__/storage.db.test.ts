@@ -559,6 +559,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       const deferLive = await harness.storage.deferRunNowWithLiveClaimGuard(
         'sch-defer-live',
         undefined,
+        firedAt,
         due + 90_000,
       );
       expect(deferLive?.nextFireAt).toBe(due + 45_000);
@@ -568,16 +569,62 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await harness.storage.insert(baseSchedule({
         id: 'sch-defer-stale',
         nextFireAt: undefined,
+        lastFiredAt: firedAt,
         activeClaimRunId: 'run-defer-stale',
       }));
       const deferStale = await harness.storage.deferRunNowWithLiveClaimGuard(
         'sch-defer-stale',
         firedAt - 1_000,
+        firedAt,
         due + 90_000,
       );
       expect(deferStale?.nextFireAt).toBe(due + 90_000);
       expect(deferStale?.lastFiredAt).toBe(firedAt - 1_000);
       expect(deferStale?.activeClaimRunId).toBeUndefined();
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-defer-newer-manual',
+        nextFireAt: undefined,
+        lastFiredAt: firedAt + 10,
+        activeClaimRunId: 'run-defer-newer-manual',
+      }));
+      const deferNewerManual = await harness.storage.deferRunNowWithLiveClaimGuard(
+        'sch-defer-newer-manual',
+        firedAt - 1_000,
+        firedAt,
+        due + 90_000,
+      );
+      expect(deferNewerManual?.nextFireAt).toBe(due + 90_000);
+      expect(deferNewerManual?.lastFiredAt).toBe(firedAt + 10);
+      expect(deferNewerManual?.activeClaimRunId).toBeUndefined();
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-normalize-orphan',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-normalize-orphan',
+      }));
+      const normalizedOrphan = await harness.storage.normalizeOrphanedAutomaticClaim(
+        'sch-normalize-orphan',
+        'run-normalize-orphan',
+        due + 100_000,
+      );
+      expect(normalizedOrphan?.nextFireAt).toBe(due + 100_000);
+      expect(normalizedOrphan?.activeClaimRunId).toBeUndefined();
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-normalize-stale',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-new-owner',
+      }));
+      const staleNormalize = await harness.storage.normalizeOrphanedAutomaticClaim(
+        'sch-normalize-stale',
+        'run-old-owner',
+        due + 100_000,
+      );
+      expect(staleNormalize).toBeNull();
+      const staleNormalizeAfter = await harness.storage.get('sch-normalize-stale');
+      expect(staleNormalizeAfter?.nextFireAt).toBeUndefined();
+      expect(staleNormalizeAfter?.activeClaimRunId).toBe('run-new-owner');
 
       await harness.storage.insert(baseSchedule({
         id: 'sch-pause-live',
@@ -794,10 +841,55 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       const proxyDeferLive = await storage.deferRunNowWithLiveClaimGuard(
         'sch-proxy-defer-live',
         undefined,
+        firedAt,
         due + 90_000,
       );
       expect(proxyDeferLive?.nextFireAt).toBe(due + 45_000);
       expect(proxyDeferLive?.activeClaimRunId).toBe('run-proxy-defer-live');
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-defer-newer-manual',
+        nextFireAt: undefined,
+        lastFiredAt: firedAt + 10,
+        activeClaimRunId: 'run-proxy-defer-newer-manual',
+      }));
+      const proxyDeferNewerManual = await storage.deferRunNowWithLiveClaimGuard(
+        'sch-proxy-defer-newer-manual',
+        firedAt - 1_000,
+        firedAt,
+        due + 90_000,
+      );
+      expect(proxyDeferNewerManual?.nextFireAt).toBe(due + 90_000);
+      expect(proxyDeferNewerManual?.lastFiredAt).toBe(firedAt + 10);
+      expect(proxyDeferNewerManual?.activeClaimRunId).toBeUndefined();
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-normalize-orphan',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-proxy-normalize-orphan',
+      }));
+      const proxyNormalizeOrphan = await storage.normalizeOrphanedAutomaticClaim(
+        'sch-proxy-normalize-orphan',
+        'run-proxy-normalize-orphan',
+        due + 100_000,
+      );
+      expect(proxyNormalizeOrphan?.nextFireAt).toBe(due + 100_000);
+      expect(proxyNormalizeOrphan?.activeClaimRunId).toBeUndefined();
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-normalize-stale',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-proxy-new-owner',
+      }));
+      const proxyStaleNormalize = await storage.normalizeOrphanedAutomaticClaim(
+        'sch-proxy-normalize-stale',
+        'run-proxy-old-owner',
+        due + 100_000,
+      );
+      expect(proxyStaleNormalize).toBeNull();
+      const proxyStaleNormalizeAfter = await storage.get('sch-proxy-normalize-stale');
+      expect(proxyStaleNormalizeAfter?.nextFireAt).toBeUndefined();
+      expect(proxyStaleNormalizeAfter?.activeClaimRunId).toBe('run-proxy-new-owner');
 
       await storage.insert(baseSchedule({
         id: 'sch-proxy-pause-live',

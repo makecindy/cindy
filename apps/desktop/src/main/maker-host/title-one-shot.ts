@@ -59,6 +59,12 @@ const log = createLogger('maker-host:title-one-shot');
 const TITLE_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
 const TITLE_MAX_TOKENS = 32;
+/**
+ * XD 网关思考模型(Hy3 / DeepSeek 等)默认会先写 reasoning_content。
+ * 标题只要短正文;不关思考时 32 token 会全部烧掉,content 仍是空串。
+ * 网关认 OpenAI 兼容的 thinking.type=disabled;官方 no_think / enable_thinking=false 无效。
+ */
+const TITLE_GATEWAY_THINKING = { type: 'disabled' } as const;
 /** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
 const TITLE_OUTPUT_MAX_CHARS = 256;
 /**
@@ -84,6 +90,18 @@ export interface TitleTarget {
   /** 上游 base(anthropic/openai 取自 catalog routing.upstream;xd 取 server 下发 endpoint)。 */
   upstream: string;
 }
+
+/**
+ * 标题 oneShot 的内部诊断结果。自动起名仍通过 `generateTitleViaProvider()` 消费
+ * string / null 兼容口径；手动 AI 重命名使用本结果区分可操作的失败原因。
+ */
+export type TitleOneShotResult =
+  | { status: 'ok'; title: string }
+  | { status: 'unsupported-provider' }
+  | { status: 'failed' };
+
+/** 当前实现具备完整凭证与 wire 契约的供应商；目标暂不可用不等于供应商不受支持。 */
+const TITLE_ONE_SHOT_PROVIDER_IDS = new Set(['anthropic', 'openai', 'xd']);
 
 /** 注入点 —— 便于单测(mock fetch / 伪造凭证 / 伪造 provider)。缺省均返回 null(回落启发式)。 */
 export interface TitleOneShotDeps {
@@ -334,6 +352,7 @@ async function fetchGatewayTitle(
     body: JSON.stringify({
       model: modelId,
       max_tokens: TITLE_MAX_TOKENS,
+      thinking: TITLE_GATEWAY_THINKING,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -376,14 +395,14 @@ export function parseResponsesSse(raw: string): string {
 }
 
 /**
- * 标题 oneShot 主入口:解析本会话 provider → titleModel → 单次 HTTP 起标题。
- * 任何环节失败(无 titleModel / 凭证缺失 / HTTP 错 / 空响应 / 超时)→ 返回 null,调用方回落启发式。
+ * 标题 oneShot 诊断入口:解析本会话 provider → titleModel → 单次 HTTP 起标题。
+ * 仅区分“当前供应商不支持”与通用失败，供手动 AI 重命名给出可操作提示。
  * 全程不打印 token(只记 providerId / model / wire / 耗时)。
  */
-export async function generateTitleViaProvider(
+export async function generateTitleViaProviderResult(
   args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
   deps: TitleOneShotDeps = {},
-): Promise<string | null> {
+): Promise<TitleOneShotResult> {
   // 默认走吃系统代理的 undici fetch:上游可能是境外端点(catalog routing.upstream)。
   const fetchImpl = deps.fetchImpl ?? outboundUndiciFetch;
   const readSessionProviderId = deps.readSessionProviderId ?? (async () => null);
@@ -413,13 +432,20 @@ export async function generateTitleViaProvider(
 
   if (!providerId) {
     log.debug('title oneShot skipped: no connected provider', { agentKind: args.agentKind });
-    return null;
+    return { status: 'failed' };
   }
 
   const target = buildTitleTarget(providerId);
   if (!target) {
-    log.debug('title oneShot skipped: no title target', { providerId, agentKind: args.agentKind });
-    return null;
+    const status = TITLE_ONE_SHOT_PROVIDER_IDS.has(providerId)
+      ? 'failed'
+      : 'unsupported-provider';
+    log.debug('title oneShot skipped: no title target', {
+      providerId,
+      agentKind: args.agentKind,
+      status,
+    });
+    return { status };
   }
   // 标题模型这份拷贝被用户停用 → 跳过(回落启发式起名)。rail 条目带 buildRegistry
   // 烘焙的 disabled 标志。查找必须跨该供应商的**所有 agent** 清单(findCatalogModel,
@@ -437,7 +463,7 @@ export async function generateTitleViaProvider(
       model: target.model,
       reason: initialUnavailableReason,
     });
-    return null;
+    return { status: 'failed' };
   }
 
   const startedAt = Date.now();
@@ -493,9 +519,11 @@ export async function generateTitleViaProvider(
         const oauth = await readAnthropicOAuth();
         if (!oauth?.accessToken) {
           log.debug('title oneShot skipped: no anthropic OAuth', { providerId });
-          return null;
+          return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-refresh')) return null;
+        if (!canDispatchNow('after-credential-refresh')) {
+          return { status: 'failed' };
+        }
         text = await fetchAnthropicTitle(
           target.upstream,
           target.model,
@@ -510,9 +538,11 @@ export async function generateTitleViaProvider(
         const creds = readCodexCreds();
         if (!creds) {
           log.debug('title oneShot skipped: no codex creds', { providerId });
-          return null;
+          return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-read')) return null;
+        if (!canDispatchNow('after-credential-read')) {
+          return { status: 'failed' };
+        }
         text = await fetchCodexTitle(
           target.upstream,
           target.model,
@@ -528,9 +558,11 @@ export async function generateTitleViaProvider(
         const key = readGatewayKey();
         if (!key) {
           log.debug('title oneShot skipped: no gateway key', { providerId });
-          return null;
+          return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-read')) return null;
+        if (!canDispatchNow('after-credential-read')) {
+          return { status: 'failed' };
+        }
         text = await fetchGatewayTitle(
           target.upstream,
           target.model,
@@ -555,7 +587,7 @@ export async function generateTitleViaProvider(
         wire: target.wire,
         elapsedMs: Date.now() - startedAt,
       });
-      return null;
+      return { status: 'failed' };
     }
     log.info('title oneShot done', {
       providerId,
@@ -564,18 +596,30 @@ export async function generateTitleViaProvider(
       elapsedMs: Date.now() - startedAt,
       chars: Array.from(title).length,
     });
-    return title;
+    return { status: 'ok', title };
   } catch (err) {
-    log.warn('title oneShot failed (swallowed)', {
+    log.warn('title oneShot failed', {
       providerId,
       model: target.model,
       wire: target.wire,
       elapsedMs: Date.now() - startedAt,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { status: 'failed' };
   } finally {
     clearTimeout(timeout);
     args.signal?.removeEventListener('abort', onExternalAbort);
   }
+}
+
+/**
+ * 自动起名的兼容入口：失败继续折叠为 null，让既有调用方回落启发式标题。
+ * 手动重命名需要失败语义时应调用 `generateTitleViaProviderResult()`。
+ */
+export async function generateTitleViaProvider(
+  args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
+  deps: TitleOneShotDeps = {},
+): Promise<string | null> {
+  const result = await generateTitleViaProviderResult(args, deps);
+  return result.status === 'ok' ? result.title : null;
 }

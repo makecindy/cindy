@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     reset: vi.fn(),
     getMe: vi.fn(async () => ({ role: 'user' })),
     clearWorkersCache: vi.fn(),
+    setModelVisibilityOwner: vi.fn(),
     invalidateProvidersSnapshot: vi.fn(),
     preloadLocalCatalogSnapshot: vi.fn(async () => undefined),
     confirm: vi.fn(async () => true),
@@ -55,6 +56,9 @@ vi.mock('@/lib/sessionsStore', () => ({
 vi.mock('@/lib/meService', () => ({ getMe: mocks.getMe }));
 vi.mock('@/features/cc-agent/hooks/useWorkers', () => ({
   clearWorkersCache: mocks.clearWorkersCache,
+}));
+vi.mock('@/state/modelVisibilityPrefs', () => ({
+  setModelVisibilityOwner: mocks.setModelVisibilityOwner,
 }));
 vi.mock('@/lib/providersSnapshotStore', () => ({
   invalidateProvidersSnapshot: mocks.invalidateProvidersSnapshot,
@@ -135,6 +139,7 @@ describe('AuthContext session cache boundaries', () => {
     mocks.reset.mockClear();
     mocks.getMe.mockClear();
     mocks.clearWorkersCache.mockClear();
+    mocks.setModelVisibilityOwner.mockClear();
     mocks.invalidateProvidersSnapshot.mockClear();
     mocks.preloadLocalCatalogSnapshot.mockClear();
     dataOwnerGenerationTesting.reset();
@@ -162,10 +167,12 @@ describe('AuthContext session cache boundaries', () => {
     await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));
     expect(mocks.reset).toHaveBeenCalledTimes(1);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.setModelVisibilityOwner).toHaveBeenLastCalledWith('account-a', 1, 'cloud');
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.setModelVisibilityOwner).toHaveBeenLastCalledWith('account-b', 1, 'cloud');
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
@@ -174,6 +181,7 @@ describe('AuthContext session cache boundaries', () => {
     act(() => mocks.emitAuth(authState(null)));
     expect(mocks.reset).toHaveBeenCalledTimes(3);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(3);
+    expect(mocks.setModelVisibilityOwner).toHaveBeenLastCalledWith(null, 2, 'signed-out');
 
     await act(async () => {
       await view.result.current.logout();

@@ -274,11 +274,49 @@ export function writeDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
 }
 
 export function readLastKnownDeviceNames(): Record<string, string> {
-  return { ...readDeviceLinkSettings().lastKnownDeviceNames };
+  const names = { ...readDeviceLinkSettings().lastKnownDeviceNames };
+  for (const [deviceId, pending] of pendingLastKnownDeviceNameByDevice) {
+    if (pending.name === null) delete names[deviceId];
+    else names[deviceId] = pending.name;
+  }
+  return names;
 }
 
 export function writeLastKnownDeviceNames(names: Record<string, string>): Promise<void> {
   return writeDeviceLinkSetting('lastKnownDeviceNames', { ...names });
+}
+
+/** 同一设备的名称判重与写入必须同序，避免旧删除覆盖紧随其后的同名恢复。 */
+const lastKnownDeviceNameMutationByDevice = new Map<string, Promise<unknown>>();
+/**
+ * presence 已生效、但设置文件写入仍在队列/跨实例锁中等待时的同步覆盖层。
+ * relay 重连 seed 必须先看到这里的最新意图，不能用旧磁盘快照覆盖当前提示。
+ */
+const pendingLastKnownDeviceNameByDevice = new Map<
+  string,
+  { name: string | null }
+>();
+
+function enqueueLastKnownDeviceNameMutation<T>(
+  deviceId: string,
+  pendingName: string | null,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  const pending = { name: pendingName };
+  pendingLastKnownDeviceNameByDevice.set(deviceId, pending);
+  const previous = lastKnownDeviceNameMutationByDevice.get(deviceId) ?? Promise.resolve();
+  const task = previous.catch(() => undefined).then(mutation);
+  lastKnownDeviceNameMutationByDevice.set(deviceId, task);
+  const cleanup = (): void => {
+    if (lastKnownDeviceNameMutationByDevice.get(deviceId) === task) {
+      lastKnownDeviceNameMutationByDevice.delete(deviceId);
+    }
+    if (pendingLastKnownDeviceNameByDevice.get(deviceId) === pending) {
+      pendingLastKnownDeviceNameByDevice.delete(deviceId);
+    }
+  };
+  void task.then(cleanup, cleanup);
+  return task;
 }
 
 export async function setDeviceControlEnabled(
@@ -304,21 +342,47 @@ export async function setDeviceControlEnabled(
 export async function rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean> {
   const normalizedName = normalizeCachedDeviceName(name);
   if (!deviceId.trim() || !normalizedName) return false;
-  const settings = readDeviceLinkSettings();
-  if (settings.lastKnownDeviceNames[deviceId] === normalizedName) return false;
-  try {
-    // 锁内基于盘上最新 map 合并单条,避免用旧 map 整体覆盖并发写入的其它条目
-    await updateDeviceLinkSetting('lastKnownDeviceNames', (latest) =>
-      latest[deviceId] === normalizedName ? latest : { ...latest, [deviceId]: normalizedName },
-    );
-  } catch (err) {
-    log.warn('remember last-known device name failed, continuing without cache update', {
-      deviceId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  }
-  return true;
+  return enqueueLastKnownDeviceNameMutation(deviceId, normalizedName, async () => {
+    const settings = readDeviceLinkSettings();
+    if (settings.lastKnownDeviceNames[deviceId] === normalizedName) return false;
+    try {
+      // 锁内基于盘上最新 map 合并单条,避免用旧 map 整体覆盖并发写入的其它条目
+      await updateDeviceLinkSetting('lastKnownDeviceNames', (latest) =>
+        latest[deviceId] === normalizedName ? latest : { ...latest, [deviceId]: normalizedName },
+      );
+    } catch (err) {
+      log.warn('remember last-known device name failed, continuing without cache update', {
+        deviceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    return true;
+  });
+}
+
+export async function forgetLastKnownDeviceName(deviceId: string): Promise<boolean> {
+  const normalizedDeviceId = deviceId.trim();
+  if (!normalizedDeviceId) return false;
+  return enqueueLastKnownDeviceNameMutation(normalizedDeviceId, null, async () => {
+    let removed = false;
+    try {
+      await updateDeviceLinkSetting('lastKnownDeviceNames', (latest) => {
+        if (!(normalizedDeviceId in latest)) return latest;
+        const next = { ...latest };
+        delete next[normalizedDeviceId];
+        removed = true;
+        return next;
+      });
+    } catch (err) {
+      log.warn('forget last-known device name failed, continuing with in-memory fallback', {
+        deviceId: normalizedDeviceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    return removed;
+  });
 }
 
 export function normalizeCachedDeviceName(name: string): string | null {

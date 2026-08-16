@@ -14,6 +14,24 @@ const knobs = vi.hoisted(() => ({
   lastCompactCommand: null as null | Record<string, unknown>,
 }));
 
+vi.mock('../transport.js', () => ({
+  createPiStdioTransport: (opts: {
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
+    opts.onProcessSpawned?.(1234);
+    return {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 1234,
+      isClosed: () => false,
+    };
+  },
+  attachJsonlReader: () => {},
+}));
+
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
@@ -74,6 +92,7 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
           { id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null },
         ],
       },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
     };
   }

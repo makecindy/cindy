@@ -117,6 +117,32 @@ describe('performSessionAgentSwitch', () => {
     expect(boundary.toAgentKind).toBe('cc');
   });
 
+  it('codex → pi + OpenAI 关闭旧会话并保持目标 provider route', async () => {
+    const { deps, calls } = makeDeps({
+      getSessionRow: vi.fn(async () =>
+        makeRow({ agentKind: 'codex', model: 'gpt-5.5-codex', sdkSessionId: 'codex-thread' }),
+      ),
+    });
+
+    const result = await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      applyNow: true,
+    });
+
+    expect(result).toMatchObject({ switched: true, agentKind: 'pi', engineReady: true });
+    expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending', 'bootstrap']);
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', {
+      agentKind: 'pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      sdkSessionId: null,
+    });
+    expect(deps.setSessionProvider).toHaveBeenCalledWith('s1', 'openai');
+  });
+
   it('claude-code → pi 不会被参数校验拒绝', async () => {
     const { deps } = makeDeps();
     const result = await performSessionAgentSwitch(deps, {

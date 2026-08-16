@@ -99,7 +99,7 @@ function AddRow({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
     >
       <div
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"

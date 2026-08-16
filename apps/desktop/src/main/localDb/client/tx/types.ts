@@ -10,6 +10,7 @@ export type DbTxName =
   | 'embedding.enqueue'
   | 'scheduler.claimDueFireAndInsertRun'
   | 'scheduler.completeAutomaticClaim'
+  | 'scheduler.normalizeOrphanedAutomaticClaim'
   | 'scheduler.deferRunNowWithLiveClaimGuard'
   | 'scheduler.pauseWithLiveClaimGuard'
   | 'scheduler.resumeWithLiveClaimGuard'
@@ -239,7 +240,14 @@ export interface SchedulerCompleteAutomaticClaimArgs {
 export interface SchedulerDeferRunNowWithLiveClaimGuardArgs {
   scheduleId: string;
   previousLastFiredAt?: number | null;
+  deferredFiredAt: number;
   retryAt: number;
+}
+
+export interface SchedulerNormalizeOrphanedAutomaticClaimArgs {
+  scheduleId: string;
+  expectedActiveClaimRunId?: string | null;
+  nextFireAt: number;
 }
 
 export interface SchedulerPauseWithLiveClaimGuardArgs {
@@ -806,6 +814,7 @@ export type DbTxArgsByName = {
   'embedding.enqueue': EmbeddingEnqueueArgs;
   'scheduler.claimDueFireAndInsertRun': SchedulerClaimDueFireAndInsertRunArgs;
   'scheduler.completeAutomaticClaim': SchedulerCompleteAutomaticClaimArgs;
+  'scheduler.normalizeOrphanedAutomaticClaim': SchedulerNormalizeOrphanedAutomaticClaimArgs;
   'scheduler.deferRunNowWithLiveClaimGuard': SchedulerDeferRunNowWithLiveClaimGuardArgs;
   'scheduler.pauseWithLiveClaimGuard': SchedulerPauseWithLiveClaimGuardArgs;
   'scheduler.resumeWithLiveClaimGuard': SchedulerResumeWithLiveClaimGuardArgs;
@@ -856,6 +865,7 @@ export type DbTxResultByName = {
   'embedding.enqueue': { inserted: number; skipped: number };
   'scheduler.claimDueFireAndInsertRun': boolean;
   'scheduler.completeAutomaticClaim': boolean;
+  'scheduler.normalizeOrphanedAutomaticClaim': boolean;
   'scheduler.deferRunNowWithLiveClaimGuard': boolean;
   'scheduler.pauseWithLiveClaimGuard': boolean;
   'scheduler.resumeWithLiveClaimGuard': boolean;

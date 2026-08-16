@@ -183,6 +183,8 @@ export const sessions = sqliteTable(
      * "restore once if leaving proxy mode" by maker-core.
      */
     codexHistoryHasProductPrompt: integer('codex_history_has_product_prompt', { mode: 'boolean' }),
+    /** Codex-only: latest native update_plan snapshot. */
+    codexPlanJson: text('codex_plan_json'),
     /**
      * Session 附加只读引用目录列表(JSON 字符串数组,绝对路径)。
      * agent 在每 turn 透传：Claude Code 使用 options.additionalDirectories，

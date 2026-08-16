@@ -66,8 +66,22 @@ describe('isInterruptedTurnError', () => {
     ).toBe(true);
   });
 
+  it('accepts the classified empty-response reason (#2320)', () => {
+    // translator 只在「发起过 API 调用、零文本、零工具、零 usage 增量」的严格
+    // 形态下盖这个 key —— 上游/网关返回退化空响应,与流被切断同属连接层故障,
+    // 由既有连续失败上限与人工介入周期硬上限止损。
+    expect(
+      isInterruptedTurnError({
+        reason: 'empty-response',
+        message: 'The model returned an empty response.',
+      }),
+    ).toBe(true);
+    // reason 是权威判据:不要求 sdkError tag,也不要求文案形态。
+    expect(isInterruptedTurnError({ reason: 'empty-response' })).toBe(true);
+  });
+
   it('rejects errors that carry a stable reason (已分类,另有处置路径)', () => {
-    for (const reason of ['empty-response', 'turn-failed', 'silent-stop-exhausted']) {
+    for (const reason of ['turn-failed', 'silent-stop-exhausted']) {
       expect(
         isInterruptedTurnError({
           sdkError: 'server_error',

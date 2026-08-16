@@ -115,6 +115,7 @@ class InMemoryStorage implements ScheduleStorage {
   async deferRunNowWithLiveClaimGuard(
     id: string,
     previousLastFiredAt: number | undefined,
+    deferredFiredAt: number,
     retryAt: number,
   ): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -124,11 +125,25 @@ class InMemoryStorage implements ScheduleStorage {
       await this.hasRunningRuns(id, { runId: ex.activeClaimRunId })
         ? ex.activeClaimRunId
         : undefined;
-    ex.lastFiredAt = previousLastFiredAt;
+    if (ex.lastFiredAt === deferredFiredAt) {
+      ex.lastFiredAt = previousLastFiredAt;
+    }
     if (liveClaimId === undefined) {
       ex.nextFireAt = retryAt;
     }
     ex.activeClaimRunId = liveClaimId;
+    return { ...ex };
+  }
+  async normalizeOrphanedAutomaticClaim(
+    id: string,
+    expectedActiveClaimRunId: string | undefined,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.status !== 'active' || ex.nextFireAt !== undefined) return null;
+    if (ex.activeClaimRunId !== expectedActiveClaimRunId) return null;
+    ex.nextFireAt = nextFireAt;
+    ex.activeClaimRunId = undefined;
     return { ...ex };
   }
   async pauseWithLiveClaimGuard(
@@ -846,6 +861,30 @@ describe('Scheduler', () => {
     expect(await local.scheduler.listRuns(sch.id)).toEqual([
       expect.objectContaining({ id: 'run-late-live-claim', status: 'running' }),
     ]);
+  });
+
+  it('deferred runNow does not erase a newer manual lastFiredAt', async () => {
+    const RETRY = 90_000;
+    const local = makeHarness({
+      runnerImpl: async (s) => ({ sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY }),
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    const firstRunAt = Date.UTC(2026, 0, 1, 0, 0, 45);
+    const laterManualAt = firstRunAt + 1_000;
+    const originalDefer = local.storage.deferRunNowWithLiveClaimGuard.bind(local.storage);
+    vi.spyOn(local.storage, 'deferRunNowWithLiveClaimGuard').mockImplementationOnce(
+      async (...args) => {
+        await local.storage.update(sch.id, { lastFiredAt: laterManualAt });
+        return originalDefer(...args);
+      },
+    );
+    local.clock.setTo(firstRunAt);
+
+    await local.scheduler.runNow(sch.id);
+
+    const after = await local.storage.get(sch.id);
+    expect(after?.nextFireAt).toBe(firstRunAt + RETRY);
+    expect(after?.lastFiredAt).toBe(laterManualAt);
   });
 
   it('heartbeat schedule passes targetSessionId through to runner.fire', async () => {
@@ -2587,6 +2626,36 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     await b.scheduler.start();
 
     expect(hasRunningSpy).not.toHaveBeenCalled();
+    await b.scheduler.stop();
+  });
+
+  it('start() does not overwrite a schedule completed after orphan detection', async () => {
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const a = makeHarness({ storage, clock });
+    const sch = await a.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+    const finishedNext = clock.now() + 7_200_000;
+    await storage.update(sch.id, {
+      nextFireAt: undefined,
+      activeClaimRunId: 'run-finishing-owner',
+    });
+    const originalNormalize = storage.normalizeOrphanedAutomaticClaim.bind(storage);
+    vi.spyOn(storage, 'normalizeOrphanedAutomaticClaim').mockImplementationOnce(
+      async (...args) => {
+        await storage.update(sch.id, {
+          nextFireAt: finishedNext,
+          activeClaimRunId: undefined,
+        });
+        return originalNormalize(...args);
+      },
+    );
+
+    const b = makeHarness({ storage, clock });
+    await b.scheduler.start();
+
+    const after = await storage.get(sch.id);
+    expect(after?.nextFireAt).toBe(finishedNext);
+    expect(after?.activeClaimRunId).toBeUndefined();
     await b.scheduler.stop();
   });
 

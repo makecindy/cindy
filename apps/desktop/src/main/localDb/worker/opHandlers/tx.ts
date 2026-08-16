@@ -57,6 +57,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return schedulerClaimDueFireAndInsertRun(db, txArgs);
     case 'scheduler.completeAutomaticClaim':
       return schedulerCompleteAutomaticClaim(db, txArgs);
+    case 'scheduler.normalizeOrphanedAutomaticClaim':
+      return schedulerNormalizeOrphanedAutomaticClaim(db, txArgs);
     case 'scheduler.deferRunNowWithLiveClaimGuard':
       return schedulerDeferRunNowWithLiveClaimGuard(db, txArgs);
     case 'scheduler.pauseWithLiveClaimGuard':
@@ -770,13 +772,14 @@ function rewindCommit(db: Database.Database, args: unknown): void {
       db.prepare(
         `UPDATE sessions
            SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,
-               sdk_session_id = ?
+               codex_plan_json = NULL, sdk_session_id = ?
          WHERE id = ?`,
       ).run(now, now, sdkSessionId, sessionId);
     } else {
       db.prepare(
         `UPDATE sessions
-           SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0
+           SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,
+               codex_plan_json = NULL
          WHERE id = ?`,
       ).run(now, now, sessionId);
     }
@@ -1793,6 +1796,7 @@ function schedulerDeferRunNowWithLiveClaimGuard(db: Database.Database, args: unk
   const payload = asRecord(args, 'scheduler.deferRunNowWithLiveClaimGuard args');
   const scheduleId = expectString(payload.scheduleId, 'scheduleId');
   const previousLastFiredAt = nullableNumber(payload.previousLastFiredAt);
+  const deferredFiredAt = expectNumber(payload.deferredFiredAt, 'deferredFiredAt');
   const retryAt = expectNumber(payload.retryAt, 'retryAt');
 
   return db.transaction(() => {
@@ -1814,22 +1818,55 @@ function schedulerDeferRunNowWithLiveClaimGuard(db: Database.Database, args: unk
       ? db
           .prepare(
             `UPDATE schedules
-             SET last_fired_at = ?,
+             SET last_fired_at = CASE
+                   WHEN last_fired_at = ? THEN ?
+                   ELSE last_fired_at
+                 END,
                  active_claim_run_id = ?
              WHERE id = ?`,
           )
-          .run(previousLastFiredAt, activeClaimRunId, scheduleId)
+          .run(deferredFiredAt, previousLastFiredAt, activeClaimRunId, scheduleId)
       : db
           .prepare(
             `UPDATE schedules
-             SET last_fired_at = ?,
+             SET last_fired_at = CASE
+                   WHEN last_fired_at = ? THEN ?
+                   ELSE last_fired_at
+                 END,
                  next_fire_at = ?,
                  active_claim_run_id = NULL
              WHERE id = ?`,
           )
-          .run(previousLastFiredAt, retryAt, scheduleId);
+          .run(deferredFiredAt, previousLastFiredAt, retryAt, scheduleId);
     return result.changes > 0;
   })();
+}
+
+function schedulerNormalizeOrphanedAutomaticClaim(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.normalizeOrphanedAutomaticClaim args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const expectedActiveClaimRunId = nullableString(payload.expectedActiveClaimRunId);
+  const nextFireAt = expectNumber(payload.nextFireAt, 'nextFireAt');
+  const claimPredicate =
+    expectedActiveClaimRunId === null
+      ? 'active_claim_run_id IS NULL'
+      : 'active_claim_run_id = ?';
+  const params =
+    expectedActiveClaimRunId === null
+      ? [nextFireAt, scheduleId]
+      : [nextFireAt, scheduleId, expectedActiveClaimRunId];
+  const result = db
+    .prepare(
+      `UPDATE schedules
+       SET next_fire_at = ?,
+           active_claim_run_id = NULL
+       WHERE id = ?
+         AND status = 'active'
+         AND next_fire_at IS NULL
+         AND ${claimPredicate}`,
+    )
+    .run(...params);
+  return result.changes > 0;
 }
 
 function schedulerPauseWithLiveClaimGuard(db: Database.Database, args: unknown): boolean {
