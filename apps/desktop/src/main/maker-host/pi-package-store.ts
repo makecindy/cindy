@@ -45,6 +45,7 @@ interface PicomatchOptions {
 type Picomatch = (pattern: string, options?: PicomatchOptions) => (value: string) => boolean;
 const picomatch = createRequire(import.meta.url)('picomatch') as Picomatch;
 const COMMAND_TIMEOUT_MS = 120_000;
+const COMMAND_FORCE_SETTLE_MS = 1_000;
 const PACKAGE_MUTATION_LOCK_WAIT_MS = COMMAND_TIMEOUT_MS + 60_000;
 const MAX_COMMAND_OUTPUT_BYTES = 128 * 1024;
 const MAX_SOURCE_LENGTH = 2_048;
@@ -58,6 +59,12 @@ const MAX_INSPECTED_PACKAGES = 128;
 const MAX_ALL_INSPECTION_MS = 10_000;
 const MAX_EXTENSION_FILES = 128;
 const INSPECTION_CACHE_MS = 1_000;
+const SNAPSHOT_COPY_CHUNK_BYTES = 256 * 1024;
+const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
+  maxEntries: 10_000,
+  maxBytes: 128 * 1024 * 1024,
+  maxDurationMs: 15_000,
+};
 const STATE_VERSION = 2;
 const changeListeners = new Set<() => void>();
 const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
@@ -121,6 +128,12 @@ export interface PiManagedPackageResources {
   promptTemplates: string[];
   /** Canonical package roots used to authenticate get_commands provenance. */
   packageRoots: string[];
+}
+
+export interface PiPackageSnapshotLimits {
+  maxEntries: number;
+  maxBytes: number;
+  maxDurationMs: number;
 }
 
 interface InspectedPackage {
@@ -277,10 +290,15 @@ export async function runPiPackageCommand(
     let timedOut = false;
     let childClosedAfterTimeout = false;
     let treeTerminationSettled = false;
+    let forceSettleTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearCommandTimers = (): void => {
+      clearTimeout(timer);
+      if (forceSettleTimer) clearTimeout(forceSettleTimer);
+    };
     const settleTimedOutCommand = (): void => {
       if (settled || !timedOut || !childClosedAfterTimeout || !treeTerminationSettled) return;
       settled = true;
-      clearTimeout(timer);
+      clearCommandTimers();
       reject(new Error('Pi package command timed out'));
     };
     const timer = setTimeout(() => {
@@ -291,6 +309,16 @@ export async function runPiPackageCommand(
       killProcessTree(child.pid, child, () => {
         treeTerminationSettled = true;
         settleTimedOutCommand();
+        if (settled || childClosedAfterTimeout) return;
+        // Windows taskkill (and descendants retaining inherited stdio) does
+        // not guarantee that Node will ever emit `close`. Once the bounded
+        // tree-termination routine has finished, give stdio one final grace
+        // window, then reject so the cross-process mutation lock is released.
+        forceSettleTimer = setTimeout(() => {
+          childClosedAfterTimeout = true;
+          settleTimedOutCommand();
+        }, COMMAND_FORCE_SETTLE_MS);
+        forceSettleTimer.unref?.();
       });
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => { stdout = boundedAppend(stdout, chunk); });
@@ -299,7 +327,7 @@ export async function runPiPackageCommand(
       if (settled) return;
       if (timedOut) return;
       settled = true;
-      clearTimeout(timer);
+      clearCommandTimers();
       reject(error);
     });
     child.once('close', (code) => {
@@ -310,7 +338,7 @@ export async function runPiPackageCommand(
         return;
       }
       settled = true;
-      clearTimeout(timer);
+      clearCommandTimers();
       if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(redactPackageCommandMessage(
         (stderr || stdout || `Pi package command failed (${code ?? 'unknown'})`).trim(),
@@ -1173,17 +1201,88 @@ function isWithinPath(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-async function assertSnapshotTreeConfined(root: string, current = root): Promise<void> {
-  const stat = await fs.lstat(current);
-  if (stat.isSymbolicLink()) {
-    const target = await fs.realpath(current);
-    if (!isWithinPath(root, target)) throw new Error('Pi extension snapshot contains an escaped link');
+class PiPackageSnapshotLimitError extends Error {
+  constructor() {
+    super('Pi extension snapshot exceeds the safe resource limit');
+    this.name = 'PiPackageSnapshotLimitError';
+  }
+}
+
+interface SnapshotCopyBudget {
+  startedAt: number;
+  entries: number;
+  bytes: number;
+  activeDirectories: Set<string>;
+  limits: PiPackageSnapshotLimits;
+}
+
+function assertSnapshotBudget(budget: SnapshotCopyBudget, additionalBytes = 0): void {
+  if (
+    budget.entries > budget.limits.maxEntries
+    || budget.bytes + additionalBytes > budget.limits.maxBytes
+    || Date.now() - budget.startedAt >= budget.limits.maxDurationMs
+  ) {
+    throw new PiPackageSnapshotLimitError();
+  }
+}
+
+async function copySnapshotEntryBounded(
+  confinementRoot: string,
+  sourcePath: string,
+  targetPath: string,
+  budget: SnapshotCopyBudget,
+): Promise<void> {
+  assertSnapshotBudget(budget);
+  const canonicalSource = await fs.realpath(sourcePath);
+  if (!isWithinPath(confinementRoot, canonicalSource)) {
+    throw new Error('Pi extension snapshot contains an escaped link');
+  }
+  const sourceStat = await fs.stat(canonicalSource);
+  budget.entries += 1;
+  assertSnapshotBudget(budget, sourceStat.isFile() ? sourceStat.size : 0);
+
+  if (sourceStat.isDirectory()) {
+    if (budget.activeDirectories.has(canonicalSource)) {
+      throw new Error('Pi extension snapshot contains a cyclic link');
+    }
+    budget.activeDirectories.add(canonicalSource);
+    const directory = await fs.opendir(canonicalSource);
+    try {
+      await fs.mkdir(targetPath, { mode: sourceStat.mode & 0o777 });
+      for await (const entry of directory) {
+        await copySnapshotEntryBounded(
+          confinementRoot,
+          path.join(canonicalSource, entry.name),
+          path.join(targetPath, entry.name),
+          budget,
+        );
+      }
+    } finally {
+      await directory.close().catch(() => undefined);
+      budget.activeDirectories.delete(canonicalSource);
+    }
     return;
   }
-  if (stat.isFile()) return;
-  if (!stat.isDirectory()) throw new Error('Pi extension snapshot contains a special file');
-  for (const entry of await fs.readdir(current)) {
-    await assertSnapshotTreeConfined(root, path.join(current, entry));
+  if (!sourceStat.isFile()) throw new Error('Pi extension snapshot contains a special file');
+
+  const sourceHandle = await fs.open(canonicalSource, 'r');
+  let targetHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    targetHandle = await fs.open(targetPath, 'wx', sourceStat.mode & 0o777);
+    const chunk = Buffer.allocUnsafe(SNAPSHOT_COPY_CHUNK_BYTES);
+    let position = 0;
+    for (;;) {
+      assertSnapshotBudget(budget);
+      const { bytesRead } = await sourceHandle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      assertSnapshotBudget(budget, bytesRead);
+      await targetHandle.write(chunk, 0, bytesRead, position);
+      budget.bytes += bytesRead;
+      position += bytesRead;
+    }
+  } finally {
+    await sourceHandle.close().catch(() => undefined);
+    await targetHandle?.close().catch(() => undefined);
   }
 }
 
@@ -1201,13 +1300,21 @@ function mapSnapshotPath(
   throw new Error('Pi extension resource is outside its inspected package root');
 }
 
-async function stageManagedPackageSnapshot(
+export async function stageManagedPackageSnapshot(
   resources: PiManagedPackageResources,
   snapshotRoot: string,
+  limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
 ): Promise<PiManagedPackageResources> {
   if (!path.isAbsolute(snapshotRoot)) throw new Error('Pi extension snapshot root must be absolute');
   const temporaryRoot = `${snapshotRoot}.tmp-${process.pid}-${Date.now()}`;
   const mappings: Array<{ source: string; target: string; directory: boolean }> = [];
+  const budget: SnapshotCopyBudget = {
+    startedAt: Date.now(),
+    entries: 0,
+    bytes: 0,
+    activeDirectories: new Set(),
+    limits,
+  };
   try {
     await fs.mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const [index, rawRoot] of resources.packageRoots.entries()) {
@@ -1215,16 +1322,10 @@ async function stageManagedPackageSnapshot(
       const sourceStat = await fs.stat(source);
       const directory = sourceStat.isDirectory();
       if (!directory && !sourceStat.isFile()) throw new Error('Pi extension package root is not a file or directory');
-      await assertSnapshotTreeConfined(source);
       const relativeTarget = directory ? String(index) : path.join(String(index), path.basename(source));
       const temporaryTarget = path.join(temporaryRoot, relativeTarget);
       await fs.mkdir(path.dirname(temporaryTarget), { recursive: true, mode: 0o700 });
-      await fs.cp(source, temporaryTarget, {
-        recursive: directory,
-        dereference: true,
-        errorOnExist: true,
-        force: false,
-      });
+      await copySnapshotEntryBounded(source, source, temporaryTarget, budget);
       mappings.push({ source, target: path.join(snapshotRoot, relativeTarget), directory });
     }
     await fs.rename(temporaryRoot, snapshotRoot);

@@ -527,7 +527,10 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
-import { runPiPackageMutationIpcBoundary } from './piPackageMutationIpc.js';
+import {
+  runPiPackageListIpcBoundary,
+  runPiPackageMutationIpcBoundary,
+} from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -6084,7 +6087,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_LIST, async (event) => {
     assertTrustedAppRendererEvent(event);
-    return listPiPackages();
+    return runPiPackageListIpcBoundary(
+      () => listPiPackages(),
+      t('settings.piPackages.loadFailed'),
+      (error) => {
+        log.warn('Pi extension list failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
   });
 
   ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_MUTATE, async (event, raw: unknown) => {

@@ -1,7 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createIpcError } from '../../../shared/ipc-errors.js';
-import { runPiPackageMutationIpcBoundary } from '../piPackageMutationIpc.js';
+import {
+  runPiPackageListIpcBoundary,
+  runPiPackageMutationIpcBoundary,
+} from '../piPackageMutationIpc.js';
+
+describe('Pi package list IPC boundary', () => {
+  it('maps backend details to a stable renderer-visible code and message', async () => {
+    const log = vi.fn();
+    await expect(runPiPackageListIpcBoundary(
+      async () => { throw new Error('C:\\private\\pi.exe stderr secret'); },
+      'The Pi extension list could not be loaded.',
+      log,
+    )).rejects.toMatchObject({
+      code: 'PI_PACKAGE_LIST_FAILED',
+      message: '[PI_PACKAGE_LIST_FAILED] The Pi extension list could not be loaded.',
+    });
+    expect(log).toHaveBeenCalledOnce();
+  });
+});
 
 describe('Pi package mutation IPC boundary', () => {
   it('preserves explicit user cancellation', async () => {

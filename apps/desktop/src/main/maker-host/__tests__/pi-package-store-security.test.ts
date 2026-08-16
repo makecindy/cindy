@@ -175,6 +175,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -208,6 +209,34 @@ describe('Pi package executable-code boundary', () => {
         expect(settled).toBe(false);
         processRuntime.pendingTreeSettled?.();
         await expect(pending).rejects.toThrow(/timed out/);
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+      }
+    },
+  );
+
+  it.each(['darwin', 'win32'] as const)(
+    'force-settles a timed-out package tree when stdio never closes on %s',
+    async (platform) => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+      try {
+        const store = await import('../pi-package-store.js');
+        runtime.holdMutationCommand = true;
+        let failure: unknown;
+        const pending = store.runPiPackageCommand(['install', 'npm:test'], 1).catch((error) => {
+          failure = error;
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(processRuntime.killTree).toHaveBeenCalledOnce();
+        processRuntime.pendingTreeSettled?.();
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        expect(failure).toBeUndefined();
+        expect(runtime.pendingClose).not.toBeNull();
+        await pending;
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toMatch(/timed out/);
       } finally {
         Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
       }
@@ -307,6 +336,35 @@ describe('Pi package executable-code boundary', () => {
       fs.readFile(snapshotSkill, 'utf8'),
       fs.readFile(snapshotPrompt, 'utf8'),
     ])).resolves.toEqual(frozenResources);
+  });
+
+  it.each([
+    { name: 'entry', limits: { maxEntries: 1, maxBytes: 1024 * 1024, maxDurationMs: 10_000 } },
+    { name: 'byte', limits: { maxEntries: 100, maxBytes: 1, maxDurationMs: 10_000 } },
+    { name: 'time', limits: { maxEntries: 100, maxBytes: 1024 * 1024, maxDurationMs: 0 } },
+  ])('rejects and cleans up snapshots that exceed the $name budget', async ({ limits }) => {
+    const { root } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const snapshotRoot = path.join(
+      runtime.userData,
+      `limited-snapshot-${limits.maxEntries}-${limits.maxBytes}`,
+    );
+
+    await expect(store.stageManagedPackageSnapshot(
+      {
+        extensions: [path.join(root, 'extensions', 'index.ts')],
+        skills: [],
+        promptTemplates: [path.join(root, 'prompts', 'hello.md')],
+        packageRoots: [root],
+      },
+      snapshotRoot,
+      limits,
+    )).rejects.toThrow(/safe resource limit/);
+    await expect(fs.stat(snapshotRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    const leftovers = (await fs.readdir(runtime.userData)).filter((entry) => (
+      entry.startsWith(`${path.basename(snapshotRoot)}.tmp-`)
+    ));
+    expect(leftovers).toEqual([]);
   });
 
   it('preserves v1 disabled sources while migrating approval state and blocks lifecycle scripts', async () => {
