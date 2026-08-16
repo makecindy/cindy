@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq } from 'drizzle-orm';
 
+import { normalizeBotDurableNoteNamespace } from '../../shared/botAutomation.js';
+
 import { getDbClient } from '../localDb/client/current.js';
 import {
   botAutomationLinks,
@@ -11,7 +13,6 @@ import {
   sessions,
 } from '../localDb/schema.js';
 
-const MAX_NAMESPACE_CHARS = 128;
 const MAX_KEY_CHARS = 128;
 const MAX_VALUE_BYTES = 32 * 1024;
 const MAX_LIST_LIMIT = 200;
@@ -80,14 +81,14 @@ function resolveNamespace(
   message: string;
 } {
   const boundNamespace = defaultNamespace
-    ? validateName(defaultNamespace, 'namespace', MAX_NAMESPACE_CHARS)
+    ? normalizeBotDurableNoteNamespace(defaultNamespace)
     : null;
   if (defaultNamespace && !boundNamespace) {
     return { ok: false, errorCode: 'INVALID_ARGS', message: '绑定的 namespace 格式无效' };
   }
   const requestedNamespace = requested === undefined
     ? undefined
-    : validateName(requested, 'namespace', MAX_NAMESPACE_CHARS);
+    : normalizeBotDurableNoteNamespace(requested);
   if (requested !== undefined && !requestedNamespace) {
     return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 格式无效' };
   }

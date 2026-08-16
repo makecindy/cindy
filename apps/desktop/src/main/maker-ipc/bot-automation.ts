@@ -18,7 +18,9 @@ import type {
   UpdateBotAutomationInput,
 } from '../../shared/botAutomation.js';
 import {
+  BOT_DURABLE_NOTE_NAMESPACE_MAX_CHARS,
   normalizeBotAutomationExecutionPolicy,
+  normalizeBotDurableNoteNamespace,
   parseBotAutomationExecutionPlan,
 } from '../../shared/botAutomation.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -67,6 +69,20 @@ function readOptionalString(value: unknown, field: string, max = MAX_TEXT): stri
   if (!text) return undefined;
   if (text.length > max) throwIpcError('INVALID_PARAMS', `${field} is too long`);
   return text;
+}
+
+function readDurableNoteNamespace(value: unknown): string | undefined {
+  const namespace = readOptionalString(
+    value,
+    'durableNoteNamespace',
+    BOT_DURABLE_NOTE_NAMESPACE_MAX_CHARS,
+  );
+  if (namespace === undefined) return undefined;
+  const normalized = normalizeBotDurableNoteNamespace(namespace);
+  if (!normalized) {
+    throwIpcError('INVALID_PARAMS', 'durableNoteNamespace has an invalid format');
+  }
+  return normalized;
 }
 
 function readBoolean(value: unknown, field: string, fallback: boolean): boolean {
@@ -324,11 +340,7 @@ export function registerBotAutomationHandlers(deps: BotAutomationHandlerDeps): v
     }
     const projectBindingId = readOptionalString(body.projectBindingId, 'projectBindingId', 128);
     const targetRouteId = readOptionalString(body.targetRouteId, 'targetRouteId', 128);
-    const durableNoteNamespace = readOptionalString(
-      body.durableNoteNamespace,
-      'durableNoteNamespace',
-      256,
-    );
+    const durableNoteNamespace = readDurableNoteNamespace(body.durableNoteNamespace);
     const executionPolicy = normalizeBotAutomationExecutionPolicy(body.executionPolicy);
     const policy = await readBotAutomationPolicy(botId);
     await validateTargets({ botId, projectBindingId, targetRouteId });
@@ -427,7 +439,7 @@ export function registerBotAutomationHandlers(deps: BotAutomationHandlerDeps): v
         : link.targetRouteId ?? undefined;
       await validateTargets({ botId: link.botId, projectBindingId, targetRouteId });
       const durableNoteNamespace = Object.prototype.hasOwnProperty.call(patch, 'durableNoteNamespace')
-        ? readOptionalString(patch.durableNoteNamespace, 'durableNoteNamespace', 256)
+        ? readDurableNoteNamespace(patch.durableNoteNamespace)
         : link.durableNoteNamespace ?? undefined;
       const executionPolicy = Object.prototype.hasOwnProperty.call(patch, 'executionPolicy')
         ? normalizeBotAutomationExecutionPolicy(patch.executionPolicy)

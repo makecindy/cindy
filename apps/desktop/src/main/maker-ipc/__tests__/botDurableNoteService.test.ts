@@ -146,6 +146,22 @@ describe('botDurableNoteService', () => {
     })).resolves.toMatchObject({ ok: true, note: { value: 7 } });
   });
 
+  it('fails closed when legacy Automation data contains an invalid bound namespace', async () => {
+    h.sqlite!.exec(`
+      INSERT INTO sessions (id, source) VALUES ('a-invalid-automation', 'bot');
+      INSERT INTO bot_session_links (id, bot_id, session_id, created_at)
+      VALUES ('a:a-invalid-automation', 'bot-a', 'a-invalid-automation', 3);
+      INSERT INTO bot_automation_links VALUES ('automation-invalid', '../escape');
+      INSERT INTO bot_automation_runs VALUES
+        ('run-invalid', 'automation-invalid', 'a-invalid-automation');
+    `);
+    await expect(setBotDurableNote({
+      callerSessionId: 'a-invalid-automation',
+      key: 'cursor',
+      value: 1,
+    })).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+
   it('rejects durable-state access from archived and read-only Bot history tasks', async () => {
     await setBotDurableNote({
       callerSessionId: 'a-main',

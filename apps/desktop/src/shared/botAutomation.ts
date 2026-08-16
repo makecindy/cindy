@@ -33,6 +33,22 @@ export type BotAutomationDeliveryStatus =
   | 'dead-letter'
   | 'cancelled';
 
+export const BOT_DURABLE_NOTE_NAMESPACE_MAX_CHARS = 128;
+const BOT_DURABLE_NOTE_NAMESPACE_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}._:/-]*$/u;
+
+/** Shared storage/runtime contract for an Automation durable-note namespace. */
+export function normalizeBotDurableNoteNamespace(value: string): string | null {
+  const normalized = value.trim();
+  if (
+    !normalized
+    || normalized.length > BOT_DURABLE_NOTE_NAMESPACE_MAX_CHARS
+    || !BOT_DURABLE_NOTE_NAMESPACE_PATTERN.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
 export interface BotAutomation {
   id: string;
   botId: string;
