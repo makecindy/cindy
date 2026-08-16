@@ -642,6 +642,7 @@ export function translatePlanUpdatedNotification(
     data: {
       toolUseId: `plan:${params.turnId}`,
       toolName: 'update_plan',
+      runtimeActivity: 'snapshot',
       input: {
         ...(params.explanation ? { explanation: params.explanation } : {}),
         plan: params.plan,
@@ -715,6 +716,7 @@ export function extractRolloutUpdatePlanFunctionCallEvent(
       data: {
         toolUseId: turnId ? `plan:${turnId}` : `plan-call:${item.call_id ?? 'unknown'}`,
         toolName: 'update_plan',
+        runtimeActivity: 'snapshot',
         input,
       },
       source: 'codex',

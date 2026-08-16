@@ -546,6 +546,8 @@ interface SessionInputState {
   pendingQueue: AgentInputQueuedMessage[];
   pendingCompacts: PendingCompactRequest[];
   steeringQueueClientIds: string[];
+  /** Identity of the currently owned steer transaction for each visible clientId. */
+  steeringRequestTokens: Map<string, symbol>;
   /** Direct composer steers have no pendingQueue row while delivery is still reversible. */
   directSteeringItems: AgentInputQueuedMessage[];
   queuePaused: boolean;
@@ -639,6 +641,7 @@ function createInitialInputState(
     pendingQueue: [],
     pendingCompacts: [],
     steeringQueueClientIds: [],
+    steeringRequestTokens: new Map(),
     directSteeringItems: [],
     queuePaused: false,
     queuePausedByRestore: false,
@@ -1754,6 +1757,7 @@ export class AgentInputCoordinator {
     const messageUuid = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
+    const steerRequestToken = Symbol('agent-input-steer-request');
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
@@ -1764,6 +1768,7 @@ export class AgentInputCoordinator {
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
       state.steeringQueueClientIds.push(item.clientId);
     }
+    state.steeringRequestTokens.set(item.clientId, steerRequestToken);
     if (!steersStoredQueueItem) {
       state.directSteeringItems = [
         ...state.directSteeringItems.filter((entry) => entry.clientId !== item.clientId),
@@ -1787,16 +1792,21 @@ export class AgentInputCoordinator {
         item,
       );
       const cur = this.getState(sessionId);
-      if (!cur.steeringQueueClientIds.includes(item.clientId)) {
+      if (
+        !this.isCurrentSteerRequest(cur, item.clientId, steerGeneration, steerRequestToken)
+      ) {
         // stop/close/clearSession 赢在筛查期间:steer 事务已被取消,静默放弃。
-        this.clearSteerAbortController(sessionId, item.clientId);
+        this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
         return false;
       }
       if (verdict.action === 'block') {
         // 拦截即终态:不注入、不落库,气泡由 onUserMessageBlocked 广播降级;
         // 返回 true(已处置),renderer 不再回滚重试。
-        this.clearSteerAbortController(sessionId, item.clientId);
-        this.clearSteeringMarker(cur, item.clientId);
+        this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
+        this.clearSteeringMarker(cur, item.clientId, {
+          generation: steerGeneration,
+          token: steerRequestToken,
+        });
         if (opts?.removeFromQueue) {
           cur.pendingQueue = cur.pendingQueue.filter((q) => q.clientId !== item.clientId);
           this.removePendingCompactWaitClientId(cur, item.clientId);
@@ -1848,11 +1858,13 @@ export class AgentInputCoordinator {
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
       });
-      this.clearDirectSteeringItem(this.getState(sessionId), item.clientId);
     } catch (err) {
-      this.clearSteerAbortController(sessionId, item.clientId);
       const latest = this.getState(sessionId);
-      const markerStillPresent = this.clearSteeringMarker(latest, item.clientId);
+      const markerStillPresent = this.clearSteeringMarker(latest, item.clientId, {
+        generation: steerGeneration,
+        token: steerRequestToken,
+      });
+      this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
 
       if (isNoActiveTurnError(err)) {
         // maker-core 权威判定无活跃 turn — 先让 host 校准可能 stale 的 busy
@@ -1925,7 +1937,11 @@ export class AgentInputCoordinator {
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
           latest.queuePausedByRestore = false;
         }
-      } else if (isSteerDeliveryUncertainError(err) && latest.generation === steerGeneration) {
+      } else if (
+        isSteerDeliveryUncertainError(err) &&
+        latest.generation === steerGeneration &&
+        !latest.steeringRequestTokens.has(item.clientId)
+      ) {
         // Stop/close 赢在 ack 返回前(marker 已被 stop 清):RPC 已发出,结果同样
         // 不确定,消息必须有落点(尤其 composer 入口无队列行的场景,review #939
         // 第四轮)。物化进暂停队列交用户处置。generation 守卫:clearSession 是
@@ -1943,10 +1959,16 @@ export class AgentInputCoordinator {
       this.scheduleDrain(sessionId, 'steer-hard-failure');
       return false;
     }
-    this.clearSteerAbortController(sessionId, item.clientId);
-
     const accepted = this.getState(sessionId);
-    if (!accepted.steeringQueueClientIds.includes(item.clientId)) {
+    if (
+      !this.isCurrentSteerRequest(
+        accepted,
+        item.clientId,
+        steerGeneration,
+        steerRequestToken,
+      )
+    ) {
+      this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
       log.warn(
         'steer accepted by agent but marker already cancelled (stop/close raced); dropping',
         {
@@ -1957,6 +1979,8 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       return false;
     }
+    this.clearDirectSteeringItem(accepted, item.clientId);
+    this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
     // steerToAgent has crossed the irreversible delivery boundary. Keep the
     // clientId known even if the subsequent user-row persistence or terminal
     // event fails, otherwise an ACK-loss retry can inject the same text twice.
@@ -2003,8 +2027,18 @@ export class AgentInputCoordinator {
     const persisted = await this.persistAcceptedUserMessage(sessionId, accepted.activeTurn);
     const settled = this.getState(sessionId);
     let releasedSteerMarker = false;
-    if (settled.generation === steerGeneration) {
-      releasedSteerMarker = this.clearSteeringMarker(settled, item.clientId);
+    if (
+      this.isCurrentSteerRequest(
+        settled,
+        item.clientId,
+        steerGeneration,
+        steerRequestToken,
+      )
+    ) {
+      releasedSteerMarker = this.clearSteeringMarker(settled, item.clientId, {
+        generation: steerGeneration,
+        token: steerRequestToken,
+      });
       if (releasedSteerMarker) {
         this.emit(sessionId);
       }
@@ -2982,9 +3016,29 @@ export class AgentInputCoordinator {
     );
   }
 
-  private clearSteeringMarker(state: SessionInputState, clientId: string): boolean {
+  private isCurrentSteerRequest(
+    state: SessionInputState,
+    clientId: string,
+    generation: number,
+    token: symbol,
+  ): boolean {
+    return state.generation === generation && state.steeringRequestTokens.get(clientId) === token;
+  }
+
+  private clearSteeringMarker(
+    state: SessionInputState,
+    clientId: string,
+    expected?: { generation: number; token: symbol },
+  ): boolean {
+    if (
+      expected &&
+      !this.isCurrentSteerRequest(state, clientId, expected.generation, expected.token)
+    ) {
+      return false;
+    }
     const existed = state.steeringQueueClientIds.includes(clientId);
     state.steeringQueueClientIds = state.steeringQueueClientIds.filter((id) => id !== clientId);
+    state.steeringRequestTokens.delete(clientId);
     this.clearDirectSteeringItem(state, clientId);
     return existed;
   }
@@ -2997,6 +3051,7 @@ export class AgentInputCoordinator {
 
   private clearAllSteeringMarkers(state: SessionInputState): void {
     state.steeringQueueClientIds = [];
+    state.steeringRequestTokens.clear();
     state.directSteeringItems = [];
   }
 
@@ -4395,9 +4450,14 @@ export class AgentInputCoordinator {
     byClientId.set(clientId, controller);
   }
 
-  private clearSteerAbortController(sessionId: string, clientId: string): void {
+  private clearSteerAbortController(
+    sessionId: string,
+    clientId: string,
+    expectedController?: AbortController,
+  ): void {
     const byClientId = this.steerAbortControllers.get(sessionId);
     if (!byClientId) return;
+    if (expectedController && byClientId.get(clientId) !== expectedController) return;
     byClientId.delete(clientId);
     if (byClientId.size === 0) this.steerAbortControllers.delete(sessionId);
   }

@@ -6064,6 +6064,77 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
   });
+
+  it('does not let a stale steer failure clear a reused clientId in a new generation', async () => {
+    const h = createHarness();
+    const sid = 'steer-stale-generation-reused-client-id';
+    const oldTurn = makeItem('old-turn', 'old turn');
+    const newTurn = makeItem('new-turn', 'new turn');
+    const oldSteer = makeItem('reused-steer', 'old steer');
+    const newSteer = makeItem('reused-steer', 'new steer');
+    const oldGate = deferred<void>();
+    let newSteerSignal: AbortSignal | undefined;
+
+    h.setAgentKind('codex');
+    h.steerToAgent
+      .mockImplementationOnce(() => oldGate.promise)
+      .mockImplementationOnce(
+        (_sessionId, _message, sendOpts) =>
+          new Promise<void>((_resolve, reject) => {
+            newSteerSignal = sendOpts.signal;
+            if (sendOpts.signal?.aborted) {
+              reject(new Error('cancelled'));
+              return;
+            }
+            sendOpts.signal?.addEventListener('abort', () => reject(new Error('cancelled')), {
+              once: true,
+            });
+          }),
+      );
+
+    h.coordinator.enqueue(sid, oldTurn);
+    await flush();
+    const oldSteerPromise = h.coordinator.steer(sid, oldSteer, { touchUserSend: true });
+    await flush();
+
+    h.coordinator.clearSession(sid);
+    h.setRunning(false);
+    h.coordinator.enqueue(sid, newTurn);
+    await flush();
+    const newSteerPromise = h.coordinator.steer(sid, newSteer, { touchUserSend: true });
+    await flush();
+
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([
+      expect.objectContaining({
+        queuedMessageId: 'reused-steer',
+        content: 'new steer',
+        consuming: true,
+      }),
+    ]);
+    expect(newSteerSignal?.aborted).toBe(false);
+
+    oldGate.reject(new Error('old generation failed late'));
+    await expect(oldSteerPromise).resolves.toBe(false);
+    await flush();
+
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual(['reused-steer']);
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([
+      expect.objectContaining({
+        queuedMessageId: 'reused-steer',
+        content: 'new steer',
+        consuming: true,
+      }),
+    ]);
+    expect(newSteerSignal?.aborted).toBe(false);
+
+    h.coordinator.stop(sid);
+    await flush();
+
+    expect(newSteerSignal?.aborted).toBe(true);
+    await expect(newSteerPromise).resolves.toBe(false);
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+  });
 });
 
 describe('AgentInputCoordinator queue mutations', () => {

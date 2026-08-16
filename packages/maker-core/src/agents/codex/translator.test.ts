@@ -1852,6 +1852,7 @@ describe('translatePlanUpdatedNotification', () => {
     expect(events[0].data).toMatchObject({
       toolUseId: 'plan:turn-1',
       toolName: 'update_plan',
+      runtimeActivity: 'snapshot',
       input: {
         explanation: 'Working through the implementation.',
         plan: [
@@ -1864,6 +1865,7 @@ describe('translatePlanUpdatedNotification', () => {
     expect(events[1].data).toMatchObject({
       toolUseId: 'plan:turn-1',
       toolName: 'update_plan',
+      runtimeActivity: 'snapshot',
       input: {
         plan: [
           { step: 'Read logs', status: 'completed' },
@@ -1908,6 +1910,7 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
       data: {
         toolUseId: 'plan:turn-1',
         toolName: 'update_plan',
+        runtimeActivity: 'snapshot',
         input: {
           plan: [
             { step: 'Read logs', status: 'completed' },

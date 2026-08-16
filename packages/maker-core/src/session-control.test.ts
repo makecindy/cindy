@@ -177,6 +177,54 @@ describe('Session control plane runtime state', () => {
     expect(stub.abort).not.toHaveBeenCalled();
   });
 
+  it('does not count display-only plan snapshots as active tools', async () => {
+    const snapshotStub = createHandle();
+    const snapshotSession = createSession(snapshotStub);
+    await snapshotSession.send('start');
+    snapshotStub.push({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        runtimeActivity: 'snapshot',
+      },
+    });
+    await vi.waitFor(() => {
+      expect(snapshotSession.getRuntimeSnapshot().currentActionSummary).toBe('正在更新计划');
+    });
+
+    await expect(snapshotSession.requestGracefulStop()).resolves.toEqual({
+      status: 'requested',
+      turnGeneration: 1,
+    });
+    expect(snapshotStub.requestGracefulStop).toHaveBeenCalledOnce();
+
+    const toolStub = createHandle();
+    const toolSession = createSession(toolStub);
+    await toolSession.send('start');
+    toolStub.push({
+      type: 'tool_use',
+      data: { toolUseId: 'plan-call-1', toolName: 'update_plan' },
+    });
+    await vi.waitFor(() => {
+      expect(toolSession.getRuntimeSnapshot().currentActionSummary).toBe(
+        '正在运行工具 update_plan',
+      );
+    });
+
+    await expect(toolSession.requestGracefulStop()).resolves.toEqual({
+      status: 'waiting-for-safe-point',
+      turnGeneration: 1,
+    });
+    expect(toolStub.requestGracefulStop).not.toHaveBeenCalled();
+
+    toolStub.push({
+      type: 'tool_result',
+      data: { toolUseIds: ['plan-call-1'], summary: 'done' },
+    });
+    await vi.waitFor(() => expect(toolStub.requestGracefulStop).toHaveBeenCalledOnce());
+  });
+
   it('treats a pending interaction as a safe stop boundary and exposes it in runtime state', async () => {
     const stub = createHandle();
     const session = createSession(stub);

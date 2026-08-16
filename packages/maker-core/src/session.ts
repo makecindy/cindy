@@ -1532,6 +1532,13 @@ export class Session {
     if (event.type === 'tool_use') {
       const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : null;
       const toolName = runtimeToolLabel(data.toolName);
+      // Some providers expose display-only tool-shaped snapshots (for example,
+      // Codex native plan updates). They have no matching tool_result and must
+      // not occupy the graceful-stop safe-point lifecycle.
+      if (data.runtimeActivity === 'snapshot') {
+        runtime.currentActionSummary = toolName === 'update_plan' ? '正在更新计划' : '正在更新状态';
+        return;
+      }
       if (toolUseId) runtime.activeTools.set(toolUseId, toolName);
       else runtime.anonymousActiveTools += 1;
       runtime.currentActionSummary = `正在运行工具 ${toolName}`;
