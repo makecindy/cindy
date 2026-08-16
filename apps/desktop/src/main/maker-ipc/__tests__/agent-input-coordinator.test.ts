@@ -254,6 +254,7 @@ function createHarness(opts?: {
   let hasAssistantProgressAfter:
     ((sessionId: string, userClientId: string) => Promise<boolean>) | null = null;
   let loadQueueSnapshot: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null = null;
+  let loadClearBoundary: ((sessionId: string) => Promise<unknown>) | null = null;
   let getPersistedClientIds:
     ((sessionId: string, clientIds: string[]) => Promise<Set<string>>) | undefined;
   const persistQueueSnapshot =
@@ -317,6 +318,8 @@ function createHarness(opts?: {
     onUserMessageRewritten,
     emitProjection,
     persistQueueSnapshot,
+    loadClearBoundary: (sessionId) =>
+      loadClearBoundary ? loadClearBoundary(sessionId) : Promise.resolve(null),
     loadQueueSnapshot: (sessionId) =>
       loadQueueSnapshot ? loadQueueSnapshot(sessionId) : Promise.resolve([]),
     getPersistedClientIds: (sessionId, clientIds) =>
@@ -391,6 +394,9 @@ function createHarness(opts?: {
     persistQueueSnapshot,
     setLoadQueueSnapshot(fn: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null) {
       loadQueueSnapshot = fn;
+    },
+    setLoadClearBoundary(fn: ((sessionId: string) => Promise<unknown>) | null) {
+      loadClearBoundary = fn;
     },
     setGetPersistedClientIds(
       fn: ((sessionId: string, clientIds: string[]) => Promise<Set<string>>) | undefined,
@@ -6293,6 +6299,57 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     h.coordinator.clearSession(sid);
     await flush();
     expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
+  });
+
+  it('hydrates the durable clear boundary before restoring a crash snapshot', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-durable-clear-boundary';
+    h.setLoadClearBoundary(async () => 2_000);
+    h.setLoadQueueSnapshot(async () => [
+      makeItem('pre-clear', 'stale', { hostAcceptedAtMs: 1_999 }),
+      makeItem('missing-receipt', 'also stale'),
+      makeItem('post-clear', 'fresh', { hostAcceptedAtMs: 2_001 }),
+    ]);
+
+    await h.coordinator.ensureQueueRestored(sid);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.clearBoundaryMs).toBe(2_000);
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['post-clear']);
+    expect(projection.queuePaused).toBe(true);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledTimes(2);
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['post-clear']);
+  });
+
+  it('keeps restore incomplete when the durable clear boundary cannot be read, then retries', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-clear-boundary-retry';
+    let attempts = 0;
+    h.setLoadClearBoundary(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('session row unavailable');
+      return 3_000;
+    });
+    const loadQueueSnapshot = vi.fn(async () => [
+      makeItem('pre-clear', 'stale', { hostAcceptedAtMs: 2_999 }),
+    ]);
+    h.setLoadQueueSnapshot(loadQueueSnapshot);
+
+    await expect(h.coordinator.ensureQueueRestored(sid)).rejects.toThrow(
+      'session row unavailable',
+    );
+    expect(h.coordinator.isQueueRestored(sid)).toBe(false);
+    expect(loadQueueSnapshot).not.toHaveBeenCalled();
+    expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
+
+    await expect(h.coordinator.ensureQueueRestored(sid)).resolves.toBeUndefined();
+    await flush();
+    expect(attempts).toBe(2);
+    expect(loadQueueSnapshot).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.isQueueRestored(sid)).toBe(true);
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    expect(h.coordinator.getClearBoundaryMs(sid)).toBe(3_000);
   });
 
   it('restores a quiet session as a paused queue and only drains after explicit resume', async () => {

@@ -11251,8 +11251,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getAgentIslandService()?.notifyQueueEmptied(sessionId);
     },
     // 排队输入崩溃恢复(issue #761):快照写入 fire-and-forget(模块内 per-session
-    // 写链保序 + 失败落日志),读回由 IPC 入口的 ensureQueueRestored 懒触发。
+    // 写链保序 + 失败落日志),读回由 ensureQueueRestored 懒触发。恢复前先严格
+    // 水合 durable /clear 边界，所有入口共用，避免仅 projection 路径安全。
     persistQueueSnapshot: (sessionId, items) => saveAgentInputQueueSnapshot(sessionId, items),
+    loadClearBoundary: async (sessionId) =>
+      (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: (sessionId) => loadAgentInputQueueSnapshot(sessionId),
     getPersistedClientIds: getPersistedInputClientIds,
   });

@@ -477,12 +477,14 @@ export interface AgentInputCoordinatorDeps {
   /**
    * 排队输入崩溃恢复(issue #761)。persistQueueSnapshot:队列内容变化时覆盖写
    * 快照(items 为空 = 删行),实现方自行 fire-and-forget + 保序,绝不阻塞派发;
-   * loadQueueSnapshot:ensureQueueRestored 懒恢复时读回。两者要么都注入要么都不注入。
+   * loadClearBoundary:ensureQueueRestored 恢复快照前先水合 durable /clear 边界；
+   * loadQueueSnapshot:随后读回快照。生产侧三者一起注入，任一读取失败都保持未恢复态。
    */
   persistQueueSnapshot?: (
     sessionId: string,
     items: AgentInputQueuedMessage[],
   ) => void | Promise<void>;
+  loadClearBoundary?: (sessionId: string) => Promise<unknown>;
   loadQueueSnapshot?: (sessionId: string) => Promise<AgentInputQueuedMessage[]>;
   getPersistedClientIds?: (sessionId: string, clientIds: string[]) => Promise<Set<string>>;
 }
@@ -999,6 +1001,18 @@ export class AgentInputCoordinator {
   private async restoreQueueSnapshot(sessionId: string): Promise<void> {
     const preState = this.getState(sessionId);
     const preGeneration = preState.generation;
+    if (this.deps.loadClearBoundary) {
+      try {
+        const clearedAt = await this.deps.loadClearBoundary(sessionId);
+        this.observeClearBoundary(sessionId, clearedAt);
+      } catch (err) {
+        log.warn('load queue clear boundary failed; will retry on next entry', {
+          sessionId,
+          error: errorMessage(err),
+        });
+        throw err;
+      }
+    }
     let items: AgentInputQueuedMessage[];
     try {
       items = (await this.deps.loadQueueSnapshot!(sessionId)).map(

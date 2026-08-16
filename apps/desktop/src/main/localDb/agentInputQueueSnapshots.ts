@@ -200,12 +200,12 @@ export async function loadAgentInputQueueSnapshotCounts(
       sessionId: string;
       itemCount: number | null;
     }>(
-      `SELECT session_id AS sessionId,
+      `SELECT snapshot.session_id AS sessionId,
               CASE
-                WHEN json_valid(payload) = 1 AND json_type(payload) = 'array'
+                WHEN json_valid(snapshot.payload) = 1 AND json_type(snapshot.payload) = 'array'
                 THEN (
                   SELECT COUNT(*)
-                  FROM json_each(payload) AS snapshot_item
+                  FROM json_each(snapshot.payload) AS snapshot_item
                   WHERE CASE
                     WHEN snapshot_item.type = 'object'
                     THEN
@@ -219,10 +219,21 @@ export async function loadAgentInputQueueSnapshotCounts(
                           IN ('claude-code', 'codex', 'pi')
                     ELSE 0
                   END
+                    AND (
+                      session.cleared_at IS NULL
+                      OR (
+                        json_type(snapshot_item.value, '$.hostAcceptedAtMs')
+                            IN ('integer', 'real')
+                        AND json_extract(snapshot_item.value, '$.hostAcceptedAtMs')
+                            > session.cleared_at
+                        AND json_extract(snapshot_item.value, '$.hostAcceptedAtMs')
+                            <= 1.7976931348623157e308
+                      )
+                    )
                     AND NOT EXISTS (
                       SELECT 1
                       FROM messages
-                      WHERE messages.session_id = agent_input_queue_snapshots.session_id
+                      WHERE messages.session_id = snapshot.session_id
                         AND messages.client_id = json_extract(
                           snapshot_item.value,
                           '$.clientId'
@@ -231,8 +242,9 @@ export async function loadAgentInputQueueSnapshotCounts(
                 )
                 ELSE NULL
               END AS itemCount
-       FROM agent_input_queue_snapshots
-       WHERE session_id IN (${placeholders})`,
+       FROM agent_input_queue_snapshots AS snapshot
+       JOIN sessions AS session ON session.id = snapshot.session_id
+       WHERE snapshot.session_id IN (${placeholders})`,
       batch,
     );
     for (const row of rows) {

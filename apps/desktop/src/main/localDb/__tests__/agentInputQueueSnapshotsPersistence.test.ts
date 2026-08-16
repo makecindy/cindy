@@ -133,16 +133,20 @@ describe('agent input queue snapshot durability boundary', () => {
     await expect(
       loadAgentInputQueueSnapshotCounts(['session-1', 'session-2', 'session-1']),
     ).resolves.toEqual({ 'session-1': 2, 'session-2': 0 });
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('json_each(payload)'), [
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('json_each(snapshot.payload)'), [
       'session-1',
       'session-2',
     ]);
     expect(query.mock.calls[0]?.[0]).not.toContain('SELECT payload');
   });
 
-  it('excludes snapshot items already persisted in messages from cold queued counts', async () => {
+  it('matches restore de-duplication and clear-boundary filtering for cold queued counts', async () => {
     const db = new Database(':memory:');
     db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        cleared_at INTEGER
+      );
       CREATE TABLE agent_input_queue_snapshots (
         session_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
@@ -154,13 +158,34 @@ describe('agent input queue snapshot durability boundary', () => {
         UNIQUE(session_id, client_id)
       );
     `);
-    const accepted = queued('accepted', 'client-accepted');
-    const waiting = queued('waiting', 'client-waiting');
+    const accepted = {
+      ...queued('accepted', 'client-accepted'),
+      hostAcceptedAtMs: 301,
+    };
+    const beforeClear = {
+      ...queued('before clear', 'client-before-clear'),
+      hostAcceptedAtMs: 299,
+    };
+    const missingReceipt = queued('missing receipt', 'client-missing-receipt');
+    const waiting = {
+      ...queued('waiting', 'client-waiting'),
+      hostAcceptedAtMs: 301,
+    };
+    db.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run(
+      'session-crash-window',
+      300,
+    );
     db.prepare(
       'INSERT INTO agent_input_queue_snapshots (session_id, payload, updated_at) VALUES (?, ?, ?)',
     ).run(
       'session-crash-window',
-      JSON.stringify([accepted, waiting, 'malformed legacy row']),
+      JSON.stringify([
+        accepted,
+        beforeClear,
+        missingReceipt,
+        waiting,
+        'malformed legacy row',
+      ]),
       Date.now(),
     );
     db.prepare('INSERT INTO messages (session_id, client_id) VALUES (?, ?)').run(
@@ -177,6 +202,8 @@ describe('agent input queue snapshot durability boundary', () => {
       ).resolves.toEqual({ 'session-crash-window': 1 });
       expect(query.mock.calls[0]?.[0]).toContain('NOT EXISTS');
       expect(query.mock.calls[0]?.[0]).toContain('FROM messages');
+      expect(query.mock.calls[0]?.[0]).toContain('session.cleared_at');
+      expect(query.mock.calls[0]?.[0]).toContain('$.hostAcceptedAtMs');
     } finally {
       db.close();
     }
