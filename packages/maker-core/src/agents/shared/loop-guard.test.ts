@@ -62,6 +62,42 @@ describe('ToolLoopGuard', () => {
     }
   });
 
+  // ── 第 3 层: 长窗口轮转(ABCD…) ───────────────────────────────────────────
+  it('4 个不同调用轮转(ABCDABCD…)在轮转窗口填满时判 rotation(对应 grok 4-Grep 实锤)', () => {
+    const g = new ToolLoopGuard(); // rotationWindowSize 16, rotationDistinct<=4
+    const cmds = ['grep -R a', 'grep -R b', 'grep -R c', 'grep -R d'];
+    for (let i = 0; i < 16; i += 1) {
+      const v = feed(g, `id${i}`, 'Grep', { pattern: cmds[i % 4] }, `hits-${i}`);
+      if (i < 15) expect(v.kind).toBe('ok');
+      else expect(v).toMatchObject({ kind: 'hard', reason: 'rotation', count: 16, toolName: 'Grep' });
+    }
+  });
+
+  it('3 个不同调用轮转同样被 rotation 层捕获', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 16; i += 1) {
+      const v = feed(g, `id${i}`, 'Bash', { cmd: `check-${i % 3}` }, `o${i}`);
+      if (i < 15) expect(v.kind).toBe('ok');
+      else expect(v).toMatchObject({ kind: 'hard', reason: 'rotation' });
+    }
+  });
+
+  it('5 个不同调用轮转不判 rotation(distinct 超过上限,留给更长证据)', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 40; i += 1) {
+      expect(feed(g, `id${i}`, 'Bash', { cmd: `probe-${i % 5}` }, `o${i}`).kind).toBe('ok');
+    }
+  });
+
+  it('轮转中途出现新调用会把窗口 distinct 顶出上限,不误判', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 48; i += 1) {
+      // 每 8 次插入一个全新 input:任何 16 连续窗口 distinct ≥ 5
+      const input = i % 8 === 7 ? { cmd: `novel-${i}` } : { cmd: `fix-${i % 4}` };
+      expect(feed(g, `id${i}`, 'Bash', input, `o${i}`).kind).toBe('ok');
+    }
+  });
+
   // ── 合法长 turn / 原生轮询工具 ───────────────────────────────────────────
   it('TaskOutput 状态长期不变仍放行,不会被通用重复判据中断', () => {
     const g = new ToolLoopGuard();
