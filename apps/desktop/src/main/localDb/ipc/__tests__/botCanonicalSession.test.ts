@@ -2925,6 +2925,9 @@ describe('Bot canonical Session lifecycle', () => {
       });
       expect(delegated).toMatchObject({ ok: true });
       if (!delegated.ok) throw new Error(delegated.message);
+      h.sqlite!.prepare(
+        'UPDATE bot_routes SET owner_generation = owner_generation + 1 WHERE id = ?',
+      ).run(route.id);
       await service.settleSession({
         childSessionId: delegated.childSessionId,
         outcome: 'done',
@@ -2937,6 +2940,9 @@ describe('Bot canonical Session lifecycle', () => {
           channelId: 'bot-1:local',
           routeId: route.id,
           sessionId: routed.sessionId,
+          // Completion keeps the generation captured when the delegation was
+          // created. The outbox rejects it instead of redirecting the old
+          // result to the Route's newly claimed owner.
           ownerGeneration: routed.route.ownerGeneration,
           idempotencyKey: 'bot-delegation-completion:delegation-route',
         }),

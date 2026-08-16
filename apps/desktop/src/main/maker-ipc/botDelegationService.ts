@@ -587,6 +587,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     status: Extract<DelegationStatus, 'completed' | 'failed' | 'cancelled' | 'timed-out'>;
     resultSummary?: string | null;
     lastError?: string | null;
+    permissionSnapshotJson: string;
   }): Promise<void> => {
     if (!params.parentSessionId) return;
     const db = getDbClient().drizzle;
@@ -595,6 +596,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         status: sessions.status,
         role: botSessionLinks.role,
         botId: botSessionLinks.botId,
+        routeKey: botSessionLinks.routeKey,
       })
       .from(sessions)
       .innerJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
@@ -602,23 +604,22 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .limit(1);
     // Renew/archive owns the parent lifecycle. Completion must never resurrect
     // or enqueue durable work against a task that is no longer active.
-    if (parent?.status !== 'active') return;
-    const [parentRoute] = parent.role === 'route'
-      ? await db
-          .select({
-            id: botRoutes.id,
-            channelId: botRoutes.channelId,
-            ownerGeneration: botRoutes.ownerGeneration,
-          })
-          .from(botRoutes)
-          .where(
-            and(
-              eq(botRoutes.currentSessionId, params.parentSessionId),
-              eq(botRoutes.botId, params.requestingBotId),
-            ),
-          )
-          .limit(1)
-      : [];
+    if (
+      parent?.status !== 'active'
+      || parent.botId !== params.requestingBotId
+      || (parent.role !== 'canonical' && parent.role !== 'route')
+    ) return;
+    const plan = parseBotDelegationPlanSnapshot(params.permissionSnapshotJson);
+    const frozenTarget = plan?.completionTarget;
+    if (frozenTarget && frozenTarget.parentSessionId !== params.parentSessionId) return;
+    // Legacy canonical and delegation-child parents are still safe because
+    // they target an exact task. A legacy IM Route lacks an ownership
+    // generation and must not be redirected through the Route's current owner.
+    if (
+      !frozenTarget
+      && parent.role === 'route'
+      && !parent.routeKey?.startsWith('delegation:')
+    ) return;
     const completionMessage = [
       `[Cindy Bot delegation ${params.id} ${params.status}]`,
       `Target Bot: ${params.targetBotId}`,
@@ -633,11 +634,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (deps.enqueueDelivery) {
       await deps.enqueueDelivery({
         botId: params.requestingBotId,
-        channelId: parentRoute?.channelId ?? null,
-        routeId: parentRoute?.id ?? null,
+        channelId: frozenTarget?.channelId ?? null,
+        routeId: frozenTarget?.routeId ?? null,
         sessionId: params.parentSessionId,
         idempotencyKey: completionClientId,
-        ownerGeneration: parentRoute?.ownerGeneration ?? 0,
+        ownerGeneration: frozenTarget?.ownerGeneration ?? 0,
         payload: {
           version: 1,
           kind: 'session-message',
@@ -1821,6 +1822,22 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       version = currentVersion;
     }
     const callerBinding = await resolveSessionProjectBinding(input.callerSessionId, caller.botId);
+    const [callerRoute] = caller.role === 'route'
+      ? await db
+          .select({
+            id: botRoutes.id,
+            channelId: botRoutes.channelId,
+            ownerGeneration: botRoutes.ownerGeneration,
+          })
+          .from(botRoutes)
+          .where(
+            and(
+              eq(botRoutes.currentSessionId, input.callerSessionId),
+              eq(botRoutes.botId, caller.botId),
+            ),
+          )
+          .limit(1)
+      : [];
     const contextRefs = normalizeDelegationReferences({
       refs: input.contextRefs,
       callerBinding,
@@ -1877,6 +1894,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         remoteHostId: binding?.remoteHostId ?? null,
         contextRefs: contextRefs.refs,
         artifactRefs: artifactRefs.refs,
+      },
+      completionTarget: {
+        parentSessionId: input.callerSessionId,
+        channelId: callerRoute?.channelId ?? null,
+        routeId: callerRoute?.id ?? null,
+        ownerGeneration: callerRoute?.ownerGeneration ?? 0,
       },
       limits: {
         maxDepth,

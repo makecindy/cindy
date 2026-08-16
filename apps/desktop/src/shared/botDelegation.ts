@@ -123,6 +123,16 @@ export interface BotDelegationPlanSnapshot {
     contextRefs: string[];
     artifactRefs: string[];
   };
+  /**
+   * Frozen destination for the completion result. Optional only for delegation
+   * rows created before Cindy persisted Route ownership in the execution plan.
+   */
+  completionTarget?: {
+    parentSessionId: string;
+    channelId: string | null;
+    routeId: string | null;
+    ownerGeneration: number;
+  };
   limits: {
     maxDepth: number;
     budgetTokens: number | null;
@@ -162,6 +172,7 @@ export function parseBotDelegationPlanSnapshot(
   const limits = parsed.limits;
   const permission = parsed.permission;
   const workspace = parsed.workspace;
+  const completionTarget = parsed.completionTarget;
   if (
     typeof parsed.createdAt !== 'number'
     || typeof parsed.targetBotId !== 'string'
@@ -170,6 +181,15 @@ export function parseBotDelegationPlanSnapshot(
     || !isRecord(limits)
     || !isRecord(permission)
   ) return null;
+  if (completionTarget !== undefined) {
+    if (
+      !isRecord(completionTarget)
+      || typeof completionTarget.parentSessionId !== 'string'
+      || (completionTarget.channelId !== null && typeof completionTarget.channelId !== 'string')
+      || (completionTarget.routeId !== null && typeof completionTarget.routeId !== 'string')
+      || typeof completionTarget.ownerGeneration !== 'number'
+    ) return null;
+  }
   if (
     typeof target.profileVersion !== 'number'
     || (target.agentKind !== 'cc' && target.agentKind !== 'codex' && target.agentKind !== 'pi')
