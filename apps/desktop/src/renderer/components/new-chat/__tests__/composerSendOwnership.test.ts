@@ -1,11 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { discardDraft, getDraft } from '@/lib/composerDraftStore';
 
 import {
   applyRefinementToSerializedText,
   applyVoiceResultToSerializedText,
+  armDetachedVoiceDraftPersist,
+  clearArmedDetachedVoiceDraft,
   editorOwnsSourceDraft,
+  hasArmedDetachedVoiceDraft,
   mergeDetachedVoiceTextIntoDocument,
   resolveSourceOwnedComposerExtras,
+  settleArmedDetachedVoiceDraft,
   voiceLocksCurrentComposer,
 } from '../composerSendOwnership';
 
@@ -164,5 +170,26 @@ describe('mergeDetachedVoiceTextIntoDocument', () => {
         { type: 'paragraph', content: [{ type: 'text', text: 'Asr draft.' }] },
       ],
     });
+  });
+});
+
+describe('detached voice draft persist across unmount', () => {
+  afterEach(() => {
+    clearArmedDetachedVoiceDraft();
+    discardDraft('__new_maker_draft__');
+  });
+
+  it('writes the listening draft immediately and upgrades it on settle', () => {
+    armDetachedVoiceDraftPersist('__new_maker_draft__', 'asr draft');
+    expect(getDraft('__new_maker_draft__')?.text).toEqual({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'asr draft' }] }],
+    });
+    settleArmedDetachedVoiceDraft('Asr draft.');
+    expect(getDraft('__new_maker_draft__')?.text).toEqual({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Asr draft.' }] }],
+    });
+    expect(hasArmedDetachedVoiceDraft()).toBe(false);
   });
 });

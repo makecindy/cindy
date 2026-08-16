@@ -10,6 +10,13 @@
 
 import type { JSONContent } from '@tiptap/core';
 
+import {
+  captureDraftDiscardToken,
+  getDraft as getComposerDraft,
+  isDraftDiscardTokenCurrent,
+  saveDraft as saveComposerDraft,
+  type ComposerDraftDiscardToken,
+} from '@/lib/composerDraftStore';
 import { plainTextToComposerDocument } from '@/lib/composerListDocument';
 
 export function editorOwnsSourceDraft(input: {
@@ -129,4 +136,77 @@ export function mergeDetachedVoiceTextIntoDocument(
     }
   }
   return { type: 'doc', content: [...existing, ...voiceBlocks] };
+}
+
+type ArmedDetachedVoiceDraft = {
+  storageKey: string;
+  previousVoiceText: string;
+  token: ComposerDraftDiscardToken;
+};
+
+let armedDetachedVoiceDraft: ArmedDetachedVoiceDraft | null = null;
+
+export function persistDetachedVoiceToDraft(
+  storageKey: string,
+  previousVoiceText: string,
+  nextVoiceText: string,
+  token?: ComposerDraftDiscardToken,
+): void {
+  if (!nextVoiceText) return;
+  if (token && !isDraftDiscardTokenCurrent(token)) return;
+  const existing = getComposerDraft(storageKey);
+  saveComposerDraft(
+    storageKey,
+    {
+      text: mergeDetachedVoiceTextIntoDocument(existing?.text, previousVoiceText, nextVoiceText),
+      attachments: existing?.attachments ?? [],
+      quotes: existing?.quotes ?? [],
+      browserComments: existing?.browserComments ?? [],
+      ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+      ...(existing?.pendingHostCapabilityGhostId
+        ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+        : {}),
+      ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
+    },
+    { silent: false },
+  );
+}
+
+export function armDetachedVoiceDraftPersist(
+  storageKey: string,
+  previousVoiceText: string,
+): void {
+  armedDetachedVoiceDraft = {
+    storageKey,
+    previousVoiceText,
+    token: captureDraftDiscardToken(storageKey),
+  };
+  if (previousVoiceText) {
+    persistDetachedVoiceToDraft(
+      storageKey,
+      '',
+      previousVoiceText,
+      armedDetachedVoiceDraft.token,
+    );
+  }
+}
+
+export function hasArmedDetachedVoiceDraft(): boolean {
+  return armedDetachedVoiceDraft !== null;
+}
+
+export function settleArmedDetachedVoiceDraft(nextVoiceText: string): void {
+  if (!armedDetachedVoiceDraft) return;
+  const { storageKey, previousVoiceText, token } = armedDetachedVoiceDraft;
+  armedDetachedVoiceDraft = null;
+  persistDetachedVoiceToDraft(
+    storageKey,
+    previousVoiceText || nextVoiceText,
+    nextVoiceText,
+    token,
+  );
+}
+
+export function clearArmedDetachedVoiceDraft(): void {
+  armedDetachedVoiceDraft = null;
 }

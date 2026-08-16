@@ -117,6 +117,7 @@ import {
 } from './effortChangeQueue';
 import {
   applyVoiceResultToSerializedText,
+  armDetachedVoiceDraftPersist,
   editorOwnsSourceDraft,
   mergeDetachedVoiceTextIntoDocument,
   resolveSourceOwnedComposerExtras,
@@ -3387,22 +3388,36 @@ export function ChatInput({
       if (!editorStorageKey) return;
       const existing = getComposerDraft(editorStorageKey);
       const hasText = !isEditorEmpty(editor);
-      if (!hasText && !existing) return;
-      saveComposerDraft(
-        editorStorageKey,
-        {
-          text: editor.getJSON(),
-          attachments: existing?.attachments ?? [],
-          quotes: existing?.quotes ?? [],
-          browserComments: existing?.browserComments ?? [],
-          ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-          ...(existing?.pendingHostCapabilityGhostId
-            ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-            : {}),
-          ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
-        },
-        { silent: true },
-      );
+      if (hasText || existing) {
+        saveComposerDraft(
+          editorStorageKey,
+          {
+            text: editor.getJSON(),
+            attachments: existing?.attachments ?? [],
+            quotes: existing?.quotes ?? [],
+            browserComments: existing?.browserComments ?? [],
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
+          },
+          { silent: true },
+        );
+      }
+      // /cc-agent/new unmounts this ChatInput instead of changing storageKey.
+      // Keep the in-flight transcript on that draft key so coming back still
+      // sees the voice text after stop/refine.
+      if (
+        voiceInputBusyRef.current &&
+        !voiceInputStopAndSendPromiseRef.current &&
+        editorStorageKey
+      ) {
+        armDetachedVoiceDraftPersist(
+          editorStorageKey,
+          voiceDraftTextRef.current.trim(),
+        );
+      }
     };
   }, [editor]);
 

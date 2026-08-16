@@ -68,6 +68,10 @@ import {
 } from './editorRangeMapping';
 import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
+  hasArmedDetachedVoiceDraft,
+  settleArmedDetachedVoiceDraft,
+} from '@/components/new-chat/composerSendOwnership';
+import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning';
 
@@ -223,6 +227,9 @@ export function useVoiceInput(
   const optionsRef = useRef(options);
   const lastRefinementRef = useRef<VoiceInputRefinementSnapshot | null>(null);
   const lastSubmittedTextRef = useRef('');
+  const stopWithGateRef = useRef<((options?: VoiceInputStopOptions) => Promise<void>) | null>(
+    null,
+  );
   editorRef.current = editor;
   disabledRef.current = Boolean(disabled);
   optionsRef.current = options;
@@ -930,7 +937,7 @@ export function useVoiceInput(
   }, [upsertDictionaryLearningWatch]);
 
   useEffect(() => {
-    return window.electronAPI.voiceInput.onEvent((event) => {
+    const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
       if (!shouldHandleVoiceInputEvent(
         ownedRunIdRef.current,
         event.runId,
@@ -1095,10 +1102,39 @@ export function useVoiceInput(
           break;
       }
     });
+    return () => {
+      if (hasArmedDetachedVoiceDraft()) {
+        const timeoutId = window.setTimeout(unsubscribe, STOP_WAIT_REFINEMENT_FAILSAFE_MS);
+        const intervalId = window.setInterval(() => {
+          if (hasArmedDetachedVoiceDraft()) return;
+          window.clearInterval(intervalId);
+          window.clearTimeout(timeoutId);
+          unsubscribe();
+        }, 100);
+        return;
+      }
+      unsubscribe();
+    };
   }, [applyRefinedText, clampEditorTextRange, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, stopEngine, upsertDictionaryLearningWatch]);
 
   useEffect(() => {
     return () => {
+      if (hasArmedDetachedVoiceDraft()) {
+        const stop = stopWithGateRef.current;
+        void (stop ? stop({ waitForRefinement: true }) : Promise.resolve())
+          .catch(() => undefined)
+          .finally(() => {
+            settleArmedDetachedVoiceDraft(
+              lastRefinementRef.current?.refinedText.trim() || lastSubmittedTextRef.current.trim(),
+            );
+            commitUsageStats();
+            clearDictionaryLearningWatches();
+            void stopEngine();
+            void restoreSystemAudioForRecording();
+            clearInlineErrorDismissTimer();
+          });
+        return;
+      }
       resolveStopCompletion();
       commitUsageStats();
       clearDictionaryLearningWatches();
@@ -1609,6 +1645,7 @@ export function useVoiceInput(
     stopInFlightPromiseRef.current = stopPromise;
     return stopPromise;
   }, [stop]);
+  stopWithGateRef.current = stopWithGate;
 
   const cancel = useCallback(async () => {
     const runId = runIdRef.current;

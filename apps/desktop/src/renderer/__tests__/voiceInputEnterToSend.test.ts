@@ -179,6 +179,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(chatInputSource).toContain('frozenVoiceSendRef.current');
     expect(chatInputSource).toContain('voiceInput.getLastRefinement()');
     expect(chatInputSource).toContain('applyVoiceResultToSerializedText(');
+    expect(chatInputSource).toContain('armDetachedVoiceDraftPersist(');
     expect(chatInputSource).toContain("frozenVoiceSend.kind !== 'send'");
     expect(chatInputSource).toContain('resolveSourceOwnedComposerExtras({');
     expect(chatInputSource).toContain('sourceAttachments:');
