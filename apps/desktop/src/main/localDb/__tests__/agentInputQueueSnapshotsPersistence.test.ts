@@ -11,6 +11,7 @@ vi.mock('../client/current', () => ({
 import {
   AgentInputQueueSnapshotTooLargeError,
   awaitAgentInputQueueSnapshotPersistence,
+  loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
 } from '../agentInputQueueSnapshots.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -122,5 +123,34 @@ describe('agent input queue snapshot durability boundary', () => {
       sessionId: 'snapshot-oversize',
     });
     expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('counts selected snapshots in SQLite without returning payload bodies', async () => {
+    const query = vi.fn().mockResolvedValue([{ sessionId: 'session-1', itemCount: 2 }]);
+    mocks.getDbClient.mockReturnValue({ query } as never);
+
+    await expect(
+      loadAgentInputQueueSnapshotCounts(['session-1', 'session-2', 'session-1']),
+    ).resolves.toEqual({ 'session-1': 2, 'session-2': 0 });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('json_array_length(payload)'), [
+      'session-1',
+      'session-2',
+    ]);
+    expect(query.mock.calls[0]?.[0]).not.toContain('SELECT payload');
+  });
+
+  it('fails closed for corrupt snapshots and database read failures', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce([{ sessionId: 'corrupt', itemCount: null }])
+      .mockRejectedValueOnce(new Error('db unavailable'));
+    mocks.getDbClient.mockReturnValue({ query } as never);
+
+    await expect(loadAgentInputQueueSnapshotCounts(['corrupt'])).rejects.toThrow(
+      'corrupt queue snapshot for corrupt',
+    );
+    await expect(loadAgentInputQueueSnapshotCounts(['unavailable'])).rejects.toThrow(
+      'db unavailable',
+    );
   });
 });

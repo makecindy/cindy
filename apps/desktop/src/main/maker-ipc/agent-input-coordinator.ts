@@ -544,6 +544,8 @@ interface SessionInputState {
   pendingQueue: AgentInputQueuedMessage[];
   pendingCompacts: PendingCompactRequest[];
   steeringQueueClientIds: string[];
+  /** Direct composer steers have no pendingQueue row while delivery is still reversible. */
+  directSteeringItems: AgentInputQueuedMessage[];
   queuePaused: boolean;
   /**
    * 当前 queuePaused 是否来自崩溃快照恢复(restoreQueueSnapshot 的静默会话分支),
@@ -635,6 +637,7 @@ function createInitialInputState(
     pendingQueue: [],
     pendingCompacts: [],
     steeringQueueClientIds: [],
+    directSteeringItems: [],
     queuePaused: false,
     queuePausedByRestore: false,
     queueExpanded: false,
@@ -881,6 +884,9 @@ export class AgentInputCoordinator {
     for (const state of this.states.values()) {
       if (state.pendingQueue.length > 0) texts.push(JSON.stringify(state.pendingQueue));
       if (state.activeTurn?.item) texts.push(JSON.stringify(state.activeTurn.item));
+      if (state.directSteeringItems.length > 0) {
+        texts.push(JSON.stringify(state.directSteeringItems));
+      }
       if (state.recovery) texts.push(JSON.stringify(state.recovery));
     }
     return texts;
@@ -893,7 +899,21 @@ export class AgentInputCoordinator {
   /** Main-only inspection view for cindy_helper; never crosses renderer/device-link IPC. */
   getQueueInspection(sessionId: string): SessionQueueInspectionEntry[] {
     const state = this.getState(sessionId);
-    return projectSessionQueueForInspection(state.pendingQueue, state.steeringQueueClientIds);
+    return this.projectQueueInspection(state);
+  }
+
+  /** Cold sessions return null for SQLite counting; live-but-unrestored state fails closed. */
+  getQueueInspectionIfRestored(sessionId: string): SessionQueueInspectionEntry[] | null {
+    if (!this.isQueueRestored(sessionId)) {
+      // A cold session can be counted directly from SQLite. Once live state exists, however,
+      // combining it with an unread snapshot without clientIds could double-count or omit rows.
+      if (this.states.has(sessionId)) {
+        throw new Error(`queue restore incomplete for ${sessionId}`);
+      }
+      return null;
+    }
+    const state = this.states.get(sessionId);
+    return state ? this.projectQueueInspection(state) : [];
   }
 
   /**
@@ -1724,6 +1744,12 @@ export class AgentInputCoordinator {
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
       state.steeringQueueClientIds.push(item.clientId);
     }
+    if (!steersStoredQueueItem) {
+      state.directSteeringItems = [
+        ...state.directSteeringItems.filter((entry) => entry.clientId !== item.clientId),
+        item,
+      ];
+    }
     const steerAbort = new AbortController();
     const inputBoundarySignal = this.getInputAbortSignal(sessionId, steerGeneration);
     this.registerSteerAbortController(sessionId, item.clientId, steerAbort);
@@ -1750,9 +1776,7 @@ export class AgentInputCoordinator {
         // 拦截即终态:不注入、不落库,气泡由 onUserMessageBlocked 广播降级;
         // 返回 true(已处置),renderer 不再回滚重试。
         this.clearSteerAbortController(sessionId, item.clientId);
-        cur.steeringQueueClientIds = cur.steeringQueueClientIds.filter(
-          (id) => id !== item.clientId,
-        );
+        this.clearSteeringMarker(cur, item.clientId);
         if (opts?.removeFromQueue) {
           cur.pendingQueue = cur.pendingQueue.filter((q) => q.clientId !== item.clientId);
           this.removePendingCompactWaitClientId(cur, item.clientId);
@@ -1802,13 +1826,11 @@ export class AgentInputCoordinator {
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
       });
+      this.clearDirectSteeringItem(this.getState(sessionId), item.clientId);
     } catch (err) {
       this.clearSteerAbortController(sessionId, item.clientId);
       const latest = this.getState(sessionId);
-      const markerStillPresent = latest.steeringQueueClientIds.includes(item.clientId);
-      latest.steeringQueueClientIds = latest.steeringQueueClientIds.filter(
-        (id) => id !== item.clientId,
-      );
+      const markerStillPresent = this.clearSteeringMarker(latest, item.clientId);
 
       if (isNoActiveTurnError(err)) {
         // maker-core 权威判定无活跃 turn — 先让 host 校准可能 stale 的 busy
@@ -1955,13 +1977,8 @@ export class AgentInputCoordinator {
     const settled = this.getState(sessionId);
     let releasedSteerMarker = false;
     if (settled.generation === steerGeneration) {
-      const remainingSteeringClientIds = settled.steeringQueueClientIds.filter(
-        (id) => id !== item.clientId,
-      );
-      releasedSteerMarker =
-        remainingSteeringClientIds.length !== settled.steeringQueueClientIds.length;
+      releasedSteerMarker = this.clearSteeringMarker(settled, item.clientId);
       if (releasedSteerMarker) {
-        settled.steeringQueueClientIds = remainingSteeringClientIds;
         this.emit(sessionId);
       }
     }
@@ -2068,7 +2085,7 @@ export class AgentInputCoordinator {
     const abortBoundaryToken = Symbol('agent-input-abort-boundary');
     const abortBoundaryGeneration = state.generation;
     state.abortBoundaryToken = abortBoundaryToken;
-    state.steeringQueueClientIds = [];
+    this.clearAllSteeringMarkers(state);
     state.queueExpanded = false;
     this.emit(sessionId);
 
@@ -2909,16 +2926,47 @@ export class AgentInputCoordinator {
       }
       state.queueAbortPending = false;
       state.abortBoundaryToken = null;
-      state.steeringQueueClientIds = [];
+      this.clearAllSteeringMarkers(state);
       this.emit(sessionId);
       return;
     }
     state.activeTurn = null;
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
-    state.steeringQueueClientIds = [];
+    this.clearAllSteeringMarkers(state);
     this.emit(sessionId);
     if (releasedAbortLock) this.scheduleDrain(sessionId, 'session-closed-abort-boundary');
+  }
+
+  private projectQueueInspection(state: SessionInputState): SessionQueueInspectionEntry[] {
+    const activeItem =
+      state.activeTurn?.item && !isActiveTurnDispatched(state.activeTurn)
+        ? state.activeTurn.item
+        : null;
+    return projectSessionQueueForInspection(
+      state.pendingQueue,
+      state.steeringQueueClientIds,
+      activeItem,
+      state.directSteeringItems,
+    );
+  }
+
+  private clearSteeringMarker(state: SessionInputState, clientId: string): boolean {
+    const existed = state.steeringQueueClientIds.includes(clientId);
+    state.steeringQueueClientIds = state.steeringQueueClientIds.filter((id) => id !== clientId);
+    this.clearDirectSteeringItem(state, clientId);
+    return existed;
+  }
+
+  private clearDirectSteeringItem(state: SessionInputState, clientId: string): void {
+    state.directSteeringItems = state.directSteeringItems.filter(
+      (item) => item.clientId !== clientId,
+    );
+  }
+
+  private clearAllSteeringMarkers(state: SessionInputState): void {
+    state.steeringQueueClientIds = [];
+    state.directSteeringItems = [];
   }
 
   private getState(sessionId: string): SessionInputState {
@@ -4123,9 +4171,7 @@ export class AgentInputCoordinator {
     this.abandonActiveTurnRecoveryForUserAction(state);
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;
-    state.steeringQueueClientIds = state.steeringQueueClientIds.filter(
-      (id) => id !== item.clientId,
-    );
+    this.clearSteeringMarker(state, item.clientId);
     state.queueEditLocks = state.queueEditLocks.filter((id) => id !== item.clientId);
     this.movePreparedItemToQueueFront(state, item, removeFromQueue);
     this.emit(sessionId);

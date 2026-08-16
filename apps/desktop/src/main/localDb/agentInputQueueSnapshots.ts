@@ -25,6 +25,7 @@ const log = createLogger('agent-input-queue-snapshots');
 
 /** 单会话快照体量上限(16MB):正常队列远小于此,超限基本是多张大图的 base64。 */
 const MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const SNAPSHOT_COUNT_QUERY_BATCH_SIZE = 200;
 
 /** per-session 写链:只做覆盖写/删除排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
@@ -177,6 +178,40 @@ export async function loadAllQueueSnapshotPayloads(): Promise<string[]> {
     .select({ payload: agentInputQueueSnapshots.payload })
     .from(agentInputQueueSnapshots);
   return rows.map((r) => r.payload);
+}
+
+/** Count snapshot rows in SQLite without returning or parsing their message bodies in JS. */
+export async function loadAgentInputQueueSnapshotCounts(
+  sessionIds: readonly string[],
+): Promise<Record<string, number>> {
+  const uniqueIds = [...new Set(sessionIds)];
+  const counts = Object.fromEntries(uniqueIds.map((sessionId) => [sessionId, 0]));
+  for (let offset = 0; offset < uniqueIds.length; offset += SNAPSHOT_COUNT_QUERY_BATCH_SIZE) {
+    const batch = uniqueIds.slice(offset, offset + SNAPSHOT_COUNT_QUERY_BATCH_SIZE);
+    if (batch.length === 0) continue;
+    const placeholders = batch.map(() => '?').join(', ');
+    const rows = await getDbClient().query<{
+      sessionId: string;
+      itemCount: number | null;
+    }>(
+      `SELECT session_id AS sessionId,
+              CASE
+                WHEN json_valid(payload) = 1 AND json_type(payload) = 'array'
+                THEN json_array_length(payload)
+                ELSE NULL
+              END AS itemCount
+       FROM agent_input_queue_snapshots
+       WHERE session_id IN (${placeholders})`,
+      batch,
+    );
+    for (const row of rows) {
+      if (!Number.isSafeInteger(row.itemCount) || (row.itemCount ?? -1) < 0) {
+        throw new Error(`corrupt queue snapshot for ${row.sessionId}`);
+      }
+      counts[row.sessionId] = row.itemCount!;
+    }
+  }
+  return counts;
 }
 
 export function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMessage {

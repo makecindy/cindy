@@ -144,6 +144,7 @@ import {
 import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
 import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
 import {
+  resolveSessionQueueCounts,
   type SessionQueueInspectionEntry,
 } from './sessionQueueInspection.js';
 import {
@@ -165,6 +166,7 @@ import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshot,
+  loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
 } from '../localDb/agentInputQueueSnapshots.js';
 import {
@@ -9760,19 +9762,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     listSessionQueuedCounts: async (sessionIds) => {
       try {
-        const counts: Record<string, number> = {};
-        const uniqueIds = [...new Set(sessionIds)];
-        for (let offset = 0; offset < uniqueIds.length; offset += 16) {
-          await Promise.all(
-            uniqueIds.slice(offset, offset + 16).map(async (sessionId) => {
-              await inputCoordinator.ensureQueueRestored(sessionId);
-              if (!inputCoordinator.isQueueRestored(sessionId)) {
-                throw new Error(`queue restore incomplete for ${sessionId}`);
-              }
-              counts[sessionId] = inputCoordinator.getProjection(sessionId).pendingQueue.length;
-            }),
-          );
-        }
+        const counts = await resolveSessionQueueCounts(sessionIds, {
+          getLiveQueue: (sessionId) =>
+            inputCoordinator.getQueueInspectionIfRestored(sessionId),
+          loadPersistedCounts: loadAgentInputQueueSnapshotCounts,
+        });
         return { ok: true, counts };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

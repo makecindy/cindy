@@ -15,20 +15,54 @@ export interface SessionQueueInspectionEntry {
   consuming: boolean;
 }
 
+export interface SessionQueueCountDeps {
+  getLiveQueue: (sessionId: string) => SessionQueueInspectionEntry[] | null;
+  loadPersistedCounts: (sessionIds: readonly string[]) => Promise<Record<string, number>>;
+}
+
+export async function resolveSessionQueueCounts(
+  sessionIds: readonly string[],
+  deps: SessionQueueCountDeps,
+): Promise<Record<string, number>> {
+  const uniqueIds = [...new Set(sessionIds)];
+  const unrestoredIds = uniqueIds.filter((sessionId) => deps.getLiveQueue(sessionId) === null);
+  const persistedCounts = await deps.loadPersistedCounts(unrestoredIds);
+  return Object.fromEntries(
+    uniqueIds.map((sessionId) => {
+      // Recheck after the async DB read: a live restore/enqueue that won the race is newer.
+      const live = deps.getLiveQueue(sessionId);
+      return [sessionId, live?.length ?? persistedCounts[sessionId] ?? 0];
+    }),
+  );
+}
+
 export function projectSessionQueueForInspection(
   pendingQueue: readonly AgentInputQueuedMessage[],
   steeringQueueClientIds: readonly string[],
+  activeItem: AgentInputQueuedMessage | null = null,
+  directSteeringItems: readonly AgentInputQueuedMessage[] = [],
 ): SessionQueueInspectionEntry[] {
   const consumingIds = new Set(steeringQueueClientIds);
-  return pendingQueue.map((item, position) => ({
-    queuedMessageId: item.clientId,
-    position,
-    source: queueSource(item),
-    sourceLabel: queueSourceLabel(item),
-    enqueuedAtMs: acceptedAtMs(item),
-    content: item.origin?.kind === 'orca' ? (item.origin.displayText ?? item.text) : item.text,
-    consuming: consumingIds.has(item.clientId),
-  }));
+  const seen = new Set<string>();
+  const result: SessionQueueInspectionEntry[] = [];
+  const append = (item: AgentInputQueuedMessage, consuming: boolean): void => {
+    if (seen.has(item.clientId)) return;
+    seen.add(item.clientId);
+    result.push({
+      queuedMessageId: item.clientId,
+      position: result.length,
+      source: queueSource(item),
+      sourceLabel: queueSourceLabel(item),
+      enqueuedAtMs: acceptedAtMs(item),
+      content: item.origin?.kind === 'orca' ? (item.origin.displayText ?? item.text) : item.text,
+      consuming,
+    });
+  };
+
+  if (activeItem) append(activeItem, true);
+  for (const item of directSteeringItems) append(item, true);
+  for (const item of pendingQueue) append(item, consumingIds.has(item.clientId));
+  return result;
 }
 
 function acceptedAtMs(item: AgentInputQueuedMessage): number | null {

@@ -650,6 +650,50 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 });
 
 describe('AgentInputCoordinator send transaction', () => {
+  it('keeps a drained turn visible until vendor dispatch accepts it', async () => {
+    const h = createHarness();
+    const sid = 'inspection-pre-dispatch';
+    const gate = deferred<void>();
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await gate.promise;
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      h.setRunning(true);
+      return sendSuccess();
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-active', 'still preparing'));
+    await flush();
+
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([
+      expect.objectContaining({ queuedMessageId: 'q-active', position: 0, consuming: true }),
+    ]);
+
+    gate.resolve();
+    await flush();
+
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([]);
+  });
+
+  it('does not materialize coordinator state when checking an unrestored queue', async () => {
+    const h = createHarness();
+    const sid = 'inspection-unrestored';
+
+    expect(h.coordinator.getQueueInspectionIfRestored(sid)).toBeNull();
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getQueueInspectionIfRestored(sid)).toEqual([]);
+  });
+
+  it('fails closed when live state exists before its crash snapshot is restored', () => {
+    const h = createHarness();
+    const sid = 'inspection-live-unrestored';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-live', 'live'));
+
+    expect(() => h.coordinator.getQueueInspectionIfRestored(sid)).toThrow(
+      `queue restore incomplete for ${sid}`,
+    );
+  });
+
   it('silently keeps a queue head when dispatch races with an already running turn', async () => {
     const h = createHarness();
     const sid = 'send-session-running-race';
@@ -4878,6 +4922,68 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
 });
 
 describe('AgentInputCoordinator steer transaction', () => {
+  it('shows a direct steer only while delivery remains reversible', async () => {
+    const h = createHarness();
+    const sid = 'inspection-direct-steer';
+    const gate = deferred<void>();
+    h.setRunning(true);
+    h.steerToAgent.mockImplementationOnce(() => gate.promise);
+
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-direct', 'direct'));
+    await flush();
+
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([
+      expect.objectContaining({ queuedMessageId: 'q-direct', position: 0, consuming: true }),
+    ]);
+
+    gate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([]);
+  });
+
+  it('keeps a queued steer in place and clears direct inspection state on failure', async () => {
+    const h = createHarness();
+    const sid = 'inspection-steer-order-and-failure';
+    const queuedGate = deferred<void>();
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-first', 'first'));
+    h.coordinator.enqueue(sid, makeItem('q-steer', 'steer'));
+    h.steerToAgent.mockImplementationOnce(() => queuedGate.promise);
+
+    const queuedSteer = h.coordinator.steer(sid, makeItem('q-steer', 'steer'), {
+      removeFromQueue: true,
+    });
+    await flush();
+    expect(
+      h.coordinator.getQueueInspection(sid).map((entry) => ({
+        id: entry.queuedMessageId,
+        consuming: entry.consuming,
+      })),
+    ).toEqual([
+      { id: 'q-first', consuming: false },
+      { id: 'q-steer', consuming: true },
+    ]);
+    queuedGate.resolve();
+    await expect(queuedSteer).resolves.toBe(true);
+
+    const directGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(() => directGate.promise);
+    const directSteer = h.coordinator.steer(sid, makeItem('q-failing', 'failing'));
+    await flush();
+    expect(
+      h.coordinator
+        .getQueueInspection(sid)
+        .some((entry) => entry.queuedMessageId === 'q-failing'),
+    ).toBe(true);
+    directGate.reject(new Error('steer failed'));
+    await expect(directSteer).resolves.toBe(false);
+    expect(
+      h.coordinator
+        .getQueueInspection(sid)
+        .some((entry) => entry.queuedMessageId === 'q-failing'),
+    ).toBe(false);
+  });
+
   it('injects a Claude steer into the running turn without aborting it', async () => {
     const h = createHarness(); // 默认 agentKind='claude-code'
     const sid = 'claude-steer-same-turn';
@@ -5153,8 +5259,12 @@ describe('AgentInputCoordinator steer transaction', () => {
 
     const steerPromise = h.coordinator.steer(sid, composer, { touchUserSend: true });
     await flush();
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([
+      expect.objectContaining({ queuedMessageId: 'composer-1', consuming: true }),
+    ]);
 
     h.coordinator.stop(sid);
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([]);
     gate.reject(
       new Error(
         'Codex steer cancelled before acceptance; delivery uncertain (request already dispatched)',
