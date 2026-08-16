@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { parseGetPluginResponse } from '@cindy/plugin-protocol';
+import { GHOST_MANIFEST_SCHEMA_VERSION, parseGetPluginResponse } from '@cindy/plugin-protocol';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -19,11 +19,25 @@ function parserError(parse: () => unknown): unknown {
 }
 
 function invalidManifestResponse(
-  schemaVersion = 2,
+  manifestSchemaVersion: unknown = GHOST_MANIFEST_SCHEMA_VERSION,
   manifestOverrides: Record<string, unknown> = {},
+  omitSchemaVersion = false,
 ): Record<string, unknown> {
+  const manifest: Record<string, unknown> = {
+    schemaVersion: manifestSchemaVersion,
+    id: 'acme-helper',
+    name: 'Acme Helper',
+    version: '1.0.0',
+    kind: 'chip',
+    entry: 'index.js',
+    slots: ['tool'],
+    tools: 'not an array',
+    ...manifestOverrides,
+  };
+  if (omitSchemaVersion) delete manifest.schemaVersion;
+
   return {
-    schemaVersion,
+    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
     plugin: {
       id: `c${'a'.repeat(24)}`,
       ghostId: 'acme-helper',
@@ -39,17 +53,7 @@ function invalidManifestResponse(
         sha256: 'a'.repeat(64),
         sizeBytes: 42,
         publishedAt: '2026-07-23T00:00:00.000Z',
-        manifest: {
-          schemaVersion: 2,
-          id: 'acme-helper',
-          name: 'Acme Helper',
-          version: '1.0.0',
-          kind: 'chip',
-          entry: 'index.js',
-          slots: ['tool'],
-          tools: 'not an array',
-          ...manifestOverrides,
-        },
+        manifest,
       },
     },
   };
@@ -108,29 +112,97 @@ describe('Plugin Market IPC error boundary', () => {
     );
   });
 
-  it('recognizes only manifest failures from the market protocol as incompatibilities', () => {
-    const manifestError = parserError(() => parseGetPluginResponse(invalidManifestResponse()));
-    const schemaError = parserError(() =>
-      parseGetPluginResponse(invalidManifestResponse(1)),
-    );
+  it.each([
+    {
+      label: 'an ordinary malformed manifest',
+      response: invalidManifestResponse(),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a future schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION + 1),
+      hostUnsupported: true,
+      manifestIncompatible: false,
+    },
+    {
+      label: 'a much newer schema version',
+      response: invalidManifestResponse(99),
+      hostUnsupported: true,
+      manifestIncompatible: false,
+    },
+    {
+      label: 'the legacy schema version',
+      response: invalidManifestResponse(1),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a missing schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {}, true),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a non-numeric schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        schemaVersion: '3',
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a fractional future schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION + 0.5,
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'an unknown string slot',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: ['future-capability'],
+      }),
+      hostUnsupported: true,
+      manifestIncompatible: false,
+    },
+    {
+      label: 'a numeric slot',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: [42],
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a null slot',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: [null],
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+  ])(
+    'classifies $label without widening the compatibility boundary',
+    ({ response, hostUnsupported, manifestIncompatible }) => {
+      const error = parserError(() => parseGetPluginResponse(response));
 
-    expect(isPluginManifestIncompatibilityError(manifestError)).toBe(true);
-    expect(isPluginManifestIncompatibilityError(schemaError)).toBe(false);
+      expect(isPluginHostUnsupportedError(error)).toBe(hostUnsupported);
+      expect(isPluginManifestIncompatibilityError(error)).toBe(manifestIncompatible);
+    },
+  );
+
+  it('does not classify unrelated protocol or network failures as manifest errors', () => {
+    expect(isPluginHostUnsupportedError(new Error('network failed'))).toBe(false);
     expect(isPluginManifestIncompatibilityError(new Error('network failed'))).toBe(false);
-  });
-
-  it('preserves future manifest schema and capability errors as host incompatibilities', () => {
-    const futureSchemaError = parserError(() =>
-      parseGetPluginResponse(invalidManifestResponse(2, { schemaVersion: 99 })),
-    );
-    const unknownSlotError = parserError(() =>
-      parseGetPluginResponse(invalidManifestResponse(2, { slots: ['future-capability'] })),
-    );
-
-    expect(isPluginHostUnsupportedError(futureSchemaError)).toBe(true);
-    expect(isPluginHostUnsupportedError(unknownSlotError)).toBe(true);
-    expect(isPluginManifestIncompatibilityError(futureSchemaError)).toBe(false);
-    expect(isPluginManifestIncompatibilityError(unknownSlotError)).toBe(false);
+    expect(
+      isPluginHostUnsupportedError(
+        Object.assign(new Error('plugin.currentRelease.manifest is missing'), {
+          name: 'PluginProtocolError',
+        }),
+      ),
+    ).toBe(false);
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {
