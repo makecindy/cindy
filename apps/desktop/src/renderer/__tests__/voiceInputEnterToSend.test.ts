@@ -174,6 +174,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(chatInputSource).toContain('frozenVoiceSendRef.current');
     expect(chatInputSource).toContain('voiceInput.getLastRefinement()');
     expect(chatInputSource).toContain('applyRefinementToSerializedText(');
+    expect(chatInputSource).toContain('resolveSourceOwnedComposerExtras({');
+    expect(chatInputSource).toContain('sourceAttachments:');
+    expect(chatInputSource).toContain('sourceComments:');
 
     const effortSettleBlock = extractBetween(
       chatInputSource,

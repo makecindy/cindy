@@ -118,6 +118,7 @@ import {
 import {
   applyRefinementToSerializedText,
   editorOwnsSourceDraft,
+  resolveSourceOwnedComposerExtras,
   voiceLocksCurrentComposer,
 } from './composerSendOwnership';
 import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './composerSendSnapshot';
@@ -2863,6 +2864,8 @@ export function ChatInput({
   const frozenVoiceSendRef = useRef<{
     sourceStorageKey: string;
     serialized: SerializedComposerContent;
+    attachments: AttachedFile[];
+    comments: BrowserCommentDraftItem[];
   } | null>(null);
   const voiceInputOptions = useMemo(
     () => ({
@@ -3552,9 +3555,12 @@ export function ChatInput({
       };
     }
     if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey) {
+      const sourceDraft = getComposerDraft(prevEditorKey);
       frozenVoiceSendRef.current = {
         sourceStorageKey: prevEditorKey,
         serialized: serializeEditorContent(editor),
+        attachments: [...(sourceDraft?.attachments ?? [])],
+        comments: [...(sourceDraft?.browserComments ?? browserCommentsRef.current)],
       };
     }
 
@@ -4732,6 +4738,7 @@ export function ChatInput({
       }
       try {
         let serializedContent = serializedAtClick;
+        let frozenVoiceSend = frozenVoiceSendRef.current;
         if (!serializedContent) {
           if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;
           const editorOwnsSource = editorOwnsSourceDraft({
@@ -4752,18 +4759,19 @@ export function ChatInput({
             }
           }
           if (!serializedContent) {
-            const frozen = frozenVoiceSendRef.current;
-            if (!frozen || frozen.sourceStorageKey !== sourceStorageKey) return;
+            if (!frozenVoiceSend || frozenVoiceSend.sourceStorageKey !== sourceStorageKey) {
+              return;
+            }
             const refinement = voiceInput.getLastRefinement();
             serializedContent = {
-              ...frozen.serialized,
+              ...frozenVoiceSend.serialized,
               text: refinement
                 ? applyRefinementToSerializedText(
-                    frozen.serialized.text,
+                    frozenVoiceSend.serialized.text,
                     refinement.basedOnText,
                     refinement.refinedText,
                   )
-                : frozen.serialized.text,
+                : frozenVoiceSend.serialized.text,
             };
             frozenVoiceSendRef.current = null;
           }
@@ -4778,18 +4786,27 @@ export function ChatInput({
           hostCapability,
         } = serializedContent;
         let agentReferences = serializedAgentReferences;
+        const sourceDraftExtras =
+          sourceStorageKey !== undefined ? getComposerDraft(sourceStorageKey) : undefined;
+        const frozenExtras =
+          frozenVoiceSend?.sourceStorageKey === sourceStorageKey ? frozenVoiceSend : null;
+        const sourceOwnedExtras = resolveSourceOwnedComposerExtras({
+          editorOwnsSource: editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          }),
+          liveAttachments: latestAttachmentsRef.current,
+          liveComments: browserCommentsRef.current,
+          sourceAttachments: frozenExtras?.attachments ?? sourceDraftExtras?.attachments,
+          sourceComments: frozenExtras?.comments ?? sourceDraftExtras?.browserComments,
+        });
         const attachmentsForSend = optimisticallyClearRemoteComposer
           ? attachmentsBeforeOptimisticClear
-          : editorOwnsSourceDraft({
-                editorDestroyed: editor.isDestroyed,
-                editorStorageKey: storageKeyForDraftRef.current,
-                sourceStorageKey,
-              })
-            ? [...latestAttachmentsRef.current]
-            : [...(sourceStorageKey ? (getComposerDraft(sourceStorageKey)?.attachments ?? []) : [])];
+          : sourceOwnedExtras.attachments;
         const commentsForSend = optimisticallyClearRemoteComposer
           ? commentsBeforeOptimisticClear
-          : [...browserCommentsRef.current];
+          : sourceOwnedExtras.comments;
         if (
           !hostCapability &&
           isPlanModeComposerCommandText(

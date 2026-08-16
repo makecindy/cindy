@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyRefinementToSerializedText,
   editorOwnsSourceDraft,
+  resolveSourceOwnedComposerExtras,
   voiceLocksCurrentComposer,
 } from '../composerSendOwnership';
 
@@ -88,5 +89,37 @@ describe('applyRefinementToSerializedText', () => {
     expect(applyRefinementToSerializedText('hello', 'ASR', 'Hello.')).toBe('hello');
     expect(applyRefinementToSerializedText('hello', 'hello', 'hello')).toBe('hello');
     expect(applyRefinementToSerializedText('hello', '', 'Hello.')).toBe('hello');
+  });
+});
+
+describe('resolveSourceOwnedComposerExtras', () => {
+  it('keeps live extras while the editor still belongs to the source session', () => {
+    expect(
+      resolveSourceOwnedComposerExtras({
+        editorOwnsSource: true,
+        liveAttachments: ['live-file'],
+        liveComments: ['live-comment'],
+        sourceAttachments: ['source-file'],
+        sourceComments: ['source-comment'],
+      }),
+    ).toEqual({
+      attachments: ['live-file'],
+      comments: ['live-comment'],
+    });
+  });
+
+  it('does not send the next session extras after restoreNextDraft', () => {
+    expect(
+      resolveSourceOwnedComposerExtras({
+        editorOwnsSource: false,
+        liveAttachments: ['session-b-file'],
+        liveComments: ['session-b-comment'],
+        sourceAttachments: ['session-a-file'],
+        sourceComments: ['session-a-comment'],
+      }),
+    ).toEqual({
+      attachments: ['session-a-file'],
+      comments: ['session-a-comment'],
+    });
   });
 });

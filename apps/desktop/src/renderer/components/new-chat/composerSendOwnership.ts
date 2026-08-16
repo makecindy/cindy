@@ -34,3 +34,27 @@ export function applyRefinementToSerializedText(
   if (index === -1) return text;
   return text.slice(0, index) + refinedText + text.slice(index + basedOnText.length);
 }
+
+/**
+ * After a session switch the live attachment/comment refs belong to the next
+ * task. A send that started on the source session must keep using the source
+ * draft extras, never the newly restored composer.
+ */
+export function resolveSourceOwnedComposerExtras<TAttachment, TComment>(input: {
+  editorOwnsSource: boolean;
+  liveAttachments: readonly TAttachment[];
+  liveComments: readonly TComment[];
+  sourceAttachments?: readonly TAttachment[];
+  sourceComments?: readonly TComment[];
+}): { attachments: TAttachment[]; comments: TComment[] } {
+  if (input.editorOwnsSource) {
+    return {
+      attachments: [...input.liveAttachments],
+      comments: [...input.liveComments],
+    };
+  }
+  return {
+    attachments: [...(input.sourceAttachments ?? [])],
+    comments: [...(input.sourceComments ?? [])],
+  };
+}
