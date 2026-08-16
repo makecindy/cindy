@@ -1594,6 +1594,44 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   });
 
+  it('requires an explicit user decision for extension mutations in Full Access', async () => {
+    const handle = await start('bypassPermissions');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest('extension-full-access', 'cindy_pi_extension', {
+      action: 'install',
+      source: 'npm:context-mode',
+    });
+
+    expect(await waitForResponse('extension-full-access')).toEqual({
+      type: 'extension_ui_response',
+      id: 'extension-full-access',
+      confirmed: false,
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it('does not let Auto-Review approve extension mutations without the user', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest('extension-auto', 'cindy_pi_extension', {
+      action: 'update',
+      source: 'npm:context-mode',
+    });
+
+    expect(await waitForResponse('extension-auto')).toEqual({
+      type: 'extension_ui_response',
+      id: 'extension-auto',
+      confirmed: false,
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+  });
+
   it('lets a turn policy override Auto-Review allow and passes exact tool evidence', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review);

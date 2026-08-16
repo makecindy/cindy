@@ -204,6 +204,12 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('token: piPackageManagementToken');
   });
 
+  it('does not let Full Access bypass Cindy-managed extension confirmation', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "permission.mode === 'bypassPermissions' && event.toolName !== 'cindy_pi_extension'",
+    );
+  });
+
   it('checks the Review deny-by-default boundary before ordinary permission handling', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     const reviewGate = source.indexOf('if (permission.reviewOnly)');

@@ -6,6 +6,7 @@ import type {
   PiRuntimeCapabilityManifest,
   PiRuntimeCommand,
   PiRuntimeCommandSourceInfo,
+  PiManagedPackageSkillRuntimeSnapshot,
 } from '../../types/pi-runtime-capabilities.js';
 
 const MAX_RESPONSE_BYTES = 256_000;
@@ -141,6 +142,48 @@ export function identifyManagedPiPackageCommandNames(
   return [...provenanceByName.entries()].flatMap(([name, provenance]) => (
     provenance.length > 0 && provenance.every(Boolean) ? [name] : []
   ));
+}
+
+function canonicalRuntimePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function managedSkillCommandMatchesSource(command: PiRuntimeCommand, sourcePath: string): boolean {
+  if (command.source !== 'skill' || !command.name.startsWith('skill:') || !path.isAbsolute(sourcePath)) return false;
+  const expectedFile = canonicalRuntimePath(sourcePath);
+  const commandFile = command.sourceInfo.path;
+  if (commandFile && path.isAbsolute(commandFile) && canonicalRuntimePath(commandFile) === expectedFile) return true;
+  const commandBaseDir = command.sourceInfo.baseDir;
+  return path.basename(sourcePath).toLowerCase() === 'skill.md'
+    && typeof commandBaseDir === 'string'
+    && path.isAbsolute(commandBaseDir)
+    && canonicalRuntimePath(commandBaseDir) === canonicalRuntimePath(path.dirname(sourcePath));
+}
+
+/**
+ * Freeze the managed-skill roster passed to one runtime and attach a command
+ * name only when that runtime's own catalog proves an unambiguous loaded match.
+ */
+export function snapshotManagedPiPackageSkills(
+  skills: readonly { path: string; name: string; description?: string }[],
+  commands: readonly PiRuntimeCommand[],
+  managedPackageCommandNames: readonly string[],
+): PiManagedPackageSkillRuntimeSnapshot[] {
+  const managedNames = new Set(managedPackageCommandNames);
+  return skills.map((skill) => {
+    const matches = [...new Set(commands.flatMap((command) => (
+      managedNames.has(command.name) && managedSkillCommandMatchesSource(command, skill.path)
+        ? [command.name]
+        : []
+    )))];
+    return {
+      sourcePath: skill.path,
+      name: skill.name,
+      ...(skill.description ? { description: skill.description } : {}),
+      ...(matches.length === 1 ? { runtimeCommandName: matches[0] } : {}),
+    };
+  });
 }
 
 function classifyExplicitRpcFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {

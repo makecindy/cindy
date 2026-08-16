@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
 
 import {
   capturePiRuntimeCapabilityManifest,
   identifyManagedPiPackageCommandNames,
   parsePiRuntimeCommands,
+  snapshotManagedPiPackageSkills,
 } from '../runtime-capabilities.js';
 
 describe('Pi runtime capability parsing', () => {
@@ -80,6 +82,61 @@ describe('Pi runtime capability parsing', () => {
         sourceInfo: { path: '/private/cindy/internal/plan-mode.ts' },
       },
     ], ['/private/cindy/pi-packages/sample'])).toEqual([]);
+  });
+
+  it('snapshots managed skills and marks only unambiguous runtime-proven commands loaded', () => {
+    const packageRoot = path.resolve('managed-package-fixture');
+    const loadedSkill = path.join(packageRoot, 'skills', 'loaded', 'SKILL.md');
+    const unprovenSkill = path.join(packageRoot, 'skills', 'unproven', 'SKILL.md');
+    const ambiguousSkill = path.join(packageRoot, 'skills', 'ambiguous', 'SKILL.md');
+    const commands = [
+      {
+        ...command,
+        name: 'skill:loaded-runtime-name',
+        sourceInfo: {
+          ...command.sourceInfo,
+          baseDir: path.dirname(loadedSkill),
+          path: loadedSkill,
+        },
+      },
+      {
+        ...command,
+        name: 'skill:not-managed',
+        sourceInfo: {
+          ...command.sourceInfo,
+          baseDir: path.dirname(unprovenSkill),
+          path: unprovenSkill,
+        },
+      },
+      ...['skill:ambiguous-a', 'skill:ambiguous-b'].map((name) => ({
+        ...command,
+        name,
+        sourceInfo: {
+          ...command.sourceInfo,
+          baseDir: path.dirname(ambiguousSkill),
+          path: ambiguousSkill,
+        },
+      })),
+    ];
+
+    expect(snapshotManagedPiPackageSkills(
+      [
+        { path: loadedSkill, name: 'loaded-label', description: 'Loaded skill' },
+        { path: unprovenSkill, name: 'unproven-label' },
+        { path: ambiguousSkill, name: 'ambiguous-label' },
+      ],
+      commands,
+      ['skill:loaded-runtime-name', 'skill:ambiguous-a', 'skill:ambiguous-b'],
+    )).toEqual([
+      {
+        sourcePath: loadedSkill,
+        name: 'loaded-label',
+        description: 'Loaded skill',
+        runtimeCommandName: 'skill:loaded-runtime-name',
+      },
+      { sourcePath: unprovenSkill, name: 'unproven-label' },
+      { sourcePath: ambiguousSkill, name: 'ambiguous-label' },
+    ]);
   });
 
   it.each([

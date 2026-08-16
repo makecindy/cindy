@@ -30,8 +30,11 @@ export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_
 
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
-    && command.scope === 'repo'
-    && command.runtimeStatus === 'discovered';
+    && (
+      (command.scope === 'repo' && command.runtimeStatus === 'discovered')
+      || command.runtimeStatus === 'unknown'
+      || command.runtimeStatus === 'failed'
+    );
 }
 
 export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): boolean {

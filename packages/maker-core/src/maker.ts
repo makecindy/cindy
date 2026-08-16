@@ -200,7 +200,34 @@ async function mergePiRuntimeSkillStatuses(
   result: ListAgentSkillsResult,
   manifest: PiRuntimeCapabilityManifest | undefined,
 ): Promise<ListAgentSkillsResult> {
-  if (manifest?.status !== 'loaded') return result;
+  // The global managed-package store can change while a task is running. An
+  // active Pi task must expose only its launch-time roster, never a fresh scan
+  // that makes a newly installed or renamed skill look executable mid-session.
+  const currentManagedSkills = result.skills.filter((skill) => skill.runtimeStatus === 'approved');
+  const nonManagedSkills = result.skills.filter((skill) => skill.runtimeStatus !== 'approved');
+  const managedSnapshot = manifest?.managedPackageSkills;
+  const managedSkills = managedSnapshot
+    ? managedSnapshot.map((skill) => ({
+        kind: 'agent-skill' as const,
+        name: skill.name,
+        ...(skill.description ? { description: skill.description } : {}),
+        source: 'skill' as const,
+        path: skill.sourcePath,
+        scope: 'user' as const,
+        enabled: true,
+        runtimeStatus: skill.runtimeCommandName ? 'loaded' as const : 'unknown' as const,
+        ...(skill.runtimeCommandName ? { runtimeCommandName: skill.runtimeCommandName } : {}),
+      }))
+    : currentManagedSkills.map((skill) => ({
+        ...skill,
+        runtimeStatus: 'unknown' as const,
+        runtimeCommandName: undefined,
+      }));
+  const sessionResult: ListAgentSkillsResult = {
+    ...result,
+    skills: [...nonManagedSkills, ...managedSkills],
+  };
+  if (manifest?.status !== 'loaded') return sessionResult;
   const loadedExplicitSkills = new Map<string, string>();
   const loadedLegacyProjectSkills = new Map<string, string>();
   const changedProjectSkills = new Map<string, string>();
@@ -253,14 +280,14 @@ async function mergePiRuntimeSkillStatuses(
     loadedExplicitSkills.size === 0
     && loadedLegacyProjectSkills.size === 0
     && changedProjectSkills.size === 0
-  ) return result;
+  ) return sessionResult;
   const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
     path: skillPath,
     message: 'Project skill changed after this Pi session started; restart the session to load the current version.',
   }));
   return {
-    ...result,
-    skills: result.skills.map((skill) => {
+    ...sessionResult,
+    skills: sessionResult.skills.map((skill) => {
       let runtimeCommandName: string | undefined;
       if (skill.scope === 'repo' && skill.path) {
         const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
@@ -277,7 +304,7 @@ async function mergePiRuntimeSkillStatuses(
         : skill;
     }),
     ...(changedSkillErrors.length > 0
-      ? { errors: [...(result.errors ?? []), ...changedSkillErrors] }
+      ? { errors: [...(sessionResult.errors ?? []), ...changedSkillErrors] }
       : {}),
   };
 }

@@ -119,7 +119,9 @@ import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import {
   capturePiRuntimeCapabilityManifest,
-  identifyManagedPiPackageCommandNames } from './runtime-capabilities.js';
+  identifyManagedPiPackageCommandNames,
+  snapshotManagedPiPackageSkills,
+} from './runtime-capabilities.js';
 import {
   assembleApprovedPiProjectResources,
   reconcilePiProjectResourceRuntime,
@@ -800,7 +802,8 @@ export class PiAgent extends BaseAgent {
       reasoningDisplay: ['off', 'full'],
       // 权限执行层在 cindy-bridge extension 的 tool_call 拦截:ask 档下只读内置
       // 工具放行,bash/edit/write 与全部桥接 MCP 工具逐次经 cindy 审批;
-      // bypassPermissions 全放行。档位从权限文件热读,setPermissionMode 即时生效。
+      // bypassPermissions 放行普通工具；Pi 扩展变更保留独立确认。档位从权限文件热读，
+      // setPermissionMode 即时生效。
       // auto 档:bridge 行为同 ask(非只读全部冒泡),Cindy 侧 dispatcher 先过
       // Auto-Review Core(shared/auto-review.ts)—— 区内写/安全命令静默放行,
       // 灰区由当前会话模型轻量诊断；仅确定性红线或 reviewer 明确 ask 才弹窗
@@ -822,7 +825,8 @@ export class PiAgent extends BaseAgent {
         {
           id: 'bypassPermissions',
           displayName: 'Full access',
-          description: 'Every tool runs without asking. Highest risk; use only for trusted tasks.',
+          description:
+            'Routine tools run without asking. Installing, updating, or removing Pi extensions still requires confirmation. Highest risk; use only for trusted tasks.',
         },
       ],
       setPermissionModeMidSession: { supported: true },
@@ -2508,9 +2512,18 @@ export class PiAgent extends BaseAgent {
         generation,
         stage,
       );
+      const managedPackageCommandNames = identifyManagedPiPackageCommandNames(
+        capturedManifest.commands,
+        managedPackageResources.packageRoots,
+      );
       const manifest = {
         ...capturedManifest,
-        managedPackageCommandNames: identifyManagedPiPackageCommandNames(capturedManifest.commands, managedPackageResources.packageRoots),
+        managedPackageCommandNames,
+        managedPackageSkills: snapshotManagedPiPackageSkills(
+          managedPackageResources.skills,
+          capturedManifest.commands,
+          managedPackageCommandNames,
+        ),
         projectResources: reconcilePiProjectResourceRuntime(projectResourceAssembly, capturedManifest),
       };
       if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
@@ -4027,6 +4040,7 @@ export class PiAgent extends BaseAgent {
         }
       })();
       const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const requiresIndependentUserConfirmation = toolName === 'cindy_pi_extension';
       const hostApprovalPresentation = (() => {
         const presenter = this.deps.getMcpToolApprovalPresentation;
         if (!presenter || !mcpTarget) return undefined;
@@ -4119,8 +4133,9 @@ export class PiAgent extends BaseAgent {
         });
       };
       /**
-       * Full access 的语义是「不问、全放行」。档位支持会话中途热切换(bridge 每次 tool_call
-       * 现读 perm 文件),所以必须**按最新档位**判断,不能用请求冒泡那一刻的快照。
+       * Full access 的普通工具语义是「不问、直接放行」；独立确认域不继承该语义。档位支持
+       * 会话中途热切换(bridge 每次 tool_call 现读 perm 文件),所以必须**按最新档位**判断,
+       * 不能用请求冒泡那一刻的快照。
        */
       const isFullAccessNow = (): boolean => getPermissionCtx().permissionMode === 'bypassPermissions';
       /**
@@ -4128,35 +4143,57 @@ export class PiAgent extends BaseAgent {
        * 等卡期间用户把档位放宽,这类**不**接受批量放行,仍按 fail-closed 拒绝 —— 与 CC /
        * Codex 的 dismissAllPending 同口径。
        */
-      const requestUserConfirmation = async (opts?: { forcePrompt?: boolean; unavailableHandoff?: boolean }): Promise<boolean> => {
+      const requestUserConfirmation = async (opts?: {
+        forcePrompt?: boolean;
+        unavailableHandoff?: boolean;
+        requireExplicitDecision?: boolean;
+      }): Promise<boolean> => {
         // 发起确认前:已切到 Full access 就不该再弹卡。
         // 但 forcePrompt 代表不能被权限放宽追认的安全边界；若 host lease / 预检失效
         // 真的让 policy turn 落进 Full access，宁可拒绝也不能静默放行。
-        if (isFullAccessNow()) {
+        if (isFullAccessNow() && opts?.requireExplicitDecision !== true) {
           if (opts?.forcePrompt === true && opts.unavailableHandoff) {
             notifyAutoReviewConfirmUndelivered();
           }
           return opts?.forcePrompt === true ? false : true;
         }
         const outcome = await requestUserDecision({
-          forcePrompt: opts?.forcePrompt === true,
+          forcePrompt: opts?.forcePrompt === true || opts?.requireExplicitDecision === true,
           ...(opts?.unavailableHandoff ? { unavailableHandoff: true } : {}),
         });
         // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
         if (outcome.decided) return outcome.approved;
         // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
-        return opts?.forcePrompt === true ? false : isFullAccessNow();
+        return opts?.forcePrompt === true || opts?.requireExplicitDecision === true
+          ? false
+          : isFullAccessNow();
       };
       void (async () => {
-        // Full access 优先收口,压在所有后续判定之前。bridge 侧按 perm 文件现读已把 bypass
-        // 拦在冒泡之前,但档位是热切换的:confirm 冒泡之后用户仍可能切到 Full access。此时
+        // 普通工具的 Full access 优先收口,压在所有后续判定之前。bridge 侧按 perm 文件现读
+        // 已把普通 bypass 拦在冒泡之前,但档位是热切换的:confirm 冒泡之后用户仍可能切到 Full access。此时
         // MCP 策略 / 灰区审阅 / 弹窗都不该再改变「全放行」语义,也不该因为没有 resolver 就
         // 拒掉工具调用(与 auto 分支既有的 modeAfterReview bypass 收口同口径)。
         // 本轮策略命中时不吃 Full Access 短路:policy + bypassPermissions 已在 send 预检
         // 拒绝、且 policy turn 持 host lease 堵死热切到 bypass,故此处 turnPolicyForcePrompt
         // 为真本不可达;仍显式 fail-closed,避免任一上游闸门被绕过就静默放行破坏性调用。
-        if (isFullAccessNow() && !turnPolicyForcePrompt) {
+        if (isFullAccessNow() && !turnPolicyForcePrompt && !requiresIndependentUserConfirmation) {
           proc.send({ type: 'extension_ui_response', id, confirmed: true });
+          return;
+        }
+        // Model-authored extension-store mutations never inherit Full Access
+        // or Auto-Review approval. Only the deterministic whole-command route
+        // handles an exact user-authored `pi install/update/remove` instruction
+        // without this second prompt; every tool call must obtain a real user
+        // decision and fails closed if the confirmation surface is unavailable.
+        if (requiresIndependentUserConfirmation) {
+          proc.send({
+            type: 'extension_ui_response',
+            id,
+            confirmed: await requestUserConfirmation({
+              forcePrompt: true,
+              requireExplicitDecision: true,
+            }),
+          });
           return;
         }
         // 桥接 MCP 工具走 host 审批策略,**不进 Auto-review 灰区** —— 与 Claude Code /

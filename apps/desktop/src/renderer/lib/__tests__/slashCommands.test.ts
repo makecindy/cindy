@@ -155,10 +155,13 @@ describe('Pi project skill availability', () => {
     expect(reload).toHaveBeenCalledTimes(3);
   });
 
-  it('disables only discovered project skills', () => {
+  it('disables unproven runtime skills while keeping approved new-task previews available', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'discovered' }))).toBe(false);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'unknown' }))).toBe(true);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'failed' }))).toBe(true);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'approved' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo' }))).toBe(false);
   });
 

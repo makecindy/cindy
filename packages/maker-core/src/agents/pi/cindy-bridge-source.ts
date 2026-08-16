@@ -3,8 +3,8 @@
  *
  * 这段代码跑在 **pi 子进程**(bun runtime)里,不能 import cindy 任何模块;
  * 只依赖 pi 的 ExtensionAPI、fetch 与 node:fs。职责:
- *  1. 权限门:tool_call 拦截。bypassPermissions 放行;ask 档下只读内置工具放行,
- *     其余(bash/edit/write + 全部桥接 MCP 工具)经 ctx.ui.confirm 走 cindy 审批
+ *  1. 权限门:tool_call 拦截。bypassPermissions 放行普通工具,但 Pi 扩展变更仍独立确认;
+ *     ask 档下只读内置工具放行,其余(bash/edit/write + 全部桥接 MCP 工具)经 ctx.ui.confirm 走 cindy 审批
  *     (RPC 模式 → extension_ui_request → PiAgent → interactionResolver)。
  *     权限档从 CINDY_PI_PERMISSION_FILE 每次现读 —— setPermissionMode 热切换生效;
  *     读不到一律按 ask(fail-closed)。
@@ -1277,7 +1277,11 @@ export default async function cindyBridge(pi: any) {
     if (credentialRead && permission.mode === 'bypassPermissions') {
       return { block: true, reason: 'Cindy blocks reading credential or key paths, even with Full access.' };
     }
-    if (permission.mode === 'bypassPermissions') return;
+    // Cindy-managed Pi extension mutations are a separate approval domain from
+    // ordinary tool permissions. Full Access may bypass normal tool prompts,
+    // but it must not let model-authored install/update/remove requests mutate
+    // the host-owned extension store without an explicit user decision.
+    if (permission.mode === 'bypassPermissions' && event.toolName !== 'cindy_pi_extension') return;
     if (READONLY_BUILTINS.has(event.toolName) && !credentialRead) return;
     let approved = false;
     try {
