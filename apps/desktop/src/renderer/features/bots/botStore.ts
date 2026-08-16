@@ -11,6 +11,10 @@ import type {
   BotBundleImportResult,
 } from '../../../shared/botPortability';
 import type { BotHealthReport } from '../../../shared/botLifecycle';
+import {
+  normalizeBotSessionControlMode,
+  type BotSessionControlMode,
+} from '../../../shared/botSessionControl';
 
 export type BotChannel =
   'telegram' | 'feishu' | 'slack' | 'discord' | 'wechat' | 'dingtalk' | 'wecom' | 'x' | 'local';
@@ -32,6 +36,7 @@ export interface BotCapabilities {
   memory: boolean;
   automation: boolean;
   permissions: 'ask' | 'trusted';
+  sessionControlMode: BotSessionControlMode;
 }
 
 function vendorForHarness(harness: BotCapabilities['harness']): 'cc' | 'codex' | 'pi' {
@@ -192,6 +197,7 @@ function defaultCapabilities(harness: BotCapabilities['harness'] = 'claude'): Bo
     memory: true,
     automation: false,
     permissions: 'ask',
+    sessionControlMode: 'none',
   };
 }
 
@@ -248,6 +254,7 @@ function readProfiles(): BotProfile[] {
                 ? capabilities.effort
                 : defaults.effort,
             fastMode: capabilities.fastMode === true,
+            sessionControlMode: normalizeBotSessionControlMode(capabilities.sessionControlMode),
             skillMode: normalizeSkillMode(capabilities.skillMode, value.skills),
             model: normalizeBotModel(capabilities.model, harness),
             toolsetMode: normalizeCapabilityMode(capabilities.toolsetMode, toolsets),
@@ -357,6 +364,7 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
           ? rawCapabilities.effort
           : defaults.effort,
       fastMode: rawCapabilities?.fastMode === true,
+      sessionControlMode: normalizeBotSessionControlMode(rawCapabilities?.sessionControlMode),
       skillMode: normalizeSkillMode(item.capabilities?.skillMode, item.skills),
       model: normalizeBotModel(item.capabilities?.model, harness),
       toolsetMode: normalizeCapabilityMode(rawCapabilities?.toolsetMode, toolsets),

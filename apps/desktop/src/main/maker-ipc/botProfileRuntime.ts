@@ -4,6 +4,11 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { buildDefaultBotIdentity } from '../../shared/botProfileDefaults.js';
+import {
+  buildBotSessionControlContext,
+  normalizeBotSessionControlMode,
+  type BotSessionControlMode,
+} from '../../shared/botSessionControl.js';
 import { getDbClient } from '../localDb/client/current.js';
 import {
   botLifecycleEvents,
@@ -60,6 +65,7 @@ export interface BotProfileRuntimeSnapshot {
   unavailableToolsets: string[];
   disabledToolsets: string[];
   toolsetMode: 'inherit' | 'allowlist';
+  sessionControlMode: BotSessionControlMode;
   memoryRefs: BotMemoryRuntimeRef[];
 }
 
@@ -580,7 +586,11 @@ export async function hydrateBotProfileRuntime(
     displayName: profile.displayName,
     identitySource: identity,
   });
-  opts.botProfileContextPrompt = buildBotProfileContextPrompt(profile.displayName);
+  const sessionControlMode = normalizeBotSessionControlMode(config.sessionControlMode);
+  opts.botProfileContextPrompt = [
+    buildBotProfileContextPrompt(profile.displayName),
+    buildBotSessionControlContext(sessionControlMode),
+  ].filter(Boolean).join('\n\n');
   opts.botRuntimeProfile = {
     botId: row.botId,
     profileVersion: row.profileVersion,
@@ -649,6 +659,7 @@ export async function hydrateBotProfileRuntime(
     mcpServers: configuredMcpServers,
     toolsetMode,
     toolsets: configuredToolsets,
+    sessionControlMode,
   });
   const resolvedJson = JSON.stringify({
     schemaVersion: 1,
@@ -662,6 +673,7 @@ export async function hydrateBotProfileRuntime(
     toolsets: resolvedToolsets,
     unavailableToolsets,
     disabledToolsets,
+    sessionControlMode,
     memoryScopeKey: opts.makerMemoryScopeKey ?? null,
     memoryRefs,
     skillResources: resolvedSkillEntries.map((entry) => ({
@@ -755,6 +767,7 @@ export async function hydrateBotProfileRuntime(
     unavailableToolsets,
     disabledToolsets,
     toolsetMode,
+    sessionControlMode,
     memoryRefs,
   };
 }

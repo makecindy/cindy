@@ -5628,6 +5628,16 @@
     "memoryDescription": "Uses a private memory namespace for this Bot.",
     "automationLabel": "Automation",
     "automationDescription": "Allow this Bot to run unattended on a schedule. Each run pins its Profile version, project, worktree, and delivery target.",
+    "sessionControl": {
+      "title": "Other task access",
+      "description": "Declare how this Bot may use Cindy's task control tools when they are available.",
+      "none": "No access",
+      "observe": "Observe",
+      "coordinate": "Coordinate",
+      "noneDescription": "This Bot cannot inspect or change other tasks.",
+      "observeDescription": "May inspect task status, runtime, history, and queues, but cannot change them.",
+      "coordinateDescription": "May inspect tasks, send work, steer or stop a turn, and manage only queue items it created. Every action is still checked by the control plane."
+    },
     "automations": {
       "title": "Bot automation",
       "description": "Create scheduled or manual routines and inspect every run, result, worktree, and delivery state.",

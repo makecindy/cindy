@@ -5626,6 +5626,16 @@
     "memoryDescription": "使用只屬於這個 Bot 的獨立記憶空間。",
     "automationLabel": "自動化",
     "automationDescription": "允許這個 Bot 在無人值守時按計畫執行。每次執行會固定 Profile 版本、專案、worktree 與投遞目標。",
+    "sessionControl": {
+      "title": "其他工作權限",
+      "description": "宣告這個 Bot 在工作控制工具可用時能夠執行的操作。",
+      "none": "不可存取",
+      "observe": "唯讀觀察",
+      "coordinate": "協調工作",
+      "noneDescription": "這個 Bot 無法查看或變更其他工作。",
+      "observeDescription": "可以查看工作狀態、執行資訊、歷史與佇列，但不能修改。",
+      "coordinateDescription": "可以查看工作、指派工作、向執行中的工作補充指示、要求停止，並管理僅由本工作送入的佇列訊息；每次操作仍由控制面驗證。"
+    },
     "automations": {
       "title": "Bot 自動化",
       "description": "建立排程或手動 Routine，查看每次執行的工作、結果、worktree 與投遞狀態。",

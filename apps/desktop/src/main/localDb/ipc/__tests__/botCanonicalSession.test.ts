@@ -817,6 +817,41 @@ describe('Bot canonical Session lifecycle', () => {
     expect(row.resolvedJson).not.toContain('Call the user Chris');
   });
 
+  it('freezes task-control permission in Profile context without polluting SOUL', async () => {
+    await invoke('local-db:bots:update', {
+      id: 'bot-1',
+      capabilities: { sessionControlMode: 'coordinate' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 2,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: created.session.id,
+      agentKind: 'codex',
+      workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue',
+      model: 'gpt-5.4',
+      permissionMode: 'ask',
+    };
+
+    const snapshot = await hydrateBotProfileRuntime(opts);
+
+    expect(snapshot?.sessionControlMode).toBe('coordinate');
+    expect(opts.botProfilePrompt).not.toContain('Cindy Task Control');
+    expect(opts.botProfileContextPrompt).toContain('## Cindy Task Control');
+    expect(opts.botProfileContextPrompt).toContain('permits coordination');
+    const row = h
+      .sqlite!.prepare(
+        `SELECT configured_json AS configuredJson, resolved_json AS resolvedJson
+         FROM bot_runtime_snapshots WHERE id = ?`,
+      )
+      .get(snapshot!.snapshotId) as { configuredJson: string; resolvedJson: string };
+    expect(JSON.parse(row.configuredJson)).toMatchObject({ sessionControlMode: 'coordinate' });
+    expect(JSON.parse(row.resolvedJson)).toMatchObject({ sessionControlMode: 'coordinate' });
+  });
+
   it('degrades without blocking when a frozen memory source cannot be read', async () => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',

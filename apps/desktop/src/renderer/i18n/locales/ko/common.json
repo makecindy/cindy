@@ -5626,6 +5626,16 @@
     "memoryDescription": "이 Bot 전용의 독립된 메모리 공간을 사용합니다.",
     "automationLabel": "자동화",
     "automationDescription": "이 Bot이 일정에 따라 무인 실행되도록 합니다. 각 실행은 Profile 버전, 프로젝트, worktree와 전달 대상을 고정합니다.",
+    "sessionControl": {
+      "title": "다른 작업 접근",
+      "description": "Cindy 작업 제어 도구를 사용할 수 있을 때 이 Bot이 사용할 수 있는 범위를 지정합니다.",
+      "none": "접근 안 함",
+      "observe": "조회",
+      "coordinate": "조정",
+      "noneDescription": "이 Bot은 다른 작업을 조회하거나 변경할 수 없습니다.",
+      "observeDescription": "작업 상태, 실행 정보, 기록과 대기열을 조회할 수 있지만 변경할 수는 없습니다.",
+      "coordinateDescription": "작업 조회, 업무 전달, 진행 중인 턴 지시, 중지 요청과 자신이 만든 대기열 항목 관리를 할 수 있습니다. 모든 작업은 제어 계층에서 계속 검증됩니다."
+    },
     "automations": {
       "title": "Bot 자동화",
       "description": "예약 또는 수동 Routine을 만들고 실행 작업, 결과, worktree와 전달 상태를 확인합니다.",

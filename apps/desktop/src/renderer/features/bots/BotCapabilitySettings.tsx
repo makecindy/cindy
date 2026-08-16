@@ -479,6 +479,32 @@ export function BotCapabilitySettings({
           </span>
         </label>
       </div>
+
+      <label className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-secondary)]">
+        <span>
+          <span className="block font-medium text-[var(--text-primary)]">
+            {t('bots.sessionControl.title')}
+          </span>
+          <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
+            {t('bots.sessionControl.description')}
+          </span>
+        </span>
+        <select
+          value={capabilities.sessionControlMode}
+          onChange={(event) => updateCapability(
+            'sessionControlMode',
+            event.target.value as BotCapabilities['sessionControlMode'],
+          )}
+          className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+        >
+          <option value="none">{t('bots.sessionControl.none')}</option>
+          <option value="observe">{t('bots.sessionControl.observe')}</option>
+          <option value="coordinate">{t('bots.sessionControl.coordinate')}</option>
+        </select>
+        <span className="text-11 leading-4 text-[var(--text-tertiary)]">
+          {t(`bots.sessionControl.${capabilities.sessionControlMode}Description`)}
+        </span>
+      </label>
     </div>
   );
 }

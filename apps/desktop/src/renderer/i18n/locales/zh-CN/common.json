@@ -5626,6 +5626,16 @@
     "memoryDescription": "使用只属于这个 Bot 的独立记忆空间。",
     "automationLabel": "自动化",
     "automationDescription": "允许这个 Bot 在无人值守时按计划运行。每次运行会固定 Profile 版本、项目、worktree 和投递目标。",
+    "sessionControl": {
+      "title": "其它任务权限",
+      "description": "声明这个 Bot 在任务控制工具可用时能够做什么。",
+      "none": "不可访问",
+      "observe": "只读观察",
+      "coordinate": "协调任务",
+      "noneDescription": "这个 Bot 不能查看或改变其它任务。",
+      "observeDescription": "可以查看任务状态、运行信息、历史和队列，但不能进行修改。",
+      "coordinateDescription": "可以查看任务、派活、向运行中的任务插话、请求停止，并管理仅由本任务投递的队列消息；每次操作仍由控制面鉴权。"
+    },
     "automations": {
       "title": "Bot 自动化",
       "description": "创建定时或手动 Routine，查看每次运行的任务、结果、worktree 和投递状态。",
