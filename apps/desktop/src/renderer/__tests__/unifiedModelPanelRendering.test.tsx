@@ -1025,10 +1025,12 @@ describe('列表样式试用开关(badge · v7 引擎徽标行)', () => {
     const row = rowFor('GPT-5.5');
     expect(row.querySelector('[data-engine-badge]')).not.toBeNull();
     expect(row.querySelector('[data-channel-tag]')?.textContent).toBe('Cindy AI');
-    // 组头粘性吸顶(v7):badge 样式下组标题带 sticky。
+    // 组名常驻改由列表顶部覆盖层题头承载(sticky 会在滚动容器 padding 上沿漏行,
+    // 2026-08-16 实测废弃);组头保持普通元素,仅挂 data-group-label 供覆盖层测量。
     const header = document.querySelector(
       '[role="group"][aria-label="Cindy AI"] > div',
     ) as HTMLElement;
-    expect(header.className).toContain('sticky');
+    expect(header.className).not.toContain('sticky');
+    expect(header.getAttribute('data-group-label')).toBe('Cindy AI');
   });
 });

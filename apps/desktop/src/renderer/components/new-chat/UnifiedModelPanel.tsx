@@ -692,6 +692,33 @@ export function UnifiedModelPanel({
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
 
+  // badge 样式:滚动中的「继承目录题头」—— 覆盖层常驻列表视口顶部,显示当前滚过的
+  // 组名。不用 sticky:它钉在滚动容器 padding 之下,上沿必漏一条行;覆盖层整条不透明
+  // 横幅盖住顶部(含 padding 带),机制上无从透底。
+  const [stickyLabel, setStickyLabel] = useState<string | null>(null);
+  const updateStickyLabel = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const listTop = list.getBoundingClientRect().top;
+    let current: string | null = null;
+    for (const el of list.querySelectorAll<HTMLElement>('[data-group-label]')) {
+      // 组头自带 8px 上衬,标题文字未完全滚出前不接管(+12 让切换发生在文字贴顶时)。
+      if (el.getBoundingClientRect().top - listTop < -12) {
+        current = el.dataset.groupLabel ?? null;
+      } else {
+        break;
+      }
+    }
+    setStickyLabel(current);
+  }, []);
+  useEffect(() => {
+    if (pickerLayout !== 'badge') {
+      setStickyLabel(null);
+      return;
+    }
+    updateStickyLabel();
+  }, [pickerLayout, sections, updateStickyLabel]);
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <UnifiedModelRail
@@ -704,6 +731,15 @@ export function UnifiedModelPanel({
       />
 
 
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      {pickerLayout === 'badge' && stickyLabel && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 z-[6] flex h-7 items-end truncate border-b border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)] px-[18px] pb-[5px] text-11 leading-none text-[var(--text-tertiary)]"
+        >
+          {stickyLabel}
+        </div>
+      )}
       <div
         ref={listRef}
         role="listbox"
@@ -733,6 +769,7 @@ export function UnifiedModelPanel({
           needsEnsureVisibleRef.current = false;
           if (flyAnchor) closeFlyout();
         }}
+        onScrollCapture={pickerLayout === 'badge' ? updateStickyLabel : undefined}
       >
         {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
         {followSession && (
@@ -792,17 +829,12 @@ export function UnifiedModelPanel({
               aria-label={sectionLabel(section)}
             >
               {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。
-                  badge 样式下粘性吸顶:滚到组中间时组名钉在列表顶端(v7 设计稿)。
-                  吸顶时必须**不透底**且横向铺满滚动区(-mx 出血盖住列表左右 padding,
-                  不透明面板底色),否则行从组头下滑过会从两侧和字缝里透出来
-                  (Chris 2026-08-16 实测)。 */}
+                  badge 样式的"滚动中组名常驻"不用 sticky(sticky 钉在滚动容器
+                  padding 之下,上沿会漏出一条行 —— Chris 2026-08-16 实测),改由
+                  列表视口顶部的覆盖层题头承载(见 stickyLabel),这里保持普通元素。 */}
               <div
-                className={cn(
-                  'truncate text-11 text-[var(--text-tertiary)]',
-                  pickerLayout === 'badge'
-                    ? 'sticky top-0 z-[5] -mx-2 bg-[var(--model-dropdown-bg)] px-[18px] pb-1 pt-2'
-                    : 'px-2.5 pb-1 pt-2',
-                )}
+                data-group-label={sectionLabel(section)}
+                className="truncate px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]"
               >
                 {sectionLabel(section)}
               </div>
@@ -914,6 +946,7 @@ export function UnifiedModelPanel({
             </div>
           ))
         )}
+      </div>
       </div>
 
       {flyTarget && configurationEnabled && (
