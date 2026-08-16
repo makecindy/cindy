@@ -6983,7 +6983,8 @@
       "silentStopContinueTitle": "현재 작업 계속",
       "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",
       "piManagerUnavailable": "원격 Pi 관리자가 준비되지 않았습니다. 잠시 후 다시 시도하세요. 계속 실패하면 「설정 → 원격 머신」에서 Pi를 다시 설치하세요.",
-      "piBundledNodeMissing": "원격 호스트에 런타임(Node.js)이 없습니다. 「설정 → 원격 머신」에서 호스트를 펼쳐 먼저 Claude Code 또는 Codex의 「설치」를 클릭하세요(Node.js가 함께 설치됨). 그런 다음 Pi 작업을 시작하세요."
+      "piBundledNodeMissing": "원격 호스트에 런타임(Node.js)이 없습니다. 「설정 → 원격 머신」에서 호스트를 펼쳐 먼저 Claude Code 또는 Codex의 「설치」를 클릭하세요(Node.js가 함께 설치됨). 그런 다음 Pi 작업을 시작하세요.",
+      "contextOverflow": "이 메시지 자체가 모델 컨텍스트 한도를 초과해서, 같은 세션에서 새 에이전트 세션으로 자동 이어갈 수 없습니다. 입력을 줄이거나 큰 첨부파일을 제거한 뒤 다시 시도하세요."
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",

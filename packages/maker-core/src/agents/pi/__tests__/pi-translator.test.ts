@@ -433,6 +433,69 @@ describe('pi translator', () => {
     expect(terminalErrors[0]?.data).toMatchObject({ message: 'final provider error' });
   });
 
+  it('tags a terminal xAI prompt-length error as context-overflow', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const overflow =
+      'API Error: 400 litellm.BadRequestError: XaiException - {"code":"invalid-argument","error":"This model\'s maximum prompt length is 500000 but the request contains 637815 tokens."}';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: overflow,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const terminalErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        (event.data as { isTerminal?: boolean }).isTerminal === true,
+    );
+    expect(terminalErrors).toHaveLength(1);
+    expect(terminalErrors[0]?.data).toMatchObject({
+      isTerminal: true,
+      reason: 'context-overflow',
+    });
+  });
+
+  it('does not tag a generic invalid-argument as context-overflow', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: '{"code":"invalid-argument","error":"unsupported field: foo"}',
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const terminalErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        (event.data as { isTerminal?: boolean }).isTerminal === true,
+    );
+    expect(terminalErrors).toHaveLength(1);
+    expect((terminalErrors[0]?.data as { reason?: string }).reason).toBeUndefined();
+  });
+
   it('preserves a 64KB ghost_manual envelope only as tool_result data', () => {
     const { content, wire } = makeGhostManual64KiBFixture();
     expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);

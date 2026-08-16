@@ -189,8 +189,10 @@ import {
   broadcastMessageRow,
   broadcastMessageAgentMetaUpdate,
   broadcastMessageDeleted,
+  commitContextRebuild,
   commitMessageDeletion,
   createMessage as createDbMessage,
+  findLatestContextRebuildMeta,
   rewindPersistedUserMessageAfterClear,
   findParkedEngineSession,
   getMessageDeletionTarget,
@@ -694,10 +696,15 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
 } from './sessionAgentSwitchHandler.js';
 import {
+  extractPlainText,
   prependNoteToWireUserMessage,
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
+import {
+  createContextOverflowRollover,
+  isContextOverflowErrorData,
+} from './contextOverflowRollover.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
@@ -2614,6 +2621,8 @@ export async function withSendToSessionLock<T>(
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
+let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null =
+  null;
 
 function getWiredSessionCloseReason(session: WiredSession) {
   return getMakerIfReady()?.getSessionCloseReason(session) ?? 'unexpected';
@@ -4278,7 +4287,31 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.type === 'error' &&
           (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
             agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
-        if (
+        const overflowRolloverClaimed =
+          event.type === 'error' &&
+          isTerminalTurnErrorEvent(event) &&
+          !isPlannedUpgradeClose &&
+          !isRemoteAuthRetry &&
+          !autoResumeSuppressesPersist &&
+          isContextOverflowErrorData(attributedEvent.data) &&
+          contextOverflowRolloverHolder?.claim(session.id) === true;
+        if (overflowRolloverClaimed) {
+          const overflowErrorData = attributedEvent.data;
+          void contextOverflowRolloverHolder
+            ?.tryRecover(session.id, overflowErrorData)
+            .then((recovered) => {
+              if (recovered) return;
+              onTurnErrorEvent(
+                session.id,
+                overflowErrorData as {
+                  message?: unknown;
+                  reason?: unknown;
+                  sdkError?: unknown;
+                } | null,
+                eventAgentMeta,
+              );
+            });
+        } else if (
           event.type === 'error' &&
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
@@ -10744,6 +10777,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertReviewExternalInputAllowed(sessionId);
     return await withSendToSessionLock(sessionId, () => sendToAgentAcceptedUnlocked(...args));
   };
+  contextOverflowRolloverHolder = createContextOverflowRollover({
+    getSessionRow: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle.select({
+          status: sessions.status,
+          agentKind: sessions.agentKind,
+          remoteHostId: sessions.remoteHostId,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      return row ?? null;
+    },
+    listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
+    findLatestRebuildMeta: findLatestContextRebuildMeta,
+    getLiveSession: (sessionId) => maker.getSession(sessionId),
+    closeSession: (sessionId) => maker.closeSession(sessionId),
+    drainPersistQueue,
+    commitRebuild: async (sessionId, handoff, meta) => {
+      const { updatedAt } = await commitContextRebuild(sessionId, handoff, meta);
+      broadcastSessionPatched(sessionId, {
+        sdkSessionId: null,
+        updatedAt: new Date(updatedAt).toISOString(),
+      });
+    },
+    setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
+      agentHandoffPending.set(sessionId, handoff, expectedGeneration),
+    readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
+    replayUserMessage: async (sessionId, content) => {
+      const wire = typeof content === 'string' ? content : extractPlainText(content);
+      await sendToAgentAccepted(sessionId, wire);
+    },
+    withCloseSuppressed: withRehydrateCloseSuppressed,
+    log,
+  });
   /**
    * Same-turn steer contract: resolved STEER means maker-core accepted the
    * inserted message into the active turn (Claude: streaming input push;

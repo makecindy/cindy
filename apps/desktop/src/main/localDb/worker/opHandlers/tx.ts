@@ -77,6 +77,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return sessionsSetStatus(db, txArgs);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(db, txArgs);
+    case 'context.rebuild':
+      return contextRebuild(db, txArgs);
     case 'message.delete':
       return messageDelete(db, txArgs);
     case 'im.deleteBindings':
@@ -213,6 +215,32 @@ function sessionAgentSwitchFallback(db: Database.Database, args: unknown): void 
         code: 'NOT_FOUND',
       });
     }
+  });
+  transaction();
+}
+
+/** 同一任务换干净原生会话：清 sdk_session_id + 隐藏 context_rebuild，不改可见消息。 */
+function contextRebuild(db: Database.Database, args: unknown): void {
+  const payload = asRecord(args, 'context.rebuild args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const markerId = expectString(payload.markerId, 'markerId');
+  const markerClientId = expectString(payload.markerClientId, 'markerClientId');
+  const markerContent = expectString(payload.markerContent, 'markerContent');
+  const markerCreatedAt = expectNumber(payload.markerCreatedAt, 'markerCreatedAt');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const transaction = db.transaction(() => {
+    const sessionResult = db
+      .prepare('UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ?')
+      .run(updatedAt, sessionId);
+    if (sessionResult.changes !== 1) {
+      throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
+    }
+    db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
+      sessionId,
+    );
+    db.prepare(
+      "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
+    ).run(markerId, markerClientId, sessionId, markerContent, markerCreatedAt, markerCreatedAt);
   });
   transaction();
 }

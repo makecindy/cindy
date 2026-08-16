@@ -946,6 +946,54 @@ export async function commitMessageDeletion(
   };
 }
 
+export async function commitContextRebuild(
+  sessionId: string,
+  handoff: string,
+  meta: { reason: 'context-overflow'; sourceUserClientId: string | null },
+): Promise<{ updatedAt: number }> {
+  const now = Date.now();
+  await getDbClient().tx('context.rebuild', {
+    sessionId,
+    markerId: createId(),
+    markerClientId: `context-rebuild:${createId()}`,
+    markerContent: JSON.stringify({
+      handoff,
+      consumed: false,
+      reason: meta.reason,
+      sourceUserClientId: meta.sourceUserClientId,
+    }),
+    markerCreatedAt: now,
+    updatedAt: now,
+  });
+  return { updatedAt: now };
+}
+
+export async function findLatestContextRebuildMeta(
+  sessionId: string,
+): Promise<{ reason?: string; sourceUserClientId?: string | null } | null> {
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({ content: messages.content })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'context_rebuild')))
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.content) as {
+      reason?: unknown;
+      sourceUserClientId?: unknown;
+    };
+    return {
+      reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+      sourceUserClientId:
+        typeof parsed.sourceUserClientId === 'string' ? parsed.sourceUserClientId : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function broadcastMessageDeleted(
   payload: MessageDeletedPayload,
   ownerScope?: DataOwnerBroadcastScope | null,
