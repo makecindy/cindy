@@ -1520,8 +1520,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(bridge).toContain('clean.PI_CODING_AGENT_DIR = bashPackageHome');
     expect(bridge).toContain('exposeSessionEnvironment: false');
     expect(bridge).toContain("'CINDY_PI_PERMISSION_FILE'");
-    expect(captured.env.CINDY_PI_BASH_PACKAGE_HOME).toBe(
-      path.join(configHome, 'bash-package-home'),
+    expect(path.normalize(captured.env.CINDY_PI_BASH_PACKAGE_HOME as string)).toBe(
+      path.normalize(path.join(configHome, 'bash-package-home')),
     );
   });
 

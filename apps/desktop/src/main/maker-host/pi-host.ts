@@ -1297,10 +1297,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
         action: request.action,
         source: request.source,
       } as const;
-      return mutatePiPackage(
-        storeRequest,
-        request.action === 'remove' ? undefined : issuePiPackageMutationGrant(storeRequest),
-      );
+      return mutatePiPackage(storeRequest, issuePiPackageMutationGrant(storeRequest));
     },
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),

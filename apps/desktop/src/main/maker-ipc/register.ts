@@ -6118,20 +6118,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             message: t('settings.piPackages.extensionApprovalDescription'),
             confirm: t('settings.piPackages.approveAndEnable'),
           }
-        : request.action === 'update'
+        : request.action === 'remove'
           ? {
-              title: t('settings.piPackages.updateConfirmTitle'),
-              message: t('settings.piPackages.updateConfirmDescription').replace(
-                '{{source}}',
-                source,
-              ),
-              confirm: t('settings.piPackages.confirmUpdate'),
+              title: t('settings.piPackages.uninstallTitle'),
+              message: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
+              confirm: t('settings.piPackages.confirmUninstall'),
             }
-          : {
-              title: t('settings.piPackages.confirmTitle'),
-              message: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
-              confirm: t('settings.piPackages.confirmInstall'),
-            };
+          : request.action === 'update'
+            ? {
+                title: t('settings.piPackages.updateConfirmTitle'),
+                message: t('settings.piPackages.updateConfirmDescription').replace(
+                  '{{source}}',
+                  source,
+                ),
+                confirm: t('settings.piPackages.confirmUpdate'),
+              }
+            : {
+                title: t('settings.piPackages.confirmTitle'),
+                message: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
+                confirm: t('settings.piPackages.confirmInstall'),
+              };
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options = {
       type: 'warning' as const,

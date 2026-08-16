@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createIpcError } from '../../../../shared/ipc-errors';
 import type { PiPackageView } from '../../../../shared/piPackages';
 
 vi.mock('react-i18next', () => ({
@@ -51,11 +52,13 @@ function packageView(index: number): PiPackageView {
     name: `sample-extension-${index}`,
     version: `1.0.${index}`,
     enabled: false,
-    resources: [{
-      kind: 'extension',
-      name: `extensions/index-${index}.ts`,
-      compatibility: 'supported',
-    }],
+    resources: [
+      {
+        kind: 'extension',
+        name: `extensions/index-${index}.ts`,
+        compatibility: 'supported',
+      },
+    ],
   };
 }
 
@@ -64,14 +67,18 @@ function installElectronApi(options?: {
   mutatePiPackage?: ReturnType<typeof vi.fn>;
   onChanged?: (callback: () => void) => () => void;
 }) {
-  const listPiPackages = options?.listPiPackages ?? vi.fn(async () => ({
-    available: true,
-    packages: [packageView(1), packageView(2)],
-  }));
-  const mutatePiPackage = options?.mutatePiPackage ?? vi.fn(async () => ({
-    available: true,
-    packages: [packageView(1), packageView(2)],
-  }));
+  const listPiPackages =
+    options?.listPiPackages ??
+    vi.fn(async () => ({
+      available: true,
+      packages: [packageView(1), packageView(2)],
+    }));
+  const mutatePiPackage =
+    options?.mutatePiPackage ??
+    vi.fn(async () => ({
+      available: true,
+      packages: [packageView(1), packageView(2)],
+    }));
   const onPiPackagesChanged = vi.fn(options?.onChanged ?? (() => () => undefined));
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { listPiPackages, mutatePiPackage, onPiPackagesChanged },
@@ -99,7 +106,9 @@ describe('PiPackagesSection interaction state machine', () => {
 
     render(<PiPackagesSection />);
 
-    expect((await screen.findByRole('alert')).textContent).toContain('settings.piPackages.loadFailed');
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'settings.piPackages.loadFailed',
+    );
     expect(screen.queryByText('settings.piPackages.empty')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.retry' }));
@@ -122,16 +131,22 @@ describe('PiPackagesSection interaction state machine', () => {
     await waitFor(() => expect(mutatePiPackage).toHaveBeenCalledTimes(1));
     expect((updateButtons[1] as HTMLButtonElement).disabled).toBe(true);
     expect(
-      (screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[1] as HTMLButtonElement).disabled,
+      (
+        screen.getAllByRole('button', {
+          name: 'settings.piPackages.removeAria',
+        })[1] as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     expect((screen.getAllByRole('switch')[1] as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole('status', { name: 'settings.piPackages.operationInProgress' })).toBeTruthy();
+    expect(
+      screen.getByRole('status', { name: 'settings.piPackages.operationInProgress' }),
+    ).toBeTruthy();
 
     mutation.resolve({ available: true, packages: [packageView(1), packageView(2)] });
     await waitFor(() => expect((updateButtons[1] as HTMLButtonElement).disabled).toBe(false));
   });
 
-  it('keeps the install confirmation open while working and after failure so it can retry', async () => {
+  it('routes install directly into the Main-owned confirmation flow and keeps retry state on failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const mutatePiPackage = vi
       .fn()
@@ -148,27 +163,35 @@ describe('PiPackagesSection interaction state machine', () => {
       target: { value: 'npm:sample-extension-1' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
-    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.confirmInstall' }));
 
-    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(mutatePiPackage).toHaveBeenCalledWith({
+      action: 'install',
+      source: 'npm:sample-extension-1',
+    });
     expect(
-      (screen.getByRole('button', { name: 'settings.piPackages.confirmInstall' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: 'settings.piPackages.install' }) as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
 
     firstMutation.reject(new Error('network'));
     await waitFor(() => {
       expect(
-        (screen.getByRole('button', { name: 'settings.piPackages.confirmInstall' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'settings.piPackages.install' }) as HTMLButtonElement)
+          .disabled,
       ).toBe(false);
     });
-    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(
+      (screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder') as HTMLInputElement)
+        .value,
+    ).toBe('npm:sample-extension-1');
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.confirmInstall' }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
+    await waitFor(() => expect(screen.getByText('sample-extension-1')).toBeTruthy());
     expect(mutatePiPackage).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps the uninstall confirmation open after failure and closes it only after success', async () => {
+  it('routes remove directly into the Main-owned confirmation flow and retries after failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const mutatePiPackage = vi
       .fn()
@@ -179,30 +202,69 @@ describe('PiPackagesSection interaction state machine', () => {
     await screen.findByText('sample-extension-2');
 
     fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
-    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.confirmUninstall' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(
-      (screen.getByRole('button', { name: 'settings.piPackages.confirmUninstall' }) as HTMLButtonElement).disabled,
+      (
+        screen.getAllByRole('button', {
+          name: 'settings.piPackages.removeAria',
+        })[0] as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
 
     firstMutation.reject(new Error('locked'));
     await waitFor(() => {
       expect(
-        (screen.getByRole('button', { name: 'settings.piPackages.confirmUninstall' }) as HTMLButtonElement).disabled,
+        (
+          screen.getAllByRole('button', {
+            name: 'settings.piPackages.removeAria',
+          })[0] as HTMLButtonElement
+        ).disabled,
       ).toBe(false);
     });
-    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('sample-extension-1')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.confirmUninstall' }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
+    await waitFor(() => expect(screen.queryByText('sample-extension-1')).toBeNull());
     expect(mutatePiPackage).toHaveBeenLastCalledWith({
       action: 'remove',
       source: 'npm:sample-extension-1',
     });
   });
 
-  it('shows progress for enable or disable mutations', async () => {
+  it('treats a cancelled Main confirmation as a quiet retryable user decision', async () => {
+    const mutatePiPackage = vi.fn(async () => {
+      throw createIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+    });
+    installElectronApi({
+      listPiPackages: vi.fn(async () => ({ available: true, packages: [] })),
+      mutatePiPackage,
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('settings.piPackages.empty');
+
+    const input = screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder');
+    fireEvent.change(input, { target: { value: 'npm:cancelled-extension' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
+
+    await waitFor(() => {
+      expect(
+        (screen.getByRole('button', { name: 'settings.piPackages.install' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    });
+    expect((input as HTMLInputElement).value).toBe('npm:cancelled-extension');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(toastMocks.error).not.toHaveBeenCalled();
+    expect(toastMocks.success).not.toHaveBeenCalled();
+  });
+
+  it('routes enable directly into the Main-owned confirmation flow and shows progress', async () => {
     const mutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const { mutatePiPackage } = installElectronApi({
+      listPiPackages: vi.fn(async () => ({
+        available: true,
+        packages: [{ ...packageView(1), requiresExtensionApproval: true }, packageView(2)],
+      })),
       mutatePiPackage: vi.fn(() => mutation.promise),
     });
     render(<PiPackagesSection />);
@@ -216,10 +278,17 @@ describe('PiPackagesSection interaction state machine', () => {
         enabled: true,
       });
     });
-    expect(screen.getByRole('status', { name: 'settings.piPackages.operationInProgress' })).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(
+      screen.getByRole('status', { name: 'settings.piPackages.operationInProgress' }),
+    ).toBeTruthy();
 
     mutation.resolve({ available: true, packages: [packageView(1), packageView(2)] });
-    await waitFor(() => expect(screen.queryByRole('status', { name: 'settings.piPackages.operationInProgress' })).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('status', { name: 'settings.piPackages.operationInProgress' }),
+      ).toBeNull(),
+    );
   });
 
   it('accepts only the latest refresh result and ignores a late callback after unmount', async () => {

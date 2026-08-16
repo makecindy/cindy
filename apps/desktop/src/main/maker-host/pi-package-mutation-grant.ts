@@ -35,6 +35,7 @@ export function piPackageMutationNeedsGrant(request: PiPackageMutationRequest): 
   return (
     request.action === 'install' ||
     request.action === 'update' ||
+    request.action === 'remove' ||
     (request.action === 'set-enabled' && request.enabled === true)
   );
 }

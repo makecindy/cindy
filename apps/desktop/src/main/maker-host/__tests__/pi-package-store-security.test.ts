@@ -117,6 +117,10 @@ describe('Pi package executable-code boundary', () => {
     const request = { action: 'install' as const, source };
     const grant = issuePiPackageMutationGrant(request);
 
+    await expect(store.mutatePiPackage({ action: 'remove', source })).rejects.toThrow(
+      /explicit authorization/i,
+    );
+
     await expect(store.mutatePiPackage({ action: 'update', source }, grant)).rejects.toThrow(
       /invalid or expired/i,
     );
@@ -287,7 +291,7 @@ describe('Pi package executable-code boundary', () => {
     });
 
     await mutateAuthorized(store, { action: 'update', source: normalizedSource });
-    await store.mutatePiPackage({ action: 'remove', source: normalizedSource });
+    await mutateAuthorized(store, { action: 'remove', source: normalizedSource });
     const canonicalRoot = await fs.realpath(root);
     expect(runtime.spawns.find(({ args }) => args.includes('update'))?.args)
       .toContain(canonicalRoot);
