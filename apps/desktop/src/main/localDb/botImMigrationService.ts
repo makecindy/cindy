@@ -83,6 +83,7 @@ function connectionConfig(connection: BotChannelConnection): Record<string, unkn
     connectionId: connection.id,
     ownership: connection.ownership,
     features: [...connection.features],
+    featureCapabilities: connection.featureCapabilities ?? [],
   };
 }
 
@@ -334,6 +335,7 @@ async function buildPlan(
       scopeKey: connection.scopeKey,
       routable: connection.routable,
       features: [...connection.features].sort(),
+      featureCapabilities: connection.featureCapabilities ?? [],
     },
     channelId,
     channel: ownChannel
@@ -536,6 +538,7 @@ export async function applyBotImMigration(
       ownership: connection.ownership,
       connectionId: connection.id,
       features: [...connection.features],
+      featureCapabilities: connection.featureCapabilities ?? [],
       // Migration audit rows currently retain a Route FK.  This hidden
       // sentinel records mount ownership only; it is never eligible to own a
       // task. Concrete DM/group/thread Routes are created lazily per lane.

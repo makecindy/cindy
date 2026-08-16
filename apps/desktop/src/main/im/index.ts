@@ -94,6 +94,7 @@ import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 import { listHookBotChannelConnections } from '../hook-control/ipc.js';
 import {
+  botChannelFeatureCapabilitiesFor,
   LOCAL_BOT_CHANNEL_FEATURES,
   type BotChannelConnection,
 } from '../../shared/botChannelRegistry.js';
@@ -153,10 +154,7 @@ export async function deliverBotRouteMessage(
   input: BotRouteDeliveryInput,
 ): Promise<BotRouteDeliveryResult> {
   if (input.ownership === 'server-relay') {
-    if (
-      (input.channel !== 'telegram' && input.channel !== 'slack')
-      || !input.deliveryKey?.trim()
-    ) {
+    if ((input.channel !== 'telegram' && input.channel !== 'slack') || !input.deliveryKey?.trim()) {
       return {
         ok: false,
         retryable: false,
@@ -183,9 +181,10 @@ export async function deliverBotRouteMessage(
       : result;
   }
   const connection = listBotChannelConnections().find(
-    (item) => item.kind === input.channel
-      && item.ownership === input.ownership
-      && item.accountKey === input.accountKey,
+    (item) =>
+      item.kind === input.channel &&
+      item.ownership === input.ownership &&
+      item.accountKey === input.accountKey,
   );
   if (!connection) {
     return {
@@ -213,15 +212,16 @@ export async function deliverBotRouteMessage(
     };
   }
   try {
-    const materialized = input.sessionId && input.workingDir && input.text.includes('![')
-      ? await materializeLocalMarkdownImages({
-          text: input.text,
-          workingDir: input.workingDir,
-          sessionId: input.sessionId,
-          maxImages: 4,
-          existingAbsPaths: [...(input.mediaAbsPaths ?? [])],
-        })
-      : { text: input.text, absPaths: [...(input.mediaAbsPaths ?? [])] };
+    const materialized =
+      input.sessionId && input.workingDir && input.text.includes('![')
+        ? await materializeLocalMarkdownImages({
+            text: input.text,
+            workingDir: input.workingDir,
+            sessionId: input.sessionId,
+            maxImages: 4,
+            existingAbsPaths: [...(input.mediaAbsPaths ?? [])],
+          })
+        : { text: input.text, absPaths: [...(input.mediaAbsPaths ?? [])] };
     // Personal WeChat supports proactive sends through its latest encrypted
     // peer context, while commitFinal is intentionally restricted to a live
     // inbound task.  Its provider clientId is the Bot outbox key, so a host
@@ -264,9 +264,7 @@ export async function deliverBotRouteMessage(
         text: materialized.text,
         terminal: 'done',
         ...(input.threadKey ? { threadTs: input.threadKey } : {}),
-        ...(materialized.absPaths.length > 0
-          ? { mediaAbsPaths: materialized.absPaths }
-          : {}),
+        ...(materialized.absPaths.length > 0 ? { mediaAbsPaths: materialized.absPaths } : {}),
         ...(input.workingDir ? { allowedFileRoots: [input.workingDir] } : {}),
       });
       await input.onProgress?.({ committedFinal: true });
@@ -419,7 +417,11 @@ export function startImOrchestrators(): void {
       _desktopCcPrefs = {
         ...(prefs as DesktopCcPrefs),
         providerId:
-          typeof p.providerId === 'string' ? p.providerId : p.providerId === null ? null : undefined,
+          typeof p.providerId === 'string'
+            ? p.providerId
+            : p.providerId === null
+              ? null
+              : undefined,
       };
     }
   });
@@ -639,6 +641,7 @@ export function listBotChannelConnections(): BotChannelConnection[] {
       scopeKey: accountKey || null,
       routable: accountKey.length > 0,
       features: [...(LOCAL_BOT_CHANNEL_FEATURES[kind] ?? [])],
+      featureCapabilities: botChannelFeatureCapabilitiesFor(kind, 'local-adapter'),
     };
   });
   return [...localConnections, ...listHookBotChannelConnections()];

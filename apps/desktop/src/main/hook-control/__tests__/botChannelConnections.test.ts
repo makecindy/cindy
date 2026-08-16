@@ -14,10 +14,18 @@ function view(): SlackHookView {
     binding: null,
     bindings: [
       {
-        teamId: 'T1', teamName: 'Acme', slackUserId: 'U1', slackUserName: 'Chris', displaced: false,
+        teamId: 'T1',
+        teamName: 'Acme',
+        slackUserId: 'U1',
+        slackUserName: 'Chris',
+        displaced: false,
       },
       {
-        teamId: 'T2', teamName: 'Old', slackUserId: 'U1', slackUserName: 'Chris', displaced: true,
+        teamId: 'T2',
+        teamName: 'Old',
+        slackUserId: 'U1',
+        slackUserName: 'Chris',
+        displaced: true,
       },
     ],
     pendingBind: null,
@@ -67,7 +75,9 @@ describe('hookViewToBotChannelConnections', () => {
       ['telegram', 'bot-1', 'server-relay'],
     ]);
     expect(rows[0]?.features).toContain('threads');
+    expect(rows[1]?.features).toContain('cards');
     expect(rows[1]?.features).toContain('group-history');
+    expect(rows[1]?.featureCapabilities).toHaveLength(9);
   });
 
   it('retains configured accounts while offline but marks them disconnected', () => {

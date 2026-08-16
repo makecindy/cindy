@@ -5477,7 +5477,12 @@
       "automationsCount": "{{count}} automations",
       "deliveriesCount": "{{count}} delivery records",
       "workspacesCount": "{{count}} workspaces",
-      "healthStatus": { "healthy": "Healthy", "attention": "Needs attention", "recovering": "Recovering", "paused": "Paused" },
+      "healthStatus": {
+        "healthy": "Healthy",
+        "attention": "Needs attention",
+        "recovering": "Recovering",
+        "paused": "Paused"
+      },
       "issues": {
         "profile-error": "The Bot Profile is in an error state.",
         "missing-canonical": "The canonical Bot task has not been created.",
@@ -5510,7 +5515,15 @@
         "duplicateTitle": "This may duplicate messages",
         "duplicateDescription": "The local channel may already have sent the text or {{count}} attachment(s) without a complete receipt. Continuing sends the full result again.",
         "duplicateConfirm": "Retry anyway",
-        "status": { "pending": "Pending", "sending": "Sending", "suspended": "Suspended", "delivered": "Delivered", "failed": "Retry pending", "dead-letter": "Needs attention", "cancelled": "Cancelled" }
+        "status": {
+          "pending": "Pending",
+          "sending": "Sending",
+          "suspended": "Suspended",
+          "delivered": "Delivered",
+          "failed": "Retry pending",
+          "dead-letter": "Needs attention",
+          "cancelled": "Cancelled"
+        }
       },
       "events": {
         "created": "Bot created",
@@ -5636,9 +5649,32 @@
       "delegateAllowlist": "Only selected Bots",
       "delegateAllActive": "All enabled Bots when the run starts",
       "noDelegateBots": "No other enabled Bots are available.",
-      "status": { "active": "Active", "paused": "Paused", "error": "Needs attention", "archived": "Archived" },
-      "runStatus": { "claimed": "Claimed", "running": "Running", "success": "Completed", "failed": "Failed", "aborted": "Aborted", "interrupted": "Interrupted", "skipped": "Skipped", "unknown": "Unknown" },
-      "deliveryStatus": { "not-requested": "Not requested", "enqueue-failed": "Could not enqueue", "pending": "Pending", "sending": "Sending", "failed": "Waiting to retry", "delivered": "Delivered", "dead-letter": "Needs manual recovery", "cancelled": "Cancelled" },
+      "status": {
+        "active": "Active",
+        "paused": "Paused",
+        "error": "Needs attention",
+        "archived": "Archived"
+      },
+      "runStatus": {
+        "claimed": "Claimed",
+        "running": "Running",
+        "success": "Completed",
+        "failed": "Failed",
+        "aborted": "Aborted",
+        "interrupted": "Interrupted",
+        "skipped": "Skipped",
+        "unknown": "Unknown"
+      },
+      "deliveryStatus": {
+        "not-requested": "Not requested",
+        "enqueue-failed": "Could not enqueue",
+        "pending": "Pending",
+        "sending": "Sending",
+        "failed": "Waiting to retry",
+        "delivered": "Delivered",
+        "dead-letter": "Needs manual recovery",
+        "cancelled": "Cancelled"
+      },
       "deliveryProgressText": "Text delivered",
       "deliveryProgressMedia": "{{count}} attachment(s) delivered",
       "deliveryCommitted": "Final message committed",
@@ -5667,82 +5703,102 @@
     "channelServerRelay": "Server relay",
     "channelConnected": "Online",
     "channelOffline": "Offline or unavailable",
-  "channelConnectionRequired": "Connect a {{channel}} Bot in Settings before mounting this channel.",
-  "migration": {
-    "title": "Migrate and mount channel",
-    "description": "Cindy checks legacy IM tasks and active takeovers before atomically transferring this account to the Bot.",
-    "legacyTaskCount": "{{count}} legacy tasks found",
-    "blocked": "Blocking conflicts must be resolved before migration",
-    "conflicts": {
-      "connection-unavailable": "This channel has no usable account identity.",
-      "connection-not-routable": "This channel cannot currently receive Bot routes.",
-      "channel-owned-by-another-bot": "This account is already mounted by another Bot.",
-      "session-owned-by-another-bot": "A legacy task is already linked to another Bot.",
-      "session-role-conflict": "A legacy task already has another Bot role.",
-      "im-takeover-active": "A legacy /ctr takeover still points to one of these tasks.",
-      "ambiguous-legacy-binding": "Some legacy Slack tasks do not include a workspace identity. Open them once with the current Slack connection before migrating.",
-      "route-overlap": "This account has overlapping default Bot routes.",
-      "channel-busy": "This channel is processing another migration."
+    "channelConnectionRequired": "Connect a {{channel}} Bot in Settings before mounting this channel.",
+    "channelCapabilities": {
+      "native": "Full support",
+      "unsupported": "Not supported yet",
+      "degradedFallback": "This adapter uses a limited implementation",
+      "features": {
+        "directMessages": "direct messages",
+        "groups": "groups",
+        "threads": "topic lanes",
+        "replies": "quoted replies",
+        "cards": "interactive cards",
+        "reactions": "reactions",
+        "attachments": "attachments",
+        "groupHistory": "group history",
+        "durableDelivery": "durable delivery"
+      },
+      "details": {
+        "feishu-turn-context-only": "Fetches context from the current group or topic for each turn, but does not keep a cross-turn searchable Bot history. Without permission, it answers from the current message only and notifies the owner.",
+        "process-lifetime-delivery": "Retries safely only while Cindy Desktop is running. Delivery does not resume in the background after quit, crash, or power loss."
+      }
     },
-    "warnings": {
-      "connection-offline": "The channel is offline. The mount will resume when it reconnects.",
-      "no-legacy-tasks": "No legacy IM tasks were found for this account.",
-      "binding-restore-conflict": "Rollback kept {{count}} newer channel binding(s) instead of overwriting them."
+    "migration": {
+      "title": "Migrate and mount channel",
+      "description": "Cindy checks legacy IM tasks and active takeovers before atomically transferring this account to the Bot.",
+      "legacyTaskCount": "{{count}} legacy tasks found",
+      "blocked": "Blocking conflicts must be resolved before migration",
+      "conflicts": {
+        "connection-unavailable": "This channel has no usable account identity.",
+        "connection-not-routable": "This channel cannot currently receive Bot routes.",
+        "channel-owned-by-another-bot": "This account is already mounted by another Bot.",
+        "session-owned-by-another-bot": "A legacy task is already linked to another Bot.",
+        "session-role-conflict": "A legacy task already has another Bot role.",
+        "im-takeover-active": "A legacy /ctr takeover still points to one of these tasks.",
+        "ambiguous-legacy-binding": "Some legacy Slack tasks do not include a workspace identity. Open them once with the current Slack connection before migrating.",
+        "route-overlap": "This account has overlapping default Bot routes.",
+        "channel-busy": "This channel is processing another migration."
+      },
+      "warnings": {
+        "connection-offline": "The channel is offline. The mount will resume when it reconnects.",
+        "no-legacy-tasks": "No legacy IM tasks were found for this account.",
+        "binding-restore-conflict": "Rollback kept {{count}} newer channel binding(s) instead of overwriting them."
+      },
+      "errors": {
+        "load": "Channel and migration status could not be loaded. Try again.",
+        "preflight": "Migration preflight failed. Refresh the channel status and try again.",
+        "apply": "The channel could not be migrated. No incomplete switch was accepted.",
+        "rollback": "Rollback did not finish. Retry to continue from the saved state."
+      },
+      "preserveData": "Legacy tasks keep their original source and become read-only history. Group history, replies, cards, threads, and attachments stay in their adapter stores.",
+      "apply": "Migrate and mount",
+      "applying": "Migrating…",
+      "rollbackTitle": "Roll back channel migration?",
+      "rollbackDescription": "This disables the migrated Bot route, safely restores eligible legacy tasks, and preserves Bot history created after migration.",
+      "rollback": "Roll back migration",
+      "rollingBack": "Rolling back…"
     },
-    "errors": {
-      "load": "Channel and migration status could not be loaded. Try again.",
-      "preflight": "Migration preflight failed. Refresh the channel status and try again.",
-      "apply": "The channel could not be migrated. No incomplete switch was accepted.",
-      "rollback": "Rollback did not finish. Retry to continue from the saved state."
+    "routes": {
+      "title": "Channel routes",
+      "description": "Choose which incoming conversations and reply chains are handled by this Bot. A more specific route takes precedence over the channel default.",
+      "add": "Add route",
+      "addTitle": "Add a channel route",
+      "addDescription": "Use the platform's conversation or reply-chain identifier. Leave it empty only for a channel-wide fallback.",
+      "mountChannelFirst": "Mount an IM channel before adding a route.",
+      "empty": "No active channel routes yet.",
+      "channel": "Channel",
+      "routeKey": "Route name",
+      "routeKeyPlaceholder": "e.g. release-team",
+      "principalKey": "Conversation or DM identifier",
+      "principalKeyPlaceholder": "Platform conversation identifier",
+      "threadKey": "Reply-chain or topic identifier",
+      "threadKeyPlaceholder": "Optional reply-chain identifier",
+      "project": "Project for this route",
+      "botDefaultProject": "Use the Bot default project",
+      "create": "Create route",
+      "saving": "Saving…",
+      "openTask": "Open task",
+      "unknownChannel": "Unavailable channel",
+      "allMessages": "all messages on this channel",
+      "lastActivity": "Last activity: {{time}}",
+      "projectBound": "Uses a route-specific project",
+      "pause": "Pause",
+      "pausing": "Pausing…",
+      "resume": "Resume",
+      "resuming": "Resuming…",
+      "archive": "Archive",
+      "archiving": "Archiving…",
+      "status": {
+        "active": "Active",
+        "paused": "Paused",
+        "offline": "Ready",
+        "recovering": "Recovering",
+        "error": "Needs attention",
+        "archived": "Archived"
+      }
     },
-    "preserveData": "Legacy tasks keep their original source and become read-only history. Group history, replies, cards, threads, and attachments stay in their adapter stores.",
-    "apply": "Migrate and mount",
-    "applying": "Migrating…",
-    "rollbackTitle": "Roll back channel migration?",
-    "rollbackDescription": "This disables the migrated Bot route, safely restores eligible legacy tasks, and preserves Bot history created after migration.",
-    "rollback": "Roll back migration",
-    "rollingBack": "Rolling back…"
-  },
-  "routes": {
-    "title": "Channel routes",
-    "description": "Choose which incoming conversations and reply chains are handled by this Bot. A more specific route takes precedence over the channel default.",
-    "add": "Add route",
-    "addTitle": "Add a channel route",
-    "addDescription": "Use the platform's conversation or reply-chain identifier. Leave it empty only for a channel-wide fallback.",
-    "mountChannelFirst": "Mount an IM channel before adding a route.",
-    "empty": "No active channel routes yet.",
-    "channel": "Channel",
-    "routeKey": "Route name",
-    "routeKeyPlaceholder": "e.g. release-team",
-    "principalKey": "Conversation or DM identifier",
-    "principalKeyPlaceholder": "Platform conversation identifier",
-    "threadKey": "Reply-chain or topic identifier",
-    "threadKeyPlaceholder": "Optional reply-chain identifier",
-    "project": "Project for this route",
-    "botDefaultProject": "Use the Bot default project",
-    "create": "Create route",
-    "saving": "Saving…",
-    "openTask": "Open task",
-    "unknownChannel": "Unavailable channel",
-    "allMessages": "all messages on this channel",
-    "lastActivity": "Last activity: {{time}}",
-    "projectBound": "Uses a route-specific project",
-    "pause": "Pause",
-    "pausing": "Pausing…",
-    "resume": "Resume",
-    "resuming": "Resuming…",
-    "archive": "Archive",
-    "archiving": "Archiving…",
-    "status": {
-      "active": "Active",
-      "paused": "Paused",
-      "offline": "Ready",
-      "recovering": "Recovering",
-      "error": "Needs attention",
-      "archived": "Archived"
-    }
-  },
-  "projects": {
+    "projects": {
       "title": "Projects and worktrees",
       "description": "Bind projects to this Bot and choose whether tasks use the project directory or a managed worktree.",
       "empty": "No project is bound to this Bot yet.",

@@ -58,6 +58,7 @@ import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
 import { BotRouteSettings } from './BotRouteSettings';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
+import { BotChannelCapabilitySummary } from './BotChannelCapabilitySummary';
 
 const AVATARS = ['🤖', '✦', '◈', '◎', '☄️', '🧭'];
 const AVATAR_COLORS = ['violet', 'blue', 'amber', 'graphite'] as const;
@@ -233,8 +234,7 @@ function BotSettings({
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
   const selectedProject = bot.projectBindings?.find((binding) => binding.isDefault);
   const sshRemote = Boolean(selectedProject?.remoteHostId);
-  const vendor: MakerVendor =
-    capabilities.harness === 'claude' ? 'cc' : capabilities.harness;
+  const vendor: MakerVendor = capabilities.harness === 'claude' ? 'cc' : capabilities.harness;
   const hiddenVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
     return (['cc', 'codex', 'pi'] as const).filter((item) => !availableVendors.has(item));
@@ -344,55 +344,56 @@ function BotSettings({
     const byKey = new Map<string, BotChannelConnection>();
     for (const connection of channelConnections) {
       if (!connection.accountKey) continue;
-      byKey.set(`${connection.kind}\u0000${connection.ownership}\u0000${connection.accountKey}`, connection);
+      byKey.set(
+        `${connection.kind}\u0000${connection.ownership}\u0000${connection.accountKey}`,
+        connection,
+      );
     }
     for (const channel of bot.channels ?? []) {
       if (channel.kind === 'local') continue;
-      const accountKey = typeof channel.config?.accountKey === 'string'
-        ? channel.config.accountKey.trim()
-        : '';
+      const accountKey =
+        typeof channel.config?.accountKey === 'string' ? channel.config.accountKey.trim() : '';
       if (!accountKey) continue;
-      const ownership = channel.config?.ownership === 'server-relay'
-        ? 'server-relay'
-        : 'local-adapter';
+      const ownership =
+        channel.config?.ownership === 'server-relay' ? 'server-relay' : 'local-adapter';
       const key = `${channel.kind}\u0000${ownership}\u0000${accountKey}`;
       if (byKey.has(key)) continue;
       byKey.set(key, {
-        id: typeof channel.config?.connectionId === 'string'
-          ? channel.config.connectionId
-          : `saved:${channel.id}`,
+        id:
+          typeof channel.config?.connectionId === 'string'
+            ? channel.config.connectionId
+            : `saved:${channel.id}`,
         kind: channel.kind,
         ownership,
         status: 'unavailable',
         connected: false,
         accountKey,
-        accountName: typeof channel.config?.accountName === 'string'
-          ? channel.config.accountName
-          : null,
+        accountName:
+          typeof channel.config?.accountName === 'string' ? channel.config.accountName : null,
         scopeKey: typeof channel.config?.scopeKey === 'string' ? channel.config.scopeKey : null,
         routable: true,
         features: Array.isArray(channel.config?.features)
-          ? channel.config.features.filter((item): item is BotChannelConnection['features'][number] =>
-              typeof item === 'string')
+          ? channel.config.features.filter(
+              (item): item is BotChannelConnection['features'][number] => typeof item === 'string',
+            )
           : [],
       });
     }
-    return [...byKey.values()].sort((a, b) =>
-      channelLabel(a.kind).localeCompare(channelLabel(b.kind))
-      || Number(b.connected) - Number(a.connected)
-      || (a.accountName ?? a.accountKey ?? '').localeCompare(b.accountName ?? b.accountKey ?? ''),
+    return [...byKey.values()].sort(
+      (a, b) =>
+        channelLabel(a.kind).localeCompare(channelLabel(b.kind)) ||
+        Number(b.connected) - Number(a.connected) ||
+        (a.accountName ?? a.accountKey ?? '').localeCompare(b.accountName ?? b.accountKey ?? ''),
     );
   }, [bot.channels, channelConnections]);
 
   const mountedChannelFor = (connection: BotChannelConnection) =>
     (bot.channels ?? []).find((channel) => {
       if (!channel.enabled || channel.kind !== connection.kind) return false;
-      const accountKey = typeof channel.config?.accountKey === 'string'
-        ? channel.config.accountKey.trim()
-        : '';
-      const ownership = channel.config?.ownership === 'server-relay'
-        ? 'server-relay'
-        : 'local-adapter';
+      const accountKey =
+        typeof channel.config?.accountKey === 'string' ? channel.config.accountKey.trim() : '';
+      const ownership =
+        channel.config?.ownership === 'server-relay' ? 'server-relay' : 'local-adapter';
       return accountKey === connection.accountKey && ownership === connection.ownership;
     });
 
@@ -453,9 +454,11 @@ function BotSettings({
         (warning) => warning.code === 'binding-restore-conflict',
       );
       if (bindingWarning) {
-        setChannelError(t('bots.migration.warnings.binding-restore-conflict', {
-          count: bindingWarning.count,
-        }));
+        setChannelError(
+          t('bots.migration.warnings.binding-restore-conflict', {
+            count: bindingWarning.count,
+          }),
+        );
       }
     } catch {
       setChannelError(t('bots.migration.errors.rollback'));
@@ -533,7 +536,9 @@ function BotSettings({
           </button>
         </section>
         {profileApplyError ? (
-          <p className="-mt-2 text-12 text-[var(--text-danger)]" role="alert">{profileApplyError}</p>
+          <p className="-mt-2 text-12 text-[var(--text-danger)]" role="alert">
+            {profileApplyError}
+          </p>
         ) : null}
 
         <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
@@ -553,44 +558,56 @@ function BotSettings({
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
             <div className="flex items-center justify-between rounded-xl border border-[var(--border-default)] px-3 py-2">
               <span>
-                <span className="block text-12 text-[var(--text-primary)]">{channelLabel('local')}</span>
-                <span className="block text-10 text-[var(--text-tertiary)]">{t('bots.channelLocalOwned')}</span>
+                <span className="block text-12 text-[var(--text-primary)]">
+                  {channelLabel('local')}
+                </span>
+                <span className="block text-10 text-[var(--text-tertiary)]">
+                  {t('bots.channelLocalOwned')}
+                </span>
               </span>
-              <span className="text-11 text-[var(--text-secondary)]">{t('bots.channelMounted')}</span>
+              <span className="text-11 text-[var(--text-secondary)]">
+                {t('bots.channelMounted')}
+              </span>
             </div>
             {visibleChannelConnections.map((connection) => {
               const mounted = mountedChannelFor(connection);
-              const label = connection.accountName || connection.accountKey || channelLabel(connection.kind);
+              const label =
+                connection.accountName || connection.accountKey || channelLabel(connection.kind);
               return (
-                <button
+                <div
                   key={connection.id}
-                  type="button"
-                  disabled={channelBusy !== null || !connection.routable}
-                  onClick={() => void toggleChannel(connection)}
-                  className="flex items-center justify-between rounded-xl border border-[var(--border-default)] px-3 py-2 text-left hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
+                  className="rounded-xl border border-[var(--border-default)] px-3 py-2"
                 >
-                  <span className="min-w-0">
-                    <span className="block truncate text-12 text-[var(--text-primary)]">
-                      {channelLabel(connection.kind)} · {label}
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block truncate text-12 text-[var(--text-primary)]">
+                        {channelLabel(connection.kind)} · {label}
+                      </span>
+                      <span className="block truncate text-10 text-[var(--text-tertiary)]">
+                        {connection.ownership === 'server-relay'
+                          ? t('bots.channelServerRelay')
+                          : t('bots.channelLocalAdapter')}
+                        {' · '}
+                        {connection.connected
+                          ? t('bots.channelConnected')
+                          : t('bots.channelOffline')}
+                      </span>
                     </span>
-                    <span className="block truncate text-10 text-[var(--text-tertiary)]">
-                      {connection.ownership === 'server-relay'
-                        ? t('bots.channelServerRelay')
-                        : t('bots.channelLocalAdapter')}
-                      {' · '}
-                      {connection.connected
-                        ? t('bots.channelConnected')
-                        : t('bots.channelOffline')}
-                    </span>
-                  </span>
-                  <span className="text-11 text-[var(--text-secondary)]">
-                    {channelBusy === connection.id
-                      ? '…'
-                      : mounted
-                        ? t('bots.channelMounted')
-                        : t('bots.channelMount')}
-                  </span>
-                </button>
+                    <button
+                      type="button"
+                      disabled={channelBusy !== null || !connection.routable}
+                      onClick={() => void toggleChannel(connection)}
+                      className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
+                    >
+                      {channelBusy === connection.id
+                        ? '…'
+                        : mounted
+                          ? t('bots.channelMounted')
+                          : t('bots.channelMount')}
+                    </button>
+                  </div>
+                  <BotChannelCapabilitySummary connection={connection} />
+                </div>
               );
             })}
           </div>
@@ -623,10 +640,13 @@ function BotSettings({
                 <div className="mt-4 space-y-3">
                   <div className="rounded-xl bg-[var(--surface-chip)] p-3 text-12 text-[var(--text-secondary)]">
                     <p className="font-medium text-[var(--text-primary)]">
-                      {channelLabel(migrationPlan.connection.kind)} · {migrationPlan.connection.accountName || migrationPlan.connection.accountKey}
+                      {channelLabel(migrationPlan.connection.kind)} ·{' '}
+                      {migrationPlan.connection.accountName || migrationPlan.connection.accountKey}
                     </p>
                     <p className="mt-1">
-                      {t('bots.migration.legacyTaskCount', { count: migrationPlan.candidates.length })}
+                      {t('bots.migration.legacyTaskCount', {
+                        count: migrationPlan.candidates.length,
+                      })}
                     </p>
                   </div>
                   {migrationPlan.conflicts.length > 0 ? (
@@ -857,9 +877,7 @@ function BotSettings({
                 excludeChatBridgedCodex={sshRemote}
                 fastMode={vendor === 'cc' ? undefined : capabilities.fastMode}
                 onFastModeChange={
-                  vendor === 'cc'
-                    ? undefined
-                    : (enabled) => updateCapability('fastMode', enabled)
+                  vendor === 'cc' ? undefined : (enabled) => updateCapability('fastMode', enabled)
                 }
                 onModelChange={(model) => updateCapability('model', model)}
                 onEffortChange={(effort) => updateCapability('effort', effort)}
@@ -919,7 +937,10 @@ function BotSettings({
             {t('bots.portability.description')}
           </p>
           {portabilityNotice ? (
-            <p className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]" role="status">
+            <p
+              className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]"
+              role="status"
+            >
               {portabilityNotice}
             </p>
           ) : null}
@@ -992,7 +1013,9 @@ function BotSettings({
                 : null}
             </Dialog.Description>
             {profileApplyError ? (
-              <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">{profileApplyError}</p>
+              <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
+                {profileApplyError}
+              </p>
             ) : null}
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -1089,9 +1112,10 @@ export function BotsHomeView() {
     if (!botId && bots[0]) {
       const target = bots.find((bot) => bot.status !== 'archived') ?? bots[0];
       const query = searchParams.toString();
-      const nextQuery = target.status !== 'active'
-        ? new URLSearchParams({ ...Object.fromEntries(searchParams), settings: '1' }).toString()
-        : query;
+      const nextQuery =
+        target.status !== 'active'
+          ? new URLSearchParams({ ...Object.fromEntries(searchParams), settings: '1' }).toString()
+          : query;
       navigate(`/bots/${target.id}${nextQuery ? `?${nextQuery}` : ''}`, { replace: true });
     }
   }, [botId, bots, navigate, searchParams]);
@@ -1114,17 +1138,22 @@ export function BotsHomeView() {
   useEffect(() => {
     if (searchParams.get('import') !== '1' || importingRef.current) return;
     importingRef.current = true;
-    setSearchParams((current) => {
-      current.delete('import');
-      return current;
-    }, { replace: true });
+    setSearchParams(
+      (current) => {
+        current.delete('import');
+        return current;
+      },
+      { replace: true },
+    );
     void importBotBundle()
       .then((result) => {
         if (result.canceled) return;
-        setImportNotice(t('bots.portability.imported', {
-          channels: result.disabledChannels?.length ?? 0,
-          automations: result.pausedAutomations ?? 0,
-        }));
+        setImportNotice(
+          t('bots.portability.imported', {
+            channels: result.disabledChannels?.length ?? 0,
+            automations: result.pausedAutomations ?? 0,
+          }),
+        );
         if (result.botId) navigate(`/bots/${result.botId}?settings=1`, { replace: true });
       })
       .catch((error: unknown) => {
@@ -1276,9 +1305,10 @@ export function BotsHomeView() {
           onRenew={() => renewBotSession(selectedBot)}
           onOpenSession={(targetSessionId, searchJump) => {
             const projection = selectedBot.sessions.find((item) => item.id === targetSessionId);
-            const route = projection?.kind === 'history'
-              ? `/bots/${selectedBot.id}/history/${targetSessionId}`
-              : `/bots/${selectedBot.id}/session/${targetSessionId}`;
+            const route =
+              projection?.kind === 'history'
+                ? `/bots/${selectedBot.id}/history/${targetSessionId}`
+                : `/bots/${selectedBot.id}/session/${targetSessionId}`;
             navigate(route, { state: searchJump ? { searchJump } : undefined });
           }}
           renewing={isCreatingSession}

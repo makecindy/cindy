@@ -1,5 +1,6 @@
 import type { SlackHookView } from '../../shared/hookControlIpc.js';
 import {
+  botChannelFeatureCapabilitiesFor,
   RELAY_BOT_CHANNEL_FEATURES,
   type BotChannelConnection,
 } from '../../shared/botChannelRegistry.js';
@@ -20,6 +21,7 @@ export function hookViewToBotChannelConnections(view: SlackHookView): BotChannel
       scopeKey: binding.teamId,
       routable: true,
       features: [...(RELAY_BOT_CHANNEL_FEATURES.slack ?? [])],
+      featureCapabilities: botChannelFeatureCapabilitiesFor('slack', 'server-relay'),
     });
   }
 
@@ -32,14 +34,13 @@ export function hookViewToBotChannelConnections(view: SlackHookView): BotChannel
       ownership: 'server-relay',
       status: view.telegram.status,
       connected:
-        view.telegram.enabled
-        && view.telegram.available
-        && view.telegram.status === 'connected',
+        view.telegram.enabled && view.telegram.available && view.telegram.status === 'connected',
       accountKey: telegramAccountKey,
       accountName: telegramBinding.scopeName,
       scopeKey: telegramBinding.scopeId,
       routable: true,
       features: [...(RELAY_BOT_CHANNEL_FEATURES.telegram ?? [])],
+      featureCapabilities: botChannelFeatureCapabilitiesFor('telegram', 'server-relay'),
     });
   }
   return rows;
