@@ -104,7 +104,10 @@ describe('ChatInput model source switching wiring', () => {
       selectorStart,
       chatInputSource.indexOf('/>', selectorStart) + 2,
     );
-    expect(selectorBlock).toContain('engineMarkVendor={composerEngineMarkVendor}');
+    // original 形态(三档并存)不画引擎小标:老 pill 用 harness 名字文本,两代形态不混。
+    expect(selectorBlock).toContain(
+      'engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}',
+    );
     expect(chatInputSource).toContain(
       "resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??",
     );

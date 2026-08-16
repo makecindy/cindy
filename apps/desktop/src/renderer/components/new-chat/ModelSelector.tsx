@@ -645,6 +645,8 @@ interface ModelSelectorProps {
   configurationEnabled?: boolean;
   /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，opt-in）。 */
   unifiedPanel?: boolean;
+  /** 语义同 ModelSelectorContentProps.unifiedPanelAvailable。 */
+  unifiedPanelAvailable?: boolean;
   /** 语义同 ModelSelectorContentProps.sessionEngineFilter（统一面板的会话内形态）。 */
   sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
   /** 语义同 ModelSelectorContentProps.unifiedAgents（参与联合列表的引擎集合）。 */
@@ -772,6 +774,12 @@ interface ModelSelectorContentProps {
    * `agentSwitch` 的两步分段在统一面板下**刻意不渲染**(见该 prop 的说明)。
    */
   unifiedPanel?: boolean;
+  /**
+   * 统一面板**可用但未启用**(用户形态偏好停在 'original')时为 true:老面板
+   * footer 据此摆「尝试新选择器」入口(modelPickerLayout 三档并存,Chris
+   * 2026-08-17)。设置类等从不支持统一面板的入口两者皆不传。
+   */
+  unifiedPanelAvailable?: boolean;
   /**
    * 统一面板的**会话内形态**(model-selector-unified §1.6,M6 面板侧)。仅在
    * `unifiedPanel` 为 true 时生效;新会话 / 草稿不传。
@@ -952,6 +960,7 @@ function ModelSelectorContentView({
   followSession,
   configurationEnabled = true,
   unifiedPanel = false,
+  unifiedPanelAvailable = false,
   sessionEngineFilter,
   unifiedAgents,
   selectedFavoriteUid = null,
@@ -2509,18 +2518,29 @@ function ModelSelectorContentView({
           ) : (
             <span />
           )}
-          <button
-            type="button"
-            data-layout-toggle
-            onClick={() =>
-              setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')
-            }
-            className="shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
-          >
-            {pickerLayout === 'badge'
-              ? t('newChat.modelSelector.unified.layoutClassic')
-              : t('newChat.modelSelector.unified.layoutBadge')}
-          </button>
+          {/* 右侧两个文字按钮(三档并存,Chris 2026-08-17):A/B 互切 + 切回老版。 */}
+          <div className="flex shrink-0 items-center gap-3">
+            <button
+              type="button"
+              data-layout-toggle
+              onClick={() =>
+                setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')
+              }
+              className="shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+            >
+              {pickerLayout === 'badge'
+                ? t('newChat.modelSelector.unified.layoutClassic')
+                : t('newChat.modelSelector.unified.layoutBadge')}
+            </button>
+            <button
+              type="button"
+              data-layout-original
+              onClick={() => setModelPickerLayout('original')}
+              className="shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+            >
+              {t('newChat.modelSelector.unified.layoutOriginal')}
+            </button>
+          </div>
         </div>
       </div>
       </div>
@@ -2667,24 +2687,42 @@ function ModelSelectorContentView({
         </div>
       )}
 
-      {/* 「连接来源」footer(供应商入口)—— device-link 远程会话隐藏(无法替被控端连来源)。 */}
-      {onNavigateToProviders && !deviceId && (
+      {/* 「连接来源」footer(供应商入口)—— device-link 远程会话隐藏(无法替被控端连来源)。
+          统一面板可用但未启用('original' 形态)时,「添加模型」改为左对齐按钮,右侧摆
+          「尝试新选择器」入口(三档并存,Chris 2026-08-17,见 modelPickerLayout)。 */}
+      {((onNavigateToProviders && !deviceId) || unifiedPanelAvailable) && (
         <>
           <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
-          <button
-            type="button"
-            disabled={interactionDisabled}
-            onClick={onNavigateToProviders}
-            className={cn(
-              'flex w-full items-center gap-1.5 rounded-[8px] px-3 py-2',
-              'transition-colors hover:bg-[var(--model-item-hover)]',
+          <div className="flex items-center justify-between gap-2">
+            {onNavigateToProviders && !deviceId ? (
+              <button
+                type="button"
+                disabled={interactionDisabled}
+                onClick={onNavigateToProviders}
+                className={cn(
+                  'flex min-w-0 items-center gap-1.5 rounded-[8px] px-3 py-2',
+                  'transition-colors hover:bg-[var(--model-item-hover)]',
+                )}
+              >
+                <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+                <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
+                  {t('newChat.modelSelector.source.connect')}
+                </span>
+              </button>
+            ) : (
+              <span />
             )}
-          >
-            <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-            <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
-              {t('newChat.modelSelector.source.connect')}
-            </span>
-          </button>
+            {unifiedPanelAvailable && (
+              <button
+                type="button"
+                data-try-unified-picker
+                onClick={() => setModelPickerLayout('classic')}
+                className="shrink-0 whitespace-nowrap rounded-[8px] px-3 py-2 text-12 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]"
+              >
+                {t('newChat.modelSelector.unified.layoutTryUnified')}
+              </button>
+            )}
+          </div>
         </>
       )}
 
@@ -2731,6 +2769,7 @@ export function ModelSelector({
   maxVisibleModelRows,
   configurationEnabled = true,
   unifiedPanel = false,
+  unifiedPanelAvailable = false,
   sessionEngineFilter,
   unifiedAgents,
   engineMarkVendor = null,
@@ -3422,6 +3461,7 @@ export function ModelSelector({
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
       unifiedPanel={unifiedPanel}
+      unifiedPanelAvailable={unifiedPanelAvailable}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}
       selectedFavoriteUid={selectedFavoriteUid}

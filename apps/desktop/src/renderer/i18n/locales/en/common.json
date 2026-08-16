@@ -5644,6 +5644,8 @@
         "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
         "layoutBadge": "Try the new style",
         "layoutClassic": "Back to classic style",
+        "layoutTryUnified": "Try the new picker",
+        "layoutOriginal": "Back to old picker",
         "addFavorite": "Save to favorites",
         "removeFavorite": "Remove from favorites",
         "favoriteConfig": "Saved setup",

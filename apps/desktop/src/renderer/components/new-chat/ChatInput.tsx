@@ -295,6 +295,7 @@ import {
   getProviderModelFast,
   setProviderModelFast,
 } from '@/state/providerModelMemory';
+import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
   getDraft,
   patchVendorPrefs,
@@ -5767,8 +5768,14 @@ export function ChatInput({
   const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;
   const lockedSessionAgentKind =
     inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null;
-  const unifiedPanelActive =
+  // 形态偏好(三档并存,Chris 2026-08-17):'original' = 最原始选择器(含旧 harness
+  // 分段切换,agentSwitch 因 unifiedPanelActive=false 自动回来);'classic'/'badge' =
+  // 新选择器 A/B 版。capable 表示统一面板**可用**(老面板 footer 据此摆「尝试新
+  // 选择器」入口),active 才真正启用。
+  const modelPickerLayoutPref = useModelPickerLayout();
+  const unifiedPanelCapable =
     unifiedModelPanelEnabled && (!inSessionEngineLocked || lockedSessionAgentKind !== null);
+  const unifiedPanelActive = unifiedPanelCapable && modelPickerLayoutPref !== 'original';
   const effectiveUnifiedAgents = useMemo<readonly AgentKind[] | undefined>(
     () => (lockedSessionAgentKind ? [lockedSessionAgentKind] : unifiedAgents),
     [lockedSessionAgentKind, unifiedAgents],
@@ -7252,8 +7259,13 @@ export function ChatInput({
                     // 「模型名 + 引擎小标 + 思考深度」。会话内取已确认 / 意图中的引擎
                     // (agentIdentity 同一口径:身份没加载完就不画,不拿 vendorKey 的
                     // Claude Code 回退冒充);草稿直接取当前引擎。
-                    engineMarkVendor={composerEngineMarkVendor}
+                    // original 形态不传:老 pill 仍写 harness 名字文本(agentIdentity),
+                    // 引擎小标是统一面板时代的形态,别把两代形态混在一颗 pill 上。
+                    engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}
                     unifiedPanel={unifiedPanelActive}
+                    // 统一面板「可用但未启用」(original 形态)时,老面板 footer 摆
+                    // 「尝试新选择器」入口 —— 可用性与启用态分开传,设置类入口两者皆无。
+                    unifiedPanelAvailable={unifiedPanelCapable}
                     // 联合列表只列**运行时已注册**的引擎(撤掉 AgentSelect 后接住它的
                     // hiddenVendors 门禁);未加载时不传 = 不隐藏任何引擎。会话内没有
                     // 跨引擎切换事务可走时锁定当前引擎(见 inSessionEngineLocked)。

@@ -5642,6 +5642,8 @@
         "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
         "layoutBadge": "試用新樣式",
         "layoutClassic": "回到舊樣式",
+        "layoutTryUnified": "試用新選擇器",
+        "layoutOriginal": "切回舊版",
         "addFavorite": "存為收藏",
         "removeFavorite": "取消收藏",
         "favoriteConfig": "收藏設定",
