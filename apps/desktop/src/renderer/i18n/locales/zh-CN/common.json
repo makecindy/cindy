@@ -5626,6 +5626,11 @@
       "openTask": "打开来源任务",
       "untitledTask": "未命名任务",
       "sidebarAttention": "有 {{count}} 个任务事件需要关注",
+      "guardianAnomalies": {
+        "stale-running": "运行中但长时间没有活动",
+        "expected-event-missing": "应到的状态事件没有到达",
+        "unclaimed-decision": "等待决策但无人认领"
+      },
       "status": {
         "pending": "待处理",
         "processing": "处理中",
@@ -5635,7 +5640,7 @@
       },
       "events": {
         "session": {
-          "state": { "transition": "任务状态已变迁" },
+          "state": { "transition": "任务状态已变迁", "guardian-anomaly": "监护心跳发现异常" },
           "turn": { "completed": "任务回合已完成", "failed": "任务回合失败" },
           "metadata": { "changed": "任务状态已变化" },
           "decision": { "required": "任务需要决策" }

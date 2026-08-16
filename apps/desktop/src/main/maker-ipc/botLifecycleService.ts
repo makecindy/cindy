@@ -56,6 +56,8 @@ export interface BotLifecycleServiceDeps {
   now?: () => number;
   /** Resume durable work owned by the Bot after lifecycle state is active. */
   onResumed?: (botId: string) => void | Promise<void>;
+  /** Refresh hidden runtime services after any lifecycle ownership change. */
+  onLifecycleChanged?: (botId: string) => void | Promise<void>;
 }
 
 const lifecycleLocks = new Map<
@@ -133,6 +135,13 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
   });
   const deleteProfileAndDetachSessions =
     deps.deleteProfileAndDetachSessions ?? deleteBotProfileAndDetachSessionsInDb;
+  const notifyLifecycleChanged = async (
+    botId: string,
+    action: BotLifecycleActionRequest['action'],
+  ): Promise<void> => {
+    broadcastBotLifecycleChanged({ botId, action });
+    await deps.onLifecycleChanged?.(botId);
+  };
 
   const readProfile = async (botId: string) => {
     const [profile] = await getDbClient()
@@ -248,7 +257,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       },
       warnings,
     );
-    broadcastBotLifecycleChanged({ botId, action: 'pause' });
+    await notifyLifecycleChanged(botId, 'pause');
     return result;
   };
 
@@ -317,7 +326,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       automations: resumed.automations,
       deliveries,
     });
-    broadcastBotLifecycleChanged({ botId, action: 'resume' });
+    await notifyLifecycleChanged(botId, 'resume');
     await deps.onResumed?.(botId);
     return result;
   };
@@ -386,7 +395,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       deliveries,
       worktrees,
     }, warnings);
-    broadcastBotLifecycleChanged({ botId: request.botId, action: 'archive' });
+    await notifyLifecycleChanged(request.botId, 'archive');
     return result;
   };
 
@@ -440,7 +449,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
         canonicalSessionId,
         affected: { ...resumed.affected, sessions: 1 },
       };
-      broadcastBotLifecycleChanged({ botId, action: 'restore' });
+      await notifyLifecycleChanged(botId, 'restore');
       return result;
     } catch (error) {
       // Resume is fail-closed and leaves the Bot paused. Keep the fresh
@@ -508,7 +517,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       delegations,
       deliveries,
     }, closed.warnings);
-    broadcastBotLifecycleChanged({ botId: request.botId, action: 'delete' });
+    await notifyLifecycleChanged(request.botId, 'delete');
     return result;
   };
 

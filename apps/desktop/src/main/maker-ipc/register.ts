@@ -9334,7 +9334,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     closeSession: (sessionId) => maker.closeSession(sessionId),
     broadcastSessionCreated,
-    onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload),
+    onChanged: (payload) => {
+      broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload);
+      void botSessionEventServiceHolder?.refreshGuardian();
+    },
     requireRuntimeSnapshot: true,
   });
   botSessionEventServiceHolder?.dispose();
@@ -9359,6 +9362,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getDelegationService: () => botDelegationServiceHolder,
     getOutboxService: () => botDeliveryOutboxServiceHolder,
     onResumed: (botId) => botSessionEventServiceHolder?.drainBot(botId),
+    onLifecycleChanged: () => botSessionEventServiceHolder?.refreshGuardian(),
   });
   const outboxForRestore = botDeliveryOutboxServiceHolder;
   const delegationForRestore = botDelegationServiceHolder;

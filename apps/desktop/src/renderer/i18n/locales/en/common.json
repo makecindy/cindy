@@ -5628,6 +5628,11 @@
       "openTask": "Open source task",
       "untitledTask": "Untitled task",
       "sidebarAttention": "{{count}} task events need attention",
+      "guardianAnomalies": {
+        "stale-running": "Running without activity for too long",
+        "expected-event-missing": "An expected state event did not arrive",
+        "unclaimed-decision": "Waiting for a decision with no owner"
+      },
       "status": {
         "pending": "Waiting",
         "processing": "Handling",
@@ -5637,7 +5642,10 @@
       },
       "events": {
         "session": {
-          "state": { "transition": "Task state changed" },
+          "state": {
+            "transition": "Task state changed",
+            "guardian-anomaly": "Guardian heartbeat found an anomaly"
+          },
           "turn": { "completed": "Task turn completed", "failed": "Task turn failed" },
           "metadata": { "changed": "Task state changed" },
           "decision": { "required": "Task needs a decision" }

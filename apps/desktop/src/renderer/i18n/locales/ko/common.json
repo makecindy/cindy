@@ -5626,6 +5626,11 @@
       "openTask": "원본 작업 열기",
       "untitledTask": "제목 없는 작업",
       "sidebarAttention": "{{count}}개의 작업 이벤트를 확인해야 합니다",
+      "guardianAnomalies": {
+        "stale-running": "실행 중이지만 오랫동안 활동이 없습니다",
+        "expected-event-missing": "도착해야 할 상태 이벤트가 오지 않았습니다",
+        "unclaimed-decision": "결정을 기다리지만 담당자가 없습니다"
+      },
       "status": {
         "pending": "대기 중",
         "processing": "처리 중",
@@ -5635,7 +5640,10 @@
       },
       "events": {
         "session": {
-          "state": { "transition": "작업 상태 전환" },
+          "state": {
+            "transition": "작업 상태 전환",
+            "guardian-anomaly": "가디언 하트비트가 이상을 감지함"
+          },
           "turn": { "completed": "작업 턴 완료", "failed": "작업 턴 실패" },
           "metadata": { "changed": "작업 상태 변경" },
           "decision": { "required": "작업에 결정 필요" }

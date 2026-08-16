@@ -5626,6 +5626,11 @@
       "openTask": "開啟來源任務",
       "untitledTask": "未命名任務",
       "sidebarAttention": "有 {{count}} 個任務事件需要關注",
+      "guardianAnomalies": {
+        "stale-running": "執行中但長時間沒有活動",
+        "expected-event-missing": "應到的狀態事件沒有到達",
+        "unclaimed-decision": "等待決策但無人認領"
+      },
       "status": {
         "pending": "待處理",
         "processing": "處理中",
@@ -5635,7 +5640,7 @@
       },
       "events": {
         "session": {
-          "state": { "transition": "任務狀態已變遷" },
+          "state": { "transition": "任務狀態已變遷", "guardian-anomaly": "監護心跳發現異常" },
           "turn": { "completed": "任務回合已完成", "failed": "任務回合失敗" },
           "metadata": { "changed": "任務狀態已變更" },
           "decision": { "required": "任務需要決策" }

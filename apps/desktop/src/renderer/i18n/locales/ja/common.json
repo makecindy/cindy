@@ -5626,6 +5626,11 @@
       "openTask": "元のタスクを開く",
       "untitledTask": "無題のタスク",
       "sidebarAttention": "{{count}} 件のタスクイベントに確認が必要です",
+      "guardianAnomalies": {
+        "stale-running": "実行中ですが長時間アクティビティがありません",
+        "expected-event-missing": "到着すべき状態イベントが届いていません",
+        "unclaimed-decision": "判断待ちですが担当がいません"
+      },
       "status": {
         "pending": "待機中",
         "processing": "処理中",
@@ -5635,7 +5640,10 @@
       },
       "events": {
         "session": {
-          "state": { "transition": "タスク状態が遷移しました" },
+          "state": {
+            "transition": "タスク状態が遷移しました",
+            "guardian-anomaly": "監視ハートビートが異常を検出しました"
+          },
           "turn": {
             "completed": "タスクのターンが完了しました",
             "failed": "タスクのターンが失敗しました"

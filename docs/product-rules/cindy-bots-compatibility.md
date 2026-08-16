@@ -18,6 +18,8 @@
 - 旧任务只允许修改 `status`，且只在迁移仍拥有该版本时回滚；用户后来修改过的任务不被旧快照覆盖。
 - rollback 只解除本次创建的 Bot 投影、恢复仍安全的旧入口与 relay binding；不删除迁移后产生的 Bot 历史，也不删除任何旧消息、群历史或附件。
 - Telegram 的本地群历史继续留在 `hook_group_messages` 的 adapter namespace；飞书按每轮 API 上下文降级，不伪装成同一种持久群历史。
+- Guardian heartbeat 不增加独立 schema，也不是可迁移的用户配置。它复用 0093 的 subscription / ledger / inbox 表，用保留前缀的隐藏系统 subscription 维持外键与历史归属；该条目不出现在用户订阅列表，旧数据中若保留前缀发生 owner 冲突则 fail-closed，不接管或改写其它 Bot 的记录。
+- 旧版创建的普通 subscription、ledger 和 inbox 行继续按原规则读取。Guardian 只把终态 state-transition 收件认作“应到事件已收到”，只把 `heartbeat-turn` 的 pending/processing 行认作“已有处理者”；`inbox-only` 历史不会掩盖新的失联或无人认领异常。
 
 ## 证据入口
 

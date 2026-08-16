@@ -15,7 +15,15 @@ export interface BotObservedSessionState {
   lifecycle: string;
   execution: string;
   attention: string | null;
-  workflow: { key: string; label?: string } | null;
+  workflow: {
+    key: string;
+    label?: string;
+    waitingOn?: string;
+  } | null;
+  /** Canonical control-plane activity clocks used by the zero-token guardian. */
+  startedAtMs?: number | null;
+  lastActivityAtMs?: number | null;
+  turnGeneration?: number | null;
 }
 
 export interface BotSessionStateTransition {
@@ -35,10 +43,16 @@ export interface BotSessionStateTransition {
 
 export interface BotSessionStateTransitionSource {
   subscribe(listener: (transition: BotSessionStateTransition) => void): () => void;
+  /**
+   * Canonical point-in-time read from the same control-plane model. Optional
+   * only until the control-plane dependency is merged and wired.
+   */
+  readSnapshot?(sessionId: string): Promise<BotObservedSessionState | null>;
 }
 
 export const BOT_SESSION_EVENT = {
   STATE_TRANSITION: 'session.state.transition',
+  GUARDIAN_ANOMALY: 'session.state.guardian-anomaly',
 } as const;
 
 export type BotSessionEventType = string;
@@ -69,6 +83,14 @@ export interface BotSessionEventPayload {
   changedFacets?: string[];
   outcome?: 'completed' | 'failed';
   workflowState?: { key: string; label?: string };
+  guardianAnomaly?: {
+    kind: 'stale-running' | 'expected-event-missing' | 'unclaimed-decision';
+    relation: string;
+    detectedAt: number;
+    supervisedAt: number;
+    thresholdMs: number;
+    fingerprint: string;
+  };
   /** Compatibility for inbox rows created by the earlier Draft producer. */
   decisionState?: string;
   originBotId?: string;
