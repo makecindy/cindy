@@ -818,6 +818,9 @@ function forward(
   // http.request 会把 options 原样透传给 agent.createConnection → net.connect,
   // 所以 socket 级 connect 选项运行时有效;但 @types/node 的 RequestOptions 没收录
   // autoSelectFamilyAttemptTimeout,用交叉类型显式补上。
+  // 流式请求由可配置、可识别系统挂起的分片 watchdog 负责;若仍保留固定 10min
+  // socket timeout,会抢在默认 31min / Codex 30min 内层恢复预算前断流。
+  // 非流式请求保持原有 10min socket 兜底。
   const upstreamOptions: RequestOptions & Pick<TcpSocketConnectOpts, 'autoSelectFamilyAttemptTimeout'> = {
     hostname: actualTarget.hostname,
     port: actualTarget.port,
@@ -828,7 +831,7 @@ function forward(
       host: actualTarget.hostname,
       'content-length': String(body.length),
     },
-    timeout: UPSTREAM_SOCKET_TIMEOUT_MS,
+    timeout: requestDeclaredStream ? 0 : UPSTREAM_SOCKET_TIMEOUT_MS,
     autoSelectFamilyAttemptTimeout: UPSTREAM_CONNECT_ATTEMPT_TIMEOUT_MS,
   };
   if (outboundProxy) {
