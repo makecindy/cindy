@@ -28,7 +28,7 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
 // **函数声明**(提升),且只在 render 时求值,不在模块求值期互相读值。
 import type { ModelMemoryAccessors } from './ModelSelector';
-import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
+import { ProviderRailMark, UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
@@ -52,6 +52,8 @@ import {
 
 /** ☆ 点亮反馈时长(规格 §1.5「点亮 0.7s 反馈后恢复」)。 */
 const FAVORITE_FEEDBACK_MS = 700;
+/** badge 样式的固定视图 —— 模块级常量保证引用稳定,不打穿 sections 的 useMemo。 */
+const BADGE_RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
 /**
  * 鼠标离开行到收起浮层之间的 grace period。
  *
@@ -294,6 +296,10 @@ export function UnifiedModelPanel({
     if (railItems.some((item) => railItemKey(item) === railItemKey(rail))) return;
     setRail({ kind: 'all' });
   }, [rail, railItems]);
+  // badge 样式:左侧快捷跳转栏整条拿掉(Chris 2026-08-16),视图恒为「全部」——
+  // 引擎与渠道已在行内(徽标 + 渠道签),渠道归属再由分栏题头上的供应商图标承担,
+  // 快捷跳转的职责就地消化;行内星标仍可收藏。classic 样式的 rail 行为保持不变。
+  const effectiveRail = pickerLayout === 'badge' ? BADGE_RAIL_ALL : rail;
 
   const sections = useMemo(
     () =>
@@ -302,10 +308,10 @@ export function UnifiedModelPanel({
         favorites,
         providers,
         query,
-        rail,
+        rail: effectiveRail,
         ...(isDefaultSeed ? { isDefaultSeed } : {}),
       }),
-    [entries, favorites, isDefaultSeed, providers, query, rail],
+    [entries, favorites, isDefaultSeed, providers, query, effectiveRail],
   );
 
   // 列表变化时只在选中行跑出可视区时做**最小滚动**(与既有面板同一条规则):
@@ -313,7 +319,7 @@ export function UnifiedModelPanel({
   // 本身变化**(rail 切换 / 搜索词变化 / 首次打开)才做「确保选中项可见」——数据刷新
   // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
   // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
-  const viewKey = `${railItemKey(rail)}::${query.trim().toLowerCase()}`;
+  const viewKey = `${railItemKey(effectiveRail)}::${query.trim().toLowerCase()}`;
   /**
    * 「需要保证选中行可见」在途标记 —— 对齐不是一次性动作:面板在 morph 弹层里,
    * 首开那一帧列表高度还是 pill 的裁切态,按它算滚动必错且此后不再重算,选中行
@@ -695,21 +701,32 @@ export function UnifiedModelPanel({
   // badge 样式:滚动中的「继承目录题头」—— 覆盖层常驻列表视口顶部,显示当前滚过的
   // 组名。不用 sticky:它钉在滚动容器 padding 之下,上沿必漏一条行;覆盖层整条不透明
   // 横幅盖住顶部(含 padding 带),机制上无从透底。
-  const [stickyLabel, setStickyLabel] = useState<string | null>(null);
+  const [stickyLabel, setStickyLabel] = useState<{
+    label: string;
+    providerId: string | null;
+  } | null>(null);
   const updateStickyLabel = useCallback(() => {
     const list = listRef.current;
     if (!list) return;
     const listTop = list.getBoundingClientRect().top;
-    let current: string | null = null;
+    let current: { label: string; providerId: string | null } | null = null;
     for (const el of list.querySelectorAll<HTMLElement>('[data-group-label]')) {
       // 组头自带 8px 上衬,标题文字未完全滚出前不接管(+12 让切换发生在文字贴顶时)。
       if (el.getBoundingClientRect().top - listTop < -12) {
-        current = el.dataset.groupLabel ?? null;
+        current = {
+          label: el.dataset.groupLabel ?? '',
+          providerId: el.dataset.groupProvider ?? null,
+        };
       } else {
         break;
       }
     }
-    setStickyLabel(current);
+    // 滚动每帧都会进来,内容没变就复用旧引用,不触发重渲染。
+    setStickyLabel((prev) =>
+      prev?.label === current?.label && prev?.providerId === current?.providerId
+        ? prev
+        : current,
+    );
   }, []);
   useEffect(() => {
     if (pickerLayout !== 'badge') {
@@ -721,14 +738,18 @@ export function UnifiedModelPanel({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <UnifiedModelRail
-        items={railItems}
-        active={rail}
-        onSelect={setRail}
-        providers={providers}
-        providerLabel={providerLabel}
-        interactionDisabled={interactionDisabled}
-      />
+      {/* badge 样式不设左侧快捷跳转栏(Chris 2026-08-16):渠道归属由行内渠道签 +
+          分栏题头的供应商图标承担,列表恒为「全部」视图。 */}
+      {pickerLayout !== 'badge' && (
+        <UnifiedModelRail
+          items={railItems}
+          active={rail}
+          onSelect={setRail}
+          providers={providers}
+          providerLabel={providerLabel}
+          interactionDisabled={interactionDisabled}
+        />
+      )}
 
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -741,13 +762,18 @@ export function UnifiedModelPanel({
           // 上下间距必须对称:文字上方净空 16px,下方同样留 15px 实底(文字底 27px +
           // 15 = 42px)再接 12px 渐隐尾;实底只到文字下缘就渐隐会让下一行的字贴着题头
           // 文字冒出来(Chris 2026-08-16 实测「贴底」)。
-          className="pointer-events-none absolute inset-x-0 top-0 z-[6] h-[54px] truncate px-[18px] pt-4 text-11 leading-none text-[var(--text-tertiary)]"
+          className="pointer-events-none absolute inset-x-0 top-0 z-[6] px-[18px] pt-4 text-11 leading-none text-[var(--text-tertiary)] h-[54px]"
           style={{
             background:
               'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 42px, transparent)',
           }}
         >
-          {stickyLabel}
+          <div className="flex items-center gap-1.5">
+            {stickyLabel.providerId && (
+              <ProviderRailMark providerId={stickyLabel.providerId} providers={providers} />
+            )}
+            <span className="truncate">{stickyLabel.label}</span>
+          </div>
         </div>
       )}
       <div
@@ -810,8 +836,9 @@ export function UnifiedModelPanel({
         )}
         {/* 跨引擎视图的有损警示(规格 §1.6)—— 一行、可截断、不抢占列表高度。
             只在会话内**离开**同引擎视图时出现:同引擎视图里选什么都是无损的,那里摆警示
-            等于每次打开都在喊狼来了。 */}
-        {sessionEngineFilter && rail.kind !== 'engine' && (
+            等于每次打开都在喊狼来了。badge 样式没有同引擎视图(恒为「全部」),常驻
+            警示同样是喊狼来了 —— 有损与否由选中时的跨引擎确认事务把关,这里不摆。 */}
+        {pickerLayout !== 'badge' && sessionEngineFilter && effectiveRail.kind !== 'engine' && (
           <div
             role="note"
             data-cross-engine-warning
@@ -827,7 +854,7 @@ export function UnifiedModelPanel({
         {!hasRows ? (
           <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
             {/* ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;★ 常驻后必经)。 */}
-            {rail.kind === 'favorites' && !query.trim()
+            {effectiveRail.kind === 'favorites' && !query.trim()
               ? t('newChat.modelSelector.unified.favoritesEmpty')
               : t('newChat.modelSelector.search.noResults')}
           </div>
@@ -841,12 +868,22 @@ export function UnifiedModelPanel({
               {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。
                   badge 样式的"滚动中组名常驻"不用 sticky(sticky 钉在滚动容器
                   padding 之下,上沿会漏出一条行 —— Chris 2026-08-16 实测),改由
-                  列表视口顶部的覆盖层题头承载(见 stickyLabel),这里保持普通元素。 */}
+                  列表视口顶部的覆盖层题头承载(见 stickyLabel),这里保持普通元素。
+                  badge 样式的组头带供应商图标(快捷跳转栏拿掉后渠道归属落在这里)。 */}
               <div
                 data-group-label={sectionLabel(section)}
-                className="truncate px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]"
+                {...(section.group?.type === 'provider'
+                  ? { 'data-group-provider': section.group.providerId }
+                  : {})}
+                className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]"
               >
-                {sectionLabel(section)}
+                {pickerLayout === 'badge' && section.group?.type === 'provider' && (
+                  <ProviderRailMark
+                    providerId={section.group.providerId}
+                    providers={providers}
+                  />
+                )}
+                <span className="truncate">{sectionLabel(section)}</span>
               </div>
               {section.rows.map((row) => {
                 const config = configOf(row.entry, row.favorite);
