@@ -86,6 +86,19 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     ].join(' '),
   },
   {
+    key: 'session-control',
+    title: '会话控制面(队列 / 插话 / 停止 / 运行探针)',
+    oneLiner:
+      'agent 可观察任意本机会话队列与运行状态，并控制自己投递的队列消息、same-turn 插话或请求优雅停止。',
+    detail: [
+      '【入口】cindy_helper 的 history 类 list_sessions / list_session_queue 提供 queuedCount、队列位置、来源、入队时间、正文摘要与 consuming 状态；control 类提供 update_session_queued_message、cancel_session_queued_message、steer_session、stop_session_turn、get_session_runtime。',
+      '【队列所有权】只能修改或撤回当前调用 session 自己通过 send_to_session 投递、且尚未进入 consuming 的消息；Orca、scheduler、用户或其它 session 的消息都会 fail-closed 拒绝。Orca worker 队列控制与这里复用同一底层生命周期实现。',
+      '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。',
+      '【停止】stop_session_turn 是请求式优雅停止：当前并行工具全部收尾后才发送 provider 软中断；不关闭 transport、不重建 session、不硬杀进程，超时未确认会返回 unconfirmed。',
+      '【探针】get_session_runtime 返回 turn 是否活跃、generation、开始时间、最后活动时间、当前动作摘要和停止状态；动作摘要有界且不包含提示词正文、工具参数或凭证。',
+    ].join(' '),
+  },
+  {
     key: 'session-management',
     title: '会话管理(含 Fork / Rewind / 批量归档)',
     oneLiner: '新建 / 关闭 / 搜索会话,在历史任意点 Fork 分岔或 Rewind 重跑;agent 还能批量归档整理。',

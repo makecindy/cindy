@@ -156,4 +156,72 @@ describe("cindy_helper MCP server", () => {
       await server.close();
     }
   });
+
+  it("discovers the complete session control surface through the control category", async () => {
+    const server = createXdtHelperMcpServer(
+      {
+        sessionControl: {
+          updateQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+            ok: true as const,
+            queuedMessageId,
+          })),
+          cancelQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+            ok: true as const,
+            queuedMessageId,
+          })),
+          steerSession: vi.fn(async () => ({
+            ok: true as const,
+            queuedMessageId: "steer-1",
+          })),
+          stopSessionTurn: vi.fn(async () => ({
+            ok: true as const,
+            status: "requested" as const,
+            turnGeneration: 4,
+          })),
+          getSessionRuntime: vi.fn(async () => ({
+            ok: true as const,
+            runtime: {
+              active: false,
+              turnGeneration: null,
+              startedAtMs: null,
+              lastActivityAtMs: null,
+              currentActionSummary: null,
+              gracefulStopState: "none" as const,
+            },
+          })),
+        },
+      },
+      {
+        agentKind: "codex",
+        workingDir: "/repo",
+        sessionId: "dispatcher-session",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({
+      name: "cindy-helper-control-test",
+      version: "0.0.0",
+    });
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const discovered = parsePayload(
+        await client.callTool({
+          name: "list_tools",
+          arguments: { category: "control" },
+        }),
+      );
+      const names = (discovered.tools as Array<{ name: string }>).map((tool) => tool.name);
+      expect(names).toEqual(expect.arrayContaining([
+        "update_session_queued_message",
+        "cancel_session_queued_message",
+        "steer_session",
+        "stop_session_turn",
+        "get_session_runtime",
+      ]));
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

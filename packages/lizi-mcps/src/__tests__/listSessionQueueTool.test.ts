@@ -40,6 +40,15 @@ describe("list_session_queue", () => {
             content: "follow up",
             consuming: false,
           },
+          {
+            queuedMessageId: "q-3",
+            position: 2,
+            source: "session" as const,
+            sourceLabel: "sender-session",
+            enqueuedAtMs: Date.parse("2026-08-16T01:02:04.000Z"),
+            content: "cross-session follow up",
+            consuming: false,
+          },
         ],
       })),
       listSessionQueuedCounts: vi.fn(),
@@ -54,7 +63,7 @@ describe("list_session_queue", () => {
     expect(payload).toMatchObject({
       ok: true,
       session_id: "session-1",
-      queued_count: 2,
+      queued_count: 3,
       queue: [
         {
           queued_message_id: "q-1",
@@ -71,6 +80,16 @@ describe("list_session_queue", () => {
           source: "user",
           enqueued_at: null,
           content_summary: "follow up",
+          truncated: false,
+          consuming: false,
+        },
+        {
+          queued_message_id: "q-3",
+          position: 2,
+          source: "session",
+          source_label: "sender-session",
+          enqueued_at: "2026-08-16T01:02:04.000Z",
+          content_summary: "cross-session follow up",
           truncated: false,
           consuming: false,
         },

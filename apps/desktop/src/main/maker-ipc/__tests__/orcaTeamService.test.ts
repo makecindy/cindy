@@ -198,7 +198,11 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       } satisfies DispatchWorkerMessageResult;
     }),
     sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),
-    getSessionQueueSnapshot: vi.fn(async () => ({ pendingQueue: [], steeringClientIds: [] })),
+    getSessionQueueSnapshot: vi.fn(async () => ({
+      pendingQueue: [],
+      steeringClientIds: [],
+      consumingClientIds: [],
+    })),
     removeQueuedMessage: vi.fn(() => true),
     replaceQueuedMessage: vi.fn(() => true),
     log: {
@@ -1559,6 +1563,7 @@ describe('OrcaTeamService worker queued message control', () => {
           queuedItem('q-sched', { kind: 'scheduler', scheduleId: 's1', scheduleName: 'beat' }),
         ],
         steeringClientIds: ['q-user'],
+        consumingClientIds: ['q-user'],
       })),
     });
 
@@ -1600,6 +1605,7 @@ describe('OrcaTeamService worker queued message control', () => {
       getSessionQueueSnapshot: vi.fn(async () => ({
         pendingQueue: [queuedItem('q-lead', leadOrigin)],
         steeringClientIds: [],
+        consumingClientIds: [],
       })),
       replaceQueuedMessage,
     });
@@ -1643,6 +1649,7 @@ describe('OrcaTeamService worker queued message control', () => {
           queuedItem('q-consuming', leadOrigin),
         ],
         steeringClientIds: ['q-consuming'],
+        consumingClientIds: ['q-consuming'],
       })),
       removeQueuedMessage,
       replaceQueuedMessage,
@@ -1679,6 +1686,7 @@ describe('OrcaTeamService worker queued message control', () => {
       getSessionQueueSnapshot: vi.fn(async () => ({
         pendingQueue: [queuedItem('q-lead', leadOrigin)],
         steeringClientIds: [],
+        consumingClientIds: [],
       })),
       removeQueuedMessage,
     });

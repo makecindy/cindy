@@ -48,7 +48,7 @@ function inspectionEntry(queuedMessageId: string): SessionQueueInspectionEntry {
 }
 
 describe('projectSessionQueueForInspection', () => {
-  it('projects user, Orca and scheduler entries without leaking unrelated queue fields', () => {
+  it('projects user, Orca, scheduler and session entries without leaking unrelated queue fields', () => {
     const result = projectSessionQueueForInspection(
       [
         queuedItem('q-orca', {
@@ -64,6 +64,13 @@ describe('projectSessionQueueForInspection', () => {
             createdAt: 'not-a-date',
           },
           origin: { kind: 'scheduler', scheduleId: 's-1', scheduleName: 'PR sweep' },
+        }),
+        queuedItem('q-session', {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'sender-session',
+            displayText: 'safe session summary',
+          },
         }),
       ],
       ['q-user'],
@@ -95,6 +102,15 @@ describe('projectSessionQueueForInspection', () => {
         sourceLabel: 'PR sweep',
         enqueuedAtMs: null,
         content: 'text-q-scheduler',
+        consuming: false,
+      },
+      {
+        queuedMessageId: 'q-session',
+        position: 3,
+        source: 'session',
+        sourceLabel: 'sender-session',
+        enqueuedAtMs: Date.parse('2026-08-16T01:02:03.000Z'),
+        content: 'safe session summary',
         consuming: false,
       },
     ]);

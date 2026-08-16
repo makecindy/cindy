@@ -1653,7 +1653,12 @@ export class AgentInputCoordinator {
   async steer(
     sessionId: string,
     item: AgentInputQueuedMessage,
-    opts?: { removeFromQueue?: boolean; touchUserSend?: boolean },
+    opts?: {
+      removeFromQueue?: boolean;
+      touchUserSend?: boolean;
+      /** 控制面插话不允许在 turn 结束竞态下退化成下一轮普通输入。 */
+      fallbackToTurn?: boolean;
+    },
   ): Promise<boolean> {
     const state = this.getState(sessionId);
     // Capture the clear boundary before any screening/reference/steer await.  The
@@ -1737,6 +1742,7 @@ export class AgentInputCoordinator {
     }
 
     if (!this.isTurnSteerable(sessionId, state)) {
+      if (opts?.fallbackToTurn === false) return false;
       this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
       if (opts?.touchUserSend) this.touchUserSend(sessionId);
       return true;
@@ -1802,7 +1808,9 @@ export class AgentInputCoordinator {
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
         this.emit(sessionId);
         this.scheduleDrain(sessionId, 'steer-ghost-blocked');
-        return true;
+        // 普通 UI steer 的 true 表示“已处置”，避免 renderer 把被策略拦截的内容
+        // 重新入队；控制面要求严格的 same-turn 投递结果，不能把 blocked 报成成功。
+        return opts?.fallbackToTurn === false ? false : true;
       }
       if (verdict.action === 'rewrite') {
         // 与 drain 的 rewrite 同构:JSON-aware 只换 text 字段并保留附件信封；
@@ -1875,6 +1883,11 @@ export class AgentInputCoordinator {
           sessionId,
           clientId: item.clientId,
         });
+        if (opts?.fallbackToTurn === false) {
+          this.clearDirectSteeringItem(latest, item.clientId);
+          this.emit(sessionId);
+          return false;
+        }
         this.emit(sessionId);
         this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
         if (opts?.touchUserSend) this.touchUserSend(sessionId);
@@ -1998,7 +2011,11 @@ export class AgentInputCoordinator {
     }
     if (persisted !== 'persisted') {
       if (releasedSteerMarker) this.scheduleDrain(sessionId, 'steer-persistence-settled');
-      return false;
+      // Provider 已确认接收后就是不可逆投递边界。落库失败仍保留上面的 sticky
+      // error，但不能向调用方报告“未投递”诱导它用新 clientId 重发，造成模型
+      // 在同一 turn 内消费两份。accepted clientId 已在 rememberEnqueuedClientId
+      // 登记，原 id 的幂等重试也会直接收口。
+      return true;
     }
     if (opts?.touchUserSend) this.touchUserSend(sessionId);
     // 已投递收口(review #939 第二轮 P1):steer ack 可能与 turn 终态乱序——
@@ -2563,8 +2580,8 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * 整条排队消息原位替换(main 侧受信调用方专用;当前唯一消费者是 Orca lead 的
-   * 「修改排队消息」工具)。与 updateText / updateContent 的差别:替换体由调用方
+   * 整条排队消息原位替换(main 侧受信调用方专用；Orca lead 与会话控制面共用)。
+   * 与 updateText / updateContent 的差别:替换体由调用方
    * 全量构造 —— orca 条目的 text / persistedContent / origin.displayText 之间存在
    * 派发格式耦合(formatAgentMessage / formatOrcaCommunicationMessage),必须由
    * dispatcher 侧按原格式重建,coordinator 不理解也不该理解该格式。

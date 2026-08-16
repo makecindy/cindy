@@ -171,6 +171,15 @@ describe('agent input queue snapshot durability boundary', () => {
       ...queued('waiting', 'client-waiting'),
       hostAcceptedAtMs: 301,
     };
+    const staleScheduler = {
+      ...queued('stale scheduler', 'client-stale-scheduler'),
+      hostAcceptedAtMs: 301,
+      origin: {
+        kind: 'scheduler' as const,
+        scheduleId: 'schedule-legacy',
+        scheduleName: 'Legacy heartbeat',
+      },
+    };
     db.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run(
       'session-crash-window',
       300,
@@ -184,6 +193,7 @@ describe('agent input queue snapshot durability boundary', () => {
         beforeClear,
         missingReceipt,
         waiting,
+        staleScheduler,
         'malformed legacy row',
       ]),
       Date.now(),
@@ -204,6 +214,7 @@ describe('agent input queue snapshot durability boundary', () => {
       expect(query.mock.calls[0]?.[0]).toContain('FROM messages');
       expect(query.mock.calls[0]?.[0]).toContain('session.cleared_at');
       expect(query.mock.calls[0]?.[0]).toContain('$.hostAcceptedAtMs');
+      expect(query.mock.calls[0]?.[0]).toContain('$.origin.kind');
     } finally {
       db.close();
     }

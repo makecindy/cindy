@@ -17,7 +17,7 @@ const MAX_CONTENT_SUMMARY_CHARS = 500;
 export interface SessionQueuedMessageEntry {
   queuedMessageId: string;
   position: number;
-  source: "user" | "orca" | "scheduler";
+  source: "user" | "orca" | "scheduler" | "session";
   sourceLabel: string | null;
   enqueuedAtMs: number | null;
   content: string;

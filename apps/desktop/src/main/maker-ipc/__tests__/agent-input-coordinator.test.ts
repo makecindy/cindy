@@ -4990,6 +4990,54 @@ describe('AgentInputCoordinator steer transaction', () => {
     ).toBe(false);
   });
 
+  it('does not leave a direct inspection row or start a fallback turn when control steer loses the active-turn race', async () => {
+    const h = createHarness();
+    const sid = 'inspection-control-steer-no-active-race';
+    h.setRunning(true);
+    h.steerToAgent.mockRejectedValueOnce(new Error('[NO_ACTIVE_TURN] Session has no active turn'));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
+
+    await expect(
+      h.coordinator.steer(sid, makeItem('q-control', 'urgent'), {
+        fallbackToTurn: false,
+      }),
+    ).resolves.toBe(false);
+
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([]);
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+  });
+
+  it('does not report a policy-blocked control steer as delivered', async () => {
+    const h = createHarness();
+    h.setScreenUserMessage(
+      vi.fn(
+        async () =>
+          ({
+            action: 'block',
+            ghostId: 'control-policy',
+            ghostName: 'Control policy',
+            reason: 'policy',
+          }) as const,
+      ),
+    );
+    const sid = 'inspection-control-steer-blocked';
+    h.setRunning(true);
+
+    await expect(
+      h.coordinator.steer(sid, makeItem('q-control-blocked', 'urgent'), {
+        fallbackToTurn: false,
+      }),
+    ).resolves.toBe(false);
+
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([]);
+  });
+
   it('injects a Claude steer into the running turn without aborting it', async () => {
     const h = createHarness(); // 默认 agentKind='claude-code'
     const sid = 'claude-steer-same-turn';
@@ -5524,7 +5572,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     const ok = await h.coordinator.steer(sid, second, { removeFromQueue: true });
     await flush();
 
-    expect(ok).toBe(false);
+    expect(ok).toBe(true);
     let projection = latestProjection(h.projections);
     expect(projection.error).toBe('Failed to persist user message: db down');
     expect(projection.recovery).toBeNull();
@@ -5553,7 +5601,7 @@ describe('AgentInputCoordinator steer transaction', () => {
 
     const ok = await h.coordinator.steer(sid, second, { removeFromQueue: true });
     await flush();
-    expect(ok).toBe(false);
+    expect(ok).toBe(true);
 
     h.coordinator.onTurnEvent(sid, 'error', 'terminal after persist failure');
     await flush();
@@ -5575,7 +5623,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     h.coordinator.enqueue(sid, first);
     await flush();
 
-    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(true);
     await flush();
     expect(h.steerToAgent).toHaveBeenCalledTimes(1);
 
@@ -5775,7 +5823,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     await persistStarted.promise;
     h.coordinator.clearSession(sid);
     persistFailed.resolve();
-    await expect(steerPromise).resolves.toBe(false);
+    await expect(steerPromise).resolves.toBe(true);
     await flush();
 
     const projection = latestProjection(h.projections);
