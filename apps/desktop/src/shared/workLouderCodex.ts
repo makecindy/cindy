@@ -52,7 +52,7 @@ export const WORKLOUDER_CODEX_AUTO_DIM_OPTIONS = [
   '1-hour',
 ] as const;
 
-export const WORKLOUDER_CODEX_AGENT_SOURCES = ['recent', 'pinned', 'priority', 'custom'] as const;
+export const WORKLOUDER_CODEX_AGENT_SOURCES = ['sidebar', 'last-sent', 'priority', 'custom'] as const;
 
 export const WORKLOUDER_CODEX_COMMAND_SLOTS = [
   'ACT06',
@@ -309,7 +309,7 @@ export const WORKLOUDER_CODEX_DEFAULT_LAYOUT: WorkLouderCodexLayout = {
 export const WORKLOUDER_CODEX_DEFAULT_SETTINGS: WorkLouderCodexSettings = {
   lightingBrightness: 100,
   lightingAutoDim: '3-minutes',
-  agentSource: 'recent',
+  agentSource: 'sidebar',
   customAgentKeys: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, () => null),
   singleTapAgentKeys: false,
   layout: WORKLOUDER_CODEX_DEFAULT_LAYOUT,
@@ -371,6 +371,15 @@ export function isWorkLouderCodexAutoDim(value: unknown): value is WorkLouderCod
 
 export function isWorkLouderCodexAgentSource(value: unknown): value is WorkLouderCodexAgentSource {
   return isStringOption(value, WORKLOUDER_CODEX_AGENT_SOURCES);
+}
+
+/**
+ * Saved values from older builds: `recent` was the visible sidebar, `pinned`
+ * was a separate pinned-only list. Both now mean sidebar order.
+ */
+export function normalizeWorkLouderCodexAgentSource(value: unknown): WorkLouderCodexAgentSource {
+  if (value === 'recent' || value === 'pinned') return 'sidebar';
+  return isWorkLouderCodexAgentSource(value) ? value : WORKLOUDER_CODEX_DEFAULT_SETTINGS.agentSource;
 }
 
 export function isWorkLouderCodexCommandId(value: unknown): value is WorkLouderCodexCommandId {

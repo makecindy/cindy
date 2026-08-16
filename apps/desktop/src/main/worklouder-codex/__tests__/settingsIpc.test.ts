@@ -125,7 +125,7 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(applySettings).toHaveBeenCalledWith({
       lightingBrightness: 40,
       lightingAutoDim: 'off',
-      agentSource: 'recent',
+      agentSource: 'sidebar',
       customAgentKeys: [null, null, null, null, null, null],
       singleTapAgentKeys: false,
       layout: DEFAULT_SETTINGS.layout,
@@ -157,14 +157,14 @@ describe('Work Louder Codex settings IPC business body', () => {
     const { ipc, publishTasks } = makeIpc();
 
     ipc.publishTasks(EVENT, [
-      { id: 'local-1', title: 'Local task', pinnedAt: null },
+      { id: 'local-1', title: 'Local task', pinnedAt: null, userSendAt: 1_700 },
       // Main cannot see this one at all — it lives in the renderer's remote store.
-      { id: 'remote-1', title: 'Remote task', pinnedAt: 1_700_000_000_000 },
+      { id: 'remote-1', title: 'Remote task', pinnedAt: 1_700_000_000_000, userSendAt: null },
     ]);
 
     expect(publishTasks).toHaveBeenCalledWith([
-      { id: 'local-1', title: 'Local task', pinnedAt: null },
-      { id: 'remote-1', title: 'Remote task', pinnedAt: 1_700_000_000_000 },
+      { id: 'local-1', title: 'Local task', pinnedAt: null, userSendAt: 1_700 },
+      { id: 'remote-1', title: 'Remote task', pinnedAt: 1_700_000_000_000, userSendAt: null },
     ]);
   });
 

@@ -3440,15 +3440,15 @@
             "label": "任務順序",
             "description": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
             "descriptions": {
-              "recent": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
-              "pinned": "AG00～AG05 對應前 6 個置頂任務。",
+              "sidebar": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
+              "last-sent": "AG00～AG05 依你最後一次傳送訊息的時間，最近的排在前面。",
               "priority": "AG00～AG05 對應前 6 個優先任務。",
               "custom": "AG00～AG05 各自開啟你指定的任務。"
             },
-            "value": "最近 6 個",
+            "value": "側邊欄順序",
             "options": {
-              "recent": "側邊欄順序",
-              "pinned": "置頂任務",
+              "sidebar": "側邊欄順序",
+              "last-sent": "最近任務",
               "priority": "優先任務",
               "custom": "自訂"
             }

@@ -3441,15 +3441,15 @@
             "label": "Task order",
             "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
             "descriptions": {
-              "recent": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
-              "pinned": "AG00–AG05 follow the first six pinned tasks.",
+              "sidebar": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+              "last-sent": "AG00–AG05 follow the six tasks you last sent a message in.",
               "priority": "AG00–AG05 follow the first six priority tasks.",
               "custom": "AG00–AG05 each open the task you assign."
             },
-            "value": "Most recent 6",
+            "value": "Sidebar order",
             "options": {
-              "recent": "Sidebar order",
-              "pinned": "Pinned",
+              "sidebar": "Sidebar order",
+              "last-sent": "Recent tasks",
               "priority": "Priority",
               "custom": "Custom"
             }

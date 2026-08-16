@@ -3440,15 +3440,15 @@
             "label": "작업 순서",
             "description": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
             "descriptions": {
-              "recent": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
-              "pinned": "AG00~AG05는 고정한 작업 위쪽 6개입니다.",
+              "sidebar": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
+              "last-sent": "AG00~AG05는 마지막으로 메시지를 보낸 작업 순입니다.",
               "priority": "AG00~AG05는 우선 작업 위쪽 6개입니다.",
               "custom": "AG00~AG05는 각각 지정한 작업을 엽니다."
             },
-            "value": "최근 6개",
+            "value": "사이드바 순서",
             "options": {
-              "recent": "사이드바 순서",
-              "pinned": "고정한 작업",
+              "sidebar": "사이드바 순서",
+              "last-sent": "최근 작업",
               "priority": "우선 작업",
               "custom": "사용자 지정"
             }

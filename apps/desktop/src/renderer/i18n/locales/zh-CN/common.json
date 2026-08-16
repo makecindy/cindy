@@ -3440,15 +3440,15 @@
             "label": "任务顺序",
             "description": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
             "descriptions": {
-              "recent": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
-              "pinned": "AG00～AG05 对应前 6 个置顶任务。",
+              "sidebar": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
+              "last-sent": "AG00～AG05 按你最后一次发消息的时间，最近的排在前面。",
               "priority": "AG00～AG05 对应前 6 个优先任务。",
               "custom": "AG00～AG05 各自打开你指定的任务。"
             },
-            "value": "最近 6 个",
+            "value": "侧边栏顺序",
             "options": {
-              "recent": "侧边栏顺序",
-              "pinned": "置顶任务",
+              "sidebar": "侧边栏顺序",
+              "last-sent": "最近任务",
               "priority": "优先任务",
               "custom": "自定义"
             }

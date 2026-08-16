@@ -78,7 +78,7 @@ export class WorkLouderCodexLightingController {
   private lastFrameKey = '';
   private slotSessionIds: string[] = [];
   private latestActivity: readonly AgentIslandSessionActivity[] = [];
-  private taskCatalog: WorkLouderCodexTaskCatalog = { recent: [], pinned: [], options: [] };
+  private taskCatalog: WorkLouderCodexTaskCatalog = { sidebar: [], lastSent: [], options: [] };
   private agentSlots: WorkLouderCodexAgentSlotState[] = emptyAgentSlots();
   private slotRefreshVersion = 0;
   private taskSlotsEnabled = false;
@@ -240,7 +240,7 @@ export class WorkLouderCodexLightingController {
       this.taskCatalog = catalog;
     } catch (error) {
       if (refreshVersion !== this.slotRefreshVersion) return;
-      this.taskCatalog = { recent: [], pinned: [], options: [] };
+      this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
       this.taskSlotsEnabled = true;
       this.publishAgentSlots();
       this.updateLightingFrame(true);
@@ -259,7 +259,7 @@ export class WorkLouderCodexLightingController {
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
     this.slotRefreshQueued = false;
-    this.taskCatalog = { recent: [], pinned: [], options: [] };
+    this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
     this.agentSlots = emptyAgentSlots();
     this.slotSessionIds = [];
     this.pendingAgentKeyTap = null;
@@ -558,11 +558,11 @@ export class WorkLouderCodexLightingController {
       return this.settings.customAgentKeys.map(cloneAction);
     }
     const tasks =
-      this.settings.agentSource === 'pinned'
-        ? this.taskCatalog.pinned
+      this.settings.agentSource === 'last-sent'
+        ? this.taskCatalog.lastSent
         : this.settings.agentSource === 'priority'
           ? this.priorityTasks()
-          : this.taskCatalog.recent;
+          : this.taskCatalog.sidebar;
     return tasks
       .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
       .map((task) => ({ type: 'task', sessionId: task.id }));
@@ -585,7 +585,7 @@ export class WorkLouderCodexLightingController {
       .map((activity) => optionById.get(activity.sessionId)!)
       .filter((task, index, rows) => rows.findIndex((row) => row.id === task.id) === index);
     const included = new Set(prioritized.map((task) => task.id));
-    return [...prioritized, ...this.taskCatalog.recent.filter((task) => !included.has(task.id))];
+    return [...prioritized, ...this.taskCatalog.sidebar.filter((task) => !included.has(task.id))];
   }
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
@@ -765,13 +765,17 @@ function normalizeTaskCatalog(
 ): WorkLouderCodexTaskCatalog {
   if (isTaskCatalog(value)) {
     return {
-      recent: value.recent.map((task) => ({ ...task })),
-      pinned: value.pinned.map((task) => ({ ...task })),
+      sidebar: value.sidebar.map((task) => ({ ...task })),
+      lastSent: value.lastSent.map((task) => ({ ...task })),
       options: value.options.map((task) => ({ ...task })),
     };
   }
   const options = value.map((id) => ({ id, title: id, pinned: false }));
-  return { recent: options.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT), pinned: [], options };
+  return {
+    sidebar: options.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT),
+    lastSent: options.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT),
+    options,
+  };
 }
 
 function isTaskCatalog(

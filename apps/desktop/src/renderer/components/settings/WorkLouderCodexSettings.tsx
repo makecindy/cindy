@@ -9,14 +9,17 @@ import {
 import {
   ArrowLeft,
   BatteryCharging,
+  Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Keyboard,
   RotateCcw,
   Usb,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import * as Select from '@radix-ui/react-select';
 import { Switch } from '@/components/ui/switch';
 import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
@@ -472,13 +475,11 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
               onChange={(value) =>
                 void setSettings({ agentSource: value as WorkLouderCodexAgentSource })
               }
-            >
-              {WORKLOUDER_CODEX_AGENT_SOURCES.map((source) => (
-                <option key={source} value={source}>
-                  {t(`settings.shortcuts.workLouderCodex.agentKeys.source.options.${source}`)}
-                </option>
-              ))}
-            </SelectControl>
+              options={WORKLOUDER_CODEX_AGENT_SOURCES.map((source) => ({
+                value: source,
+                label: t(`settings.shortcuts.workLouderCodex.agentKeys.source.options.${source}`),
+              }))}
+            />
           }
         />
         <SettingsDivider />
@@ -658,13 +659,11 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
                     layout.encoderMode = value as WorkLouderCodexLayout['encoderMode'];
                   })
                 }
-              >
-                {WORKLOUDER_CODEX_ENCODER_MODES.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {t(`settings.shortcuts.workLouderCodex.encoder.mode.options.${mode}`)}
-                  </option>
-                ))}
-              </SelectControl>
+                options={WORKLOUDER_CODEX_ENCODER_MODES.map((mode) => ({
+                  value: mode,
+                  label: t(`settings.shortcuts.workLouderCodex.encoder.mode.options.${mode}`),
+                }))}
+              />
             }
           />
           {settings.layout.encoderMode === 'custom' &&
@@ -767,13 +766,11 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
               onChange={(value) =>
                 void setSettings({ lightingAutoDim: value as WorkLouderCodexAutoDim })
               }
-            >
-              {WORKLOUDER_CODEX_AUTO_DIM_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {t(`settings.shortcuts.workLouderCodex.lighting.autoDim.options.${option}`)}
-                </option>
-              ))}
-            </SelectControl>
+              options={WORKLOUDER_CODEX_AUTO_DIM_OPTIONS.map((option) => ({
+                value: option,
+                label: t(`settings.shortcuts.workLouderCodex.lighting.autoDim.options.${option}`),
+              }))}
+            />
           }
         />
       </SettingsGroup>
@@ -864,6 +861,45 @@ function ActionSelect({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const groups: SelectOptionGroup[] = [
+    { options: [{ value: 'none', label: emptyLabel }] },
+  ];
+  if (allowTasks && state && state.taskOptions.length > 0) {
+    groups.push({
+      label: t('settings.shortcuts.workLouderCodex.actions.tasks'),
+      options: state.taskOptions.map((task) => ({
+        value: `task:${task.id}`,
+        label: task.title,
+      })),
+    });
+  }
+  groups.push({
+    label: t('settings.shortcuts.workLouderCodex.actions.commands'),
+    options: WORKLOUDER_CODEX_COMMAND_IDS.map((commandId) => ({
+      value: `command:${commandId}`,
+      label: workLouderCodexCommandName(t, commandId),
+    })),
+  });
+  if (allowKeycaps) {
+    groups.push({
+      label: t('settings.shortcuts.workLouderCodex.actions.keycaps'),
+      options: WORKLOUDER_CODEX_KEYCAP_IDS.filter(
+        (keycapId) => WORKLOUDER_CODEX_KEYCAP_ACTIONS[keycapId],
+      ).map((keycapId) => ({
+        value: `keycap:${keycapId}`,
+        label: keycapId,
+      })),
+    });
+  }
+  if (skills.length > 0) {
+    groups.push({
+      label: t('settings.shortcuts.workLouderCodex.actions.skills'),
+      options: skills.map((skill) => ({
+        value: `skill:${skill.id}`,
+        label: skill.name,
+      })),
+    });
+  }
   return (
     <SelectControl
       value={actionValue(action)}
@@ -871,46 +907,20 @@ function ActionSelect({
       ariaLabel={t('settings.shortcuts.workLouderCodex.actions.choose')}
       onChange={(value) => onChange(parseActionValue(value, state, skills))}
       className={cn('min-w-[190px]', className)}
-    >
-      <option value="none">{emptyLabel}</option>
-      {allowTasks && state && state.taskOptions.length > 0 && (
-        <optgroup label={t('settings.shortcuts.workLouderCodex.actions.tasks')}>
-          {state.taskOptions.map((task) => (
-            <option key={task.id} value={`task:${task.id}`}>
-              {task.title}
-            </option>
-          ))}
-        </optgroup>
-      )}
-      <optgroup label={t('settings.shortcuts.workLouderCodex.actions.commands')}>
-        {WORKLOUDER_CODEX_COMMAND_IDS.map((commandId) => (
-          <option key={commandId} value={`command:${commandId}`}>
-            {workLouderCodexCommandName(t, commandId)}
-          </option>
-        ))}
-      </optgroup>
-      {allowKeycaps && (
-        <optgroup label={t('settings.shortcuts.workLouderCodex.actions.keycaps')}>
-          {WORKLOUDER_CODEX_KEYCAP_IDS.filter((keycapId) => WORKLOUDER_CODEX_KEYCAP_ACTIONS[keycapId]).map(
-            (keycapId) => (
-              <option key={keycapId} value={`keycap:${keycapId}`}>
-                {keycapId}
-              </option>
-            ),
-          )}
-        </optgroup>
-      )}
-      {skills.length > 0 && (
-        <optgroup label={t('settings.shortcuts.workLouderCodex.actions.skills')}>
-          {skills.map((skill) => (
-            <option key={skill.id} value={`skill:${skill.id}`}>
-              {skill.name}
-            </option>
-          ))}
-        </optgroup>
-      )}
-    </SelectControl>
+      groups={groups}
+    />
   );
+}
+
+interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+interface SelectOptionGroup {
+  label?: string;
+  options: SelectOption[];
 }
 
 function SelectControl({
@@ -918,37 +928,91 @@ function SelectControl({
   disabled,
   ariaLabel,
   onChange,
-  children,
+  options,
+  groups,
   className,
 }: {
   value: string;
   disabled: boolean;
   ariaLabel: string;
   onChange(value: string): void;
-  children: ReactNode;
+  options?: SelectOption[];
+  groups?: SelectOptionGroup[];
   className?: string;
 }) {
+  const resolvedGroups = groups ?? [{ options: options ?? [] }];
   return (
-    <div className={cn('relative min-w-[150px]', className)}>
-      <select
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        className={cn(
-          'h-9 w-full appearance-none rounded-full border py-0 pl-3 pr-8 text-12 outline-none',
-          'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'focus:ring-2 focus:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50',
-        )}
+    <Select.Root value={value} onValueChange={onChange} disabled={disabled}>
+      <Select.Trigger
         aria-label={ariaLabel}
+        className={cn(
+          'flex h-9 min-w-[150px] items-center justify-between gap-2 rounded-full border px-3 text-12',
+          'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+          'outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+          'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
+          className,
+        )}
       >
-        {children}
-      </select>
-      <ChevronDown
-        size={14}
-        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--settings-input-text)] opacity-70"
-        aria-hidden="true"
-      />
-    </div>
+        <span className="min-w-0 truncate text-left">
+          <Select.Value />
+        </span>
+        <Select.Icon asChild>
+          <ChevronDown size={14} className="shrink-0 opacity-70" />
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content
+          position="popper"
+          side="bottom"
+          align="end"
+          sideOffset={4}
+          className={cn(
+            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
+            'max-h-[min(15rem,var(--radix-select-content-available-height))]',
+            'border-[var(--border-default)] bg-[var(--surface-elevated)]',
+          )}
+        >
+          <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--text-tertiary)]">
+            <ChevronUp size={14} />
+          </Select.ScrollUpButton>
+          <Select.Viewport>
+            {resolvedGroups.map((group, groupIndex) => (
+              <Select.Group key={group.label ?? `group-${groupIndex}`}>
+                {group.label && (
+                  <Select.Label className="px-2.5 py-1 text-11 text-[var(--text-tertiary)]">
+                    {group.label}
+                  </Select.Label>
+                )}
+                {group.options.map((option) => (
+                  <Select.Item
+                    key={option.value}
+                    value={option.value}
+                    disabled={option.disabled}
+                    className={cn(
+                      'flex w-full cursor-pointer select-none items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-12 outline-none',
+                      'text-[var(--text-primary)]',
+                      'data-[highlighted]:bg-[var(--surface-hover)]',
+                      'data-[state=checked]:font-medium',
+                      'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
+                    )}
+                  >
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                      <Select.ItemIndicator>
+                        <Check size={14} strokeWidth={2.25} />
+                      </Select.ItemIndicator>
+                    </span>
+                    <Select.ItemText>{option.label}</Select.ItemText>
+                  </Select.Item>
+                ))}
+              </Select.Group>
+            ))}
+          </Select.Viewport>
+          <Select.ScrollDownButton className="flex h-5 items-center justify-center text-[var(--text-tertiary)]">
+            <ChevronDown size={14} />
+          </Select.ScrollDownButton>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
   );
 }
 

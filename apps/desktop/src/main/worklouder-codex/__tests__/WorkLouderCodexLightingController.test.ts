@@ -79,6 +79,43 @@ describe('WorkLouderCodexLightingController', () => {
     expect(activateSession).toHaveBeenCalledWith('waiting-session', false);
   });
 
+  it('maps last-sent keys by the last user message, not sidebar order', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const activateSession = vi.fn();
+    const controller = new WorkLouderCodexLightingController(sink, activateSession, async () => ({
+      sidebar: [
+        { id: 'older', title: 'Older send', pinned: false },
+        { id: 'newer', title: 'Newer send', pinned: false },
+      ],
+      lastSent: [
+        { id: 'newer', title: 'Newer send', pinned: false },
+        { id: 'older', title: 'Older send', pinned: false },
+      ],
+      options: [
+        { id: 'older', title: 'Older send', pinned: false },
+        { id: 'newer', title: 'Newer send', pinned: false },
+      ],
+    }));
+    controller.applySettings(settings({ agentSource: 'last-sent' }));
+    await controller.resumeTaskSlots();
+
+    hidRef.current?.({ key: 'AG00', act: 1 });
+
+    expect(activateSession).toHaveBeenCalledWith('newer', false);
+  });
+
   it('uses the published assignment for the current press and refreshes only later presses', async () => {
     let resolveRefresh: ((value: readonly string[]) => void) | undefined;
     const keyHandlerRef: { current: ((slot: number) => void) | null } = { current: null };

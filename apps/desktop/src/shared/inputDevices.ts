@@ -73,6 +73,8 @@ export interface InputDevicePublishedTask {
   id: string;
   title: string | null;
   pinnedAt: number | null;
+  /** Last time the user sent a message, in unix ms. Null if they never have. */
+  userSendAt: number | null;
 }
 
 export function isInputDeviceCommandId(value: unknown): value is InputDeviceCommandId {

@@ -640,13 +640,15 @@ export function CCAgentSidebarUpper() {
     const tasks = renderedIds.flatMap((id) => {
       const session = byId.get(id);
       if (!session) return [];
-      // 渲染端存 ISO 字符串,键盘那边按毫秒排置顶顺序。
+      // 渲染端存 ISO 字符串,键盘那边按毫秒排最近发送。
       const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
+      const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
       return [
         {
           id: session.id,
           title: session.title ?? null,
           pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
+          userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
         },
       ];
     });

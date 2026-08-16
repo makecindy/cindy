@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
     }) => void
   >,
   /** Which rule the six task keys follow; drives whether they are clickable. */
-  agentSource: 'recent' as string,
+  agentSource: 'sidebar' as string,
   layout: null as ReturnType<typeof createWorkLouderCodexDefaultSettings>['layout'] | null,
 }));
 
@@ -73,10 +73,20 @@ vi.mock('@/features/skillhub/hooks/useSkillhub', () => ({
 
 import { WorkLouderCodexEntry, WorkLouderCodexSettings } from '../WorkLouderCodexSettings';
 
+async function chooseSelectOption(
+  trigger: string | HTMLElement,
+  optionName: string,
+): Promise<void> {
+  const combobox = typeof trigger === 'string' ? screen.getByRole('combobox', { name: trigger }) : trigger;
+  fireEvent.keyDown(combobox, { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('option', { name: optionName }));
+}
+
 describe('WorkLouderCodexSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.agentSource = 'recent';
+    Element.prototype.scrollIntoView = vi.fn();
+    mocks.agentSource = 'sidebar';
     mocks.layout = createWorkLouderCodexDefaultSettings().layout;
     mocks.previewListeners = [];
     Object.defineProperty(window, 'electronAPI', {
@@ -140,7 +150,7 @@ describe('WorkLouderCodexSettings', () => {
     ).toBeTruthy();
   });
 
-  it('shows the six task keys and writes the settings that remain on the panel', () => {
+  it('shows the six task keys and writes the settings that remain on the panel', async () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     // Default source is "recent", so the keys follow the shared rule and are
@@ -159,26 +169,22 @@ describe('WorkLouderCodexSettings', () => {
     fireEvent.pointerUp(slider);
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingBrightness: 40 });
 
-    fireEvent.change(
-      screen.getByRole('combobox', {
-        name: 'settings.shortcuts.workLouderCodex.lighting.autoDim.aria',
-      }),
-      { target: { value: '10-minutes' } },
+    await chooseSelectOption(
+      'settings.shortcuts.workLouderCodex.lighting.autoDim.aria',
+      'settings.shortcuts.workLouderCodex.lighting.autoDim.options.10-minutes',
     );
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingAutoDim: '10-minutes' });
   });
 
-  it('sets all six task keys at once, since they follow one shared rule', () => {
+  it('sets all six task keys at once, since they follow one shared rule', async () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     // One control for the set, not one per key.
-    fireEvent.change(
-      screen.getByRole('combobox', {
-        name: 'settings.shortcuts.workLouderCodex.agentKeys.source.label',
-      }),
-      { target: { value: 'pinned' } },
+    await chooseSelectOption(
+      'settings.shortcuts.workLouderCodex.agentKeys.source.label',
+      'settings.shortcuts.workLouderCodex.agentKeys.source.options.last-sent',
     );
-    expect(mocks.setSettings).toHaveBeenCalledWith({ agentSource: 'pinned' });
+    expect(mocks.setSettings).toHaveBeenCalledWith({ agentSource: 'last-sent' });
 
     fireEvent.click(
       screen.getByRole('switch', {
@@ -188,17 +194,15 @@ describe('WorkLouderCodexSettings', () => {
     expect(mocks.setSettings).toHaveBeenCalledWith({ singleTapAgentKeys: true });
   });
 
-  it('only lets a task key be set on its own under "custom"', () => {
+  it('only lets a task key be set on its own under "custom"', async () => {
     mocks.agentSource = 'custom';
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     // Now each key is its own target, and its editor writes only that slot.
     fireEvent.click(screen.getByRole('button', { name: /AG02/ }));
-    fireEvent.change(
-      screen.getByRole('combobox', {
-        name: 'settings.shortcuts.workLouderCodex.actions.choose',
-      }),
-      { target: { value: 'command:newTask' } },
+    await chooseSelectOption(
+      'settings.shortcuts.workLouderCodex.actions.choose',
+      'New Task',
     );
 
     expect(mocks.setSettings).toHaveBeenCalledWith({
@@ -206,7 +210,7 @@ describe('WorkLouderCodexSettings', () => {
     });
   });
 
-  it('opens the analog stick and encoder editors from the board', () => {
+  it('opens the analog stick and encoder editors from the board', async () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(
@@ -218,7 +222,7 @@ describe('WorkLouderCodexSettings', () => {
     const [up] = screen.getAllByRole('combobox', {
       name: 'settings.shortcuts.workLouderCodex.actions.choose',
     });
-    fireEvent.change(up, { target: { value: 'command:toggleSidebar' } });
+    await chooseSelectOption(up, 'Toggle Sidebar');
     expect(mocks.setSettings).toHaveBeenCalledWith({
       layout: expect.objectContaining({
         analogStick: expect.objectContaining({

@@ -6,6 +6,7 @@ import {
   WORKLOUDER_CODEX_COMMAND_SLOTS,
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
   isWorkLouderCodexAgentSource,
+  normalizeWorkLouderCodexAgentSource,
   isWorkLouderCodexAutoDim,
   isWorkLouderCodexCommandId,
   isWorkLouderCodexEncoderMode,
@@ -67,10 +68,14 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
     patch.lightingAutoDim = record.lightingAutoDim;
   }
   if ('agentSource' in record) {
-    if (!isWorkLouderCodexAgentSource(record.agentSource)) {
+    if (
+      record.agentSource !== 'recent' &&
+      record.agentSource !== 'pinned' &&
+      !isWorkLouderCodexAgentSource(record.agentSource)
+    ) {
       throwIpcError('INVALID_PARAMS', 'agentSource is invalid');
     }
-    patch.agentSource = record.agentSource;
+    patch.agentSource = normalizeWorkLouderCodexAgentSource(record.agentSource);
   }
   if ('customAgentKeys' in record) {
     if (
@@ -284,10 +289,18 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
         ) {
           throwIpcError('INVALID_PARAMS', 'Work Louder Codex task pinnedAt is invalid');
         }
+        if (
+          row.userSendAt !== null &&
+          row.userSendAt !== undefined &&
+          (typeof row.userSendAt !== 'number' || !Number.isFinite(row.userSendAt))
+        ) {
+          throwIpcError('INVALID_PARAMS', 'Work Louder Codex task userSendAt is invalid');
+        }
         return {
           id: row.id,
           title: typeof row.title === 'string' ? row.title.slice(0, 512) : null,
           pinnedAt: typeof row.pinnedAt === 'number' ? row.pinnedAt : null,
+          userSendAt: typeof row.userSendAt === 'number' ? row.userSendAt : null,
         };
       });
       deps.publishTasks(tasks);

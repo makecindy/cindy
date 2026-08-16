@@ -68,6 +68,12 @@ describe('Work Louder Codex settings store', () => {
     expect(__testing.normalize({ lightingBrightness: Number.NaN }).lightingBrightness).toBe(100);
   });
 
+  it('maps the old pinned and recent sources onto sidebar order', () => {
+    expect(__testing.normalize({ agentSource: 'pinned' }).agentSource).toBe('sidebar');
+    expect(__testing.normalize({ agentSource: 'recent' }).agentSource).toBe('sidebar');
+    expect(__testing.normalize({ agentSource: 'last-sent' }).agentSource).toBe('last-sent');
+  });
+
   it('persists a patch under the Electron userData directory', () => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklouder-settings-'));
 

@@ -9,7 +9,7 @@ import {
   WORKLOUDER_CODEX_COMMAND_SLOTS,
   WORKLOUDER_CODEX_DEFAULT_LAYOUT,
   createWorkLouderCodexDefaultSettings,
-  isWorkLouderCodexAgentSource,
+  normalizeWorkLouderCodexAgentSource,
   isWorkLouderCodexAutoDim,
   isWorkLouderCodexCommandId,
   isWorkLouderCodexEncoderMode,
@@ -131,9 +131,7 @@ function normalize(raw: unknown): WorkLouderCodexSettings {
     lightingAutoDim: isWorkLouderCodexAutoDim(value.lightingAutoDim)
       ? value.lightingAutoDim
       : defaults.lightingAutoDim,
-    agentSource: isWorkLouderCodexAgentSource(value.agentSource)
-      ? value.agentSource
-      : defaults.agentSource,
+    agentSource: normalizeWorkLouderCodexAgentSource(value.agentSource),
     customAgentKeys,
     singleTapAgentKeys:
       typeof value.singleTapAgentKeys === 'boolean'

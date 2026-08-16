@@ -3,7 +3,6 @@ import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { loadSidebarSettingsSnapshot } from '../sidebarSettingsStore.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
@@ -18,11 +17,12 @@ export interface WorkLouderCodexTaskSlotRow {
 
 interface WorkLouderCodexTaskCatalogRow extends WorkLouderCodexTaskOption {
   pinnedAt: number | null;
+  userSendAt: number | null;
 }
 
 export interface WorkLouderCodexTaskCatalog {
-  recent: WorkLouderCodexTaskOption[];
-  pinned: WorkLouderCodexTaskOption[];
+  sidebar: WorkLouderCodexTaskOption[];
+  lastSent: WorkLouderCodexTaskOption[];
   options: WorkLouderCodexTaskOption[];
 }
 
@@ -47,6 +47,7 @@ export async function listWorkLouderCodexTaskCatalog(
       id: sessions.id,
       title: sessions.title,
       pinnedAt: sessions.pinnedAt,
+      userSendAt: sessions.userSendAt,
     })
     .from(sessions)
     .where(visibleActiveTask)
@@ -58,6 +59,7 @@ export async function listWorkLouderCodexTaskCatalog(
       id: row.id,
       title: row.title,
       pinnedAt: row.pinnedAt,
+      userSendAt: row.userSendAt,
     })),
   );
 }
@@ -67,6 +69,7 @@ export interface WorkLouderCodexTaskCatalogInput {
   id: string;
   title: string | null;
   pinnedAt: number | null;
+  userSendAt: number | null;
 }
 
 /**
@@ -88,13 +91,16 @@ export function buildWorkLouderCodexTaskCatalog(
       title: row.title ?? '',
       pinned: row.pinnedAt !== null,
       pinnedAt: row.pinnedAt,
+      userSendAt: row.userSendAt,
     }));
-  const recent = catalogRows.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(stripPinnedAt);
-  const pinned = sortPinnedRows(catalogRows.filter((row) => row.pinned)).map(stripPinnedAt);
+  const sidebar = catalogRows.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(toTaskOption);
+  const lastSent = sortLastSentRows(catalogRows)
+    .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
+    .map(toTaskOption);
   return {
-    recent,
-    pinned: pinned.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT),
-    options: catalogRows.map(stripPinnedAt),
+    sidebar,
+    lastSent,
+    options: catalogRows.map(toTaskOption),
   };
 }
 
@@ -103,30 +109,18 @@ export async function listWorkLouderCodexTaskSlots(
   db: DbClient['drizzle'] = getDbClient().drizzle,
 ): Promise<string[]> {
   const catalog = await listWorkLouderCodexTaskCatalog(db);
-  return catalog.recent.map((task) => task.id);
+  return catalog.sidebar.map((task) => task.id);
 }
 
-function sortPinnedRows(rows: WorkLouderCodexTaskCatalogRow[]): WorkLouderCodexTaskCatalogRow[] {
-  let manualOrder: readonly string[] = [];
-  try {
-    const snapshot = loadSidebarSettingsSnapshot();
-    if (snapshot.pinnedOrderIsAuthoritative) manualOrder = snapshot.pinnedOrder;
-  } catch {
-    // Account startup may briefly make the owner-scoped sidebar store unavailable.
-  }
-  const rank = new Map(manualOrder.map((id, index) => [id, index] as const));
+function sortLastSentRows(rows: WorkLouderCodexTaskCatalogRow[]): WorkLouderCodexTaskCatalogRow[] {
   return rows.toSorted((left, right) => {
-    const leftRank = rank.get(left.id);
-    const rightRank = rank.get(right.id);
-    if (leftRank !== undefined || rightRank !== undefined) {
-      if (leftRank === undefined) return 1;
-      if (rightRank === undefined) return -1;
-      return leftRank - rightRank;
-    }
-    return (right.pinnedAt ?? 0) - (left.pinnedAt ?? 0);
+    const leftSent = left.userSendAt ?? 0;
+    const rightSent = right.userSendAt ?? 0;
+    if (rightSent !== leftSent) return rightSent - leftSent;
+    return right.id.localeCompare(left.id);
   });
 }
 
-function stripPinnedAt(row: WorkLouderCodexTaskCatalogRow): WorkLouderCodexTaskOption {
+function toTaskOption(row: WorkLouderCodexTaskCatalogRow): WorkLouderCodexTaskOption {
   return { id: row.id, title: row.title, pinned: row.pinned };
 }
