@@ -73,8 +73,39 @@ async function resolveBotContext(callerSessionId: string): Promise<{
 function resolveNamespace(
   requested: string | undefined,
   defaultNamespace: string | null,
-): string | null {
-  return validateName(requested ?? defaultNamespace ?? '', 'namespace', MAX_NAMESPACE_CHARS);
+  allowAll: boolean,
+): { ok: true; namespace: string | undefined } | {
+  ok: false;
+  errorCode: 'INVALID_ARGS' | 'NAMESPACE_SCOPE_MISMATCH';
+  message: string;
+} {
+  const boundNamespace = defaultNamespace
+    ? validateName(defaultNamespace, 'namespace', MAX_NAMESPACE_CHARS)
+    : null;
+  if (defaultNamespace && !boundNamespace) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: '绑定的 namespace 格式无效' };
+  }
+  const requestedNamespace = requested === undefined
+    ? undefined
+    : validateName(requested, 'namespace', MAX_NAMESPACE_CHARS);
+  if (requested !== undefined && !requestedNamespace) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 格式无效' };
+  }
+  if (boundNamespace) {
+    if (requestedNamespace && requestedNamespace !== boundNamespace) {
+      return {
+        ok: false,
+        errorCode: 'NAMESPACE_SCOPE_MISMATCH',
+        message: '当前 Automation 只能访问其绑定的 Durable Note namespace',
+      };
+    }
+    return { ok: true, namespace: boundNamespace };
+  }
+  if (allowAll && requestedNamespace === undefined) return { ok: true, namespace: undefined };
+  if (!requestedNamespace) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 格式无效' };
+  }
+  return { ok: true, namespace: requestedNamespace };
 }
 
 function parseValue(valueJson: string): unknown {
@@ -92,12 +123,13 @@ export async function listBotDurableNotes(input: {
 }): Promise<BotDurableNoteResult<{ notes: unknown[] }>> {
   const context = await resolveBotContext(input.callerSessionId);
   if (!context.ok) return context;
-  const namespace = input.namespace === undefined && !context.context.defaultNamespace
-    ? undefined
-    : resolveNamespace(input.namespace, context.context.defaultNamespace);
-  if ((input.namespace !== undefined || context.context.defaultNamespace) && !namespace) {
-    return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 格式无效' };
-  }
+  const resolvedNamespace = resolveNamespace(
+    input.namespace,
+    context.context.defaultNamespace,
+    true,
+  );
+  if (!resolvedNamespace.ok) return resolvedNamespace;
+  const namespace = resolvedNamespace.namespace;
   const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 100), MAX_LIST_LIMIT));
   const db = getDbClient().drizzle;
   const rows = await db
@@ -129,7 +161,9 @@ export async function getBotDurableNote(input: {
 }): Promise<BotDurableNoteResult<{ note: unknown }>> {
   const context = await resolveBotContext(input.callerSessionId);
   if (!context.ok) return context;
-  const namespace = resolveNamespace(input.namespace, context.context.defaultNamespace);
+  const resolvedNamespace = resolveNamespace(input.namespace, context.context.defaultNamespace, false);
+  if (!resolvedNamespace.ok) return resolvedNamespace;
+  const namespace = resolvedNamespace.namespace;
   const key = validateName(input.key, 'key', MAX_KEY_CHARS);
   if (!namespace || !key) return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 或 key 格式无效' };
   const db = getDbClient().drizzle;
@@ -165,7 +199,9 @@ export async function setBotDurableNote(input: {
 }): Promise<BotDurableNoteResult<{ note: unknown }>> {
   const context = await resolveBotContext(input.callerSessionId);
   if (!context.ok) return context;
-  const namespace = resolveNamespace(input.namespace, context.context.defaultNamespace);
+  const resolvedNamespace = resolveNamespace(input.namespace, context.context.defaultNamespace, false);
+  if (!resolvedNamespace.ok) return resolvedNamespace;
+  const namespace = resolvedNamespace.namespace;
   const key = validateName(input.key, 'key', MAX_KEY_CHARS);
   if (!namespace || !key) return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 或 key 格式无效' };
   let valueJson: string;
@@ -197,7 +233,9 @@ export async function deleteBotDurableNote(input: {
 }): Promise<BotDurableNoteResult<{ deleted: boolean }>> {
   const context = await resolveBotContext(input.callerSessionId);
   if (!context.ok) return context;
-  const namespace = resolveNamespace(input.namespace, context.context.defaultNamespace);
+  const resolvedNamespace = resolveNamespace(input.namespace, context.context.defaultNamespace, false);
+  if (!resolvedNamespace.ok) return resolvedNamespace;
+  const namespace = resolvedNamespace.namespace;
   const key = validateName(input.key, 'key', MAX_KEY_CHARS);
   if (!namespace || !key) return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 或 key 格式无效' };
   const rows = await getDbClient().drizzle

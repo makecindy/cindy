@@ -129,6 +129,21 @@ describe('botDurableNoteService', () => {
       key: 'cursor',
       value: 7,
     })).toMatchObject({ ok: true, note: { namespace: 'nightly', key: 'cursor', value: 7 } });
+    await expect(setBotDurableNote({
+      callerSessionId: 'a-automation',
+      namespace: 'another-automation',
+      key: 'cursor',
+      value: 8,
+    })).resolves.toMatchObject({ ok: false, errorCode: 'NAMESPACE_SCOPE_MISMATCH' });
+    await expect(listBotDurableNotes({
+      callerSessionId: 'a-automation',
+      namespace: 'another-automation',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'NAMESPACE_SCOPE_MISMATCH' });
+    await expect(getBotDurableNote({
+      callerSessionId: 'a-main',
+      namespace: 'nightly',
+      key: 'cursor',
+    })).resolves.toMatchObject({ ok: true, note: { value: 7 } });
   });
 
   it('rejects durable-state access from archived and read-only Bot history tasks', async () => {
