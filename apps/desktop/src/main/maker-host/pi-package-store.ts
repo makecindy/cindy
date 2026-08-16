@@ -26,6 +26,7 @@ import {
 } from '../../shared/piPackages.js';
 import { createLogger } from '../logger.js';
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
+import { withSecurityBoundaryLock } from '../device-link/crossProcessLock.js';
 import {
   analyzePiExtensionCompatibility,
   evaluatePiRuntimeRequirements,
@@ -43,6 +44,7 @@ interface PicomatchOptions {
 type Picomatch = (pattern: string, options?: PicomatchOptions) => (value: string) => boolean;
 const picomatch = createRequire(import.meta.url)('picomatch') as Picomatch;
 const COMMAND_TIMEOUT_MS = 120_000;
+const PACKAGE_MUTATION_LOCK_WAIT_MS = COMMAND_TIMEOUT_MS + 60_000;
 const MAX_COMMAND_OUTPUT_BYTES = 128 * 1024;
 const MAX_SOURCE_LENGTH = 2_048;
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
@@ -162,6 +164,25 @@ function statePath(): string {
   return path.join(packageHome(), 'cindy-package-state.json');
 }
 
+function mutationLockPath(): string {
+  return path.join(app.getPath('userData'), 'pi-package-home.mutation.lock');
+}
+
+async function withPiPackageMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const lockPath = mutationLockPath();
+  await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  return withSecurityBoundaryLock(
+    lockPath,
+    { label: 'pi-package-mutation', waitMs: PACKAGE_MUTATION_LOCK_WAIT_MS },
+    async (status) => {
+      if (!status.held) {
+        throw new Error('Pi extension store is busy or unavailable');
+      }
+      return operation();
+    },
+  );
+}
+
 async function readState(): Promise<PiPackageState> {
   try {
     const parsed = JSON.parse(await fs.readFile(statePath(), 'utf8')) as Partial<PiPackageState | PiPackageStateV1>;
@@ -202,8 +223,15 @@ async function writeState(state: PiPackageState): Promise<void> {
   await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
   const target = statePath();
   const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  await fs.rename(temporary, target);
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await fs.rename(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
 function boundedAppend(current: string, chunk: Buffer): string {
@@ -1110,7 +1138,11 @@ async function findAffectedInspectedPackage(
 }
 
 function enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const result = mutationTail.then(operation);
+  // mutationTail prevents overlapping work inside one Main process. The
+  // strict file lock extends the same critical section across packaged, dev,
+  // and --passive instances sharing userData. It also recovers abandoned locks
+  // after an owner exits and releases normally when an operation times out.
+  const result = mutationTail.then(() => withPiPackageMutationLock(operation));
   mutationTail = result.then(() => undefined, () => undefined);
   return result;
 }
@@ -1237,6 +1269,10 @@ export async function mutatePiPackage(
       } else {
         disabled.add(target.source);
       }
+      // writeState atomically replaces the state file. Mark the mutation before
+      // entering that durable write so a successful write followed by a failed
+      // inspection still invalidates caches and notifies every open Renderer.
+      mutationMayHaveChangedState = true;
       await writeState({
         version: STATE_VERSION,
         disabledSources: [...disabled].sort(),
@@ -1252,10 +1288,10 @@ export async function mutatePiPackage(
     notifyPiPackagesChanged();
     return mutationResult;
   }).catch((error) => {
-    // install/update/remove may already have changed Pi's package tree or
-    // Cindy's approval state before the CLI reports failure. Refresh every
-    // open Settings view and command palette instead of leaving a stale
-    // enabled package visible until the next manual reload.
+    // Any action may already have changed Pi's package tree or Cindy's state
+    // before a later CLI/inspection step reports failure. Refresh every open
+    // Settings view and command palette instead of leaving stale state visible
+    // until the next manual reload.
     if (mutationMayHaveChangedState) {
       invalidateInspectionCache();
       notifyPiPackagesChanged();

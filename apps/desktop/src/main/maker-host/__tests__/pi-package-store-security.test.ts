@@ -6,9 +6,18 @@ import path from 'node:path';
 const runtime = vi.hoisted(() => ({
   userData: '',
   listOutput: '',
+  listOutcomes: [] as Array<{ stdout?: string; stderr?: string; exitCode: number }>,
   stderr: '',
   exitCode: 0,
   spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined> }>,
+}));
+
+const lockRuntime = vi.hoisted(() => ({
+  calls: [] as Array<{ lockPath: string; label: string; waitMs?: number }>,
+  tail: Promise.resolve() as Promise<void>,
+  active: 0,
+  maxActive: 0,
+  nextStatus: null as null | { held: false; reason: 'busy' | 'unavailable' },
 }));
 
 vi.mock('electron', () => ({
@@ -23,6 +32,34 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({
     trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
     child() { return this; },
+  }),
+}));
+
+vi.mock('../../device-link/crossProcessLock.js', () => ({
+  withSecurityBoundaryLock: vi.fn(async (
+    lockPath: string,
+    options: { label: string; waitMs?: number },
+    task: (status: { held: true } | { held: false; reason: 'busy' | 'unavailable' }) => Promise<unknown>,
+  ) => {
+    lockRuntime.calls.push({ lockPath, label: options.label, waitMs: options.waitMs });
+    if (lockRuntime.nextStatus) {
+      const status = lockRuntime.nextStatus;
+      lockRuntime.nextStatus = null;
+      return task(status);
+    }
+    const previous = lockRuntime.tail;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    lockRuntime.tail = previous.then(() => gate);
+    await previous.catch(() => undefined);
+    lockRuntime.active += 1;
+    lockRuntime.maxActive = Math.max(lockRuntime.maxActive, lockRuntime.active);
+    try {
+      return await task({ held: true });
+    } finally {
+      lockRuntime.active -= 1;
+      release();
+    }
   }),
 }));
 
@@ -43,13 +80,17 @@ vi.mock('node:child_process', () => ({
       kill: vi.fn(),
     };
     queueMicrotask(() => {
+      const outcome = args.includes('list') ? runtime.listOutcomes.shift() : undefined;
       if (args.includes('list')) {
-        for (const handler of stdoutHandlers) handler(Buffer.from(runtime.listOutput));
+        for (const handler of stdoutHandlers) {
+          handler(Buffer.from(outcome?.stdout ?? runtime.listOutput));
+        }
       }
-      if (runtime.stderr) {
-        for (const handler of stderrHandlers) handler(Buffer.from(runtime.stderr));
+      const stderr = outcome?.stderr ?? runtime.stderr;
+      if (stderr) {
+        for (const handler of stderrHandlers) handler(Buffer.from(stderr));
       }
-      for (const handler of closeHandlers) handler(runtime.exitCode);
+      for (const handler of closeHandlers) handler(outcome?.exitCode ?? runtime.exitCode);
     });
     return child;
   },
@@ -57,13 +98,18 @@ vi.mock('node:child_process', () => ({
 
 const roots: string[] = [];
 
-async function createPackage(options?: { oversizedManifest?: boolean; lifecycleScript?: boolean }): Promise<{
+async function createPackage(options?: {
+  oversizedManifest?: boolean;
+  lifecycleScript?: boolean;
+  source?: string;
+}): Promise<{
   root: string;
   source: string;
 }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-security-pkg-'));
   roots.push(root);
-  const source = options?.oversizedManifest ? 'npm:oversized-package' : 'npm:test-extension';
+  const source = options?.source
+    ?? (options?.oversizedManifest ? 'npm:oversized-package' : 'npm:test-extension');
   const prompts = options?.oversizedManifest
     ? Array.from({ length: 257 }, (_, index) => `prompts/${index}.md`)
     : ['./prompts'];
@@ -91,9 +137,15 @@ beforeEach(async () => {
   runtime.userData = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-security-home-'));
   roots.push(runtime.userData);
   runtime.listOutput = '';
+  runtime.listOutcomes = [];
   runtime.stderr = '';
   runtime.exitCode = 0;
   runtime.spawns = [];
+  lockRuntime.calls = [];
+  lockRuntime.tail = Promise.resolve();
+  lockRuntime.active = 0;
+  lockRuntime.maxActive = 0;
+  lockRuntime.nextStatus = null;
   vi.resetModules();
 });
 
@@ -239,6 +291,65 @@ describe('Pi package executable-code boundary', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it('uses one shared cross-process lock for every package mutation action', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+
+    await mutateAuthorized(store, { action: 'install', source });
+    await mutateAuthorized(store, { action: 'update', source });
+    await store.mutatePiPackage({ action: 'set-enabled', source, enabled: false });
+    await mutateAuthorized(store, { action: 'remove', source });
+
+    expect(lockRuntime.calls).toHaveLength(4);
+    expect(new Set(lockRuntime.calls.map((call) => call.lockPath))).toEqual(new Set([
+      path.join(runtime.userData, 'pi-package-home.mutation.lock'),
+    ]));
+    expect(lockRuntime.calls.every((call) => (
+      call.label === 'pi-package-mutation' && (call.waitMs ?? 0) > 120_000
+    ))).toBe(true);
+  });
+
+  it('fails closed before touching the package tree when the shared lock is unavailable', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    lockRuntime.nextStatus = { held: false, reason: 'busy' };
+
+    await expect(store.mutatePiPackage({ action: 'set-enabled', source, enabled: false }))
+      .rejects.toThrow(/busy or unavailable/);
+    expect(runtime.spawns).toEqual([]);
+    await expect(fs.stat(path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('serializes independent Main module instances without losing state updates', async () => {
+    const first = await createPackage({ source: 'npm:first-extension' });
+    const second = await createPackage({ source: 'npm:second-extension' });
+    runtime.listOutput = [
+      'User packages:',
+      `  ${first.source}`,
+      `    ${first.root}`,
+      `  ${second.source}`,
+      `    ${second.root}`,
+      '',
+    ].join('\n');
+    const firstStore = await import('../pi-package-store.js');
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+
+    await Promise.all([
+      firstStore.mutatePiPackage({ action: 'set-enabled', source: first.source, enabled: false }),
+      secondStore.mutatePiPackage({ action: 'set-enabled', source: second.source, enabled: false }),
+    ]);
+
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([first.source, second.source]);
+    expect(lockRuntime.calls).toHaveLength(2);
+    expect(lockRuntime.maxActive).toBe(1);
+  });
+
   it('refreshes open settings when a failed update has already revoked approval', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
@@ -261,6 +372,35 @@ describe('Pi package executable-code boundary', () => {
     runtime.stderr = '';
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
+    unsubscribe();
+  });
+
+  it('refreshes open settings when set-enabled persists but the follow-up list fails', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    runtime.listOutcomes = [
+      { stdout: runtime.listOutput, exitCode: 0 },
+      { stderr: 'list failed after state write', exitCode: 1 },
+    ];
+
+    await expect(mutateAuthorized(store, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
+    })).rejects.toThrow(/list failed after state write/);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[]; approvedExtensionSources: string[] };
+    expect(state.disabledSources).toEqual([]);
+    expect(state.approvedExtensionSources).toEqual([source]);
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: true }],
     });
     unsubscribe();
   });
