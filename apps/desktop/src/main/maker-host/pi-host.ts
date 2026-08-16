@@ -560,7 +560,14 @@ export function buildPiSubscriptionNativeProviders(
         // A missing/empty/partial PI probe is not evidence that the daily
         // catalog annotation is wrong. Keep annotated rows in the overlay so
         // inheritModels cannot filter out a confirmed addition or correction.
-        const isXaiCatalogAddition = sourceProviderId === 'xai' && !bundledModel;
+        // 探针失败(bundledModelsByProvider == null)不能当成「全部 xAI 都不在二进制里」,
+        // 否则 grok-4.3 / grok-build-0.1 会被改写成 openai-responses。只在探针成功且
+        // 明确缺 grok-4.6 时才合成 addition。
+        const xaiProbeKnown = bundledModelsByProvider != null;
+        const isKnownMissingXaiModel =
+          wireId === 'grok-4.6' || model.id === 'grok-4.6' || model.id.endsWith('/grok-4.6');
+        const isXaiCatalogAddition =
+          sourceProviderId === 'xai' && xaiProbeKnown && !bundledModel && isKnownMissingXaiModel;
         const isAnnotatedAddition = (!!model.piApi && !bundledModel) || isXaiCatalogAddition;
         const isContextProfileAddition =
           sourceProviderId === 'openai' && wireId.endsWith('[1m]') && !bundledModel;

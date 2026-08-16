@@ -1017,6 +1017,42 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
+  it('does not rewrite bundled xAI protocols when the PI probe is unavailable', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
+    xai.models.pi = [
+      {
+        id: 'grok-4.3',
+        name: 'Grok 4.3',
+        contextWindow: 1_000_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: true,
+      },
+      {
+        id: 'grok-4.6',
+        name: 'Grok 4.6',
+        contextWindow: 500_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: true,
+      },
+    ];
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      undefined,
+    ).providers.find((candidate) => candidate.id === 'xai');
+    const grok43 = provider?.models.find((model) => model.wireId === 'grok-4.3');
+    const grok46 = provider?.models.find((model) => model.wireId === 'grok-4.6');
+    expect(grok43?.id).toBe('grok-4.3');
+    expect(grok43?.catalogAddition).toBeUndefined();
+    expect(grok43?.api).toBeUndefined();
+    expect(grok46?.id).toBe('grok-4.6');
+    expect(grok46?.catalogAddition).toBeUndefined();
+    expect(grok46?.api).toBeUndefined();
+  });
+
   it('keeps missing daily rows while respecting models returned by a partial PI probe', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
