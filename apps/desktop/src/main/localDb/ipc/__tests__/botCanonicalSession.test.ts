@@ -3291,6 +3291,76 @@ describe('Bot canonical Session lifecycle', () => {
     }
   });
 
+  it('does not manually retry a delivery while its Bot is paused', async () => {
+    const service = createBotDeliveryOutboxService({
+      deliver: vi.fn(async () => ({
+        ok: false as const,
+        retryable: false,
+        errorCode: 'REMOTE_REJECTED',
+        message: 'retry manually',
+      })),
+      createId: () => 'outbox-paused-bot-retry',
+    });
+    try {
+      const queued = await service.enqueue({
+        botId: 'bot-1',
+        idempotencyKey: 'paused-bot-manual-retry',
+        payload: { version: 1, kind: 'channel-message', text: 'do not deliver' },
+      });
+      await service.drain();
+      h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = 'bot-1'").run();
+
+      await expect(service.retry(queued.id, 'bot-1')).rejects.toThrow(
+        'Restore the Bot before retrying this delivery',
+      );
+      expect(
+        h.sqlite!.prepare('SELECT status FROM bot_delivery_outbox WHERE id = ?').pluck().get(queued.id),
+      ).toBe('dead-letter');
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('does not manually retry a delivery after its Route switched tasks', async () => {
+    const route = await upsertBotRoute({
+      botId: 'bot-1',
+      channelId: 'bot-1:local',
+      routeKey: 'telegram:dm:bot-1:retry-task',
+    });
+    const routed = await ensureBotRouteSession({ routeId: route.id, ownerDeviceId: 'device-a' });
+    const service = createBotDeliveryOutboxService({
+      deliver: vi.fn(async () => ({
+        ok: false as const,
+        retryable: false,
+        errorCode: 'REMOTE_REJECTED',
+        message: 'retry manually',
+      })),
+      createId: () => 'outbox-stale-route-task',
+    });
+    try {
+      const queued = await service.enqueue({
+        botId: 'bot-1',
+        channelId: 'bot-1:local',
+        routeId: route.id,
+        sessionId: routed.sessionId,
+        ownerGeneration: routed.route.ownerGeneration,
+        idempotencyKey: 'stale-route-task',
+        payload: { version: 1, kind: 'channel-message', text: 'do not deliver' },
+      });
+      await service.drain();
+      h.sqlite!.prepare('UPDATE bot_routes SET current_session_id = NULL WHERE id = ?').run(route.id);
+
+      await expect(service.retry(queued.id, 'bot-1')).rejects.toThrow(
+        'Bot delivery route now points to a different task',
+      );
+      expect(
+        h.sqlite!.prepare('SELECT status FROM bot_delivery_outbox WHERE id = ?').pluck().get(queued.id),
+      ).toBe('dead-letter');
+    } finally {
+      service.dispose();
+    }
+  });
+
   it('does not manually retry through a changed Route owner generation', async () => {
     h.sqlite!.prepare(
       `

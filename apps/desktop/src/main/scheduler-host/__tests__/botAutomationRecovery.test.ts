@@ -31,7 +31,8 @@ function createDb() {
     );
     CREATE TABLE schedules (
       id TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active'
     );
     CREATE TABLE schedule_runs (
       id TEXT PRIMARY KEY NOT NULL,
@@ -44,7 +45,8 @@ function createDb() {
     CREATE TABLE bot_automation_links (
       id TEXT PRIMARY KEY NOT NULL,
       bot_id TEXT NOT NULL,
-      schedule_id TEXT
+      schedule_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active'
     );
     CREATE TABLE bot_automation_runs (
       id TEXT PRIMARY KEY NOT NULL,
@@ -308,6 +310,80 @@ describe('Bot automation restart recovery', () => {
     sqlite.close();
   });
 
+  it('does not deliver a recovered Route completion after the Bot was paused', async () => {
+    const { sqlite, db } = createDb();
+    sqlite.prepare("INSERT INTO sessions (id, status, updated_at) VALUES ('route-task', 'active', 1), ('child', 'active', 1)").run();
+    sqlite.prepare("INSERT INTO bot_profiles (id, canonical_session_id, status) VALUES ('bot-1', NULL, 'paused')").run();
+    sqlite.prepare("INSERT INTO schedules (id, name) VALUES ('schedule-1', 'Route report')").run();
+    sqlite.prepare("INSERT INTO schedule_runs (id, schedule_id, status) VALUES ('schedule-run-1', 'schedule-1', 'running')").run();
+    sqlite.prepare("INSERT INTO bot_automation_links (id, bot_id, schedule_id) VALUES ('automation-1', 'bot-1', 'schedule-1')").run();
+    sqlite.prepare(`
+      INSERT INTO bot_routes (
+        id, bot_id, current_session_id, channel_id, owner_generation, status
+      ) VALUES ('route-1', 'bot-1', 'route-task', 'telegram-account-1', 7, 'active')
+    `).run();
+    sqlite.prepare(`
+      INSERT INTO bot_automation_runs (
+        id, automation_link_id, schedule_run_id, session_id,
+        target_route_id_snapshot, target_route_owner_generation_snapshot,
+        delivery_status, result_text_snapshot, status, updated_at
+      ) VALUES ('automation-run-1', 'automation-1', 'schedule-run-1', 'child',
+        'route-1', 7, 'not-requested', 'Recovered route report.', 'completing', 10)
+    `).run();
+
+    const enqueueDelivery = vi.fn(async () => ({ id: 'outbox-route-1' }));
+    await reconcileBotAutomationRuns({
+      getDb: () => db,
+      maker: { closeSession: vi.fn(async () => undefined) } as unknown as Maker,
+      enqueueDelivery,
+    });
+
+    expect(enqueueDelivery).not.toHaveBeenCalled();
+    expect(db.select({
+      status: botAutomationRuns.status,
+      deliveryStatus: botAutomationRuns.deliveryStatus,
+      deliveryError: botAutomationRuns.deliveryError,
+    }).from(botAutomationRuns).get()).toEqual({
+      status: 'success',
+      deliveryStatus: 'enqueue-failed',
+      deliveryError: 'Bot is no longer active; completion was not delivered',
+    });
+    sqlite.close();
+  });
+
+  it('does not deliver a recovered completion after its Automation was paused', async () => {
+    const { sqlite, db } = createDb();
+    sqlite.prepare("INSERT INTO sessions (id, status, updated_at) VALUES ('parent', 'active', 1), ('child', 'active', 1)").run();
+    sqlite.prepare("INSERT INTO bot_profiles (id, canonical_session_id) VALUES ('bot-1', 'parent')").run();
+    sqlite.prepare("INSERT INTO schedules (id, name, status) VALUES ('schedule-1', 'Daily report', 'paused')").run();
+    sqlite.prepare("INSERT INTO schedule_runs (id, schedule_id, status) VALUES ('schedule-run-1', 'schedule-1', 'running')").run();
+    sqlite.prepare("INSERT INTO bot_automation_links (id, bot_id, schedule_id, status) VALUES ('automation-1', 'bot-1', 'schedule-1', 'paused')").run();
+    sqlite.prepare(`
+      INSERT INTO bot_automation_runs (
+        id, automation_link_id, schedule_run_id, session_id,
+        delivery_status, result_text_snapshot, status, updated_at
+      ) VALUES ('automation-run-1', 'automation-1', 'schedule-run-1', 'child',
+        'not-requested', 'Recovered report.', 'completing', 10)
+    `).run();
+
+    const enqueueDelivery = vi.fn(async () => ({ id: 'outbox-1' }));
+    await reconcileBotAutomationRuns({
+      getDb: () => db,
+      maker: { closeSession: vi.fn(async () => undefined) } as unknown as Maker,
+      enqueueDelivery,
+    });
+
+    expect(enqueueDelivery).not.toHaveBeenCalled();
+    expect(db.select({
+      deliveryStatus: botAutomationRuns.deliveryStatus,
+      deliveryError: botAutomationRuns.deliveryError,
+    }).from(botAutomationRuns).get()).toEqual({
+      deliveryStatus: 'enqueue-failed',
+      deliveryError: 'Bot automation is no longer active; completion was not delivered',
+    });
+    sqlite.close();
+  });
+
   it('repairs a Scheduler run interrupted after the Bot result was durably completed', async () => {
     const { sqlite, db } = createDb();
     sqlite.prepare("INSERT INTO sessions (id, status, updated_at) VALUES ('child', 'active', 1)").run();
@@ -352,4 +428,39 @@ describe('Bot automation restart recovery', () => {
       .toEqual({ status: 'archived' });
     sqlite.close();
   });
+
+  it.each(['failed', 'aborted', 'skipped'] as const)(
+    'repairs a Scheduler run left %s after the Bot result was durably completed',
+    async (scheduleStatus) => {
+      const { sqlite, db } = createDb();
+      sqlite.prepare("INSERT INTO sessions (id, status, updated_at) VALUES ('child', 'active', 1)").run();
+      sqlite.prepare("INSERT INTO bot_profiles (id, canonical_session_id) VALUES ('bot-1', NULL)").run();
+      sqlite.prepare("INSERT INTO schedules (id, name) VALUES ('schedule-1', 'Crash window')").run();
+      sqlite.prepare(`
+        INSERT INTO schedule_runs (id, schedule_id, status, result_text, finished_at)
+        VALUES ('schedule-run-1', 'schedule-1', ?, NULL, 20)
+      `).run(scheduleStatus);
+      sqlite.prepare("INSERT INTO bot_automation_links (id, bot_id, schedule_id) VALUES ('automation-1', 'bot-1', 'schedule-1')").run();
+      sqlite.prepare(`
+        INSERT INTO bot_automation_runs (
+          id, automation_link_id, schedule_run_id, session_id,
+          delivery_status, result_text_snapshot, status, updated_at, finished_at
+        ) VALUES ('automation-run-1', 'automation-1', 'schedule-run-1', 'child',
+          'not-requested', 'Durable result.', 'success', 19, 19)
+      `).run();
+
+      await reconcileBotAutomationRuns({
+        getDb: () => db,
+        maker: { closeSession: vi.fn(async () => undefined) } as unknown as Maker,
+        archiveSession: vi.fn(async () => undefined),
+      });
+
+      expect(
+        db.select({ status: scheduleRuns.status, resultText: scheduleRuns.resultText })
+          .from(scheduleRuns)
+          .get(),
+      ).toEqual({ status: 'success', resultText: 'Durable result.' });
+      sqlite.close();
+    },
+  );
 });

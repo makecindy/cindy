@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 
-import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm';
 import type { Maker, AgentKind, Effort } from '@cindy/maker-core';
 import type {
   FireContext,
@@ -459,6 +459,7 @@ type BotAutomationDeliveryTarget = {
 
 async function resolveBotAutomationDeliveryTarget(
   db: SchedulerDrizzleDb,
+  automationLinkId: string,
   targetRouteId: string | null,
   botId: string,
   expectedOwnerGeneration: number | null,
@@ -466,6 +467,29 @@ async function resolveBotAutomationDeliveryTarget(
   | { ok: true; target: BotAutomationDeliveryTarget | null }
   | { ok: false; error: string }
 > {
+  const [automation] = await db
+    .select({
+      status: botAutomationLinks.status,
+      scheduleStatus: schedules.status,
+    })
+    .from(botAutomationLinks)
+    .leftJoin(schedules, eq(schedules.id, botAutomationLinks.scheduleId))
+    .where(and(eq(botAutomationLinks.id, automationLinkId), eq(botAutomationLinks.botId, botId)))
+    .limit(1);
+  if (!automation || automation.status !== 'active' || automation.scheduleStatus !== 'active') {
+    return { ok: false, error: 'Bot automation is no longer active; completion was not delivered' };
+  }
+  const [profile] = await db
+    .select({
+      canonicalSessionId: botProfiles.canonicalSessionId,
+      status: botProfiles.status,
+    })
+    .from(botProfiles)
+    .where(eq(botProfiles.id, botId))
+    .limit(1);
+  if (!profile || profile.status !== 'active') {
+    return { ok: false, error: 'Bot is no longer active; completion was not delivered' };
+  }
   if (targetRouteId) {
     const [route] = await db
       .select({
@@ -503,17 +527,6 @@ async function resolveBotAutomationDeliveryTarget(
         ? `Target route is ${route.status} or has no active task`
         : 'Target route no longer exists',
     };
-  }
-  const [profile] = await db
-    .select({
-      canonicalSessionId: botProfiles.canonicalSessionId,
-      status: botProfiles.status,
-    })
-    .from(botProfiles)
-    .where(eq(botProfiles.id, botId))
-    .limit(1);
-  if (!profile || profile.status !== 'active') {
-    return { ok: false, error: 'Bot is no longer active; completion was not delivered' };
   }
   return {
     ok: true,
@@ -959,6 +972,7 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
       .where(eq(botAutomationRuns.id, automationRunId));
 
     const deliveryTarget = await this.resolveDeliveryTarget(
+      link.id,
       link.targetRouteId,
       profile.id,
       targetRouteOwnerGenerationSnapshot,
@@ -1105,12 +1119,14 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
   }
 
   private async resolveDeliveryTarget(
+    automationLinkId: string,
     targetRouteId: string | null,
     botId: string,
     expectedOwnerGeneration: number | null,
   ): ReturnType<typeof resolveBotAutomationDeliveryTarget> {
     return resolveBotAutomationDeliveryTarget(
       this.deps.getDb(),
+      automationLinkId,
       targetRouteId,
       botId,
       expectedOwnerGeneration,
@@ -1158,7 +1174,7 @@ export async function reconcileBotAutomationRuns(
         inArray(botAutomationRuns.status, ['claimed', 'running', 'completing']),
         and(
           eq(botAutomationRuns.status, 'success'),
-          inArray(scheduleRuns.status, ['running', 'interrupted']),
+          ne(scheduleRuns.status, 'success'),
         ),
       ),
     );
@@ -1180,7 +1196,7 @@ export async function reconcileBotAutomationRuns(
           .where(
             and(
               eq(scheduleRuns.id, row.scheduleRunId),
-              inArray(scheduleRuns.status, ['running', 'interrupted']),
+              ne(scheduleRuns.status, 'success'),
             ),
           );
       }
@@ -1201,6 +1217,7 @@ export async function reconcileBotAutomationRuns(
       if (!row.deliveryOutboxId && row.deliveryStatus === 'not-requested' && row.sessionId) {
         const deliveryTarget = await resolveBotAutomationDeliveryTarget(
           db,
+          row.automationLinkId,
           row.targetRouteIdSnapshot,
           row.botId,
           row.targetRouteOwnerGenerationSnapshot,

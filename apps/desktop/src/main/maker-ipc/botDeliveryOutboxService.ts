@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
-import { botChannels, botDeliveryOutbox, botRoutes } from '../localDb/schema.js';
+import { botChannels, botDeliveryOutbox, botProfiles, botRoutes } from '../localDb/schema.js';
 import type { BotDeliveryView } from '../../shared/botDelivery.js';
 import { parseBotDeliveryDiagnostic } from '../../shared/botDeliveryDiagnostic.js';
 
@@ -498,6 +498,7 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
         id: botDeliveryOutbox.id,
         botId: botDeliveryOutbox.botId,
         routeId: botDeliveryOutbox.routeId,
+        sessionId: botDeliveryOutbox.sessionId,
         ownerGeneration: botDeliveryOutbox.ownerGeneration,
         status: botDeliveryOutbox.status,
         deliveryReceiptJson: botDeliveryOutbox.deliveryReceiptJson,
@@ -511,6 +512,17 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
     }
     if (row.status !== 'failed' && row.status !== 'dead-letter') {
       throw new Error(`Bot delivery in status ${row.status} cannot be retried`);
+    }
+    const [profile] = await db
+      .select({
+        canonicalSessionId: botProfiles.canonicalSessionId,
+        status: botProfiles.status,
+      })
+      .from(botProfiles)
+      .where(eq(botProfiles.id, botId))
+      .limit(1);
+    if (!profile || profile.status !== 'active') {
+      throw new Error('Restore the Bot before retrying this delivery');
     }
     const priorReceipt = parseReceipt(row.deliveryReceiptJson);
     const priorDispatch = priorReceipt.externalDispatch;
@@ -527,6 +539,7 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
       const [route] = await db
         .select({
           botId: botRoutes.botId,
+          currentSessionId: botRoutes.currentSessionId,
           ownerGeneration: botRoutes.ownerGeneration,
           status: botRoutes.status,
         })
@@ -537,9 +550,14 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
       if (route.status !== 'active') {
         throw new Error(`Bot delivery route is ${route.status}`);
       }
+      if (row.sessionId && route.currentSessionId !== row.sessionId) {
+        throw new Error('Bot delivery route now points to a different task');
+      }
       if (route.ownerGeneration !== row.ownerGeneration) {
         throw new Error('Bot delivery route ownership changed; create a new delivery instead');
       }
+    } else if (row.sessionId && profile.canonicalSessionId !== row.sessionId) {
+      throw new Error('Bot canonical task changed; create a new delivery instead');
     }
     const at = now();
     const [updated] = await db

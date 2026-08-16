@@ -658,6 +658,12 @@ export function registerBotAutomationHandlers(deps: BotAutomationHandlerDeps): v
       if (row.run.status !== 'success') {
         throwIpcError('INVALID_PARAMS', 'Only a completed Bot automation can retry delivery');
       }
+      if (link.status !== 'active' || row.schedule?.status !== 'active') {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Resume this Bot automation before retrying its delivery',
+        );
+      }
       const [activeProfile] = await db
         .select({
           status: botProfiles.status,
