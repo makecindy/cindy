@@ -583,6 +583,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       sessionId: 'approved',
     }));
     expect(resolvePiManagedPackageResources).toHaveBeenCalledOnce();
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith({
+      snapshotRoot: path.join(approvedHome, 'managed-packages'),
+    });
     await vi.waitFor(() => {
       expect(approvedHandle.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
         status: 'approved', approvalRevision: 'rev-approved-only', requestedSkillCount: 1,

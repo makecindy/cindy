@@ -527,6 +527,7 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import { runPiPackageMutationIpcBoundary } from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -6108,54 +6109,61 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       source: payload.source,
       ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
     };
-    if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
+    return runPiPackageMutationIpcBoundary(async () => {
+      if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
 
-    const source = request.source.trim();
-    const copy =
-      request.action === 'set-enabled'
-        ? {
-            title: t('settings.piPackages.extensionApprovalTitle'),
-            message: t('settings.piPackages.extensionApprovalDescription'),
-            confirm: t('settings.piPackages.approveAndEnable'),
-          }
-        : request.action === 'remove'
+      const source = request.source.trim();
+      const copy =
+        request.action === 'set-enabled'
           ? {
-              title: t('settings.piPackages.uninstallTitle'),
-              message: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
-              confirm: t('settings.piPackages.confirmUninstall'),
+              title: t('settings.piPackages.extensionApprovalTitle'),
+              message: t('settings.piPackages.extensionApprovalDescription'),
+              confirm: t('settings.piPackages.approveAndEnable'),
             }
-          : request.action === 'update'
+          : request.action === 'remove'
             ? {
-                title: t('settings.piPackages.updateConfirmTitle'),
-                message: t('settings.piPackages.updateConfirmDescription').replace(
-                  '{{source}}',
-                  source,
-                ),
-                confirm: t('settings.piPackages.confirmUpdate'),
+                title: t('settings.piPackages.uninstallTitle'),
+                message: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
+                confirm: t('settings.piPackages.confirmUninstall'),
               }
-            : {
-                title: t('settings.piPackages.confirmTitle'),
-                message: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
-                confirm: t('settings.piPackages.confirmInstall'),
-              };
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    const options = {
-      type: 'warning' as const,
-      title: copy.title,
-      message: copy.title,
-      detail: copy.message,
-      buttons: [copy.confirm, t('settings.piPackages.cancel')],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
-    };
-    const decision = owner
-      ? await dialog.showMessageBox(owner, options)
-      : await dialog.showMessageBox(options);
-    if (decision.response !== 0) {
-      throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
-    }
-    return mutatePiPackage(request, issuePiPackageMutationGrant(request));
+            : request.action === 'update'
+              ? {
+                  title: t('settings.piPackages.updateConfirmTitle'),
+                  message: t('settings.piPackages.updateConfirmDescription').replace(
+                    '{{source}}',
+                    source,
+                  ),
+                  confirm: t('settings.piPackages.confirmUpdate'),
+                }
+              : {
+                  title: t('settings.piPackages.confirmTitle'),
+                  message: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
+                  confirm: t('settings.piPackages.confirmInstall'),
+                };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const options = {
+        type: 'warning' as const,
+        title: copy.title,
+        message: copy.title,
+        detail: copy.message,
+        buttons: [copy.confirm, t('settings.piPackages.cancel')],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      };
+      const decision = owner
+        ? await dialog.showMessageBox(owner, options)
+        : await dialog.showMessageBox(options);
+      if (decision.response !== 0) {
+        throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+      }
+      return mutatePiPackage(request, issuePiPackageMutationGrant(request));
+    }, t('settings.piPackages.operationFailed'), (error) => {
+      log.warn('Pi extension mutation failed', {
+        action: request.action,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
   });
 
   ipcMain.handle(

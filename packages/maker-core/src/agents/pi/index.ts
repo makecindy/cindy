@@ -1958,7 +1958,9 @@ export class PiAgent extends BaseAgent {
     } = { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
     if (!reviewMode && !opts.remoteHostId && this.deps.resolvePiManagedPackageResources) {
       try {
-        managedPackageResources = await this.deps.resolvePiManagedPackageResources();
+        managedPackageResources = await this.deps.resolvePiManagedPackageResources({
+          snapshotRoot: path.join(configHome, 'managed-packages'),
+        });
       } catch {
         this.deps.logger.warn('pi managed package resolver failed closed', {
           sessionId: opts.sessionId ?? null,

@@ -9,7 +9,14 @@ const runtime = vi.hoisted(() => ({
   listOutcomes: [] as Array<{ stdout?: string; stderr?: string; exitCode: number }>,
   stderr: '',
   exitCode: 0,
-  spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined> }>,
+  spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined>; detached?: boolean }>,
+  holdMutationCommand: false,
+  pendingClose: null as null | ((code: number) => void),
+}));
+
+const processRuntime = vi.hoisted(() => ({
+  killTree: vi.fn(),
+  pendingTreeSettled: null as null | (() => void),
 }));
 
 const lockRuntime = vi.hoisted(() => ({
@@ -63,9 +70,16 @@ vi.mock('../../device-link/crossProcessLock.js', () => ({
   }),
 }));
 
+vi.mock('../../scheduler-host/proc-util.js', () => ({
+  killProcessTree: (...args: unknown[]) => {
+    processRuntime.killTree(...args);
+    processRuntime.pendingTreeSettled = args[2] as (() => void) | undefined ?? null;
+  },
+}));
+
 vi.mock('node:child_process', () => ({
-  spawn: (_binary: string, args: string[], options: { env?: Record<string, string | undefined> }) => {
-    runtime.spawns.push({ args: [...args], env: { ...(options.env ?? {}) } });
+  spawn: (_binary: string, args: string[], options: { env?: Record<string, string | undefined>; detached?: boolean }) => {
+    runtime.spawns.push({ args: [...args], env: { ...(options.env ?? {}) }, detached: options.detached });
     const stdoutHandlers: Array<(chunk: Buffer) => void> = [];
     const stderrHandlers: Array<(chunk: Buffer) => void> = [];
     const closeHandlers: Array<(code: number) => void> = [];
@@ -78,8 +92,15 @@ vi.mock('node:child_process', () => ({
         if (event === 'error') errorHandlers.push(handler as (error: Error) => void);
       },
       kill: vi.fn(),
+      pid: 4242,
+      exitCode: null,
+      signalCode: null,
+    };
+    runtime.pendingClose = (code) => {
+      for (const handler of closeHandlers) handler(code);
     };
     queueMicrotask(() => {
+      if (runtime.holdMutationCommand && !args.includes('list')) return;
       const outcome = args.includes('list') ? runtime.listOutcomes.shift() : undefined;
       if (args.includes('list')) {
         for (const handler of stdoutHandlers) {
@@ -141,6 +162,10 @@ beforeEach(async () => {
   runtime.stderr = '';
   runtime.exitCode = 0;
   runtime.spawns = [];
+  runtime.holdMutationCommand = false;
+  runtime.pendingClose = null;
+  processRuntime.killTree.mockReset();
+  processRuntime.pendingTreeSettled = null;
   lockRuntime.calls = [];
   lockRuntime.tail = Promise.resolve();
   lockRuntime.active = 0;
@@ -162,6 +187,33 @@ async function mutateAuthorized(
 }
 
 describe('Pi package executable-code boundary', () => {
+  it.each(['darwin', 'win32'] as const)(
+    'waits for timed-out package trees to close on %s',
+    async (platform) => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+      try {
+        const store = await import('../pi-package-store.js');
+        runtime.holdMutationCommand = true;
+        let settled = false;
+        const pending = store.runPiPackageCommand(['install', 'npm:test'], 1).finally(() => {
+          settled = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(processRuntime.killTree).toHaveBeenCalledOnce();
+        expect(runtime.spawns.at(-1)?.detached).toBe(platform !== 'win32');
+        expect(settled).toBe(false);
+        runtime.pendingClose?.(1);
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        processRuntime.pendingTreeSettled?.();
+        await expect(pending).rejects.toThrow(/timed out/);
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+      }
+    },
+  );
+
   it('binds mutation grants to one exact request and rejects replay', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
@@ -185,6 +237,16 @@ describe('Pi package executable-code boundary', () => {
 
   it('holds Extension packages disabled until explicit approval and revokes approval on update', async () => {
     const { root, source } = await createPackage();
+    await fs.mkdir(path.join(root, 'skills', 'sample'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, 'skills', 'sample', 'SKILL.md'),
+      '---\nname: sample\ndescription: sample skill\n---\nold skill\n',
+    );
+    const manifest = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')) as {
+      pi: { skills?: string[] };
+    };
+    manifest.pi.skills = ['./skills'];
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify(manifest));
     const store = await import('../pi-package-store.js');
 
     const initial = await store.listPiPackages();
@@ -208,11 +270,30 @@ describe('Pi package executable-code boundary', () => {
     });
     expect(approved.affectedPackage).toMatchObject({ source, enabled: true });
     expect(approved.affectedPackage?.requiresExtensionApproval).toBeUndefined();
-    const canonicalRoot = await fs.realpath(root);
-    await expect(store.resolveManagedPiPackageResources()).resolves.toMatchObject({
-      extensions: [path.join(canonicalRoot, 'extensions', 'index.ts')],
-      packageRoots: [canonicalRoot],
+    const snapshotRoot = path.join(runtime.userData, 'session-home', 'managed-packages');
+    const snapshot = await store.resolveManagedPiPackageResources({ snapshotRoot });
+    const snapshotExtension = path.join(snapshotRoot, '0', 'extensions', 'index.ts');
+    const snapshotSkill = path.join(snapshotRoot, '0', 'skills', 'sample', 'SKILL.md');
+    const snapshotPrompt = path.join(snapshotRoot, '0', 'prompts', 'hello.md');
+    expect(snapshot).toMatchObject({
+      extensions: [snapshotExtension],
+      skills: [{ path: snapshotSkill, name: 'sample' }],
+      promptTemplates: [snapshotPrompt],
+      packageRoots: [path.join(snapshotRoot, '0')],
     });
+    const frozenResources = await Promise.all([
+      fs.readFile(snapshotExtension, 'utf8'),
+      fs.readFile(snapshotSkill, 'utf8'),
+      fs.readFile(snapshotPrompt, 'utf8'),
+    ]);
+    await fs.writeFile(path.join(root, 'extensions', 'index.ts'), 'export default function changed() {}');
+    await fs.writeFile(path.join(root, 'skills', 'sample', 'SKILL.md'), '# changed');
+    await fs.writeFile(path.join(root, 'prompts', 'hello.md'), 'changed');
+    await expect(Promise.all([
+      fs.readFile(snapshotExtension, 'utf8'),
+      fs.readFile(snapshotSkill, 'utf8'),
+      fs.readFile(snapshotPrompt, 'utf8'),
+    ])).resolves.toEqual(frozenResources);
 
     const updated = await mutateAuthorized(store, { action: 'update', source });
     expect(updated.affectedPackage).toMatchObject({
@@ -220,6 +301,12 @@ describe('Pi package executable-code boundary', () => {
       enabled: false,
       requiresExtensionApproval: true,
     });
+    await fs.rm(root, { recursive: true, force: true });
+    await expect(Promise.all([
+      fs.readFile(snapshotExtension, 'utf8'),
+      fs.readFile(snapshotSkill, 'utf8'),
+      fs.readFile(snapshotPrompt, 'utf8'),
+    ])).resolves.toEqual(frozenResources);
   });
 
   it('preserves v1 disabled sources while migrating approval state and blocks lifecycle scripts', async () => {
@@ -516,8 +603,10 @@ describe('Pi package executable-code boundary', () => {
         warning: 'no-resources',
       }],
     });
-    await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
-      extensions: [], skills: [], promptTemplates: [], packageRoots: [await fs.realpath(packageRoot)],
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'escaped-snapshot'),
+    })).resolves.toEqual({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
     });
   });
 
@@ -547,7 +636,9 @@ describe('Pi package executable-code boundary', () => {
     }]);
     expect(JSON.stringify(result)).not.toContain('secret');
     expect(JSON.stringify(result)).not.toContain('private');
-    await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'unsafe-snapshot'),
+    })).resolves.toEqual({
       extensions: [], skills: [], promptTemplates: [], packageRoots: [],
     });
   });
@@ -570,7 +661,9 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{ source, enabled: false, warning: 'inspection-limit', resources: [] }],
     });
-    await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'oversized-snapshot'),
+    })).resolves.toEqual({
       extensions: [], skills: [], promptTemplates: [], packageRoots: [],
     });
   });

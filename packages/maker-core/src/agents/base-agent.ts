@@ -479,7 +479,7 @@ export interface AgentDeps {
    * and path confinement. Device-link remote control still executes on this host
    * and therefore uses these resources. SSH remoteHostId and Review runtimes do not.
    */
-  resolvePiManagedPackageResources?: () => Promise<{
+  resolvePiManagedPackageResources?: (options?: { snapshotRoot: string }) => Promise<{
     extensions: string[];
     skills: Array<{ path: string; name: string; description?: string }>;
     promptTemplates: string[];

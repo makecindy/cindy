@@ -36,6 +36,7 @@ import {
   piPackageMutationNeedsGrant,
   type PiPackageMutationGrant,
 } from './pi-package-mutation-grant.js';
+import { killProcessTree } from '../scheduler-host/proc-util.js';
 
 const log = createLogger('pi-package-store');
 interface PicomatchOptions {
@@ -242,7 +243,10 @@ function boundedAppend(current: string, chunk: Buffer): string {
   ).toString('utf8');
 }
 
-async function runPiPackageCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
+export async function runPiPackageCommand(
+  args: string[],
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): Promise<{ stdout: string; stderr: string }> {
   const binaryPath = getReadyBinaryPath('pi');
   if (!binaryPath) throw new Error('Pi is not installed in Cindy');
   await fs.mkdir(packageHome(), { recursive: true, mode: 0o700 });
@@ -253,6 +257,7 @@ async function runPiPackageCommand(args: string[]): Promise<{ stdout: string; st
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
       env: {
         ...process.env,
         PI_CODING_AGENT_DIR: packageHome(),
@@ -270,33 +275,42 @@ async function runPiPackageCommand(args: string[]): Promise<{ stdout: string; st
     let stderr = '';
     let settled = false;
     let timedOut = false;
-    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let childClosedAfterTimeout = false;
+    let treeTerminationSettled = false;
+    const settleTimedOutCommand = (): void => {
+      if (settled || !timedOut || !childClosedAfterTimeout || !treeTerminationSettled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error('Pi package command timed out'));
+    };
     const timer = setTimeout(() => {
       if (settled) return;
       timedOut = true;
-      child.kill('SIGTERM');
-      forceKillTimer = setTimeout(() => {
-        if (!settled) child.kill('SIGKILL');
-      }, 5_000);
-    }, COMMAND_TIMEOUT_MS);
+      // `close` follows inherited stdio release, so the mutation lock remains
+      // held until Pi and npm/git descendants have stopped touching the store.
+      killProcessTree(child.pid, child, () => {
+        treeTerminationSettled = true;
+        settleTimedOutCommand();
+      });
+    }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => { stdout = boundedAppend(stdout, chunk); });
     child.stderr.on('data', (chunk: Buffer) => { stderr = boundedAppend(stderr, chunk); });
     child.once('error', (error) => {
       if (settled) return;
+      if (timedOut) return;
       settled = true;
       clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
       reject(error);
     });
     child.once('close', (code) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
       if (timedOut) {
-        reject(new Error('Pi package command timed out'));
+        childClosedAfterTimeout = true;
+        settleTimedOutCommand();
         return;
       }
+      settled = true;
+      clearTimeout(timer);
       if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(redactPackageCommandMessage(
         (stderr || stdout || `Pi package command failed (${code ?? 'unknown'})`).trim(),
@@ -1012,19 +1026,26 @@ export async function listPiPackages(): Promise<PiPackageListResult> {
   return listPiPackagesNow();
 }
 
-export async function resolveManagedPiPackageResources(): Promise<PiManagedPackageResources> {
-  await mutationTail;
+export async function resolveManagedPiPackageResources(
+  options?: { snapshotRoot: string },
+): Promise<PiManagedPackageResources> {
   if (!getReadyBinaryPath('pi')) {
     return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
   }
   try {
-    const inspected = await inspectAllPackages();
-    return {
-      extensions: [...new Set(inspected.flatMap((pkg) => pkg.launch.extensions))],
-      skills: inspected.flatMap((pkg) => pkg.launch.skills),
-      promptTemplates: [...new Set(inspected.flatMap((pkg) => pkg.launch.promptTemplates))],
-      packageRoots: [...new Set(inspected.flatMap((pkg) => pkg.launch.packageRoots))],
+    const resolveResources = async (): Promise<PiManagedPackageResources> => {
+      const inspected = await inspectAllPackages();
+      const resources = {
+        extensions: [...new Set(inspected.flatMap((pkg) => pkg.launch.extensions))],
+        skills: inspected.flatMap((pkg) => pkg.launch.skills),
+        promptTemplates: [...new Set(inspected.flatMap((pkg) => pkg.launch.promptTemplates))],
+        packageRoots: [...new Set(inspected.flatMap((pkg) => pkg.launch.packageRoots))],
+      };
+      return options ? stageManagedPackageSnapshot(resources, options.snapshotRoot) : resources;
     };
+    if (options) return await enqueueMutation(resolveResources);
+    await mutationTail;
+    return await resolveResources();
   } catch (error) {
     log.warn('Pi package resources unavailable; starting without user packages', {
       message: error instanceof Error ? error.message : String(error),
@@ -1145,6 +1166,78 @@ function enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
   const result = mutationTail.then(() => withPiPackageMutationLock(operation));
   mutationTail = result.then(() => undefined, () => undefined);
   return result;
+}
+
+function isWithinPath(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function assertSnapshotTreeConfined(root: string, current = root): Promise<void> {
+  const stat = await fs.lstat(current);
+  if (stat.isSymbolicLink()) {
+    const target = await fs.realpath(current);
+    if (!isWithinPath(root, target)) throw new Error('Pi extension snapshot contains an escaped link');
+    return;
+  }
+  if (stat.isFile()) return;
+  if (!stat.isDirectory()) throw new Error('Pi extension snapshot contains a special file');
+  for (const entry of await fs.readdir(current)) {
+    await assertSnapshotTreeConfined(root, path.join(current, entry));
+  }
+}
+
+function mapSnapshotPath(
+  sourcePath: string,
+  mappings: Array<{ source: string; target: string; directory: boolean }>,
+): string {
+  const resolved = path.resolve(sourcePath);
+  for (const mapping of mappings) {
+    if (!mapping.directory && resolved === mapping.source) return mapping.target;
+    if (mapping.directory && isWithinPath(mapping.source, resolved)) {
+      return path.join(mapping.target, path.relative(mapping.source, resolved));
+    }
+  }
+  throw new Error('Pi extension resource is outside its inspected package root');
+}
+
+async function stageManagedPackageSnapshot(
+  resources: PiManagedPackageResources,
+  snapshotRoot: string,
+): Promise<PiManagedPackageResources> {
+  if (!path.isAbsolute(snapshotRoot)) throw new Error('Pi extension snapshot root must be absolute');
+  const temporaryRoot = `${snapshotRoot}.tmp-${process.pid}-${Date.now()}`;
+  const mappings: Array<{ source: string; target: string; directory: boolean }> = [];
+  try {
+    await fs.mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
+    for (const [index, rawRoot] of resources.packageRoots.entries()) {
+      const source = await fs.realpath(rawRoot);
+      const sourceStat = await fs.stat(source);
+      const directory = sourceStat.isDirectory();
+      if (!directory && !sourceStat.isFile()) throw new Error('Pi extension package root is not a file or directory');
+      await assertSnapshotTreeConfined(source);
+      const relativeTarget = directory ? String(index) : path.join(String(index), path.basename(source));
+      const temporaryTarget = path.join(temporaryRoot, relativeTarget);
+      await fs.mkdir(path.dirname(temporaryTarget), { recursive: true, mode: 0o700 });
+      await fs.cp(source, temporaryTarget, {
+        recursive: directory,
+        dereference: true,
+        errorOnExist: true,
+        force: false,
+      });
+      mappings.push({ source, target: path.join(snapshotRoot, relativeTarget), directory });
+    }
+    await fs.rename(temporaryRoot, snapshotRoot);
+    return {
+      extensions: resources.extensions.map((entry) => mapSnapshotPath(entry, mappings)),
+      skills: resources.skills.map((skill) => ({ ...skill, path: mapSnapshotPath(skill.path, mappings) })),
+      promptTemplates: resources.promptTemplates.map((entry) => mapSnapshotPath(entry, mappings)),
+      packageRoots: mappings.map((mapping) => mapping.target),
+    };
+  } catch (error) {
+    await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function revokeExtensionApproval(sources: Iterable<string>): Promise<void> {
