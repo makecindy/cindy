@@ -276,4 +276,147 @@ describe('killProcessTree win32 重试(Greptile P1 加固)', () => {
     expect(kill).not.toHaveBeenCalled();
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
+
+  it('严格模式下父进程已退出仍枚举并终止后代，确认前不 settle', () => {
+    const psQuery = fakeProcess();
+    const descendantKiller = new EventEmitter();
+    spawnMock
+      .mockImplementationOnce(() => psQuery)
+      .mockImplementationOnce(() => descendantKiller);
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number;
+      signalCode: null;
+    };
+    child.kill = vi.fn();
+    child.exitCode = 0;
+    child.signalCode = null;
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(spawnMock).toHaveBeenCalledWith('powershell', expect.any(Array), expect.any(Object));
+    psQuery.stdout.emit('data', Buffer.from('456\r\n'));
+    psQuery.emit('close', 0);
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenLastCalledWith(
+      'taskkill',
+      ['/pid', '456', '/T', '/F'],
+      expect.objectContaining({ windowsHide: true }),
+    );
+
+    descendantKiller.emit('exit', 0);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('严格模式下主 taskkill 成功后仍等待后代确认', () => {
+    const killer = new EventEmitter();
+    const psQuery = fakeProcess();
+    spawnMock
+      .mockImplementationOnce(() => killer)
+      .mockImplementationOnce(() => psQuery);
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: null;
+      signalCode: null;
+    };
+    child.kill = vi.fn();
+    child.exitCode = null;
+    child.signalCode = null;
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    killer.emit('exit', 0);
+    expect(onSettled).not.toHaveBeenCalled();
+
+    psQuery.emit('close', 0);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('严格模式下后代查询失败时保持未 settle', () => {
+    const psQuery = fakeProcess();
+    spawnMock.mockImplementationOnce(() => psQuery);
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number;
+      signalCode: null;
+    };
+    child.kill = vi.fn();
+    child.exitCode = 0;
+    child.signalCode = null;
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    psQuery.emit('error', new Error('powershell unavailable'));
+
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  it('严格模式下后代查询超时会终止查询但保持未 settle', async () => {
+    const psQuery = fakeProcess();
+    spawnMock.mockImplementationOnce(() => psQuery);
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number;
+      signalCode: null;
+    };
+    child.kill = vi.fn();
+    child.exitCode = 0;
+    child.signalCode = null;
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(psQuery.kill).toHaveBeenCalledTimes(1);
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  it('严格模式下回落 SIGKILL 后等待父进程退出再确认后代', async () => {
+    const killers = [new EventEmitter(), new EventEmitter(), new EventEmitter()];
+    const psQuery = fakeProcess();
+    spawnMock
+      .mockImplementationOnce(() => killers[0])
+      .mockImplementationOnce(() => killers[1])
+      .mockImplementationOnce(() => killers[2])
+      .mockImplementationOnce(() => psQuery);
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number | null;
+      signalCode: null;
+    };
+    child.kill = vi.fn();
+    child.exitCode = null;
+    child.signalCode = null;
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    killers[0].emit('exit', 1);
+    await vi.advanceTimersByTimeAsync(150);
+    killers[1].emit('exit', 1);
+    await vi.advanceTimersByTimeAsync(150);
+    killers[2].emit('exit', 1);
+
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+    expect(onSettled).not.toHaveBeenCalled();
+
+    child.exitCode = 1;
+    child.emit('exit', 1);
+    expect(spawnMock).toHaveBeenCalledTimes(4);
+    expect(onSettled).not.toHaveBeenCalled();
+    psQuery.emit('close', 0);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
 });

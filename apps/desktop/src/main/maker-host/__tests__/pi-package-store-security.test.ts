@@ -202,6 +202,12 @@ describe('Pi package executable-code boundary', () => {
         });
         await new Promise((resolve) => setTimeout(resolve, 10));
         expect(processRuntime.killTree).toHaveBeenCalledOnce();
+        expect(processRuntime.killTree).toHaveBeenCalledWith(
+          4242,
+          expect.any(Object),
+          expect.any(Function),
+          { requireWindowsDescendantConfirmation: true },
+        );
         expect(runtime.spawns.at(-1)?.detached).toBe(platform !== 'win32');
         expect(settled).toBe(false);
         runtime.pendingClose?.(1);
@@ -493,6 +499,40 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([first.source, second.source]);
     expect(lockRuntime.calls).toHaveLength(2);
     expect(lockRuntime.maxActive).toBe(1);
+  });
+
+  it('re-inspects approval state under the shared lock before staging a session snapshot', async () => {
+    const { root, source } = await createPackage();
+    const firstStore = await import('../pi-package-store.js');
+    await mutateAuthorized(firstStore, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
+    });
+    const canonicalRoot = await fs.realpath(root);
+    await expect(firstStore.resolveManagedPiPackageResources()).resolves.toMatchObject({
+      extensions: [path.join(canonicalRoot, 'extensions', 'index.ts')],
+    });
+
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+    await fs.writeFile(
+      path.join(root, 'extensions', 'index.ts'),
+      'export default function replacedAfterApproval() {}',
+    );
+    await mutateAuthorized(secondStore, { action: 'update', source });
+
+    const snapshotRoot = path.join(runtime.userData, 'cross-process-session', 'managed-packages');
+    await expect(firstStore.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toEqual({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+    await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
+    await expect(firstStore.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
   });
 
   it('refreshes open settings when a failed update has already revoked approval', async () => {

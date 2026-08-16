@@ -30,6 +30,15 @@ export function capAppend(current: string, chunk: string, cap: number): string {
 const WIN32_TASKKILL_MAX_ATTEMPTS = 3;
 const WIN32_TASKKILL_RETRY_DELAY_MS = 150;
 
+export interface KillProcessTreeOptions {
+  /**
+   * Security-sensitive stores may not release their lock until Windows has
+   * positively enumerated and reaped descendants, even when the direct child
+   * has already exited. The default keeps the generic PID-reuse-safe behavior.
+   */
+  requireWindowsDescendantConfirmation?: boolean;
+}
+
 /**
  * 最后一层兜底,尽力而为:枚举 pid 的**直接子进程**,对每个单独发
  * `taskkill /T /F`——每个子进程自己的 /T 会级联杀掉它自己的后代,不需要我们
@@ -38,9 +47,9 @@ const WIN32_TASKKILL_RETRY_DELAY_MS = 150;
  * 支持核心组件。失败(PowerShell 不可用/超时/无输出)静默跳过——不引入新的
  * 失败模式,退化到"只杀直接子进程"这条已有行为,不会比现状更差。
  *
- * `onSettled` 在**这层兜底也跑完**(不论枚举成功与否、每个子进程 taskkill 是否
- * 成功)后才调用——调用方据此才武装强制 settle 计时器,保证不会在这层还在跑
- * 的时候就抢跑。⚠️ 反过来这层自己也不能无界等:PowerShell/CIM 查询卡死(从不
+ * 默认模式下,`onSettled` 在**这层兜底也跑完**(不论枚举成功与否、每个子进程
+ * taskkill 是否成功)后调用。安全敏感调用方可要求正向确认；此时查询/终止失败
+ * 不回调,让调用方继续持有仓库锁。⚠️ 反过来这层自己也不能无界等:PowerShell/CIM 查询卡死(从不
  * close/error)会让 onSettled 永远不触发,原本"强制 settle 防 fire() 挂死"的
  * 保护就在更深一层失效(codex review 四次发现)。看门狗按**阶段**武装而不是
  * 全链路共用一个 deadline:查询阶段 3s,查询返回、后代 taskkill 已发起后**重新
@@ -50,15 +59,19 @@ const WIN32_TASKKILL_RETRY_DELAY_MS = 150;
  */
 const DESCENDANT_REAP_TIMEOUT_MS = 3_000;
 
-function reapWindowsDescendantsBestEffort(pid: number, onSettled?: () => void): void {
+function reapWindowsDescendantsBestEffort(
+  pid: number,
+  onSettled?: () => void,
+  requireConfirmation = false,
+): void {
   let finished = false;
   let query: ChildProcess | undefined;
   let watchdog: ReturnType<typeof setTimeout> | undefined;
-  function finish(): void {
+  function finish(confirmed = false): void {
     if (finished) return;
     finished = true;
     if (watchdog) clearTimeout(watchdog);
-    onSettled?.();
+    if (confirmed || !requireConfirmation) onSettled?.();
   }
   const armWatchdog = (onExpire?: () => void): void => {
     if (watchdog) clearTimeout(watchdog);
@@ -102,28 +115,36 @@ function reapWindowsDescendantsBestEffort(pid: number, onSettled?: () => void): 
         .map((line) => line.trim())
         .filter((line) => /^\d+$/.test(line));
       if (childPids.length === 0) {
-        finish();
+        finish(true);
         return;
       }
       // 阶段二:后代终止。重新武装完整窗口——taskkill 正常几十 ms 内退出,超过
       // 3s 本身就是病态;到点只停止等待(taskkill.exe 自己会退出,不需要强杀)。
       armWatchdog();
       let remaining = childPids.length;
-      const onDescendantDone = (): void => {
+      let allConfirmed = true;
+      const onDescendantDone = (confirmed: boolean): void => {
+        allConfirmed &&= confirmed;
         remaining -= 1;
-        if (remaining <= 0) finish();
+        if (remaining <= 0) finish(allConfirmed);
       };
       for (const childPid of childPids) {
         try {
           const killer = spawn('taskkill', ['/pid', childPid, '/T', '/F'], { windowsHide: true });
-          killer.on('exit', onDescendantDone);
-          killer.on('error', onDescendantDone);
+          let killerFinished = false;
+          const finishKiller = (confirmed: boolean): void => {
+            if (killerFinished) return;
+            killerFinished = true;
+            onDescendantDone(confirmed);
+          };
+          killer.on('exit', (code) => finishKiller(code === 0));
+          killer.on('error', () => finishKiller(false));
         } catch {
-          onDescendantDone();
+          onDescendantDone(false);
         }
       }
     });
-    query.on('error', finish);
+    query.on('error', () => finish());
   } catch {
     finish();
   }
@@ -134,7 +155,13 @@ function reapWindowsDescendantsBestEffort(pid: number, onSettled?: () => void): 
  * ——重试覆盖真实高发的瞬态失败(kill 与进程自然退出竞速、进程表短暂繁忙)。
  * `onSettled` 在整条链路(重试 + 必要时的后代兜底)都跑完后才调用一次。
  */
-function killWindowsTree(pid: number, child: ChildProcess, attempt: number, onSettled?: () => void): void {
+function killWindowsTree(
+  pid: number,
+  child: ChildProcess,
+  attempt: number,
+  onSettled?: () => void,
+  options: KillProcessTreeOptions = {},
+): void {
   // pid 复用防线(codex review 五次发现):这条重试/兜底链的每一步动手前都先确认
   // 原进程还没退出——taskkill 失败到 150ms 后重试之间,子进程完全可能已自然退出
   // (typical:timeout/abort 与自然退出竞速),此时这个 pid 随时会被 OS 发给无关
@@ -144,13 +171,37 @@ function killWindowsTree(pid: number, child: ChildProcess, attempt: number, onSe
   // OS 进程表的第一方信号。
   const childExited = (): boolean =>
     typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
+  const settleExitedParent = (): void => {
+    if (options.requireWindowsDescendantConfirmation) {
+      reapWindowsDescendantsBestEffort(pid, onSettled, true);
+    } else {
+      onSettled?.();
+    }
+  };
   if (childExited()) {
-    onSettled?.();
+    settleExitedParent();
     return;
   }
   const fallbackKill = (): void => {
     if (childExited()) {
-      onSettled?.();
+      settleExitedParent();
+      return;
+    }
+    if (options.requireWindowsDescendantConfirmation) {
+      const onChildExit = (): void => settleExitedParent();
+      child.once('exit', onChildExit);
+      // Close the check/listen race: the process may exit between the first
+      // childExited() read and registering the listener above.
+      if (childExited()) {
+        child.removeListener('exit', onChildExit);
+        settleExitedParent();
+        return;
+      }
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* 无法证明直接进程退出:调用方继续持有安全锁 */
+      }
       return;
     }
     try {
@@ -162,14 +213,17 @@ function killWindowsTree(pid: number, child: ChildProcess, attempt: number, onSe
   };
   try {
     const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+    let attemptFinished = false;
     const onFailure = (): void => {
+      if (attemptFinished) return;
+      attemptFinished = true;
       if (childExited()) {
-        onSettled?.();
+        settleExitedParent();
         return;
       }
       if (attempt < WIN32_TASKKILL_MAX_ATTEMPTS) {
         setTimeout(
-          () => killWindowsTree(pid, child, attempt + 1, onSettled),
+          () => killWindowsTree(pid, child, attempt + 1, onSettled, options),
           WIN32_TASKKILL_RETRY_DELAY_MS,
         ).unref?.();
       } else {
@@ -177,8 +231,17 @@ function killWindowsTree(pid: number, child: ChildProcess, attempt: number, onSe
       }
     };
     killer.on('exit', (code) => {
-      if (code !== 0) onFailure();
-      else onSettled?.();
+      if (code !== 0) {
+        onFailure();
+        return;
+      }
+      if (attemptFinished) return;
+      attemptFinished = true;
+      if (options.requireWindowsDescendantConfirmation) {
+        reapWindowsDescendantsBestEffort(pid, onSettled, true);
+      } else {
+        onSettled?.();
+      }
     });
     killer.on('error', onFailure);
   } catch {
@@ -196,9 +259,10 @@ export function killProcessTree(
   pid: number | undefined,
   child: ChildProcess,
   onSettled?: () => void,
+  options: KillProcessTreeOptions = {},
 ): void {
   if (process.platform === 'win32' && pid) {
-    killWindowsTree(pid, child, 1, onSettled);
+    killWindowsTree(pid, child, 1, onSettled, options);
     return;
   }
   if (process.platform !== 'win32' && pid) {

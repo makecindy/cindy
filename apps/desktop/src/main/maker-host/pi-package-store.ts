@@ -319,6 +319,12 @@ export async function runPiPackageCommand(
           settleTimedOutCommand();
         }, COMMAND_FORCE_SETTLE_MS);
         forceSettleTimer.unref?.();
+      }, {
+        // A timed-out package manager may outlive the direct Pi child while
+        // retaining inherited stdio and write access to the shared store.
+        // Do not release the mutation lock until Windows positively reaps the
+        // remaining descendants; an unavailable verifier fails closed.
+        requireWindowsDescendantConfirmation: true,
       });
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => { stdout = boundedAppend(stdout, chunk); });
@@ -1043,6 +1049,17 @@ async function inspectAllPackages(): Promise<InspectedPackage[]> {
   return pending;
 }
 
+async function inspectAllPackagesFreshUnderMutationLock(): Promise<InspectedPackage[]> {
+  // A local inspection that began before another process changed the shared
+  // package store must finish before its generation is retired. Starting the
+  // replacement under the cross-process mutation lock then re-reads both the
+  // package tree and Cindy's approval state as one fresh projection.
+  const staleInspection = inspectionPromise;
+  if (staleInspection) await staleInspection.catch(() => undefined);
+  invalidateInspectionCache();
+  return inspectAllPackages();
+}
+
 async function listPiPackagesNow(): Promise<PiPackageListResult> {
   if (!getReadyBinaryPath('pi')) return { available: false, packages: [] };
   const inspected = await inspectAllPackages();
@@ -1061,8 +1078,10 @@ export async function resolveManagedPiPackageResources(
     return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
   }
   try {
-    const resolveResources = async (): Promise<PiManagedPackageResources> => {
-      const inspected = await inspectAllPackages();
+    const resolveResources = async (forceFresh = false): Promise<PiManagedPackageResources> => {
+      const inspected = forceFresh
+        ? await inspectAllPackagesFreshUnderMutationLock()
+        : await inspectAllPackages();
       const resources = {
         extensions: [...new Set(inspected.flatMap((pkg) => pkg.launch.extensions))],
         skills: inspected.flatMap((pkg) => pkg.launch.skills),
@@ -1071,7 +1090,7 @@ export async function resolveManagedPiPackageResources(
       };
       return options ? stageManagedPackageSnapshot(resources, options.snapshotRoot) : resources;
     };
-    if (options) return await enqueueMutation(resolveResources);
+    if (options) return await enqueueMutation(() => resolveResources(true));
     await mutationTail;
     return await resolveResources();
   } catch (error) {
