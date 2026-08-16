@@ -28,13 +28,22 @@ function validateName(value: string, field: string, max: number): string | null 
 }
 
 async function resolveBotContext(callerSessionId: string): Promise<{
-  botId: string;
-  defaultNamespace: string | null;
-} | null> {
+  ok: true;
+  context: {
+    botId: string;
+    defaultNamespace: string | null;
+  };
+} | {
+  ok: false;
+  errorCode: 'NOT_A_BOT_SESSION' | 'BOT_SESSION_INACTIVE' | 'BOT_SESSION_READ_ONLY';
+  message: string;
+}> {
   const db = getDbClient().drizzle;
   const [row] = await db
     .select({
       botId: botSessionLinks.botId,
+      role: botSessionLinks.role,
+      sessionStatus: sessions.status,
       defaultNamespace: botAutomationLinks.durableNoteNamespace,
     })
     .from(botSessionLinks)
@@ -46,7 +55,19 @@ async function resolveBotContext(callerSessionId: string): Promise<{
     )
     .where(and(eq(botSessionLinks.sessionId, callerSessionId), eq(sessions.source, 'bot')))
     .limit(1);
-  return row ?? null;
+  if (!row) {
+    return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
+  }
+  if (row.sessionStatus !== 'active') {
+    return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '已归档的 Bot 任务不能修改长期状态' };
+  }
+  if (row.role !== 'canonical' && row.role !== 'route') {
+    return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前 Bot 历史任务为只读状态' };
+  }
+  return {
+    ok: true,
+    context: { botId: row.botId, defaultNamespace: row.defaultNamespace },
+  };
 }
 
 function resolveNamespace(
@@ -70,11 +91,11 @@ export async function listBotDurableNotes(input: {
   limit?: number;
 }): Promise<BotDurableNoteResult<{ notes: unknown[] }>> {
   const context = await resolveBotContext(input.callerSessionId);
-  if (!context) return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
-  const namespace = input.namespace === undefined && !context.defaultNamespace
+  if (!context.ok) return context;
+  const namespace = input.namespace === undefined && !context.context.defaultNamespace
     ? undefined
-    : resolveNamespace(input.namespace, context.defaultNamespace);
-  if ((input.namespace !== undefined || context.defaultNamespace) && !namespace) {
+    : resolveNamespace(input.namespace, context.context.defaultNamespace);
+  if ((input.namespace !== undefined || context.context.defaultNamespace) && !namespace) {
     return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 格式无效' };
   }
   const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 100), MAX_LIST_LIMIT));
@@ -84,8 +105,8 @@ export async function listBotDurableNotes(input: {
     .from(botDurableNotes)
     .where(
       namespace
-        ? and(eq(botDurableNotes.botId, context.botId), eq(botDurableNotes.namespace, namespace))
-        : eq(botDurableNotes.botId, context.botId),
+        ? and(eq(botDurableNotes.botId, context.context.botId), eq(botDurableNotes.namespace, namespace))
+        : eq(botDurableNotes.botId, context.context.botId),
     )
     .orderBy(desc(botDurableNotes.updatedAt), desc(botDurableNotes.id))
     .limit(limit);
@@ -107,8 +128,8 @@ export async function getBotDurableNote(input: {
   key: string;
 }): Promise<BotDurableNoteResult<{ note: unknown }>> {
   const context = await resolveBotContext(input.callerSessionId);
-  if (!context) return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
-  const namespace = resolveNamespace(input.namespace, context.defaultNamespace);
+  if (!context.ok) return context;
+  const namespace = resolveNamespace(input.namespace, context.context.defaultNamespace);
   const key = validateName(input.key, 'key', MAX_KEY_CHARS);
   if (!namespace || !key) return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 或 key 格式无效' };
   const db = getDbClient().drizzle;
@@ -117,7 +138,7 @@ export async function getBotDurableNote(input: {
     .from(botDurableNotes)
     .where(
       and(
-        eq(botDurableNotes.botId, context.botId),
+        eq(botDurableNotes.botId, context.context.botId),
         eq(botDurableNotes.namespace, namespace),
         eq(botDurableNotes.noteKey, key),
       ),
@@ -143,8 +164,8 @@ export async function setBotDurableNote(input: {
   value: unknown;
 }): Promise<BotDurableNoteResult<{ note: unknown }>> {
   const context = await resolveBotContext(input.callerSessionId);
-  if (!context) return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
-  const namespace = resolveNamespace(input.namespace, context.defaultNamespace);
+  if (!context.ok) return context;
+  const namespace = resolveNamespace(input.namespace, context.context.defaultNamespace);
   const key = validateName(input.key, 'key', MAX_KEY_CHARS);
   if (!namespace || !key) return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 或 key 格式无效' };
   let valueJson: string;
@@ -161,7 +182,7 @@ export async function setBotDurableNote(input: {
   const id = randomUUID();
   await db
     .insert(botDurableNotes)
-    .values({ id, botId: context.botId, namespace, noteKey: key, valueJson, createdAt: now, updatedAt: now })
+    .values({ id, botId: context.context.botId, namespace, noteKey: key, valueJson, createdAt: now, updatedAt: now })
     .onConflictDoUpdate({
       target: [botDurableNotes.botId, botDurableNotes.namespace, botDurableNotes.noteKey],
       set: { valueJson, updatedAt: now },
@@ -175,15 +196,15 @@ export async function deleteBotDurableNote(input: {
   key: string;
 }): Promise<BotDurableNoteResult<{ deleted: boolean }>> {
   const context = await resolveBotContext(input.callerSessionId);
-  if (!context) return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
-  const namespace = resolveNamespace(input.namespace, context.defaultNamespace);
+  if (!context.ok) return context;
+  const namespace = resolveNamespace(input.namespace, context.context.defaultNamespace);
   const key = validateName(input.key, 'key', MAX_KEY_CHARS);
   if (!namespace || !key) return { ok: false, errorCode: 'INVALID_ARGS', message: 'namespace 或 key 格式无效' };
   const rows = await getDbClient().drizzle
     .delete(botDurableNotes)
     .where(
       and(
-        eq(botDurableNotes.botId, context.botId),
+        eq(botDurableNotes.botId, context.context.botId),
         eq(botDurableNotes.namespace, namespace),
         eq(botDurableNotes.noteKey, key),
       ),

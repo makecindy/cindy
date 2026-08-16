@@ -22,7 +22,11 @@ describe('botDurableNoteService', () => {
   beforeEach(() => {
     const sqlite = new Database(':memory:');
     sqlite.exec(`
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL);
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
       CREATE TABLE bot_session_links (
         id TEXT PRIMARY KEY,
         bot_id TEXT NOT NULL,
@@ -53,7 +57,8 @@ describe('botDurableNoteService', () => {
         automation_link_id TEXT NOT NULL,
         session_id TEXT
       );
-      INSERT INTO sessions VALUES ('a-main', 'bot'), ('b-main', 'bot'), ('ordinary', 'desktop');
+      INSERT INTO sessions (id, source) VALUES
+        ('a-main', 'bot'), ('b-main', 'bot'), ('ordinary', 'desktop');
       INSERT INTO bot_session_links (id, bot_id, session_id, created_at)
       VALUES ('a:a-main', 'bot-a', 'a-main', 1), ('b:b-main', 'bot-b', 'b-main', 1);
     `);
@@ -113,7 +118,7 @@ describe('botDurableNoteService', () => {
 
   it('uses the automation-bound namespace when the tool omits one', async () => {
     h.sqlite!.exec(`
-      INSERT INTO sessions VALUES ('a-automation', 'bot');
+      INSERT INTO sessions (id, source) VALUES ('a-automation', 'bot');
       INSERT INTO bot_session_links (id, bot_id, session_id, created_at)
       VALUES ('a:a-automation', 'bot-a', 'a-automation', 2);
       INSERT INTO bot_automation_links VALUES ('automation-a', 'nightly');
@@ -124,5 +129,39 @@ describe('botDurableNoteService', () => {
       key: 'cursor',
       value: 7,
     })).toMatchObject({ ok: true, note: { namespace: 'nightly', key: 'cursor', value: 7 } });
+  });
+
+  it('rejects durable-state access from archived and read-only Bot history tasks', async () => {
+    await setBotDurableNote({
+      callerSessionId: 'a-main',
+      namespace: 'automation',
+      key: 'cursor',
+      value: 1,
+    });
+    h.sqlite!.exec(`
+      INSERT INTO sessions (id, source, status) VALUES
+        ('a-archived', 'bot', 'archived'),
+        ('a-history', 'bot', 'active');
+      INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES
+        ('a:a-archived', 'bot-a', 'a-archived', 'history', 3),
+        ('a:a-history', 'bot-a', 'a-history', 'history', 4);
+    `);
+
+    await expect(setBotDurableNote({
+      callerSessionId: 'a-archived',
+      namespace: 'automation',
+      key: 'cursor',
+      value: 2,
+    })).resolves.toMatchObject({ ok: false, errorCode: 'BOT_SESSION_INACTIVE' });
+    await expect(deleteBotDurableNote({
+      callerSessionId: 'a-history',
+      namespace: 'automation',
+      key: 'cursor',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'BOT_SESSION_READ_ONLY' });
+    await expect(getBotDurableNote({
+      callerSessionId: 'a-main',
+      namespace: 'automation',
+      key: 'cursor',
+    })).resolves.toMatchObject({ ok: true, note: { value: 1 } });
   });
 });
