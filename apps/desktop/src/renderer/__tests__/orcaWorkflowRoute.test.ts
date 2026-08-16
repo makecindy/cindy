@@ -364,7 +364,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('sets passive collaboration sidebar collapsed state during the route layout declaration', () => {
     expect(sessionViewSource).toContain('useLayoutEffect(() => {');
-    expect(sessionViewSource).toContain('declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord });');
+    expect(sessionViewSource).toContain(
+      'declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });',
+    );
+    expect(sessionViewSource).toContain(
+      "subagentsAvailable={session ? session.agentKind === 'pi' : undefined}",
+    );
     expect(mainLayoutSource).toContain('const declareRightSidebarSessionId = useCallback');
     expect(mainLayoutSource).toContain('const nextCollapsed = hasInitialCollapsed');
     expect(mainLayoutSource).toContain('setIsRightSidebarCollapsed(nextCollapsed);');

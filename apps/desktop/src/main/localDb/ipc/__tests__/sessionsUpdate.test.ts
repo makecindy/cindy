@@ -10,6 +10,9 @@
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { messages, sessions } from '../../schema';
@@ -27,18 +30,26 @@ const h = vi.hoisted(() => ({
   })),
   tapWindowBroadcast: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
+  stopAndRemovePiSubagentRuns: vi.fn(async () => true),
+  userData: '',
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
 }));
 
 vi.mock('electron', () => ({
+  app: { getPath: () => h.userData },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       h.handlers.set(channel, handler);
     }),
   },
   BrowserWindow: { getAllWindows: () => [] },
+}));
+vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
+  piSubagentRunRoot: (agentHome: string, sessionId: string) =>
+    path.join(agentHome, 'runtime', 'pi-subagent-runs', sessionId),
+  stopAndRemovePiSubagentRuns: h.stopAndRemovePiSubagentRuns,
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -66,7 +77,7 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
 
-import { registerSessionIpc } from '../sessions';
+import { registerSessionIpc, resumeDeletedPiSubagentCleanup } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 
 function createDb(): void {
@@ -109,6 +120,7 @@ function createDb(): void {
       orca_role TEXT,
       remote_host_id TEXT,
       codex_history_has_product_prompt INTEGER,
+      codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
       summary TEXT,
@@ -157,16 +169,40 @@ beforeEach(() => {
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.handlers.clear();
+  h.stopAndRemovePiSubagentRuns.mockClear();
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
   registerSessionIpc();
 });
 
-afterEach(() => {
+afterEach(async () => {
   setSessionRouteLockImplementation(null);
+  if (h.userData) await rm(h.userData, { recursive: true, force: true });
+  h.userData = '';
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('recovers cleanup only for deleted parent tasks after restart', async () => {
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-recovery-'));
+    const parentRoot = path.join(h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+    await Promise.all([
+      mkdir(path.join(parentRoot, 'codex-local'), { recursive: true }),
+      mkdir(path.join(parentRoot, 'cc-local'), { recursive: true }),
+    ]);
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledTimes(1);
+    });
+    expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(
+      path.join(parentRoot, 'codex-local'),
+    );
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalledWith(
+      path.join(parentRoot, 'cc-local'),
+    );
+  });
+
   it('does not resurrect a deleted task through the generic status writer', async () => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
 

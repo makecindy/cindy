@@ -84,6 +84,8 @@ vi.mock('../rpc-client.js', () => ({
 }));
 
 import { PiAgent } from '../index.js';
+import * as piSubagentRuns from '../pi-subagent-runs.js';
+import type { PiSubagentRunStatus } from '../pi-subagent-runs.js';
 import { piProjectKey } from '../project-trust.js';
 import type { AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -228,12 +230,44 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     model: 'm',
   });
 
+  function pendingSubagentRun(
+    input: Record<string, unknown>,
+    overrides: Partial<PiSubagentRunStatus> = {},
+  ): PiSubagentRunStatus {
+    const runId = '123e4567-e89b-42d3-a456-426614174096';
+    return {
+      version: 1,
+      runId,
+      taskId: 'tool-subagent-approval',
+      parentSessionId: 's1',
+      interactiveOwner: 'host',
+      runnerInstanceId: 'runner-subagent-approval',
+      state: 'running',
+      startedAt: 1,
+      updatedAt: 2,
+      tasks: [{
+        childId: `${runId}-1`,
+        sessionId: `${runId}-1`,
+        agent: 'worker',
+        title: 'approval-fixture',
+        status: 'running',
+        pendingApproval: {
+          id: 'approval-1',
+          method: 'confirm',
+          title: 'cindy:permission',
+          message: JSON.stringify(input),
+        },
+      }],
+      ...overrides,
+    };
+  }
+
   it('disposes ctx (and does not close a nonexistent proc) when the process constructor throws synchronously', async () => {
     knobs.ctorThrows = true;
     const agent = new PiAgent(buildDeps());
     await expect(agent.startSession(opts())).rejects.toThrow(/spawn failed/);
     expect(disposed).toBe(1);
-    expect(proxyDisposed).toBe(1);
+    expect(proxyDisposed).toBe(2);
     expect(knobs.closeCount).toBe(0); // 构造失败没有 proc 可关
   });
 
@@ -242,7 +276,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const agent = new PiAgent(buildDeps());
     await expect(agent.startSession(opts())).rejects.toThrow(/get_state rejected/);
     expect(disposed).toBe(1);
-    expect(proxyDisposed).toBe(1);
+    expect(proxyDisposed).toBe(2);
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
   });
 
@@ -261,9 +295,255 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(disposed).toBe(0);
     expect(proxyDisposed).toBe(0);
     await handle.close();
-    expect(clearIntervalSpy).toHaveBeenCalledOnce();
+    // Pi RPC and Cindy's durable Subagent status poll are both session-owned.
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1); // close() 才注销
-    expect(proxyDisposed).toBe(1);
+    expect(proxyDisposed).toBe(2);
+  });
+
+  it('keeps the proxy token leased until detached Subagents settle', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    const runId = '123e4567-e89b-42d3-a456-426614174099';
+    const runDir = path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1', runId);
+    mkdirSync(runDir, { recursive: true });
+    const writeStatus = (state: 'running' | 'completed') => writeFileSync(
+      path.join(runDir, 'status.json'),
+      JSON.stringify({
+        version: 1,
+        runId,
+        taskId: 'tool-durable',
+        parentSessionId: 's1',
+        runnerInstanceId: 'runner-durable',
+        state,
+        startedAt: 1,
+        updatedAt: Date.now(),
+        ...(state === 'completed' ? { endedAt: Date.now() } : {}),
+        tasks: [{
+          childId: `${runId}-1`,
+          sessionId: `${runId}-1`,
+          agent: 'scout',
+          status: state,
+        }],
+      }) + '\n',
+    );
+    writeStatus('running');
+
+    await handle.close();
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(disposed).toBe(1);
+    expect(proxyDisposed).toBe(0);
+
+    writeStatus('completed');
+    await vi.waitFor(() => expect(proxyDisposed).toBe(2), { timeout: 2_000 });
+  });
+
+  it('acknowledges durable Subagent turn-change capture without creating a user permission prompt', async () => {
+    const runId = '123e4567-e89b-42d3-a456-426614174097';
+    const noteOpaqueWrite = vi.fn();
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([{
+      version: 1,
+      runId,
+      taskId: 'tool-turn-change',
+      parentSessionId: 's1',
+      runnerInstanceId: 'runner-turn-change',
+      state: 'running',
+      startedAt: 1,
+      updatedAt: 2,
+      tasks: [{
+        childId: `${runId}-1`,
+        sessionId: `${runId}-1`,
+        agent: 'worker',
+        status: 'running',
+        pendingApproval: {
+          id: 'capture-1',
+          method: 'confirm',
+          title: 'cindy:turn-change-capture',
+          message: JSON.stringify({
+            toolName: 'bash',
+            toolUseId: 'bash-1',
+            input: { command: 'printf done' },
+          }),
+        },
+      }],
+    }]);
+    const handle = await new PiAgent(buildDeps({
+      turnChangeCapture: {
+        beforeKnownFileWrite: vi.fn(async () => undefined),
+        noteOpaqueWrite,
+      },
+    })).startSession(opts());
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      'tool-turn-change',
+      'approval',
+      {
+        childId: `${runId}-1`,
+        approvalId: 'capture-1',
+        confirmed: true,
+      },
+    ));
+    expect(noteOpaqueWrite).toHaveBeenCalledWith({
+      sessionId: 's1',
+      provider: 'pi',
+      cwd,
+    });
+
+    await handle.close();
+  });
+
+  it.each([
+    ['allow', true],
+    ['deny', false],
+  ] as const)('forwards durable Subagent Ask payload and delivers %s once', async (behavior, confirmed) => {
+    const run = pendingSubagentRun({
+      toolName: 'bash',
+      input: { command: 'printf fixture' },
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      {
+        childId: run.tasks[0]!.childId,
+        approvalId: 'approval-1',
+        confirmed,
+      },
+    ));
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'permission',
+      toolName: 'bash',
+      input: { command: 'printf fixture' },
+      title: 'Subagent: bash',
+      description: 'Requested by approval-fixture',
+      metadata: expect.objectContaining({ provider: 'pi', subagent: true }),
+    }));
+    await handle.close();
+  });
+
+  it('reuses Auto-review for a safe durable Subagent workspace write without prompting', async () => {
+    const run = pendingSubagentRun({
+      toolName: 'write',
+      input: { path: 'tmp/auto-safe.txt', content: 'safe' },
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: true }),
+    ));
+    expect(resolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('keeps risky durable Subagent Auto actions behind the real Cindy prompt', async () => {
+    const run = pendingSubagentRun({
+      toolName: 'bash',
+      input: { command: "printf unsafe > /tmp/outside.txt" },
+    });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn(async () => ({ verdict: 'ask' as const }));
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review })).startSession({
+      ...opts(),
+      permissionMode: 'auto',
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: false }),
+    ));
+    expect(review).toHaveBeenCalledOnce();
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'bash',
+      input: { command: "printf unsafe > /tmp/outside.txt" },
+      metadata: expect.objectContaining({ subagent: true }),
+    }));
+    await handle.close();
+  });
+
+  it('fails closed when the durable Subagent approval resolver throws', async () => {
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(vi.fn(async () => { throw new Error('resolver failed'); }));
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: false }),
+    ));
+    await handle.close();
+  });
+
+  it('retries durable Subagent approval delivery without asking the user twice', async () => {
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns')
+      .mockRejectedValueOnce(new Error('mailbox unavailable'))
+      .mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(2), { timeout: 2_500 });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(control).toHaveBeenLastCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: true }),
+    );
+    await handle.close();
+  });
+
+  it('waits for an in-flight Subagent resume before transferring the proxy lease', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    let releaseResume!: (runId: string) => void;
+    const resumeResult = new Promise<string>((resolve) => { releaseResume = resolve; });
+    const resumeSpy = vi
+      .spyOn(piSubagentRuns, 'resumePiSubagentRun')
+      .mockImplementation(async () => resumeResult);
+
+    const resume = handle.resumeBackgroundTask?.('terminal-task', 'continue');
+    await vi.waitFor(() => expect(resumeSpy).toHaveBeenCalledOnce());
+    let closeSettled = false;
+    const close = handle.close().then(() => { closeSettled = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(closeSettled).toBe(false);
+    expect(proxyDisposed).toBe(0);
+
+    releaseResume('123e4567-e89b-42d3-a456-426614174098');
+    await resume;
+    await close;
+    expect(proxyDisposed).toBe(2);
   });
 
   it('always disables project trust and implicit extensions while explicitly restoring only Cindy extensions', async () => {
@@ -434,14 +714,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.onEvent?.({ type: 'message_start' });
 
     knobs.onExit!({ code: 1, signal: null }); // 模拟进程异常退出
-    expect(clearIntervalSpy).toHaveBeenCalledOnce();
+    // Pi RPC and Cindy's durable Subagent status poll both release their timers.
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
-    expect(proxyDisposed).toBe(1);
+    await vi.waitFor(() => expect(proxyDisposed).toBe(2));
 
     // 上层随后仍可能调用 close() —— 幂等,不得二次注销。
     await handle.close();
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
-    expect(proxyDisposed).toBe(1);
+    expect(proxyDisposed).toBe(2);
   });
 
   it('rejects a sessionId that would escape the runtime dir via the permission file path', async () => {

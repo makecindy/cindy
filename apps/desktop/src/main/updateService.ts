@@ -26,6 +26,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 
+import { requestStopAllPiSubagentRunsSync } from '@cindy/maker-core/pi-subagent-runs';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { fetchManifest, getBaseUrl, isDev } from './manifestService';
@@ -1019,6 +1020,7 @@ function forceQuit(): void {
   // build_app uses detached process groups, so parent exit does not reliably
   // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
   abortIOSSimulatorOperationsForExit();
+  requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'));
   // Node 子进程同理——before-quit 的 destroyAll 不会触发,这里同步 kill。
   try { getGhostNodeRuntimeBroker().destroyAll(); } catch { /* best-effort */ }
   for (const win of BrowserWindow.getAllWindows()) {

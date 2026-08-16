@@ -75,7 +75,21 @@ import {
   CINDY_SUBAGENT_EXTENSION_FILENAME,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
 } from './cindy-subagent-source.js';
+import {
+  CINDY_SUBAGENT_RUNNER_FILENAME,
+  CINDY_SUBAGENT_RUNNER_SOURCE,
+} from './cindy-subagent-runner-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
+import {
+  controlPiSubagentRuns,
+  countPiSubagentRunDirectories,
+  isPiSubagentTerminal,
+  listPiSubagentRuns,
+  piSubagentRunRoot,
+  resumePiSubagentRun,
+  syncPiSubagentPermissions,
+  type PiSubagentRunStatus,
+} from './pi-subagent-runs.js';
 import {
   annotatePermissionRequestForUnavailableReview,
   createAutoReviewConfirmUndeliveredNotice,
@@ -258,6 +272,12 @@ function stableRemoteProxySessionToken(
     throw new Error('pi: host returned an invalid proxy session token');
   }
   return token;
+}
+
+function derivePiSubagentRouteToken(parentToken: string, sourceProviderId: string): string {
+  return createHmac('sha256', parentToken)
+    .update(`cindy.pi.subagent-route\0${sourceProviderId}`)
+    .digest('base64url');
 }
 
 function slugifyForMemory(input: string, maxLen: number): string {
@@ -871,6 +891,7 @@ export class PiAgent extends BaseAgent {
       });
     }
     const reviewMode = opts.reviewMode === true;
+    const remote = Boolean(opts.remoteHostId);
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
     // 缺省 → 空,只有网关 provider `cindy`(现状不变)。失败不致命,降级为无原生 provider。
@@ -1074,6 +1095,146 @@ export class PiAgent extends BaseAgent {
         });
       }
     }
+
+    // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明
+    // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
+    // SSH 只解决可达性，session token 继续提供逐会话鉴权，不能把 loopback 端口
+    // 当作信任边界。
+    const remoteUsesHostProxy = remote && nativeProviders.some((provider) => provider.hostProxyForward);
+    const proxySessionToken = remoteUsesHostProxy
+      ? stableRemoteProxySessionToken(opts.sessionId, this.deps.derivePiProxySessionToken)
+      : !remote
+        ? randomBytes(32).toString('base64url')
+        : undefined;
+
+    // A child may deliberately use a different provider from its parent (for
+    // example a ChatGPT parent delegating to Grok). Freeze every model route
+    // available to this Pi runtime so the self-contained extension can validate
+    // an override and pass the provider/model pair that owns it. models.json is
+    // not sufficient for this: inheritModels providers intentionally omit the
+    // bundled rows from that file even though Pi can run them.
+    type SubagentModelRouteSnapshot = {
+      provider: string;
+      model: string;
+      sourceProviderId?: string;
+      proxySessionAuth?: true;
+    };
+    const subagentProxyTokens = new Map<
+      string,
+      { token: string; providerId: string | null }
+    >();
+    const proxyTokenForSubagentProvider = (
+      provider: PiNativeProviderSpec,
+      sourceProviderId: string,
+    ): string | undefined => {
+      if (
+        reviewMode
+        || opts.remoteHostId
+        || !opts.sessionId
+        || !this.deps.registerPiProxySession
+        || provider.headers?.['x-cindy-pi-session-id'] !== `$${PI_SESSION_ID_ENV}`
+        || provider.headers?.['x-cindy-pi-session-token'] !== `$${PI_SESSION_TOKEN_ENV}`
+      ) return undefined;
+      const existing = subagentProxyTokens.get(sourceProviderId);
+      if (existing) return existing.token;
+      if (!proxySessionToken) return undefined;
+      const token = derivePiSubagentRouteToken(proxySessionToken, sourceProviderId);
+      subagentProxyTokens.set(sourceProviderId, { token, providerId: sourceProviderId });
+      return token;
+    };
+    const subagentModelRouteCandidates = new Map<
+      string,
+      Map<string, SubagentModelRouteSnapshot>
+    >();
+    const addSubagentModelRoute = (
+      id: string | undefined,
+      provider: string,
+      model: string,
+      sourceProviderId?: string,
+      proxySessionAuth?: boolean,
+    ): void => {
+      if (!id) return;
+      const candidates = subagentModelRouteCandidates.get(id) ?? new Map();
+      candidates.set(`${provider}\0${model}`, {
+        provider,
+        model,
+        ...(sourceProviderId ? { sourceProviderId } : {}),
+        ...(proxySessionAuth ? { proxySessionAuth: true as const } : {}),
+      });
+      subagentModelRouteCandidates.set(id, candidates);
+    };
+    for (const provider of nativeProviders) {
+      if (provider.id === PI_PROVIDER_ID) continue;
+      for (const model of provider.models) {
+        const wireModel = model.wireId ?? model.id;
+        const sourceProviderId = provider.sourceProviderId ?? provider.id;
+        const routeProxySessionToken = proxyTokenForSubagentProvider(provider, sourceProviderId);
+        addSubagentModelRoute(
+          model.id,
+          provider.id,
+          wireModel,
+          sourceProviderId,
+          Boolean(routeProxySessionToken),
+        );
+        // Active subscription catalogs expose Pi-native ids without Cindy's
+        // public namespace (`grok-4.6`, `gpt-5.6-luna`). The subagent tool,
+        // however, accepts the canonical ids shown to users. Freeze both
+        // spellings so a child may cross from its parent provider without
+        // depending on the current parent route or a later catalog refresh.
+        const canonicalSubscriptionId = !model.id.includes('/')
+          ? sourceProviderId === 'xai'
+            ? `xai/${model.id}`
+            : sourceProviderId === 'openai'
+              ? `chatgpt/${model.id}`
+              : undefined
+          : undefined;
+        addSubagentModelRoute(
+          canonicalSubscriptionId,
+          provider.id,
+          wireModel,
+          sourceProviderId,
+          Boolean(routeProxySessionToken),
+        );
+        for (const [alias, target] of Object.entries(provider.modelIdAliases ?? {})) {
+          if (target === model.id) {
+            addSubagentModelRoute(
+              alias,
+              provider.id,
+              wireModel,
+              sourceProviderId,
+              Boolean(routeProxySessionToken),
+            );
+          }
+        }
+      }
+    }
+    const gatewaySubagentModels = retainedRuntimeModel
+      && !this.capabilities.availableModels.some((model) => model.id === retainedRuntimeModel.id)
+      ? [...this.capabilities.availableModels, retainedRuntimeModel]
+      : this.capabilities.availableModels;
+    const gatewaySubagentRouteKey = 'cindy-gateway';
+    const gatewaySubagentProxyToken =
+      !reviewMode && !opts.remoteHostId && opts.sessionId && proxySessionToken
+        ? derivePiSubagentRouteToken(proxySessionToken, gatewaySubagentRouteKey)
+        : undefined;
+    if (gatewaySubagentProxyToken) {
+      subagentProxyTokens.set(gatewaySubagentRouteKey, {
+        token: gatewaySubagentProxyToken,
+        providerId: null,
+      });
+    }
+    for (const model of gatewaySubagentModels) {
+      addSubagentModelRoute(
+        model.id,
+        PI_PROVIDER_ID,
+        model.id,
+        gatewaySubagentProxyToken ? gatewaySubagentRouteKey : undefined,
+        Boolean(gatewaySubagentProxyToken),
+      );
+    }
+    const subagentModelRoutes = Object.fromEntries(
+      [...subagentModelRouteCandidates].map(([id, candidates]) => [id, [...candidates.values()]]),
+    );
     const startupEffort = reconcilePiStartupEffort(opts.effort, selectedRuntimeModel);
     if (opts.effort && startupEffort !== opts.effort) {
       this.deps.logger.info('pi: reconciled persisted effort against current runtime model', {
@@ -1172,7 +1333,6 @@ export class PiAgent extends BaseAgent {
         message: 'remote pi sessions require getRemotePiFileOps — host must provide SSH file primitives',
       });
     }
-    const remote = Boolean(opts.remoteHostId);
     const mkdirp = async (dir: string): Promise<void> => {
       if (fileOps) return fileOps.mkdirp(dir);
       await fs.mkdir(dir, { recursive: true });
@@ -1293,8 +1453,17 @@ export class PiAgent extends BaseAgent {
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
     const subagentExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME);
-    if (!reviewMode) {
+    const subagentRunnerPath = joinRemotePosixPath(configHome, CINDY_SUBAGENT_RUNNER_FILENAME);
+    // Durable PI Subagent ownership is local to Desktop for this phase: status,
+    // controls, approvals, transcripts, and cleanup all use local filesystem
+    // primitives. Exposing the extension in an SSH session would start work on
+    // the remote host while Cindy observes and controls an unrelated local
+    // directory. Keep the capability absent until the wire protocol owns those
+    // files remotely end-to-end.
+    const localSubagentSupported = !reviewMode && !remote;
+    if (localSubagentSupported) {
       await writeFile(subagentExtensionPath, CINDY_SUBAGENT_EXTENSION_SOURCE);
+      await writeFile(subagentRunnerPath, CINDY_SUBAGENT_RUNNER_SOURCE, 0o600);
     }
 
     // 权限档文件:extension 每次 tool_call 现读(热切换);读不到按 ask fail-closed。
@@ -1307,6 +1476,10 @@ export class PiAgent extends BaseAgent {
     if (sid !== undefined && (sid === '.' || sid === '..' || /[\\/\0]/.test(sid))) {
       throw new Error(`pi: unsafe sessionId for runtime path: ${JSON.stringify(sid)}`);
     }
+    const subagentRunRoot = sid
+      ? piSubagentRunRoot(agentHome, sid)
+      : path.join(runtimeDir, 'pi-subagent-runs', `anon-${process.pid}-${Date.now()}`);
+    if (localSubagentSupported) await fs.mkdir(subagentRunRoot, { recursive: true, mode: 0o700 });
     // 每运行时 nonce —— 与 configHome(`agentHome/run-tmp/<hex>`)同一套隔离思路。
     //
     // dev + 打包版共用同一个 userData、以及 `--passive` 任意多开,都是**明确支持**的工作流
@@ -1423,6 +1596,21 @@ export class PiAgent extends BaseAgent {
         if (gen !== permissionWriteGen) return;
         try {
           await writeFile(permissionFile, JSON.stringify(snapshot) + '\n');
+          try {
+            if (localSubagentSupported) {
+              await syncPiSubagentPermissions(subagentRunRoot, snapshot);
+            }
+          } catch (error) {
+            // A stale Full Access copy in any detached child is a privilege
+            // escalation. Stop every active run before surfacing the write
+            // failure; never keep mixed permission generations alive.
+            const activeRuns = await listPiSubagentRuns(subagentRunRoot).catch(() => []);
+            await Promise.all(activeRuns
+              .filter((run) => !isPiSubagentTerminal(run.state))
+              .map((run) => controlPiSubagentRuns(subagentRunRoot, run.taskId, 'stop')),
+            ).catch(() => undefined);
+            throw error;
+          }
         } catch (error) {
           // 失败的最新意图不能留在 requested 里。否则一次 Full-access 写失败后，
           // 随后的 Extra Dirs 更新会从 requested 继承 bypassPermissions，再把失败的
@@ -1482,7 +1670,7 @@ export class PiAgent extends BaseAgent {
      * 用它当"撤销开关"(上一版就是这么用的,那是个空操作,review 连点两轮)。运行期要收回子代理
      * 能力只有一条可证明有效的路:终止会话。
      */
-    let subagentRoutingEnabled = !reviewMode;
+    let subagentRoutingEnabled = localSubagentSupported;
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean },
     ): Promise<boolean> => {
@@ -1490,6 +1678,7 @@ export class PiAgent extends BaseAgent {
       const snapshot = {
         ...(next.model ? { model: next.model } : {}),
         ...(next.provider ? { provider: next.provider } : {}),
+        modelRoutes: subagentModelRoutes,
         // `pending: true` = 这条路由**尚未**被 pi 确认。扩展见到它就拒绝派发(fail-closed),
         // 于是模型切换的等待窗口里一个子进程都起不来 —— 详见 setModel 的注释。
         ...(next.pending ? { pending: true } : {}),
@@ -1711,7 +1900,7 @@ export class PiAgent extends BaseAgent {
       ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
       '--extension', bridgeExtensionPath,
-      ...(!reviewMode ? ['--extension', subagentExtensionPath] : []),
+      ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
       ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
     ];
@@ -1821,6 +2010,401 @@ export class PiAgent extends BaseAgent {
       return pending;
     };
     let closed = false;
+    const piSubagentStatuses = new Map<string, PiSubagentRunStatus>();
+    const piSubagentFingerprints = new Map<string, string>();
+    const piSubagentApprovalRequests = new Set<string>();
+    const piSubagentApprovalDeliveries = new Set<string>();
+    const piSubagentApprovalDecisions = new Map<string, boolean>();
+    let piSubagentRefreshInFlight = false;
+    let piSubagentResumeTail: Promise<void> = Promise.resolve();
+    const clearPiSubagentApprovalState = (runId: string): void => {
+      const prefix = `${runId}:`;
+      for (const key of piSubagentApprovalRequests) {
+        if (key.startsWith(prefix)) piSubagentApprovalRequests.delete(key);
+      }
+      for (const key of piSubagentApprovalDeliveries) {
+        if (key.startsWith(prefix)) piSubagentApprovalDeliveries.delete(key);
+      }
+      for (const key of piSubagentApprovalDecisions.keys()) {
+        if (key.startsWith(prefix)) piSubagentApprovalDecisions.delete(key);
+      }
+    };
+    const emitPiSubagentStatus = (status: PiSubagentRunStatus): void => {
+      const taskId = status.taskId;
+      const projectedStatus = status.state === 'queued' ? 'running' : status.state;
+      if (isPiSubagentTerminal(status.state)) clearPiSubagentApprovalState(status.runId);
+      const fingerprint = JSON.stringify([
+        status.runId,
+        status.state,
+        status.totalTokens,
+        status.toolUses,
+        status.stopRequested,
+        status.timedOut,
+        status.tasks.map((task) => [
+          task.status,
+          task.output,
+          task.outputTruncated,
+          task.error,
+          task.pendingApproval?.id,
+        ]),
+      ]);
+      if (piSubagentFingerprints.get(taskId) === fingerprint) return;
+      piSubagentFingerprints.set(taskId, fingerprint);
+      const taskModels = new Set(status.tasks.map((task) => task.model ?? null));
+      const onlyModel = taskModels.size === 1 ? [...taskModels][0] : null;
+      const taskThinking = new Set(status.tasks.map((task) => task.thinking ?? null));
+      const onlyThinking = taskThinking.size === 1 ? [...taskThinking][0] : null;
+      const terminal = isPiSubagentTerminal(status.state);
+      const terminalBodies = terminal
+        ? status.tasks.map((task) => [
+            task.output,
+            task.error ? `Error: ${task.error}` : undefined,
+          ].filter((part): part is string => Boolean(part)).join('\n\n'))
+        : [];
+      const hasReturnedResult = terminalBodies.some((body) => body.length > 0);
+      const returnedResult = terminal && hasReturnedResult
+        ? status.tasks.map((task, index) => status.tasks.length === 1
+            ? terminalBodies[index]
+            : `## ${task.title ?? task.agent}\n\n${terminalBodies[index] || '(no output)'}`,
+          ).join('\n\n')
+        : undefined;
+      const terminalSummary = returnedResult?.slice(0, 2_000);
+      queue.push({
+        type: 'agent_task_update',
+        source: 'pi',
+        data: {
+          provider: 'pi',
+          taskId,
+          parentToolUseId: taskId,
+          status: projectedStatus,
+          taskType: 'pi_subagent',
+          subagentParentContext: status.context === 'fork' ? 'snapshot' : 'none',
+          title: status.title,
+          description: status.description,
+          createdAt: new Date(status.startedAt).toISOString(),
+          updatedAt: new Date(status.updatedAt).toISOString(),
+          ...(terminalSummary ? { summary: terminalSummary } : {}),
+          ...(returnedResult !== undefined ? { returnedResult } : {}),
+          ...(terminal && !hasReturnedResult ? { returnedResultEmpty: true } : {}),
+          ...(terminal && status.tasks.some((task) => task.outputTruncated === true)
+            ? { returnedResultTruncated: true }
+            : {}),
+          ...(onlyModel ? { model: onlyModel } : taskModels.size > 1 ? { model: null } : {}),
+          ...(onlyThinking ? { reasoningEffort: onlyThinking } : {}),
+          usage: {
+            ...(typeof status.totalTokens === 'number' ? { totalTokens: status.totalTokens } : {}),
+            ...(typeof status.toolUses === 'number' ? { toolUses: status.toolUses } : {}),
+            ...(typeof status.usage?.cost === 'number' ? { costUsd: status.usage.cost } : {}),
+            durationMs: Math.max(0, (status.endedAt ?? status.updatedAt) - status.startedAt),
+          },
+          subagentObservation: {
+            // A UUID run directory is host-owned discovery authority. Mark each
+            // deduplicated snapshot as spawn/enrichment so the durable DB may
+            // learn native run/child ids even though the tool-start event fired
+            // before the detached runner UUID existed.
+            kind: 'spawn',
+            logicalSubagentId: status.runId,
+            parentToolUseId: taskId,
+            providerRunIds: [status.runId, ...status.tasks.map((task) => task.childId)],
+          },
+        },
+      });
+    };
+    const resolvePiSubagentApproval = async (
+      status: PiSubagentRunStatus,
+      task: PiSubagentRunStatus['tasks'][number],
+    ): Promise<void> => {
+      if (closed) return;
+      const approval = task.pendingApproval;
+      if (!approval || status.interactiveOwner === 'extension') return;
+      const turnChangeCapture = approval.method === 'confirm'
+        && approval.title === 'cindy:turn-change-capture';
+      const key = `${status.runId}:${task.childId}:${approval.id}`;
+      if (piSubagentApprovalDeliveries.has(key) || piSubagentApprovalRequests.has(key)) return;
+      piSubagentApprovalRequests.add(key);
+      if (turnChangeCapture) {
+        let toolName = '';
+        let input: Record<string, unknown> = {};
+        try {
+          const payload = JSON.parse(approval.message ?? '{}') as { toolName?: unknown; input?: unknown };
+          if (typeof payload.toolName === 'string') toolName = payload.toolName;
+          if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
+            input = payload.input as Record<string, unknown>;
+          }
+        } catch {
+          // Malformed capture payload is non-fatal; acknowledge it as opaque.
+        }
+        if (sid) {
+          try {
+            const targetPath = typeof input.path === 'string' ? input.path : null;
+            if (targetPath && (toolName === 'edit' || toolName === 'write')) {
+              await this.deps.turnChangeCapture?.beforeKnownFileWrite({
+                sessionId: sid,
+                provider: 'pi',
+                cwd: opts.workingDir,
+                targetPath,
+                ...(opts.remoteHostId ? { remote: true } : {}),
+              });
+            } else {
+              this.deps.turnChangeCapture?.noteOpaqueWrite({
+                sessionId: sid,
+                provider: 'pi',
+                cwd: opts.workingDir,
+                ...(opts.remoteHostId ? { remote: true } : {}),
+              });
+            }
+          } catch (error) {
+            this.deps.logger.warn('PI Subagent turn change capture failed', {
+              toolName,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        try {
+          const controlled = await controlPiSubagentRuns(subagentRunRoot, status.taskId, 'approval', {
+            childId: task.childId,
+            approvalId: approval.id,
+            confirmed: true,
+          });
+          if (controlled > 0) piSubagentApprovalDeliveries.add(key);
+        } catch (error) {
+          this.deps.logger.warn('PI Subagent turn change capture acknowledgement failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          piSubagentApprovalRequests.delete(key);
+        }
+        return;
+      }
+      let toolName = 'tool';
+      let input: Record<string, unknown> = {};
+      if (approval.title === 'cindy:permission' && approval.message) {
+        try {
+          const payload = JSON.parse(approval.message) as { toolName?: unknown; input?: unknown };
+          if (typeof payload.toolName === 'string' && payload.toolName) toolName = payload.toolName;
+          if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
+            input = payload.input as Record<string, unknown>;
+          }
+        } catch {
+          /* malformed permission payload remains a generic, deny-by-default prompt */
+        }
+      }
+      const requestId = `pi-subagent:${key}`;
+      const turnPolicyForcePrompt = (() => {
+        if (!activeTurnPermissionPolicy) return false;
+        try {
+          return activeTurnPermissionPolicy.forceConfirmToolCall(toolName, input) === true;
+        } catch (error) {
+          this.deps.logger.error('PI Subagent turn permission policy threw -> force confirmation', {
+            toolName,
+            origin: activeTurnPermissionPolicy.origin,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return true;
+        }
+      })();
+      const requestUserDecision = async (
+        options: { forcePrompt: boolean; unavailableHandoff?: boolean },
+      ): Promise<boolean | null> => {
+        // Session wires the resolver immediately after handle creation. Keep a
+        // very fast Ask/gray request pending until that wiring exists instead
+        // of turning startup ordering into a denial. The runner timeout remains
+        // the final fail-closed bound if a resolver never arrives.
+        if (!interactionResolver) return null;
+        return new Promise<boolean>((resolve) => {
+          let settled = false;
+          let unregister: (() => void) | null = null;
+          const finalize = (confirmed: boolean): void => {
+            if (settled) return;
+            settled = true;
+            unregister?.();
+            resolve(confirmed);
+          };
+          unregister = registerPendingPrompt(requestId, {
+            forcePrompt: options.forcePrompt,
+            ...(options.unavailableHandoff ? { unavailableHandoff: true } : {}),
+            settle: (resolveAs) => finalize(resolveAs === 'allow'),
+          });
+          const permissionRequest = {
+            kind: 'permission' as const,
+            requestId,
+            toolName,
+            input,
+            title: `Subagent: ${toolName}`,
+            description: `Requested by ${task.title ?? task.agent}`,
+            metadata: {
+              provider: 'pi',
+              subagent: true,
+              runId: status.runId,
+              childId: task.childId,
+            },
+          };
+          Promise.resolve().then(() => interactionResolver!(
+            options.unavailableHandoff
+              ? annotatePermissionRequestForUnavailableReview(permissionRequest)
+              : permissionRequest,
+          )).then((decision) => {
+            if (decision.kind !== 'permission') {
+              if (options.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+              finalize(false);
+              return;
+            }
+            if (
+              options.unavailableHandoff
+              && decision.behavior === 'deny'
+              && isSystemPermissionDenialReason(decision.reason)
+            ) {
+              autoReviewConfirmUndeliveredNotice.notify();
+            }
+            finalize(decision.behavior === 'allow');
+          }).catch((error) => {
+            this.deps.logger.warn('PI Subagent approval forwarding failed closed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+            if (options.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+            finalize(false);
+          });
+        });
+      };
+      const resolveConfirmation = async (): Promise<boolean | null> => {
+        if (permissionMode === 'bypassPermissions') return turnPolicyForcePrompt ? false : true;
+        const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+        const mcpPolicy = (() => {
+          const classifier = this.deps.getMcpToolApprovalPolicy;
+          if (!classifier || !mcpTarget) return null;
+          try {
+            const policy = classifier({
+              serverName: mcpTarget.serverName,
+              toolName: mcpTarget.toolName,
+              toolParams: input,
+            });
+            if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
+              return policy;
+            }
+            this.deps.logger.error('invalid PI Subagent MCP approval policy -> user confirmation', {
+              serverName: mcpTarget.serverName,
+              policy,
+            });
+          } catch (error) {
+            this.deps.logger.error('PI Subagent MCP approval policy threw -> user confirmation', {
+              serverName: mcpTarget.serverName,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+          return 'prompt-each-time' as const;
+        })();
+        if (mcpPolicy !== null) {
+          if (mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt) return true;
+          return requestUserDecision({
+            forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time',
+          });
+        }
+        if (permissionMode !== 'auto') {
+          return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
+        }
+        try {
+          const decision = await reviewAutoAction(normalizePiToolForAutoReview({
+            toolName,
+            input,
+            workspaceRoots: [opts.workingDir],
+            readRoots: [opts.workingDir, ...mutableExtraDirs],
+          }));
+          if (permissionMode !== 'auto' || turnPolicyForcePrompt) {
+            return requestUserDecision({ forcePrompt: true });
+          }
+          if (decision.verdict === 'allow') return true;
+          if (decision.verdict === 'block') return false;
+          if (decision.unavailable) autoReviewUnavailableNotice.notify();
+          return requestUserDecision({
+            forcePrompt: true,
+            ...(decision.unavailable ? { unavailableHandoff: true } : {}),
+          });
+        } catch (error) {
+          this.deps.logger.warn('PI Subagent auto-review failed; denying', {
+            toolName,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        }
+      };
+      let confirmed = piSubagentApprovalDecisions.get(key);
+      try {
+        if (typeof confirmed !== 'boolean' && approval.method === 'confirm') {
+          const resolved = await resolveConfirmation();
+          if (resolved === null) {
+            piSubagentApprovalRequests.delete(key);
+            return;
+          }
+          confirmed = resolved;
+        }
+      } catch (error) {
+        confirmed = false;
+        this.deps.logger.warn('PI Subagent approval forwarding failed closed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (typeof confirmed !== 'boolean') confirmed = false;
+      piSubagentApprovalDecisions.set(key, confirmed);
+      try {
+        const controlled = await controlPiSubagentRuns(subagentRunRoot, status.taskId, 'approval', {
+          childId: task.childId,
+          approvalId: approval.id,
+          confirmed,
+        });
+        if (controlled > 0) {
+          piSubagentApprovalDeliveries.add(key);
+          piSubagentApprovalDecisions.delete(key);
+        }
+      } catch (error) {
+        this.deps.logger.warn('PI Subagent approval response delivery failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        piSubagentApprovalRequests.delete(key);
+      }
+    };
+    const refreshPiSubagentRuns = async (): Promise<void> => {
+      if (closed || piSubagentRefreshInFlight) return;
+      piSubagentRefreshInFlight = true;
+      try {
+        const statuses = await listPiSubagentRuns(subagentRunRoot);
+        if (closed) return;
+        const newestTaskIds = new Set<string>();
+        for (const status of statuses) {
+          if (closed) break;
+          if (newestTaskIds.has(status.taskId)) continue;
+          newestTaskIds.add(status.taskId);
+          piSubagentStatuses.set(status.taskId, status);
+          emitPiSubagentStatus(status);
+          for (const task of status.tasks) void resolvePiSubagentApproval(status, task);
+        }
+        for (const [taskId, previous] of piSubagentStatuses) {
+          if (newestTaskIds.has(taskId)) continue;
+          piSubagentStatuses.delete(taskId);
+          piSubagentFingerprints.delete(taskId);
+          clearPiSubagentApprovalState(previous.runId);
+        }
+      } catch (error) {
+        deps.logger.warn('pi subagent durable status refresh failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        piSubagentRefreshInFlight = false;
+      }
+    };
+    const piSubagentRefreshTimer = localSubagentSupported
+      ? setInterval(() => {
+          void refreshPiSubagentRuns();
+        }, 500)
+      : null;
+    let piSubagentRefreshTimerCleared = false;
+    const clearPiSubagentRefreshTimer = (): void => {
+      if (piSubagentRefreshTimerCleared) return;
+      piSubagentRefreshTimerCleared = true;
+      if (piSubagentRefreshTimer) clearInterval(piSubagentRefreshTimer);
+    };
+    piSubagentRefreshTimer?.unref?.();
+    if (localSubagentSupported) void refreshPiSubagentRuns();
     // Cindy 侧对 pi plan 模式的镜像态;setPlanMode 经 /plan toggle 驱动,与 pi 内部
     // planModeEnabled 保持一致(RPC 下 Execute/Refine 选择框被 auto-cancel,pi 不会自行
     // 翻转,故镜像不漂移)。
@@ -1855,33 +2439,116 @@ export class PiAgent extends BaseAgent {
         notifyRuntimeCapabilityListener(listener, manifest);
       }
     };
-    // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明
-    // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
-    // SSH 只解决可达性，session token 继续提供逐会话鉴权，不能把 loopback 端口
-    // 当作信任边界。
-    const remoteUsesHostProxy = remote && nativeProviders.some((provider) => provider.hostProxyForward);
-    const proxySessionToken = remoteUsesHostProxy
-      ? stableRemoteProxySessionToken(opts.sessionId, this.deps.derivePiProxySessionToken)
-      : !remote
-        ? randomBytes(32).toString('base64url')
-        : undefined;
     let disposeProxySession: (() => void) | undefined;
-    // 幂等:onExit(进程异常退出)与 close()(用户结束)可能都调用它;首次注销后置位,
-    // 后续调用直接返回,避免二次注销(codex review:crash 时须由 onExit 立即释放)。
-    let sessionRegistrationsDisposed = false;
+    const appendProxyDisposer = (disposer: (() => void) | void): void => {
+      if (typeof disposer !== 'function') return;
+      const previous = disposeProxySession;
+      disposeProxySession = () => {
+        let firstError: unknown;
+        try { disposer(); } catch (error) { firstError = error; }
+        try { previous?.(); } catch (error) { firstError ??= error; }
+        if (firstError) throw firstError;
+      };
+    };
+    // MCP context belongs only to the root Pi process and is always released
+    // immediately. The gateway proxy token is different: detached children use
+    // it too, so parent navigation transfers that disposer to a bounded durable
+    // run lease instead of revoking the token underneath a live child.
+    let sessionContextDisposed = false;
+    let proxyRegistrationOwned = true;
+    const disposeSessionContext = (): void => {
+      if (sessionContextDisposed) return;
+      sessionContextDisposed = true;
+      disposeSessionCtx?.();
+    };
+    const disposeProxyRegistration = (): void => {
+      if (!proxyRegistrationOwned) return;
+      proxyRegistrationOwned = false;
+      const dispose = disposeProxySession;
+      disposeProxySession = undefined;
+      dispose?.();
+    };
     const disposeSessionRegistrations = (): void => {
-      if (sessionRegistrationsDisposed) return;
-      sessionRegistrationsDisposed = true;
       let firstError: unknown;
-      for (const dispose of [disposeProxySession, disposeSessionCtx]) {
-        try {
-          dispose?.();
-        } catch (error) {
-          firstError ??= error;
-        }
+      try {
+        disposeProxyRegistration();
+      } catch (error) {
+        firstError = error;
+      }
+      try {
+        disposeSessionContext();
+      } catch (error) {
+        firstError ??= error;
       }
       if (firstError) throw firstError;
     };
+    let proxyLeaseInitialInspection: Promise<void> | null = null;
+    const deferProxyDisposalForDetachedRuns = (): Promise<void> => {
+      if (proxyLeaseInitialInspection) return proxyLeaseInitialInspection;
+      if (!proxyRegistrationOwned || !disposeProxySession) return Promise.resolve();
+      const dispose = disposeProxySession;
+      disposeProxySession = undefined;
+      proxyRegistrationOwned = false;
+      let leaseDisposed = false;
+      const settleLease = (): void => {
+        if (leaseDisposed) return;
+        leaseDisposed = true;
+        dispose();
+      };
+      const startedAt = Date.now();
+      const unreadableDirectoryDeadline = startedAt + 2_000;
+      const hardDeadline = startedAt + (24 * 60 + 5) * 60 * 1_000;
+      let resolveInitialInspection!: () => void;
+      let initialInspectionSettled = false;
+      proxyLeaseInitialInspection = new Promise<void>((resolve) => {
+        resolveInitialInspection = resolve;
+      });
+      const settleInitialInspection = (): void => {
+        if (initialInspectionSettled) return;
+        initialInspectionSettled = true;
+        resolveInitialInspection();
+      };
+      void (async () => {
+        for (;;) {
+          const [directoryCount, statuses] = await Promise.all([
+            countPiSubagentRunDirectories(subagentRunRoot),
+            listPiSubagentRuns(subagentRunRoot),
+          ]);
+          const active = statuses.some((status) => !isPiSubagentTerminal(status.state));
+          const allDirectoriesReadable = statuses.length === directoryCount;
+          settleInitialInspection();
+          if (
+            !active
+            && (
+              directoryCount === 0
+              || allDirectoriesReadable
+              || Date.now() >= unreadableDirectoryDeadline
+            )
+          ) {
+            settleLease();
+            return;
+          }
+          if (Date.now() >= hardDeadline) {
+            settleLease();
+            return;
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        }
+      })().catch((error) => {
+        settleInitialInspection();
+        // Inspection failure revokes rather than leaking a credential lease.
+        try {
+          settleLease();
+        } catch {
+          /* best effort */
+        }
+        this.deps.logger.warn('pi detached Subagent proxy lease failed closed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return proxyLeaseInitialInspection;
+    };
+    let durableSpawnEnv: NodeJS.ProcessEnv = {};
     try {
       // 远端不 stage 本地 rg(本机二进制远端无意义)—— 远端走 PATH 上的 rg(远端 POSIX
       // 系统常见),与 CC/Codex 远端一致(不注入受管工具路径)。
@@ -1892,14 +2559,21 @@ export class PiAgent extends BaseAgent {
             this.deps.runtimeConfig.managedExecutablePaths?.ripgrep,
           );
       if (proxySessionToken && opts.sessionId && this.deps.registerPiProxySession) {
-        const disposer = this.deps.registerPiProxySession(
+        appendProxyDisposer(this.deps.registerPiProxySession(
           opts.sessionId,
           proxySessionToken,
           () => mutablePiProviderId === PI_PROVIDER_ID
             ? null
             : resolveSourceProvider(mutablePiProviderId),
-        );
-        if (typeof disposer === 'function') disposeProxySession = disposer;
+        ));
+        for (const { providerId, token } of subagentProxyTokens.values()) {
+          appendProxyDisposer(this.deps.registerPiProxySession(
+            opts.sessionId,
+            token,
+            () => providerId,
+            { scope: 'subagent-route' },
+          ));
+        }
       }
       // 视觉桥后端 env（层 C）：host 解析后注入，cindy-bridge 的 vision 工具读取。
       // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
@@ -1960,14 +2634,18 @@ export class PiAgent extends BaseAgent {
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
         // cindy-bridge-source currentPermissionState fail-closed)。
         ...(reviewMode ? { CINDY_PI_REVIEW_ONLY: '1' } : {}),
-        // 子代理:cindy-subagent 扩展据此 spawn 子 pi 进程。给二进制路径而不是让扩展猜
-        // process.execPath —— host 本来就知道本次会话用的是哪个 pi。远端会话用远端
-        // 二进制路径(effectivePiBinaryPath;本地路径远端不存在,spawn 会失败)。
-        [CINDY_SUBAGENT_ENV.binary]: effectivePiBinaryPath,
-        // 只给文件路径:model/provider 由扩展每次现读,setModel 后立即生效。
-        // 快照没能持久化时**不传**该 env —— 扩展据此完全不注册 subagent 工具(fail-closed,
-        // 宁可本次会话没有子代理,也不让它带着空/旧快照把请求发到错误 endpoint)。
-        ...(subagentRoutingEnabled ? { [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile } : {}),
+        // 子代理能力与其全部控制面 env 一起注入。当前只支持本地 PI；远端会话不加载
+        // 扩展，也不能看见一组指向 Desktop 本机文件的半残能力。
+        ...(subagentRoutingEnabled ? {
+          // 给二进制路径而不是让扩展猜 process.execPath；host 知道本次会话的真实 pi。
+          [CINDY_SUBAGENT_ENV.binary]: effectivePiBinaryPath,
+          // model/provider 由扩展每次现读，setModel 后立即生效。快照不可用时整组不传，
+          // 扩展据此完全不注册 subagent 工具（fail-closed）。
+          [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile,
+          [CINDY_SUBAGENT_ENV.runRoot]: subagentRunRoot,
+          [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
+          [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
+        } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。
         PI_OFFLINE: '1',
@@ -1992,6 +2670,7 @@ export class PiAgent extends BaseAgent {
         spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
       }
       mergeLoopbackNoProxy(spawnEnv);
+      durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
       const { transport } = await this.createTransport(
         {
@@ -2053,6 +2732,8 @@ export class PiAgent extends BaseAgent {
           translatePiEvent(event, queue, ctx);
         },
         onExit: ({ code, signal }) => {
+          clearPiSubagentRefreshTimer();
+          void deferProxyDisposalForDetachedRuns();
           disposePiTranslateContext(ctx);
           clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true });
           runtimeCapabilityGeneration++;
@@ -2097,6 +2778,7 @@ export class PiAgent extends BaseAgent {
         },
       });
     } catch (err) {
+      clearPiSubagentRefreshTimer();
       disposePiTranslateContext(ctx);
       try {
         disposeSessionRegistrations();
@@ -2494,7 +3176,10 @@ export class PiAgent extends BaseAgent {
         model: mutableWireModel,
         provider: mutablePiProviderId,
       };
-      if (!(await writeSubagentRuntimeFile({ model: wireModel, provider, pending: true }))) {
+      if (
+        subagentRoutingEnabled
+        && !(await writeSubagentRuntimeFile({ model: wireModel, provider, pending: true }))
+      ) {
         throw new Error(
           'pi: 无法持久化子代理路由快照,已取消本次模型切换(避免父会话切到新 provider 而子代理仍按旧路由派发)。'
           + '请检查运行目录是否可写后重试。',
@@ -2541,7 +3226,7 @@ export class PiAgent extends BaseAgent {
         // pi 侧没切成:快照必须回滚成上一份**已确认**的路由,否则子代理会一直被 pending 挡住。
         // 这次回滚是安全的 —— 等待窗口里 pending 标记挡住了全部派发,不存在"已经起来的子进程
         // 正在用被拒绝的 provider"这种撤不回的状态(review)。
-        if (!(await writeSubagentRuntimeFile(previousSnapshot))) {
+        if (subagentRoutingEnabled && !(await writeSubagentRuntimeFile(previousSnapshot))) {
           // 回滚也失败(第一次写成功之后文件系统才转只读之类):此刻盘上的快照指向**被拒绝的**
           // provider/model,而父会话仍在旧路由 —— 子代理的下一次派发就会打到用户并未启用的
           // 端点(错误计费 + 提示词与仓库上下文外泄)。
@@ -2575,7 +3260,10 @@ export class PiAgent extends BaseAgent {
       // pi 已确认 → 清掉 pending 标记放行派发。写失败时**不**抛错:模型切换本身确实成功了,
       // 谎报失败会让上层与 UI 状态和 pi 真实状态背离。代价是这个会话的子代理一直被 pending
       // 挡住(可见的降级、拒绝时有明确文案),而它是安全方向 —— 绝不会把委派发到错误 endpoint。
-      if (!(await writeSubagentRuntimeFile({ model: wireModel, provider }))) {
+      if (
+        subagentRoutingEnabled
+        && !(await writeSubagentRuntimeFile({ model: wireModel, provider }))
+      ) {
         deps.logger.error(
           'pi: model switch confirmed but the subagent routing snapshot stayed pending; '
           + 'subagent delegation stays disabled for this session (fail-closed)',
@@ -2707,6 +3395,59 @@ export class PiAgent extends BaseAgent {
         }
       },
 
+      async stopBackgroundTask(taskId: string): Promise<void> {
+        if (closed) return;
+        if (!localSubagentSupported) throw new Error('PI Subagent is available only in local PI sessions.');
+        await controlPiSubagentRuns(subagentRunRoot, taskId, 'stop');
+        await refreshPiSubagentRuns();
+      },
+
+      async resumeBackgroundTask(taskId: string, message: string, childId?: string): Promise<void> {
+        if (closed) throw new Error('PI session is closed');
+        if (!localSubagentSupported) throw new Error('PI Subagent is available only in local PI sessions.');
+        const operation = (async () => {
+          await permissionWriteChain;
+          if (closed) throw new Error('PI session is closed');
+          const [modelsJson, bridgeSource, runnerSource] = await Promise.all([
+            fs.readFile(path.join(configHome, 'models.json')),
+            fs.readFile(bridgeExtensionPath),
+            fs.readFile(subagentRunnerPath),
+          ]);
+          const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
+            nodeExecutable: process.execPath,
+            env: durableSpawnEnv,
+            permissionSnapshot: {
+              ...requestedPermissionSnapshot,
+              mode: permissionMode,
+              readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots],
+              ...reviewPathSnapshot,
+            },
+            runnerFallbackFile: subagentRunnerPath,
+            runtimeSnapshot: { modelsJson, bridgeSource, runnerSource },
+          }, childId);
+          if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
+          await refreshPiSubagentRuns();
+        })();
+        // close() waits for every resume that entered while this handle was
+        // live before inspecting durable runs and transferring the proxy-token
+        // lease. Otherwise a concurrent close can observe no new directory,
+        // revoke the token, and then let this resume launch a doomed child.
+        piSubagentResumeTail = operation.then(() => undefined, () => undefined);
+        await operation;
+      },
+
+      listBackgroundTasks() {
+        if (closed) return [];
+        return Array.from(piSubagentStatuses.values())
+          .filter((status) => !isPiSubagentTerminal(status.state))
+          .map((status) => ({
+            taskId: status.taskId,
+            taskType: 'pi_subagent',
+            toolUseId: status.taskId,
+            title: status.title ?? status.description,
+          }));
+      },
+
       async abort(): Promise<void> {
         if (proc.isClosed) return;
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
@@ -2729,6 +3470,7 @@ export class PiAgent extends BaseAgent {
 
       async close(): Promise<void> {
         closed = true;
+        clearPiSubagentRefreshTimer();
         disposePiTranslateContext(ctx);
         runtimeCapabilityGeneration++;
         publishRuntimeCapabilities(undefined);
@@ -2736,8 +3478,11 @@ export class PiAgent extends BaseAgent {
         // 会话结束时挂起的卡已经不可能有人回答:清 policy 并强制 deny,别让等它的调用
         // 悬着(同 CC / Codex)。
         clearActiveTurnPermissionPolicy('session_closed', { dismissPending: true });
-        // 先注销 bridge 身份注册(幂等),再关子进程。放前面:即便 proc.close 抛错
-        // 也不泄漏 ctx —— 该 sessionId 的 `?session=` 路由必须随会话结束失效。
+        // MCP route belongs to the root and closes immediately. Transfer the
+        // proxy-token disposer first so detached children keep their gateway
+        // lease until their durable statuses settle.
+        await piSubagentResumeTail;
+        await deferProxyDisposalForDetachedRuns();
         try {
           disposeSessionRegistrations();
         } catch (err) {

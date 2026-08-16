@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
 
 import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
 
@@ -9,6 +10,8 @@ import {
   CINDY_SUBAGENT_PARENT_PID_ENV,
   CINDY_SUBAGENT_TOOL_NAME,
 } from '../cindy-subagent-source.js';
+import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
+import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
 import { PI_SUBAGENT_PROGRESS_MARKER } from '../subagent-progress.js';
 
 /**
@@ -16,6 +19,23 @@ import { PI_SUBAGENT_PROGRESS_MARKER } from '../subagent-progress.js';
  * 「改一处忘另一处就静默失效」的那几条,不是复读实现细节。
  */
 describe('cindy-subagent extension source', () => {
+  it('parses as a complete generated TypeScript module', () => {
+    const result = ts.transpileModule(CINDY_SUBAGENT_EXTENSION_SOURCE, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+      },
+      reportDiagnostics: true,
+    });
+    const diagnostics = (result.diagnostics ?? []).filter(
+      (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+    );
+    expect(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(
+      diagnostic.messageText,
+      '\n',
+    ))).toEqual([]);
+  });
+
   it('registers the tool name the card predicate recognises', () => {
     // 工具名与 maker-shared 的判据脱同步 = 子代理卡完全不渲染(且不报错)。
     expect(CINDY_SUBAGENT_TOOL_NAME).toBe(PI_SUBAGENT_TOOL_NAME);
@@ -54,14 +74,34 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('if (readDepth() >= MAX_DEPTH) return;');
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('const MAX_TASKS = 8');
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('const MAX_CONCURRENCY = 4');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('const MAX_TASK_CHARS = 32000');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('const MAX_MODEL_CHARS = 500');
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toMatch(/TASK_TIMEOUT_MS\s*=/);
-    // 子代理不写会话文件,不污染 Cindy 的会话 JSONL。
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("'--no-session'");
+    // Durable runner owns a private PI session directory so queued children can
+    // resume after the parent turn exits without polluting the parent session.
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain("'--mode', 'rpc'");
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain("'--session-dir', task.sessionDir");
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain("'--session-id', task.sessionId");
     // 子 Pi 与父 Pi 使用同一条 project hard gate；权限门只经显式 bridge 回装。
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("'--no-approve'");
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("'--no-extensions'");
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
-      "'--extension', join(configHome, 'extensions', 'cindy-bridge.ts')",
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain("'--no-approve'");
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain("'--no-extensions'");
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain(
+      "'--extension', config.bridgeExtension",
+    );
+  });
+
+  it('keeps durable run controls hidden and read-only inside child PI', () => {
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain(
+      "if (key.startsWith('CINDY_PI_SUBAGENT_')) delete childEnv[key]",
+    );
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain(
+      'childEnv.CINDY_PI_SUBAGENT_RUN_DIR = config.runDir',
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      'writeInsideAgentHome || writeInsideSubagentRun',
     );
   });
 
@@ -70,10 +110,34 @@ describe('cindy-subagent extension source', () => {
     // 让网关与 BYOM 的同名模型落到默认 endpoint(pi-harness §3 要求 BYOM 直连原生 provider)。
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('function readRuntimeSnapshot()');
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const runtime = readRuntimeSnapshot();");
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("args.push('--provider', runtime.provider)");
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("args.push('--model', runtime.model)");
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain("'--provider', task.provider");
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain("args.push('--model', task.model)");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('function resolveTaskModelRoutes(tasks, runtime)');
     // 不得再从 env 直接取模型(那就是被 review 指出的 stale 源)。
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('CINDY_PI_SUBAGENT_MODEL');
+  });
+
+  it('freezes the PI model catalog inside the durable run directory', () => {
+    // Parent navigation closes its ephemeral configHome. A detached runner may
+    // launch queued children later, so inheriting that directory would make
+    // background survival depend on a file the parent deliberately deletes.
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'))",
+    );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('childConfigHome: childConfigHome');
+  });
+
+  it('persists a terminal failure if the detached runner cannot spawn', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("runner.once('error'");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("state: 'failed'");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("writePrivateJson(join(runDir, 'status.json')");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("runnerInstanceId: 'launch-pending-' + runId");
+  });
+
+  it('removes a partially staged durable run before reporting setup failure', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      'rmSync(runDir, { recursive: true, force: true })',
+    );
   });
 
   it('reports failed when any parallel task failed, not only when all did', () => {
@@ -111,12 +175,8 @@ describe('cindy-subagent extension source', () => {
     expect(src).toContain('is not confirmed yet');
     const guard = src.indexOf('if (runtime.pending) {');
     const execute = src.indexOf('async execute(toolCallId');
-    const spawn = src.indexOf('child = spawn(binary, args');
     expect(guard).toBeGreaterThan(execute);
-    // runTask 里的 spawn 在源码里位于 execute 之前(函数声明顺序),所以不能只比字符位置 ——
-    // 关键是这道闸在 execute 的**早返回段**里,即在 tasks 循环启动之前。
-    expect(spawn).toBeLessThan(execute);
-    const dispatch = src.indexOf('runTask(', guard);
+    const dispatch = src.indexOf('const launched = launchDurableRun(', guard);
     expect(dispatch).toBeGreaterThan(guard);
   });
 
@@ -145,43 +205,11 @@ describe('cindy-subagent extension source', () => {
     expect(src.indexOf("report('running');")).toBeGreaterThan(pendingGuard);
   });
 
-  it('defers settling to process close so grace-period usage is still counted', () => {
-    // kill() 到 SIGKILL 之间约 2 秒宽限里子进程仍会吐 message_end,那是真实产生的 token/cost。
-    // 原来 abort/timeout 立刻 finish + 在 JSON.parse 之前整条短路,这段用量直接丢掉(review)。
-    // 单纯"解析但不上报"也救不回来:promise 已 resolve,调用方紧接着读走快照,之后改 totals
-    // 没人再看。所以收口必须推迟到进程真的 'close'。
-    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
-    // abort 与 timeout 都只置原因 + 杀 + 兜底,不再直接 finish。
-    expect(src).toContain("terminationReason = 'aborted';");
-    expect(src).toContain("terminationReason = 'timeout';");
-    expect(src).toContain('armSettleFallback(');
-    // 真正的收口在 close 分支里,按 terminationReason 决定文案。
-    const closeAt = src.indexOf("child.on('close'");
-    expect(src.indexOf('if (terminationReason !== null) {', closeAt)).toBeGreaterThan(closeAt);
-    // 'close' 万一不来,兜底定时器仍要收口,不能把父 turn 永久挂住。
-    expect(src).toMatch(/settleFallbackTimer = setTimeout\(/);
-    // 守卫仍在(只挡上报),但它现在只对"兜底已强行收口"生效。
-    const feedGuard = src.indexOf('const feed = createLineReader');
-    expect(src.indexOf('if (settled) return;', feedGuard)).toBeGreaterThan(feedGuard);
-  });
 
   it('ships as its own extension file rather than being folded into cindy-bridge', () => {
     expect(CINDY_SUBAGENT_EXTENSION_FILENAME).toBe('cindy-subagent.ts');
   });
 
-  it('strips the MCP bridge from the child env so subagents do not open MCP transports', () => {
-    // 子进程继承 PI_CODING_AGENT_DIR → 会加载 cindy-bridge(权限门要靠这个)。bridge 一见到
-    // CINDY_PI_MCP_BRIDGE 就逐个 connect 所有 MCP server 并持有有状态 transport,而子代理的
-    // --tools 白名单里根本没有 MCP 工具 —— 纯浪费:每个子代理一整套连接、并发 4 单批最多 8,
-    // 且子代理不显式 close。实测:一个 depth=1 的 pi 进程对 fake MCP server 发了 3 次请求,
-    // 剥掉该 env 后为 0,而 bridge 的 bash 覆盖与权限门注册在 MCP 段**之前**,不受影响。
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE'");
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('delete childEnv[MCP_BRIDGE_ENV];');
-    // 权限门与网关路由必须**保留**:这两个被剥掉才是真事故(子代理越权 / 打错 endpoint)。
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('delete childEnv[RUNTIME_FILE_ENV]');
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("delete childEnv['CINDY_PI_PERMISSION_FILE']");
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("delete childEnv['PI_CODING_AGENT_DIR']");
-  });
 
   it('enforces a call-level output budget, not just a per-task one', () => {
     // 只限单项没用:8 个任务各 16k 拼起来 ~128k 字符注进父请求,一次委派就吃掉大半父上下文
@@ -200,53 +228,14 @@ describe('cindy-subagent extension source', () => {
     // 只报一个 totalTokens 的话父侧无从拆分 input/output/cache/cost,turn 记账与
     // register.ts 的持久化都拿不到委派花费(review)。
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('function emptyUsage()');
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('totals.cost += cost');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('usage: task.usage || emptyUsage()');
     for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'cost']) {
       expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(field + ': totals.usage.' + field + ',');
     }
   });
 
-  it('does not SIGKILL a pid it no longer owns', () => {
-    // SIGTERM 后的 2 秒宽限里子进程通常已经退了。原来那发 SIGKILL 既没存定时器(进程退出后
-    // 仍多挂 2 秒)也不复查存活 —— 一旦 pid 被系统回收复用,这一发就打到无关进程上(review)。
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('let killTimer = null;');
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('killTimer = setTimeout(');
-    // 强杀前必须先确认子进程还没退。
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
-      "if (child.exitCode !== null || child.signalCode !== null) return;",
-    );
-    // 存活复查必须在 SIGKILL **之前**。
-    const guard = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('if (child.exitCode !== null');
-    const sigkill = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf("child.kill('SIGKILL')", guard);
-    expect(guard).toBeGreaterThan(-1);
-    expect(sigkill).toBeGreaterThan(guard);
-    // close / error 两条退出路径都要清定时器。
-    // 锚点必须是**真** error handler(带 err 形参);中止分支那个吞错 stub 是无形参的,
-    // 用它当锚点会让断言落在错误的位置(我加中止分支时就先踩了一次)。
-    for (const handler of ["child.on('close'", "child.on('error', function (err)"]) {
-      const at = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(handler);
-      expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(at, at + 320)).toContain('clearTimeout(killTimer)');
-    }
-  });
 
 
-  it('never spawns a child once the batch is aborted', () => {
-    // 批次取消时 worker 车道里可能还排着任务。原来它们照样先 spawn、再走 aborted 早返回,而那个
-    // return 在注册 stdout/error/close **之前**:子进程永留 liveChildren,且 spawn 失败会变成
-    // 无人监听的 'error' 事件 —— Node 里直接抛出,能把父 pi 进程带走(review)。
-    const source = CINDY_SUBAGENT_EXTENSION_SOURCE;
-    const runTaskAt = source.indexOf('function runTask(');
-    const preCheck = source.indexOf('if (signal && signal.aborted === true) {', runTaskAt);
-    const spawnAt = source.indexOf('child = spawn(binary, args', runTaskAt);
-    expect(preCheck).toBeGreaterThan(runTaskAt);
-    // 检查必须在 spawn **之前**。
-    expect(preCheck).toBeLessThan(spawnAt);
-    // 残余竞态(检查后、spawn 完成前才 abort)那条早返回要自己摘 liveChildren + 吞 error。
-    const innerAbort = source.indexOf('if (signal.aborted) {', spawnAt);
-    const innerBody = source.slice(innerAbort, innerAbort + 520);
-    expect(innerBody).toContain('liveChildren.delete(child)');
-    expect(innerBody).toContain("child.on('error'");
-  });
 
   it('declares the watchdog constants exactly once in the composed module', () => {
     // 主体与看门狗段是拼起来的:同名 const 声明两次 → 拼接后的模块直接 SyntaxError,
@@ -267,25 +256,6 @@ describe('cindy-subagent extension source', () => {
     expect(earlyReturn).toBeGreaterThan(install);
   });
 
-  it('tracks live children and reaps them when the parent exits normally', () => {
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('liveChildren.add(child)');
-    // 摘除必须挂在进程真正结束的 'close' / 'error' 上,**不能**挂在 finish() 里:超时与中止
-    // 都是先 finish 再进 SIGKILL 宽限期,进程那时还活着,这段窗口内父进程退出仍要杀它。
-    const finishStart = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('const finish = function');
-    const finishEnd = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('const kill = function', finishStart);
-    expect(finishStart).toBeGreaterThan(-1);
-    expect(finishEnd).toBeGreaterThan(finishStart);
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(finishStart, finishEnd)).not.toContain('liveChildren.delete');
-    // 锚点必须是**真** error handler(带 err 形参);中止分支那个吞错 stub 是无形参的,
-    // 用它当锚点会让断言落在错误的位置(我加中止分支时就先踩了一次)。
-    for (const handler of ["child.on('close'", "child.on('error', function (err)"]) {
-      const at = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(handler);
-      expect(at).toBeGreaterThan(-1);
-      expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(at, at + 240)).toContain('liveChildren.delete(child)');
-    }
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("process.on('exit', reapLiveChildren)");
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("childEnv[PARENT_PID_ENV] = String(process.pid)");
-  });
 
   it('registers no signal handlers (that would suppress pi\'s default terminate)', () => {
     // Node/Bun 里加一个 SIGTERM 监听就抑制了该信号的默认终止行为:pi 自身若没有别的处理器,

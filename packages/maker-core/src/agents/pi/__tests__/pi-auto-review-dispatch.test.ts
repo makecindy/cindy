@@ -30,7 +30,11 @@ const captured = vi.hoisted(() => ({
   onEvent: null as ((event: unknown) => void) | null,
   requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
-  proxyRegistration: null as { sessionId: string; token: string } | null,
+  proxyRegistrations: [] as Array<{
+    sessionId: string;
+    token: string;
+    scope: 'session' | 'subagent-route';
+  }>,
   mcpVendorOptions: undefined as Record<string, unknown> | undefined,
   failSetModel: false,
   rejectSetModel: false,
@@ -138,7 +142,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onEvent = null;
     captured.requests = [];
     captured.sent = [];
-    captured.proxyRegistration = null;
+    captured.proxyRegistrations = [];
     captured.mcpVendorOptions = undefined;
     captured.failSetModel = false;
     captured.rejectSetModel = false;
@@ -237,8 +241,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
-      registerPiProxySession: (sessionId, token) => {
-        captured.proxyRegistration = { sessionId, token };
+      registerPiProxySession: (sessionId, token, _resolveProviderId, options) => {
+        captured.proxyRegistrations.push({
+          sessionId,
+          token,
+          scope: options?.scope === 'subagent-route' ? 'subagent-route' : 'session',
+        });
       },
       reviewAutoPermissionAction,
     };
@@ -307,10 +315,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     ));
     expect(path.isAbsolute(privateRgPath!)).toBe(true);
     expect(readFileSync(privateRgPath!, 'utf8')).toBe('fake managed ripgrep');
-    expect(captured.proxyRegistration).toEqual({
-      sessionId: 's1',
-      token: captured.env.CINDY_PI_SESSION_TOKEN,
-    });
+    expect(captured.proxyRegistrations).toEqual([
+      {
+        sessionId: 's1',
+        token: captured.env.CINDY_PI_SESSION_TOKEN,
+        scope: 'session',
+      },
+      {
+        sessionId: 's1',
+        token: expect.not.stringMatching(captured.env.CINDY_PI_SESSION_TOKEN!),
+        scope: 'subagent-route',
+      },
+    ]);
     expect(captured.env.CINDY_PI_SESSION_TOKEN).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(JSON.parse(captured.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]')).toEqual(
       expect.arrayContaining([

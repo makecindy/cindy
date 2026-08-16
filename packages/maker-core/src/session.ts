@@ -726,6 +726,16 @@ export class Session {
     await this.handle.stopBackgroundTask(taskId);
   }
 
+  async resumeBackgroundTask(taskId: string, message: string, childId?: string): Promise<void> {
+    if (this.status === 'closed' || this.status === 'error') {
+      throw new NotSupportedError('resumeBackgroundTask', { supported: false, reason: 'not-implemented' });
+    }
+    if (!this.handle.resumeBackgroundTask) {
+      throw new NotSupportedError('resumeBackgroundTask', { supported: false, reason: 'not-implemented' });
+    }
+    await this.handle.resumeBackgroundTask(taskId, message, childId);
+  }
+
   /**
    * 当前仍在运行的后台任务快照。不支持的 agent / 已关闭会话 → 空数组(此时
    * 子进程不存在,后台任务必然已死,空数组即事实)。

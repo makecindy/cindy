@@ -1,0 +1,1085 @@
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import {
+  createReadStream,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import * as fs from 'node:fs/promises';
+import path from 'node:path';
+import { createInterface } from 'node:readline';
+
+import type {
+  SubagentTranscriptEntry,
+  SubagentTranscriptPageResponse,
+} from '@cindy/maker-shared/subagent-workspace';
+
+const RUN_DIR_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_STATUS_BYTES = 2 * 1024 * 1024;
+const MAX_TRANSCRIPT_BYTES = 50 * 1024 * 1024 + 4096;
+const MAX_TRANSCRIPT_PAGE_SIZE = 200;
+const MAX_TRANSCRIPT_ENTRY_CHARS = 32 * 1024;
+const STALE_HEARTBEAT_MS = 15_000;
+let controlWriteSequence = 0;
+
+export function piSubagentRunRoot(agentHome: string, sessionId: string): string {
+  const id = sessionId.trim();
+  if (!id || id === '.' || id === '..' || /[\\/\0]/.test(id)) {
+    throw new Error('unsafe PI Subagent parent session id');
+  }
+  return path.join(agentHome, 'runtime', 'pi-subagent-runs', id);
+}
+
+export type PiSubagentRunState = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
+
+export interface PiSubagentTaskStatus {
+  childId: string;
+  sessionId: string;
+  agent: string;
+  title?: string;
+  task?: string;
+  status: PiSubagentRunState;
+  model?: string;
+  thinking?: string;
+  toolUses?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    cost?: number;
+  };
+  output?: string;
+  outputTruncated?: boolean;
+  error?: string;
+  pendingApproval?: {
+    id: string;
+    method: string;
+    title?: string;
+    message?: string;
+  };
+  startedAt?: number;
+  endedAt?: number;
+}
+
+export interface PiSubagentRunStatus {
+  version: 1;
+  runId: string;
+  taskId: string;
+  parentSessionId: string;
+  runnerInstanceId: string;
+  runnerPid?: number;
+  interactiveOwner?: 'host' | 'extension';
+  state: PiSubagentRunState;
+  title?: string;
+  description?: string;
+  mode?: 'single' | 'parallel' | 'chain' | 'workflow';
+  context?: 'fresh' | 'fork';
+  startedAt: number;
+  updatedAt: number;
+  endedAt?: number;
+  stopRequested?: boolean;
+  timedOut?: boolean;
+  toolUses?: number;
+  totalTokens?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    cost?: number;
+  };
+  transcriptPath?: string;
+  resultPath?: string;
+  tasks: PiSubagentTaskStatus[];
+}
+
+export interface PiSubagentRunDiagnostic {
+  kind: 'corrupt' | 'stale';
+  runId: string;
+  taskId?: string;
+  parentSessionId?: string;
+  title?: string;
+  description?: string;
+  startedAt: number;
+  updatedAt: number;
+  message: string;
+}
+
+export type PiSubagentControlAction = 'stop' | 'steer' | 'follow_up' | 'approval';
+
+interface TranscriptCursor {
+  version: 1;
+  runId: string;
+  offset: number;
+}
+
+function finiteNonNegative(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isState(value: unknown): value is PiSubagentRunState {
+  return value === 'queued'
+    || value === 'running'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'stopped';
+}
+
+function parseStatus(value: unknown, expectedRunId: string): PiSubagentRunStatus | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1 || raw.runId !== expectedRunId) return null;
+  if (typeof raw.taskId !== 'string' || !raw.taskId) return null;
+  if (typeof raw.parentSessionId !== 'string' || !raw.parentSessionId) return null;
+  if (typeof raw.runnerInstanceId !== 'string' || !raw.runnerInstanceId) return null;
+  if (!isState(raw.state) || !finiteNonNegative(raw.startedAt) || !finiteNonNegative(raw.updatedAt)) return null;
+  if (!Array.isArray(raw.tasks)) return null;
+  const tasks: PiSubagentTaskStatus[] = [];
+  for (const value of raw.tasks) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const task = value as Record<string, unknown>;
+    if (
+      typeof task.childId !== 'string'
+      || !task.childId
+      || typeof task.sessionId !== 'string'
+      || !task.sessionId
+      || typeof task.agent !== 'string'
+      || !task.agent
+      || !isState(task.status)
+    ) return null;
+    tasks.push(value as PiSubagentTaskStatus);
+  }
+  return { ...(value as PiSubagentRunStatus), tasks };
+}
+
+async function readSmallJson(file: string): Promise<unknown> {
+  const stat = await fs.lstat(file);
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_STATUS_BYTES) {
+    throw new Error('oversized, linked, or non-file subagent status');
+  }
+  return JSON.parse(await fs.readFile(file, 'utf8')) as unknown;
+}
+
+export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
+  return state === 'completed' || state === 'failed' || state === 'stopped';
+}
+
+function isProcessAlive(pid: number | undefined): boolean | null {
+  if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return null;
+  try {
+    process.kill(pid!, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') return true;
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    return null;
+  }
+}
+
+export function isPiSubagentRunStale(
+  status: PiSubagentRunStatus,
+  now = Date.now(),
+): boolean {
+  if (isPiSubagentTerminal(status.state)) return false;
+  if (now - status.updatedAt <= STALE_HEARTBEAT_MS) return false;
+  if (!Number.isSafeInteger(status.runnerPid) || status.runnerPid! <= 0) return true;
+  return isProcessAlive(status.runnerPid) === false;
+}
+
+async function listRunDirectoryIds(root: string): Promise<string[]> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && RUN_DIR_RE.test(entry.name))
+    .map((entry) => entry.name);
+}
+
+export async function countPiSubagentRunDirectories(root: string): Promise<number> {
+  return (await listRunDirectoryIds(root)).length;
+}
+
+export async function listPiSubagentRuns(root: string): Promise<PiSubagentRunStatus[]> {
+  const runIds = await listRunDirectoryIds(root);
+  const now = Date.now();
+  const statuses = await Promise.all(runIds
+    .map(async (runId): Promise<PiSubagentRunStatus | null> => {
+      try {
+        return parseStatus(
+          await readSmallJson(path.join(root, runId, 'status.json')),
+          runId,
+        );
+      } catch {
+        return null;
+      }
+    }));
+  return statuses
+    .filter((status): status is PiSubagentRunStatus => status !== null)
+    .filter((status) => !isPiSubagentRunStale(status, now))
+    .sort((left, right) => right.startedAt - left.startedAt || right.runId.localeCompare(left.runId));
+}
+
+export async function listPiSubagentRunDiagnostics(root: string): Promise<PiSubagentRunDiagnostic[]> {
+  const runIds = await listRunDirectoryIds(root);
+  const diagnostics: PiSubagentRunDiagnostic[] = [];
+  for (const runId of runIds) {
+    let parsedStatus: PiSubagentRunStatus | null = null;
+    try {
+      parsedStatus = parseStatus(await readSmallJson(path.join(root, runId, 'status.json')), runId);
+      if (parsedStatus && !isPiSubagentRunStale(parsedStatus)) continue;
+    } catch {
+      // Fall through to the immutable config snapshot for safe display metadata.
+    }
+    if (parsedStatus) {
+      diagnostics.push({
+        kind: 'stale',
+        runId,
+        taskId: parsedStatus.taskId,
+        parentSessionId: parsedStatus.parentSessionId,
+        title: parsedStatus.title,
+        description: parsedStatus.description,
+        startedAt: parsedStatus.startedAt,
+        updatedAt: parsedStatus.updatedAt,
+        message: 'PI Subagent runner stopped unexpectedly. Its last durable state is shown for diagnosis, but controls are disabled.',
+      });
+      continue;
+    }
+    let config: Record<string, unknown> = {};
+    try {
+      const value = await readSmallJson(path.join(root, runId, 'config.json'));
+      if (value && typeof value === 'object' && !Array.isArray(value)) config = value as Record<string, unknown>;
+    } catch {
+      // A missing config still yields a UUID-contained diagnostic record.
+    }
+    let updatedAt = 0;
+    try { updatedAt = Math.floor((await fs.stat(path.join(root, runId))).mtimeMs); } catch { /* best effort */ }
+    diagnostics.push({
+      kind: 'corrupt',
+      runId,
+      taskId: typeof config.taskId === 'string' ? config.taskId : undefined,
+      parentSessionId: typeof config.parentSessionId === 'string' ? config.parentSessionId : undefined,
+      title: typeof config.title === 'string' ? config.title : undefined,
+      description: typeof config.description === 'string' ? config.description : undefined,
+      startedAt: finiteNonNegative(config.startedAt) ? Math.floor(config.startedAt) : updatedAt,
+      updatedAt,
+      message: 'PI Subagent durable status is missing, corrupt, or oversized. The run was not resumed or signaled from disk metadata.',
+    });
+  }
+  return diagnostics;
+}
+
+function clampTranscriptContent(value: string): string {
+  if (value.length <= MAX_TRANSCRIPT_ENTRY_CHARS) return value;
+  return `${value.slice(0, MAX_TRANSCRIPT_ENTRY_CHARS - 1)}…`;
+}
+
+function transcriptText(message: unknown): string {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return '';
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      if (!block || typeof block !== 'object' || Array.isArray(block)) return '';
+      const value = block as Record<string, unknown>;
+      return value.type === 'text' && typeof value.text === 'string' ? value.text : '';
+    })
+    .join('');
+}
+
+function transcriptEntry(
+  runId: string,
+  offset: number,
+  rawLine: string,
+): SubagentTranscriptEntry | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawLine) as unknown;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  const occurredAt = finiteNonNegative(record.at) ? Math.floor(record.at) : 0;
+  let role: SubagentTranscriptEntry['role'] = 'system';
+  let content = '';
+  let toolName: string | undefined;
+  let childId: string | undefined;
+  if (record.type === 'cindy.subagent.control') {
+    const control = record.control && typeof record.control === 'object' && !Array.isArray(record.control)
+      ? record.control as Record<string, unknown>
+      : {};
+    role = 'parent';
+    const action = typeof control.action === 'string' ? control.action : 'control';
+    childId = typeof control.childId === 'string' ? control.childId : undefined;
+    const message = typeof control.message === 'string' ? control.message : '';
+    content = message ? `[${action}] ${message}` : `[${action}]`;
+  } else if (record.type === 'cindy.subagent.stderr') {
+    content = typeof record.text === 'string' ? record.text : '';
+  } else if (record.type === 'cindy.subagent.stdout') {
+    content = typeof record.line === 'string' ? record.line : '';
+  } else if (record.type === 'cindy.subagent.control_error') {
+    content = typeof record.message === 'string' ? record.message : '';
+  } else if (record.type === 'cindy.subagent.transcript_truncated') {
+    content = 'Transcript storage limit reached.';
+  } else if (record.type === 'cindy.subagent.child_event') {
+    childId = typeof record.childId === 'string' ? record.childId : undefined;
+    if (!record.event || typeof record.event !== 'object' || Array.isArray(record.event)) return null;
+    const event = record.event as Record<string, unknown>;
+    if (event.type === 'message_end') {
+      const message = event.message && typeof event.message === 'object' && !Array.isArray(event.message)
+        ? event.message as Record<string, unknown>
+        : {};
+      role = message.role === 'assistant' ? 'subagent' : message.role === 'user' ? 'parent' : 'system';
+      content = transcriptText(message);
+    } else if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
+      role = 'tool';
+      toolName = typeof event.toolName === 'string'
+        ? event.toolName
+        : typeof event.name === 'string'
+          ? event.name
+          : undefined;
+      content = JSON.stringify(event);
+    } else if (event.type === 'agent_end') {
+      content = 'Subagent turn ended.';
+    } else if (event.type === 'response' && event.success === false) {
+      content = typeof event.error === 'string' ? event.error : 'PI rejected a child command.';
+    } else {
+      return null;
+    }
+  } else {
+    return null;
+  }
+  if (!content.trim()) return null;
+  return {
+    id: `${runId}:${offset}`,
+    sequence: offset,
+    role,
+    content: clampTranscriptContent(content),
+    occurredAt,
+    ...(toolName ? { toolName } : {}),
+    ...(childId ? { childId } : {}),
+  };
+}
+
+function decodeTranscriptCursor(raw: string | undefined, runId: string): number {
+  if (!raw) return 0;
+  if (raw.length > 512) throw new Error('invalid PI Subagent transcript cursor');
+  try {
+    const value = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as TranscriptCursor;
+    if (
+      value.version !== 1
+      || value.runId !== runId
+      || !Number.isSafeInteger(value.offset)
+      || value.offset < 0
+      || value.offset > MAX_TRANSCRIPT_BYTES
+    ) throw new Error('invalid');
+    return value.offset;
+  } catch {
+    throw new Error('invalid PI Subagent transcript cursor');
+  }
+}
+
+function encodeTranscriptCursor(runId: string, offset: number): string {
+  return Buffer.from(JSON.stringify({ version: 1, runId, offset } satisfies TranscriptCursor), 'utf8')
+    .toString('base64url');
+}
+
+/** Read a bounded chronological page without trusting transcript paths from status.json. */
+export async function readPiSubagentTranscriptPage(
+  root: string,
+  runId: string,
+  options: { cursor?: string; limit?: number } = {},
+): Promise<SubagentTranscriptPageResponse> {
+  if (!RUN_DIR_RE.test(runId)) {
+    return { supported: false, entries: [] };
+  }
+  const transcriptPath = path.join(root, runId, 'transcript.jsonl');
+  let stat: import('node:fs').Stats;
+  try {
+    stat = await fs.lstat(transcriptPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { supported: false, entries: [] };
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_TRANSCRIPT_BYTES) {
+    throw new Error('oversized, linked, or non-file PI Subagent transcript');
+  }
+  const start = decodeTranscriptCursor(options.cursor, runId);
+  if (start > stat.size) throw new Error('PI Subagent transcript cursor exceeds file size');
+  const requested = typeof options.limit === 'number' && Number.isFinite(options.limit)
+    ? Math.floor(options.limit)
+    : 50;
+  const limit = Math.max(1, Math.min(MAX_TRANSCRIPT_PAGE_SIZE, requested));
+  const entries: SubagentTranscriptEntry[] = [];
+  let offset = start;
+  const input = createReadStream(transcriptPath, { encoding: 'utf8', start });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      const lineOffset = offset;
+      offset += Buffer.byteLength(line, 'utf8') + 1;
+      const entry = transcriptEntry(runId, lineOffset, line);
+      if (entry) entries.push(entry);
+      if (entries.length >= limit) {
+        lines.close();
+        input.destroy();
+        break;
+      }
+    }
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+  return {
+    supported: true,
+    entries,
+    ...(offset < stat.size ? { nextCursor: encodeTranscriptCursor(runId, offset) } : {}),
+  };
+}
+
+async function writeAtomicJson(file: string, value: unknown): Promise<void> {
+  const temp = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  await fs.writeFile(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  try {
+    await fs.rename(temp, file);
+    await fs.chmod(file, 0o600).catch(() => undefined);
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function ensureExistingPrivateDirectory(parent: string, directory: string): Promise<void> {
+  const parentStat = await fs.lstat(parent);
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    throw new Error('PI Subagent run directory is unavailable');
+  }
+  try {
+    await fs.mkdir(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const directoryStat = await fs.lstat(directory);
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+    throw new Error('PI Subagent control directory is unavailable');
+  }
+  await fs.chmod(directory, 0o700).catch(() => undefined);
+}
+
+async function writeRunControl(
+  root: string,
+  runId: string,
+  action: PiSubagentControlAction,
+  options: {
+    message?: string;
+    childId?: string;
+    approvalId?: string;
+    confirmed?: boolean;
+  } = {},
+): Promise<{ requestId: string; receiptFile: string }> {
+  const requestId = randomUUID();
+  const runDir = path.join(root, runId);
+  const controlDir = path.join(runDir, 'controls');
+  // Do not recursively recreate a run that parent deletion removed between
+  // durable discovery and control delivery. A control may restore only its
+  // mailbox inside an existing, non-linked UUID run directory.
+  await ensureExistingPrivateDirectory(runDir, controlDir);
+  const requestedAt = Date.now();
+  controlWriteSequence = (controlWriteSequence + 1) % 1000;
+  await writeAtomicJson(path.join(controlDir, `${requestId}.json`), {
+    version: 1,
+    seq: requestedAt * 1000 + controlWriteSequence,
+    requestId,
+    action,
+    ...(options.message?.trim() ? { message: options.message.trim() } : {}),
+    ...(options.childId ? { childId: options.childId } : {}),
+    ...(options.approvalId ? { approvalId: options.approvalId } : {}),
+    ...(typeof options.confirmed === 'boolean' ? { confirmed: options.confirmed } : {}),
+    acknowledge: true,
+    requestedAt,
+  });
+  return {
+    requestId,
+    receiptFile: path.join(runDir, 'control-receipts', `${requestId}.json`),
+  };
+}
+
+async function waitForControlReceipt(
+  root: string,
+  runId: string,
+  receiptFile: string,
+  timeoutMs = 2_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const value = await readSmallJson(receiptFile);
+      await fs.rm(receiptFile, { force: true }).catch(() => undefined);
+      return Boolean(
+        value
+        && typeof value === 'object'
+        && !Array.isArray(value)
+        && (value as Record<string, unknown>).accepted === true,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    }
+    try {
+      const status = parseStatus(
+        await readSmallJson(path.join(root, runId, 'status.json')),
+        runId,
+      );
+      if (!status || isPiSubagentTerminal(status.state) || isProcessAlive(status.runnerPid) === false) return false;
+    } catch {
+      return false;
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/**
+ * Send a control request without ever interpreting taskId as a filesystem path.
+ * The status record is discovered from UUID-only run directories, then the
+ * request is written inside that already-contained directory.
+ */
+export async function syncPiSubagentPermissions(
+  root: string,
+  snapshot: unknown,
+): Promise<number> {
+  const runs = (await listPiSubagentRuns(root)).filter((run) => !isPiSubagentTerminal(run.state));
+  let updated = 0;
+  for (const run of runs) {
+    try {
+      await writeAtomicJson(path.join(root, run.runId, 'permission.json'), snapshot);
+      updated += 1;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return updated;
+}
+
+function matchesRunReference(run: PiSubagentRunStatus, reference: string): boolean {
+  return run.taskId === reference || run.runId === reference;
+}
+
+export async function controlPiSubagentRuns(
+  root: string,
+  taskId: string,
+  action: PiSubagentControlAction,
+  options: {
+    message?: string;
+    childId?: string;
+    approvalId?: string;
+    confirmed?: boolean;
+  } = {},
+): Promise<number> {
+  const id = taskId.trim();
+  if (!id) return 0;
+  if ((action === 'steer' || action === 'follow_up') && !options.message?.trim()) {
+    throw new Error(`${action} requires a non-empty message`);
+  }
+  if (action === 'approval' && (!options.approvalId || typeof options.confirmed !== 'boolean')) {
+    throw new Error('approval requires approvalId and confirmed');
+  }
+  const runs = (await listPiSubagentRuns(root)).filter(
+    (run) => {
+      if (!matchesRunReference(run, id) || isPiSubagentTerminal(run.state)) return false;
+      if (!options.childId) return true;
+      const task = run.tasks.find((candidate) => candidate.childId === options.childId);
+      if (!task) return false;
+      if (action === 'approval') {
+        return task.pendingApproval?.id === options.approvalId;
+      }
+      return task.status === 'queued' || task.status === 'running';
+    },
+  );
+  const outcomes = await Promise.all(runs.map(async (run) => {
+    const request = await writeRunControl(root, run.runId, action, options);
+    // A status without a live runner identity is disk metadata, not proof that
+    // anyone can consume the mailbox. Keep the request for diagnosis but do
+    // not report successful delivery.
+    if (isProcessAlive(run.runnerPid) !== true) return false;
+    return waitForControlReceipt(root, run.runId, request.receiptFile);
+  }));
+  return outcomes.filter(Boolean).length;
+}
+
+interface ResumeRunnerConfig {
+  version: 1;
+  runId: string;
+  taskId: string;
+  parentSessionId: string;
+  runDir: string;
+  cwd: string;
+  binary: string;
+  binaryPrefixArgs?: string[];
+  depth?: number;
+  mode?: string;
+  context?: string;
+  title?: string;
+  description?: string;
+  concurrency?: number;
+  timeoutMs?: number;
+  tasks: Array<{
+    childId: string;
+    stepId?: string;
+    sessionId: string;
+    sessionDir: string;
+    agent: string;
+    title?: string;
+    task: string;
+    tools: string;
+    profilePrompt: string;
+    provider: string;
+    model?: string;
+    sourceProviderId?: string;
+    proxySessionAuth?: boolean;
+    thinking?: string;
+    cwd?: string;
+  }>;
+}
+
+interface PiSubagentResumeLaunch {
+  nodeExecutable: string;
+  env: NodeJS.ProcessEnv;
+  permissionSnapshot: unknown;
+  runnerFallbackFile?: string;
+  runtimeSnapshot?: {
+    modelsJson: Buffer;
+    bridgeSource: Buffer;
+    runnerSource: Buffer;
+  };
+}
+
+const resumeOperationTails = new Map<string, Promise<void>>();
+
+async function serializePiSubagentResume<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const key = path.resolve(root);
+  const previous = resumeOperationTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => gate);
+  resumeOperationTails.set(key, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (resumeOperationTails.get(key) === tail) resumeOperationTails.delete(key);
+  }
+}
+
+function isResumeConfig(value: unknown, runId: string): value is ResumeRunnerConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const raw = value as Record<string, unknown>;
+  return raw.version === 1
+    && raw.runId === runId
+    && typeof raw.taskId === 'string'
+    && typeof raw.parentSessionId === 'string'
+    && typeof raw.cwd === 'string'
+    && typeof raw.binary === 'string'
+    && Array.isArray(raw.tasks)
+    && raw.tasks.length > 0
+    && raw.tasks.length <= 8;
+}
+
+/**
+ * Resume the latest terminal generation on its existing PI child session ids.
+ * Credentials are supplied only by the live parent handle and are never copied
+ * into durable config. The new runner receives fresh private runtime snapshots.
+ */
+async function resumePiSubagentRunUnlocked(
+  root: string,
+  taskId: string,
+  message: string,
+  launch: PiSubagentResumeLaunch,
+  childId?: string,
+): Promise<string | null> {
+  const followUp = message.trim();
+  if (!taskId.trim() || !followUp || followUp.length > 32_000) {
+    throw new Error('invalid PI Subagent resume request');
+  }
+  const runs = await listPiSubagentRuns(root);
+  const source = runs.find((run) => matchesRunReference(run, taskId));
+  if (!source || !isPiSubagentTerminal(source.state)) return null;
+  if (runs.some((run) => run.taskId === source.taskId && !isPiSubagentTerminal(run.state))) return null;
+  const sourceDir = path.join(root, source.runId);
+  const sourceConfigValue = await readSmallJson(path.join(sourceDir, 'config.json'));
+  if (!isResumeConfig(sourceConfigValue, source.runId)) {
+    throw new Error('PI Subagent resume config is unavailable');
+  }
+  const sourceConfig = sourceConfigValue;
+  const selectedTasks = childId
+    ? sourceConfig.tasks.filter((task) => task.childId === childId)
+    : sourceConfig.tasks;
+  if (selectedTasks.length === 0) return null;
+  const canonicalRoot = await fs.realpath(root);
+  const canonicalSourceDir = await fs.realpath(sourceDir);
+  if (path.dirname(canonicalSourceDir) !== canonicalRoot) {
+    throw new Error('PI Subagent resume source escaped its run root');
+  }
+  const canonicalSourcePrefix = `${canonicalSourceDir}${path.sep}`;
+  for (const task of sourceConfig.tasks) {
+    if (typeof task.sessionDir !== 'string' || !path.resolve(task.sessionDir).startsWith(`${path.resolve(root)}${path.sep}`)) {
+      throw new Error('PI Subagent resume session escaped its run root');
+    }
+    const sessionStat = await fs.lstat(task.sessionDir);
+    const canonicalSessionDir = await fs.realpath(task.sessionDir);
+    const canonicalSessionRunDir = path.dirname(canonicalSessionDir);
+    const sessionRunStat = await fs.lstat(canonicalSessionRunDir);
+    if (
+      sessionStat.isSymbolicLink()
+      || !sessionStat.isDirectory()
+      || path.basename(canonicalSessionDir) !== 'sessions'
+      || sessionRunStat.isSymbolicLink()
+      || !sessionRunStat.isDirectory()
+      || path.dirname(canonicalSessionRunDir) !== canonicalRoot
+      || !RUN_DIR_RE.test(path.basename(canonicalSessionRunDir))
+    ) {
+      throw new Error('PI Subagent resume session escaped its source run');
+    }
+  }
+  const sourceConfigHome = path.join(sourceDir, 'pi-home');
+  const sourceModelsFile = path.join(sourceConfigHome, 'models.json');
+  const sourceBridgeFile = path.join(sourceDir, 'cindy-bridge.ts');
+  const sourceRunnerFile = path.join(sourceDir, 'runner.cjs');
+  const [configHomeStat, modelsStat, bridgeStat, canonicalConfigHome, canonicalModelsFile, canonicalBridgeFile] = await Promise.all([
+    fs.lstat(sourceConfigHome),
+    fs.lstat(sourceModelsFile),
+    fs.lstat(sourceBridgeFile),
+    fs.realpath(sourceConfigHome),
+    fs.realpath(sourceModelsFile),
+    fs.realpath(sourceBridgeFile),
+  ]);
+  if (
+    configHomeStat.isSymbolicLink()
+    || !configHomeStat.isDirectory()
+    || !canonicalConfigHome.startsWith(canonicalSourcePrefix)
+    || modelsStat.isSymbolicLink()
+    || !modelsStat.isFile()
+    || modelsStat.size > MAX_STATUS_BYTES
+    || !canonicalModelsFile.startsWith(canonicalSourcePrefix)
+    || bridgeStat.isSymbolicLink()
+    || !bridgeStat.isFile()
+    || bridgeStat.size > MAX_STATUS_BYTES
+    || !canonicalBridgeFile.startsWith(canonicalSourcePrefix)
+  ) {
+    throw new Error('PI Subagent resume runtime artifacts escaped their source run');
+  }
+  let selectedRunnerFile = sourceRunnerFile;
+  let runnerStat: import('node:fs').Stats;
+  try {
+    runnerStat = await fs.lstat(sourceRunnerFile);
+  } catch (error) {
+    if (!launch.runnerFallbackFile || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    selectedRunnerFile = launch.runnerFallbackFile;
+    runnerStat = await fs.lstat(selectedRunnerFile);
+  }
+  if (runnerStat.isSymbolicLink() || !runnerStat.isFile() || runnerStat.size > MAX_STATUS_BYTES) {
+    throw new Error('PI Subagent resume runner is linked, oversized, or unavailable');
+  }
+  const [modelsJson, bridgeSource, runnerSource] = launch.runtimeSnapshot
+    ? [
+        launch.runtimeSnapshot.modelsJson,
+        launch.runtimeSnapshot.bridgeSource,
+        launch.runtimeSnapshot.runnerSource,
+      ]
+    : await Promise.all([
+        fs.readFile(sourceModelsFile),
+        fs.readFile(sourceBridgeFile),
+        fs.readFile(selectedRunnerFile),
+      ]);
+  JSON.parse(modelsJson.toString('utf8'));
+  const runId = randomUUID();
+  const runDir = path.join(root, runId);
+  const childConfigHome = path.join(runDir, 'pi-home');
+  const bridgeExtension = path.join(runDir, 'cindy-bridge.ts');
+  const permissionFile = path.join(runDir, 'permission.json');
+  const runnerFile = path.join(runDir, 'runner.cjs');
+  const config: ResumeRunnerConfig & Record<string, unknown> = {
+    ...sourceConfig,
+    runId,
+    runDir,
+    childConfigHome,
+    bridgeExtension,
+    permissionFile,
+    title: sourceConfig.title ? `Resume: ${sourceConfig.title}` : 'Resumed Subagent',
+    description: followUp,
+    interactiveOwner: 'host',
+    parentPid: undefined,
+    mode: selectedTasks.length > 1 ? 'parallel' : 'single',
+    tasks: selectedTasks.map((task, index) => ({
+      ...task,
+      childId: `${runId}-${index + 1}`,
+      stepId: `resume-${index + 1}`,
+      dependsOn: [],
+      task: followUp,
+      // Session dir/id intentionally point at the prior durable generation.
+      sessionDir: task.sessionDir,
+    })),
+  };
+  const launchStartedAt = Date.now();
+  try {
+    await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
+    await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await fs.writeFile(bridgeExtension, bridgeSource, { mode: 0o600, flag: 'wx' });
+    await writeAtomicJson(permissionFile, launch.permissionSnapshot);
+    await fs.writeFile(runnerFile, runnerSource, { mode: 0o600, flag: 'wx' });
+    await Promise.all([
+      fs.chmod(runDir, 0o700).catch(() => undefined),
+      fs.chmod(bridgeExtension, 0o600).catch(() => undefined),
+      fs.chmod(permissionFile, 0o600).catch(() => undefined),
+      fs.chmod(runnerFile, 0o600).catch(() => undefined),
+    ]);
+    await writeAtomicJson(path.join(runDir, 'config.json'), config);
+    await writeAtomicJson(path.join(runDir, 'status.json'), {
+      version: 1,
+      runId,
+      taskId: sourceConfig.taskId,
+      parentSessionId: sourceConfig.parentSessionId,
+      runnerInstanceId: `launch-pending-${runId}`,
+      state: 'queued',
+      title: config.title,
+      description: config.description,
+      startedAt: launchStartedAt,
+      updatedAt: launchStartedAt,
+      tasks: config.tasks.map((task) => ({
+        childId: task.childId,
+        sessionId: task.sessionId,
+        agent: task.agent,
+        title: task.title,
+        status: 'queued',
+      })),
+    });
+  } catch (error) {
+    await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+  const child = spawn(launch.nodeExecutable, [runnerFile, path.join(runDir, 'config.json')], {
+    cwd: sourceConfig.cwd,
+    env: { ...launch.env, ELECTRON_RUN_AS_NODE: '1' },
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  child.once('error', (error) => {
+    const now = Date.now();
+    void writeAtomicJson(path.join(runDir, 'status.json'), {
+      version: 1,
+      runId,
+      taskId: sourceConfig.taskId,
+      parentSessionId: sourceConfig.parentSessionId,
+      runnerInstanceId: `launch-error-${runId}`,
+      state: 'failed',
+      title: config.title,
+      description: config.description,
+      startedAt: now,
+      updatedAt: now,
+      endedAt: now,
+      tasks: config.tasks.map((task) => ({
+        childId: task.childId,
+        sessionId: task.sessionId,
+        agent: task.agent,
+        title: task.title,
+        status: 'failed',
+        error: `Durable runner failed to resume: ${String(error)}`.slice(0, 4_000),
+        endedAt: now,
+      })),
+    }).catch(() => undefined);
+  });
+  child.unref();
+  return runId;
+}
+
+export async function resumePiSubagentRun(
+  root: string,
+  taskId: string,
+  message: string,
+  launch: PiSubagentResumeLaunch,
+  childId?: string,
+): Promise<string | null> {
+  return serializePiSubagentResume(root, () => resumePiSubagentRunUnlocked(
+    root,
+    taskId,
+    message,
+    launch,
+    childId,
+  ));
+}
+
+export function hasActivePiSubagentRunsSync(agentHome: string): boolean {
+  const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
+  let sessionEntries: import('node:fs').Dirent[];
+  try { sessionEntries = readdirSync(parentRoot, { withFileTypes: true }); } catch { return false; }
+  for (const sessionEntry of sessionEntries) {
+    if (!sessionEntry.isDirectory()) continue;
+    let runEntries: import('node:fs').Dirent[];
+    const root = path.join(parentRoot, sessionEntry.name);
+    try { runEntries = readdirSync(root, { withFileTypes: true }); } catch { return true; }
+    for (const runEntry of runEntries) {
+      if (!runEntry.isDirectory() || !RUN_DIR_RE.test(runEntry.name)) continue;
+      try {
+        const status = parseStatus(
+          JSON.parse(readFileSync(path.join(root, runEntry.name, 'status.json'), 'utf8')),
+          runEntry.name,
+        );
+        if (!status || (!isPiSubagentTerminal(status.state) && !isPiSubagentRunStale(status))) return true;
+      } catch {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function requestStopAllPiSubagentRunsSync(agentHome: string): number {
+  const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
+  let requested = 0;
+  let sessionEntries: import('node:fs').Dirent[];
+  try { sessionEntries = readdirSync(parentRoot, { withFileTypes: true }); } catch { return 0; }
+  for (const sessionEntry of sessionEntries) {
+    if (!sessionEntry.isDirectory()) continue;
+    const root = path.join(parentRoot, sessionEntry.name);
+    let runEntries: import('node:fs').Dirent[];
+    try { runEntries = readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const runEntry of runEntries) {
+      if (!runEntry.isDirectory() || !RUN_DIR_RE.test(runEntry.name)) continue;
+      const runDir = path.join(root, runEntry.name);
+      try {
+        let status: PiSubagentRunStatus | null = null;
+        try {
+          status = parseStatus(
+            JSON.parse(readFileSync(path.join(runDir, 'status.json'), 'utf8')),
+            runEntry.name,
+          );
+        } catch { /* unreadable status is treated as potentially active */ }
+        if (status && (isPiSubagentTerminal(status.state) || isPiSubagentRunStale(status))) continue;
+        const controlPath = path.join(runDir, 'control.json');
+        let seq = 0;
+        try {
+          const previous = JSON.parse(readFileSync(controlPath, 'utf8')) as { seq?: unknown };
+          if (finiteNonNegative(previous.seq)) seq = Math.floor(previous.seq);
+        } catch { /* first request */ }
+        const temp = `${controlPath}.tmp-exit-${process.pid}-${randomUUID()}`;
+        writeFileSync(temp, `${JSON.stringify({
+          version: 1,
+          seq: seq + 1,
+          requestId: randomUUID(),
+          action: 'stop',
+          requestedAt: Date.now(),
+        })}\n`, { mode: 0o600 });
+        renameSync(temp, controlPath);
+        requested += 1;
+      } catch {
+        // Force-quit is best effort. Ordinary quit uses the awaited variant.
+      }
+    }
+  }
+  return requested;
+}
+
+export async function stopAllPiSubagentRunsForExit(
+  agentHome: string,
+  timeoutMs = 4_000,
+): Promise<boolean> {
+  const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
+  let sessionEntries: import('node:fs').Dirent[];
+  try {
+    sessionEntries = await fs.readdir(parentRoot, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  const roots = sessionEntries
+    .filter((entry) => entry.isDirectory() && entry.name !== '.' && entry.name !== '..')
+    .map((entry) => path.join(parentRoot, entry.name));
+  const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
+  const requested = new Set<string>();
+  for (;;) {
+    let activeCount = 0;
+    for (const root of roots) {
+      const runIds = await listRunDirectoryIds(root);
+      const [listedStatuses, diagnostics] = await Promise.all([
+        listPiSubagentRuns(root),
+        listPiSubagentRunDiagnostics(root),
+      ]);
+      const statuses = new Map(listedStatuses.map((status) => [status.runId, status]));
+      const staleRunIds = new Set(
+        diagnostics.filter((diagnostic) => diagnostic.kind === 'stale').map((diagnostic) => diagnostic.runId),
+      );
+      for (const runId of runIds) {
+        const status = statuses.get(runId);
+        if ((status && isPiSubagentTerminal(status.state)) || staleRunIds.has(runId)) continue;
+        activeCount += 1;
+        const key = `${root}:${runId}`;
+        if (requested.has(key)) continue;
+        requested.add(key);
+        await writeRunControl(root, runId, 'stop').catch((error) => {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        });
+      }
+    }
+    if (activeCount === 0) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/**
+ * Explicit parent deletion lifecycle: request stop for every UUID-contained
+ * runner, wait for runner-owned process termination, then remove durable files.
+ * A timeout never deletes live ownership metadata; callers may retry cleanup.
+ */
+export async function stopAndRemovePiSubagentRuns(
+  root: string,
+  timeoutMs = 6_000,
+): Promise<boolean> {
+  const timeout = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? Math.floor(timeoutMs) : 6_000;
+  const deadline = Date.now() + timeout;
+  const requested = new Set<string>();
+  for (;;) {
+    const runIds = await listRunDirectoryIds(root);
+    if (runIds.length === 0) {
+      await fs.rm(root, { recursive: true, force: true });
+      return true;
+    }
+    const [listedStatuses, diagnostics] = await Promise.all([
+      listPiSubagentRuns(root),
+      listPiSubagentRunDiagnostics(root),
+    ]);
+    const statuses = new Map(listedStatuses.map((status) => [status.runId, status]));
+    const staleRunIds = new Set(
+      diagnostics.filter((diagnostic) => diagnostic.kind === 'stale').map((diagnostic) => diagnostic.runId),
+    );
+    const active = runIds.filter((runId) => {
+      if (staleRunIds.has(runId)) return false;
+      const status = statuses.get(runId);
+      return !status || !isPiSubagentTerminal(status.state);
+    });
+    if (active.length === 0) {
+      await fs.rm(root, { recursive: true, force: true });
+      return true;
+    }
+    await Promise.all(active.map(async (runId) => {
+      if (requested.has(runId)) return;
+      requested.add(runId);
+      try {
+        await writeRunControl(root, runId, 'stop');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }));
+    if (Date.now() >= deadline) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+}

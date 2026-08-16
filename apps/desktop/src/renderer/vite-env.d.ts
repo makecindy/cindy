@@ -1820,6 +1820,7 @@ interface ElectronAPI {
       workdir: string | null;
       remoteHostId: string | null;
       deviceLinkDeviceId?: string | null;
+      subagentsAvailable?: boolean;
       available: boolean;
     } | null>;
     /** 子窗口根组件挂载握手。 */
@@ -1839,6 +1840,7 @@ interface ElectronAPI {
       workdir: string | null;
       remoteHostId: string | null;
       deviceLinkDeviceId?: string | null;
+      subagentsAvailable?: boolean;
       available: boolean;
     }) => void;
     onStateChanged: (cb: (state: { detached: boolean; open: boolean }) => void) => () => void;
@@ -1848,6 +1850,7 @@ interface ElectronAPI {
         workdir: string | null;
         remoteHostId: string | null;
         deviceLinkDeviceId?: string | null;
+        subagentsAvailable?: boolean;
         available: boolean;
       }) => void,
     ) => () => void;
@@ -4232,6 +4235,9 @@ interface ElectronAPI {
       detail: (
         input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
       ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailResponse>;
+      transcript: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentTranscriptPageRequest,
+      ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentTranscriptPageResponse>;
       onChanged: (
         callback: (
           payload: import('@cindy/maker-shared/subagent-workspace').SubagentRunsChangedPayload,
@@ -4745,6 +4751,13 @@ interface ElectronAPI {
     ) => () => void;
     /** 精确停止会话内单个后台任务(不中断当前 turn;任务已结束幂等成功)。 */
     stopAgentTask: (sessionId: string, taskId: string) => Promise<{ ok: true }>;
+    controlPiSubagent: (input: {
+      sessionId: string;
+      taskId: string;
+      action: 'stop' | 'steer' | 'follow_up' | 'resume';
+      message?: string;
+      childId?: string;
+    }) => Promise<{ ok: boolean; controlled: number }>;
     /** 会话仍在运行的后台任务快照(挂载 / 重载后补回存量;实时增量走事件流)。 */
     listSessionBackgroundTasks: (sessionId: string) => Promise<{
       tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>;

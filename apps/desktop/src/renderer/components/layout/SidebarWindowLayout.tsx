@@ -60,6 +60,7 @@ interface SidebarWindowContext {
   workdir: string | null;
   remoteHostId: string | null;
   deviceLinkDeviceId?: string | null;
+  subagentsAvailable?: boolean;
   available: boolean;
 }
 
@@ -326,6 +327,7 @@ export function SidebarWindowLayout() {
           workdir={ctx?.workdir ?? ''}
           remoteHostId={ctx?.remoteHostId ?? null}
           deviceLinkDeviceId={ctx?.deviceLinkDeviceId}
+          subagentsAvailable={ctx?.subagentsAvailable}
           shellVisible={windowVisible}
           isMac={isMac}
         />

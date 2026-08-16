@@ -103,6 +103,18 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
   });
 
+  it('routes durable PI Subagent reads and controls to the data-owning device', () => {
+    for (const channel of [
+      'local-db:subagent-runs:list',
+      'local-db:subagent-runs:detail',
+      'local-db:subagent-runs:transcript',
+      'maker:pi-subagent:control',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
+  });
+
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
     for (const ch of [
       'maker:fork-strip-encrypted',

@@ -492,6 +492,7 @@ export interface AgentDeps {
     sessionId: string,
     token: string,
     resolveProviderId: () => string | null,
+    options?: { scope?: 'session' | 'subagent-route' },
   ) => (() => void) | void;
 
   /**
@@ -1489,6 +1490,9 @@ export interface AgentSessionHandle {
    * NotSupportedError)。
    */
   stopBackgroundTask?(taskId: string): Promise<void>;
+
+  /** Resume a terminal durable child on its existing provider session. */
+  resumeBackgroundTask?(taskId: string, message: string, childId?: string): Promise<void>;
 
   /**
    * 当前仍在运行的后台任务快照(含 local_bash)。事件流(agent_task_update)是

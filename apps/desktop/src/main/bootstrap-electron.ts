@@ -272,7 +272,10 @@ import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
 import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
-import { getSessionRowSnapshot } from './localDb/ipc/sessions';
+import {
+  getSessionRowSnapshot,
+  resumeDeletedPiSubagentCleanup,
+} from './localDb/ipc/sessions';
 import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
@@ -311,6 +314,11 @@ import {
 import { readClaudeApiKey } from './maker-host/auth-adapters';
 import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
+import {
+  hasActivePiSubagentRunsSync,
+  stopAllPiSubagentRunsForExit,
+} from '@cindy/maker-core/pi-subagent-runs';
+
 import { onQuit, installQuitHandler } from './lifecycle';
 import {
   cancelIOSSimulatorSessionOperations,
@@ -1113,6 +1121,7 @@ const rendererConsoleLog = createLogger('renderer-console');
 const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 const sessionDragPreviewLog = createLogger('session-drag-preview');
+const piSubagentLog = createLogger('pi-subagent');
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
@@ -4629,6 +4638,9 @@ const registerIpcHandlers = () => {
         // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
         // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
         anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
+        anyPiSubagentRunning: () => hasActivePiSubagentRunsSync(
+          path.join(app.getPath('userData'), 'pi-agent-home'),
+        ),
         // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
         anySchedulerRunRunning: () =>
           readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
@@ -6881,6 +6893,15 @@ app.on('ready', async () => {
         }
         return;
       }
+      try {
+        await resumeDeletedPiSubagentCleanup();
+      } catch (err) {
+        dbClientLog.warn('PI Subagent deleted-task cleanup recovery failed (non-fatal)', {
+          userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      logStartupPhase('pi-subagent-cleanup-recovery');
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
@@ -7339,6 +7360,17 @@ onQuit(
 //                           codex 子进程之后, 这里并发跑最坏是 log noise。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
+onQuit(
+  'pi-subagent-runners',
+  async () => {
+    const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+    const stopped = await stopAllPiSubagentRunsForExit(agentHome);
+    if (!stopped) {
+      piSubagentLog.warn('PI Subagent runners did not all acknowledge stop before exit timeout');
+    }
+  },
+  'async',
+);
 onQuit('shutdown-maker', shutdownMaker, 'async');
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');

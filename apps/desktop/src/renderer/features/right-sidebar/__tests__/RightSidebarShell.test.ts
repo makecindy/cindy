@@ -306,6 +306,70 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(setActiveSession).toHaveBeenCalledWith({ sessionId: null }));
   });
 
+  it('hides a persisted Subagents-only sidebar for non-Pi tasks without deleting the tab', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-subagents', kind: 'subagents', state: null }],
+      activeTabId: 'tab-subagents',
+    });
+
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: false,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(onAllTabsClosed).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+    expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: null });
+  });
+
+  it('does not auto-collapse a persisted Subagents-only sidebar while Pi eligibility is loading', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-subagents', kind: 'subagents', state: null }],
+      activeTabId: 'tab-subagents',
+    });
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: true,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy());
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+  });
+
   it('mounts only the active body first, then idle-mounts and keeps the rest alive', async () => {
     const idleCallbacks: IdleRequestCallback[] = [];
     Object.defineProperty(window, 'requestIdleCallback', {

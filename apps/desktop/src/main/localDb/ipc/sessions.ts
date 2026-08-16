@@ -11,6 +11,10 @@ import path from 'node:path';
 import { ipcMain, app, BrowserWindow } from 'electron';
 import { eq, ne, and, desc, count, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 
+import {
+  piSubagentRunRoot,
+  stopAndRemovePiSubagentRuns,
+} from '@cindy/maker-core/pi-subagent-runs';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import { getDbClient } from '../client/current';
@@ -909,6 +913,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .update(sessions)
     .set({
       sdkSessionId: null,
+      codexPlanJson: null,
       // Concurrent /clear calls may finish their DB awaits out of order. Keep
       // both persisted boundaries monotonic so the older completion cannot
       // make pre-clear history visible again or invalidate a newer input token.
@@ -1513,7 +1518,7 @@ export function registerSessionIpc(
     });
     scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
     notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
-    removeHookAttachmentDir(sid, p.status);
+    cleanupSessionTerminalArtifacts(sid, p.status);
     return updated;
   });
 
@@ -1604,7 +1609,7 @@ export async function patchSessionMetaInDb(
       });
     });
   }
-  removeHookAttachmentDir(sessionId, patch.status);
+  cleanupSessionTerminalArtifacts(sessionId, patch.status);
   scheduleWorktreeRecycleForStatusChange(sessionId, patch.status, { ownerScope, mediaDb: db });
   notifyGhostSessionStatusChange(sessionId, patch.status, updated.workingDir);
   // 远程 / MCP 改动绕过 renderer 乐观更新,故主动广播 sessions:patched:
@@ -1755,7 +1760,7 @@ export async function setSessionsStatusInDb(
       mediaDb: dbClient.drizzle,
     });
     notifyGhostSessionStatusChange(item.sessionId, item.status, item.workingDir);
-    removeHookAttachmentDir(item.sessionId, item.status);
+    cleanupSessionTerminalArtifacts(item.sessionId, item.status);
   }
   return applied.map((item) => ({
     sessionId: item.sessionId,
@@ -1765,11 +1770,63 @@ export async function setSessionsStatusInDb(
   }));
 }
 
+const piSubagentCleanupTimers = new Map<string, NodeJS.Timeout>();
+
+function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void {
+  if (piSubagentCleanupTimers.has(sessionId)) return;
+  const marker = setTimeout(() => undefined, 0);
+  marker.unref?.();
+  piSubagentCleanupTimers.set(sessionId, marker);
+  void (async () => {
+    try {
+      const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+      const removed = await stopAndRemovePiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
+      if (removed) {
+        piSubagentCleanupTimers.delete(sessionId);
+        return;
+      }
+    } catch (err) {
+      log.warn('PI Subagent cleanup attempt failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const delayMs = Math.min(60_000, 1_000 * (2 ** Math.min(attempt, 6)));
+    const timer = setTimeout(() => {
+      piSubagentCleanupTimers.delete(sessionId);
+      scheduleDeletedPiSubagentCleanup(sessionId, attempt + 1);
+    }, delayMs);
+    timer.unref?.();
+    piSubagentCleanupTimers.set(sessionId, timer);
+  })();
+}
+
+export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
+  const parentRoot = path.join(app.getPath('userData'), 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(parentRoot, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  const ids = entries
+    .filter((entry) => entry.isDirectory() && entry.name && !/[\\/\0]/.test(entry.name))
+    .map((entry) => entry.name);
+  if (ids.length === 0) return;
+  const deleted = await getDbClient().drizzle
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(and(inArray(sessions.id, ids), eq(sessions.status, 'deleted')));
+  for (const row of deleted) scheduleDeletedPiSubagentCleanup(row.id);
+}
+
 /**
- * hook 入站附件目录回收(fire-and-forget): deleted/archived 都是终态,
- * 文件在 turn 送出后即无用。所有把 session 置为终态的路径都应调用。
+ * Terminal task artifact cleanup. Archive only removes one-shot hook files;
+ * delete additionally stops and removes detached PI Subagents owned by the
+ * parent task. All status writers must pass through this helper.
  */
-function removeHookAttachmentDir(sessionId: string, status: unknown): void {
+function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   if (status === 'deleted') {
     void removeTurnChangeSetsForSession(sessionId).catch((err) => {
@@ -1778,6 +1835,7 @@ function removeHookAttachmentDir(sessionId: string, status: unknown): void {
         err: err instanceof Error ? err.message : String(err),
       });
     });
+    scheduleDeletedPiSubagentCleanup(sessionId);
   }
   const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
   const attachDir = path.join(attachRoot, sessionId);

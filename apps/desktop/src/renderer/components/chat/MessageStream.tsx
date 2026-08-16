@@ -2636,6 +2636,7 @@ function renderWorkGroupChild(
         toolCall={item.toolCall}
         update={item.update}
         result={item.result}
+        sessionAgentKind={props.agentKind}
         {...(props.sessionId ? { sessionId: props.sessionId } : {})}
         subagentModel={
           item.toolCall?.toolUseId
@@ -5317,6 +5318,7 @@ export function MessageStream({
                           toolCall={item.toolCall}
                           update={item.update}
                           result={item.result}
+                          sessionAgentKind={agentKind}
                           {...(sessionId ? { sessionId } : {})}
                           subagentModel={
                             item.toolCall?.toolUseId

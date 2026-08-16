@@ -15,6 +15,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+import {
+  controlPiSubagentRuns,
+  isPiSubagentTerminal,
+  listPiSubagentRuns,
+  piSubagentRunRoot,
+} from '@cindy/maker-core/pi-subagent-runs';
 import type {
   AgentEvent,
   AgentKind,
@@ -5415,6 +5421,74 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 当前 turn 与其他后台任务不受影响 —— 与上面的会话级止损入口互补。
   registerStopAgentTaskHandler(createElectronIpcHandlerRegistry(), {
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? undefined,
+    stopDetachedTask: async (sessionId, taskId) => {
+      const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+      const runRoot = piSubagentRunRoot(agentHome, sessionId);
+      return (await controlPiSubagentRuns(runRoot, taskId, 'stop')) > 0;
+    },
+  });
+
+  ipcMain.handle(MAKER_INVOKE.CONTROL_PI_SUBAGENT, async (event, input: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throwIpcError('INVALID_PARAMS', 'PI Subagent control input required');
+    }
+    const body = input as Record<string, unknown>;
+    if (typeof body.sessionId !== 'string' || !body.sessionId) {
+      throwIpcError('INVALID_PARAMS', 'sessionId required');
+    }
+    if (typeof body.taskId !== 'string' || !body.taskId) {
+      throwIpcError('INVALID_PARAMS', 'taskId required');
+    }
+    if (
+      body.action !== 'stop' &&
+      body.action !== 'steer' &&
+      body.action !== 'follow_up' &&
+      body.action !== 'resume'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'action must be stop, steer, follow_up, or resume');
+    }
+    if (
+      body.action !== 'stop' &&
+      (typeof body.message !== 'string' || !body.message.trim() || body.message.length > 32_000)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'message must contain 1..32000 characters');
+    }
+    const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+    const runRoot = piSubagentRunRoot(agentHome, body.sessionId);
+    const runs = await listPiSubagentRuns(runRoot);
+    const run = runs.find((candidate) =>
+      candidate.taskId === body.taskId || candidate.runId === body.taskId,
+    );
+    if (!run) throwIpcError('NOT_FOUND', 'PI Subagent run not found');
+    if (body.childId !== undefined && (typeof body.childId !== 'string' || !body.childId)) {
+      throwIpcError('INVALID_PARAMS', 'childId must be a non-empty string');
+    }
+    const childId = typeof body.childId === 'string' ? body.childId : undefined;
+    if (childId && !run.tasks.some((task) => task.childId === childId)) {
+      throwIpcError('NOT_FOUND', 'PI Subagent child not found');
+    }
+    const terminal = isPiSubagentTerminal(run.state);
+    if (body.action === 'resume') {
+      const live = maker.getSession(body.sessionId);
+      if (!terminal || live?.agentKind !== 'pi') {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Resume requires a loaded parent PI task and a terminal run.');
+      }
+      await live.resumeBackgroundTask(run.taskId, body.message as string, childId);
+      return { ok: true, controlled: 1 };
+    }
+    if (terminal) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'PI Subagent control requires an active run');
+    }
+    const controlled = await controlPiSubagentRuns(
+      runRoot,
+      run.runId,
+      body.action,
+      body.action === 'stop'
+        ? { ...(childId ? { childId } : {}) }
+        : { message: body.message as string, ...(childId ? { childId } : {}) },
+    );
+    return { ok: controlled > 0, controlled };
   });
 
   // 会话仍在运行的后台任务快照(只读)。renderer 挂载 / reloadMessages 清空
@@ -14051,9 +14125,18 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   // Main consumes this Cindy-owned durable projection marker before the event
   // crosses renderer/device-link boundaries. Live task-card payloads therefore
   // keep their existing wire shape and older mobile clients need no upgrade.
-  if (event.type === 'agent_task_update' && 'subagentObservation' in safeData) {
-    delete safeData.subagentObservation;
-    changed = true;
+  if (event.type === 'agent_task_update') {
+    for (const key of [
+      'subagentObservation',
+      'subagentParentContext',
+      'returnedResult',
+      'returnedResultEmpty',
+      'returnedResultTruncated',
+    ]) {
+      if (!(key in safeData)) continue;
+      delete safeData[key];
+      changed = true;
+    }
   }
   for (const key of ['message', 'sdkError'] as const) {
     if (typeof safeData[key] === 'string') {

@@ -450,22 +450,28 @@ function RightSidebarAvailabilityRegistration({
  */
 function RightSidebarSessionIdRegistration({
   sessionId,
+  subagentsAvailable,
   initialCollapsed,
   writeInitialCollapsedRecord = false,
   declare,
 }: {
   sessionId: string;
+  subagentsAvailable?: boolean;
   initialCollapsed?: boolean;
   writeInitialCollapsedRecord?: boolean;
   declare: (
     sessionId: string | null,
-    opts?: { initialCollapsed?: boolean; writeInitialCollapsedRecord?: boolean },
+    opts?: {
+      initialCollapsed?: boolean;
+      writeInitialCollapsedRecord?: boolean;
+      subagentsAvailable?: boolean;
+    },
   ) => void;
 }) {
   useLayoutEffect(() => {
-    declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord });
+    declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });
     return () => declare(null);
-  }, [sessionId, initialCollapsed, writeInitialCollapsedRecord, declare]);
+  }, [sessionId, subagentsAvailable, initialCollapsed, writeInitialCollapsedRecord, declare]);
   return null;
 }
 
@@ -567,45 +573,6 @@ export function CCAgentSessionView({
     });
   }, [navigate, sessionId, viewVisible]);
 
-  // A task that has Subagents owns one durable Subagent tab. Both on history
-  // mount and on the first live child we only ensure the tab exists — never
-  // stealing OS focus, replacing an already-active tab, or opening the sidebar.
-  useEffect(() => {
-    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
-    let disposed = false;
-    const requestOwner = getDataOwnerGeneration();
-    void window.electronAPI.localDb.subagentRuns
-      .list({ sessionId })
-      .then((response) => {
-        if (
-          disposed ||
-          !isDataOwnerGenerationCurrent(requestOwner) ||
-          !response.supported ||
-          response.runs.length === 0
-        ) {
-          return;
-        }
-        return openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY);
-      })
-      .catch(() => undefined);
-    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged(
-      (payload, ownerStamp) => {
-        if (
-          disposed ||
-          !isDataOwnerPushCurrent(ownerStamp) ||
-          payload.runId === null ||
-          payload.sessionId !== sessionId
-        ) {
-          return;
-        }
-        void openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY).catch(() => undefined);
-      },
-    );
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, [ownsWindowRoute, sessionId, viewVisible]);
   // MainLayout 经 Outlet context 下发右栏相关能力(二级路由由 CCAgentFeatureLayout
   // 透传,否则这里会断链拿不到):
   //   - rightSidebarCollapsed:折叠态,用于 useProportionalWidth 的 compact 判定;
@@ -762,6 +729,46 @@ export function CCAgentSessionView({
       ? sessionSnapshotPatchBufferRef.current.merge(sessionId, sessionBase)
       : null;
   const isOrcaLeadSessionView = session?.orcaRole === 'lead';
+
+  // A Pi task that has Subagents owns one durable Subagent tab. Both on history
+  // mount and on the first live child we only ensure the tab exists — never
+  // stealing OS focus, replacing an already-active tab, or opening the sidebar.
+  useEffect(() => {
+    if (!ownsWindowRoute || !viewVisible || !sessionId || session?.agentKind !== 'pi') return;
+    let disposed = false;
+    const requestOwner = getDataOwnerGeneration();
+    void window.electronAPI.localDb.subagentRuns
+      .list({ sessionId })
+      .then((response) => {
+        if (
+          disposed ||
+          !isDataOwnerGenerationCurrent(requestOwner) ||
+          !response.supported ||
+          response.runs.length === 0
+        ) {
+          return;
+        }
+        return openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY);
+      })
+      .catch(() => undefined);
+    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged(
+      (payload, ownerStamp) => {
+        if (
+          disposed ||
+          !isDataOwnerPushCurrent(ownerStamp) ||
+          payload.runId === null ||
+          payload.sessionId !== sessionId
+        ) {
+          return;
+        }
+        void openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY).catch(() => undefined);
+      },
+    );
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [ownsWindowRoute, session?.agentKind, sessionId, viewVisible]);
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。
   // 触发源:NewMakerDraftRoute 的 worktree 异步创建路径。
@@ -3849,6 +3856,7 @@ export function CCAgentSessionView({
       {ownsRoute && sessionId && setRightSidebarSessionId && (
         <RightSidebarSessionIdRegistration
           sessionId={sessionId}
+          subagentsAvailable={session ? session.agentKind === 'pi' : undefined}
           initialCollapsed={shouldFirstFrameRevealOrcaWorkers ? false : undefined}
           writeInitialCollapsedRecord={shouldFirstFrameRevealOrcaWorkers}
           declare={setRightSidebarSessionId}

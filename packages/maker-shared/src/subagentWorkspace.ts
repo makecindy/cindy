@@ -46,13 +46,29 @@ export interface SubagentCapabilities {
   resume: boolean;
   steer: boolean;
   stop: boolean;
-  parentContext: 'unknown' | 'snapshot' | 'live';
+  parentContext: 'unknown' | 'none' | 'snapshot' | 'live';
 }
 
 export interface SubagentRunUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+  costUsd?: number;
+}
+
+export interface SubagentChildRun {
+  id: string;
+  role: string;
+  title?: string;
+  task?: string;
+  status: SubagentRunStatus | 'queued';
+  model?: string;
+  reasoningEffort?: string;
+  usage?: SubagentRunUsage;
+  awaitingApproval?: boolean;
+  output?: string;
+  outputTruncated?: boolean;
+  error?: string;
 }
 
 export interface SubagentRun {
@@ -95,10 +111,14 @@ export interface SubagentTranscriptEntry {
   content: string;
   occurredAt: number;
   toolName?: string;
+  childId?: string;
+  childTitle?: string;
 }
 
 export interface SubagentRunDetail extends SubagentRun {
   activity: SubagentActivityEntry[];
+  /** PI durable batches expose their independently addressable children. */
+  children?: SubagentChildRun[];
   /** The result explicitly returned to the parent task, when available. */
   returnedResult?: string;
   returnedResultTruncated?: boolean;
@@ -166,5 +186,22 @@ export const SUBAGENT_PR1_CAPABILITIES: Readonly<SubagentCapabilities> =
     resume: false,
     steer: false,
     stop: false,
+    parentContext: 'unknown',
+  });
+
+/**
+ * PI detached runs are owned by Cindy's durable runner rather than the parent
+ * turn. The current product surface exposes exact stop; the runner's internal
+ * steer/follow-up protocol stays fail-closed until a reviewed host IPC and UI
+ * are connected.
+ */
+export const PI_DURABLE_SUBAGENT_CAPABILITIES: Readonly<SubagentCapabilities> =
+  Object.freeze({
+    viewActivity: true,
+    viewReturnedResult: true,
+    viewFullTranscript: true,
+    resume: true,
+    steer: true,
+    stop: true,
     parentContext: 'unknown',
   });
