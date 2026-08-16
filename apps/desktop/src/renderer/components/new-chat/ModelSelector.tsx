@@ -2749,6 +2749,8 @@ export function ModelSelector({
   agentSwitch,
 }: ModelSelectorProps) {
   const { t, i18n } = useTranslation();
+  // 列表样式开关也决定 pill 首位图标形态(badge = 引擎 mark 打头,见 engineLeadsTrigger)。
+  const pickerLayout = useModelPickerLayout();
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
@@ -3071,6 +3073,10 @@ export function ModelSelector({
   // 传了 engineMarkVendor 就走新形态:harness 名字文本让位给尾部的一枚 mark,和深度档字
   // 紧挨着收尾(与面板行右侧三元组同构)。没传的入口一个像素都不变。
   const engineMarkOption = engineMarkVendor ? agentOptionOf(engineMarkVendor) : null;
+  // badge 样式的 pill(Chris 2026-08-17 裁决):首位图标 = 用户在用的 harness mark,
+  // 渠道图标与尾部 harness 小标一并去掉 —— 行内已按「引擎徽标行」建立了引擎优先的
+  // 心智,pill 跟着同一套;渠道归属由面板里的分栏题头回答。classic 一个像素不动。
+  const engineLeadsTrigger = pickerLayout === 'badge' && engineMarkOption !== null;
   // 引擎小标 + 深度是 pill 的**定宽身份位**:窄工具条下也要留着,先让模型名截断
   // (Chris 2026-08-12 裁决)。只有 ultra-compact(整段文字都收起、只剩图标)才一并隐藏。
   const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;
@@ -3255,9 +3261,26 @@ export function ModelSelector({
           {!currentModel && remoteModelLoadFailed && (
             <CircleAlert size={dense ? 12 : 13} className="shrink-0 text-[var(--error-fg)]" />
           )}
-          {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先,缺省回落
-                  当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
-          {activeSourceId && (
+          {/* 图标统一规则:badge 样式首位放**引擎 mark**(engineLeadsTrigger,渠道图标
+              让位);classic 保持模型条目 icon(AI Gateway / 目录设定)优先、缺省回落
+              当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
+          {engineLeadsTrigger && engineMarkOption ? (
+            <span
+              data-composer-engine-lead={engineMarkVendor}
+              className="mr-1.5 flex shrink-0 items-center"
+              aria-hidden="true"
+            >
+              <engineMarkOption.Mark
+                size={isCreateAgentVariant ? 12 : 13}
+                className={cn(
+                  'shrink-0',
+                  isCreateAgentVariant
+                    ? 'text-[var(--create-agent-control-icon)]'
+                    : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+                )}
+              />
+            </span>
+          ) : activeSourceId ? (
             <ModelIconMark
               icon={triggerModelIcon}
               providerId={activeSourceId}
@@ -3268,7 +3291,7 @@ export function ModelSelector({
                 isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : undefined
               }
             />
-          )}
+          ) : null}
           {agentIdentityPrefix}
           <span
             className={cn(
@@ -3294,11 +3317,14 @@ export function ModelSelector({
           </span>
           {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
               旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
-              会读成「模型 · 引擎 · 深度」三段,又变回被撤掉的那种堆砌。 */}
-          {showTriggerTail && engineMarkNode}
+              会读成「模型 · 引擎 · 深度」三段,又变回被撤掉的那种堆砌。
+              badge 样式引擎已在首位(engineLeadsTrigger),尾部不再重复一枚。 */}
+          {showTriggerTail && !engineLeadsTrigger && engineMarkNode}
           {effortLabel && showTriggerTail && (
             <>
-              {!engineMarkOption && (
+              {/* 尾部没有 mark 作视觉分隔(旧形态,或 badge 把 mark 移到了首位)时,
+                  深度前补「·」—— 否则「名字 深度」贴着读会粘成一个词。 */}
+              {(!engineMarkOption || engineLeadsTrigger) && (
                 <span
                   className={cn(
                     'shrink-0 font-normal',
