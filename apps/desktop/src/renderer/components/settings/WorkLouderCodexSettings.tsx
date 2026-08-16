@@ -164,6 +164,14 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   }, [bootstrapped, refreshSkills]);
 
   useEffect(() => {
+    const api = window.electronAPI?.workLouderCodex;
+    void api?.setLayoutPreviewActive?.(true);
+    return () => {
+      void api?.setLayoutPreviewActive?.(false);
+    };
+  }, []);
+
+  useEffect(() => {
     const unsubscribe = window.electronAPI?.workLouderCodex?.onPreviewInput?.((input) => {
       setPressedParts((current) => {
         const next = new Set(current);

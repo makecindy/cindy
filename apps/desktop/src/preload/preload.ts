@@ -35,6 +35,7 @@ import {
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
   WORKLOUDER_CODEX_PROBE_CHANNEL,
   WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL,
+  WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL,
   type WorkLouderCodexPublishedTask,
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
@@ -1560,6 +1561,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     probe: (): Promise<WorkLouderCodexState> => ipcRenderer.invoke(WORKLOUDER_CODEX_PROBE_CHANNEL),
     publishTasks: (tasks: WorkLouderCodexPublishedTask[]): Promise<void> =>
       ipcRenderer.invoke(WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL, tasks),
+    setLayoutPreviewActive: (active: boolean): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL, active),
     onStateChanged: (callback: (state: WorkLouderCodexState) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, state: WorkLouderCodexState): void => {
         callback(state);

@@ -346,6 +346,42 @@ describe('WorkLouderCodexLightingController', () => {
     expect(dispatch).toHaveBeenCalled();
   });
 
+  it('keeps physical presses on the preview while the layout editor is open', () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const preview = vi.fn();
+    const activateSession = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      activateSession,
+      undefined,
+      dispatch,
+      preview,
+    );
+    controller.start();
+    controller.setLayoutPreviewActive(true);
+
+    hidRef.current?.({ key: 'AG00', act: 1 });
+    hidRef.current?.({ key: 'ACT06', act: 1 });
+
+    expect(preview).toHaveBeenCalledWith({ part: 'AG00', pressed: true });
+    expect(preview).toHaveBeenCalledWith({ part: 'ACT06', pressed: true });
+    expect(activateSession).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   describe('joystick scrolling', () => {
     function makeStick() {
       const stickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {

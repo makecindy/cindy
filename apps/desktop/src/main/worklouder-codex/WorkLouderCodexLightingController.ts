@@ -106,6 +106,7 @@ export class WorkLouderCodexLightingController {
   private joystickReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   private scrollActive = false;
   private started = false;
+  private layoutPreviewActive = false;
 
   constructor(
     private readonly sink: WorkLouderCodexLightingSink,
@@ -159,6 +160,11 @@ export class WorkLouderCodexLightingController {
     this.stateListeners.add(listener);
     listener(this.getState());
     return () => this.stateListeners.delete(listener);
+  }
+
+  setLayoutPreviewActive(active: boolean): void {
+    this.layoutPreviewActive = active;
+    if (!active) this.pendingAgentKeyTap = null;
   }
 
   applySettings(settings: WorkLouderCodexSettings): void {
@@ -289,6 +295,7 @@ export class WorkLouderCodexLightingController {
   private handleHidInput(event: WorkLouderCodexHidEvent): void {
     this.handleDeviceActivity();
     this.emitPreviewInput(previewPartForHidKey(event.key, this.settings.layout.separateMicrophoneKeys), event.act);
+    if (this.layoutPreviewActive) return;
     const agentMatch = /^AG0([0-5])$/.exec(event.key);
     if (agentMatch) {
       if (event.act === 1) this.handleAgentKeyPress(Number(agentMatch[1]));
@@ -438,6 +445,7 @@ export class WorkLouderCodexLightingController {
     this.handleDeviceActivity();
     const direction = joystickDirection(event);
     this.emitPreviewInput('analog', direction ? 1 : 0);
+    if (this.layoutPreviewActive) return;
 
     // Scrolling follows the stick continuously — held means keep scrolling, and
     // pushing further means faster — so it cannot go through the one-shot path

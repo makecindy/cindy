@@ -32,6 +32,7 @@ export const WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL =
   'worklouder-codex:open-input-monitoring-settings';
 export const WORKLOUDER_CODEX_PROBE_CHANNEL = 'worklouder-codex:probe';
 export const WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL = 'worklouder-codex:publish-tasks';
+export const WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL = 'worklouder-codex:set-layout-preview';
 
 /** One sidebar task, as the renderer reports it for the agent keys. */
 export type WorkLouderCodexPublishedTask = InputDevicePublishedTask;

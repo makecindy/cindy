@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   resetSettings: vi.fn(),
   openInputMonitoringSettings: vi.fn(),
   reload: vi.fn(),
+  setLayoutPreviewActive: vi.fn(),
   /** Which rule the six task keys follow; drives whether they are clickable. */
   agentSource: 'recent' as string,
   layout: null as ReturnType<typeof createWorkLouderCodexDefaultSettings>['layout'] | null,
@@ -68,6 +69,18 @@ describe('WorkLouderCodexSettings', () => {
     vi.clearAllMocks();
     mocks.agentSource = 'recent';
     mocks.layout = createWorkLouderCodexDefaultSettings().layout;
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        workLouderCodex: {
+          setLayoutPreviewActive: mocks.setLayoutPreviewActive,
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'electronAPI');
   });
 
   it('renders a keyboard-shortcuts entry with live connection status', () => {
@@ -113,6 +126,7 @@ describe('WorkLouderCodexSettings', () => {
     expect(screen.getByTestId('worklouder-codex-keyboard-layout').parentElement?.className).toContain(
       'justify-center',
     );
+    expect(mocks.setLayoutPreviewActive).toHaveBeenCalledWith(true);
 
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',

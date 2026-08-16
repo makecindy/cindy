@@ -49,6 +49,7 @@ function makeIpc(options?: {
   const openInputMonitoringSettings = vi.fn(async () => undefined);
   const probeDevice = vi.fn();
   const publishTasks = vi.fn();
+  const setLayoutPreviewActive = vi.fn();
   const ipc = createWorkLouderCodexSettingsIpc({
     assertTrustedSender,
     getState,
@@ -58,6 +59,7 @@ function makeIpc(options?: {
     openInputMonitoringSettings,
     probeDevice,
     publishTasks,
+    setLayoutPreviewActive,
   });
   return {
     ipc,
@@ -69,6 +71,7 @@ function makeIpc(options?: {
     openInputMonitoringSettings,
     probeDevice,
     publishTasks,
+    setLayoutPreviewActive,
   };
 }
 
@@ -196,6 +199,17 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(resetSettings).toHaveBeenCalledOnce();
     expect(applySettings).toHaveBeenCalledWith(DEFAULT_SETTINGS);
     expect(state.settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('toggles layout preview without writing settings', () => {
+    const { ipc, setLayoutPreviewActive, writeSettings } = makeIpc();
+
+    ipc.setLayoutPreviewActive(EVENT, true);
+    ipc.setLayoutPreviewActive(EVENT, false);
+
+    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(1, true);
+    expect(setLayoutPreviewActive).toHaveBeenNthCalledWith(2, false);
+    expect(writeSettings).not.toHaveBeenCalled();
   });
 
   it('opens macOS Input Monitoring settings only for trusted callers', async () => {

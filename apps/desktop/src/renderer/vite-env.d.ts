@@ -1828,6 +1828,7 @@ interface ElectronAPI {
     publishTasks: (
       tasks: import('../shared/workLouderCodex').WorkLouderCodexPublishedTask[],
     ) => Promise<void>;
+    setLayoutPreviewActive: (active: boolean) => Promise<void>;
     onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
     onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
     onPreviewInput: (

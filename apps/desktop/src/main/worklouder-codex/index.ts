@@ -14,6 +14,7 @@ import {
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
   WORKLOUDER_CODEX_PROBE_CHANNEL,
   WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL,
+  WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL,
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
@@ -162,6 +163,9 @@ export function registerWorkLouderCodexSettingsIpc(): void {
       rendererTaskCatalog = tasks.map((task) => ({ ...task }));
       void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
     },
+    setLayoutPreviewActive: (active) => {
+      workLouderCodexLightingController.setLayoutPreviewActive(active);
+    },
   });
 
   ipcMain.handle(WORKLOUDER_CODEX_GET_STATE_CHANNEL, (event) => handlers.get(event));
@@ -175,6 +179,9 @@ export function registerWorkLouderCodexSettingsIpc(): void {
   ipcMain.handle(WORKLOUDER_CODEX_PROBE_CHANNEL, (event) => handlers.probe(event));
   ipcMain.handle(WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL, (event, tasks: unknown) =>
     handlers.publishTasks(event, tasks),
+  );
+  ipcMain.handle(WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL, (event, active: unknown) =>
+    handlers.setLayoutPreviewActive(event, active),
   );
 
   workLouderCodexLightingController.subscribeState((state) => {
