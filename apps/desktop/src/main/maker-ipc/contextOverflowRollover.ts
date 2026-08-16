@@ -48,13 +48,59 @@ function isSyntheticUser(message: OverflowSourceMessage): boolean {
 }
 
 function hasTurnSideEffects(messagesAfterUser: OverflowSourceMessage[]): boolean {
-  for (const message of messagesAfterUser) {
-    if (message.role === 'tool_use' || message.role === 'tool_result') return true;
-    if (message.role === 'assistant' && extractPlainText(message.content).trim().length > 0) {
-      return true;
+  return messagesAfterUser.some((message) => message.role !== 'error');
+}
+
+export type OverflowReplayWireMessage =
+  | string
+  | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
+
+export function persistedUserContentToWireMessage(content: unknown): OverflowReplayWireMessage {
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return persistedUserContentToWireMessage(JSON.parse(content));
+      } catch {
+        return content;
+      }
+    }
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return { type: 'user', content: content as Array<{ type: string; [k: string]: unknown }> };
+  }
+  if (!content || typeof content !== 'object') return '';
+  const rec = content as Record<string, unknown>;
+  if (rec.type === 'user') {
+    if (typeof rec.content === 'string' || Array.isArray(rec.content)) {
+      return rec as OverflowReplayWireMessage;
     }
   }
-  return false;
+  const text = typeof rec.text === 'string' ? rec.text : '';
+  const images = Array.isArray(rec.images) ? rec.images : [];
+  const files = Array.isArray(rec.files) ? rec.files : [];
+  if (images.length === 0 && files.length === 0) return text;
+  const blocks: Array<{ type: string; [k: string]: unknown }> = [];
+  if (text) blocks.push({ type: 'text', text });
+  for (const image of images) {
+    if (!image || typeof image !== 'object') continue;
+    const item = image as Record<string, unknown>;
+    const path =
+      typeof item.path === 'string'
+        ? item.path
+        : typeof item.url === 'string'
+          ? item.url
+          : '';
+    if (path) blocks.push({ type: 'image', path });
+  }
+  for (const file of files) {
+    if (!file || typeof file !== 'object') continue;
+    const item = file as Record<string, unknown>;
+    const path = typeof item.path === 'string' ? item.path : '';
+    if (path) blocks.push({ type: 'file', path });
+  }
+  return { type: 'user', content: blocks.length > 0 ? blocks : text };
 }
 
 export function planContextOverflowRollover(
@@ -96,6 +142,7 @@ export interface ContextOverflowRolloverDeps {
     status: string;
     agentKind: string;
     remoteHostId: string | null;
+    clearedAt: number | null;
   } | null>;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
   findLatestRebuildMeta(
@@ -107,12 +154,20 @@ export interface ContextOverflowRolloverDeps {
   commitRebuild(
     sessionId: string,
     handoff: string,
-    meta: { reason: 'context-overflow'; sourceUserClientId: string | null },
+    meta: {
+      reason: 'context-overflow';
+      sourceUserClientId: string | null;
+      expectedClearedAt?: number | null;
+    },
   ): Promise<void>;
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
   readPendingHandoffGeneration?(sessionId: string): number;
-  replayUserMessage(sessionId: string, content: unknown): Promise<void>;
+  replayUserMessage(
+    sessionId: string,
+    content: unknown,
+  ): Promise<{ accepted: boolean }>;
   onRebuilt?(sessionId: string): void;
+  withSessionLock?<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
   withCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
   log: {
     info(message: string, fields?: Record<string, unknown>): void;
@@ -120,70 +175,88 @@ export interface ContextOverflowRolloverDeps {
   };
 }
 
+export type OverflowClaimResult = 'claimed' | 'in-flight' | 'idle';
+
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
-  claim(sessionId: string): boolean;
+  claim(sessionId: string): OverflowClaimResult;
   tryRecover(sessionId: string, errorData: unknown): Promise<boolean>;
 } {
   const inFlight = new Set<string>();
 
-  return {
-    claim(sessionId: string): boolean {
-      if (inFlight.has(sessionId)) return false;
-      inFlight.add(sessionId);
+  const runRecover = async (sessionId: string, errorData: unknown): Promise<boolean> => {
+    if (!isContextOverflowErrorData(errorData)) return false;
+    await deps.drainPersistQueue();
+    const sessionRow = await deps.getSessionRow(sessionId);
+    if (!sessionRow || sessionRow.status === 'deleted') return false;
+    if (sessionRow.remoteHostId) return false;
+    if (sessionRow.agentKind !== 'pi') return false;
+
+    return deps.withCloseSuppressed(sessionId, async () => {
+      const live = deps.getLiveSession(sessionId);
+      if (live?.isTurnRunning()) {
+        deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
+        return false;
+      }
+      const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+      const [source, rebuildMeta] = await Promise.all([
+        deps.listMessages(sessionId),
+        deps.findLatestRebuildMeta(sessionId),
+      ]);
+      const alreadyRolled =
+        rebuildMeta?.reason === 'context-overflow' ? rebuildMeta.sourceUserClientId : null;
+      const plan = planContextOverflowRollover(source, alreadyRolled);
+      if (plan.action === 'stop') {
+        deps.log.info('context overflow rollover stopped', {
+          sessionId,
+          reason: plan.reason,
+        });
+        return false;
+      }
+
+      if (live) await deps.closeSession(sessionId);
+      const label = engineLabelForOverflow(sessionRow.agentKind);
+      const handoff = buildHandoffText(plan.handoffMessages, {
+        fromLabel: label,
+        toLabel: label,
+        sessionId,
+        reason: 'context-overflow',
+      });
+      await deps.commitRebuild(sessionId, handoff, {
+        reason: 'context-overflow',
+        sourceUserClientId: plan.sourceUserClientId,
+        expectedClearedAt: sessionRow.clearedAt,
+      });
+      deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+      deps.onRebuilt?.(sessionId);
+      const replay = await deps.replayUserMessage(sessionId, plan.sourceUserContent);
+      if (!replay.accepted) {
+        deps.log.warn('context overflow rollover replay was not accepted', {
+          sessionId,
+          sourceUserClientId: plan.sourceUserClientId,
+        });
+        return false;
+      }
+      deps.log.info('context overflow rollover replayed user message', {
+        sessionId,
+        sourceUserClientId: plan.sourceUserClientId,
+      });
       return true;
+    });
+  };
+
+  return {
+    claim(sessionId: string): OverflowClaimResult {
+      if (inFlight.has(sessionId)) return 'in-flight';
+      inFlight.add(sessionId);
+      return 'claimed';
     },
 
     async tryRecover(sessionId: string, errorData: unknown): Promise<boolean> {
       try {
-        if (!isContextOverflowErrorData(errorData)) return false;
-        await deps.drainPersistQueue();
-        const sessionRow = await deps.getSessionRow(sessionId);
-        if (!sessionRow || sessionRow.status === 'deleted') return false;
-        if (sessionRow.remoteHostId) return false;
-
-        return await deps.withCloseSuppressed(sessionId, async () => {
-          const live = deps.getLiveSession(sessionId);
-          if (live?.isTurnRunning()) {
-            deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
-            return false;
-          }
-          const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
-          const [source, rebuildMeta] = await Promise.all([
-            deps.listMessages(sessionId),
-            deps.findLatestRebuildMeta(sessionId),
-          ]);
-          const alreadyRolled =
-            rebuildMeta?.reason === 'context-overflow' ? rebuildMeta.sourceUserClientId : null;
-          const plan = planContextOverflowRollover(source, alreadyRolled);
-          if (plan.action === 'stop') {
-            deps.log.info('context overflow rollover stopped', {
-              sessionId,
-              reason: plan.reason,
-            });
-            return false;
-          }
-
-          if (live) await deps.closeSession(sessionId);
-          const label = engineLabelForOverflow(sessionRow.agentKind);
-          const handoff = buildHandoffText(plan.handoffMessages, {
-            fromLabel: label,
-            toLabel: label,
-            sessionId,
-            reason: 'context-overflow',
-          });
-          await deps.commitRebuild(sessionId, handoff, {
-            reason: 'context-overflow',
-            sourceUserClientId: plan.sourceUserClientId,
-          });
-          deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-          deps.onRebuilt?.(sessionId);
-          await deps.replayUserMessage(sessionId, plan.sourceUserContent);
-          deps.log.info('context overflow rollover replayed user message', {
-            sessionId,
-            sourceUserClientId: plan.sourceUserClientId,
-          });
-          return true;
-        });
+        if (deps.withSessionLock) {
+          return await deps.withSessionLock(sessionId, () => runRecover(sessionId, errorData));
+        }
+        return await runRecover(sessionId, errorData);
       } catch (error) {
         deps.log.warn('context overflow rollover failed', {
           sessionId,

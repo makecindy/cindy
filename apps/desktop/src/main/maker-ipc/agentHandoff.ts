@@ -21,6 +21,8 @@ export interface HandoffSourceMessage {
   role: string;
   content: unknown;
   createdAt: number; // unix ms
+  /** 生产 tool_result 的关联列；content 经常是纯字符串，不能靠信封里的 toolUseId。 */
+  toolUseId?: string | null;
 }
 
 export interface BuildHandoffOptions {
@@ -172,12 +174,25 @@ function commandTextOf(input: Record<string, unknown>): string {
   return '';
 }
 
-function toolUseIdOf(content: Record<string, unknown>): string {
+function toolUseIdOf(message: HandoffSourceMessage, content?: Record<string, unknown>): string {
+  if (typeof message.toolUseId === 'string' && message.toolUseId) return message.toolUseId;
+  if (!content) return '';
   return typeof content.toolUseId === 'string'
     ? content.toolUseId
     : typeof content.id === 'string'
       ? content.id
       : '';
+}
+
+function extractFailedPathHints(text: string): string[] {
+  const hints: string[] = [];
+  for (const line of text.split('\n')) {
+    const match = line.match(/\bFAIL\s+(\S+)/) ?? line.match(/(\S+\.(?:test|spec)\.\w+)/);
+    if (!match?.[1]) continue;
+    hints.push(truncate(match[1], 80));
+    if (hints.length >= 3) break;
+  }
+  return hints;
 }
 
 function extractCommandOutcome(content: Record<string, unknown>): string | undefined {
@@ -205,11 +220,18 @@ function extractWorkState(messages: HandoffSourceMessage[]): WorkState {
   const commandByToolUseId = new Map<string, number>();
   const failedPaths: string[] = [];
   for (const msg of messages) {
-    if (!msg.content || typeof msg.content !== 'object') continue;
-    const c = msg.content as Record<string, unknown>;
+    const objectContent =
+      msg.content && typeof msg.content === 'object' && !Array.isArray(msg.content)
+        ? (msg.content as Record<string, unknown>)
+        : undefined;
     if (msg.role === 'tool_use') {
-      const name = typeof c.toolName === 'string' ? c.toolName : '';
-      const input = (c.input && typeof c.input === 'object' ? c.input : {}) as Record<string, unknown>;
+      if (!objectContent) continue;
+      const name = typeof objectContent.toolName === 'string' ? objectContent.toolName : '';
+      const input = (
+        objectContent.input && typeof objectContent.input === 'object'
+          ? objectContent.input
+          : {}
+      ) as Record<string, unknown>;
       if (FILE_EDIT_TOOL_NAMES.has(name)) {
         for (const key of ['file_path', 'path', 'notebook_path']) {
           const v = input[key];
@@ -220,20 +242,30 @@ function extractWorkState(messages: HandoffSourceMessage[]): WorkState {
         if (!cmd) continue;
         const entry = { command: truncate(oneLine(cmd), COMMAND_LINE_CAP) };
         const index = commands.push(entry) - 1;
-        const toolUseId = toolUseIdOf(c);
+        const toolUseId = toolUseIdOf(msg, objectContent);
         if (toolUseId) commandByToolUseId.set(toolUseId, index);
       }
       continue;
     }
     if (msg.role !== 'tool_result') continue;
-    const toolUseId = toolUseIdOf(c);
+    const toolUseId = toolUseIdOf(msg, objectContent);
     const index = toolUseId ? commandByToolUseId.get(toolUseId) : undefined;
     if (index === undefined) continue;
-    const outcome = extractCommandOutcome(c);
+    const outcomeSource =
+      objectContent ??
+      (typeof msg.content === 'string' ? { fullText: msg.content } : undefined);
+    if (!outcomeSource) continue;
+    const outcome = extractCommandOutcome(outcomeSource);
     if (!outcome) continue;
     commands[index] = { ...commands[index]!, outcome };
     if (isFailedOutcome(outcome)) {
-      failedPaths.push(`${commands[index]!.command} → ${outcome}`);
+      const rawText =
+        typeof msg.content === 'string'
+          ? msg.content
+          : extractPlainText(outcomeSource.fullText ?? outcomeSource.output ?? outcomeSource);
+      const hints = extractFailedPathHints(rawText);
+      if (hints.length > 0) failedPaths.push(...hints);
+      else failedPaths.push(`${commands[index]!.command} → ${outcome}`);
     }
   }
   return {
@@ -388,13 +420,33 @@ function splitTrailingTerminator(text: string): [body: string, tail: string] {
  * 内部历史的显式分隔——工具密集的长历史(逐字区已收缩到 1 轮仍超限)真会走到这里,
  * 英文 framing 比原中文长,触达上限更容易。
  */
+const RETRIEVAL_SECTION_HEADING = '== Retrieving earlier verbatim history';
+
+function splitMandatoryHandoffTail(text: string, opts: BuildHandoffOptions): {
+  body: string;
+  tail: string;
+} {
+  const retrievalAt = text.lastIndexOf(RETRIEVAL_SECTION_HEADING);
+  if (retrievalAt >= 0) {
+    return {
+      body: text.slice(0, retrievalAt).trimEnd(),
+      tail: text.slice(retrievalAt),
+    };
+  }
+  const [body, terminatorTail] = splitTrailingTerminator(text);
+  return {
+    body: body.trimEnd(),
+    tail: terminatorTail || `${handoffTerminator(opts)}`,
+  };
+}
+
 function capPreservingTerminator(text: string, opts: BuildHandoffOptions): string {
   if (text.length <= HANDOFF_HARD_CAP) return text;
-  const terminator = handoffTerminator(opts);
+  const { body, tail } = splitMandatoryHandoffTail(text, opts);
   const separator = '\n\n';
-  const room = HANDOFF_HARD_CAP - terminator.length - separator.length;
-  if (room <= 0) return terminator.slice(0, HANDOFF_HARD_CAP);
-  return `${text.slice(0, room)}${separator}${terminator}`;
+  const room = HANDOFF_HARD_CAP - tail.length - separator.length;
+  if (room <= 0) return tail.slice(0, HANDOFF_HARD_CAP);
+  return `${body.slice(0, room)}${separator}${tail}`;
 }
 
 function assembleHandoffText(

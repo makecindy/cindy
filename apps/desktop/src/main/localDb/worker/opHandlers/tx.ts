@@ -228,12 +228,20 @@ function contextRebuild(db: Database.Database, args: unknown): void {
   const markerContent = expectString(payload.markerContent, 'markerContent');
   const markerCreatedAt = expectNumber(payload.markerCreatedAt, 'markerCreatedAt');
   const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   const transaction = db.transaction(() => {
     const sessionResult = db
-      .prepare('UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ?')
-      .run(updatedAt, sessionId);
+      .prepare(
+        'UPDATE sessions SET sdk_session_id = NULL, updated_at = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+      )
+      .run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
-      throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
+      throw Object.assign(new Error(`Session missing or clear-boundary changed: ${sessionId}`), {
+        code: 'PRECONDITION_FAILED',
+      });
     }
     db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
       sessionId,

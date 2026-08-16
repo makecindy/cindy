@@ -949,7 +949,11 @@ export async function commitMessageDeletion(
 export async function commitContextRebuild(
   sessionId: string,
   handoff: string,
-  meta: { reason: 'context-overflow'; sourceUserClientId: string | null },
+  meta: {
+    reason: 'context-overflow';
+    sourceUserClientId: string | null;
+    expectedClearedAt?: number | null;
+  },
 ): Promise<{ updatedAt: number }> {
   const now = Date.now();
   await getDbClient().tx('context.rebuild', {
@@ -964,6 +968,7 @@ export async function commitContextRebuild(
     }),
     markerCreatedAt: now,
     updatedAt: now,
+    expectedClearedAt: meta.expectedClearedAt ?? null,
   });
   return { updatedAt: now };
 }
@@ -2174,6 +2179,7 @@ export async function listMessagesForAgentHandoff(
     content: unknown;
     createdAt: number;
     agentMeta: Record<string, unknown> | null;
+    toolUseId: string | null;
   }>
 > {
   const db = getDbClient().drizzle;
@@ -2199,6 +2205,7 @@ export async function listMessagesForAgentHandoff(
       content: messages.content,
       createdAt: messages.createdAt,
       agentMeta: messages.agentMeta,
+      toolUseId: messages.toolUseId,
     })
     .from(messages)
     .where(
@@ -2225,7 +2232,14 @@ export async function listMessagesForAgentHandoff(
         // 非法 JSON 视为无 meta
       }
     }
-    return { clientId: r.clientId, role: r.role, content, createdAt: r.createdAt, agentMeta };
+    return {
+      clientId: r.clientId,
+      role: r.role,
+      content,
+      createdAt: r.createdAt,
+      agentMeta,
+      toolUseId: r.toolUseId ?? null,
+    };
   });
 }
 

@@ -696,7 +696,6 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
 } from './sessionAgentSwitchHandler.js';
 import {
-  extractPlainText,
   prependNoteToWireUserMessage,
   prependHandoffToUserMessage,
   type HandoffWireMessage,
@@ -704,6 +703,7 @@ import {
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  persistedUserContentToWireMessage,
 } from './contextOverflowRollover.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
@@ -2623,6 +2623,15 @@ export async function withSendToSessionLock<T>(
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
 let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null =
   null;
+const overflowSuppressedBroadcasts = new Map<
+  string,
+  {
+    sessionId: string;
+    event: AgentEvent;
+    persistId?: string;
+    resolvedContent?: unknown;
+  }
+>();
 
 function getWiredSessionCloseReason(session: WiredSession) {
   return getMakerIfReady()?.getSessionCloseReason(session) ?? 'unexpected';
@@ -4174,13 +4183,28 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 先 broadcast 保 UI 实时性,再 flush(flush 只入队、不阻塞)。
       // Keep the raw event for main-side coordination/persistence, but only
       // cross renderer/device-link boundaries with the redacted copy.
-      broadcastToAllWindows(MAKER_PUSH.EVENT, {
-        sessionId: session.id,
-        event: broadcastEvent,
-        persistId,
-        resolvedContent,
-      });
-      handleAgentIslandEventAfterBroadcast(session, broadcastEvent);
+      const suppressOverflowBroadcast =
+        session.agentKind === 'pi' &&
+        !session.remoteHostId &&
+        event.type === 'error' &&
+        isTerminalTurnErrorEvent(event) &&
+        isContextOverflowErrorData(event.data);
+      if (suppressOverflowBroadcast) {
+        overflowSuppressedBroadcasts.set(session.id, {
+          sessionId: session.id,
+          event: broadcastEvent,
+          persistId,
+          resolvedContent,
+        });
+      } else {
+        broadcastToAllWindows(MAKER_PUSH.EVENT, {
+          sessionId: session.id,
+          event: broadcastEvent,
+          persistId,
+          resolvedContent,
+        });
+        handleAgentIslandEventAfterBroadcast(session, broadcastEvent);
+      }
       if (shouldMarkTurnTerminalIdleAfterBroadcast) {
         sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);
         // #9 idle 兜底:正常 done、终止型 error（含 abort）统一在 tracker 已置 idle 后
@@ -4287,20 +4311,29 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.type === 'error' &&
           (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
             agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
-        const overflowRolloverClaimed =
+        const overflowClaim =
           event.type === 'error' &&
+          session.agentKind === 'pi' &&
+          !session.remoteHostId &&
           isTerminalTurnErrorEvent(event) &&
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
           !autoResumeSuppressesPersist &&
-          isContextOverflowErrorData(attributedEvent.data) &&
-          contextOverflowRolloverHolder?.claim(session.id) === true;
-        if (overflowRolloverClaimed) {
+          isContextOverflowErrorData(attributedEvent.data)
+            ? (contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
+            : 'idle';
+        if (overflowClaim === 'claimed') {
           const overflowErrorData = attributedEvent.data;
           void contextOverflowRolloverHolder
             ?.tryRecover(session.id, overflowErrorData)
             .then((recovered) => {
+              const stashed = overflowSuppressedBroadcasts.get(session.id);
+              overflowSuppressedBroadcasts.delete(session.id);
               if (recovered) return;
+              if (stashed) {
+                broadcastToAllWindows(MAKER_PUSH.EVENT, stashed);
+                handleAgentIslandEventAfterBroadcast(session, stashed.event);
+              }
               onTurnErrorEvent(
                 session.id,
                 overflowErrorData as {
@@ -4311,6 +4344,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 eventAgentMeta,
               );
             });
+        } else if (overflowClaim === 'in-flight') {
+          // 同一 turn 的重复终态 error：继续压住，避免污染历史。
         } else if (
           event.type === 'error' &&
           !isPlannedUpgradeClose &&
@@ -10784,6 +10819,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           status: sessions.status,
           agentKind: sessions.agentKind,
           remoteHostId: sessions.remoteHostId,
+          clearedAt: sessions.clearedAt,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -10806,9 +10842,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
     replayUserMessage: async (sessionId, content) => {
-      const wire = typeof content === 'string' ? content : extractPlainText(content);
-      await sendToAgentAccepted(sessionId, wire);
+      const [row] = await getDbClient()
+        .drizzle.select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!row?.workingDir) return { accepted: false };
+      const createOpts = buildCreateOptsWithStderr({
+        id: sessionId,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        model: row.model ?? undefined,
+        providerId: row.providerId,
+        effort: (row.effort ?? undefined) as CreateOpts['effort'],
+        fastMode: !!row.fastMode,
+        permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
+        planMode: false,
+        title: row.title ?? undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+      });
+      if (createOpts.extraDirs === undefined) {
+        try {
+          const extraDirs = await readSessionExtraDirsFromDb(sessionId);
+          if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+        } catch (err) {
+          log.warn('overflow replay: read extra_dirs from DB failed (non-fatal)', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const result = await sendToAgentAcceptedUnlocked(
+        sessionId,
+        persistedUserContentToWireMessage(content),
+        createOpts,
+      );
+      return { accepted: result.accepted === true };
     },
+    withSessionLock: withSendToSessionLock,
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log,
   });

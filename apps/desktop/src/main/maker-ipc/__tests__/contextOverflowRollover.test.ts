@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  persistedUserContentToWireMessage,
   planContextOverflowRollover,
   type OverflowSourceMessage,
 } from '../contextOverflowRollover';
@@ -68,6 +69,12 @@ describe('planContextOverflowRollover', () => {
         msg('assistant', '先说一句', 'a1'),
       ]),
     ).toMatchObject({ action: 'stop', reason: 'has-side-effects' });
+    expect(
+      planContextOverflowRollover([
+        msg('user', '问你一个问题', 'u1'),
+        msg('ask_user', { prompt: '选哪个?' }, 'q1'),
+      ]),
+    ).toMatchObject({ action: 'stop', reason: 'has-side-effects' });
   });
 
   it('does not treat a later error card as side effects', () => {
@@ -88,7 +95,12 @@ describe('planContextOverflowRollover', () => {
 describe('createContextOverflowRollover', () => {
   function makeDeps(source: OverflowSourceMessage[]) {
     return {
-      getSessionRow: vi.fn(async () => ({ status: 'active', agentKind: 'pi', remoteHostId: null })),
+      getSessionRow: vi.fn(async () => ({
+        status: 'active',
+        agentKind: 'pi',
+        remoteHostId: null,
+        clearedAt: null,
+      })),
       listMessages: vi.fn(async () => source),
       findLatestRebuildMeta: vi.fn(async () => null),
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
@@ -97,7 +109,7 @@ describe('createContextOverflowRollover', () => {
       commitRebuild: vi.fn(async () => undefined),
       setPendingHandoff: vi.fn(),
       readPendingHandoffGeneration: vi.fn(() => 3),
-      replayUserMessage: vi.fn(async () => undefined),
+      replayUserMessage: vi.fn(async () => ({ accepted: true })),
       onRebuilt: vi.fn(),
       withCloseSuppressed: async <T>(_sessionId: string, fn: () => Promise<T>) => fn(),
       log: { info: vi.fn(), warn: vi.fn() },
@@ -111,8 +123,8 @@ describe('createContextOverflowRollover', () => {
       msg('user', '再做 B', 'u2', 3),
     ]);
     const rollover = createContextOverflowRollover(deps);
-    expect(rollover.claim('s1')).toBe(true);
-    expect(rollover.claim('s1')).toBe(false);
+    expect(rollover.claim('s1')).toBe('claimed');
+    expect(rollover.claim('s1')).toBe('in-flight');
     await expect(
       rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
     ).resolves.toBe(true);
@@ -120,7 +132,7 @@ describe('createContextOverflowRollover', () => {
     expect(deps.commitRebuild).toHaveBeenCalledWith(
       's1',
       expect.stringContaining('exceeded the model\'s context window'),
-      { reason: 'context-overflow', sourceUserClientId: 'u2' },
+      { reason: 'context-overflow', sourceUserClientId: 'u2', expectedClearedAt: null },
     );
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.any(String), 3);
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('先做 A');
@@ -141,5 +153,49 @@ describe('createContextOverflowRollover', () => {
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('treats an unaccepted replay as recovery failure', async () => {
+    const deps = makeDeps([msg('user', '再做 B', 'u2')]);
+    deps.replayUserMessage.mockResolvedValue({ accepted: false });
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+    ).resolves.toBe(false);
+  });
+
+  it('does not rollover a non-Pi session', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'cc',
+      remoteHostId: null,
+      clearedAt: null,
+    });
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+    ).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('persistedUserContentToWireMessage', () => {
+  it('keeps images from the persist envelope instead of flattening to text', () => {
+    expect(
+      persistedUserContentToWireMessage({
+        text: '看这张图',
+        images: [{ url: 'xdt-image://sess/a.png' }],
+        files: [],
+      }),
+    ).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: '看这张图' },
+        { type: 'image', path: 'xdt-image://sess/a.png' },
+      ],
+    });
   });
 });

@@ -564,18 +564,25 @@ describe('buildHandoffText 工作状态区(社区 handoff packet 口径)', () =>
     const text = buildHandoffText(
       [
         msg('user', '跑测试'),
-        msg('tool_use', { toolUseId: 't1', toolName: 'Bash', input: { command: 'pnpm test:unit' } }),
-        msg('tool_result', {
+        {
+          role: 'tool_use',
+          content: { toolName: 'Bash', input: { command: 'pnpm test:unit' } },
+          createdAt: 0,
           toolUseId: 't1',
-          isError: true,
-          fullText: 'FAIL src/foo.test.ts\n'.repeat(40),
-        }),
+        },
+        {
+          role: 'tool_result',
+          content: `${'FAIL src/foo.test.ts\n'.repeat(40)}exit code 1`,
+          createdAt: 1,
+          toolUseId: 't1',
+        },
       ],
       opts,
     );
-    expect(text).toContain('- pnpm test:unit → failed');
+    expect(text).toContain('- pnpm test:unit → exit 1');
     expect(text).toContain('Failed attempts:');
-    expect(text).not.toContain('FAIL src/foo.test.ts');
+    expect(text).toContain('src/foo.test.ts');
+    expect(text).not.toContain('FAIL src/foo.test.ts\nFAIL src/foo.test.ts');
   });
 
   it('framing 包含「先核对工作区、以工作区为准」纪律', () => {
@@ -717,6 +724,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       sessionId: 'sess-cap',
     });
     expect(text.length).toBe(16_000); // 确实顶到上限 = 确实走了兜底分支
+    expect(text).toContain('"session_ids":["sess-cap"]');
+    expect(text).toContain('"limit":10');
+    expect(text).toContain('"limit":20');
     expect(text.trimEnd().endsWith("== End of handoff note; the user's new message follows =="))
       .toBe(true);
   });
