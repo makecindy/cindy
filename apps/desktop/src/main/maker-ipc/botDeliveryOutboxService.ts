@@ -58,6 +58,11 @@ export interface BotDeliveryOutboxServiceDeps {
   maxAttempts?: number;
   sendingLeaseMs?: number;
   onChanged?: (payload: { botId: string; deliveryId?: string }) => void;
+  /** Release payload-owned resources after the row becomes non-retryable. */
+  releaseResources?: (
+    row: Pick<BotDeliveryRow, 'id' | 'botId' | 'idempotencyKey'>,
+    payload: BotDeliveryEnvelope,
+  ) => Promise<void>;
 }
 
 export interface EnqueueBotDeliveryInput {
@@ -68,6 +73,13 @@ export interface EnqueueBotDeliveryInput {
   idempotencyKey: string;
   ownerGeneration?: number;
   payload: BotDeliveryEnvelope;
+}
+
+export interface RecordUnknownBotDeliveryInput extends EnqueueBotDeliveryInput {
+  errorCode: string;
+  message: string;
+  transport: string;
+  progress?: Record<string, unknown>;
 }
 
 function parseEnvelope(value: string): BotDeliveryEnvelope | null {
@@ -134,7 +146,12 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
   ): Promise<void> => {
     const at = now();
     const [current] = await getDbClient()
-      .drizzle.select({ deliveryReceiptJson: botDeliveryOutbox.deliveryReceiptJson })
+      .drizzle.select({
+        botId: botDeliveryOutbox.botId,
+        idempotencyKey: botDeliveryOutbox.idempotencyKey,
+        payloadRefJson: botDeliveryOutbox.payloadRefJson,
+        deliveryReceiptJson: botDeliveryOutbox.deliveryReceiptJson,
+      })
       .from(botDeliveryOutbox)
       .where(and(eq(botDeliveryOutbox.id, id), eq(botDeliveryOutbox.status, 'sending')))
       .limit(1);
@@ -153,7 +170,23 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
       })
       .where(and(eq(botDeliveryOutbox.id, id), eq(botDeliveryOutbox.status, 'sending')))
       .returning({ botId: botDeliveryOutbox.botId });
-    if (updated) emitChanged(updated.botId, id);
+    if (updated) {
+      emitChanged(updated.botId, id);
+      if ((status === 'delivered' || status === 'cancelled') && current) {
+        const payload = parseEnvelope(current.payloadRefJson);
+        if (payload) {
+          try {
+            await deps.releaseResources?.(
+              { id, botId: current.botId, idempotencyKey: current.idempotencyKey },
+              payload,
+            );
+          } catch {
+            // A retained managed-media reference is safer than rolling back a
+            // provider delivery that already reached a terminal state.
+          }
+        }
+      }
+    }
   };
 
   const markFailure = async (
@@ -487,6 +520,75 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
     return { id: row.id };
   };
 
+  const recordUnknown = async (
+    input: RecordUnknownBotDeliveryInput,
+  ): Promise<{ id: string }> => {
+    const idempotencyKey = input.idempotencyKey.trim();
+    if (!idempotencyKey) throw new Error('Bot delivery idempotencyKey is required');
+    const payloadRefJson = JSON.stringify(input.payload);
+    if (Buffer.byteLength(payloadRefJson, 'utf8') > MAX_PAYLOAD_BYTES) {
+      throw new Error(`Bot delivery payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
+    }
+    const at = now();
+    const id = createId();
+    const deliveryReceiptJson = JSON.stringify({
+      externalDispatch: {
+        retrySafe: false,
+        transport: input.transport.trim() || 'unknown',
+        startedAt: at,
+      },
+      progress: input.progress ?? {},
+    });
+    const db = getDbClient().drizzle;
+    await db
+      .insert(botDeliveryOutbox)
+      .values({
+        id,
+        botId: input.botId,
+        channelId: input.channelId ?? null,
+        routeId: input.routeId ?? null,
+        sessionId: input.sessionId ?? null,
+        idempotencyKey,
+        payloadRefJson,
+        ownerGeneration: input.ownerGeneration ?? 0,
+        status: 'dead-letter',
+        attempts: 1,
+        nextAttemptAt: null,
+        lastError: `${input.errorCode}: ${input.message}`.slice(0, 4_000),
+        deliveryReceiptJson,
+        createdAt: at,
+        updatedAt: at,
+        deliveredAt: null,
+      })
+      .onConflictDoNothing({ target: botDeliveryOutbox.idempotencyKey });
+    const [row] = await db
+      .select({
+        id: botDeliveryOutbox.id,
+        botId: botDeliveryOutbox.botId,
+        channelId: botDeliveryOutbox.channelId,
+        routeId: botDeliveryOutbox.routeId,
+        sessionId: botDeliveryOutbox.sessionId,
+        ownerGeneration: botDeliveryOutbox.ownerGeneration,
+        payloadRefJson: botDeliveryOutbox.payloadRefJson,
+      })
+      .from(botDeliveryOutbox)
+      .where(eq(botDeliveryOutbox.idempotencyKey, idempotencyKey))
+      .limit(1);
+    if (!row) throw new Error('Bot delivery recovery record failed');
+    if (
+      row.botId !== input.botId
+      || row.channelId !== (input.channelId ?? null)
+      || row.routeId !== (input.routeId ?? null)
+      || row.sessionId !== (input.sessionId ?? null)
+      || row.ownerGeneration !== (input.ownerGeneration ?? 0)
+      || row.payloadRefJson !== payloadRefJson
+    ) {
+      throw new Error(`Bot delivery idempotency conflict for ${idempotencyKey}`);
+    }
+    emitChanged(row.botId, row.id);
+    return { id: row.id };
+  };
+
   const retry = async (
     id: string,
     botId: string,
@@ -731,6 +833,7 @@ export function createBotDeliveryOutboxService(deps: BotDeliveryOutboxServiceDep
 
   return {
     enqueue,
+    recordUnknown,
     listForBot,
     retry,
     drain,

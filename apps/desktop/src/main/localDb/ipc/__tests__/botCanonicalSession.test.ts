@@ -180,6 +180,7 @@ function createDb(): void {
       used_project_context INTEGER NOT NULL DEFAULT 0,
       one_m INTEGER NOT NULL DEFAULT 0,
       codex_history_has_product_prompt INTEGER,
+      codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
       active_turn_started_at INTEGER,
@@ -3090,6 +3091,82 @@ describe('Bot canonical Session lifecycle', () => {
         lastError:
           'DELIVERY_OUTCOME_UNKNOWN: local adapter may have delivered before the host stopped; automatic retry was suppressed to prevent a duplicate',
       });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('records an unknown local Bot final directly as a dead-letter recovery item', async () => {
+    const deliver = vi.fn(async () => ({ ok: true as const }));
+    const releaseResources = vi.fn(async () => undefined);
+    const service = createBotDeliveryOutboxService({
+      deliver,
+      releaseResources,
+      now: () => 71_000,
+      createId: () => 'outbox-recorded-unknown',
+    });
+    try {
+      const recorded = await service.recordUnknown({
+        botId: 'bot-1',
+        idempotencyKey: 'recorded-unknown',
+        payload: {
+          version: 1,
+          kind: 'channel-final-recovery',
+          text: 'possibly delivered final',
+          mediaRefs: [`cindy-media://blobs/${'a'.repeat(64)}.png`],
+        },
+        errorCode: 'TELEGRAM_FINAL_UNCONFIRMED',
+        message: 'content may already be delivered',
+        transport: 'local-adapter',
+        progress: { firstChunkConfirmed: false, unconfirmedChunks: [0] },
+      });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(
+        h.sqlite!.prepare(`
+          SELECT status, attempts, payload_ref_json AS payloadRefJson, last_error AS lastError,
+            delivery_receipt_json AS deliveryReceiptJson
+          FROM bot_delivery_outbox WHERE id = ?
+        `).get(recorded.id),
+      ).toEqual({
+        status: 'dead-letter',
+        attempts: 1,
+        payloadRefJson: JSON.stringify({
+          version: 1,
+          kind: 'channel-final-recovery',
+          text: 'possibly delivered final',
+          mediaRefs: [`cindy-media://blobs/${'a'.repeat(64)}.png`],
+        }),
+        lastError: 'TELEGRAM_FINAL_UNCONFIRMED: content may already be delivered',
+        deliveryReceiptJson: JSON.stringify({
+          externalDispatch: {
+            retrySafe: false,
+            transport: 'local-adapter',
+            startedAt: 71_000,
+          },
+          progress: { firstChunkConfirmed: false, unconfirmedChunks: [0] },
+        }),
+      });
+      await expect(service.retry(recorded.id, 'bot-1')).rejects.toThrow(
+        'explicit duplicate-risk confirmation is required',
+      );
+      await expect(
+        service.retry(recorded.id, 'bot-1', { allowDuplicateRisk: true }),
+      ).resolves.toEqual({ id: recorded.id });
+      await service.drain();
+      expect(releaseResources).toHaveBeenCalledWith(
+        {
+          id: recorded.id,
+          botId: 'bot-1',
+          idempotencyKey: 'recorded-unknown',
+        },
+        {
+          version: 1,
+          kind: 'channel-final-recovery',
+          text: 'possibly delivered final',
+          mediaRefs: [`cindy-media://blobs/${'a'.repeat(64)}.png`],
+        },
+      );
     } finally {
       service.dispose();
     }

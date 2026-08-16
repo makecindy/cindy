@@ -95,6 +95,7 @@ import {
   noteSilentStopUserSend,
   noteSilentStopSessionReset,
   onSilentStopSettled,
+  recordUnknownBotFinalDelivery,
 } from '../../maker-ipc/register';
 import { clearPendingTurnChangeSets } from '../../turn-change-set/store';
 import {
@@ -2904,10 +2905,41 @@ export function createTurnRunner(
       }
     }
     if (turn.streamingHandle) {
+      const finalView = composeStreamingView(turn) || '_(空回复)_';
       try {
-        const finalView = composeStreamingView(turn) || '_(空回复)_';
         await turn.streamingHandle.finalize(finalView);
       } catch (err) {
+        if (
+          channel === 'telegram'
+          && err instanceof Error
+          && err.name === 'TelegramFinalUnconfirmedError'
+        ) {
+          const diagnostic = err as Error & {
+            firstChunkConfirmed?: boolean;
+            unconfirmedChunks?: readonly number[];
+          };
+          try {
+            await recordUnknownBotFinalDelivery({
+              sessionId: state.makerSession.id,
+              recoveryKey: turn.turnId,
+              text: finalView,
+              mediaAbsPaths: turn.mediaAbsPaths,
+              errorCode: 'TELEGRAM_FINAL_UNCONFIRMED',
+              message: diagnostic.message,
+              progress: {
+                firstChunkConfirmed: diagnostic.firstChunkConfirmed === true,
+                unconfirmedChunks: [...(diagnostic.unconfirmedChunks ?? [])],
+                mediaCount: turn.mediaAbsPaths.length,
+              },
+            });
+          } catch (recordError) {
+            log.error(
+              `telegram final recovery record failed: ${
+                recordError instanceof Error ? recordError.message : String(recordError)
+              }`,
+            );
+          }
+        }
         if (output.kind === 'chunked-text') {
           turn.terminalKind = 'error';
           turn.terminalErrorCode = 'terminal_output_commit_failed';

@@ -129,6 +129,8 @@ export interface BotRouteDeliveryInput {
   deliveryKey?: string | null;
   idempotencyKey: string;
   text: string;
+  /** Trusted host-owned media paths captured from the original Bot turn. */
+  mediaAbsPaths?: readonly string[];
   sessionId?: string | null;
   workingDir?: string | null;
   onProgress?: (receipt: Record<string, unknown>) => Promise<void>;
@@ -217,8 +219,9 @@ export async function deliverBotRouteMessage(
           workingDir: input.workingDir,
           sessionId: input.sessionId,
           maxImages: 4,
+          existingAbsPaths: [...(input.mediaAbsPaths ?? [])],
         })
-      : { text: input.text, absPaths: [] };
+      : { text: input.text, absPaths: [...(input.mediaAbsPaths ?? [])] };
     // Personal WeChat supports proactive sends through its latest encrypted
     // peer context, while commitFinal is intentionally restricted to a live
     // inbound task.  Its provider clientId is the Bot outbox key, so a host

@@ -69,6 +69,7 @@ export type MediaRefKind =
   | 'ghost-deposit'
   | 'import'
   | 'integration-cache'
+  | 'bot-delivery'
   | 'profile-avatar';
 /** 出生来源类型。 */
 export type MediaOriginKind = 'ghost' | 'tool' | 'user' | 'integration';

@@ -85,6 +85,10 @@ import {
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
+import { ingestMedia } from '../cindy-media/ingest.js';
+import { removeRefs as removeMediaRefs } from '../cindy-media/ledger.js';
+import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -284,6 +288,7 @@ import {
 import {
   botLifecycleEvents,
   botChannels,
+  botDeliveryOutbox,
   botProfiles,
   botRoutes,
   botSessionLinks,
@@ -334,6 +339,7 @@ import {
 import {
   createBotDeliveryOutboxService,
   type EnqueueBotDeliveryInput,
+  type RecordUnknownBotDeliveryInput,
   type BotDeliveryOutboxService,
 } from './botDeliveryOutboxService.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
@@ -1741,6 +1747,145 @@ export function retryBotDelivery(id: string, botId: string): Promise<{ id: strin
   const outbox = botDeliveryOutboxServiceHolder;
   if (!outbox) throw new Error('Bot delivery outbox is not initialized');
   return outbox.retry(id, botId);
+}
+
+export async function recordUnknownBotFinalDelivery(input: {
+  sessionId: string;
+  recoveryKey: string;
+  text: string;
+  mediaAbsPaths?: readonly string[];
+  errorCode: string;
+  message: string;
+  progress?: Record<string, unknown>;
+}): Promise<{ id: string } | null> {
+  const outbox = botDeliveryOutboxServiceHolder;
+  if (!outbox) return null;
+  const [route] = await getDbClient()
+    .drizzle.select({
+      id: botRoutes.id,
+      botId: botRoutes.botId,
+      channelId: botRoutes.channelId,
+      ownerGeneration: botRoutes.ownerGeneration,
+      status: botRoutes.status,
+    })
+    .from(botRoutes)
+    .where(eq(botRoutes.currentSessionId, input.sessionId))
+    .limit(1);
+  if (!route || route.status !== 'active') return null;
+  const idempotencyKey = `bot-turn-final-recovery:${input.recoveryKey}`;
+  const [existing] = await getDbClient()
+    .drizzle.select({
+      id: botDeliveryOutbox.id,
+      botId: botDeliveryOutbox.botId,
+      routeId: botDeliveryOutbox.routeId,
+      sessionId: botDeliveryOutbox.sessionId,
+      ownerGeneration: botDeliveryOutbox.ownerGeneration,
+    })
+    .from(botDeliveryOutbox)
+    .where(eq(botDeliveryOutbox.idempotencyKey, idempotencyKey))
+    .limit(1);
+  if (existing) {
+    if (
+      existing.botId !== route.botId
+      || existing.routeId !== route.id
+      || existing.sessionId !== input.sessionId
+      || existing.ownerGeneration !== route.ownerGeneration
+    ) {
+      throw new Error(`Bot delivery idempotency conflict for ${idempotencyKey}`);
+    }
+    return { id: existing.id };
+  }
+  const initialPayload = {
+    version: 1 as const,
+    kind: 'channel-final-recovery',
+    text: input.text,
+    mediaRefs: [] as string[],
+  };
+  const recorded = await outbox.recordUnknown({
+    botId: route.botId,
+    channelId: route.channelId,
+    routeId: route.id,
+    sessionId: input.sessionId,
+    ownerGeneration: route.ownerGeneration,
+    idempotencyKey,
+    payload: initialPayload,
+    errorCode: input.errorCode,
+    message: input.message,
+    transport: 'local-adapter',
+    progress: input.progress,
+  } satisfies RecordUnknownBotDeliveryInput);
+  if (!input.mediaAbsPaths?.length) return recorded;
+
+  const mediaRefs: string[] = [];
+  const capturedRealPaths = new Set<string>();
+  try {
+    for (const rawPath of input.mediaAbsPaths ?? []) {
+      if (mediaRefs.length >= 4) break;
+      const realPath = await fsp.realpath(rawPath);
+      if (capturedRealPaths.has(realPath)) continue;
+      capturedRealPaths.add(realPath);
+      const stat = await fsp.stat(realPath);
+      if (!stat.isFile() || stat.size <= 0 || stat.size > 20 * 1024 * 1024) {
+        throw new Error('Bot delivery recovery media is unavailable or too large');
+      }
+      const buffer = await fsp.readFile(realPath);
+      if (buffer.byteLength !== stat.size) {
+        throw new Error('Bot delivery recovery media changed while being captured');
+      }
+      const mimeType = sniffMediaMime(buffer);
+      if (!mimeType?.startsWith('image/')) {
+        throw new Error('Bot delivery recovery only accepts validated images');
+      }
+      const ingested = await ingestMedia({
+        buffer,
+        mimeType,
+        refs: [{
+          refKind: 'bot-delivery',
+          refId: idempotencyKey,
+          originSessionId: input.sessionId,
+          originKind: 'tool',
+          originId: 'bot-final-recovery',
+        }],
+      });
+      if (!mediaRefs.includes(ingested.url)) mediaRefs.push(ingested.url);
+    }
+    const payloadRefJson = JSON.stringify({ ...initialPayload, mediaRefs });
+    const [updated] = await getDbClient()
+      .drizzle.update(botDeliveryOutbox)
+      .set({ payloadRefJson, updatedAt: Date.now() })
+      .where(
+        and(
+          eq(botDeliveryOutbox.id, recorded.id),
+          eq(botDeliveryOutbox.payloadRefJson, JSON.stringify(initialPayload)),
+        ),
+      )
+      .returning({ id: botDeliveryOutbox.id });
+    if (!updated) {
+      const [persisted] = await getDbClient()
+        .drizzle.select({ payloadRefJson: botDeliveryOutbox.payloadRefJson })
+        .from(botDeliveryOutbox)
+        .where(eq(botDeliveryOutbox.id, recorded.id))
+        .limit(1);
+      if (persisted?.payloadRefJson !== payloadRefJson) {
+        throw new Error('Bot delivery recovery media commit lost ownership');
+      }
+    }
+    return recorded;
+  } catch (error) {
+    const [persisted] = await getDbClient()
+      .drizzle.select({ payloadRefJson: botDeliveryOutbox.payloadRefJson })
+      .from(botDeliveryOutbox)
+      .where(eq(botDeliveryOutbox.id, recorded.id))
+      .limit(1)
+      .catch(() => []);
+    const finalPayloadRefJson = JSON.stringify({ ...initialPayload, mediaRefs });
+    if (persisted?.payloadRefJson !== finalPayloadRefJson) {
+      await removeMediaRefs({ refKind: 'bot-delivery', refId: idempotencyKey }).catch(
+        () => undefined,
+      );
+    }
+    throw error;
+  }
 }
 // session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
 let orcaTeamServiceForEvents: OrcaTeamService | null = null;
@@ -5357,6 +5502,7 @@ export interface RegisterMakerIpcOptions {
     deliveryKey?: string | null;
     idempotencyKey: string;
     text: string;
+    mediaAbsPaths?: readonly string[];
     sessionId?: string | null;
     workingDir?: string | null;
     onProgress?: (receipt: Record<string, unknown>) => Promise<void>;
@@ -8989,7 +9135,162 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   botDeliveryOutboxServiceHolder?.dispose();
   botDeliveryOutboxServiceHolder = createBotDeliveryOutboxService({
     onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_DELIVERY_CHANGED, payload),
+    releaseResources: async (row, payload) => {
+      if (payload.kind !== 'channel-final-recovery') return;
+      await removeMediaRefs({ refKind: 'bot-delivery', refId: row.idempotencyKey });
+    },
     deliver: async (row, payload, attempt) => {
+      const deliverMountedRoute = async (
+        persistedContent: string,
+        mediaAbsPaths: readonly string[] = [],
+        targetSessionId: string | null = row.sessionId,
+      ) => {
+        if (!row.routeId) {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'ROUTE_REQUIRED',
+            message: 'Direct Bot Channel recovery requires an active Route.',
+          };
+        }
+        const [targetTask] = targetSessionId
+          ? await getDbClient()
+              .drizzle.select({ workingDir: sessions.workingDir })
+              .from(sessions)
+              .where(eq(sessions.id, targetSessionId))
+              .limit(1)
+          : [];
+        const [route] = await getDbClient()
+          .drizzle.select({
+            botId: botRoutes.botId,
+            channelId: botRoutes.channelId,
+            principalKey: botRoutes.principalKey,
+            threadKey: botRoutes.threadKey,
+            capabilitiesJson: botRoutes.capabilitiesJson,
+            routeStatus: botRoutes.status,
+            channelKind: botChannels.kind,
+            channelEnabled: botChannels.enabled,
+            channelConfigJson: botChannels.configJson,
+          })
+          .from(botRoutes)
+          .innerJoin(botChannels, eq(botChannels.id, botRoutes.channelId))
+          .where(eq(botRoutes.id, row.routeId))
+          .limit(1);
+        if (!route || route.botId !== row.botId || route.channelId !== row.channelId) {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'ROUTE_OWNERSHIP_MISMATCH',
+            message: 'Bot delivery route no longer belongs to the mounted Channel.',
+          };
+        }
+        if (route.routeStatus !== 'active' || !route.channelEnabled) {
+          return {
+            ok: false as const,
+            retryable: true,
+            errorCode: 'ROUTE_UNAVAILABLE',
+            message: `Bot delivery route is ${route.routeStatus}.`,
+          };
+        }
+        let channelConfig: Record<string, unknown> = {};
+        let routeCapabilities: Record<string, unknown> = {};
+        try {
+          const parsed = JSON.parse(route.channelConfigJson) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            channelConfig = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Invalid durable config is terminal: retries cannot repair it.
+        }
+        try {
+          const parsed = JSON.parse(route.capabilitiesJson) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            routeCapabilities = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Missing relay address is handled below as a terminal route error.
+        }
+        const ownership = channelConfig.ownership;
+        const accountKey = typeof channelConfig.accountKey === 'string'
+          ? channelConfig.accountKey.trim()
+          : '';
+        if ((ownership !== 'local-adapter' && ownership !== 'server-relay') || !accountKey) {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'INVALID_CHANNEL_CONFIG',
+            message: 'Bot Channel delivery identity is incomplete.',
+          };
+        }
+        if (!options.deliverBotRouteMessage) {
+          return {
+            ok: false as const,
+            retryable: true,
+            errorCode: 'CHANNEL_DELIVERY_NOT_READY',
+            message: 'Bot Channel delivery is not initialized.',
+          };
+        }
+        await attempt.recordExternalDispatch({
+          retrySafe: ownership === 'server-relay' || route.channelKind === 'wechat',
+          transport: ownership,
+        });
+        const delivered = await options.deliverBotRouteMessage({
+          channel: route.channelKind,
+          ownership,
+          accountKey,
+          principalKey: route.principalKey,
+          threadKey: route.threadKey,
+          deliveryKey:
+            typeof routeCapabilities.deliveryKey === 'string'
+              ? routeCapabilities.deliveryKey
+              : null,
+          idempotencyKey: row.idempotencyKey,
+          text: persistedContent,
+          sessionId: targetSessionId,
+          workingDir: targetTask?.workingDir ?? null,
+          onProgress: attempt.recordProgress,
+          mediaAbsPaths,
+        });
+        return delivered.ok
+          ? { ok: true as const, receipt: delivered.receipt }
+          : {
+              ok: false as const,
+              retryable: delivered.retryable,
+              errorCode: delivered.errorCode,
+              message: delivered.message,
+            };
+      };
+
+      if (payload.kind === 'channel-final-recovery') {
+        const text = typeof payload.text === 'string' ? payload.text : '';
+        const mediaRefs = Array.isArray(payload.mediaRefs)
+          ? payload.mediaRefs.filter((value): value is string => typeof value === 'string')
+          : [];
+        if (!text) {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'INVALID_PAYLOAD',
+            message: 'Bot Channel recovery requires final text.',
+          };
+        }
+        const mediaAbsPaths: string[] = [];
+        try {
+          for (const ref of mediaRefs) {
+            const resolved = resolveCindyMediaUrl(ref);
+            await fsp.access(resolved.absPath);
+            mediaAbsPaths.push(resolved.absPath);
+          }
+        } catch {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'RECOVERY_MEDIA_UNAVAILABLE',
+            message: 'A managed Bot recovery attachment is no longer available.',
+          };
+        }
+        return deliverMountedRoute(text, mediaAbsPaths);
+      }
       if (payload.kind !== 'session-message') {
         return {
           ok: false as const,
@@ -9036,112 +9337,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         if (result.ok) {
           if (!row.routeId) return { ok: true as const };
-          const [targetTask] = await getDbClient()
-            .drizzle.select({ workingDir: sessions.workingDir })
-            .from(sessions)
-            .where(eq(sessions.id, candidate))
-            .limit(1);
-          const [route] = await getDbClient()
-            .drizzle.select({
-              botId: botRoutes.botId,
-              channelId: botRoutes.channelId,
-              principalKey: botRoutes.principalKey,
-              threadKey: botRoutes.threadKey,
-              capabilitiesJson: botRoutes.capabilitiesJson,
-              routeStatus: botRoutes.status,
-              channelKind: botChannels.kind,
-              channelEnabled: botChannels.enabled,
-              channelConfigJson: botChannels.configJson,
-            })
-            .from(botRoutes)
-            .innerJoin(botChannels, eq(botChannels.id, botRoutes.channelId))
-            .where(eq(botRoutes.id, row.routeId))
-            .limit(1);
-          if (!route || route.botId !== row.botId || route.channelId !== row.channelId) {
-            return {
-              ok: false as const,
-              retryable: false,
-              errorCode: 'ROUTE_OWNERSHIP_MISMATCH',
-              message: 'Bot delivery route no longer belongs to the mounted Channel.',
-            };
-          }
-          if (route.routeStatus !== 'active' || !route.channelEnabled) {
-            return {
-              ok: false as const,
-              retryable: true,
-              errorCode: 'ROUTE_UNAVAILABLE',
-              message: `Bot delivery route is ${route.routeStatus}.`,
-            };
-          }
-          let channelConfig: Record<string, unknown> = {};
-          let routeCapabilities: Record<string, unknown> = {};
-          try {
-            const parsed = JSON.parse(route.channelConfigJson) as unknown;
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              channelConfig = parsed as Record<string, unknown>;
-            }
-          } catch {
-            // Invalid durable config is terminal: retries cannot repair it.
-          }
-          try {
-            const parsed = JSON.parse(route.capabilitiesJson) as unknown;
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              routeCapabilities = parsed as Record<string, unknown>;
-            }
-          } catch {
-            // Missing relay address is handled below as a terminal route error.
-          }
-          const ownership = channelConfig.ownership;
-          const accountKey = typeof channelConfig.accountKey === 'string'
-            ? channelConfig.accountKey.trim()
-            : '';
-          if (
-            (ownership !== 'local-adapter' && ownership !== 'server-relay')
-            || !accountKey
-          ) {
-            return {
-              ok: false as const,
-              retryable: false,
-              errorCode: 'INVALID_CHANNEL_CONFIG',
-              message: 'Bot Channel delivery identity is incomplete.',
-            };
-          }
-          if (!options.deliverBotRouteMessage) {
-            return {
-              ok: false as const,
-              retryable: true,
-              errorCode: 'CHANNEL_DELIVERY_NOT_READY',
-              message: 'Bot Channel delivery is not initialized.',
-            };
-          }
-          await attempt.recordExternalDispatch({
-            retrySafe: ownership === 'server-relay' || route.channelKind === 'wechat',
-            transport: ownership,
-          });
-          const delivered = await options.deliverBotRouteMessage({
-            channel: route.channelKind,
-            ownership,
-            accountKey,
-            principalKey: route.principalKey,
-            threadKey: route.threadKey,
-            deliveryKey:
-              typeof routeCapabilities.deliveryKey === 'string'
-                ? routeCapabilities.deliveryKey
-                : null,
-            idempotencyKey: row.idempotencyKey,
-            text: persistedContent,
-            sessionId: candidate,
-            workingDir: targetTask?.workingDir ?? null,
-            onProgress: attempt.recordProgress,
-          });
-          return delivered.ok
-            ? { ok: true as const, receipt: delivered.receipt }
-            : {
-                ok: false as const,
-                retryable: delivered.retryable,
-                errorCode: delivered.errorCode,
-                message: delivered.message,
-              };
+          return deliverMountedRoute(persistedContent, [], candidate);
         }
         lastFailure = { errorCode: result.errorCode, message: result.message };
         if (result.errorCode !== 'ARCHIVED' && result.errorCode !== 'DELETED' && result.errorCode !== 'NOT_FOUND') {
