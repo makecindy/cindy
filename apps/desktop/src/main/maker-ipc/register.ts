@@ -342,6 +342,7 @@ import {
   type RecordUnknownBotDeliveryInput,
   type BotDeliveryOutboxService,
 } from './botDeliveryOutboxService.js';
+import { deliverMountedBotRoute } from './botMountedRouteDelivery.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
@@ -9144,122 +9145,49 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         persistedContent: string,
         mediaAbsPaths: readonly string[] = [],
         targetSessionId: string | null = row.sessionId,
-      ) => {
-        if (!row.routeId) {
-          return {
-            ok: false as const,
-            retryable: false,
-            errorCode: 'ROUTE_REQUIRED',
-            message: 'Direct Bot Channel recovery requires an active Route.',
-          };
-        }
-        const [targetTask] = targetSessionId
-          ? await getDbClient()
+        requireCurrentSessionMatch = false,
+      ) => deliverMountedBotRoute(
+        {
+          row,
+          persistedContent,
+          mediaAbsPaths,
+          targetSessionId,
+          requireCurrentSessionMatch,
+          attempt,
+        },
+        {
+          loadWorkingDir: async (sessionId) => {
+            const [targetTask] = await getDbClient()
               .drizzle.select({ workingDir: sessions.workingDir })
               .from(sessions)
-              .where(eq(sessions.id, targetSessionId))
-              .limit(1)
-          : [];
-        const [route] = await getDbClient()
-          .drizzle.select({
-            botId: botRoutes.botId,
-            channelId: botRoutes.channelId,
-            principalKey: botRoutes.principalKey,
-            threadKey: botRoutes.threadKey,
-            capabilitiesJson: botRoutes.capabilitiesJson,
-            routeStatus: botRoutes.status,
-            channelKind: botChannels.kind,
-            channelEnabled: botChannels.enabled,
-            channelConfigJson: botChannels.configJson,
-          })
-          .from(botRoutes)
-          .innerJoin(botChannels, eq(botChannels.id, botRoutes.channelId))
-          .where(eq(botRoutes.id, row.routeId))
-          .limit(1);
-        if (!route || route.botId !== row.botId || route.channelId !== row.channelId) {
-          return {
-            ok: false as const,
-            retryable: false,
-            errorCode: 'ROUTE_OWNERSHIP_MISMATCH',
-            message: 'Bot delivery route no longer belongs to the mounted Channel.',
-          };
-        }
-        if (route.routeStatus !== 'active' || !route.channelEnabled) {
-          return {
-            ok: false as const,
-            retryable: true,
-            errorCode: 'ROUTE_UNAVAILABLE',
-            message: `Bot delivery route is ${route.routeStatus}.`,
-          };
-        }
-        let channelConfig: Record<string, unknown> = {};
-        let routeCapabilities: Record<string, unknown> = {};
-        try {
-          const parsed = JSON.parse(route.channelConfigJson) as unknown;
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            channelConfig = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // Invalid durable config is terminal: retries cannot repair it.
-        }
-        try {
-          const parsed = JSON.parse(route.capabilitiesJson) as unknown;
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            routeCapabilities = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // Missing relay address is handled below as a terminal route error.
-        }
-        const ownership = channelConfig.ownership;
-        const accountKey = typeof channelConfig.accountKey === 'string'
-          ? channelConfig.accountKey.trim()
-          : '';
-        if ((ownership !== 'local-adapter' && ownership !== 'server-relay') || !accountKey) {
-          return {
-            ok: false as const,
-            retryable: false,
-            errorCode: 'INVALID_CHANNEL_CONFIG',
-            message: 'Bot Channel delivery identity is incomplete.',
-          };
-        }
-        if (!options.deliverBotRouteMessage) {
-          return {
-            ok: false as const,
-            retryable: true,
-            errorCode: 'CHANNEL_DELIVERY_NOT_READY',
-            message: 'Bot Channel delivery is not initialized.',
-          };
-        }
-        await attempt.recordExternalDispatch({
-          retrySafe: ownership === 'server-relay' || route.channelKind === 'wechat',
-          transport: ownership,
-        });
-        const delivered = await options.deliverBotRouteMessage({
-          channel: route.channelKind,
-          ownership,
-          accountKey,
-          principalKey: route.principalKey,
-          threadKey: route.threadKey,
-          deliveryKey:
-            typeof routeCapabilities.deliveryKey === 'string'
-              ? routeCapabilities.deliveryKey
-              : null,
-          idempotencyKey: row.idempotencyKey,
-          text: persistedContent,
-          sessionId: targetSessionId,
-          workingDir: targetTask?.workingDir ?? null,
-          onProgress: attempt.recordProgress,
-          mediaAbsPaths,
-        });
-        return delivered.ok
-          ? { ok: true as const, receipt: delivered.receipt }
-          : {
-              ok: false as const,
-              retryable: delivered.retryable,
-              errorCode: delivered.errorCode,
-              message: delivered.message,
-            };
-      };
+              .where(eq(sessions.id, sessionId))
+              .limit(1);
+            return targetTask?.workingDir ?? null;
+          },
+          loadRoute: async (routeId) => {
+            const [route] = await getDbClient()
+              .drizzle.select({
+                botId: botRoutes.botId,
+                channelId: botRoutes.channelId,
+                currentSessionId: botRoutes.currentSessionId,
+                ownerGeneration: botRoutes.ownerGeneration,
+                principalKey: botRoutes.principalKey,
+                threadKey: botRoutes.threadKey,
+                capabilitiesJson: botRoutes.capabilitiesJson,
+                routeStatus: botRoutes.status,
+                channelKind: botChannels.kind,
+                channelEnabled: botChannels.enabled,
+                channelConfigJson: botChannels.configJson,
+              })
+              .from(botRoutes)
+              .innerJoin(botChannels, eq(botChannels.id, botRoutes.channelId))
+              .where(eq(botRoutes.id, routeId))
+              .limit(1);
+            return route ?? null;
+          },
+          deliver: options.deliverBotRouteMessage,
+        },
+      );
 
       if (payload.kind === 'channel-final-recovery') {
         const text = typeof payload.text === 'string' ? payload.text : '';
@@ -9289,7 +9217,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             message: 'A managed Bot recovery attachment is no longer available.',
           };
         }
-        return deliverMountedRoute(text, mediaAbsPaths);
+        return deliverMountedRoute(text, mediaAbsPaths, row.sessionId, true);
       }
       if (payload.kind !== 'session-message') {
         return {
