@@ -16,9 +16,9 @@ vi.mock('@/i18n', () => ({
   },
 }));
 
-vi.mock('./toast', () => ({ toast: toastMocks }));
+vi.mock('../toast', () => ({ toast: toastMocks }));
 
-import { formatDiagnostics, handleProviderUpstreamError } from './providerUpstreamErrorToast';
+import { formatDiagnostics, handleProviderUpstreamError } from '../providerUpstreamErrorToast';
 
 describe('handleProviderUpstreamError', () => {
   beforeEach(() => {
@@ -56,14 +56,16 @@ describe('handleProviderUpstreamError', () => {
       'providerError.openLogs',
       'providerError.copyDiagnostics',
     ]);
-    expect(formatDiagnostics({
-      agent: 'pi',
-      providerId: 'provider-abc',
-      providerName: '测试网关',
-      code: 'UNKNOWN',
-      retryable: false,
-      status: 400,
-      detail: 'request failed: Bearer [REDACTED]',
-    })).toContain('Detail: request failed: Bearer [REDACTED]');
+    expect(
+      formatDiagnostics({
+        agent: 'pi',
+        providerId: 'provider-abc',
+        providerName: '测试网关',
+        code: 'UNKNOWN',
+        retryable: false,
+        status: 400,
+        detail: 'request failed: Bearer [REDACTED]',
+      }),
+    ).toContain('Detail: request failed: Bearer [REDACTED]');
   });
 });
