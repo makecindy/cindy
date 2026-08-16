@@ -10854,6 +10854,26 @@ export class CodexAgent extends BaseAgent {
         setAutoReviewIntent(message.content);
       },
 
+      async requestGracefulStop() {
+        if (closed || !currentTurnId) throw new Error('No active Codex turn to stop');
+        if (skipIfStaleHost('turn/interrupt')) {
+          throw new Error('Codex host is stale');
+        }
+        const turnId = currentTurnId;
+        turnInterruptOrigins.set(turnId, { source: 'user-stop' });
+        resetUpstreamIdleForTurnEnd();
+        dismissAllPending('turn_interrupted', 'deny');
+        dismissPendingUserInputForTurn(turnId, 'turn_interrupted');
+        try {
+          await host.request(Method.TurnInterrupt, { threadId, turnId });
+        } catch (error) {
+          if (turnInterruptOrigins.get(turnId)?.source === 'user-stop') {
+            turnInterruptOrigins.delete(turnId);
+          }
+          throw error;
+        }
+      },
+
       async abort() {
         clearReconnectStall();
         // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。

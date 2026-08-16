@@ -475,6 +475,23 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent abort stops background wake tasks', () => {
+  it('graceful stop sends only the SDK interrupt without closing or stopping background tasks', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'long turn' });
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+
+    stream.emit(turnResult('stopped'));
+    await waitFor(
+      () => events.some((event) => event.type === 'done'),
+      'graceful stop terminal',
+    );
+    await handle.close();
+  });
+
   it('只给会触发 SDK 自动续 turn 的 wake 任务对应 done 附 continuation claim', async () => {
     const { handle, stream, events } = await startSessionWithStream();
 

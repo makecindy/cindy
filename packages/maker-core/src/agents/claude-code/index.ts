@@ -5412,6 +5412,26 @@ export class ClaudeCodeAgent extends BaseAgent {
         armUpstreamResponseIdle();
       },
 
+      async requestGracefulStop() {
+        if (canceledBridgeQueries.has(q)) {
+          throw new Error('Claude query is no longer active');
+        }
+        const awaitingContinuation = activeContinuationClaim();
+        if (!turnInFlight && awaitingContinuation?.state !== 'awaiting') {
+          throw new Error('No active Claude turn to stop');
+        }
+        const generation = turnState.generation;
+        turnState.interruptRequested = true;
+        turnState.interruptGeneration = generation;
+        dismissAllPending('graceful_stop', 'deny');
+        try {
+          await q.interrupt();
+        } catch (error) {
+          if (turnState.generation === generation) turnState.interruptRequested = false;
+          throw error;
+        }
+      },
+
       async abort() {
         // 只 interrupt 当前 turn, 不能 abortController.abort() ——
         // 那会杀掉整个 SDK Query, 让 streaming-input 流断开 (for await 抛

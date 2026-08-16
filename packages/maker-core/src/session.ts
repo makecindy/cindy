@@ -291,6 +291,53 @@ export type SessionSendResult =
   | { accepted: true }
   | { accepted: false; reason: 'cancelled-before-dispatch' };
 
+export type SessionGracefulStopState =
+  | 'none'
+  | 'waiting-for-safe-point'
+  | 'requesting'
+  | 'requested'
+  | 'unconfirmed';
+
+export interface SessionRuntimeSnapshot {
+  active: boolean;
+  turnGeneration: number | null;
+  startedAtMs: number | null;
+  lastActivityAtMs: number | null;
+  currentActionSummary: string | null;
+  gracefulStopState: SessionGracefulStopState;
+}
+
+export type SessionGracefulStopResult =
+  | { status: 'no-active-turn' }
+  | { status: 'unsupported'; reason: 'provider-not-supported' }
+  | { status: 'waiting-for-safe-point'; turnGeneration: number }
+  | { status: 'requested'; turnGeneration: number }
+  | { status: 'unconfirmed'; turnGeneration: number; reason: string };
+
+type TurnRuntimeState = {
+  generation: number;
+  startedAtMs: number;
+  lastActivityAtMs: number;
+  currentActionSummary: string;
+  activeTools: Map<string, string>;
+  anonymousActiveTools: number;
+  pendingInteractionToolIds: Set<string>;
+  gracefulStopState: SessionGracefulStopState;
+  gracefulStopPromise: Promise<SessionGracefulStopResult> | null;
+};
+
+const MAX_RUNTIME_TOOL_LABEL_CHARS = 80;
+
+function runtimeToolLabel(value: unknown): string {
+  if (typeof value !== 'string') return '工具';
+  const normalized = value.replace(/\s+/gu, ' ').trim();
+  if (!normalized) return '工具';
+  const chars = Array.from(normalized);
+  return chars.length <= MAX_RUNTIME_TOOL_LABEL_CHARS
+    ? normalized
+    : `${chars.slice(0, MAX_RUNTIME_TOOL_LABEL_CHARS).join('')}…`;
+}
+
 type SendReservation = {
   phase: 'accepting' | 'dispatching';
   cancelled: boolean;
@@ -374,6 +421,8 @@ export class Session {
   /** 已为哪个 turn 代号排过 abort 复核；同一 turn 上重复 abort 不重复排。 */
   private abortRecoveryScheduledFor: number | null = null;
   private lastEventType: string | null = null;
+  /** 当前产品 turn 的只读活动投影；terminal/失败 dispatch 时按 generation 清理。 */
+  private turnRuntimeState: TurnRuntimeState | null = null;
 
   constructor(opts: SessionOptions) {
     this.id = opts.id;
@@ -398,6 +447,7 @@ export class Session {
       // 等用户回应期间挂起 stall 看门狗:用户可能离开电脑很久,没有事件是正常的,
       // 中断这种 turn 等于把"等你决定"误判成"卡死"(见 DEFAULT_TURN_STALL_MS)。
       this.pendingInteractions += 1;
+      const interactionRuntime = this.observeInteractionStarted(req);
       this.clearTurnStallWatchdog();
       try {
         if (!this.interactionListener) {
@@ -413,6 +463,7 @@ export class Session {
         return await this.interactionListener(req);
       } finally {
         this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
+        this.observeInteractionSettled(interactionRuntime);
         this.armTurnStallWatchdog();
       }
     });
@@ -565,6 +616,7 @@ export class Session {
       originInstalled = true;
       this.startEventLoopIfNeeded();
       try {
+        this.beginTurnRuntime(reservedTurnGeneration);
         onDispatching?.();
         await this.handle.send(msg, {
           ...handleOpts,
@@ -626,6 +678,7 @@ export class Session {
           });
         }
       }
+      if (!turnDispatched) this.clearTurnRuntime(reservedTurnGeneration);
     }
   }
 
@@ -713,6 +766,54 @@ export class Session {
     }
   }
 
+  getRuntimeSnapshot(): SessionRuntimeSnapshot {
+    const runtime = this.turnRuntimeState;
+    if (!runtime) {
+      return {
+        active: false,
+        turnGeneration: null,
+        startedAtMs: null,
+        lastActivityAtMs: null,
+        currentActionSummary: null,
+        gracefulStopState: 'none',
+      };
+    }
+    return {
+      active: true,
+      turnGeneration: runtime.generation,
+      startedAtMs: runtime.startedAtMs,
+      lastActivityAtMs: runtime.lastActivityAtMs,
+      currentActionSummary: runtime.currentActionSummary,
+      gracefulStopState: runtime.gracefulStopState,
+    };
+  }
+
+  async requestGracefulStop(): Promise<SessionGracefulStopResult> {
+    const runtime = this.turnRuntimeState;
+    if (!runtime || runtime.generation !== this.turnGeneration || !this.isHandleTurnRunning()) {
+      return { status: 'no-active-turn' };
+    }
+    if (!this.handle.requestGracefulStop) {
+      return { status: 'unsupported', reason: 'provider-not-supported' };
+    }
+    if (runtime.gracefulStopPromise) return runtime.gracefulStopPromise;
+    if (runtime.gracefulStopState === 'requested') {
+      return { status: 'requested', turnGeneration: runtime.generation };
+    }
+    if (runtime.gracefulStopState === 'unconfirmed') {
+      return {
+        status: 'unconfirmed',
+        turnGeneration: runtime.generation,
+        reason: 'provider-did-not-confirm',
+      };
+    }
+    if (!this.isGracefulStopSafePoint(runtime)) {
+      runtime.gracefulStopState = 'waiting-for-safe-point';
+      return { status: 'waiting-for-safe-point', turnGeneration: runtime.generation };
+    }
+    return this.issueGracefulStop(runtime);
+  }
+
   /**
    * 停止本会话内单个后台任务(run_in_background 的 Bash / 后台 subagent 等)。
    * 与 abort() 不同:不中断当前 turn,只停指定 taskId;任务已到终态时幂等成功。
@@ -789,6 +890,7 @@ export class Session {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnRuntimeState = null;
       this.eventListeners.clear();
       this.interactionListener = null;
       if (closeSucceeded) {
@@ -820,6 +922,7 @@ export class Session {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
+      this.turnRuntimeState = null;
       this.clearTerminalErrorDrain();
       this.setStatus('closed');
       this.eventListeners.clear();
@@ -1300,6 +1403,152 @@ export class Session {
     void this.runEventLoop();
   }
 
+  private beginTurnRuntime(generation: number): void {
+    const now = Date.now();
+    this.turnRuntimeState = {
+      generation,
+      startedAtMs: now,
+      lastActivityAtMs: now,
+      currentActionSummary: '正在启动',
+      activeTools: new Map(),
+      anonymousActiveTools: 0,
+      pendingInteractionToolIds: new Set(),
+      gracefulStopState: 'none',
+      gracefulStopPromise: null,
+    };
+  }
+
+  private clearTurnRuntime(generation: number): void {
+    if (this.turnRuntimeState?.generation === generation) this.turnRuntimeState = null;
+  }
+
+  /**
+   * Provider 的权限/提问/计划确认会直接经过 InteractionResolver，不保证另发
+   * interaction_request event。这里从权威入口更新探针，并把“尚未执行、正在等用户”
+   * 视为优雅停止安全点，避免 stop 永久等不到该工具的 result。
+   */
+  private observeInteractionStarted(
+    request: InteractionRequest,
+  ): { runtime: TurnRuntimeState; requestId: string } | null {
+    const runtime = this.turnRuntimeState;
+    if (!runtime || runtime.generation !== this.turnGeneration) return null;
+    runtime.pendingInteractionToolIds.add(request.requestId);
+    runtime.lastActivityAtMs = Date.now();
+    runtime.currentActionSummary = '等待用户确认';
+    if (runtime.gracefulStopState === 'waiting-for-safe-point') {
+      void this.issueGracefulStop(runtime);
+    }
+    return { runtime, requestId: request.requestId };
+  }
+
+  private observeInteractionSettled(
+    observation: { runtime: TurnRuntimeState; requestId: string } | null,
+  ): void {
+    if (!observation || this.turnRuntimeState !== observation.runtime) return;
+    const { runtime, requestId } = observation;
+    runtime.pendingInteractionToolIds.delete(requestId);
+    runtime.lastActivityAtMs = Date.now();
+    const remaining = [...runtime.activeTools.values()].at(-1);
+    runtime.currentActionSummary = remaining ? `正在运行工具 ${remaining}` : '正在运行';
+  }
+
+  private isGracefulStopSafePoint(runtime: TurnRuntimeState): boolean {
+    if (runtime.anonymousActiveTools > 0) return false;
+    return (
+      runtime.activeTools.size === 0 ||
+      [...runtime.activeTools.keys()].every((id) => runtime.pendingInteractionToolIds.has(id))
+    );
+  }
+
+  private issueGracefulStop(runtime: TurnRuntimeState): Promise<SessionGracefulStopResult> {
+    if (runtime.gracefulStopPromise) return runtime.gracefulStopPromise;
+    runtime.gracefulStopState = 'requesting';
+    const request = Promise.resolve().then(() => this.handle.requestGracefulStop!());
+    const result = new Promise<SessionGracefulStopResult>((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        settled = true;
+        if (this.turnRuntimeState === runtime) runtime.gracefulStopState = 'unconfirmed';
+        resolve({
+          status: 'unconfirmed',
+          turnGeneration: runtime.generation,
+          reason: 'provider-confirmation-timeout',
+        });
+      }, 5_000);
+      (timeout as unknown as { unref?: () => void }).unref?.();
+      void request.then(
+        () => {
+          clearTimeout(timeout);
+          if (settled) return;
+          settled = true;
+          if (this.turnRuntimeState === runtime) runtime.gracefulStopState = 'requested';
+          resolve({ status: 'requested', turnGeneration: runtime.generation });
+        },
+        (error) => {
+          clearTimeout(timeout);
+          if (settled) return;
+          settled = true;
+          if (this.turnRuntimeState === runtime) runtime.gracefulStopState = 'unconfirmed';
+          this.logger.warn('graceful stop request failed', {
+            turnGeneration: runtime.generation,
+            error: String(error),
+          });
+          resolve({
+            status: 'unconfirmed',
+            turnGeneration: runtime.generation,
+            reason: 'provider-request-failed',
+          });
+        },
+      );
+    });
+    runtime.gracefulStopPromise = result;
+    return result;
+  }
+
+  private observeTurnActivity(event: AgentEvent, observedGeneration: number): void {
+    const runtime = this.turnRuntimeState;
+    if (!runtime || runtime.generation !== observedGeneration || event.turnScope === 'background') return;
+    runtime.lastActivityAtMs = Date.now();
+    const data = event.data && typeof event.data === 'object'
+      ? event.data as Record<string, unknown>
+      : {};
+    if (event.type === 'tool_use') {
+      const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : null;
+      const toolName = runtimeToolLabel(data.toolName);
+      if (toolUseId) runtime.activeTools.set(toolUseId, toolName);
+      else runtime.anonymousActiveTools += 1;
+      runtime.currentActionSummary = `正在运行工具 ${toolName}`;
+      return;
+    }
+    if (event.type === 'tool_result_full' || event.type === 'tool_result') {
+      const ids = [
+        ...(typeof data.toolUseId === 'string' ? [data.toolUseId] : []),
+        ...(Array.isArray(data.toolUseIds)
+          ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
+          : []),
+      ];
+      for (const id of ids) runtime.activeTools.delete(id);
+      if (ids.length === 0 && runtime.anonymousActiveTools > 0) {
+        runtime.anonymousActiveTools -= 1;
+      }
+      const remaining = [...runtime.activeTools.values()].at(-1);
+      runtime.currentActionSummary = remaining ? `正在运行工具 ${remaining}` : '正在处理工具结果';
+      if (
+        this.isGracefulStopSafePoint(runtime) &&
+        runtime.gracefulStopState === 'waiting-for-safe-point'
+      ) {
+        void this.issueGracefulStop(runtime);
+      }
+      return;
+    }
+    if (event.type === 'thinking') runtime.currentActionSummary = '正在思考';
+    else if (event.type === 'text') runtime.currentActionSummary = '正在生成回复';
+    else if (event.type === 'interaction_request') runtime.currentActionSummary = '等待用户确认';
+    else if (event.type === 'agent_task_update') runtime.currentActionSummary = '正在处理子任务';
+    else if (event.type === 'image') runtime.currentActionSummary = '正在处理图片';
+    else if (event.type === 'status') runtime.currentActionSummary = '正在运行';
+  }
+
   /**
    * 事件 fan-out 的唯一出口(真实事件与看门狗合成的事件共用)。三件事都收在这里,
    * 保证两条来路语义一致 —— origin 打标、订阅者分发、stall 看门狗记账。
@@ -1314,6 +1563,7 @@ export class Session {
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     const isCurrentGeneration = observedGeneration === this.turnGeneration;
+    this.observeTurnActivity(event, observedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
     if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
@@ -1367,6 +1617,9 @@ export class Session {
       this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
+    if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
+      this.clearTurnRuntime(observedGeneration);
+    }
     if (isTerminal && !isBackgroundEvent) {
       try {
         const pending = this.turnLifecycleObserver?.onTerminal({
@@ -1753,6 +2006,7 @@ export class Session {
     this.sendReservation = null;
     this.currentTurnOrigin = null;
     this.currentTurnAttemptToken = null;
+    this.turnRuntimeState = null;
     this.setStatus('closed');
     this.eventListeners.clear();
     this.statusListeners.clear();

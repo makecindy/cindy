@@ -26,6 +26,7 @@ const knobs = vi.hoisted(() => ({
   onEvent: null as null | ((event: unknown) => void),
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
+  requests: [] as string[],
 }));
 
 vi.mock('../transport.js', () => ({
@@ -67,6 +68,7 @@ vi.mock('../rpc-client.js', () => ({
       knobs.onEvent = o?.onEvent ?? null;
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
+      knobs.requests.push(cmd.type);
       if (cmd.type === 'get_state') {
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
@@ -109,6 +111,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.onEvent = null;
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
+    knobs.requests = [];
     disposed = 0;
     proxyDisposed = 0;
     preparedMcpContext = undefined;
@@ -264,6 +267,18 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(disposed).toBe(1); // close() 才注销
     expect(proxyDisposed).toBe(1);
+  });
+
+  it('graceful stop uses only the Pi abort RPC and keeps the process alive', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    knobs.onEvent?.({ type: 'message_start' });
+    knobs.requests = [];
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+    expect(knobs.requests).toEqual(['abort']);
+    expect(knobs.closeCount).toBe(0);
+
+    await handle.close();
   });
 
   it('always disables project trust and implicit extensions while explicitly restoring only Cindy extensions', async () => {
