@@ -167,6 +167,7 @@ export type UseVoiceInputOptions = {
   onMicrophonePermissionRequired?: (error: string) => void | Promise<void>;
   /** When false, keep refining in the background but do not write the live editor. */
   shouldApplyToEditor?: () => boolean;
+  getDraftStorageKey?: () => string | undefined;
 };
 
 /**
@@ -1103,10 +1104,10 @@ export function useVoiceInput(
       }
     });
     return () => {
-      if (hasArmedDetachedVoiceDraft()) {
+      if (hasArmedDetachedVoiceDraft(optionsRef.current?.getDraftStorageKey?.())) {
         const timeoutId = window.setTimeout(unsubscribe, STOP_WAIT_REFINEMENT_FAILSAFE_MS);
         const intervalId = window.setInterval(() => {
-          if (hasArmedDetachedVoiceDraft()) return;
+          if (hasArmedDetachedVoiceDraft(optionsRef.current?.getDraftStorageKey?.())) return;
           window.clearInterval(intervalId);
           window.clearTimeout(timeoutId);
           unsubscribe();
@@ -1119,7 +1120,8 @@ export function useVoiceInput(
 
   useEffect(() => {
     return () => {
-      if (hasArmedDetachedVoiceDraft()) {
+      const draftKey = optionsRef.current?.getDraftStorageKey?.();
+      if (hasArmedDetachedVoiceDraft(draftKey)) {
         const stop = stopWithGateRef.current;
         void (stop ? stop({ waitForRefinement: true }) : Promise.resolve())
           .catch(() => undefined)
@@ -1133,6 +1135,10 @@ export function useVoiceInput(
             void restoreSystemAudioForRecording();
             clearInlineErrorDismissTimer();
           });
+        return;
+      }
+      if (hasArmedDetachedVoiceDraft()) {
+        // Another ChatInput owns the in-flight persist; do not cancel or settle it.
         return;
       }
       resolveStopCompletion();

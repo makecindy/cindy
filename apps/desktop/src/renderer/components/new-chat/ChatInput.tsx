@@ -2876,6 +2876,7 @@ export function ChatInput({
       shouldApplyToEditor: () =>
         voiceOwnerStorageKeyRef.current === undefined ||
         voiceOwnerStorageKeyRef.current === storageKeyForDraftRef.current,
+      getDraftStorageKey: () => storageKeyForDraftRef.current,
     }),
     [handleVoiceInputPermissionRequired],
   );
@@ -3554,9 +3555,9 @@ export function ChatInput({
 
     const pendingStopAndSend = voiceInputStopAndSendPromiseRef.current;
     const wasBusyWithoutSend = !pendingStopAndSend && voiceInputBusyRef.current;
-    const listeningDraftText = wasBusyWithoutSend
-      ? voiceDraftTextRef.current.trim() || voiceInput.getLastSubmittedText().trim()
-      : '';
+    const submittedAtSwitch = wasBusyWithoutSend ? voiceInput.getLastSubmittedText().trim() : '';
+    const unlandedPreview =
+      wasBusyWithoutSend && !submittedAtSwitch ? voiceDraftTextRef.current.trim() : '';
     const voiceOwnerKey = voiceOwnerStorageKeyRef.current ?? prevEditorKey;
     if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey && voiceOwnerKey) {
       const existingFreeze = frozenVoiceSendRef.current;
@@ -3604,20 +3605,22 @@ export function ChatInput({
           { silent: latestStorageKeyRef.current !== sourceKey },
         );
       };
-      if (listeningDraftText) persistDetachedVoice('', listeningDraftText);
+      // Submitted text is already in the editor snapshot. Only persist a
+      // still-ghost listening preview, then upgrade it after stop/refine.
+      if (unlandedPreview) persistDetachedVoice('', unlandedPreview);
       void (async () => {
         try {
           await voiceInputStopRef.current({ waitForRefinement: true });
         } catch {
           const submitted = voiceInput.getLastSubmittedText().trim();
-          if (submitted) persistDetachedVoice(listeningDraftText || submitted, submitted);
+          if (submitted && unlandedPreview) persistDetachedVoice(unlandedPreview, submitted);
           return;
         }
         const submitted = voiceInput.getLastSubmittedText().trim();
         const refined = voiceInput.getLastRefinement()?.refinedText.trim() ?? '';
         const nextVoice = refined || submitted;
         if (!nextVoice) return;
-        persistDetachedVoice(listeningDraftText || submitted, nextVoice);
+        persistDetachedVoice(unlandedPreview || submittedAtSwitch, nextVoice);
       })();
     }
   }, [editor, storageKey]);

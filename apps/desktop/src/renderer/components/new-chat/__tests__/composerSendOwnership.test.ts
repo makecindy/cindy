@@ -192,4 +192,10 @@ describe('detached voice draft persist across unmount', () => {
     });
     expect(hasArmedDetachedVoiceDraft()).toBe(false);
   });
+
+  it('does not let another composer key settle the armed persist', () => {
+    armDetachedVoiceDraftPersist('__new_maker_draft__', 'asr draft');
+    expect(hasArmedDetachedVoiceDraft('session-b')).toBe(false);
+    expect(hasArmedDetachedVoiceDraft('__new_maker_draft__')).toBe(true);
+  });
 });

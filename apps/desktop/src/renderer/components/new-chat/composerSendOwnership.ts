@@ -191,8 +191,10 @@ export function armDetachedVoiceDraftPersist(
   }
 }
 
-export function hasArmedDetachedVoiceDraft(): boolean {
-  return armedDetachedVoiceDraft !== null;
+export function hasArmedDetachedVoiceDraft(storageKey?: string): boolean {
+  if (!armedDetachedVoiceDraft) return false;
+  if (storageKey === undefined) return true;
+  return armedDetachedVoiceDraft.storageKey === storageKey;
 }
 
 export function settleArmedDetachedVoiceDraft(nextVoiceText: string): void {
