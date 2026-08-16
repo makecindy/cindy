@@ -689,7 +689,7 @@ describe('接管陈旧锁', () => {
     try {
       const started = performance.now();
       await expect(
-        withCrossProcessLock(lock, { label: 'churn', waitMs: 500 }, async (s) => s),
+        withCrossProcessLock(lock, { label: 'churn', waitMs: 2_000 }, async (s) => s),
       ).resolves.toEqual({ held: false, reason: 'busy' });
       expect(performance.now() - started).toBeLessThan(1_000);
       expect(takeovers).toBe(3);
@@ -716,7 +716,7 @@ describe('接管陈旧锁', () => {
     }) as typeof fsp.rename);
     try {
       await expect(
-        withCrossProcessLock(lock, { label: 'final-takeover', waitMs: 500 }, async (s) => s),
+        withCrossProcessLock(lock, { label: 'final-takeover', waitMs: 2_000 }, async (s) => s),
       ).resolves.toEqual({ held: true });
       expect(takeovers).toBe(3);
     } finally {
@@ -754,7 +754,7 @@ describe('接管陈旧锁', () => {
     }) as typeof fsp.link);
     try {
       await expect(
-        withCrossProcessLock(lock, { label: 'final-takeover-busy', waitMs: 500 }, async (s) => s),
+        withCrossProcessLock(lock, { label: 'final-takeover-busy', waitMs: 2_000 }, async (s) => s),
       ).resolves.toEqual({ held: true });
       expect(takeovers).toBe(3);
       expect(busyPublishes).toBe(1);

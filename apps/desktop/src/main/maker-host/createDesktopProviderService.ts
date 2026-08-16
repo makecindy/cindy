@@ -31,7 +31,9 @@ import {
   parseCatalog,
   storedCustomProviderId,
   type Catalog,
+  type CatalogCapabilityEvidence,
   type CatalogIO,
+  type CatalogLoadResult,
   type CatalogSourceConfig,
 } from '@cindy/model-providers';
 
@@ -40,7 +42,7 @@ import { getBaseUrl } from '../manifestService.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
-  commitModelPlaneFromCatalog,
+  commitActiveCatalogSnapshot,
   getActiveCatalog,
   getModelPlaneWarnings,
   setActiveCatalog,
@@ -98,12 +100,8 @@ import {
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
-import {
-  filterProviderCatalogForAccount,
-  projectProviderCatalogForBuildRegion,
-} from './provider-access-policy.js';
+import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   claimDetectedNativeProviderAuth,
   migrateLegacyNativeProviderAuthBindings,
@@ -482,10 +480,19 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
-    activeInflight = loadCatalog(source, io)
+    let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+    let unverifiedXdMediaKinds: CatalogLoadResult['unverifiedXdMediaKinds'] = [
+      'image',
+      'video',
+      'embedding',
+    ];
+    activeInflight = loadCatalog(source, io, (result) => {
+      capabilityEvidence = result.capabilityEvidence;
+      unverifiedXdMediaKinds = result.unverifiedXdMediaKinds;
+    })
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
-        setActiveCatalog(catalog);
+        setActiveCatalog(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
         syncLocalCatalogOverridesIntoActiveCatalog();
         getActiveCatalog();
         logModelPlaneWarnings();
@@ -544,10 +551,19 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   const generation = ++endpointReloadGeneration;
   activeCatalogSourceKey = null;
   // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
-  setActiveCatalog(BUNDLED_CATALOG);
+  setActiveCatalog(BUNDLED_CATALOG, { capabilityEvidence: 'fallback' });
   broadcastReferenceModelPricing();
 
-  const flight = loadCatalog(source, io)
+  let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+  let unverifiedXdMediaKinds: CatalogLoadResult['unverifiedXdMediaKinds'] = [
+    'image',
+    'video',
+    'embedding',
+  ];
+  const flight = loadCatalog(source, io, (result) => {
+    capabilityEvidence = result.capabilityEvidence;
+    unverifiedXdMediaKinds = result.unverifiedXdMediaKinds;
+  })
     .then((catalog) => {
       if (
         endpointReloadGeneration !== generation ||
@@ -556,7 +572,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
         return getActiveCatalog();
       }
       activeCatalogSourceKey = sourceKey;
-      setActiveCatalog(catalog);
+      setActiveCatalog(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
       broadcastReferenceModelPricing();
       return getActiveCatalog();
     })
@@ -574,9 +590,9 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
  * 已完成,再复用同一 `loadCatalogWithSource` 源选择;bundled fallback 视为失败保
  * LKG。守卫序:realm/generation → updatedAt 时间单调 → 同一时刻规范化 digest
  * (同=no-op,异=拒收+告警——线上纠错必须 forward-fix 抬 updatedAt)。通过后经
- * `commitModelPlaneFromCatalog` **单次 swap、单次 markChanged** 提交,成功且有
+ * `commitActiveCatalogSnapshot` **单次 swap、单次 markChanged** 提交,成功且有
  * 变化 = 恰 1 revision/1 广播(出口只有 active-catalog changedListener),
- * no-op/失败/拒收 = 0。
+ * fallback → current 会连同完整目录快照一起替换；精确 no-op/失败/拒收 = 0。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
@@ -596,7 +612,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   }
   const generation = endpointReloadGeneration;
   const flight = loadCatalogWithSource(sourceConfig, io)
-    .then(({ catalog, source }) => {
+    .then(({ catalog, source, capabilityEvidence, unverifiedXdMediaKinds }) => {
       if (source === 'bundled') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
@@ -611,8 +627,18 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       const incomingRegistry = catalog.modelRegistry;
       if (currentRegistry && incomingRegistry) {
         const relation = compareModelRegistryRevisions(incomingRegistry, currentRegistry);
-        if (relation === 'older' || relation === 'same') {
-          // 旧版拒收；同版同内容纯 no-op。两者都不 commit，零 revision 零广播。
+        if (relation === 'older') {
+          // 旧版拒收，不 commit，零 revision 零广播。
+          return getActiveCatalog();
+        }
+        if (relation === 'same') {
+          // Registry 相同不代表 provider media / presets 等完整目录相同；无论本次
+          // 选中 current 还是 fallback，都必须把完整快照与能力证据原子安装。
+          // commitActiveCatalogSnapshot 会保留完整快照与证据均相同的精确 no-op。
+          commitActiveCatalogSnapshot(catalog, {
+            capabilityEvidence,
+            unverifiedXdMediaKinds,
+          });
           return getActiveCatalog();
         }
         if (relation === 'invalid-incoming') {
@@ -634,7 +660,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           return getActiveCatalog();
         }
       }
-      commitModelPlaneFromCatalog(catalog);
+      commitActiveCatalogSnapshot(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
       // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();
@@ -849,11 +875,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  const regionCatalog = projectProviderCatalogForBuildRegion(
-    getActiveCatalog(),
-    CURRENT_CINDY_REGION,
-  );
-  return filterProviderCatalogForAccount(regionCatalog, {
+  return filterProviderCatalogForAccount(getActiveCatalog(), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }

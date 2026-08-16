@@ -154,7 +154,7 @@ import {
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
-import { ProjectsSection } from './sidebar/sections/ProjectsSection';
+import { holdSidebarViewedPriority, ProjectsSection } from './sidebar/sections/ProjectsSection';
 import { isAutomationGeneratedSession } from './lib/scheduledSessionGrouping';
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
@@ -1059,6 +1059,8 @@ function ExpandedView({
       onSessionNeedsReply: handleSessionNeedsReply,
     },
   );
+  const attentionKinds = useSessionAttentionKinds();
+  const urgentSet = useSessionAttentionUrgencySet();
   const unreadScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
     for (const [sessionId, info] of scheduleSessionIndex) {
@@ -2003,6 +2005,17 @@ function ExpandedView({
         setSelectedSessionIds(new Set());
       }
       setSelectionAnchorSessionId(id);
+      // 清点会先于路由更新抹掉 attention。必须先按当前档位钉住,否则
+      // ProjectsSection 首次 hold 只能读到 rest,刚打开的完成未读仍会立刻沉底。
+      const waiting = new Set(urgentSet);
+      for (const [sessionId, kind] of attentionKinds) {
+        if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
+      }
+      holdSidebarViewedPriority(id, {
+        runningSessionIds,
+        attentionSessionIds: sidebarNotifications,
+        waitingSessionIds: waiting,
+      });
       // F-SB-7: Clear done notification on click
       clearNotification(id);
       markAutomationSessionRunsRead(id);
@@ -2012,10 +2025,15 @@ function ExpandedView({
       const target = sessionsRef.current.find((s) => s.id === id);
       navigate(await resolveSessionRoute(id, target));
     },
-    // deps 只剩三个天然稳定的引用:navigate(router)、clearNotification(空 deps
-    // useCallback)、markAutomationSessionRunsRead(随 scheduleSessionIndex,仅
-    // schedule 真变时换)。至此 onClick 在运行期与切换时都不再换引用。
-    [navigate, clearNotification, markAutomationSessionRunsRead],
+    [
+      navigate,
+      clearNotification,
+      markAutomationSessionRunsRead,
+      urgentSet,
+      attentionKinds,
+      runningSessionIds,
+      sidebarNotifications,
+    ],
   );
 
   /* ---- mod+1..9 快速切换对话 + 按住修饰键浮现序号徽标(复刻 Codex 桌面版) ----
@@ -3382,6 +3400,7 @@ function ExpandedView({
                 collapsed={collapse.collapsed}
                 isAllCollapsed={collapse.isAllCollapsed}
                 activeSessionId={activeSessionId}
+                viewedSessionId={viewedSessionId}
                 runningSessionIds={displayRunningSessionIds}
                 attachedSessionIds={attachedSessionIds}
                 notifications={sidebarNotifications}

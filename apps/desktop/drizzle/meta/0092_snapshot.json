@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "678c1f41-343b-49e0-92d8-20247184dc60",
-  "prevId": "9b947440-3e27-474b-93c1-dc62b1bc9c35",
+  "id": "7bb26f2b-e242-4b12-9a19-26249f2c4063",
+  "prevId": "678c1f41-343b-49e0-92d8-20247184dc60",
   "tables": {
     "account_usage_snapshots": {
       "name": "account_usage_snapshots",
@@ -652,6 +652,61 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ghost_usage_daily": {
+      "name": "ghost_usage_daily",
+      "columns": {
+        "ghost_id": {
+          "name": "ghost_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "local_day": {
+          "name": "local_day",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "call_count": {
+          "name": "call_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "ghost_usage_daily_day_idx": {
+          "name": "ghost_usage_daily_day_idx",
+          "columns": [
+            "local_day"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "ghost_usage_daily_ghost_id_local_day_pk": {
+          "columns": [
+            "ghost_id",
+            "local_day"
+          ],
+          "name": "ghost_usage_daily_ghost_id_local_day_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
