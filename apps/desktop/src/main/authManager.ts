@@ -93,6 +93,7 @@ import {
   type DesktopLoginActionResult,
 } from '../shared/authIpc';
 import {
+  activeOwnerScopeKey,
   beginAppSessionBoundary,
   commitActiveAppSession,
   commitVolatileAppSession,
@@ -108,6 +109,10 @@ import {
 } from './ownerNamespaceMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
+import {
+  StableOwnerPostCommitCoordinator,
+  type StableOwnerPostCommitTask,
+} from './stableOwnerPostCommit.js';
 
 const log = createLogger('authManager');
 
@@ -248,6 +253,30 @@ type ProjectionRepairTeardown = (reason: string) => void | Promise<void>;
 let accountSwitchTeardown: AccountSwitchTeardown | null = null;
 let authSessionTeardown: AuthSessionTeardown | null = null;
 let projectionRepairTeardown: ProjectionRepairTeardown | null = null;
+
+const stableOwnerPostCommitCoordinator = new StableOwnerPostCommitCoordinator({
+  snapshot: () => {
+    const session = getActiveAppSession();
+    return {
+      scopeKey: activeOwnerScopeKey(),
+      dataOwnerId: session.dataOwnerId,
+      stable:
+        !isAppSessionBoundaryPending()
+        && isGhostSkillProjectionBoundaryStableForOwner(session.dataOwnerId),
+    };
+  },
+  warn: (message, meta) => log.warn(message, meta),
+});
+
+function requestStableOwnerPostCommit(reason: string): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  void stableOwnerPostCommitCoordinator.ensure(reason);
+}
+
+async function ensureStableOwnerPostCommit(reason: string): Promise<void> {
+  if (isPassiveSharedUserDataInstance()) return;
+  await stableOwnerPostCommitCoordinator.ensure(reason);
+}
 
 // ── Module-level state ──────────────────────────────────────────────────────
 
@@ -823,8 +852,10 @@ async function withCloudOwnerCommit<T>(opts: {
   // captured the pre-repair scope key would then pass the post-release guard.
   // Force a generation bump so the scope key changes across the teardown.
   let forceBumpGeneration = false;
+  let result!: T;
+  let committed = false;
   try {
-    return await withGhostSkillProjectionOwnerCommit({
+    result = await withGhostSkillProjectionOwnerCommit({
       previousOwnerId: opts.previousOwnerId,
       nextOwnerId: opts.nextOwnerId,
       prepareTransition: async ({ ownerChanged }) => {
@@ -852,11 +883,14 @@ async function withCloudOwnerCommit<T>(opts: {
         return result;
       },
     });
+    committed = true;
   } finally {
     const release = releaseBoundary as (() => void) | null;
     release?.();
     if (release) notifyRenderer();
   }
+  if (committed) requestStableOwnerPostCommit('owner-commit');
+  return result;
 }
 
 /**
@@ -989,6 +1023,7 @@ async function withAccountFreeOwnerCommit(opts: {
     if (release && notify) notifyRenderer();
   }
 
+  requestStableOwnerPostCommit('owner-commit');
   if (notify) {
     notifyRenderer();
     notifyAuthListeners();
@@ -1008,6 +1043,7 @@ async function recoverAccountFreeOwnerAtStartup(
         commitActiveAppSession(mode);
       }
     }
+    await ensureStableOwnerPostCommit('owner-already-stable');
     return;
   }
   await withAccountFreeOwnerCommit({
@@ -1042,6 +1078,16 @@ export function setAuthSessionTeardown(teardown: AuthSessionTeardown | null): vo
 
 export function setProjectionRepairTeardown(teardown: ProjectionRepairTeardown | null): void {
   projectionRepairTeardown = teardown;
+}
+
+/** Register the owner-scoped work that must settle after the durable boundary is stable. */
+export function setStableOwnerPostCommitTask(task: StableOwnerPostCommitTask | null): void {
+  stableOwnerPostCommitCoordinator.setTask(task);
+}
+
+/** Pull-based startup fallback for an owner that was already stable before registration. */
+export async function ensureStableOwnerPostCommitTasks(reason: string): Promise<void> {
+  await ensureStableOwnerPostCommit(reason);
 }
 
 // ── User-level API key sync ─────────────────────────────────────────────────
@@ -2260,6 +2306,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     } else {
       commitCloudAppSession(currentUser.id);
     }
+    await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');
     return snapshotAuthState();
   }
 

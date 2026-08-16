@@ -40,6 +40,13 @@ import {
   updateMessageContent as updateDbMessageContent,
 } from './localDb/ipc/messages.js';
 import { getDbClient } from './localDb/client/current.js';
+import {
+  markCodexPlanInterrupted,
+  parseCodexPlanTerminal,
+  parseCodexPlanUpdate,
+  writeCodexPlanTerminal,
+  writeCodexPlanUpdate,
+} from './localDb/codexPlanState.js';
 import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
 import { createLogger } from './logger.js';
@@ -154,6 +161,7 @@ const lastAgentMetaBySession = new Map<string, AgentMeta>();
  * 若 turnStartedAt <= clearBoundary，该 error 行必须 cap 在 clear 边界之下，防止出现在清空后的新会话。
  * resetTurnPersistState / clearSessionPersistState 时清除。 */
 const _turnStartedAtBySession = new Map<string, number>();
+const _turnAttemptTokenBySession = new Map<string, number>();
 const _turnDedupIdBySession = new Map<string, string>();
 let _turnDedupSeq = 0;
 
@@ -167,10 +175,13 @@ const _savedTurnDedupIdForDeferred = new Map<string, string>();
  * 只在首次调用（Map 中无条目）时写入，忽略后续 isRunning:true 的覆盖，
  * 防止 Claude 工具进度 / Codex stage 等 mid-turn 进度事件在 /clear 之后
  * 用 post-clear 时间戳覆盖原始 pre-clear 起点，导致 /clear 竞态 cap 失效。 */
-export function noteTurnStarted(sessionId: string): void {
+export function noteTurnStarted(sessionId: string, turnAttemptToken?: number): void {
   if (!_turnStartedAtBySession.has(sessionId)) {
     const now = Date.now();
     _turnStartedAtBySession.set(sessionId, now);
+    if (typeof turnAttemptToken === 'number') {
+      _turnAttemptTokenBySession.set(sessionId, turnAttemptToken);
+    }
     _turnDedupIdBySession.set(sessionId, `${now}:${++_turnDedupSeq}`);
     // 新 turn 第一次记录时，旧的 deferred 保存值已无效，清掉防止 deferred IPC 用到旧 turn 的时刻。
     _savedTurnStartedAtForDeferred.delete(sessionId);
@@ -708,10 +719,32 @@ export function onToolUseEvent(
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
   backgroundTurnStartedAt?: number,
+  turnAttemptToken?: number,
 ): string | undefined {
   const createdAt = Date.now();
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
+
+  if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
+    const planUpdate = parseCodexPlanUpdate(data);
+    const currentTurnAttemptToken = _turnAttemptTokenBySession.get(sessionId);
+    const turnStartedAt =
+      currentTurnAttemptToken !== undefined && currentTurnAttemptToken !== turnAttemptToken
+        ? undefined
+        : _turnStartedAtBySession.get(sessionId);
+    if (planUpdate && !backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)) {
+      const clearBoundaryAtEnqueue = clearBoundaryBySession.get(sessionId);
+      enqueueWrite(`codex_plan_state_update:${sessionId}:${planUpdate.turnId}`, () => {
+        if (
+          clearBoundaryBySession.get(sessionId) !== clearBoundaryAtEnqueue ||
+          backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)
+        ) {
+          return Promise.resolve();
+        }
+        return writeCodexPlanUpdate(sessionId, planUpdate);
+      });
+    }
+  }
 
   if (scope === 'background') {
     if (backgroundTurnPredatesSessionClear(sessionId, backgroundTurnStartedAt)) {
@@ -804,6 +837,12 @@ export function persistCodexPlanOnDone(
     | null
     | undefined,
 ): boolean {
+  const planTerminal = parseCodexPlanTerminal(data);
+  if (planTerminal) {
+    enqueueWrite(`codex_plan_state_terminal:${sessionId}:${planTerminal.turnId}`, () =>
+      writeCodexPlanTerminal(sessionId, planTerminal),
+    );
+  }
   const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
   if (!turnId) return false;
 
@@ -883,6 +922,12 @@ export function persistCodexPlanOnTerminalError(sessionId: string, turnId?: stri
       ? planRow.input as Record<string, unknown>
       : null;
     if (!input || !Array.isArray(input.plan)) continue;
+    const ownedTurnId = toolUseId.startsWith('plan:') ? toolUseId.slice('plan:'.length) : '';
+    if (ownedTurnId) {
+      enqueueWrite(`codex_plan_state_error:${sessionId}:${ownedTurnId}`, () =>
+        markCodexPlanInterrupted(sessionId, ownedTurnId),
+      );
+    }
     enqueueWrite(`codex_plan_terminal_error:${sessionId}:${persistId}`, async (ownerScope) => {
       const updated = await updateDbMessageContent(sessionId, persistId, {
         toolUseId,
@@ -1369,6 +1414,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // clearCodexPlanRowsForSession(逻辑 turn 结束 / 会话清理)负责回收。
   lastAgentMetaBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
+  _turnAttemptTokenBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
   // turn 边界必须清 lastPersistedMsgBySession:within-turn 的重复 isFinal / result 兜底
   // 补推都在 done 之前已去重(translator fallback isFinal@translator.ts:897 早于 done@922,
@@ -1687,6 +1733,7 @@ export function clearSessionPersistState(sessionId: string): void {
   lastAssistantTranscriptUuidBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
+  _turnAttemptTokenBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
   _savedTurnStartedAtForDeferred.delete(sessionId);
   _savedTurnDedupIdForDeferred.delete(sessionId);

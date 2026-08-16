@@ -96,8 +96,8 @@ export function deriveCindyMediaConfig(
     // XD 声明的向量清单 —— 非 XD 供应商(远端目录可以给任何 provider 加这个字段)
     // 声明了也不能进白名单,否则会长出"界面可选、实际拿 XD 的凭证去计费"的型号,
     // 用户以为用的是自己填的 key(PR #1707 review)。
-    // 视频出于同一原因在非 Global 构建里整段隐藏;向量这条更严:任何区域都只认 XD,
-    // 因为它连"本区域能不能路由"都还谈不上。provider-aware 路由落地后再放开。
+    // 向量在任何区域都只认 XD,因为它连 provider-aware 路由都还没有。
+    // 地区政策由 Gateway 通过目录下发负责，客户端不按构建区域裁剪模型。
     if (kind === 'embed' && p.id !== EMBED_DISPATCH_PROVIDER_ID) continue;
     const list =
       kind === 'image' ? p.imageModels : kind === 'video' ? p.videoModels : p.embeddingModels;

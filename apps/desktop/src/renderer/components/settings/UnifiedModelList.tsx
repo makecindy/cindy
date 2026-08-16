@@ -17,7 +17,7 @@
  *     选择面板(modelList.ts 硬排除),没有显示轴 ⇒ 行内**没有开关**,只有「⋯」停用;
  *     其启用状态控制媒体生成等专属链路能否使用它。
  *   - 普通模式:对话模型行恒为一个开关,一次拨动同时写该模型全部可用 agent 的可见性
- *     override;分歧(双端可用但可见性不同)以「已在 X 隐藏」chip 提示,点击进入分别调整。
+ *     override;分歧(多端可用但可见性不同)以「已在 X / Y 隐藏」chip 提示,点击进入分别调整。
  *   - 分别调整模式:对话模型行统一变为两列(列头 Claude Code / Codex),模型在某 agent
  *     不可用时该格显示「—」。停用行不在分组里,不参与分别模式(停用不分 agent,一停全停)。
  *
@@ -236,11 +236,16 @@ export function isCapabilityRow(row: UnionModelRow, userProvider: boolean): bool
   return !!rep && !isAgentSelectableModel(rep, { userProvider });
 }
 
-/** 分歧 = 双端可用且可见性不同(仅对话模型行有意义)。 */
+/** 分歧 = 多端可用且可见性不同(仅对话模型行有意义)。 */
 export function isRowDiverged(providerId: string, row: UnionModelRow): boolean {
   if (row.avail.length < 2) return false;
   const values = row.avail.map((a) => rowEnabled(providerId, row, a));
   return values.some((v) => v !== values[0]);
+}
+
+/** 该行当前隐藏的全部 agent;普通模式的分歧 chip 必须完整展示,不能只取首个。 */
+export function getHiddenAgents(providerId: string, row: UnionModelRow): AgentKind[] {
+  return row.avail.filter((agent) => rowEnabled(providerId, row, agent) === false);
 }
 
 /**
@@ -707,13 +712,17 @@ export function UnifiedModelList({
                         .map((a) => `${AGENT_LABEL[a]} ${formatContextWindow(row.byAgent[a]!.contextWindow)}`)
                         .join(' · ')
                     : undefined;
-                  const hiddenAgent = diverged
-                    ? row.avail.find((a) => rowEnabled(provider.id, row, a) === false)
-                    : undefined;
+                  const hiddenAgents = diverged ? getHiddenAgents(provider.id, row) : [];
+                  const divergedChipLabel =
+                    hiddenAgents.length > 0
+                      ? t('settings.providers.models.divergedChip', {
+                          agent: hiddenAgents.map((agent) => AGENT_LABEL[agent]).join(' / '),
+                        })
+                      : '';
                   return (
                     <div
                       key={row.id}
-                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--surface-hover)]"
+                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                     >
                       <span
                         className="min-w-0 truncate text-14 font-medium"
@@ -739,17 +748,18 @@ export function UnifiedModelList({
                         </span>
                       )}
                       <span className="min-w-0 flex-1" />
-                      {!splitMode && diverged && hiddenAgent && (
+                      {!splitMode && diverged && hiddenAgents.length > 0 && (
                         <button
                           type="button"
                           onClick={() => setSplitMode(true)}
-                          className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
+                          className="flex h-[18px] min-w-0 max-w-32 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
                           style={{
                             backgroundColor: 'var(--surface-chip)',
                             color: 'var(--text-secondary)',
                           }}
+                          title={divergedChipLabel}
                         >
-                          {t('settings.providers.models.divergedChip', { agent: AGENT_LABEL[hiddenAgent] })}
+                          <span className="truncate">{divergedChipLabel}</span>
                         </button>
                       )}
                       {/* 固定 44px 右对齐列:上下扫读时数字齐成一条线;合成媒体行

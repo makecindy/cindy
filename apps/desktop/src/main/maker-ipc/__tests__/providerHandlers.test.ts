@@ -1392,6 +1392,58 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.refreshCatalog).not.toHaveBeenCalled();
   });
 
+  it('reserves xai for new providers while preserving edits to an existing legacy row', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      stageClearProviderDisableOverrides: vi.fn(() => () => true),
+    });
+    registerProviderHandlers(harness, deps);
+    const legacyXai: CustomProviderConfig = {
+      id: 'xai',
+      name: 'Legacy custom xAI',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://private-xai.example/v1',
+          models: [{ id: 'private-grok', name: 'Private Grok' }],
+        },
+      },
+    };
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, legacyXai)).rejects.toThrow(
+      /INVALID_PARAMS/,
+    );
+
+    raw!
+      .prepare(
+        `INSERT INTO custom_providers
+       (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, 1, 1)`,
+      )
+      .run(
+        legacyXai.id,
+        legacyXai.name,
+        JSON.stringify(legacyXai.runtimes),
+        JSON.stringify(legacyXai.auth),
+      );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+        ...legacyXai,
+        name: 'Legacy custom xAI edited',
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect((await listCustomProviders())[0]?.name).toBe('Legacy custom xAI edited');
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'xai'),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.stageClearProviderDisableOverrides).toHaveBeenCalledWith('custom:xai');
+    expect(deps.stageClearProviderModelPriceOverrides).toHaveBeenCalledWith('custom:xai');
+    expect(await listCustomProviders()).toEqual([]);
+  });
+
   it('rejects duplicate id with ALREADY_EXISTS', async () => {
     mountDb();
     const harness = new IpcHarness();

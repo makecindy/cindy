@@ -35,6 +35,7 @@ import { sessionsStore } from '@/lib/sessionsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
+import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
@@ -184,6 +185,7 @@ export function AuthProvider({
       setPendingHandoffOwner(state.dataOwnerId);
       setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
+      setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();

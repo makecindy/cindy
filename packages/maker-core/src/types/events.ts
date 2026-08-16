@@ -403,6 +403,12 @@ export interface ForkSdkSessionOptions {
   workingDir?: string;
   /** Codex only: fork from a rollout copy with reasoning response items removed. */
   stripEncryptedReasoning?: boolean;
+  /**
+   * 源 session 的 remoteHostId(fork 编排层从 DB 源 session 取, 透传给 agent)。
+   * Pi 用它做 fork 守卫判定 —— 不用 agent 实例级 lastRemoteHostId(并发会话
+   * 覆盖会误判, R4 竞态 #1)。
+   */
+  remoteHostId?: string | null;
 }
 
 export interface ForkSdkSessionResult {

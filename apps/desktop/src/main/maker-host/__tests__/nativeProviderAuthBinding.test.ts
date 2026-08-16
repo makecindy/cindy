@@ -22,6 +22,7 @@ vi.mock('../../appSessionState.js', () => ({
 import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
+  getNativeProviderAuthSource,
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
@@ -51,11 +52,15 @@ describe('native provider auth legacy binding', () => {
     expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
       anthropic: 'owner-a',
       legacyClaimOwner: 'owner-a',
+      sources: { anthropic: 'native-harness-inherited' },
     });
   });
 
-  it('does not reclaim a legacy credential after logout', () => {
+  it('migrates an old Cindy xAI token as explicit provider OAuth, never CLI inheritance', () => {
     migrateLegacyNativeProviderAuthBindings('owner-a', { xai: true });
+    expect(getNativeProviderAuthSource('xai')).toBe('explicit-provider-oauth');
+    expect(isNativeProviderAuthSelfAuthorized('xai')).toBe(true);
+
     unbindNativeProviderAuth('xai');
     session.dataOwnerId = 'owner-b';
     migrateLegacyNativeProviderAuthBindings('owner-b', { xai: true });
@@ -119,12 +124,12 @@ describe('claimDetectedNativeProviderAuth', () => {
     expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(true);
   });
 
-  it('claims anthropic and xai on the same terms as openai', () => {
-    // 三家 native provider 共用一套认领口径:凭证在场 + 名额未被占 → 绑给当前 owner。
+  it('claims only native Harness credentials and records their inherited source', () => {
     expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(true);
-    expect(claimDetectedNativeProviderAuth('xai', () => true)).toBe(true);
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
     expect(isNativeProviderAuthBound('anthropic')).toBe(true);
-    expect(isNativeProviderAuthBound('xai')).toBe(true);
+    expect(getNativeProviderAuthSource('anthropic')).toBe('native-harness-inherited');
+    expect(getNativeProviderAuthSource('openai')).toBe('native-harness-inherited');
 
     session.dataOwnerId = 'owner-b';
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
@@ -172,15 +177,13 @@ describe('claimDetectedNativeProviderAuth', () => {
     expect(isNativeProviderAuthBound('xai')).toBe(true);
   });
 
-  it('用户再次显式授权即清除撤销标记,恢复自动继承语义', () => {
+  it('xAI 再次显式授权清除撤销标记，但仍保持 provider OAuth 来源', () => {
     unbindNativeProviderAuth('xai', { revoked: true });
-    expect(claimDetectedNativeProviderAuth('xai', () => true)).toBe(false);
 
     bindNativeProviderAuth('xai');
     expect(isNativeProviderAuthBound('xai')).toBe(true);
-    unbindNativeProviderAuth('xai');
-    // 上一次的撤销标记已随显式授权作废,这次(非显式登出)不该再挡。
-    expect(claimDetectedNativeProviderAuth('xai', () => true)).toBe(true);
+    expect(getNativeProviderAuthSource('xai')).toBe('explicit-provider-oauth');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty('revoked.xai');
   });
 
   it('凭证失效(非用户登出)不留标记 —— 本机重新登录后仍按设计自动继承', () => {
@@ -233,7 +236,9 @@ describe('claimDetectedNativeProviderAuth', () => {
       expect(() => claimDetectedNativeProviderAuth('anthropic', () => true)).not.toThrow();
       expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
       expect(() => unbindNativeProviderAuth('anthropic', { revoked: true })).not.toThrow();
-      expect(() => migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true })).not.toThrow();
+      expect(() =>
+        migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true }),
+      ).not.toThrow();
       expect(fs.readFileSync(bindingFile, 'utf8')).toBe(bad); // 一律不改写
     }
 
@@ -271,7 +276,7 @@ describe('claimDetectedNativeProviderAuth', () => {
     // 坏掉的 revoked 无从得知谁被撤销过,不能直接丢弃(丢弃 = 给所有残留凭证放行)。
     expect(after.revoked).toMatchObject({ openai: 'owner-a', xai: 'owner-a' });
     expect(after.revoked).not.toHaveProperty('anthropic');
-    expect(claimDetectedNativeProviderAuth('xai', () => true)).toBe(false);
+    expect(isNativeProviderAuthBound('xai')).toBe(false);
     // 本次授权的这家不受抑制,且 owner-b 的 openai 依然轮不到 owner-a。
     expect(isNativeProviderAuthBound('anthropic')).toBe(true);
     expect(isNativeProviderAuthBound('openai')).toBe(false);
@@ -344,9 +349,11 @@ describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () =
   it('显式授权记下来路,自动认领不记', () => {
     bindNativeProviderAuth('anthropic');
     expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
+    expect(getNativeProviderAuthSource('anthropic')).toBe('explicit-provider-oauth');
 
     expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
     expect(isNativeProviderAuthSelfAuthorized('openai')).toBe(false);
+    expect(getNativeProviderAuthSource('openai')).toBe('native-harness-inherited');
   });
 
   it('来路按 provider 分别记账,不互相串味', () => {

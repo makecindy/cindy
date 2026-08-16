@@ -49,6 +49,13 @@ const TARGETS = [
     destDir: resolve(DESKTOP_ROOT, 'resources', 'remote-file-service'),
     destFile: 'file-service.mjs',
   },
+  {
+    pkgName: '@cindy/maker-pi-manager',
+    pkgDir: resolve(MONOREPO_ROOT, 'packages', 'maker-pi-manager'),
+    bundleFile: 'dist/pi-manager.mjs',
+    destDir: resolve(DESKTOP_ROOT, 'resources', 'pi-manager'),
+    destFile: 'pi-manager.mjs',
+  },
 ];
 
 function newestMtime(rootDir, relPaths) {

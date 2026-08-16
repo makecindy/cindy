@@ -24,8 +24,10 @@ import {
   RSB_WINDOW_REFRESH_CONTEXT_CHANNEL,
   RSB_WINDOW_RENDERER_READY_CHANNEL,
   RSB_WINDOW_LOCALE_CHANGED_CHANNEL,
+  RSB_WINDOW_TAB_HANDOFF_CHANNEL,
   RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL,
 } from '../shared/rightSidebarWindow';
+import type { RsbWindowTabHandoff } from '../shared/rightSidebarWindow';
 
 type ApplicationMenuLocale = SupportedLocale;
 
@@ -59,6 +61,9 @@ function readPreferredSystemLocale(): ApplicationMenuLocale {
 const appearanceSettings = ipcRenderer.sendSync(
   'appearance-settings:get-sync',
 ) as AppearanceSettings | null;
+
+const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => void) =>
+  onPayload('fullscreen-change', cb);
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
@@ -98,6 +103,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.send('theme:apply-vibrancy', { familyId, isDark });
     },
   },
+  // PanelChrome uses this on macOS to keep the traffic-light area and actions
+  // aligned while the detached sidebar enters or leaves native fullscreen.
+  onFullscreenChange: fanOutFullscreenChange,
+  getFullscreenState: (): Promise<boolean> => ipcRenderer.invoke('get-fullscreen-state'),
 
   // AuthProvider 在分离侧栏中只负责初始化账号快照、监听账号边界变化，以及给
   // device-link 子面板投影当前身份。该窗口没有登录/登出/本地模式/账号删除 UI，
@@ -291,8 +300,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     open: (payload?: unknown): Promise<void> =>
       ipcRenderer.invoke('maker:rsb-window:open', payload),
     close: (): Promise<void> => ipcRenderer.invoke('maker:rsb-window:close'),
-    setDetached: (detached: boolean): Promise<{ detached: boolean; lastOpen: boolean; open: boolean }> =>
-      ipcRenderer.invoke('maker:rsb-window:set-detached', detached),
+    setDetached: (
+      detached: boolean,
+      handoff?: RsbWindowTabHandoff,
+    ): Promise<{ detached: boolean; lastOpen: boolean; open: boolean }> =>
+      ipcRenderer.invoke('maker:rsb-window:set-detached', detached, handoff),
     getContext: (): Promise<{
       sessionId: string | null;
       workdir: string | null;
@@ -323,6 +335,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onCommand: (
       cb: (cmd: unknown) => void,
     ): (() => void) => onPayload('maker:push:rsb-window:command', cb),
+    onTabHandoff: (cb: (handoff: RsbWindowTabHandoff) => void): (() => void) =>
+      onPayload(RSB_WINDOW_TAB_HANDOFF_CHANNEL, cb),
     sendCommand: (request: unknown): Promise<string> =>
       ipcRenderer.invoke('maker:rsb-window:send-command', request),
     /** 闅愯棌/鏄剧ず鏃堕€氱煡瀛愮獥鍙ｅ埛鏂?context + 閲嶇疆鐬椂浜や簰鎬併€?*/

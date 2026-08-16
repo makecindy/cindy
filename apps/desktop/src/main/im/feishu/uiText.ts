@@ -13,6 +13,7 @@
 
 import type { IMUnsupportedEntry } from '@cindy/im';
 
+import { t } from '../../i18n';
 import type { ImUiTextPack } from '../shared/types';
 
 export const ui = {
@@ -88,6 +89,14 @@ export const ui = {
       `其它部分收到啦，正在处理~`,
   },
 
+  // ── pre-dispatch 失败细分文案 ──────────────────────────────────────────────
+  error: {
+    agentUnsupported:
+      '🤔 当前选择的 Agent 在这个渠道需要逐条权限确认，暂时上不了场，换一个 Agent 再试~',
+    permissionModeUnsupported: () =>
+      t('settings.imBot.defaults.permissionModeUnsupportedOnChannelHint'),
+  },
+
   // ── card text (sent via @cindy/im InteractiveCardSpec) ──────────────────────
   cards: {
     permission: {
@@ -96,6 +105,9 @@ export const ui = {
       btnAllowOnce: '✅ 仅本次允许',
       btnAllowAlways: '✅ 总是允许',
       btnDeny: '❌ 拒绝',
+      /** 授权卡转投 owner 私聊后, 在原群/话题里留的指路提示 — 带工具名, 点出具体是什么操作。 */
+      dmRoutedNotice: (toolName: string) =>
+        `🔐 \`${toolName}\` 这个操作需要你确认 — 授权卡片已经发到你的私聊，去那里点一下继续~`,
       resolvedAllowOnce: '✅ 已允许（仅本次）',
       resolvedAllowAlways: '✅ 已允许（这个工具以后都放行）',
       resolvedDeny: '❌ 已拒绝',
@@ -139,6 +151,20 @@ export const ui = {
       btnCancelFullAccess: '保留当前权限',
       fullAccessCancelled: '已取消，保留当前权限',
     },
+    /**
+     * 群会话「完全访问」档被强确认策略拒绝时, 发到 owner 私聊的一键修复卡 —
+     * 点按钮把该会话切回 auto(自动审批), 群里就能继续发消息了。
+     */
+    permissionModeFix: {
+      title: '🛡️ 把群会话切回「自动审批」',
+      body: (sessionTitle: string) =>
+        `刚才在群里/话题里的消息没能开跑：**${sessionTitle}** 用的是「完全访问」权限档，` +
+        '但群上下文里有成员可控的内容，必须保留操作确认。\n\n点下面按钮把它切到「自动审批」（auto），' +
+        '切完回群里继续发消息就行。',
+      btnFix: '✅ 切到自动审批',
+      resolved: '✅ 已切到「自动审批」— 回群里继续发消息吧~',
+      failed: (reason: string) => `❌ 没切过去：${reason}。可以发 /permission auto 手动切换`,
+    },
     control: {
       title: '🎮 挑个工作区上号',
       emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_',
@@ -159,6 +185,11 @@ export const ui = {
       resolvedNewSession: (workspaceName: string) =>
         `✨ 新存档已建 + 接管完成（在 **${workspaceName}** 里）\n直接发指令开聊；想退就 \`/exctr\``,
       attachFailed: (reason: string) => `❌ 没接上：${reason}`,
+      // 群卡认不出自己在哪条话题(应用重启过, 卡片和话题的对应关系只存在内存里)。
+      // 这时候按回调身份接管会把绑定挂到私聊上, 所以宁可不接, 让用户重发一次。
+      staleGroupCard:
+        '❌ 没接上：这张卡片是应用重启前发的，已经认不出它属于哪条话题了。\n' +
+        '请在你想接管的那条话题里重新发一次 `/ctr`（绑定只跟话题走，不会串到别处）',
       /** 旧卡片(被点了 busy session 那张)被 freeze 时的占位文字, 让用户知道这张
        *  卡片不再活跃, 下面会新发一张可重选的卡片。 */
       sessionBusyOldCardPlaceholder: '⏳ 那个任务还在跑——下方给你刷了张新卡片，重选一下吧',

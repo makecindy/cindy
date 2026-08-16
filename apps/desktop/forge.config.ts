@@ -751,6 +751,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/remote-file-service',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
+    // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。
+    'resources/pi-manager',
     // 第三方开源声明,由 scripts/generate-third-party-notices.mjs 生成
     // (pnpm licenses:generate),随安装包分发以满足各开源协议的署名义务。
     'resources/THIRD-PARTY-NOTICES.txt',
@@ -1036,6 +1038,53 @@ function buildMacVoiceInputModifierShortcutListener(platform: ForgePlatform, arc
   fs.chmodSync(dest, 0o755);
   const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
   console.log(`[forge:prePackage] macOS voice input modifier shortcut listener (${swiftArchLabel(arch, MACOS_VOICE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
+}
+
+function buildWindowsVoiceInputFunctionKeyListener(targetPlatform: string): void {
+  if (process.platform !== 'win32' || targetPlatform !== 'win32') return;
+  const sourceRoot = path.join(__dirname, 'native', 'voice-input', 'windows-function-key-listener');
+  const manifest = path.join(sourceRoot, 'Cargo.toml');
+  if (!fs.existsSync(manifest)) {
+    throw new Error(
+      `[forge] Windows voice input function key listener source missing at ${manifest}`,
+    );
+  }
+  const cargoBin = process.env.USERPROFILE
+    ? path.join(process.env.USERPROFILE, '.cargo', 'bin', 'cargo.exe')
+    : 'cargo';
+  const cargo = fs.existsSync(cargoBin) ? cargoBin : 'cargo';
+  const result = spawnSync(cargo, ['build', '--release', '--manifest-path', manifest], {
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw new Error(
+      `[forge] failed to invoke cargo (${cargo}) for Windows function key listener: ${result.error.message}`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[forge] Windows function key listener cargo build failed with exit code ${result.status}`,
+    );
+  }
+  const builtExe = path.join(
+    sourceRoot,
+    'target',
+    'release',
+    'cindy-windows-function-key-listener.exe',
+  );
+  const destDir = path.join(__dirname, 'resources', 'tools', 'voice-input');
+  const dest = path.join(destDir, 'cindy-windows-function-key-listener.exe');
+  if (!fs.existsSync(builtExe)) {
+    throw new Error(
+      `[forge] Windows function key listener build succeeded but ${builtExe} is missing`,
+    );
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.copyFileSync(builtExe, dest);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log(
+    `[forge:prePackage] Windows voice input function key listener -> ${dest} (${sizeMb} MB)`,
+  );
 }
 
 function buildMacAgentIslandHelper(platform: ForgePlatform, arch: ForgeArch): void {
@@ -1411,6 +1460,7 @@ const config: ForgeConfig = {
       }
       stageRipgrep(targetPlatform, targetArch);
       stageAndroidPlatformTools(targetPlatform, targetArch);
+      buildWindowsVoiceInputFunctionKeyListener(targetPlatform);
       buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);

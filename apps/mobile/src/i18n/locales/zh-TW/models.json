@@ -8,6 +8,7 @@
     "emptyDefault": "暫無可用模型",
     "loadingDefault": "正在載入模型…",
     "subscriptionBadge": "訂閱",
+    "subscriptionBadgeCompact": "訂閱",
     "backToModels": "返回模型列表",
     "agentSwitchHint": "選擇模型後，下一條訊息將切換到 {{agent}}",
     "crossAgentEmptyHint": "請先在被控裝置連線 {{agent}} 的模型來源",
@@ -24,7 +25,16 @@
     "fastMode": "快速模式",
     "fastModeAccessibility": "快速模式 {{model}}",
     "reasoningEffort": "推理強度",
-    "reasoningEffortAccessibility": "推理強度 {{label}}"
+    "reasoningEffortAccessibility": "推理強度 {{label}}",
+    "effortLevels": {
+      "minimal": "最小",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高",
+      "ultra": "極致"
+    }
   },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型",

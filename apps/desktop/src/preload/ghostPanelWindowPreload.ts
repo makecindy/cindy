@@ -118,6 +118,9 @@ const appearanceSettings = ipcRenderer.sendSync(
   'appearance-settings:get-sync',
 ) as AppearanceSettings | null;
 
+const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): Unsub =>
+  onPayload('fullscreen-change', cb);
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   preferredSystemLocale: readPreferredSystemLocale(),
@@ -156,6 +159,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.send('theme:apply-vibrancy', { familyId, isDark });
     },
   },
+  // Shared panel chrome may need this when a detached plugin window is used
+  // on macOS, where the traffic-light area changes during native fullscreen.
+  onFullscreenChange: fanOutFullscreenChange,
+  getFullscreenState: (): Promise<boolean> => ipcRenderer.invoke('get-fullscreen-state'),
 
   // ── 媒体操作（面板产物右键菜单 / 拖拽引渡） ──────────────────────────
   // 与主 preload 同款 channel，main 侧 handler 对所有受信 renderer 生效。

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 
 import {
   GHOST_MANIFEST_FILE,
@@ -142,6 +143,16 @@ export interface ProvisionOutcome {
   removed: string[];
   /** 指纹一致 / 墓碑 / 受众不命中 / 种子不合格而跳过的 id(仅日志用途)。 */
   skipped: string[];
+  /** A transient per-seed or state I/O failure keeps the stable-owner pass retryable. */
+  retryPending?: boolean;
+}
+
+function isRetryableProvisioningError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  // Seed links/non-regular entries are deterministic package violations. Keep
+  // them fail-closed without turning a bad bundle into an endless retry loop.
+  if (message.includes('non-regular') || message.includes(' rejects link')) return false;
+  return true;
 }
 
 /** 播种状态文件形态(墓碑 + seeded 台账;将来组织清单等扩展也落这里)。 */
@@ -178,9 +189,37 @@ function isRealDirectoryPath(absPath: string, allowMissingLeaf = false): boolean
       }
       return false;
     }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    if (stat.isSymbolicLink()) {
+      if (!isExternalTempAncestor(current, resolved)) return false;
+      try {
+        if (!fs.statSync(current).isDirectory()) return false;
+      } catch {
+        return false;
+      }
+      continue;
+    }
+    if (!stat.isDirectory()) return false;
   }
   return true;
+}
+
+/**
+ * macOS exposes the temporary directory through a system alias (`/var` →
+ * `/private/var`).  That alias is outside the caller-controlled directory and
+ * is safe to traverse; links at or below the temporary root remain rejected.
+ */
+function isExternalTempAncestor(segment: string, target: string): boolean {
+  const tempRoot = path.resolve(os.tmpdir());
+  const targetRel = path.relative(tempRoot, target);
+  if (targetRel.startsWith(`..${path.sep}`) || path.isAbsolute(targetRel)) return false;
+  try {
+    const realSegment = fs.realpathSync.native(segment);
+    const realTempRoot = fs.realpathSync.native(tempRoot);
+    const tempRel = path.relative(realSegment, realTempRoot);
+    return tempRel !== '' && !tempRel.startsWith(`..${path.sep}`) && !path.isAbsolute(tempRel);
+  } catch {
+    return false;
+  }
 }
 
 /** Verify that an approval source is the exact, link-free bundled seed directory for an id. */
@@ -541,11 +580,13 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
       repoRootDir,
     });
     outcome.skipped.push(...allSeedIds);
+    outcome.retryPending = true;
     return outcome;
   }
   const stateResult = readState(repoRootDir, log);
   if (!stateResult.readable) {
     outcome.skipped.push(...allSeedIds);
+    outcome.retryPending = true;
     return outcome;
   }
   const state = stateResult.state;
@@ -704,6 +745,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         // have partially changed bytes or approval state before throwing.
         if (!ownedBeforeAttempt && !ownershipClaimPersisted) seeded.delete(id);
         outcome.skipped.push(id);
+        if (isRetryableProvisioningError(err)) outcome.retryPending = true;
         log?.warn('builtin ghost provisioning failed', {
           id,
           error: err instanceof Error ? err.message : String(err),
@@ -750,6 +792,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           outcome.removed.push(id);
           log?.info('builtin ghost removed: seed no longer bundled', { id });
         } catch (err) {
+          outcome.retryPending = true;
           log?.warn('builtin ghost orphan removal failed', {
             id,
             error: err instanceof Error ? err.message : String(err),
@@ -762,7 +805,9 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
   }
 
   if (!setsEqual(seeded, seededBefore)) {
-    writeState(repoRootDir, { removed: [...tombstones], seeded: [...seeded].sort() }, log);
+    if (!writeState(repoRootDir, { removed: [...tombstones], seeded: [...seeded].sort() }, log)) {
+      outcome.retryPending = true;
+    }
   }
   return outcome;
 }

@@ -27,6 +27,8 @@ import {
   COMPOSER_TEXT_VERTICAL_PADDING,
 } from '@/session/composerTextMetrics';
 import {
+  COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+  COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   COMPOSER_TEXT_PADDING_BOTTOM,
   COMPOSER_TEXT_PADDING_TOP,
 } from '@/session/composerTextPlatformMetrics';
@@ -224,6 +226,10 @@ export function MobileComposerInputRow({
 }: MobileComposerInputRowProps) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const cardLayout = cardActive === true;
+  // 几何居中只看当前是不是收起展示态。resize 在 collapsed 下会把可见高度钉成单行,
+  // 但 mode/manual 与多行草稿判定仍会让 multilineShape 为 true;若据此关掉几何居中,
+  // 收起态文字会继续走 iOS 6/0 光学偏移,对不齐新增的 34pt +。
+  const geometricSingleLine = !cardLayout;
   // RN 里显式 height 压过 minHeight:manual 定高(用户拖过高度)时 frameHeight 可能小于
   // inputFrameMinHeight,直接铺开会把听写停止命中区又压回不足 44pt。数值高度在这里
   // 先 clamp;拖拽中的 Animated 值无法在 JS 侧 clamp(会打断跟手),那一瞬保持动画值,
@@ -266,6 +272,7 @@ export function MobileComposerInputRow({
       selectionColor={selectionColor}
       style={[
         styles.input,
+        geometricSingleLine && styles.inputGeometricSingleLine,
         { maxHeight },
         inputStyle,
       ]}
@@ -278,7 +285,8 @@ export function MobileComposerInputRow({
       style={[
         styles.row,
         compact && styles.rowCompact,
-        multilineShape && styles.rowMultiline,
+        geometricSingleLine && styles.rowCollapsedTouch,
+        !geometricSingleLine && multilineShape && styles.rowMultiline,
         cardLayout && styles.rowCard,
         rowStyle,
       ]}
@@ -289,7 +297,8 @@ export function MobileComposerInputRow({
       <View
         style={[
           styles.mainRow,
-          multilineShape && styles.mainRowMultiline,
+          geometricSingleLine && styles.mainRowCollapsedTouch,
+          !geometricSingleLine && multilineShape && styles.mainRowMultiline,
           !cardLayout && voicePlacement?.inline && styles.mainRowVoiceInset,
         ]}
       >
@@ -297,6 +306,8 @@ export function MobileComposerInputRow({
         <Animated.View
           style={[
             styles.inputFrame,
+            // 收起单行与 34pt + 并排：输入盒在行内居中。
+            geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
           ]}
@@ -503,9 +514,15 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'column',
     minHeight: 50,
+    overflow: 'visible',
     paddingHorizontal: spacing.md,
     paddingVertical: 10,
     position: 'relative',
+  },
+  // 收起态给 leading 的 44pt 热区留出父边界,避免溢出子节点点不到。
+  rowCollapsedTouch: {
+    minHeight: MOBILE_COMPOSER_MIN_TOUCH_TARGET + 6,
+    paddingVertical: 3,
   },
   rowMultiline: {
     borderRadius: 30, // 组件几何:composer 聚焦形态专用,非通用圆角档
@@ -528,6 +545,10 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     flexGrow: 1,
     gap: MOBILE_COMPOSER_TOOL_GAP,
     minWidth: 0,
+    overflow: 'visible',
+  },
+  mainRowCollapsedTouch: {
+    minHeight: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   },
   mainRowMultiline: {
     alignItems: 'flex-end',
@@ -541,6 +562,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     flexDirection: 'row',
     minWidth: 0,
     position: 'relative',
+  },
+  inputFrameSingleLine: {
+    alignItems: 'center',
   },
   // TextInputWrapper(expo-paste-input)接管 TextInput 在 inputFrame row 里的
   // flex:1 位置;内部保持 row + stretch,TextInput 自身 flex:1 继续填满,
@@ -578,14 +602,21 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
   },
+  inputGeometricSingleLine: {
+    paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+    paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
+    textAlignVertical: 'center',
+  },
   // 语音按钮的 absolute 锚点：简洁态贴输入行右侧垂直居中；
   // 有发送按钮时向左让位；卡片态下沉到底部工具排的占位上。
   voiceButtonAnchor: {
-    // iOS 的文字 padding 是 6/0,按钮随文字下移 3pt；Android 保持 3/3,
-    // 不应继承 iOS 的补偿。
-    bottom: Platform.OS === 'ios' ? 8 : 11,
+    // 收起态按行垂直居中,与 34pt 加号 / 文字共中线;
+    // 不再钉在底部,避免行高变化后麦克风掉下去。
+    bottom: undefined,
     position: 'absolute',
     right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
+    top: '50%',
+    transform: [{ translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2 }],
     zIndex: 2,
   },
   voiceButtonAnchorWithTrailing: {
@@ -593,6 +624,8 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   },
   voiceButtonAnchorCard: {
     bottom: 8,
+    top: undefined,
+    transform: [],
   },
   // 外层横跨全行但 box-none 穿透触摸，只有中间的窄命中条接手势，
   // 避免与左右两侧按钮的 hitSlop 抢触摸。

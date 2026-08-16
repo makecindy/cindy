@@ -127,6 +127,7 @@
       "chipMetrics": "用量指示器",
       "memory": "記憶",
       "subagentModels": "Subagent",
+      "visionBridge": "視覺橋",
       "compaction": "上下文壓縮",
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
@@ -308,6 +309,7 @@
         "statusInstalled": "已安裝",
         "statusNotInstalled": "未安裝",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "安裝",
           "reinstall": "重新安裝",
@@ -466,13 +468,18 @@
         "hint": "置頂任務以卡片形式展示，含執行狀態摘要，卡片高度隨摘要長短錯落；側欄拉寬時自動分 2~3 列。",
         "aria": "切換側邊欄卡片模式"
       },
+      "sidebarMainListMode": {
+        "label": "任務列表顯示方式",
+        "hint": "側邊欄主列表（置頂以外）的顯示形態：文字為緊湊單行，列表為帶預覽的兩行。",
+        "aria": "切換任務列表顯示方式"
+      },
       "layout": {
         "label": "面板佈局",
         "hint": "面板位置和寬度會保留到下次啟動。如果佈局變得難以使用，可以恢復預設排列。",
         "reset": "恢復預設佈局",
         "resetSuccess": "已恢復預設面板佈局",
         "resetFailed": "無法恢復預設面板佈局",
-        "saved": "面板位置已儲存；可在「設定 → 外觀」中恢復預設佈局",
+        "saved": "面板位置已儲存；可在「設定 → 一般」的「外觀」區段恢復預設配置",
         "saveFailed": "無法儲存面板位置"
       }
     },
@@ -634,8 +641,8 @@
         "zh-CN": "簡體中文",
         "en": "English",
         "ja": "日本語",
-    "ko": "한국어",
-    "zh-TW": "繁體中文"
+        "ko": "한국어",
+        "zh-TW": "繁體中文"
       }
     },
     "userProfile": {
@@ -979,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "監聽權限",
-          "tooltip": "用於監聽 Fn、單獨 Command / Option / Control 以及帶 Fn 的語音輸入快捷鍵。普通組合鍵和 F1-F24 單鍵通常不需要。已授權表示當前執行中的 App 可以監聽快捷鍵；開發版可能由 Terminal 承載授權。"
+          "tooltip": "用於監聽 Fn、單獨 Command / Option / Control、帶 Fn 的快捷鍵，以及 F1-F24 單鍵按住說話的放開事件。普通組合鍵不需要。已授權表示目前執行中的 App 可以監聽快捷鍵；開發版可能由 Terminal 承載授權。"
         },
         "accessibility": {
           "label": "自動輸入",
@@ -1452,7 +1459,11 @@
           "confirmTitle": "確認覆蓋",
           "confirmSubtitle": "選擇要從 {{source}} 複製的欄位。",
           "source": "來源",
-          "columns": { "field": "欄位", "source": "來源值", "target": "目前值" },
+          "columns": {
+            "field": "欄位",
+            "source": "來源值",
+            "target": "目前值"
+          },
           "fields": {
             "endpointBundle": "端點與 API 協議",
             "baseUrl": "基礎 URL",
@@ -1479,7 +1490,11 @@
           "targetReady_other": "可填入 {{count}} 個欄位",
           "targetIncompatible_one": "{{count}} 個欄位不相容",
           "targetIncompatible_other": "{{count}} 個欄位不相容",
-          "status": { "needsConfirm": "需要確認", "ready": "可以填入", "incompatible": "不相容" },
+          "status": {
+            "needsConfirm": "需要確認",
+            "ready": "可以填入",
+            "incompatible": "不相容"
+          },
           "secretIndependent": "複製到 {{target}} 的獨立本機金鑰",
           "overwriteCurrent": "取代目前值",
           "fillEmpty": "填入目前空白欄位",
@@ -2306,16 +2321,16 @@
       "title": "Subagent",
       "description": "分別設定 Claude Code 和 Codex 執行子任務時使用的預設模型，併為 Codex Subagent 配置執行護欄。設定按入口生效，不會為每個模型單獨儲存。",
       "unspecified": "不指定（跟隨原邏輯）",
-      "hint": "可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
+      "hint": "Claude Code Subagent 僅支援指定模型，推理強度沿用 Claude Code 原生邏輯。可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
       "codexV2ModelHint": "Subagent 預設模型必須是 Codex 自身模型目錄內的模型，目錄外的模型（如經相容橋接入的第三方模型）會被 Codex 拒絕；Sol / Terra（Multi-Agent V2）進一步只接受 V2 目錄模型（當前為 gpt-5.6-sol 與 gpt-5.6-terra），舊版（V1）無 V2 限制。",
       "saveFailed": "儲存 Subagent 設定失敗",
       "guardrails": {
         "title": "Codex Subagent 護欄",
         "enableHint": "允許 Codex 在執行任務時建立一次性 Subagent。關閉後對舊版（V1）和 Sol / Terra（V2）都生效。",
         "enableAria": "允許 Codex 使用 Subagent",
-        "cindyPolicyLabel": "使用 Cindy 自定義 Subagent 策略",
-        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃和委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
-        "cindyPolicyAria": "使用 Cindy 自定義 Subagent 策略",
+        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
+        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃與委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
+        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略",
         "concurrencyLabel": "Subagent 併發上限",
         "concurrencyHint": "同時執行的 Subagent 數量上限。每個 Subagent 都會消耗模型配額，調低更省；Ultra 檔位下併發達到 8 時 Codex 會發出用量警告。",
         "concurrencyFollowDefault": "跟隨 Codex 預設（舊版 V1 為 6，Sol / Terra 為 3）",
@@ -2324,9 +2339,6 @@
         "nestedLabel": "允許 Subagent 再建立 Subagent",
         "nestedHint": "僅舊版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）會忽略此設定。",
         "nestedAria": "允許 Subagent 再建立 Subagent",
-        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
-        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃與委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
-        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略",
         "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。"
       },
       "toast": {
@@ -2418,6 +2430,37 @@
     "compatMode": {
       "title": "小技巧",
       "description": "一些功能性開關，部分需要新建任務才會生效(具體見各 cell 說明)。"
+    },
+    "visionBridge": {
+      "title": "視覺橋",
+      "description": "讓純文字模型獲得看圖能力：用獨立的多模態模型把圖片轉成文字描述後再交給純文字模型。",
+      "enableLabel": "啟用視覺橋",
+      "enableHint": "關閉時所有模型行為與之前完全一致。開啟後，下方勾選的模型會把圖片經視覺後端轉成文字描述。啟用後，傳送給這些模型的圖片以及同訊息文字提示會傳送給你選擇的視覺後端。",
+      "enableAria": "切換視覺橋",
+      "toast": {
+        "saved": "視覺橋設定已儲存",
+        "saveFailed": "儲存視覺橋設定失敗"
+      },
+      "capability": {
+        "vision": "已知支援視覺",
+        "noVision": "已知純文字",
+        "unknown": "視覺能力未知"
+      },
+      "targetModels": {
+        "label": "走視覺橋的模型",
+        "hint": "純文字模型（如 DeepSeek）預設已勾選。也可以勾選支援視覺的模型——例如故意用更便宜的描述模型來節省 token。",
+        "empty": "暫無可用的模型。",
+        "toggleAria": "切換 {{model}} 的視覺橋"
+      },
+      "backends": {
+        "label": "視覺後端模型",
+        "hint": "選擇最多兩個把圖片轉文字的多模態模型。第二個（備用）可選。",
+        "primary": "主後端",
+        "fallback": "備用",
+        "unset": "未選擇",
+        "noBackup": "無備用",
+        "hintSecondary": "優先使用主後端。主後端失敗且配置了備用時切換到備用。兩者都失敗時圖片無法辨識，會以文字提示代替並提醒你。"
+      }
     },
     "chatEmbedding": {
       "cell": {
@@ -2533,7 +2576,7 @@
       },
       "android": {
         "title": "Android 自動化",
-          "description": "讓 Agent 透過 ADB 檢查並操作已連線的 Android 裝置",
+        "description": "讓 Agent 透過 ADB 檢查並操作已連線的 Android 裝置",
         "toggleAria": "切換 Android 自動化",
         "refresh": "重新檢查",
         "toggleHint": "這個全域性開關只對之後新建的 Agent 會話生效；已在執行的 Agent 會話不受影響。",
@@ -3145,7 +3188,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupPermissionLabel": "群聊新建任務權限檔",
+        "groupPermissionDescription": "群組裡新建任務時統一使用的權限檔（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限檔只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。"
       }
     },
     "shortcuts": {
@@ -4800,7 +4845,10 @@
         "localOnly": "本條訊息的精確變更暫不支援遠端任務。",
         "partialNotice": "本條訊息包含無法精確追蹤的命令或工具寫入；以下僅展示已精確捕獲的部分，不能視為完整補丁。",
         "emptyTitle": "沒有已記錄的變更",
-        "emptyDesc": "這條訊息記錄的補丁中沒有可顯示的檔案變更。"
+        "emptyDesc": "這條訊息記錄的補丁中沒有可顯示的檔案變更。",
+        "crossSessionSwitchDisabled": "正在審查協作任務中的這條訊息，不能在目前任務中切換來源。",
+        "previewUnavailable": "這條訊息記錄的是歷史變更，無法可靠預覽目前磁碟中的檔案內容。",
+        "snapshotPatchUnavailable": "歷史變更快照不能產生面向目前 worktree 的 git apply 指令。"
       },
       "fileCount_one": "{{count}} 個檔案",
       "fileCount_other": "{{count}} 個檔案",
@@ -4858,6 +4906,7 @@
         "in-progress": "git 操作進行中",
         "agent-running": "Agent 正在執行",
         "disabled": "審查不可用",
+        "historical-snapshot": "歷史變更快照為唯讀",
         "remote-device": "遠端設備任務僅支援檢視",
         "remote-ssh": "SSH 工作區審查僅支援檢視"
       },
@@ -5570,6 +5619,7 @@
         "context": "{{value}} 上下文",
         "codexCompatibilityMode": "Codex 相容模式",
         "price": "{{input}}/{{output}} / 百萬",
+        "subscriptionBadgeCompact": "訂閱",
         "fastBadge": "快速"
       },
       "source": {
@@ -5890,6 +5940,7 @@
       "alwaysAllowScoped": "本任務都允許 {{scope}}",
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
+      "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
       "ruleSeparator": "、"
     },
     "deviceSwitcher": {
@@ -6071,6 +6122,11 @@
     "imageMissing": {
       "title": "圖片已丟失"
     },
+    "visionBridge": {
+      "analyzing": "正在辨識圖片中…（{{count}} 張）",
+      "fallback": "視覺橋使用了備用視覺後端（主後端不可用），圖片辨識可能受影響",
+      "unavailable": "視覺橋目前不可用，圖片無法辨識，已以文字提示代替"
+    },
     "newMessageIndicator": {
       "aria": "回到底部，檢視 {{count}} 條新訊息",
       "label_one": "{{count}} 條新訊息",
@@ -6173,7 +6229,10 @@
       "networkShowRaw": "檢視原始錯誤",
       "networkHideRaw": "收起原始錯誤",
       "silentStopContinue": "繼續",
-      "silentStopContinueTitle": "繼續當前任務"
+      "silentStopContinueTitle": "繼續當前任務",
+      "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",
+      "piManagerUnavailable": "遠端 Pi 管理器未就緒，請稍後重試；若持續失敗請到「設定 → 遠端機器」重新安裝 Pi。",
+      "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。"
     },
     "backgroundActivity": {
       "status": "後臺子任務執行中，模型用量仍在消耗…",
@@ -6590,6 +6649,8 @@
       "automationSent": "由自動化傳送",
       "automationSentNamed": "由自動化「{{name}}」傳送",
       "automationViewTask": "檢視自動化",
+      "orcaFromLead": "來自 Lead 的訊息",
+      "orcaFromWorker": "來自 Worker 的訊息",
       "expandLongMessage": "展開全文",
       "collapseLongMessage": "收起",
       "sessionReference": {
@@ -6655,20 +6716,22 @@
       }
     },
     "upgradeBanner": {
-      "description": "遠端 {{hostId}} 的 cc-manager 有新版本可用 — 升級會中斷該機器上當前所有 Claude Code 遠端任務",
-      "upgrading": "正在升級遠端 {{hostId}} 的 cc-manager…",
+      "description": "遠端 {{hostId}} 的 {{manager}} 有新版本可用 — 升級會中斷該機器上當前所有遠端任務",
+      "upgrading": "正在升級遠端 {{hostId}} 的 {{manager}}…",
       "upgrade": "立即升級",
-      "upgradeTitle": "下載並啟動新版本 cc-manager（會中斷當前任務）",
+      "upgradeTitle": "下載並啟動新版本 {{manager}}（會中斷當前任務）",
       "dismissTitle": "暫不升級（下次啟動會再次提示）",
       "failed": "升級失敗：{{message}}",
-      "daemonNotReady": "cc-manager 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
+      "daemonNotReady": "{{manager}} 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "遠端連線已中斷（daemon 可能正在升級或重啟）。本輪已結束 — 請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
       "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷（網路或服務波動），需要審批的操作已轉由你來確認。想少被打斷，可以把任務切到「預設權限」自行掌控。",
+      "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動審批沒完成，確認也沒有送到或沒有被點。這次拒絕不是你點的。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "此模型供應商是本機專屬服務（如 Ollama），SSH 遠端任務無法存取本機位址。請改用 Cindy AI 閘道，或選擇遠端主機可達的模型供應商。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。"
     },
@@ -6940,7 +7003,7 @@
         "remoteSettings": "遠端連線設定",
         "multiSelect": "多選",
         "deselect": "取消勾選",
-        "menuTrigger": "遠端機器",
+        "menuTrigger": "任務範圍",
         "selectedCount_one": "{{count}} 臺機器",
         "selectedCount_other": "{{count}} 臺機器"
       },
@@ -6959,6 +7022,8 @@
         "awaitingPluginSetup": "等待插件設定"
       },
       "showAllSessions": "顯示全部 {{count}} 項",
+      "allSessions": "全部任務",
+      "scopeLocalSessions": "本機任務",
       "dialogues": "對話",
       "newDialogue": "新任務",
       "dialoguesToggleExpand": "展開對話",
@@ -6976,12 +7041,10 @@
       "projects": "專案",
       "newProject": "新建專案",
       "createProjectFailed": "新建專案失敗",
-      "projectsSectionToggleExpand": "展開專案",
-      "projectsSectionToggleCollapse": "收起專案",
       "projectsToggleExpand": "展開所有專案任務",
       "projectsToggleCollapse": "收起所有專案任務",
-      "filterAria": "整理側邊欄（狀態：{{status}}，Agent：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
-      "organizeSidebar": "整理側邊欄",
+      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Agent：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
+      "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
       "filterStatus": {
@@ -6995,8 +7058,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "專案",
-        "date": "日期"
+        "project": "按專案分組",
+        "flat": "平鋪",
+        "device": "按裝置分組",
+        "dialogue": "對話歸為一組"
+      },
+      "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
+      "deviceGroup": {
+        "local": "本機",
+        "offline": "離線",
+        "collapse": "收起該裝置",
+        "expand": "展開該裝置"
+      },
+      "foldAll": {
+        "collapseGroups": "收起所有分組",
+        "collapseProjects": "收起專案分組",
+        "collapseDevices": "收起裝置分組",
+        "expandAll": "展開所有分組"
       },
       "filterLastActivity": {
         "1d": "1 天",
@@ -7006,10 +7084,12 @@
         "all": "全部"
       },
       "filterSortBy": {
-        "recency": "最近優先",
-        "time": "最早優先",
+        "recency": "按時間排序",
         "manual": "手動排序",
-        "alphabetic": "字母排序"
+        "priority": "優先級"
+      },
+      "filterSortByTip": {
+        "priority": "等你處理的排在最前，然後是未讀、執行中，其餘按時間"
       },
       "filterStatusHeading": "狀態",
       "filterAgentHeading": "Agent",
@@ -7018,6 +7098,24 @@
       "filterSortByHeading": "排序",
       "filterProjectsHeading": "專案",
       "filterAllProjects": "所有專案",
+      "filterHeading": "篩選",
+      "filterSummaryNone": "無",
+      "filterSummaryActive": "{{count}} 項生效",
+      "filterReset": "重設篩選",
+      "displayHeading": "顯示",
+      "taskInfoHeading": "任務資訊",
+      "taskInfoSummaryNone": "無",
+      "taskInfoSummarySeparator": "、",
+      "taskInfo": {
+        "time": "時間",
+        "pr": "PR 狀態",
+        "tokens": "Token",
+        "cost": "費用"
+      },
+      "taskInfoTip": {
+        "tokens": "累計 Token",
+        "cost": "累計費用"
+      },
       "dateGroup": {
         "today": "今天",
         "yesterday": "昨天",
@@ -9010,6 +9108,7 @@
       "archiveWorkerAria": "歸檔 Worker {{name}}",
       "createWorker": "建立新 Worker",
       "hardLimitHint": "已達硬上限 {{count}} 個 · 歸檔現有 Worker 後可繼續建立",
+      "hardLimitSettingsHint": "已達硬上限 {{count}} 個 · 點擊前往協同設定調整",
       "softLimitHint": "已超過軟上限 {{count}} 個 · Worker 過多會增加記憶體佔用",
       "settingsCollaboration": "設定 · 協同",
       "layoutMenuLabel": "Worker 列表顯示方式",
@@ -9295,13 +9394,20 @@
         "endsAt": "套餐將於 {{date}} 結束",
         "cancelAction": "取消訂閱",
         "cancelConfirmTitle": "取消當前訂閱？",
-        "cancelConfirmDescription": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至 {{date}}，之後不再續費。取消後無法在應用內恢復，本計費週期結束前也無法購買新套餐。",
-        "cancelConfirmDescriptionWithoutDate": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至本計費週期結束，之後不再續費。取消後無法在應用內恢復，本計費週期結束前也無法購買新套餐。",
+        "cancelConfirmDescription": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至 {{date}}，之後不再續費。本計費週期結束前無法購買新套餐。",
+        "cancelConfirmDescriptionWithoutDate": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至本計費週期結束，之後不再續費。本計費週期結束前無法購買新套餐。",
         "cancelConfirmAction": "確認取消",
         "cancelSuccess": "已取消自動續費，當前套餐可使用至 {{date}}。",
         "cancelSuccessWithoutDate": "已取消自動續費，當前套餐將在本計費週期結束後到期。",
         "cancelNotSupported": "當前訂閱暫不支援取消。",
-        "cancelFailed": "取消訂閱失敗，請稍後重試。"
+        "cancelFailed": "取消訂閱失敗，請稍後重試。",
+        "resumeAction": "恢復訂閱",
+        "resumeConfirmTitle": "恢復目前訂閱？",
+        "resumeConfirmDescription": "恢復後將在續費日自動續費。",
+        "resumeConfirmAction": "恢復訂閱",
+        "resumeSuccess": "已恢復訂閱，將按原計畫自動續費。",
+        "resumeNotAvailable": "目前訂閱暫不支援恢復，請查看最新訂閱狀態後重試。",
+        "resumeFailed": "未能恢復訂閱，請稍後重試。"
       },
       "topupCard": {
         "action": "餘額充值"

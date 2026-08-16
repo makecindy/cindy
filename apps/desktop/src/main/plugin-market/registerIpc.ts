@@ -4,7 +4,10 @@ import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { isGhostInstallApprovalToken, type GhostManifest } from '../../shared/ghost.js';
-import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';
+import {
+  isPluginMarketCustomIconKey,
+  type PluginMarketSnapshot,
+} from '../../shared/pluginMarket.js';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import {
   sendToTrustedAppWindows,
@@ -62,13 +65,50 @@ async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOpti
  * default-install plugins are provisioned as soon as an app owner is ready.
  * The Plugins page keeps the same call as a later retry path.
  */
-export async function syncDefaultMarketPlugins(): Promise<void> {
+export type DefaultMarketPluginSyncOutcome = 'completed' | 'deferred' | 'failed';
+
+export function defaultMarketPluginSyncOutcome(
+  snapshot: PluginMarketSnapshot,
+  reconciliationOutcome: 'completed' | 'failed' = 'completed',
+): DefaultMarketPluginSyncOutcome {
+  if (
+    (snapshot.unavailableReason === null || snapshot.unavailableReason === 'not-configured')
+    && reconciliationOutcome === 'completed'
+  ) {
+    return 'completed';
+  }
+  if (
+    snapshot.unavailableReason === 'session-switching'
+    || snapshot.unavailableReason === 'authentication-required'
+  ) {
+    return 'deferred';
+  }
+  return 'failed';
+}
+
+export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyncOutcome> {
   try {
-    await snapshotAndSignalRemovalNotice();
+    let reconciliationOutcome: 'completed' | 'failed' | null = null;
+    const snapshot = await snapshotAndSignalRemovalNotice({
+      onDefaultReconciliationOutcome: (outcome) => {
+        reconciliationOutcome = outcome;
+      },
+    });
+    const outcome = defaultMarketPluginSyncOutcome(
+      snapshot,
+      reconciliationOutcome ?? 'completed',
+    );
+    if (outcome === 'failed') {
+      log.warn('default plugin startup sync incomplete', {
+        unavailableReason: snapshot.unavailableReason,
+      });
+    }
+    return outcome;
   } catch (error) {
     log.warn('default plugin startup sync failed', {
       error: error instanceof Error ? error.message : String(error),
     });
+    return 'failed';
   }
 }
 

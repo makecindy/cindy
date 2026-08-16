@@ -21,6 +21,7 @@ import {
   isSafeGhostRelativePath,
   isOfficialGhostId,
   validateGhostManifest,
+  validateNormalizedGhostManifest,
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -286,6 +287,8 @@ export interface PluginMarketSnapshotOptions {
   deferDefaultReconciliation?: boolean;
   /** 延后对账完成（成功或失败）后通知 IPC 层刷新一次性提示。 */
   onDeferredReconciliationSettled?: () => void;
+  /** Main-only completion signal; it is not part of the Renderer snapshot. */
+  onDefaultReconciliationOutcome?: (outcome: 'completed' | 'failed') => void;
 }
 
 /**
@@ -595,11 +598,29 @@ export class PluginMarketService {
     // before its ledger write. Wait for queued ledger mutations before deciding
     // whether a default plugin should be installed again.
     await this.ledgerMutation;
-    const reconcileDefaults = async () => {
+    const reconcileDefaults = async (): Promise<'completed' | 'failed'> => {
       // 自定义来源只影响自己的目录发现；暂时不可读的来源不能阻塞官方默认安装。
       // 已经落地的同 id 插件仍由 applyDefaultInstalls → installDetail 的本地事实检查保护。
-      await this.applyDefaultInstalls(plugins, owner, ledger);
-      await this.applyDefaultUpgrades(plugins, owner, ledger);
+      let completed = true;
+      try {
+        if (!(await this.applyDefaultInstalls(plugins, owner, ledger))) completed = false;
+      } catch (error) {
+        completed = false;
+        log.warn('default plugin install reconciliation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        if (!(await this.applyDefaultUpgrades(plugins, owner, ledger))) completed = false;
+      } catch (error) {
+        completed = false;
+        log.warn('default plugin upgrade reconciliation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const outcome = completed ? 'completed' : 'failed';
+      options.onDefaultReconciliationOutcome?.(outcome);
+      return outcome;
     };
     if (!options.deferDefaultReconciliation) await reconcileDefaults();
     requireSameMarketOwner(owner);
@@ -897,7 +918,7 @@ export class PluginMarketService {
       // install.ts:184-191 的打包前比对同向（但此处比对的是预览清单而非
       // 实际打包字节，名字/版本/作者差异不在此处检测）。
       if (options.expectedManifest !== undefined) {
-        const reviewed = validateGhostManifest(options.expectedManifest);
+        const reviewed = validateNormalizedGhostManifest(options.expectedManifest);
         // 畸形 payload 会造成 ghostPermissionBaselineKey crash（slots.includes
         // 等字段解引用），先验证再比对。验证失败时直接拒——审阅过的清单连基本
         // 结构都不对，不能信任。
@@ -1609,14 +1630,14 @@ export class PluginMarketService {
     }
 
     const reviewedManifest = options.reviewedManifest
-      ? validateGhostManifest(options.reviewedManifest)
+      ? validateNormalizedGhostManifest(options.reviewedManifest)
       : null;
     if (reviewedManifest && !reviewedManifest.ok) {
       throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
     }
     const permissionCap =
       options.permissionPolicy?.mode === 'cap'
-        ? validateGhostManifest(options.permissionPolicy.manifest)
+        ? validateNormalizedGhostManifest(options.permissionPolicy.manifest)
         : null;
     if (permissionCap && !permissionCap.ok) {
       throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
@@ -2151,7 +2172,8 @@ export class PluginMarketService {
     plugins: readonly VisiblePluginSummary[],
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    let completed = true;
     const installSubject = defaultInstallSubject(owner);
     const counts = ghostIdCounts(plugins);
     const uniqueGhostIds = new Set(
@@ -2225,6 +2247,7 @@ export class PluginMarketService {
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。
         if (!(error instanceof SilentDefaultInstallCancelledError)) {
+          completed = false;
           log.warn('default plugin install failed', {
             pluginId: summary.id,
             error: error instanceof Error ? error.message : String(error),
@@ -2232,13 +2255,15 @@ export class PluginMarketService {
         }
       }
     }
+    return completed;
   }
 
   private async applyDefaultUpgrades(
     plugins: readonly VisiblePluginSummary[],
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    let reconciled = true;
     const local = this.localInstallSnapshot(ledger);
     const completed: Array<{
       name: string | null;
@@ -2251,8 +2276,10 @@ export class PluginMarketService {
         hasPendingGhostCalls(summary.ghostId) ||
         hasRunningGhostErrand(summary.ghostId) ||
         hasRunningGhostCindyWork(summary.ghostId)
-      )
+      ) {
+        reconciled = false;
         continue;
+      }
       try {
         await this.withMutation(summary.id, async () => {
           requireSameMarketOwner(owner);
@@ -2343,7 +2370,10 @@ export class PluginMarketService {
           }
         });
       } catch (error) {
-        if (!(error instanceof SilentUpgradeBusyError)) {
+        if (error instanceof SilentUpgradeBusyError) {
+          reconciled = false;
+        } else {
+          reconciled = false;
           log.warn('default plugin upgrade failed', {
             pluginId: summary.id,
             error: error instanceof Error ? error.message : String(error),
@@ -2365,6 +2395,7 @@ export class PluginMarketService {
         hasPermissionExpansion,
       });
     }
+    return reconciled;
   }
 
   private localInstallSnapshot(

@@ -23,6 +23,7 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
   type GhostManifestLocaleResource,
@@ -1229,6 +1230,11 @@ export class GhostManager {
     retryPending: string[];
   }> {
     return this.runExclusiveMutation(() => this.migrateLegacyApprovalsUnlocked());
+  }
+
+  /** True only while the durable migration ledger still carries retry work. */
+  hasPendingLegacyApprovalMigration(): boolean {
+    return this.receiptStore.readMigrationLedger()?.state === 'in-progress';
   }
 
   private async migrateLegacyApprovalsUnlocked(): Promise<{
@@ -3552,7 +3558,7 @@ export class GhostManager {
     });
     const sourceManifestRaw = JSON.parse(fs.readFileSync(sourceManifestPath, 'utf8')) as unknown;
     const sourceManifest = validateGhostManifest(sourceManifestRaw);
-    const expectedManifest = validateGhostManifest(manifest);
+    const expectedManifest = validateNormalizedGhostManifest(manifest);
     if (
       !sourceManifest.ok ||
       !expectedManifest.ok ||

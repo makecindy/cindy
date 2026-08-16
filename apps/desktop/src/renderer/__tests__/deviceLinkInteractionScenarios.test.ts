@@ -951,7 +951,7 @@ describe('远程交互接线不变式', () => {
     expect(finalize).toBeGreaterThan(sync);
   });
 
-  it('会话同步 New Maker 草稿默认不应打 modelChosenByVendor 显式选择标记', () => {
+  it('已有任务换模会打选模标记,只改思考档 / Fast 不会', () => {
     const chatInputSrc = read('components/new-chat/ChatInput.tsx');
     const syncStart = chatInputSrc.indexOf('const syncSessionDraftModelPrefs');
     const syncEnd = chatInputSrc.indexOf('const persistFastModeChange', syncStart);
@@ -959,17 +959,32 @@ describe('远程交互接线不变式', () => {
     expect(syncEnd).toBeGreaterThan(syncStart);
     const syncBody = chatInputSrc.slice(syncStart, syncEnd);
     expect(syncBody).toContain('patchVendorPrefsPreservingModelChoice');
-    expect(syncBody).toContain('markModelChoice: false');
+    expect(syncBody).toContain('markModelChoice ? patchVendorPrefs : patchVendorPrefsPreservingModelChoice');
+    expect(syncBody).toContain("opts.markModelChoice === true");
+    expect(syncBody).toContain('markModelChoice');
+    expect(syncBody).toContain('{ model: modelId, providerId: activeProviderId ?? null }');
+    expect(syncBody).not.toContain(': { model: modelId }');
     expect(syncBody).toContain(
       'opts.remoteDeviceId ?? getSessionDeviceId(sessionId) ?? deviceLinkDeviceId',
     );
     expect(syncBody).toContain(".invoke(remoteDeviceId, 'maker:apply-new-maker-draft-pref'");
-    expect(syncBody).not.toContain('patchVendorPrefs(vendor');
+
+    expect(chatInputSrc).toContain('markModelChoice: true');
+    expect(chatInputSrc).toContain('agentKind: targetAgentKind');
 
     const appSrc = read('App.tsx');
     expect(appSrc).toContain(
       'markModelChoice === false ? patchVendorPrefsPreservingModelChoice : patchVendorPrefs',
     );
+    expect(appSrc).toContain('model: modelId');
+    expect(appSrc).not.toContain("markModelChoice === false ? {} : { model: modelId }");
+
+    const draftSrc = read('state/newMakerDraft.ts');
+    expect(draftSrc).toContain('if (!opts.markModelChoice && modelChosen[vendor] === true)');
+    expect(draftSrc).toContain('delete nextPatch.model');
+    expect(draftSrc).toContain('delete nextPatch.providerId');
+    expect(draftSrc).toContain('if (incomingModel !== savedModel)');
+    expect(draftSrc).toContain('delete nextPatch.effort');
 
     const newMakerDraftRouteSrc = read('features/cc-agent/NewMakerDraftRoute.tsx');
     const pushActiveStart = newMakerDraftRouteSrc.indexOf('const pushActiveDraftPref');
