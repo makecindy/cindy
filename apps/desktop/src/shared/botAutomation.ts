@@ -143,6 +143,8 @@ export interface BotAutomationExecutionPlan {
   delivery: {
     targetRouteId: string | null;
     ownerGeneration: number | null;
+    /** Frozen completion destination. Missing only on legacy runs created before this field. */
+    targetSessionId?: string | null;
   };
   limits: {
     timeoutMs: number;

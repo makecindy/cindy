@@ -689,6 +689,14 @@ export function registerBotAutomationHandlers(deps: BotAutomationHandlerDeps): v
         if (!row.run.sessionId) {
           throwIpcError('PRECONDITION_FAILED', 'The completed Bot task is unavailable');
         }
+        const executionPlan = parseBotAutomationExecutionPlan(row.run.executionPlanJson);
+        const expectedTargetSessionId = executionPlan?.delivery.targetSessionId;
+        if (expectedTargetSessionId === undefined) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'The Bot delivery task snapshot is unavailable; run the automation again',
+          );
+        }
 
         let target:
           | {
@@ -730,6 +738,12 @@ export function registerBotAutomationHandlers(deps: BotAutomationHandlerDeps): v
               'The Bot delivery route ownership changed; the old result will not be redirected',
             );
           }
+          if (route.currentSessionId !== expectedTargetSessionId) {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'The Bot delivery route now points to a different task; the old result will not be redirected',
+            );
+          }
           target = {
             sessionId: route.currentSessionId,
             channelId: route.channelId,
@@ -737,11 +751,17 @@ export function registerBotAutomationHandlers(deps: BotAutomationHandlerDeps): v
             ownerGeneration: route.ownerGeneration,
           };
         } else {
-          if (!activeProfile.canonicalSessionId) {
-            throwIpcError('PRECONDITION_FAILED', 'The Bot canonical task is unavailable');
+          if (activeProfile.canonicalSessionId !== expectedTargetSessionId) {
+            throwIpcError(
+              'PRECONDITION_FAILED',
+              'The Bot canonical task changed; the old result will not be redirected',
+            );
+          }
+          if (!expectedTargetSessionId) {
+            throwIpcError('PRECONDITION_FAILED', 'The frozen Bot canonical task is unavailable');
           }
           target = {
-            sessionId: activeProfile.canonicalSessionId,
+            sessionId: expectedTargetSessionId,
             channelId: null,
             routeId: null,
             ownerGeneration: 0,

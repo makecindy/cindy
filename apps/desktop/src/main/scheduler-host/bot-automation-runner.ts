@@ -43,7 +43,10 @@ import type {
   BotAutomationDelegateTargetSnapshot,
   BotAutomationExecutionPlan,
 } from '../../shared/botAutomation.js';
-import { normalizeBotAutomationExecutionPolicy } from '../../shared/botAutomation.js';
+import {
+  normalizeBotAutomationExecutionPolicy,
+  parseBotAutomationExecutionPlan,
+} from '../../shared/botAutomation.js';
 import type {
   BotDelegationCapabilitySnapshot,
   BotDelegationWorkspaceSnapshot,
@@ -163,6 +166,7 @@ async function buildAutomationExecutionPlan(input: {
   executionPolicyJson: string;
   targetRouteId: string | null;
   targetRouteOwnerGeneration: number | null;
+  targetSessionId: string | null;
   createdAt: number;
 }): Promise<BotAutomationExecutionPlan> {
   const policy = normalizeBotAutomationExecutionPolicy(parseObject(input.executionPolicyJson));
@@ -235,6 +239,7 @@ async function buildAutomationExecutionPlan(input: {
     delivery: {
       targetRouteId: input.targetRouteId,
       ownerGeneration: input.targetRouteOwnerGeneration,
+      targetSessionId: input.targetSessionId,
     },
     limits: {
       timeoutMs: policy.timeoutMs,
@@ -463,6 +468,7 @@ async function resolveBotAutomationDeliveryTarget(
   targetRouteId: string | null,
   botId: string,
   expectedOwnerGeneration: number | null,
+  expectedSessionId: string | null | undefined,
 ): Promise<
   | { ok: true; target: BotAutomationDeliveryTarget | null }
   | { ok: false; error: string }
@@ -490,6 +496,12 @@ async function resolveBotAutomationDeliveryTarget(
   if (!profile || profile.status !== 'active') {
     return { ok: false, error: 'Bot is no longer active; completion was not delivered' };
   }
+  if (expectedSessionId === undefined) {
+    return {
+      ok: false,
+      error: 'Bot automation delivery task snapshot is unavailable; completion was not redirected',
+    };
+  }
   if (targetRouteId) {
     const [route] = await db
       .select({
@@ -511,6 +523,12 @@ async function resolveBotAutomationDeliveryTarget(
           error: 'Target route ownership changed while the automation was running',
         };
       }
+      if (route.currentSessionId !== expectedSessionId) {
+        return {
+          ok: false,
+          error: 'Target route task changed while the automation was running',
+        };
+      }
       return {
         ok: true,
         target: {
@@ -526,6 +544,12 @@ async function resolveBotAutomationDeliveryTarget(
       error: route
         ? `Target route is ${route.status} or has no active task`
         : 'Target route no longer exists',
+    };
+  }
+  if (profile.canonicalSessionId !== expectedSessionId) {
+    return {
+      ok: false,
+      error: 'Bot canonical task changed while the automation was running',
     };
   }
   return {
@@ -635,6 +659,7 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
       }
 
       let targetRouteOwnerGenerationSnapshot: number | null = null;
+      let targetSessionIdSnapshot = profile.canonicalSessionId;
       if (link.targetRouteId) {
         const [targetRoute] = await db
           .select({
@@ -655,6 +680,7 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
           throw new Error('Bot automation target route is unavailable');
         }
         targetRouteOwnerGenerationSnapshot = targetRoute.ownerGeneration;
+        targetSessionIdSnapshot = targetRoute.currentSessionId;
       }
 
       const createdAt = Date.now();
@@ -667,6 +693,7 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
         executionPolicyJson: link.executionPolicyJson,
         targetRouteId: link.targetRouteId,
         targetRouteOwnerGeneration: targetRouteOwnerGenerationSnapshot,
+        targetSessionId: targetSessionIdSnapshot,
         createdAt,
       });
       const claimed = await db
@@ -976,6 +1003,7 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
       link.targetRouteId,
       profile.id,
       targetRouteOwnerGenerationSnapshot,
+      executionPlan.delivery.targetSessionId,
     );
     if (deliveryTarget.ok && deliveryTarget.target && this.deps.enqueueDelivery) {
       const text = [
@@ -1123,6 +1151,7 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
     targetRouteId: string | null,
     botId: string,
     expectedOwnerGeneration: number | null,
+    expectedSessionId: string | null | undefined,
   ): ReturnType<typeof resolveBotAutomationDeliveryTarget> {
     return resolveBotAutomationDeliveryTarget(
       this.deps.getDb(),
@@ -1130,6 +1159,7 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
       targetRouteId,
       botId,
       expectedOwnerGeneration,
+      expectedSessionId,
     );
   }
 }
@@ -1157,6 +1187,7 @@ export async function reconcileBotAutomationRuns(
       targetRouteOwnerGenerationSnapshot: botAutomationRuns.targetRouteOwnerGenerationSnapshot,
       deliveryOutboxId: botAutomationRuns.deliveryOutboxId,
       deliveryStatus: botAutomationRuns.deliveryStatus,
+      executionPlanJson: botAutomationRuns.executionPlanJson,
       botId: botAutomationLinks.botId,
       scheduleName: schedules.name,
       sessionStatus: sessions.status,
@@ -1221,6 +1252,7 @@ export async function reconcileBotAutomationRuns(
           row.targetRouteIdSnapshot,
           row.botId,
           row.targetRouteOwnerGenerationSnapshot,
+          parseBotAutomationExecutionPlan(row.executionPlanJson)?.delivery.targetSessionId,
         );
         if (deliveryTarget.ok && deliveryTarget.target && deps.enqueueDelivery) {
           const stableRunIdentity = row.scheduleRunId ?? row.id;
