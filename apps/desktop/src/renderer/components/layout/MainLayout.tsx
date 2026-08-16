@@ -721,6 +721,32 @@ export function MainLayout() {
     setIsRightSidebarCollapsed(true);
   }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached]);
 
+  const handleToggleRightSidebar = useCallback(() => {
+    if (!rsbWindow.loaded) return;
+    if (rsbDetached) {
+      if (rsbWindow.open) {
+        void window.electronAPI.rightSidebarWindow
+          .close()
+          .catch((err) => log.warn('hide detached right sidebar failed', err));
+        return;
+      }
+      handleOpenRightSidebar();
+      return;
+    }
+    if (isRightSidebarCollapsed) {
+      handleOpenRightSidebar();
+      return;
+    }
+    handleCloseRightSidebar();
+  }, [
+    handleCloseRightSidebar,
+    handleOpenRightSidebar,
+    isRightSidebarCollapsed,
+    rsbDetached,
+    rsbWindow.loaded,
+    rsbWindow.open,
+  ]);
+
   // 关掉右侧栏最后一个 tab 时自动收起(由 RightSidebarShell 在 tab 数 >0→0 时回调)。
   // detached 子窗口形态不在此处理(那时主窗根本不渲染内嵌 Shell,也收不到此回调)。
   // 走 requestAnimateNextChange 让收起有 250ms 动画,与用户手动折叠观感一致(规则 7)。
