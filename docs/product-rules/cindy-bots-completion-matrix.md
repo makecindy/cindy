@@ -2,21 +2,26 @@
 
 > 状态：Draft 工程验收正本。它把《Cindy Bots 完整设计与迁移契约》的终点线映射到当前实现和自动验证。真实 IM、真实定时触发、真实 Bot 委派、真实旧库升级与双端视觉目检仍必须由 Chris 在场完成；在这些验收通过前不得把 Draft 转为 Ready。
 
+北极星用例：创建“总控”Bot，挂载 Telegram，订阅任意本机任务的完成、失败和待决策事件；事件持久进入 Bot 收件匣并自动唤醒 Bot，Bot 再通过会话控制面查询事实、推进工作，最后把自己的处理结果发回 Telegram。PR 总管是同一模型下挂 Automation 的专用模板，不是另一套产品。
+
 ## 产品完成线
 
 | 能力 | 生产实现 | 自动证据 | 当前结论 |
 |---|---|---|---|
 | Hermes 风格 Profile、SOUL、USER context | `botProfileVersioning.ts`、`botProfileRuntime.ts`、`botProfileDefaults.ts` | `botProfileVersioning.test.ts`、`botProfileRuntime.test.ts` | Profile 版本化；身份源和用户上下文分槽；运行任务固定使用已选版本。 |
+| 开箱创建与模板 | `AddBotDialog.tsx`、`botTemplates.ts`、`botStore.ts` | `botTemplates.test.ts`、`botStore.test.ts`、`botTx.test.ts` | 新 Bot 固定先创建为本地 Profile；总控、PR 总管和普通助理模板一次写入身份、头像、能力与默认事件订阅，再进入真实 canonical 任务。 |
 | 三 Harness runtime 注入 | Claude、Codex、Pi 的 Bot runtime 接线 | `bot-profile-prompt.test.ts`、`codex/index.test.ts`、`bot-skill-policy.test.ts` | 三种 Harness 都消费同一份 Cindy Bot runtime snapshot，不由 UI 拼 prompt。 |
 | Skills、MCP、Toolset、Memory | `botProfileRuntime.ts` 与 maker-core 原生能力策略 | `botCanonicalSession.test.ts` 的资源冻结、漂移和远端能力用例 | 能力必须来自真实 catalog；不可用项进入 degraded/failed，不靠名称猜测。 |
 | canonical、Route、历史、Renew、恢复 | `localDb/ipc/bots.ts`、`botRouteService.ts`、`botLifecycleService.ts` | `botCanonicalSession.test.ts`、`botLifecycleService.test.ts` | canonical 与每条具体 IM lane 分离；历史只读；并发 Renew 使用 CAS；删除后建新任务而不复活旧记录。 |
-| IM adapter 边界 | `im/shared/botRouteTarget.ts`、`hook-control/botRouteTarget.ts`、`botChannelRegistry.ts` | `botRouteTarget.test.ts`、`botChannelRegistry.test.ts`、`botMountedRouteDelivery.test.ts` | Telegram、飞书等仍保留各自引用、卡片、附件、thread 和群历史实现；差异是 native/degraded/unsupported 三态契约。 |
+| 任务事件反向流 | `sessionEventSource.ts`、`botSessionEventService.ts`、0093 migration、`BotEventInboxSettings.tsx` | `botSessionEventService.test.ts`、`botTx.test.ts`、`botMigrationReplay.test.ts` | 任意任务按开放事件名产生完成、失败、元数据和待决策事实；逻辑订阅去重写入持久收件匣，可自动唤醒 Bot，并只把 Bot 的处理结果投递到挂载 Route。 |
+| 会话控制面接线 | `botSessionControl.ts`、`botProfileRuntime.ts` | runtime snapshot 与 Profile 测试 | `none / observe / coordinate` 是 Bot Profile 权限声明；实际查状态、查队列、派活、插话和停止仍由 `cindy_helper` 控制面逐次鉴权。本 Draft 依赖会话控制面 Draft #2804 提供最终工具契约。 |
+| IM adapter 边界 | `im/shared/botRouteTarget.ts`、`hook-control/botRouteTarget.ts`、`botChannelRegistry.ts`、`im/index.ts` | `botRouteTarget.test.ts`、`botChannelRegistry.test.ts`、`botMountedRouteDelivery.test.ts`、`botRouteDelivery.test.ts` | Telegram、飞书等仍保留各自引用、卡片、附件、thread 和群历史实现；本地 Telegram 精确匹配挂载账号，服务端 relay 保持 `deliveryKey + opId`，不可寻址时失败关闭且不串到本地账号。 |
 | Bot roster 与能力互补 | `botDelegationService.ts`、`bot_delegation.ts` | `botDelegationCapabilityTarget.test.ts`、`botCanonicalSession.test.ts` 委派用例 | roster 只暴露真实 runtime、项目和忙碌状态；权限与数据边界不随委派扩大。 |
 | Bot-to-Bot handoff | `botDelegationService.ts`、父任务右侧栏 `bot-delegations` | 委派循环、深度、预算、取消、恢复、结果投递用例 | 子 Bot 使用自己的 Profile 和工作区；完整子任务持久可查；结果通过 durable delivery 返回冻结目标。 |
 | 项目与 worktree | `botWorkspaceRuntime.ts`、`botRemoteWorkspaceService.ts`、`botWorkspaceLeaseLifecycle.ts` | canonical 测试中的本地/远端创建、恢复、释放与引用保护用例 | worktree 按任务 lease，不归 Profile 永久占用；owner generation 和数据库 attachment 是恢复真相。 |
 | Automation | `bot-automation.ts`、`bot-automation-runner.ts` | `botAutomationRecovery.test.ts`、mutation lock 与 durable note 测试 | 每次触发冻结 Profile、项目、Route、目标任务、委派图、预算和 note namespace；执行结果与投递结果分离。 |
 | 可靠投递 | `botDeliveryOutboxService.ts`、`botMountedRouteDelivery.ts` | ACK、retry、unknown、dead-letter、附件、route generation 用例 | 服务端 relay 可安全重试；本地 adapter 在外部结果未知时停止自动重放并要求显式确认重复风险。 |
-| 旧 IM 数据迁移 | `botImMigrationService.ts`、0092 migration | `botMigrationReplay.test.ts`、`botImMigrationService.test.ts`、`db:validate` | 0092 只新增 Bot 表；旧任务、消息、引用、binding、Telegram 群历史和附件不搬动；apply/rollback 幂等且可续跑。 |
+| 旧 IM 数据迁移 | `botImMigrationService.ts`、0092/0093 migrations | `botMigrationReplay.test.ts`、`botImMigrationService.test.ts`、`db:validate` | 0092 增加 Bot 主体与迁移表，0093 增加事件 ledger、逻辑订阅和收件匣；两者都只增量，旧任务、消息、引用、binding、Telegram 群历史和附件不搬动；apply/rollback 幂等且可续跑。 |
 | Desktop UI | `renderer/features/bots/**` | renderer store、typecheck、设计契约测试 | 左侧 Bots 是固定任务入口；主区域复用真实 Session 与 ChatInput；设置、历史、委派、worktree、Automation 和投递诊断均有入口。 |
 | Mobile UI | `app/bots/[deviceId].tsx`、设备详情入口 | Mobile typecheck、`remoteBots.test.ts`、device-link allowlist 测试 | 手机通过 device-link 只读列出 Bot，并打开真实 canonical 任务；旧 Desktop 明确显示不支持。 |
 
@@ -25,6 +30,7 @@
 | 事件 | 约束后的行为 | 证据入口 |
 |---|---|---|
 | 重复创建 / Renew | 数据库唯一约束 + CAS 只允许一个 winner；失败方清理未使用 workspace。 | `botTx.test.ts`、`botCanonicalSession.test.ts` |
+| 重复任务事件 / Bot 自触发 | event key 与 subscription-event 唯一索引去重；origin、lineage 与 hop 限制阻止 Bot 结果递归唤醒自己。 | `botSessionEventService.test.ts`、0093 indexes |
 | 重复 Automation fire | Scheduler claim 与 Bot mutation lock 串行同一 Automation；execution row 和 delivery idempotency key 去重。 | `botAutomationMutationLock.test.ts`、`botAutomationRecovery.test.ts` |
 | 重复委派 / 循环 | lineage、最大深度、并发数和聚合预算同时约束；数据库事务再次检查并发上限。 | `botCanonicalSession.test.ts` |
 | 用户取消 / 父任务关闭 | 当前委派及后代进入明确终态并中止活动回合；历史任务保持可读。 | `botCanonicalSession.test.ts`、`botLifecycleService.test.ts` |

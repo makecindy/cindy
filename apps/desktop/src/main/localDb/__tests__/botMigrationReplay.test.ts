@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { listMigrations, runMigrationReplay } from '../migrationRunner';
 
-const MIGRATION = '0092_motionless_hiroim.sql';
+const MIGRATIONS = ['0092_motionless_hiroim.sql', '0093_bot_session_event_inbox.sql'] as const;
 const cleanups: Array<() => void> = [];
 const canReplayPublishedLineage = process.platform === 'darwin' || process.platform === 'win32';
 const lineageIt = canReplayPublishedLineage ? it : it.skip;
@@ -83,15 +83,22 @@ function createPublishedV91Db() {
   return db;
 }
 
-function runBotMigration(db: ReturnType<typeof createBetterSqliteDatabase>): void {
+function runBotMigrations(db: ReturnType<typeof createBetterSqliteDatabase>): void {
   const desktopRoot = path.resolve(__dirname, '../../../..');
   const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-bot-migration-step-'));
-  copyFileSync(path.join(desktopRoot, 'drizzle', MIGRATION), path.join(stagedDir, MIGRATION));
-  mkdirSync(path.join(stagedDir, 'scripts'));
-  copyFileSync(
-    path.join(desktopRoot, 'drizzle', 'scripts', MIGRATION.replace(/\.sql$/, '.ts')),
-    path.join(stagedDir, 'scripts', MIGRATION.replace(/\.sql$/, '.ts')),
-  );
+  for (const migration of MIGRATIONS) {
+    copyFileSync(path.join(desktopRoot, 'drizzle', migration), path.join(stagedDir, migration));
+    const companion = path.join(
+      desktopRoot,
+      'drizzle',
+      'scripts',
+      migration.replace(/\.sql$/, '.ts'),
+    );
+    if (existsSync(companion)) {
+      mkdirSync(path.join(stagedDir, 'scripts'), { recursive: true });
+      copyFileSync(companion, path.join(stagedDir, 'scripts', path.basename(companion)));
+    }
+  }
   try {
     runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: 91 });
   } finally {
@@ -112,7 +119,7 @@ function indexExists(db: ReturnType<typeof createBetterSqliteDatabase>, name: st
   );
 }
 
-describe('Bot release migration', () => {
+describe('Bot release migrations', () => {
   lineageIt('replays the published v91 lineage and preserves legacy IM storage byte-for-byte', () => {
     const db = createPublishedV91Db();
     db.exec(`
@@ -151,7 +158,7 @@ describe('Bot release migration', () => {
       groupHistory: db.prepare(`SELECT * FROM hook_group_messages`).all(),
     };
 
-    runBotMigration(db);
+    runBotMigrations(db);
 
     expect({
       sessions: db
@@ -171,15 +178,17 @@ describe('Bot release migration', () => {
     ).toEqual(['legacy-telegram']);
   });
 
-  it('keeps 0092 additive so an older IM reader has no legacy table rewrite to interpret', () => {
+  it('keeps 0092 and 0093 additive so an older IM reader sees no legacy table rewrite', () => {
     const desktopRoot = path.resolve(__dirname, '../../../..');
-    const sql = readFileSync(path.join(desktopRoot, 'drizzle', MIGRATION), 'utf-8');
-    expect(sql).not.toMatch(/^\s*(?:ALTER|DROP|UPDATE|DELETE)\b/im);
+    for (const migration of MIGRATIONS) {
+      const sql = readFileSync(path.join(desktopRoot, 'drizzle', migration), 'utf-8');
+      expect(sql).not.toMatch(/^\s*(?:ALTER|DROP|UPDATE|DELETE)\b/im);
+    }
   });
 
   it('creates the final Bot schema after the published main migration lineage', () => {
     const db = createDb();
-    runBotMigration(db);
+    runBotMigrations(db);
 
     expect(columns(db, 'bot_runtime_snapshots')).toEqual(
       expect.arrayContaining(['prepared_at', 'applied_at', 'failed_at', 'failure_json']),
@@ -192,14 +201,19 @@ describe('Bot release migration', () => {
       ]),
     );
     expect(columns(db, 'bot_workspace_leases')).toContain('lease_key');
+    expect(columns(db, 'bot_inbox_items')).toEqual(
+      expect.arrayContaining(['subscription_id', 'processing_session_id', 'result_delivery_status']),
+    );
     expect(indexExists(db, 'uniq_bot_session_links_route')).toBe(true);
     expect(indexExists(db, 'uniq_bot_workspace_leases_active_binding_key')).toBe(true);
+    expect(indexExists(db, 'uniq_bot_inbox_subscription_event')).toBe(true);
+    expect(indexExists(db, 'uniq_bot_session_event_ledger_key')).toBe(true);
     expect(indexExists(db, 'right_sidebar_tabs_bot_delegations_singleton_idx')).toBe(true);
   });
 
   it('enforces canonical, route, project, and sidebar ownership uniqueness', () => {
     const db = createDb();
-    runBotMigration(db);
+    runBotMigrations(db);
     db.exec(`
       INSERT INTO bot_profiles (id, display_name, created_at, updated_at)
         VALUES ('bot-1', 'Bot One', 1, 1);

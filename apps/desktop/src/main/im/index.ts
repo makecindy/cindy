@@ -77,7 +77,11 @@ import { wireDingTalkOrchestrator } from './dingtalk';
 import { wireWechatOrchestrator } from './wechat';
 import { wireWecomOrchestrator } from './wecom';
 import { resetTelegramGroupContextCursors } from './telegram/groupWindow';
-import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
+import {
+  getImOrchestrator,
+  listImOrchestrators,
+  type ImOrchestrator,
+} from './shared/orchestrator';
 import { createSerializedConnectionLifecycle } from './connectionLifecycle';
 import {
   activateImAccountBoundary,
@@ -141,6 +145,34 @@ export type BotRouteDeliveryResult =
   | { ok: true; receipt: Record<string, unknown> }
   | { ok: false; retryable: boolean; errorCode: string; message: string };
 
+type BotRouteRelaySender = (input: {
+  provider: 'telegram' | 'slack';
+  accountKey: string;
+  externalKey: string;
+  opId: string;
+  text: string;
+}) => Promise<
+  | { ok: true; messageId?: string | null }
+  | { ok: false; retryable: boolean; errorCode: string; message: string }
+>;
+
+export interface BotRouteDeliveryDeps {
+  listConnections(): BotChannelConnection[];
+  getOrchestrator(channel: string): ImOrchestrator | undefined;
+  sendRelay: BotRouteRelaySender;
+  materializeImages: typeof materializeLocalMarkdownImages;
+}
+
+const defaultBotRouteDeliveryDeps: BotRouteDeliveryDeps = {
+  listConnections: listBotChannelConnections,
+  getOrchestrator: getImOrchestrator,
+  sendRelay: async (input) => {
+    const { sendHookBotRouteMessage } = await import('../hook-control/ipc.js');
+    return sendHookBotRouteMessage(input);
+  },
+  materializeImages: materializeLocalMarkdownImages,
+};
+
 /**
  * Deliver a proactive Bot result through the already-wired local IM adapter.
  *
@@ -150,8 +182,9 @@ export type BotRouteDeliveryResult =
  * that would cross account/transport ownership and could send to the wrong
  * bot identity.
  */
-export async function deliverBotRouteMessage(
+export async function deliverBotRouteMessageWithDeps(
   input: BotRouteDeliveryInput,
+  deps: BotRouteDeliveryDeps,
 ): Promise<BotRouteDeliveryResult> {
   if (input.ownership === 'server-relay') {
     if ((input.channel !== 'telegram' && input.channel !== 'slack') || !input.deliveryKey?.trim()) {
@@ -162,8 +195,7 @@ export async function deliverBotRouteMessage(
         message: 'The server-relay Bot Route has no authenticated delivery address.',
       };
     }
-    const { sendHookBotRouteMessage } = await import('../hook-control/ipc.js');
-    const result = await sendHookBotRouteMessage({
+    const result = await deps.sendRelay({
       provider: input.channel,
       accountKey: input.accountKey,
       externalKey: input.deliveryKey,
@@ -180,7 +212,7 @@ export async function deliverBotRouteMessage(
         }
       : result;
   }
-  const connection = listBotChannelConnections().find(
+  const connection = deps.listConnections().find(
     (item) =>
       item.kind === input.channel &&
       item.ownership === input.ownership &&
@@ -202,7 +234,7 @@ export async function deliverBotRouteMessage(
       message: `The ${input.channel} adapter is offline.`,
     };
   }
-  const orchestrator = getImOrchestrator(input.channel);
+  const orchestrator = deps.getOrchestrator(input.channel);
   if (!orchestrator) {
     return {
       ok: false,
@@ -214,7 +246,7 @@ export async function deliverBotRouteMessage(
   try {
     const materialized =
       input.sessionId && input.workingDir && input.text.includes('![')
-        ? await materializeLocalMarkdownImages({
+        ? await deps.materializeImages({
             text: input.text,
             workingDir: input.workingDir,
             sessionId: input.sessionId,
@@ -312,6 +344,12 @@ export async function deliverBotRouteMessage(
       message: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export async function deliverBotRouteMessage(
+  input: BotRouteDeliveryInput,
+): Promise<BotRouteDeliveryResult> {
+  return deliverBotRouteMessageWithDeps(input, defaultBotRouteDeliveryDeps);
 }
 
 let wired = false;
