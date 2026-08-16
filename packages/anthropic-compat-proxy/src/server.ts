@@ -1274,6 +1274,7 @@ function forward(
             /* already destroyed */
           }
         }, streamIdleTimeoutMs);
+        streamIdleTimer.unref?.();
       };
       // 数据块一到就重置计时器;end/error/close 后清理。
       const resetStreamIdle = (): void => {
