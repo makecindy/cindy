@@ -5641,7 +5641,6 @@
         "railFavorites": "Favorites",
         "railAll": "All",
         "favoritesGroup": "Favorites",
-        "authGroup": "Signed-in accounts",
         "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
         "layoutBadge": "Try the new style",
         "layoutClassic": "Back to classic style",

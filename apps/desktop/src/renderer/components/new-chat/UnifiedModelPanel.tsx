@@ -685,9 +685,9 @@ export function UnifiedModelPanel({
       ? t('newChat.modelSelector.unified.favoritesGroup')
       : section.kind === 'defaults'
         ? t('newChat.modelSelector.unified.defaultsGroup')
-        : section.group?.type === 'provider'
+        : section.group
           ? providerLabel(section.group.providerId)
-          : t('newChat.modelSelector.unified.authGroup');
+          : '';
 
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
@@ -792,12 +792,16 @@ export function UnifiedModelPanel({
               aria-label={sectionLabel(section)}
             >
               {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。
-                  badge 样式下粘性吸顶:滚到组中间时组名钉在列表顶端(v7 设计稿)。 */}
+                  badge 样式下粘性吸顶:滚到组中间时组名钉在列表顶端(v7 设计稿)。
+                  吸顶时必须**不透底**且横向铺满滚动区(-mx 出血盖住列表左右 padding,
+                  不透明面板底色),否则行从组头下滑过会从两侧和字缝里透出来
+                  (Chris 2026-08-16 实测)。 */}
               <div
                 className={cn(
-                  'truncate px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]',
-                  pickerLayout === 'badge' &&
-                    'sticky top-0 z-[5] bg-[var(--model-dropdown-bg)]',
+                  'truncate text-11 text-[var(--text-tertiary)]',
+                  pickerLayout === 'badge'
+                    ? 'sticky top-0 z-[5] -mx-2 bg-[var(--model-dropdown-bg)] px-[18px] pb-1 pt-2'
+                    : 'px-2.5 pb-1 pt-2',
                 )}
               >
                 {sectionLabel(section)}

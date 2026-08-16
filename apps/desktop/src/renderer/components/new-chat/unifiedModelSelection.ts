@@ -335,11 +335,11 @@ export interface UnifiedListSection {
   kind: 'favorites' | 'defaults' | 'group';
   /**
    * 分组小节的口径 —— **按供应商,不按模型家族**(Chris 2026-08-13 实测裁决:供应商决定
-   * 价格,同名模型跨来源混排会让用户没法选):
-   *   - `{ type: 'auth' }`:所有 OAuth 授权登录来源合并的「授权登录」组;
-   *   - `{ type: 'provider' }`:单供应商组(网关 / 自定义),标题用 providerLabel。
+   * 价格,同名模型跨来源混排会让用户没法选)。每个供应商各自成组,标题用
+   * providerLabel,与模型设置页同一套名字(Chris 2026-08-16 裁决:废除「授权登录」
+   * 合并组 —— 分组名必须直接回答"这是哪家的",不引入第二套口径)。
    */
-  group?: { type: 'auth' } | { type: 'provider'; providerId: string };
+  group?: { type: 'provider'; providerId: string };
   rows: UnifiedListRow[];
 }
 
@@ -476,18 +476,11 @@ export function buildUnifiedListSections(args: {
       });
       continue;
     }
-    // 「授权登录」合并组只在多来源陈列的视图有意义;rail 已按单一来源过滤时,
-    // 组标题必须回答「我在看哪个来源」—— 显示该来源名,不再合并
-    // (2026-08-14 实机自查:点了 xAI 图标,列表标题却写「授权登录」,像没切换)。
-    const isAuth =
-      rail.kind !== 'provider' && providerById.get(entry.providerId)?.auth?.method === 'oauth';
-    const key = isAuth ? 'auth' : `provider:${entry.providerId}`;
+    const key = `provider:${entry.providerId}`;
     let bucket = buckets.get(key);
     if (!bucket) {
       bucket = {
-        group: isAuth
-          ? { type: 'auth' as const }
-          : { type: 'provider' as const, providerId: entry.providerId },
+        group: { type: 'provider' as const, providerId: entry.providerId },
         items: [],
       };
       buckets.set(key, bucket);

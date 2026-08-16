@@ -5639,7 +5639,6 @@
         "railFavorites": "お気に入り",
         "railAll": "すべて",
         "favoritesGroup": "お気に入り",
-        "authGroup": "ログイン済みアカウント",
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
         "layoutBadge": "新スタイルを試す",
         "layoutClassic": "旧スタイルに戻す",

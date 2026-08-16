@@ -297,7 +297,7 @@ describe('buildUnifiedListSections', () => {
     expect(modelRows.map((row) => row.entry.modelId)).toEqual(['claude-opus-5', 'gpt-5.5']);
   });
 
-  it('分组按供应商:OAuth 来源合并「授权登录」组,网关与自定义各自成组(2026-08-13 裁决)', () => {
+  it('分组按供应商:每家各自成组,组名 = providerLabel(2026-08-16 裁决,废除「授权登录」合并组)', () => {
     const xdModel = entryOf({
       providerId: 'xd',
       modelId: 'deepseek-v4-pro',
@@ -312,13 +312,13 @@ describe('buildUnifiedListSections', () => {
       query: '',
       rail: { kind: 'all' },
     });
-    // 供应商决定价格:网关上的模型与订阅登录的模型绝不混进同一组。
+    // 供应商决定价格:每家一组、与模型设置页同一套名字,不引入「授权登录」这种第二套口径。
     expect(sections.map((section) => section.group)).toEqual([
-      { type: 'auth' },
+      { type: 'provider', providerId: 'anthropic' },
+      { type: 'provider', providerId: 'openai' },
       { type: 'provider', providerId: 'xd' },
       { type: 'provider', providerId: 'custom-a' },
     ]);
-    expect(sections[0].rows.map((row) => row.entry.providerId)).toEqual(['anthropic', 'openai']);
   });
 
   it('供应商簇内按 sortOrder 排,簇间保持首见序(不做全局 sortOrder 混排)', () => {
@@ -332,8 +332,9 @@ describe('buildUnifiedListSections', () => {
       query: '',
       rail: { kind: 'all' },
     });
-    expect(sections[0].rows.map((row) => row.entry.modelId)).toEqual([
-      'gpt-5.5',
+    // openai 先出现 → openai 组在前;anthropic 组内 9/1 入参按 sortOrder 回正。
+    expect(sections[0].rows.map((row) => row.entry.modelId)).toEqual(['gpt-5.5']);
+    expect(sections[1].rows.map((row) => row.entry.modelId)).toEqual([
       'claude-opus-5',
       'claude-sonnet-5',
     ]);
