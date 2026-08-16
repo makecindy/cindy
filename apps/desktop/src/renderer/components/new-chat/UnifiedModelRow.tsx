@@ -60,7 +60,6 @@ export function UnifiedModelRow({
   onStar,
   onRevealForKeyboard,
   priceDisplay,
-  defaultBadge,
   subscriptionLabel,
   layout = 'classic',
   channelLabel,
@@ -112,8 +111,6 @@ export function UnifiedModelRow({
     /** 已本地化的悬停说明(折扣幅度全文)。 */
     title?: string;
   };
-  /** 已本地化的「默认」标识;仅默认小节的行传。 */
-  defaultBadge?: string;
   /**
    * 已本地化的「订阅」小签(设计稿 `.badge.sub`)。仅**订阅接入且无按量报价**的行传 ——
    * 那类模型走套餐额度,行内画 $ 档串会误导成按量计费。
@@ -254,14 +251,6 @@ export function UnifiedModelRow({
         >
           {entry.displayName}
         </span>
-        {defaultBadge && (
-          <span
-            data-default-badge
-            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-[1px] text-10 font-medium text-[var(--text-secondary)]"
-          >
-            {defaultBadge}
-          </span>
-        )}
         {subscriptionLabel && (
           <span
             data-subscription-badge
@@ -407,14 +396,6 @@ export function UnifiedModelRow({
         >
           {entry.displayName}
         </span>
-        {defaultBadge && (
-          <span
-            data-default-badge
-            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-[1px] text-10 font-medium text-[var(--text-secondary)]"
-          >
-            {defaultBadge}
-          </span>
-        )}
         {subscriptionLabel && (
           <span
             data-subscription-badge

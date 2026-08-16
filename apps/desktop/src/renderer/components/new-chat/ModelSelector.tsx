@@ -86,6 +86,7 @@ import {
   isSubscriptionDirectModel,
 } from '../../../shared/subscriptionModels';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
+import { seedDefaultFavorite } from '@/state/modelFavorites';
 import { setModelPickerLayout, useModelPickerLayout } from '@/state/modelPickerLayout';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
@@ -99,6 +100,7 @@ import {
   resolveModelIconKind,
   resolveCodexCompatibilityWireProtocol,
   sourcesForModel,
+  unifiedModelEntries,
   visibleModelUnion,
   type ProviderView,
   type UnifiedModelEntry,
@@ -1173,6 +1175,31 @@ function ModelSelectorContentView({
     }
     closeOptionsPanel();
   }, [closeOptionsPanel, interactionDisabled]);
+
+  // 官方默认推荐 → 一次性**种子收藏**(Chris 2026-08-16 裁决,替代列表里的「默认」
+  // 小节):服务端目录用 `newSessionDefault` 标记推荐模型(gateway 下发),首个命中
+  // 项以收藏形态投放。只投一次、取消不复种、已有收藏的用户不打扰 —— 这三条都由
+  // seedDefaultFavorite 内部保证,这里重复跑只是 no-op。device-link 远程视图不投:
+  // 标记来自被控端目录,控制端的本机收藏不该被它污染。
+  useEffect(() => {
+    if (!unifiedPanel || deviceId) return;
+    for (const entry of unifiedModelEntries({ providers })) {
+      const provider = providers.find((item) => item.id === entry.providerId);
+      if (!provider) continue;
+      const markedAgent = entry.candidates.find((agent) => {
+        const wireId = entry.capabilities[agent]?.wireModelId ?? entry.modelId;
+        const marked = getModel(provider, wireId, agent)?.newSessionDefault;
+        return Array.isArray(marked) && marked.includes(agent as 'claude-code' | 'codex');
+      });
+      if (!markedAgent) continue;
+      seedDefaultFavorite({
+        providerId: entry.providerId,
+        modelId: entry.modelId,
+        agent: markedAgent === 'claude-code' ? 'cc' : markedAgent === 'codex' ? 'codex' : 'pi',
+      });
+      break;
+    }
+  }, [providers, unifiedPanel, deviceId]);
 
   // 模型清单来源:本机会话从 live providers 派生(builtin + 自定义合集);device-link 远程会话
   // 必须列**被控端**模型(cc/codex.capabilities.availableModels,deviceId 作用域),不读控制端本地
@@ -2336,18 +2363,6 @@ function ModelSelectorContentView({
             : (pi.capabilities?.effortLevels ?? []);
       return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
     };
-    // 服务端目录用 `newSessionDefault` 标记新会话默认种子。命中的行提升到列表顶部的
-    // 「默认」小节(实测反馈:默认模型混在中部很难找)。判定按**该行任一候选引擎**的
-    // 目录条目查 —— 标记本身是按 wire agent 下发的(`('claude-code'|'codex')[]`)。
-    const unifiedIsDefaultSeed = (entry: UnifiedModelEntry): boolean => {
-      const provider = providers.find((item) => item.id === entry.providerId);
-      if (!provider) return false;
-      return entry.candidates.some((agent) => {
-        const wireId = entry.capabilities[agent]?.wireModelId ?? entry.modelId;
-        const marked = getModel(provider, wireId, agent)?.newSessionDefault;
-        return Array.isArray(marked) && marked.includes(agent as 'claude-code' | 'codex');
-      });
-    };
     const unifiedAgentFastCapable = (agent: AgentKind): boolean =>
       agent === 'claude-code'
         ? !!cc.capabilities?.hasFastMode
@@ -2437,7 +2452,6 @@ function ModelSelectorContentView({
           {...(modelMemory ? { modelMemory } : {})}
           agentFastModeCapable={unifiedAgentFastCapable}
           priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
-          isDefaultSeed={unifiedIsDefaultSeed}
           providerLabel={unifiedProviderLabel}
           effortLabelOf={unifiedEffortLabel}
           {...(constrainedListMaxHeight !== undefined

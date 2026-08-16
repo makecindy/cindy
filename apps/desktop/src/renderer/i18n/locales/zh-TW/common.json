@@ -5653,9 +5653,7 @@
         "effortEndFast": "更高效",
         "effortEndSmart": "更聰明",
         "railSameEngine": "僅 {{agent}}",
-        "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
-        "defaultsGroup": "預設",
-        "defaultBadge": "預設"
+        "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容"
       }
     },
     "permissionSelector": {

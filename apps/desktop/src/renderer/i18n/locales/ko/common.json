@@ -5653,9 +5653,7 @@
         "effortEndFast": "더 빠르게",
         "effortEndSmart": "더 똑똑하게",
         "railSameEngine": "{{agent}} 전용",
-        "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다",
-        "defaultsGroup": "기본",
-        "defaultBadge": "기본"
+        "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다"
       }
     },
     "permissionSelector": {

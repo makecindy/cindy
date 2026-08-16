@@ -383,4 +383,62 @@ describe('modelFavorites store', () => {
     }).not.toThrow();
     expect(m.getModelFavorite(uid)).toBeDefined();
   });
+
+  describe('seedDefaultFavorite(官方默认推荐的一次性种子收藏)', () => {
+    const SEED = { providerId: 'xd', modelId: 'deepseek-v4-pro', agent: 'codex' } as const;
+
+    it('收藏为空且从未投放 → 投放一条,即列表首条', async () => {
+      const m = await loadModule();
+      m.seedDefaultFavorite({ ...SEED });
+      const items = m.listModelFavorites();
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject(SEED);
+    });
+
+    it('取消种子收藏后不复种(seeded 标记落盘,跨重启仍生效)', async () => {
+      let m = await loadModule();
+      m.seedDefaultFavorite({ ...SEED });
+      const uid = m.listModelFavorites()[0]!.uid;
+      m.removeModelFavorite(uid);
+      // 同一进程内重投 → no-op。
+      m.seedDefaultFavorite({ ...SEED });
+      expect(m.listModelFavorites()).toEqual([]);
+      // 模拟重启(重新加载模块,读同一 localStorage)→ 仍不复种。
+      vi.resetModules();
+      m = await loadModule();
+      m.seedDefaultFavorite({ ...SEED });
+      expect(m.listModelFavorites()).toEqual([]);
+    });
+
+    it('已有收藏的用户不投放,只落标记(不动用户整理过的列表)', async () => {
+      const m = await loadModule();
+      m.addModelFavorite({ ...OPUS });
+      m.seedDefaultFavorite({ ...SEED });
+      const items = m.listModelFavorites();
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject(OPUS);
+      // 用户随后清空收藏,也不再补种(标记已落)。
+      m.removeModelFavorite(items[0]!.uid);
+      m.seedDefaultFavorite({ ...SEED });
+      expect(m.listModelFavorites()).toEqual([]);
+    });
+
+    it('后续普通增删不清 seeded 标记(add 落盘后重投仍 no-op)', async () => {
+      const m = await loadModule();
+      m.seedDefaultFavorite({ ...SEED });
+      m.addModelFavorite({ ...OPUS });
+      const seedUid = m.listModelFavorites()[0]!.uid;
+      m.removeModelFavorite(seedUid);
+      m.seedDefaultFavorite({ ...SEED });
+      expect(m.listModelFavorites().map((item) => item.modelId)).toEqual([OPUS.modelId]);
+    });
+
+    it('非法配置 no-op 且不落标记(下次合法投放仍生效)', async () => {
+      const m = await loadModule();
+      m.seedDefaultFavorite({ providerId: '', modelId: 'x', agent: 'codex' });
+      expect(m.listModelFavorites()).toEqual([]);
+      m.seedDefaultFavorite({ ...SEED });
+      expect(m.listModelFavorites()).toHaveLength(1);
+    });
+  });
 });

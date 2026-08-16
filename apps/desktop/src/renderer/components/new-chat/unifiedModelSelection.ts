@@ -331,8 +331,7 @@ export interface UnifiedListRow {
 
 export interface UnifiedListSection {
   key: string;
-  /** `defaults` = 服务端标记的新会话默认种子小节(收藏之下、普通分组之上)。 */
-  kind: 'favorites' | 'defaults' | 'group';
+  kind: 'favorites' | 'group';
   /**
    * 分组小节的口径 —— **按供应商,不按模型家族**(Chris 2026-08-13 实测裁决:供应商决定
    * 价格,同名模型跨来源混排会让用户没法选)。每个供应商各自成组,标题用
@@ -357,13 +356,16 @@ function entryKeyOf(providerId: string, modelId: string): string {
 }
 
 /**
- * 面板列表:**收藏区置顶** → 默认种子 → **按供应商分组**。
+ * 面板列表:**收藏区置顶** → **按供应商分组**。
+ *
+ * 没有「默认」小节(Chris 2026-08-16 裁决:去掉默认小节,简单一点)—— 服务端的默认
+ * 推荐改以**种子收藏**交付(见 modelFavorites.seedDefaultFavorite):gateway 用户的
+ * 首个收藏即官方推荐,不想要就取消收藏,不再占一个常驻小节。
  *
  * 分组口径(Chris 2026-08-13 实测裁决):供应商决定价格,不能按模型家族归类把
- * 网关上的 Claude 和订阅登录的 Claude 揉进同一组。OAuth 授权登录来源合并成
- * 「授权登录」一组;网关与自定义供应商各自成组(标题 = 供应商名)。判据是
- * `provider.auth.method === 'oauth'` —— 供应商级元数据,device-link 投影下保留
- * (投影只剥 routing 执行字段),两端同结果。
+ * 网关上的 Claude 和订阅登录的 Claude 揉进同一组。**每个供应商各自成组**,组标题由
+ * 调用方按 providerLabel 渲染(Chris 2026-08-16 裁决:废除「授权登录」合并组,与
+ * 模型设置页同一套名字)。
  *
  * 收藏条目**不**从供应商组里去重移除(规格 §1.2):收藏是配置副本,模型本体仍在原地 ——
  * 移除会让用户在「全部」视图里找不到那个模型。
@@ -374,18 +376,10 @@ function entryKeyOf(providerId: string, modelId: string): string {
 export function buildUnifiedListSections(args: {
   entries: readonly UnifiedModelEntry[];
   favorites: readonly ModelFavoriteItem[];
-  /** 分组判据(auth.method)与组标题都要供应商元数据;只读,不改变本模块零 IO 边界。 */
-  providers: readonly ProviderView[];
   query: string;
   rail: UnifiedRailFilter;
-  /**
-   * 该行是否被服务端目录标记为**新会话默认种子**(`CatalogModel.newSessionDefault`)。
-   * 命中的行提升到独立的「默认」小节(收藏之下、普通分组之上)—— 实测反馈:默认模型
-   * 混在列表中部很难找。判定数据在 renderer 侧(目录条目),故由调用方注入。
-   */
-  isDefaultSeed?: (entry: UnifiedModelEntry) => boolean;
 }): UnifiedListSection[] {
-  const { entries, favorites, providers, rail, isDefaultSeed } = args;
+  const { entries, favorites, rail } = args;
   const q = args.query.trim().toLowerCase();
   const byKey = new Map<string, UnifiedModelEntry>();
   for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
@@ -461,21 +455,9 @@ export function buildUnifiedListSections(args: {
       ),
     );
   }
-  // 服务端默认种子提升到独立小节:**从普通分组里移走**(不像收藏那样两处都留)——
-  // 收藏是配置副本、模型本体仍在原地;默认种子是同一行的位置提升,两处都出现只会让
-  // 用户以为有两个同名模型。
-  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const defaultRows: UnifiedListRow[] = [];
   const bucketOrder: string[] = [];
   const buckets = new Map<string, { group: UnifiedListSection['group']; items: UnifiedModelEntry[] }>();
   for (const entry of base) {
-    if (isDefaultSeed?.(entry)) {
-      defaultRows.push({
-        anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
-        entry,
-      });
-      continue;
-    }
     const key = `provider:${entry.providerId}`;
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -487,9 +469,6 @@ export function buildUnifiedListSections(args: {
       bucketOrder.push(key);
     }
     bucket.items.push(entry);
-  }
-  if (defaultRows.length > 0) {
-    sections.push({ key: 'defaults', kind: 'defaults', rows: defaultRows });
   }
   for (const key of bucketOrder) {
     const bucket = buckets.get(key)!;

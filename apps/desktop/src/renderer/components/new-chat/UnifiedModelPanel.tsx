@@ -119,12 +119,6 @@ export interface UnifiedModelPanelProps {
     modelId: string,
     agent: AgentKind,
   ) => ModelPricePresentation | null;
-  /**
-   * 该行是否被服务端目录标记为新会话默认种子(`CatalogModel.newSessionDefault`)。
-   * 命中的行提升到列表顶部的「默认」小节 —— 实测反馈:默认模型混在中部很难找。
-   * 判定要读目录条目,数据在 ModelSelector 侧,故注入。
-   */
-  isDefaultSeed?: (entry: UnifiedModelEntry) => boolean;
   providerLabel: (providerId: string) => string;
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   listMaxHeight?: number;
@@ -216,7 +210,6 @@ export function UnifiedModelPanel({
   modelMemory,
   agentFastModeCapable,
   priceOf,
-  isDefaultSeed,
   providerLabel,
   effortLabelOf,
   listMaxHeight,
@@ -306,12 +299,10 @@ export function UnifiedModelPanel({
       buildUnifiedListSections({
         entries,
         favorites,
-        providers,
         query,
         rail: effectiveRail,
-        ...(isDefaultSeed ? { isDefaultSeed } : {}),
       }),
-    [entries, favorites, isDefaultSeed, providers, query, effectiveRail],
+    [entries, favorites, query, effectiveRail],
   );
 
   // 列表变化时只在选中行跑出可视区时做**最小滚动**(与既有面板同一条规则):
@@ -683,17 +674,15 @@ export function UnifiedModelPanel({
   };
 
   /**
-   * 小节标题:收藏 / 默认 / 供应商分组(Chris 2026-08-13 裁决:按供应商,不按模型家族)。
-   * 「授权登录」合并组走 i18n,单供应商组直接用供应商名(providerLabel)。
+   * 小节标题:收藏 / 供应商分组(Chris 2026-08-13 裁决:按供应商,不按模型家族;
+   * 组名与模型设置页同一套 providerLabel)。
    */
   const sectionLabel = (section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
-      : section.kind === 'defaults'
-        ? t('newChat.modelSelector.unified.defaultsGroup')
-        : section.group
-          ? providerLabel(section.group.providerId)
-          : '';
+      : section.group
+        ? providerLabel(section.group.providerId)
+        : '';
 
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
@@ -976,9 +965,6 @@ export function UnifiedModelPanel({
                     {...(priceDisplay ? { priceDisplay } : {})}
                     {...(subscriptionRow
                       ? { subscriptionLabel: t('settings.providers.models.subscription') }
-                      : {})}
-                    {...(section.kind === 'defaults'
-                      ? { defaultBadge: t('newChat.modelSelector.unified.defaultBadge') }
                       : {})}
                     interactionDisabled={interactionDisabled}
                     effortLabelOf={effortLabelOf}
