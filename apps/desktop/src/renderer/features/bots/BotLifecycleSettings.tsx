@@ -216,7 +216,7 @@ export function BotLifecycleSettings({
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+    <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
@@ -558,8 +558,8 @@ export function BotLifecycleSettings({
 
       <Dialog.Root open={archiveOpen} onOpenChange={setArchiveOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 shadow-2xl outline-none">
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">{t('bots.lifecycle.archiveTitle')}</Dialog.Title>
@@ -585,8 +585,8 @@ export function BotLifecycleSettings({
 
       <Dialog.Root open={deleteOpen} onOpenChange={setDeleteOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 shadow-2xl outline-none">
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <Dialog.Title className="text-16 font-medium text-[var(--text-danger)]">{t('bots.lifecycle.deleteTitle')}</Dialog.Title>

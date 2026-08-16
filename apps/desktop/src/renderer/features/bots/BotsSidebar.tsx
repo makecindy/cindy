@@ -107,7 +107,7 @@ function BotsSidebarContent() {
           <button
             type="button"
             onClick={() => navigate('/bots?import=1')}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
             aria-label={t('bots.portability.import')}
           >
             <Upload size={14} />
@@ -115,7 +115,7 @@ function BotsSidebarContent() {
           <button
             type="button"
             onClick={() => navigate('/bots?add=1')}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
             aria-label={t('bots.add')}
           >
             <Plus size={15} />

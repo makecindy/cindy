@@ -285,7 +285,7 @@ export function BotProjectSettings({ bot }: { bot: BotProfile }) {
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+    <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
       <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
         <FolderGit2 size={16} />
         {t('bots.projects.title')}

@@ -195,7 +195,7 @@ export function BotRouteSettings({
   const visibleRoutes = (bot.routes ?? []).filter((route) => route.status !== 'archived');
 
   return (
-    <section className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+    <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">

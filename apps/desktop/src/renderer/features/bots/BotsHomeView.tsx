@@ -80,10 +80,10 @@ function avatarColorStyle(color: string): CSSProperties {
 function BotAvatar({ bot, size = 'h-10 w-10' }: { bot: BotProfile; size?: string }) {
   return (
     <span
-      className={cn('inline-flex shrink-0 items-center justify-center rounded-2xl text-lg', size)}
+      className={cn('inline-flex shrink-0 items-center justify-center rounded-xl text-lg', size)}
       style={avatarColorStyle(bot.avatarColor)}
     >
-      <span className="drop-shadow-sm" aria-hidden>
+      <span aria-hidden>
         {bot.avatar || '🤖'}
       </span>
     </span>
@@ -127,8 +127,8 @@ function AddBotDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 shadow-2xl outline-none">
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
           <div className="flex items-start justify-between gap-4">
             <div>
               <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
@@ -516,7 +516,7 @@ function BotSettings({
           </div>
         </header>
 
-        <section className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+        <section className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
           <div>
             <p className="text-13 font-medium text-[var(--text-primary)]">
               {t('bots.sessionLifecycleTitle')}
@@ -547,7 +547,7 @@ function BotSettings({
 
         <BotRouteSettings bot={bot} onOpenTask={onOpenSession} />
 
-        <section className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
           <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
             <Bot size={16} />
             {t('bots.channelsTitle')}
@@ -628,8 +628,8 @@ function BotSettings({
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]" />
-            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 shadow-2xl outline-none">
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
               <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
                 {t('bots.migration.title')}
               </Dialog.Title>
@@ -704,8 +704,8 @@ function BotSettings({
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]" />
-            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 shadow-2xl outline-none">
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
               <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
                 {t('bots.migration.rollbackTitle')}
               </Dialog.Title>
@@ -734,7 +734,7 @@ function BotSettings({
           </Dialog.Portal>
         </Dialog.Root>
 
-        <section className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
           <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
             <ImagePlus size={16} />
             {t('bots.identityTitle')}
@@ -822,7 +822,7 @@ function BotSettings({
           </label>
         </section>
 
-        <section className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
               <Sparkles size={16} />
@@ -928,7 +928,7 @@ function BotSettings({
           onOpenTask={onOpenSession}
         />
 
-        <section className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
           <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
             <Download size={16} />
             {t('bots.portability.title')}
@@ -999,8 +999,8 @@ function BotSettings({
         }}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px]" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 shadow-2xl outline-none">
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
             <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
               {t('bots.profileApply.title')}
             </Dialog.Title>
