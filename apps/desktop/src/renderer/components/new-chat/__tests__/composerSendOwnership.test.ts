@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyRefinementToSerializedText,
   editorOwnsSourceDraft,
+  mergeDetachedVoiceTextIntoDocument,
   resolveSourceOwnedComposerExtras,
   voiceLocksCurrentComposer,
 } from '../composerSendOwnership';
@@ -120,6 +121,30 @@ describe('resolveSourceOwnedComposerExtras', () => {
     ).toEqual({
       attachments: ['session-a-file'],
       comments: ['session-a-comment'],
+    });
+  });
+});
+
+describe('mergeDetachedVoiceTextIntoDocument', () => {
+  it('becomes the document when the source draft is empty', () => {
+    expect(mergeDetachedVoiceTextIntoDocument(null, '', 'Hello world.')).toEqual({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello world.' }] }],
+    });
+  });
+
+  it('replaces a previously appended listening draft with the refined text', () => {
+    const typed = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'typed' }] }],
+    };
+    const withListening = mergeDetachedVoiceTextIntoDocument(typed, '', 'asr draft');
+    expect(mergeDetachedVoiceTextIntoDocument(withListening, 'asr draft', 'Asr draft.')).toEqual({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'typed' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Asr draft.' }] },
+      ],
     });
   });
 });

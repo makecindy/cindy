@@ -136,6 +136,7 @@ export type UseVoiceInputResult = {
   lastError: string | null;
   isListening: boolean;
   isBusy: boolean;
+  getLastSubmittedText: () => string;
   getLastRefinement: () => VoiceInputRefinementSnapshot | null;
   start: () => Promise<void>;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
@@ -221,6 +222,7 @@ export function useVoiceInput(
   const disabledRef = useRef(Boolean(disabled));
   const optionsRef = useRef(options);
   const lastRefinementRef = useRef<VoiceInputRefinementSnapshot | null>(null);
+  const lastSubmittedTextRef = useRef('');
   editorRef.current = editor;
   disabledRef.current = Boolean(disabled);
   optionsRef.current = options;
@@ -972,6 +974,7 @@ export function useVoiceInput(
           break;
         case 'submitted':
           {
+            lastSubmittedTextRef.current = event.text;
             const range = insertSubmittedText(event.text);
             transcriptLandedRef.current = Boolean(range);
             if (range) {
@@ -1207,6 +1210,7 @@ export function useVoiceInput(
     ownedRunIdRef.current = null;
     submittedRangesRef.current.clear();
     lastRefinementRef.current = null;
+    lastSubmittedTextRef.current = '';
     sentAudioMsRef.current = 0;
     terminalOutcomeRef.current = 'success';
     systemAudioMuteGateOpenRef.current = true;
@@ -1656,6 +1660,7 @@ export function useVoiceInput(
     lastError,
     isListening: state === 'listening',
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
+    getLastSubmittedText: () => lastSubmittedTextRef.current,
     getLastRefinement: () => lastRefinementRef.current,
     start,
     stop: stopWithGate,

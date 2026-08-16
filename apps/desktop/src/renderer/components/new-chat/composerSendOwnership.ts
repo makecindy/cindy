@@ -4,9 +4,13 @@
  * editor has been swapped to the next task's draft.
  *
  * Restore is immediate: the next task must not keep showing the source
- * session's refining text or a locked Send button. The in-flight send then
- * uses a frozen snapshot, optionally patched with the final refined span.
+ * session's listening or refining text. Detached voice text is merged back
+ * into the source draft after stop/refine settles.
  */
+
+import type { JSONContent } from '@tiptap/core';
+
+import { plainTextToComposerDocument } from '@/lib/composerListDocument';
 
 export function editorOwnsSourceDraft(input: {
   editorDestroyed: boolean;
@@ -57,4 +61,50 @@ export function resolveSourceOwnedComposerExtras<TAttachment, TComment>(input: {
     attachments: [...(input.sourceAttachments ?? [])],
     comments: [...(input.sourceComments ?? [])],
   };
+}
+
+function composerBlockPlainText(block: JSONContent): string {
+  if (block.type === 'text') return block.text ?? '';
+  return (block.content ?? []).map(composerBlockPlainText).join('');
+}
+
+function composerBlocksPlainText(blocks: JSONContent[]): string {
+  return blocks.map(composerBlockPlainText).join('\n');
+}
+
+/**
+ * Land detached ASR / refined text on the source session draft after the live
+ * editor has already been swapped to another task.
+ */
+export function mergeDetachedVoiceTextIntoDocument(
+  document: JSONContent | null | undefined,
+  previousVoiceText: string,
+  nextVoiceText: string,
+): JSONContent {
+  if (!nextVoiceText) {
+    return document?.type === 'doc'
+      ? document
+      : { type: 'doc', content: [{ type: 'paragraph' }] };
+  }
+  const voiceBlocks = plainTextToComposerDocument(nextVoiceText).content ?? [];
+  const existing = document?.type === 'doc' ? [...(document.content ?? [])] : [];
+  const existingText = composerBlocksPlainText(existing).trim();
+  if (existing.length === 0 || existingText.length === 0) {
+    return { type: 'doc', content: voiceBlocks };
+  }
+  if (previousVoiceText) {
+    const previousBlocks = plainTextToComposerDocument(previousVoiceText).content ?? [];
+    if (
+      previousBlocks.length > 0 &&
+      previousBlocks.length <= existing.length &&
+      composerBlocksPlainText(existing.slice(-previousBlocks.length)) ===
+        composerBlocksPlainText(previousBlocks)
+    ) {
+      return {
+        type: 'doc',
+        content: [...existing.slice(0, -previousBlocks.length), ...voiceBlocks],
+      };
+    }
+  }
+  return { type: 'doc', content: [...existing, ...voiceBlocks] };
 }

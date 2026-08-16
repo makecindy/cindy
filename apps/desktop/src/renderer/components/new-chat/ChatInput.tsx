@@ -118,6 +118,7 @@ import {
 import {
   applyRefinementToSerializedText,
   editorOwnsSourceDraft,
+  mergeDetachedVoiceTextIntoDocument,
   resolveSourceOwnedComposerExtras,
   voiceLocksCurrentComposer,
 } from './composerSendOwnership';
@@ -2969,6 +2970,8 @@ export function ChatInput({
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
   const voiceInputBusyRef = useRef(voiceInput.isBusy);
   voiceInputBusyRef.current = voiceInput.isBusy;
+  const voiceDraftTextRef = useRef(voiceInput.draftText);
+  voiceDraftTextRef.current = voiceInput.draftText;
   const voiceInputCancelRef = useRef(voiceInput.cancel);
   const voiceInputStopAndSendRef = useRef<
     (deliveryMode?: MessageDeliveryMode) => void | Promise<void>
@@ -3531,29 +3534,11 @@ export function ChatInput({
     };
 
     const pendingStopAndSend = voiceInputStopAndSendPromiseRef.current;
-    const deferRestoreForLiveListening =
+    const wasListeningWithoutSend =
       !pendingStopAndSend &&
       voiceInputBusyRef.current &&
       voiceInputStateRef.current === 'listening';
-    // Still listening and the user has not asked to send: wait for stop so the
-    // ASR text lands in the source document before we swap. After stop/refine
-    // (or stop-and-send) the next task must restore immediately — otherwise it
-    // keeps showing the source session's refining text and a locked Send.
-    if (deferRestoreForLiveListening) {
-      void (async () => {
-        try {
-          await voiceInputStopRef.current({ waitForRefinement: true });
-        } finally {
-          if (isCurrentTransition()) {
-            saveCurrentEditorDraft();
-          }
-          restoreNextDraft();
-        }
-      })();
-      return () => {
-        cancelled = true;
-      };
-    }
+    const listeningDraftText = wasListeningWithoutSend ? voiceDraftTextRef.current.trim() : '';
     if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey) {
       const sourceDraft = getComposerDraft(prevEditorKey);
       frozenVoiceSendRef.current = {
@@ -3564,9 +3549,49 @@ export function ChatInput({
       };
     }
 
-    // storageKey actually changed — swap the editor's content.
+    // storageKey actually changed — swap the editor's content immediately so
+    // the next task never paints the previous session's listening/refining text.
     saveCurrentEditorDraft();
     restoreNextDraft();
+    if (wasListeningWithoutSend && prevEditorKey) {
+      const sourceKey = prevEditorKey;
+      const persistDetachedVoice = (previousVoiceText: string, nextVoiceText: string) => {
+        if (!nextVoiceText) return;
+        const existing = getComposerDraft(sourceKey);
+        saveComposerDraft(
+          sourceKey,
+          {
+            text: mergeDetachedVoiceTextIntoDocument(
+              existing?.text,
+              previousVoiceText,
+              nextVoiceText,
+            ),
+            attachments: existing?.attachments ?? [],
+            quotes: existing?.quotes ?? [],
+            browserComments: existing?.browserComments ?? [],
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
+          },
+          { silent: latestStorageKeyRef.current !== sourceKey },
+        );
+      };
+      if (listeningDraftText) persistDetachedVoice('', listeningDraftText);
+      void (async () => {
+        try {
+          await voiceInputStopRef.current({ waitForRefinement: true });
+        } catch {
+          return;
+        }
+        const submitted = voiceInput.getLastSubmittedText().trim();
+        const refined = voiceInput.getLastRefinement()?.refinedText.trim() ?? '';
+        const nextVoice = refined || submitted;
+        if (!nextVoice) return;
+        persistDetachedVoice(listeningDraftText || submitted, nextVoice);
+      })();
+    }
   }, [editor, storageKey]);
 
   // ── External draft writes for the CURRENT session (e.g. rewind / fork
