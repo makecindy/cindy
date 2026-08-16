@@ -5,8 +5,8 @@
  * - 无 Provider。任意代码（包括非 React 的 fetch 拦截器）都可调用 toast.xxx()
  * - 模块级单例 Store，用 useSyncExternalStore 订阅
  * - 最大并发 3 条，超出部分 FIFO 进入等待队列
- * - 默认 duration 按 variant 区分：success / warning 1200ms，error 8000ms
- *   （错误信息需要用户读完，太短根本来不及看清）；0 表示永久显示
+ * - 默认 duration 按 variant 区分：info / success 1200ms，warning / error 8000ms
+ *   （警告和错误都需要用户读完，太短根本来不及看清）；0 表示永久显示
  * - hover 悬停时暂停自动关闭（pauseAutoDismiss / resumeAutoDismiss），移开后按剩余时长继续
  * - 退出动画完成后（200ms）才真正从 state 移除
  *
@@ -27,7 +27,7 @@ export interface ToastSource {
 }
 
 export interface ToastOptions {
-  /** 自动关闭时长（ms）。不传时按 variant 取默认：info / success / warning 1200，error 8000；0 表示永久显示 */
+  /** 自动关闭时长（ms）。不传时按 variant 取默认：info / success 1200，warning / error 8000；0 表示永久显示 */
   duration?: number;
   /** 来源身份头（见 ToastSource；主机自己的提示不传） */
   source?: ToastSource;
@@ -52,8 +52,8 @@ export interface ToastItem {
 // ============================================================
 
 const DEFAULT_DURATION = 1200;
-// error 提示需要用户读完（且常带诊断信息），默认停留时间显著拉长
-const DEFAULT_ERROR_DURATION = 8000;
+// warning / error 都需要用户读完（warning 常带操作指引，error 常带诊断），默认停留显著拉长
+const DEFAULT_ALERT_DURATION = 8000;
 const MAX_ACTIVE = 3;
 const EXIT_ANIMATION_MS = 300;
 
@@ -224,11 +224,7 @@ function finalizeRemove(id: string) {
 // 对外命令式 API
 // ============================================================
 
-function createItem(
-  variant: ToastVariant,
-  message: string,
-  options?: ToastOptions,
-): string {
+function createItem(variant: ToastVariant, message: string, options?: ToastOptions): string {
   const id = generateId();
   const item: ToastItem = {
     id,
@@ -236,7 +232,7 @@ function createItem(
     message,
     duration:
       options?.duration ??
-      (variant === 'error' ? DEFAULT_ERROR_DURATION : DEFAULT_DURATION),
+      (variant === 'error' || variant === 'warning' ? DEFAULT_ALERT_DURATION : DEFAULT_DURATION),
     ...(options?.source ? { source: options.source } : {}),
     onClose: options?.onClose,
     createdAt: Date.now(),
