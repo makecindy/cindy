@@ -2745,10 +2745,32 @@ export class PiAgent extends BaseAgent {
         if (refreshed && sdkSessionId) {
           // Claude 热切先 applyFlagSettings 扩白名单;Pi 的 set_model 不重读 models.json,
           // 但 switch_session 会 createRuntime → ModelConfig.load,等于无重启扩名单。
-          const reloaded = await proc.request({
-            type: 'switch_session',
-            sessionPath: sdkSessionId,
-          });
+          // success:false = 确定没重载,回滚安全。reject/超时 = 不知道 Pi 侧有没有吃到新
+          // models.json,回滚和放行都可能分叉,按未确认 set_model 一样终止会话。
+          let reloaded;
+          try {
+            reloaded = await proc.request({
+              type: 'switch_session',
+              sessionPath: sdkSessionId,
+            });
+          } catch (err) {
+            this.deps.logger.error(
+              'pi: switch_session after xAI catalog refresh did not confirm; terminating session',
+              { message: err instanceof Error ? err.message : String(err) },
+            );
+            try {
+              await proc.close();
+            } catch (closeErr) {
+              this.deps.logger.warn(
+                'pi: session termination after unconfirmed catalog reload also failed',
+                { message: closeErr instanceof Error ? closeErr.message : String(closeErr) },
+              );
+            }
+            throw new Error(
+              'pi: 模型目录重载请求未收到确认(超时或链路错误),无法确定 Pi 侧是否已加载新 models.json;'
+              + '已终止本会话。请重开会话后再切换模型。',
+            );
+          }
           if (!reloaded.success) {
             await restoreNativeCatalog(previousProviders);
             throw new Error(
