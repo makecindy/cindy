@@ -157,6 +157,49 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(chatInputSource).not.toContain('}, [editor, storageKey, voiceInput.isBusy]);');
   });
 
+  it('still dispatches the pinned source send after a deferred restoreNextDraft switch', () => {
+    expect(chatInputSource).toContain("from './composerSendOwnership'");
+
+    const serializeGuard = extractBetween(
+      chatInputSource,
+      'await resolveSessionMessageReferencesForSend(editor);',
+      'serializedContent = serializeEditorContent(editor);',
+    );
+    expect(serializeGuard).toContain('editorOwnsSourceDraft({');
+    expect(serializeGuard).toContain('editorStorageKey: storageKeyForDraftRef.current');
+    expect(serializeGuard).not.toContain('latestStorageKeyRef.current !== sourceStorageKey');
+
+    const effortSettleBlock = extractBetween(
+      chatInputSource,
+      'if (!runtimeSettled) {',
+      'result = await onSend(',
+    );
+    expect(effortSettleBlock).not.toContain(
+      'if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current))',
+    );
+    expect(effortSettleBlock).toContain('must not cancel that pinned send');
+
+    const clearBlock = extractBetween(
+      chatInputSource,
+      'const clearSentComposer = (options?: { preserveNewerContent?: boolean }) => {',
+      'const restoreOptimisticallyClearedComposer = (',
+    );
+    expect(clearBlock).toContain('const editorOwnsSource = editorOwnsSourceDraft({');
+    expect(clearBlock).toContain('if (!optimisticallyClearRemoteComposer) {');
+    expect(clearBlock).toContain('if (editorOwnsSource) {');
+    expect(clearBlock).toContain('editor.commands.clearContent(true)');
+    expect(clearBlock).toContain('if (sourceStorageKey) clearComposerDraft(sourceStorageKey);');
+    const deferredClearStart = clearBlock.indexOf('if (!optimisticallyClearRemoteComposer) {');
+    const deferredClearEnd = clearBlock.indexOf(
+      'if (!options?.preserveNewerContent || !sourceStorageKey)',
+      deferredClearStart,
+    );
+    const deferredClear = clearBlock.slice(deferredClearStart, deferredClearEnd);
+    expect(deferredClear).toContain('if (editorOwnsSource) {');
+    expect(deferredClear).toContain('editor.commands.clearContent(true)');
+    expect(deferredClear).not.toContain('clearFiles()');
+  });
+
   it('keeps storageKey hydration and stop completion safe across switch races', () => {
     const initialHydrationBlock = extractBetween(
       chatInputSource,

@@ -115,6 +115,7 @@ import {
   getEffortChangeCoordinator,
   isSessionScopeCurrent,
 } from './effortChangeQueue';
+import { editorOwnsSourceDraft } from './composerSendOwnership';
 import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './composerSendSnapshot';
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
@@ -4690,14 +4691,18 @@ export function ChatInput({
         let serializedContent = serializedAtClick;
         if (!serializedContent) {
           await resolveSessionMessageReferencesForSend(editor);
-          // Local/SSH keeps the live editor until acceptance. A routed ChatInput
-          // may have switched sessions during hydration; never serialize or
-          // clear the newly hydrated composer with the old send continuation.
+          // Local/SSH keeps the live editor until acceptance. Abort only when
+          // the reused editor has already been swapped to another session's
+          // document. A deferred restoreNextDraft (voice stop/refine/send)
+          // leaves storageKeyForDraftRef on the source while the route already
+          // points at the next session — that is still the source document.
           if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;
           if (
-            editor.isDestroyed ||
-            latestStorageKeyRef.current !== sourceStorageKey ||
-            storageKeyForDraftRef.current !== sourceStorageKey
+            !editorOwnsSourceDraft({
+              editorDestroyed: editor.isDestroyed,
+              editorStorageKey: storageKeyForDraftRef.current,
+              sourceStorageKey,
+            })
           ) {
             return;
           }
@@ -4906,27 +4911,46 @@ export function ChatInput({
           });
         };
         const clearSentComposer = (options?: { preserveNewerContent?: boolean }) => {
+          const editorOwnsSource = editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          });
           const isCurrentComposer =
-            latestStorageKeyRef.current === sourceStorageKey &&
-            storageKeyForDraftRef.current === sourceStorageKey &&
-            !editor.isDestroyed;
+            latestStorageKeyRef.current === sourceStorageKey && editorOwnsSource;
           // Local/SSH sends keep the live composer until onSend is accepted.
-          // If the async send crossed a session/editor switch or the user
-          // changed the snapshot while it was in flight, leave the current
-          // draft untouched rather than clearing newer input.
+          // If the user kept typing on the same session, leave that newer
+          // draft untouched. A route switch is not "newer input": the reused
+          // editor may still hold the source document because restoreNextDraft
+          // was deferred for voice stop/refine/send.
           if (
             !optimisticallyClearRemoteComposer &&
-            (!isCurrentComposer ||
-              !isComposerSendSnapshotCurrent(
-                sendSnapshot,
-                editor.getJSON(),
-                latestAttachmentsRef.current,
-                browserCommentsRef.current,
-              ))
+            isCurrentComposer &&
+            !isComposerSendSnapshotCurrent(
+              sendSnapshot,
+              editor.getJSON(),
+              latestAttachmentsRef.current,
+              browserCommentsRef.current,
+            )
           ) {
             return;
           }
           if (!isCurrentComposer) {
+            if (!optimisticallyClearRemoteComposer) {
+              if (editorOwnsSource) {
+                isRestoringRef.current = true;
+                try {
+                  editor.commands.clearContent(true);
+                } finally {
+                  isRestoringRef.current = false;
+                }
+                historyIndexRef.current = -1;
+                hydratedHistoryDocumentRef.current = null;
+                draftRef.current = null;
+              }
+              if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
+              return;
+            }
             if (!options?.preserveNewerContent || !sourceStorageKey) {
               if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
               return;
@@ -5217,11 +5241,11 @@ export function ChatInput({
               if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
               return;
             }
-            // 路由切换后复用的编辑器不能把 A 会话的内容送进 B，也不能清掉 B 的草稿。
-            if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) {
-              if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
-              return;
-            }
+            // onSend is the click-time closure and still targets the source
+            // session. A route change while effort settles (or while voice
+            // refine was deferred) must not cancel that pinned send; clearing
+            // the live composer is gated separately so session B's draft is
+            // never wiped.
             if (coordinator.isRuntimeDirty(sessionId)) {
               toast.error(t('newChat.chatInput.effortRuntimeDirty'));
               if (optimisticallyClearRemoteComposer) restoreRemoteComposerAndRelease();
