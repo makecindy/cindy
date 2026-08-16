@@ -2558,6 +2558,7 @@
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
+      "extensionDialogConfirm": "確認",
       "cancel": "キャンセル",
       "relativePathUnsupported": "設定からローカル拡張機能を入れる場合は絶対パスを使ってください。./extension のような相対パスは Pi タスクからインストールできます。",
       "resources": {

@@ -2558,6 +2558,7 @@
       "uninstallTitle": "Pi 확장을 제거할까요?",
       "uninstallDescription": "{{name}}을(를) 이 기기에서 제거합니다. 이미 열려 있는 Pi 작업은 닫을 때까지 이전 확장을 유지합니다.",
       "confirmUninstall": "제거",
+      "extensionDialogConfirm": "확인",
       "cancel": "취소",
       "relativePathUnsupported": "설정에서 로컬 확장을 설치할 때는 절대 경로를 사용하세요. ./extension 같은 상대 경로는 Pi 작업에서 설치할 수 있습니다.",
       "resources": {

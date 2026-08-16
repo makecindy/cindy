@@ -2556,6 +2556,7 @@
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
       "confirmUninstall": "Uninstall",
+      "extensionDialogConfirm": "Confirm",
       "cancel": "Cancel",
       "resources": { "extension": "Extension code", "skill": "Skill", "prompt": "Prompt template", "theme": "Theme" },
       "status": { "supported": "Fully supported by Cindy", "extensionSupported": "No known Pi TUI dependency found", "partial": "Compatibility limits found", "unsupported": "Installed, but not loaded by Cindy", "unknown": "Compatibility check incomplete" },

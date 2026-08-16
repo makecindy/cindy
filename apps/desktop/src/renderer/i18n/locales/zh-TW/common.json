@@ -2558,6 +2558,7 @@
       "uninstallTitle": "解除安裝 Pi 擴充功能？",
       "uninstallDescription": "將從這台裝置移除 {{name}}。目前已開啟的 Pi 任務仍會保留舊擴充功能，關閉後才會徹底卸載。",
       "confirmUninstall": "解除安裝",
+      "extensionDialogConfirm": "確認",
       "cancel": "取消",
       "relativePathUnsupported": "在設定中安裝本機擴充功能時請使用絕對路徑；./extension 這類相對路徑可在 Pi 任務中安裝。",
       "resources": {

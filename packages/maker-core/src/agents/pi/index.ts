@@ -60,6 +60,7 @@ import {
   type AgentDeps,
   type AgentSessionHandle,
   type PiExtraSpawnConfig,
+  type PiExtensionUiStrings,
   type PiNativeModelSpec,
   type PiNativeProviderSpec,
   type SendOptions,
@@ -380,6 +381,39 @@ const MAX_PI_EXTENSION_DIALOG_BODY_LENGTH = 4_096;
 const MAX_PI_EXTENSION_DIALOG_OPTIONS = 100;
 const MAX_PI_EXTENSION_DIALOG_OPTION_LENGTH = 512;
 
+const DEFAULT_PI_EXTENSION_UI_STRINGS: PiExtensionUiStrings = {
+  confirm: '✓',
+  cancel: '✕',
+  mutationFailed: '✕',
+  mutationSuccess: {
+    install: '✓',
+    update: '✓',
+    remove: '✓',
+  },
+};
+
+function resolvePiExtensionUiStrings(deps: AgentDeps): PiExtensionUiStrings {
+  try {
+    const strings = deps.getPiExtensionUiStrings?.();
+    if (
+      strings
+      && strings.confirm.trim()
+      && strings.cancel.trim()
+      && strings.mutationFailed.trim()
+      && strings.mutationSuccess.install.trim()
+      && strings.mutationSuccess.update.trim()
+      && strings.mutationSuccess.remove.trim()
+    ) {
+      return strings;
+    }
+  } catch (error) {
+    deps.logger.warn('pi extension UI localization failed; using fallback copy', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return DEFAULT_PI_EXTENSION_UI_STRINGS;
+}
+
 interface ParsedPiManagedPackageCommand {
   action: 'install' | 'update' | 'remove';
   source: string;
@@ -538,6 +572,37 @@ function compactPiManagedPackageReceipt(receipt: Record<string, unknown>): Recor
   };
 }
 
+function piManagedPackageReceiptPayload(
+  outcome: { ok: true; result: unknown } | { ok: false; error: string },
+): Record<string, unknown> {
+  return outcome.ok
+    ? { ok: true, result: piManagedPackageResultSummary(outcome.result) }
+    : {
+        ok: false,
+        error: outcome.error.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH),
+        outputTruncated: outcome.error.length > MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH,
+      };
+}
+
+function piManagedPackageVisibleReceipt(
+  command: ParsedPiManagedPackageCommand,
+  outcome: { ok: true; result: unknown } | { ok: false; error: string },
+  strings: PiExtensionUiStrings,
+): string {
+  const receipt = piManagedPackageReceiptPayload(outcome);
+  const headline = outcome.ok ? strings.mutationSuccess[command.action] : strings.mutationFailed;
+  const commandText = command.original.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
+  const build = (value: Record<string, unknown>): string => [
+    headline,
+    '```json',
+    JSON.stringify({ command: commandText, receipt: value }),
+    '```',
+  ].join('\n');
+  const full = build(receipt);
+  if (full.length <= MAX_PI_MANAGED_PACKAGE_RECEIPT_PROMPT_LENGTH) return full;
+  return build(compactPiManagedPackageReceipt(receipt)).slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_PROMPT_LENGTH);
+}
+
 function boundedPiManagedPackageToolResult(result: unknown): Record<string, unknown> {
   const summary = piManagedPackageResultSummary(result);
   if (JSON.stringify(summary).length <= MAX_PI_MANAGED_PACKAGE_RECEIPT_PROMPT_LENGTH) {
@@ -552,13 +617,7 @@ function piManagedPackageReceiptPrompt(
   command: ParsedPiManagedPackageCommand,
   outcome: { ok: true; result: unknown } | { ok: false; error: string },
 ): string {
-  const receipt: Record<string, unknown> = outcome.ok
-    ? { ok: true, result: piManagedPackageResultSummary(outcome.result) }
-    : {
-        ok: false,
-        error: outcome.error.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH),
-        outputTruncated: outcome.error.length > MAX_PI_MANAGED_PACKAGE_RECEIPT_ERROR_LENGTH,
-      };
+  const receipt = piManagedPackageReceiptPayload(outcome);
   const original = command.original.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
   const source = command.source.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
   const build = (value: Record<string, unknown>): string =>
@@ -2496,6 +2555,14 @@ export class PiAgent extends BaseAgent {
           };
         }
       }
+      queue.push({
+        type: 'text',
+        data: {
+          text: piManagedPackageVisibleReceipt(command, outcome, resolvePiExtensionUiStrings(this.deps)),
+          isFinal: false,
+        },
+        source: 'pi',
+      });
       return {
         text: piManagedPackageReceiptPrompt(command, outcome),
         accepted: true,
@@ -4298,8 +4365,13 @@ export class PiAgent extends BaseAgent {
               ? `Current text:\n\n${prefill}`
               : '';
       const question = [title || `Pi extension ${method}`, body].filter(Boolean).join('\n\n');
+      const uiStrings = resolvePiExtensionUiStrings(this.deps);
       const questionOptions =
-        method === 'select' ? options.map((label) => ({ label })) : method === 'confirm' ? [{ label: 'Yes' }, { label: 'No' }] : undefined;
+        method === 'select'
+          ? options.map((label) => ({ label }))
+          : method === 'confirm'
+            ? [{ label: uiStrings.confirm }, { label: uiStrings.cancel }]
+            : undefined;
       void Promise.resolve(
         context.resolver({
           kind: 'ask_user_question',
@@ -4323,7 +4395,7 @@ export class PiAgent extends BaseAgent {
             proc.send({
               type: 'extension_ui_response',
               id,
-              confirmed: answer === 'Yes',
+              confirmed: answer === uiStrings.confirm,
             });
             return;
           }

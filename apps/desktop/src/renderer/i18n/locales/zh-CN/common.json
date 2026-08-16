@@ -2555,6 +2555,7 @@
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",
       "confirmUninstall": "卸载",
+      "extensionDialogConfirm": "确认",
       "cancel": "取消",
       "resources": { "extension": "扩展代码", "skill": "技能", "prompt": "提示模板", "theme": "主题" },
       "status": { "supported": "Cindy 完整支持", "extensionSupported": "未发现已知 Pi TUI 依赖", "partial": "发现兼容限制", "unsupported": "已安装，但不会在 Cindy 中加载", "unknown": "无法完成兼容检查" },

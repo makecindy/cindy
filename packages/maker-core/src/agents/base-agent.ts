@@ -428,6 +428,13 @@ export interface PiManagedPackageMutationRequest {
   source: string;
 }
 
+export interface PiExtensionUiStrings {
+  confirm: string;
+  cancel: string;
+  mutationFailed: string;
+  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+}
+
 export interface AgentDeps {
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
@@ -483,6 +490,13 @@ export interface AgentDeps {
    * user's ~/.pi directory or bypass Cindy's inspection/approval state.
    */
   mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
+
+  /**
+   * Pi-only: host-localized copy for extension dialogs and deterministic
+   * mutation receipts. The same strings flow through Desktop and attached IM
+   * interaction surfaces, so maker-core never hard-codes one UI language.
+   */
+  getPiExtensionUiStrings?: () => PiExtensionUiStrings;
 
   /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new

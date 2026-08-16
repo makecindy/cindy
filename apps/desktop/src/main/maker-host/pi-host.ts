@@ -46,6 +46,7 @@ import type {
 } from '@cindy/model-providers';
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
+import { t } from '../i18n.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
@@ -1287,6 +1288,16 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     mutatePiManagedPackage: (request) => mutatePiPackage({
       ...request,
       ...(request.action === 'install' ? { confirmed: true } : {}),
+    }),
+    getPiExtensionUiStrings: () => ({
+      confirm: t('settings.piPackages.extensionDialogConfirm'),
+      cancel: t('settings.piPackages.cancel'),
+      mutationFailed: t('settings.piPackages.operationFailed'),
+      mutationSuccess: {
+        install: t('settings.piPackages.success.install'),
+        update: t('settings.piPackages.success.update'),
+        remove: t('settings.piPackages.success.remove'),
+      },
     }),
     preparePiExtraSpawnConfig: async (providers, ctx) => {
       const extra = await getPiExtraSpawnConfig(providers, opts.logger, ctx);

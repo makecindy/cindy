@@ -438,16 +438,37 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   it('adapts Pi extension dialogs onto Cindy question cards', async () => {
-    const handle = await start();
+    const deps = buildDeps();
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '確認',
+      cancel: 'キャンセル',
+      mutationFailed: '失敗しました',
+      mutationSuccess: {
+        install: 'インストールしました',
+        update: '更新しました',
+        remove: '削除しました',
+      },
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'localized-extension-dialog-session',
+      workingDir: cwd,
+      model: 'm',
+    });
     handle.setInteractionResolver(async (request) => {
       if (request.kind !== 'ask_user_question') {
         throw new Error(`unexpected interaction ${request.kind}`);
       }
       const question = request.questions[0]?.question ?? '';
+      if (question.includes('Confirm')) {
+        expect(request.questions[0]?.options).toEqual([
+          { label: '確認' },
+          { label: 'キャンセル' },
+        ]);
+      }
       const answer = question.includes('Pick')
         ? 'Beta'
         : question.includes('Confirm')
-          ? 'Yes'
+          ? '確認'
           : question.includes('Edit')
             ? 'updated\ntext'
             : 'typed value';
@@ -780,6 +801,74 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('"status-display"');
       expect(prompt?.message).toContain('Do not run bash');
     } finally {
+      await handle.close();
+    }
+  });
+
+  it('publishes a localized deterministic mutation receipt even when the following model prompt fails', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: 'npm:context-mode',
+        name: 'context-mode',
+        version: '1.0.169',
+        enabled: false,
+        requiresExtensionApproval: true,
+      },
+    }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationSuccess: {
+        install: 'Pi 扩展已安装；重启任务后生效。',
+        update: 'Pi 扩展已更新；重启任务后生效。',
+        remove: 'Pi 扩展已卸载。',
+      },
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-durable-receipt-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.failPrompt = true;
+      await expect(handle.send({
+        type: 'user',
+        content: 'pi install npm:context-mode',
+      })).rejects.toThrow('pi prompt rejected');
+
+      const events = handle.events()[Symbol.asyncIterator]();
+      let receiptEvent: Awaited<ReturnType<typeof events.next>>['value'];
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (
+          event.value.type === 'text'
+          && JSON.stringify(event.value).includes('Pi 扩展已安装；重启任务后生效。')
+        ) {
+          receiptEvent = event.value;
+          break;
+        }
+      }
+
+      expect(receiptEvent).toMatchObject({
+        type: 'text',
+        data: {
+          isFinal: false,
+        },
+        source: 'pi',
+      });
+      if (!receiptEvent || receiptEvent.type !== 'text') {
+        throw new Error('missing deterministic Pi extension mutation receipt');
+      }
+      expect(receiptEvent.data.text).toContain('Pi 扩展已安装；重启任务后生效。');
+      expect(receiptEvent.data.text).toContain('"requiresExtensionApproval":true');
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(1);
+    } finally {
+      captured.failPrompt = false;
       await handle.close();
     }
   });
