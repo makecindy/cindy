@@ -8,7 +8,7 @@
  *   4. 剩下有 text 的按 model_id 再分组, 同组一次 client.embed()
  *   5. 成功 → 一个事务内: INSERT INTO {vec_table}(rowid, embedding) + UPDATE jobs.status='done'
  *   6. 失败 → attempts++, last_error, scheduled_at += 退避; attempts >= MAX → status='failed'
- *      INVALID_MODEL 是确定性配置错误:首批直接 failed,本进程内同模型后续批次不再请求 API。
+ *      只有明确的 404 模型不存在才是确定性配置错误:首批直接 failed,本进程内同模型后续批次不再请求 API。
  *
  * 重要约束 (better-sqlite3 同步事务 vs async embed):
  *   embed() 是 async, 不能在 db.transaction 内 await; 所以流程是
@@ -37,6 +37,15 @@ import {
 
 const TICK_INTERVAL_MS = 5_000;
 const BATCH_SIZE = 32;
+
+/**
+ * INVALID_MODEL 也承载参数不兼容和未分类 4xx，不能据此永久失败整个模型队列。
+ * 目前 XD Gateway 仅以 404 明确表示目标模型不存在；其它状态保留重试路径，给配置
+ * 修复或瞬时网关故障恢复的机会。
+ */
+function isTerminalInvalidModelError(error: unknown): boolean {
+  return error instanceof EmbeddingError && error.code === 'INVALID_MODEL' && error.status === 404;
+}
 
 interface JobRow {
   rowid: number;
@@ -76,9 +85,9 @@ export class EmbeddingWorker {
   private vecWarned = false;
   private suspendedWarned = false;
   /**
-   * INVALID_MODEL 原样重试不会自愈。按进程生命周期记住它:后续新 job 本地终止,
-   * 避免每 5 秒继续打同一个必败请求。应用重启会清空,让修复后的网关/模型配置
-   * 有一次重新探测的机会。
+   * 只有上游明确的 404 模型不存在不会自愈。按进程生命周期记住它:后续新 job 本地终止,
+   * 避免每 5 秒继续打同一个必败请求。普通 4xx 仍走退避重试,让网关或模型配置修复后
+   * 无需重启即可恢复。
    */
   private readonly blockedModels = new Map<string, string>();
   // 关闭 / 切账号时由 stop() 置 true。in-flight tick 在每个 await 点之后检查它,
@@ -356,7 +365,7 @@ export class EmbeddingWorker {
             }),
           );
           const errorText = `[${code}] ${msg}`;
-          const terminal = code === 'INVALID_MODEL';
+          const terminal = isTerminalInvalidModelError(err);
           if (terminal) {
             this.blockedModels.set(modelId, errorText);
             this.opts.log.warn(
