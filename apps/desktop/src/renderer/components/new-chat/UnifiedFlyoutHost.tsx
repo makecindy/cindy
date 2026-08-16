@@ -78,12 +78,15 @@ function resolvePanelRect(anchorEl: HTMLElement, panelElement: HTMLElement | nul
  *
  * 定位只在**锚点 / 面板元素变化**时算一次(规格 §1.3「同锚点内不重算」,防滑杆改高度
  * 导致抖动);面板元素从 null 变成真节点也要重算,否则会把首帧的兜底位置永久缓存。
+ * 例外是 `repositionKey`:浮层开着时列表**结构**变了(在浮层里点 ☆ 插入收藏小节,锚点行
+ * 整体下移)会脱锚 —— 那不是滑杆改高度那类自激抖动,必须按当前锚点矩形重算一次。
  */
 export function UnifiedFlyoutHost({
   anchorEl,
   panelElement,
   flyoutRef,
   className,
+  repositionKey,
   onPointerEnter,
   onPointerLeave,
   onDismiss,
@@ -93,6 +96,12 @@ export function UnifiedFlyoutHost({
   panelElement: HTMLElement | null;
   flyoutRef: RefObject<HTMLDivElement | null>;
   className?: string;
+  /**
+   * 「列表结构变了」的身份值(调用方传 sections 之类的引用即可)。值变化 = 锚点行可能
+   * 已经位移,清缓存按当前 rect 重算。**不要**传每帧都变的东西:那会退化成持续重算,
+   * 正是「同锚点内不重算」要挡的抖动。
+   */
+  repositionKey?: unknown;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onDismiss: () => void;
@@ -103,15 +112,29 @@ export function UnifiedFlyoutHost({
     top: number;
     side: 'left' | 'right';
   } | null>(null);
-  const placedForRef = useRef<{ anchor: HTMLElement; panel: HTMLElement | null } | null>(null);
+  const placedForRef = useRef<{
+    anchor: HTMLElement;
+    panel: HTMLElement | null;
+    repositionKey: unknown;
+  } | null>(null);
 
   useEffect(() => {
     if (!anchorEl || typeof window === 'undefined') return;
+    // 锚点行已从 DOM 卸载(收藏小节插入 / 重排可能整批重建行节点)→ 对着 detached 节点算
+    // rect 只会得到一堆 0。这不由本组件收场:面板侧「锚点行消失即收起浮层」的既有逻辑
+    // (flyTarget 为空 → closeFlyout)会紧接着到,这里只需按兵不动。
+    if (!anchorEl.isConnected) return;
     const placedFor = placedForRef.current;
-    if (placedFor && placedFor.anchor === anchorEl && placedFor.panel === panelElement && placement) {
+    if (
+      placedFor &&
+      placedFor.anchor === anchorEl &&
+      placedFor.panel === panelElement &&
+      placedFor.repositionKey === repositionKey &&
+      placement
+    ) {
       return;
     }
-    placedForRef.current = { anchor: anchorEl, panel: panelElement };
+    placedForRef.current = { anchor: anchorEl, panel: panelElement, repositionKey };
     const frame = requestAnimationFrame(() => {
       const size = flyoutRef.current?.getBoundingClientRect();
       setPlacement(
@@ -124,7 +147,7 @@ export function UnifiedFlyoutHost({
       );
     });
     return () => cancelAnimationFrame(frame);
-  }, [anchorEl, flyoutRef, panelElement, placement]);
+  }, [anchorEl, flyoutRef, panelElement, placement, repositionKey]);
 
   if (typeof document === 'undefined') return null;
   const side = placement?.side ?? 'left';

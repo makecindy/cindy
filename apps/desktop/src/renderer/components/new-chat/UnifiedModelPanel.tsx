@@ -65,6 +65,26 @@ const FLYOUT_CLOSE_GRACE_MS = 240;
 /** 鼠标是朝浮层那一侧离开行的 —— 明显的「我要去浮层」意图,给更长的窗口。 */
 const FLYOUT_CLOSE_GRACE_TOWARD_MS = 600;
 
+/**
+ * badge 样式滚动题头的**一套位形**(下面三处必须同源派生,拆开写过就漂过:横幅本身的
+ * 高度 / 渐变、updateStickyLabel 的接管与顶出阈值、ensureSelectedVisible 的上界)。
+ *
+ * 这组数字与真组头的 `pt-1 / pb-3 / leading-none` + 列表 `p-2` 是同一套位形:
+ * 列表上衬 8 + 组头上衬 4 + 文字行内居中 ≈ 文字距列表顶 13px,题头卡接管的那一瞬要与
+ * 真组头逐像素重合。
+ *   - SOLID:横幅的**不透明实底**高度。文字上下各留约 13px 净空;实底只到文字下缘就
+ *     渐隐,下一行的字会贴着题头文字冒出来(Chris 2026-08-16 实测「贴底」)。
+ *     它也是自动对齐时必须让开的遮挡带 —— 实底之下的内容看不见,把选中行滚到 listTop
+ *     等于把它藏在题头后面。
+ *   - TOTAL:实底 + 12px 渐隐尾的整条横幅高度。
+ *   - SWITCH_AT:组头盒顶到达这里(此时文字恰好落在钉住位)即被题头卡接管锁死。
+ *     顶出阈值 = SWITCH_AT + SOLID:下一组组头贴上实底下缘后 1:1 把在位题头顶出,
+ *     推满 SOLID 时正好轮到它自己锁进钉住位,全程无跳变、无空窗。
+ */
+const BADGE_HEADER_SOLID_PX = 38;
+const BADGE_HEADER_TOTAL_PX = 50;
+const BADGE_HEADER_SWITCH_AT_PX = 8;
+
 /** 选中一行时回传的生效配置(见 `UnifiedModelPanelProps.onSelect`)。 */
 export interface UnifiedSelectedRow {
   /** 该行**生效**引擎(推荐 ⊕ override ⊕ 会话内 pinnedEngine ⊕ 收藏副本)。 */
@@ -274,14 +294,17 @@ export function UnifiedModelPanel({
         excludeModel: (model, provider, agent) =>
           predicatesRef.current.excludeModel?.(model, provider, agent) ?? false,
         scope,
+        // 选中行豁免:当前会话 / 草稿正在用的那一条即便被停用或服务端下架,也必须留在
+        // 列表里 —— 否则选择器一打开就是空选态,用户看不出自己在跑什么、也换不回来。
+        keepModel: { providerId: selected.providerId, modelId: selected.modelId },
       }),
     // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份。
-    [providers, agentsKey, scope, sourceVersion],
+    [providers, agentsKey, scope, sourceVersion, selected.providerId, selected.modelId],
   );
 
   const railItems = useMemo(
-    () => buildUnifiedRail(entries, favorites, sessionAgent),
-    [entries, favorites, sessionAgent],
+    () => buildUnifiedRail(entries, sessionAgent),
+    [entries, sessionAgent],
   );
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
@@ -330,6 +353,11 @@ export function UnifiedModelPanel({
     }
     const listRect = el.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
+    // badge 样式的滚动题头是**不透明实底**覆盖层,恒盖住列表视口顶部 SOLID 那一带
+    // (见 BADGE_HEADER_* 头注)。上界仍按 listRect.top 算的话,自动对齐会把选中行
+    // 正好滚进题头背后 —— 用户看到的就是「当前模型没露出来」。
+    const headerInset = pickerLayout === 'badge' ? BADGE_HEADER_SOLID_PX : 0;
+    const listTopVisible = listRect.top + headerInset;
     // 上界目标:行是所在组第一行时把**组标题**一起露出来(贴顶只见行不见组名,
     // 像被裁了一刀 —— 2026-08-14 实机自查);否则给 8px 呼吸余量。下界恒 8px。
     const group = row.closest('[role="group"]');
@@ -340,9 +368,9 @@ export function UnifiedModelPanel({
       ? header.getBoundingClientRect().top - 4
       : rowRect.top - 8;
     // 上下两条余量约束装不进可视区(极矮面板)时按顶对齐一次并收工,防止上下修正
-    // 相互触发的振荡。
-    if (rowRect.bottom + 8 - topBoundary > el.clientHeight) {
-      const forced = Math.max(0, el.scrollTop + (topBoundary - listRect.top));
+    // 相互触发的振荡。题头带不算可视高度。
+    if (rowRect.bottom + 8 - topBoundary > el.clientHeight - headerInset) {
+      const forced = Math.max(0, el.scrollTop + (topBoundary - listTopVisible));
       if (Math.abs(forced - el.scrollTop) > 1) {
         suppressScrollDismissRef.current = true;
         el.scrollTop = forced;
@@ -351,8 +379,8 @@ export function UnifiedModelPanel({
       return;
     }
     const delta =
-      topBoundary < listRect.top
-        ? topBoundary - listRect.top
+      topBoundary < listTopVisible
+        ? topBoundary - listTopVisible
         : rowRect.bottom > listRect.bottom - 8
           ? rowRect.bottom - (listRect.bottom - 8)
           : 0;
@@ -366,7 +394,7 @@ export function UnifiedModelPanel({
     }
     // 行已完整可见且容器有真实高度 → 收工。
     needsEnsureVisibleRef.current = false;
-  }, []);
+  }, [pickerLayout]);
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -701,13 +729,12 @@ export function UnifiedModelPanel({
     if (!list) return;
     // 真 sticky 力学(Chris 2026-08-16:「没在它出现就锁死…落下来把第一个模型挡住」
     // ——离散阈值切换会让组头先跟滚一段再跳回钉住位,必须做成连续运动):
-    //   - 组头盒顶到达 SWITCH_AT(8px,此时其文字恰好落在钉住位 13px)即被题头卡
-    //     接管锁死,一到位就锁,不多跟一像素;
-    //   - 下一组组头盒顶贴上题头实底下缘(PUSH_AT = SWITCH_AT + 实底 38)后,把在位
-    //     题头 1:1 顶出(offset 随滚动连续变化),推满 38px 时正好轮到它自己锁进钉住位
-    //     —— 全程无跳变、无空窗。
-    const SWITCH_AT = 8;
-    const PUSH_AT = SWITCH_AT + 38;
+    //   - 组头盒顶到达 SWITCH_AT 即被题头卡接管锁死,一到位就锁,不多跟一像素;
+    //   - 下一组组头盒顶贴上题头实底下缘(PUSH_AT)后,把在位题头 1:1 顶出(offset 随
+    //     滚动连续变化),推满实底高度时正好轮到它自己锁进钉住位 —— 全程无跳变、无空窗。
+    // 两个阈值都从 BADGE_HEADER_* 派生(见其头注:横幅高度 / 渐变 / 自动对齐上界同源)。
+    const SWITCH_AT = BADGE_HEADER_SWITCH_AT_PX;
+    const PUSH_AT = SWITCH_AT + BADGE_HEADER_SOLID_PX;
     const listTop = list.getBoundingClientRect().top;
     let current: { label: string; providerId: string | null; offset: number } | null = null;
     let nextTop: number | null = null;
@@ -764,16 +791,13 @@ export function UnifiedModelPanel({
       {pickerLayout === 'badge' && stickyLabel && (
         <div
           aria-hidden
-          // 复刻真组头的静止位形:文字距列表顶约 13px(= 列表 p-2 8px + 组头 pt-1 4px
-          // + 图标行内居中),接管瞬间与列表顶部的真组头逐像素重合。收尾照设计稿 .sec:
-          // 实底渐隐到透明,不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
-          // 上下间距对称:文字上下各约 13px 实底净空(实底到 38px)再接 12px 渐隐尾;
-          // 实底只到文字下缘就渐隐会让下一行的字贴着题头文字冒出来(Chris 2026-08-16
-          // 实测「贴底」)。
-          className="pointer-events-none absolute inset-x-0 top-0 z-[6] h-[50px] px-[18px] pt-3 text-11 leading-none text-[var(--text-tertiary)]"
+          // 复刻真组头的静止位形,接管瞬间与列表顶部的真组头逐像素重合;收尾照设计稿
+          // .sec:实底渐隐到透明,不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
+          // 高度与渐变止点全部由 BADGE_HEADER_* 派生(见其头注),不在这里另写字面量。
+          className="pointer-events-none absolute inset-x-0 top-0 z-[6] px-[18px] pt-3 text-11 leading-none text-[var(--text-tertiary)]"
           style={{
-            background:
-              'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 38px, transparent)',
+            height: BADGE_HEADER_TOTAL_PX,
+            background: `linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) ${BADGE_HEADER_SOLID_PX}px, transparent)`,
             // 顶出位移由滚动位置直接驱动(1:1),不加 transition —— 与滚动逐帧同步,
             // 补间动画反而会让它滞后于手指。
             transform: `translateY(${stickyLabel.offset}px)`,
@@ -1017,6 +1041,9 @@ export function UnifiedModelPanel({
           anchorEl={flyAnchorEl}
           panelElement={panelElement}
           flyoutRef={flyoutRef}
+          // 列表结构变了(在浮层里点 ☆ 插入收藏小节 → 锚点行整体下移)就重算浮层位置,
+          // 否则它停在旧坐标上脱锚。sections 的引用只在真正重建列表时才变。
+          repositionKey={sections}
           {...(overlayClassName !== undefined ? { className: overlayClassName } : {})}
           onPointerEnter={cancelClose}
           onPointerLeave={() => scheduleClose()}

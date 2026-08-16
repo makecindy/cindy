@@ -360,6 +360,37 @@ describe('modelFavorites store', () => {
     expect(seen).not.toHaveBeenCalled();
   });
 
+  it('storage 事件:seeded 单独变化也要同步(否则本窗口会重复投种子收藏)', async () => {
+    let onStorage: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal('window', {
+      localStorage: memStorage,
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === 'storage' && typeof listener === 'function') {
+          onStorage = listener as (event: StorageEvent) => void;
+        }
+      },
+      removeEventListener: vi.fn(),
+    });
+    vi.resetModules();
+
+    const m = await loadModule();
+    const seen = vi.fn();
+    m.subscribeModelFavorites(seen);
+    // 本窗口先有一条用户收藏(seeded 未置位)。
+    m.addModelFavorite({ ...OPUS });
+    seen.mockClear();
+
+    // 另一个窗口跑了 seedDefaultFavorite 的「已有收藏 → 只落标记」分支:items / uidSeq
+    // 一字未动,只多了 seeded。漏比这一位的话本窗口缓存永远停在未置位,下次自己再投一遍。
+    const shared = JSON.parse(memStorage.getItem(m.__STORAGE_KEY)!) as Record<string, unknown>;
+    memStorage.setItem(m.__STORAGE_KEY, JSON.stringify({ ...shared, seeded: true }));
+    onStorage?.({ key: m.__STORAGE_KEY } as StorageEvent);
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    m.seedDefaultFavorite({ providerId: 'xd', modelId: 'deepseek-v4-pro', agent: 'codex' });
+    expect(m.listModelFavorites().map((item) => item.modelId)).toEqual([OPUS.modelId]);
+  });
+
   it('落盘失败静默吞,内存态仍生效', async () => {
     const m = await loadModule();
     const setItem = vi.spyOn(memStorage, 'setItem').mockImplementationOnce(() => {

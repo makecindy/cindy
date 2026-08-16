@@ -607,6 +607,30 @@ describe('统一面板 · 实测回归', () => {
     expect(triple?.getAttribute('title')).toContain('Codex');
   });
 
+  it('「恢复推荐」把 Fast 收回**推荐引擎**那一格,即便当前生效引擎的 Fast 是关的', async () => {
+    // 行落在 cc(override)上,而 cc 那条目录条目没有 Fast 能力 → 行上的生效 fast 恒 false;
+    // 推荐引擎(codex)的记忆槽里却留着上次开的 Fast。按生效引擎的值当门就会漏掉这一路:
+    // 恢复推荐后行翻回 codex,⚡ 当场复活。
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const setFast = vi.fn();
+    renderPanel({
+      modelMemory: {
+        getEffort: () => undefined,
+        setEffort: vi.fn(),
+        getFast: (agent: string) => agent === 'codex',
+        setFast,
+      },
+    });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(setFast).toHaveBeenCalledWith('codex', 'xd', 'gpt-5.5', false);
+  });
+
   it('浮层贴着面板左外侧,不会飘到远处', async () => {
     renderPanel();
     const panel = document.querySelector('[data-unified-model-panel]') as HTMLElement;
@@ -758,7 +782,6 @@ describe('统一面板 · 行内折扣徽标', () => {
       providerId: 'xd',
       modelId: 'gpt-5.5',
       displayName: 'GPT-5.5',
-      sourceConnected: true,
       candidates: ['codex' as const],
       recommended: 'codex' as const,
       nativeAgent: 'codex' as const,
@@ -907,7 +930,6 @@ describe('列表样式试用开关(badge · v7 引擎徽标行)', () => {
       providerId: 'xd',
       modelId: 'gpt-5.5',
       displayName: 'GPT-5.5',
-      sourceConnected: true,
       candidates: ['claude-code' as const, 'codex' as const],
       recommended: 'codex' as const,
       nativeAgent: 'codex' as const,

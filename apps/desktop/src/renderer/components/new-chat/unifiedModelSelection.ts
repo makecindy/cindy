@@ -17,11 +17,7 @@
  *      (i18n `effortLevels.*`),绝不把翻译过的文案回灌进配置。
  */
 
-import type {
-  ProviderView,
-  UnifiedAgentCapability,
-  UnifiedModelEntry,
-} from '@cindy/model-providers';
+import type { UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
 import { sortEntriesForAgent } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
@@ -296,15 +292,17 @@ export function railItemKey(item: UnifiedRailItem): string {
 }
 
 /**
- * rail 项派生:★收藏(有收藏条目才出现) → 同引擎(仅会话内) → 全部 → 各来源供应商
+ * rail 项派生:★收藏(**常驻**) → 同引擎(仅会话内) → 全部 → 各来源供应商
  * (按行首次出现序,即联合列表的引擎优先序 × catalog 序)。
  *
  * 「同引擎」格刻意排在 ★ 之下、全部之上(规格 §1.6):它是会话内的**默认视图**,
  * 但收藏仍是用户自己钉的东西,优先级更高。
+ *
+ * 刻意**不收** favorites:★ 常驻是裁决(见函数体注释),格位与收藏条目多少无关 ——
+ * 收着一个不看的参数只会让调用方以为「传了它就会影响 rail」。
  */
 export function buildUnifiedRail(
   entries: readonly UnifiedModelEntry[],
-  favorites: readonly ModelFavoriteItem[],
   sessionAgent?: AgentKind,
 ): UnifiedRailItem[] {
   const items: UnifiedRailItem[] = [];
@@ -351,8 +349,13 @@ function matchesQuery(entry: UnifiedModelEntry, q: string): boolean {
   );
 }
 
+/**
+ * 行查找的 map key。分隔符用空格而不是裸 NUL:源码里嵌一个 `\0` 会让整个文件被
+ * git / rg / grep 判成二进制(diff 只显示 `Bin`、符号一个都搜不到),代价远大于它能防的
+ * 那点分隔符冲突 —— provider id 与 model id 都是 slug 形态,不含空格。
+ */
 function entryKeyOf(providerId: string, modelId: string): string {
-  return `${providerId} ${modelId}`;
+  return `${providerId} ${modelId}`;
 }
 
 /**

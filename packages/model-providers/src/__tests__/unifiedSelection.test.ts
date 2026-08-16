@@ -150,6 +150,22 @@ const xd = view({
   routingOverride: { codex: { modelIdRewrite: { stripPrefix: 'codex/' } } },
 });
 
+/**
+ * 智谱形状(A12 回归):cc 同时上架长上下文变体与标准条目,codex 只有标准条目。
+ * `glm-5.2[1m]` 与 `glm-5.2` 是**两件商品**(1M vs 标准窗口),候选推导不许把前者归一成
+ * 后者 —— 归一了就会在长上下文那行上摆一个 codex 胶囊,点下去发的却是标准窗口那条。
+ */
+const zhipu = view({
+  id: 'zhipu',
+  models: {
+    'claude-code': [
+      m('glm-5.2[1m]', { contextWindow: 1_000_000 }),
+      m('glm-5.2', { contextWindow: 200_000 }),
+    ],
+    codex: [m('glm-5.2', { contextWindow: 200_000 })],
+  },
+});
+
 const alwaysVisible = () => true;
 
 function find(entries: readonly UnifiedModelEntry[], pid: string, mid: string) {
@@ -189,6 +205,20 @@ describe('id 归一', () => {
       'codex/gpt-5.5',
       'gpt-5.5[1m]',
       'gpt-5.5',
+    ]);
+  });
+
+  it('exact 候选表不剥 [1m](候选推导不许落到另一件商品上),bridge / stripPrefix 仍归一', () => {
+    expect(catalogModelIdCandidates('gpt-5.5[1m]', undefined, { exact: true })).toEqual([
+      'gpt-5.5[1m]',
+      'chatgpt/gpt-5.5[1m]',
+      'xai/gpt-5.5[1m]',
+    ]);
+    expect(catalogModelIdCandidates('codex/gpt-5.5[1m]', 'codex/', { exact: true })).toEqual([
+      'codex/gpt-5.5[1m]',
+      'chatgpt/codex/gpt-5.5[1m]',
+      'xai/codex/gpt-5.5[1m]',
+      'gpt-5.5[1m]',
     ]);
   });
 
@@ -372,6 +402,36 @@ describe('nativeAgentForProviderModel(原生底座)', () => {
     // 家族判不出的(grok / 国产 / 未知)仍是 null:无主场,任何视图不降级(裁决不变)。
     expect(nativeAgentForProviderModel(xd, 'x-ai/grok-4.6')).toBeNull();
     expect(nativeAgentForProviderModel(xd, 'deepseek/deepseek-v4-pro')).toBeNull();
+  });
+
+  it('家族与前缀矛盾时(codex/ 前缀 + group:anthropic)按目录 group 判:落 claude-code', () => {
+    // 三层优先级(见 nativeAgentForProviderModel 头注):内置 root 表 → 折扣判定 → 厂商家族。
+    // 后两层都是 isBudgetModel / groupOf 的「数据优先」契约:目录给了**合法** group 就完全
+    // 跟 group 走,`codex/` 前缀只在 group 缺失 / 未知时兜底(否则会出现「显示 budget 徽章
+    // 却归入 anthropic 分组」的自相矛盾)。本用例锁的是**现行为**,不是新裁决。
+    const conflicted = view({
+      id: 'xd',
+      models: { 'claude-code': [m('codex/weird-claude', { group: 'anthropic' })] },
+    });
+    expect(nativeAgentForProviderModel(conflicted, 'codex/weird-claude')).toBe('claude-code');
+    // group 拿掉后回到前缀兜底 → codex。
+    const noGroup = view({
+      id: 'xd',
+      models: { 'claude-code': [m('codex/weird-claude')] },
+    });
+    expect(nativeAgentForProviderModel(noGroup, 'codex/weird-claude')).toBe('codex');
+    // 未知 group 值不算数据,同样回到前缀兜底。
+    const unknownGroup = view({
+      id: 'xd',
+      models: { 'claude-code': [m('codex/weird-claude', { group: 'custom:whatever' })] },
+    });
+    expect(nativeAgentForProviderModel(unknownGroup, 'codex/weird-claude')).toBe('codex');
+    // 内置 root 表仍在最上层:同一条目挂在 anthropic 名下时 provider 说了算。
+    const builtinRoot = view({
+      id: 'anthropic',
+      models: { 'claude-code': [m('codex/weird-claude', { group: 'gpt' })] },
+    });
+    expect(nativeAgentForProviderModel(builtinRoot, 'codex/weird-claude')).toBe('claude-code');
   });
 
   it('device-link 投影(routing 无 authStrategy)与本地同结果:判定链不依赖 authStrategy', () => {
@@ -805,6 +865,72 @@ describe('unifiedModelEntries', () => {
       'xd:codex/gpt-5.5',
       'xd:codex-only-model',
     ]);
+  });
+
+  it('[1m] 变体不借基础条目蹭候选引擎(智谱形状)', () => {
+    // 候选推导:cc 有 `glm-5.2[1m]`,codex 只有 `glm-5.2` → 长上下文行的候选只有 cc。
+    expect(candidateAgentsForModel([zhipu], 'zhipu', 'glm-5.2[1m]')).toEqual(['claude-code']);
+    expect(candidateAgentsForModel([zhipu], 'zhipu', 'glm-5.2')).toEqual(['claude-code', 'codex']);
+    // wire id 解析同口径:codex 下根本没有这条,必须是 null 而不是回落到标准窗口那条。
+    expect(resolveWireModelId(zhipu, 'glm-5.2[1m]', 'codex')).toBeNull();
+    expect(resolveWireModelId(zhipu, 'glm-5.2[1m]', 'claude-code')).toBe('glm-5.2[1m]');
+
+    const entries = unifiedModelEntries({ providers: [zhipu], isVisible: alwaysVisible });
+    expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.candidates).toEqual(['claude-code']);
+    expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.capabilities.codex).toBeUndefined();
+    expect(find(entries, 'zhipu', 'glm-5.2')?.candidates).toEqual(['claude-code', 'codex']);
+  });
+
+  it('选中行豁免(keepModel):停用 / retired 的选中条目仍成行,并带上候选与能力', () => {
+    const mixed = view({
+      id: 'anthropic',
+      models: {
+        'claude-code': [
+          m('claude-opus-5'),
+          m('claude-sonnet-5', { disabled: true }),
+          m('claude-haiku-5', { status: 'retired' }),
+        ],
+        codex: [m('claude-haiku-5', { status: 'retired' })],
+      },
+    });
+    // 不传 keepModel:新路由准入照旧把两条挡掉(回归保护)。
+    expect(
+      unifiedModelEntries({ providers: [mixed], isVisible: alwaysVisible }).map((e) => e.modelId),
+    ).toEqual(['claude-opus-5']);
+
+    // 停用条目:会话里正跑着它,行必须留着。
+    const withDisabled = unifiedModelEntries({
+      providers: [mixed],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: 'anthropic', modelId: 'claude-sonnet-5' },
+    });
+    const disabledRow = find(withDisabled, 'anthropic', 'claude-sonnet-5');
+    expect(disabledRow?.candidates).toEqual(['claude-code']);
+    expect(disabledRow?.capabilities['claude-code']?.wireModelId).toBe('claude-sonnet-5');
+
+    // retired 条目 + `providerId: null`(跟随默认路由)同样保得住,候选跨两个引擎。
+    const withRetired = unifiedModelEntries({
+      providers: [mixed],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: null, modelId: 'claude-haiku-5' },
+    });
+    expect(find(withRetired, 'anthropic', 'claude-haiku-5')?.candidates).toEqual([
+      'claude-code',
+      'codex',
+    ]);
+    // 豁免只作用于点名那一行,不是把整张表的准入放开。
+    expect(withRetired.some((e) => e.modelId === 'claude-sonnet-5')).toBe(false);
+  });
+
+  it('选中行豁免也松开可见性 override(与 deriveModelList.keepSelected 同约定)', () => {
+    const entries = unifiedModelEntries({
+      providers: [anthropic],
+      isVisible: () => false,
+      keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5' },
+    });
+    expect(entries.map((e) => e.modelId)).toEqual(['claude-opus-5']);
   });
 
   it('展示元数据取推荐引擎那条目录条目', () => {

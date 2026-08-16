@@ -57,6 +57,30 @@ function subscribe(cb: () => void): () => void {
   };
 }
 
+// 多窗口:另一个窗口切了形态,本窗口的进程内缓存不会自己失效 —— 不听 storage 事件的话
+// 两个窗口会一直显示两套选择器。与 modelFavorites 同一套写法:**重读 localStorage**
+// 而不是采信 event.newValue(迟到事件带旧值,采信会把本窗口刚做的切换回滚)。
+const removeStorageListener = (() => {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return null;
+  const onStorage = (event: StorageEvent): void => {
+    // key === null 表示 storage.clear();其余只认本 store 的 key。
+    if (event.key !== null && event.key !== STORAGE_KEY) return;
+    if (event.storageArea && event.storageArea !== window.localStorage) return;
+    const prev = cache;
+    cache = null;
+    if (load() === prev) return;
+    for (const listener of listeners) listener();
+  };
+  window.addEventListener('storage', onStorage);
+  return () => window.removeEventListener('storage', onStorage);
+})();
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    removeStorageListener?.();
+  });
+}
+
 export function useModelPickerLayout(): ModelPickerLayout {
   return useSyncExternalStore(subscribe, load, () => 'original' as const);
 }

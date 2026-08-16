@@ -1584,9 +1584,11 @@ export function ChatInput({
   const providersLoading = deviceLinkDeviceId
     ? remoteModelListStatus === 'loading'
     : localProvidersLoading;
-  // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关。
+  // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关 —— **能力级**那一半
+  // (下面还要叠形态偏好才是真正启用,见 unifiedPanelCapable / unifiedPanelActive;
+  // NewMakerDraftRoute 的 unifiedModelPanelEnabled / unifiedModelPanelActive 与这两级逐字对应)。
   //
-  // 唯一的降级条件是**没有供应商目录可用**:联合列表(unifiedModelEntries)只认目录里的
+  // 这一级唯一的降级条件是**没有供应商目录可用**:联合列表(unifiedModelEntries)只认目录里的
   // (provider, agent) 条目,而老被控端不支持 provider:list 时控制端只有一份拍平的
   // capabilities —— 那种情况下开了统一面板就是一张空列表(见 ModelSelector.unifiedPanel
   // 的「已知边界」)。unsupported 是**结构化**判定(isDeviceProvidersUnsupportedError),

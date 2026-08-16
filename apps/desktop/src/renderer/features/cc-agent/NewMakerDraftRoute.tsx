@@ -93,6 +93,7 @@ import {
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
   rememberRecoverableHandoff,
   setPending,
@@ -1157,12 +1158,19 @@ export function NewMakerDraftRoute() {
     unsupported: deviceProvidersUnsupported,
   } = useDeviceProviders(effectiveDeviceLinkDeviceId);
   const providers = effectiveDeviceLinkDeviceId ? deviceProviders : localProviders;
-  // 与 ChatInput.unifiedModelPanelEnabled **逐字同一条判据**:统一面板的联合列表只认供应商
-  // 目录,老被控端(不支持 provider:list)只有一份拍平 capabilities → 开了就是空列表,
-  // composer 那边会降级回旧面板。旧面板是「先选引擎再选模型」,所以这一路必须把工具条上的
-  // 引擎下拉一起还回来 —— 否则那条链路上根本换不了引擎。常态不注入(引擎跟着模型走)。
+  // 统一面板的启用判据是**两级**,与 ChatInput 的 unifiedPanelCapable / unifiedPanelActive
+  // 一一对应,工具条的引擎下拉必须按后者(active)决定去留:
+  //   · capable(本变量)—— 联合列表只认供应商目录,老被控端(不支持 provider:list)只有
+  //     一份拍平 capabilities → 开了就是空列表,composer 那边会降级回旧面板;
+  //   · active —— 再叠上形态偏好(modelPickerLayout,默认 'original' = 最原始选择器)。
+  // 旧面板是「先选引擎再选模型」,所以只要没真正启用统一面板,就必须把工具条上的引擎下拉
+  // 还回来 —— 否则那条链路上根本换不了引擎(只按 capable 撤掉时,默认形态下的新建草稿
+  // 就彻底没有换引擎入口)。统一面板真启用时不注入(引擎跟着模型走)。
   const unifiedModelPanelEnabled =
     !effectiveDeviceLinkDeviceId || !deviceProvidersUnsupported;
+  const modelPickerLayoutPref = useModelPickerLayout();
+  const unifiedModelPanelActive =
+    unifiedModelPanelEnabled && modelPickerLayoutPref !== 'original';
   const remoteModelListStatus = !isDeviceLinkDraft
     ? 'idle'
     : capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)
@@ -2573,16 +2581,37 @@ export function NewMakerDraftRoute() {
       if (selection.vendor !== draft.vendor) switchVendor(selection.vendor, currentPrefs);
       if (isDeviceLinkDraft) {
         dlRuntimeTouchedRef.current = true;
-        setDlSel((prev) => ({
-          ...(prev ?? {}),
-          model: selection.modelId,
-          effort: selection.effort ?? prev?.effort ?? deviceLinkInitial?.effort ?? 'medium',
-          fastMode: selection.fast,
-          ...(prev?.permissionMode !== undefined
-            ? { permissionMode: prev.permissionMode }
-            : {}),
-          providerId: selection.providerId,
-        }));
+        setDlSel((prev) => {
+          const previous = prev ?? deviceLinkInitial;
+          // 与 handleModelDidChange 的远程分支同一条口径:换模型必须按**目标模型**重新解析
+          // 被控端记的 effort / fast(per-model 记忆 + `${agent}:*` 全局预设 + 目标模型的
+          // efforts 校验),不能沿用上一个模型的档 —— 沿用会把 A 模型的 high 原样带到只
+          // 支持 low 的 B 模型上,再被兜底成一个用户没选过的字面量。面板显式给出的
+          // effort / fast 是这次选择的一部分,叠在基线之上。
+          const baseline = capabilities
+            ? resolveDeviceLinkDraftDefaults(
+                capabilities,
+                remoteDraftState.value ?? previous,
+                selection.modelId,
+                capabilityAgentKind,
+              )
+            : previous;
+          // 能力与镜像都还没到:推不出任何一档,保持原状而不是编一个默认值。
+          if (!baseline) return previous;
+          return {
+            ...baseline,
+            // 用户在面板里点的就是这一行:即便它不在被控端拍平 availableModels 里(基线会
+            // clamp 到 models[0]),也不替他改选。
+            model: selection.modelId,
+            ...(selection.effort ? { effort: selection.effort } : {}),
+            fastMode: selection.fast,
+            // permissionMode 不按模型记:控制端已有的显式选择优先于基线重算。
+            ...(previous?.permissionMode !== undefined
+              ? { permissionMode: previous.permissionMode }
+              : {}),
+            providerId: selection.providerId,
+          };
+        });
         // 选中模型的 effort/fast 写穿被控端(active=true):与既有 handleEffortDidChange /
         // handleFastModeChange 同一条通道,缺了它被控端 trigger 的激活档不会跟着变。
         pushActiveDraftPref({
@@ -2605,6 +2634,9 @@ export function NewMakerDraftRoute() {
       currentPrefs,
       isDeviceLinkDraft,
       deviceLinkInitial,
+      capabilities,
+      remoteDraftState,
+      capabilityAgentKind,
       pushActiveDraftPref,
     ],
   );
@@ -4747,11 +4779,12 @@ export function NewMakerDraftRoute() {
                     showFolderPicker={false}
                     // 统一模型选择器(model-selector-unified §1.1):引擎不再是工具条上的
                     // 独立控件 —— 它跟着模型走(推荐映射自动配好,并在模型 pill 与每一行
-                    // 右侧常驻显示),高级调整收进行配置浮层。唯一的例外是 device-link 老
-                    // 被控端的 capabilities-only 降级(见 unifiedModelPanelEnabled):那条
-                    // 链路上 composer 回落旧面板,引擎下拉必须一起回来。
+                    // 右侧常驻显示),高级调整收进行配置浮层。两条例外都由
+                    // unifiedModelPanelActive 表达:device-link 老被控端的 capabilities-only
+                    // 降级、以及形态偏好停在 'original'(默认档)—— 那两路 composer 都回落
+                    // 旧面板,引擎下拉必须一起回来。
                     middleToolbarSlot={
-                      unifiedModelPanelEnabled ? undefined : (
+                      unifiedModelPanelActive ? undefined : (
                         <AgentSelect
                           value={draft.vendor}
                           onChange={handleVendorChange}
@@ -4807,7 +4840,7 @@ export function NewMakerDraftRoute() {
                         : undefined
                     }
                     compactMiddleToolbarSlot={
-                      unifiedModelPanelEnabled ? undefined : (
+                      unifiedModelPanelActive ? undefined : (
                         <AgentSelect
                           value={draft.vendor}
                           onChange={handleVendorChange}

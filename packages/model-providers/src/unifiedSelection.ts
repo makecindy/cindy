@@ -37,9 +37,10 @@
  *
  * ## 不在本层处理的事(由调用层负责)
  *
- * - `status:'retired'` 的 **keepSelected 豁免**:本模块走「新路由准入」口径,retired /
- *   disabled 条目不出现;运行中会话要保留选中行,由调用方单独并入并按 `scope:'session'`
- *   查候选与能力。
+ * - **来源之外的可见性策略**:可见性谓词由调用方注入(本包不读用户偏好)。
+ *   注意 `scope:'session'` 只管**来源解析**那一步;`disabled` / `status:'retired'` 的选中行
+ *   要留在列表里,得由调用方传 `unifiedModelEntries` 的 `keepModel`(与 `deriveModelList`
+ *   的 `keepSelected` 同一条既有约定)。
  * - 用户的引擎 override 与收藏副本:本模块只给「推荐」,override 合成在 renderer store(M2)。
  * - **effort 落档**:本模块给出的 `defaultEffort` 已应用「缺省回落 medium」(见
  *   `UnifiedAgentCapability.defaultEffort`),调用方必须把这个**已回落的值**传给
@@ -55,7 +56,7 @@ import {
   modelSupportsFastMode,
   type ProviderView,
 } from './registry.js';
-import { deriveModelList, type ProviderScope } from './modelList.js';
+import { deriveModelList } from './modelList.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, groupOf, isBudgetModel } from './classification.js';
 import type { AgentKind, CatalogModel, Effort, Provider } from './types.js';
 
@@ -133,19 +134,33 @@ export function normalizeModelIdForClassification(modelId: string): string {
  *   1. **bridge 壳**:行身份 id ↔ `chatgpt/` / `xai/` 前缀形态(支撑合并行);
  *   2. **wire 变体**:`[1m]` 展示后缀 + 该路由的 `modelIdRewrite.stripPrefix`,与 host 的
  *      `getCatalogModelContextWindow`(apps/desktop/src/main/maker-host/active-catalog.ts:750)
- *      同口径 —— 会话侧存的是 wire model id,目录始终存原始 id。
+ *      同口径 —— 会话侧存的 wire model id 可能带 `[1m]`,而目录只有基础条目。
  * 顺序即优先级:精确 id 永远排第一,保证 `[1m]` 这类**独立存在**的条目不被变体顶替。
+ *
+ * ⚠️ `exact`(默认 false)—— **两类调用方口径不同,不能共用一张表**:
+ *   - `exact: true`(候选推导 / wire id 解析,见 `resolveWireModelId`):**不剥 `[1m]`**。
+ *     `glm-5.2[1m]` 与 `glm-5.2` 是两件商品(1M vs 标准窗口)。剥了以后,「cc 有
+ *     `glm-5.2[1m]` + `glm-5.2`、codex 只有 `glm-5.2`」这种目录形状会让 `glm-5.2[1m]`
+ *     的候选里混进 codex —— 用户在长上下文那行上换到 codex,发出去的却是标准窗口那条,
+ *     正是「不做假按钮」要挡的事。bridge 壳与 `stripPrefix` 仍然归一(那两类是同一件
+ *     商品的不同外壳,不是另一件商品)。
+ *   - 默认(元数据回查:上下文窗口 / 分类 group / 展示名):允许回落基础条目,否则会话侧
+ *     存着 `[1m]` 而目录只有基础条目时整个查不到,徽章与窗口数一起消失。
  */
-export function catalogModelIdCandidates(modelId: string, stripPrefix?: string): string[] {
+export function catalogModelIdCandidates(
+  modelId: string,
+  stripPrefix?: string,
+  opts: { exact?: boolean } = {},
+): string[] {
   const out = new Set<string>([modelId]);
   const key = unifiedModelKeyId(modelId);
   out.add(key);
   for (const prefix of BRIDGE_NAMESPACE_PREFIXES) out.add(`${prefix}${key}`);
-  out.add(modelId.replace(/\[1m\]$/, ''));
+  if (opts.exact !== true) out.add(modelId.replace(/\[1m\]$/, ''));
   if (stripPrefix && modelId.startsWith(stripPrefix)) {
     const stripped = modelId.slice(stripPrefix.length);
     out.add(stripped);
-    out.add(stripped.replace(/\[1m\]$/, ''));
+    if (opts.exact !== true) out.add(stripped.replace(/\[1m\]$/, ''));
   }
   return [...out];
 }
@@ -153,15 +168,17 @@ export function catalogModelIdCandidates(modelId: string, stripPrefix?: string):
 /**
  * 取 (provider, agent) 下的目录条目,精确 id 优先、失配时按 `catalogModelIdCandidates` 归一重试。
  * 返回的是**目录里真实那条**,调用方要发请求就用它的 `.id`(= wire id)。
+ * `exact` 透传给候选表(见其头注:候选推导不许把 `[1m]` 落到另一件商品上)。
  */
 export function findCatalogModel(
   provider: Provider | ProviderView | undefined,
   modelId: string,
   agent: AgentKind,
+  opts: { exact?: boolean } = {},
 ): CatalogModel | undefined {
   if (!provider) return undefined;
   const stripPrefix = provider.routing?.[agent]?.modelIdRewrite?.stripPrefix;
-  for (const candidate of catalogModelIdCandidates(modelId, stripPrefix)) {
+  for (const candidate of catalogModelIdCandidates(modelId, stripPrefix, opts)) {
     const found = getModel(provider, candidate, agent);
     if (found) return found;
   }
@@ -172,13 +189,16 @@ export function findCatalogModel(
  * 该 (provider, agent) 下这个逻辑模型真正要发出去的 **wire model id**;不提供则 null。
  * 面板选中某引擎后写 draft / 建会话 / 切模型,一律用本函数(或 `capabilities[agent].wireModelId`)
  * 的结果,不能用行的归一化 `modelId`。
+ *
+ * 走 `exact` 查找:这是**能不能路由**的判定,`[1m]` 变体不许回落到基础条目(见
+ * `catalogModelIdCandidates` 头注)。
  */
 export function resolveWireModelId(
   provider: Provider | ProviderView | undefined,
   modelId: string,
   agent: AgentKind,
 ): string | null {
-  return findCatalogModel(provider, modelId, agent)?.id ?? null;
+  return findCatalogModel(provider, modelId, agent, { exact: true })?.id ?? null;
 }
 
 /**
@@ -453,8 +473,6 @@ export interface UnifiedModelEntry {
   sortOrder?: number;
   /** 展示图标 id(`CatalogModel.icon`;缺省由渲染层回落供应商标)。 */
   icon?: string;
-  /** 该行的来源供应商是否已连接。 */
-  sourceConnected: boolean;
   /** 候选引擎,按 `UNIFIED_AGENT_PRIORITY` 序。恒 ≥1。 */
   candidates: AgentKind[];
   /** 推荐引擎,恒 ∈ candidates。 */
@@ -475,11 +493,6 @@ export interface UnifiedModelEntriesOptions {
   /** 参与联合的引擎;缺省 = 全部三个。 */
   agents?: readonly AgentKind[];
   /**
-   * 供应商范围,默认 `'connected-for-agent'` —— 与 `visibleModelUnion`(选择器口径)一致,
-   * 也与来源解析对齐:`effectiveSourceIdForModel` 只认已连接来源。
-   */
-  providerScope?: ProviderScope;
-  /**
    * 可见性谓词(用户「设置 → 模型供应商」的显隐 override)。带 `agent` 维度 —— 显隐 key
    * 是 `<agent>:<providerId>:<modelId>`(见 renderer `isDeviceModelVisible`),同 id 在
    * cc / codex 下可以一显一隐。缺省 = 不过滤。
@@ -493,6 +506,21 @@ export interface UnifiedModelEntriesOptions {
   excludeModel?: (model: CatalogModel, provider: ProviderView, agent: AgentKind) => boolean;
   /** 来源解析口径,默认 `'draft'`。 */
   scope?: SourceResolutionScope;
+  /**
+   * **选中行豁免**(`deriveModelList.keepSelected` 的联合列表版,同一条既有约定):
+   * 这一 (来源, wire id) 即便被 `disabled` / `status:'retired'` / 可见性 override 挡住,
+   * 也必须留在列表里。
+   *
+   * 为什么必须有:`scope:'session'` 只作用于**来源解析**那一步,枚举阶段仍走
+   * `isModelSelectableForNewRoute`(新路由准入)——于是一个运行中会话选中的模型被服务端
+   * 下架或被用户停用后,那一行会从面板里凭空消失:选择器打开是空选态,用户看不出自己
+   * 正在跑什么,更换不回来。
+   *
+   * `providerId` 传 `null` = 按 wire id 匹配任意来源(跟随默认路由的选中态)。
+   * 被豁免的行**不走新路由准入的第二道来源校验**,只要目录里能解析出能力就成行;
+   * 解析不出能力的引擎照常不进候选(不做假按钮),整行一个候选都没有时才丢弃。
+   */
+  keepModel?: { providerId: string | null; modelId: string };
 }
 
 function entryKey(providerId: string, keyModelId: string): string {
@@ -512,17 +540,22 @@ function entryKey(providerId: string, keyModelId: string): string {
  * `groupModelsForDisplay` / `sortEntriesForAgent`,本函数**不二次排序**。
  *
  * 准入:复用 `deriveModelList` 的标准派生(非聊天模型 / `disabled` / `retired` 内建过滤),
- * 再叠一层「生效来源必须就是本行来源」的校验。空候选的行整行丢弃。
+ * 再叠一层「生效来源必须就是本行来源」的校验。空候选的行整行丢弃。`keepModel` 点名的那一行
+ * 豁免这两道(见该选项头注)。
+ *
+ * 供应商范围固定 `'connected-for-agent'`:第二道来源校验本就只认已连接来源
+ * (`effectiveSourceIdForModel` / `actualSourceIdForModel` 都过 `chatEligibleSourcesForModel`
+ * 的 `onlyConnected`),放宽枚举范围只会枚举出一批随后必被丢弃的行 —— 故不给调用方开这个口。
  */
 export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedModelEntry[] {
   const {
     providers,
     agents,
-    providerScope = 'connected-for-agent',
     isVisible,
     excludeProvider,
     excludeModel,
     scope = 'draft',
+    keepModel,
   } = opts;
 
   const activeAgents = UNIFIED_AGENT_PRIORITY.filter(
@@ -535,16 +568,22 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     /** 该行在各引擎下被枚举到的 wire id。 */
     wireIds: Partial<Record<AgentKind, string>>;
     agents: AgentKind[];
-    connected: boolean;
+    /** 这一行是 `keepModel` 点名的选中行 → 豁免新路由准入(见该选项头注)。 */
+    kept: boolean;
   }
   const drafts = new Map<string, Draft>();
   const order: string[] = [];
+
+  const isKeptRow = (providerId: string, wireId: string): boolean =>
+    keepModel !== undefined &&
+    keepModel.modelId === wireId &&
+    (keepModel.providerId === null || keepModel.providerId === providerId);
 
   for (const agent of activeAgents) {
     const rows = deriveModelList({
       providers,
       agent,
-      providerScope,
+      providerScope: 'connected-for-agent',
       // 同 id 多来源必须各出一行:联合列表按 (provider, 模型) 聚合,拍平去重会把另一来源
       // 的能力/徽章张冠李戴(规格 §4「同名模型多来源」)。
       dedupe: 'none',
@@ -555,15 +594,23 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       ...(excludeModel
         ? { excludeModel: (model, provider) => excludeModel(model, provider, agent) }
         : {}),
+      // 选中行豁免直接借 deriveModelList 的既有 keepSelected:它同时松开可见性 override 与
+      // 「新路由准入」(改用 isAgentSelectableModel),正是 disabled / retired 选中行要的那两道。
+      ...(keepModel ? { keepSelected: keepModel } : {}),
     });
     for (const row of rows) {
       const keyModelId = unifiedModelKeyId(row.id);
       const key = entryKey(row.sourceProviderId, keyModelId);
+      const kept = isKeptRow(row.sourceProviderId, row.id);
       const hit = drafts.get(key);
       if (hit) {
         if (!hit.agents.includes(agent)) hit.agents.push(agent);
-        // 同一引擎内同一行只可能来自同一条目录条目;首见即定。
+        // 同一 (引擎, 供应商, 归一化 id) 只可能来自一条目录条目 —— dedupe:'none' 下同一份
+        // provider.models[agent] 里出现两条归一后同 key 的 id(如 `x` 与 `chatgpt/x` 同时
+        // 在场)才会撞行。撞了取**先出现**的那条,与 deriveModelList 的目录序契约一致:
+        // 后面那条只是同一逻辑模型的另一个壳,壳的选取不该改变行的身份。
         if (hit.wireIds[agent] === undefined) hit.wireIds[agent] = row.id;
+        if (kept) hit.kept = true;
         continue;
       }
       drafts.set(key, {
@@ -571,7 +618,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
         keyModelId,
         wireIds: { [agent]: row.id },
         agents: [agent],
-        connected: row.sourceConnected,
+        kept,
       });
       order.push(key);
     }
@@ -583,27 +630,33 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     if (!draft) continue;
     const provider = providers.find((entry) => entry.id === draft.providerId);
     if (!provider) continue;
-    // 枚举到的引擎 ∩ 生效来源解析确认的引擎 —— 两道都过才算候选(约束 1)。
-    const resolved = candidateAgentsForModel(providers, draft.providerId, draft.keyModelId, {
-      scope,
-      agents: draft.agents,
-    });
-    const candidates = UNIFIED_AGENT_PRIORITY.filter(
-      (agent) => draft.agents.includes(agent) && resolved.includes(agent),
-    );
+    // 候选与能力**一次求齐**,保证「capabilities 键集 = candidates」这条不变量成立:
+    //   1. 校验用枚举时记下的**该引擎自己的 wire id**(不是行的归一化 id)—— 归一化 id 在
+    //      bridge 引擎的目录里根本不存在,拿它重查会把校验做成一次运气;
+    //   2. 解析生效来源:必须解析回本行来源(约束 1)。`keepModel` 点名的选中行跳过这一步
+    //      (它可能已被停用 / 下架,新路由准入本就会拒;但那一行必须留着能看见);
+    //   3. 目录条目解析不出能力的引擎一律剔除 —— 宁可少一个胶囊,不做点了发不出去的假按钮。
+    const candidates: AgentKind[] = [];
+    const capabilities: Partial<Record<AgentKind, UnifiedAgentCapability>> = {};
+    for (const agent of UNIFIED_AGENT_PRIORITY) {
+      if (!draft.agents.includes(agent)) continue;
+      const wireId = draft.wireIds[agent];
+      if (wireId === undefined) continue;
+      if (!draft.kept) {
+        const sourceId = resolveSourceId(providers, draft.providerId, wireId, agent, scope);
+        if (sourceId !== draft.providerId) continue;
+      }
+      const capability = capabilityOf(provider, wireId, agent);
+      if (!capability) continue;
+      candidates.push(agent);
+      capabilities[agent] = capability;
+    }
     if (candidates.length === 0) continue;
     const recommended = pickRecommendedAgent(provider, draft.keyModelId, candidates);
     if (recommended === null) continue;
-    const capabilities: Partial<Record<AgentKind, UnifiedAgentCapability>> = {};
-    for (const agent of candidates) {
-      // 优先用枚举时记下的 wire id(它经过了可见性/排除过滤),缺失才回落归一查找。
-      const capability = capabilityOf(provider, draft.wireIds[agent] ?? draft.keyModelId, agent);
-      if (capability) capabilities[agent] = capability;
-    }
-    // 展示元数据取推荐引擎那条(同 id 跨 agent 元数据可不同)。
-    const display =
-      findCatalogModel(provider, draft.wireIds[recommended] ?? draft.keyModelId, recommended) ??
-      findCatalogModel(provider, draft.wireIds[candidates[0]] ?? draft.keyModelId, candidates[0]);
+    // 展示元数据取推荐引擎那条(同 id 跨 agent 元数据可不同)。推荐必在候选内,而候选的
+    // wire id 与能力上面已经解析成功,所以这一查恒命中 —— 不再写第二层回落。
+    const display = findCatalogModel(provider, draft.wireIds[recommended]!, recommended);
     out.push({
       providerId: draft.providerId,
       modelId: draft.keyModelId,
@@ -612,7 +665,6 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       ...(display?.group !== undefined ? { group: display.group } : {}),
       ...(display?.sortOrder !== undefined ? { sortOrder: display.sortOrder } : {}),
       ...(display?.icon !== undefined ? { icon: display.icon } : {}),
-      sourceConnected: draft.connected,
       candidates,
       recommended,
       nativeAgent: nativeAgentForProviderModel(provider, draft.keyModelId),

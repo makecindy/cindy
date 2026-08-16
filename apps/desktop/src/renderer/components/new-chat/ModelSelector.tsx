@@ -103,7 +103,6 @@ import {
   unifiedModelEntries,
   visibleModelUnion,
   type ProviderView,
-  type UnifiedModelEntry,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilities';
@@ -1185,6 +1184,41 @@ function ModelSelectorContentView({
     closeOptionsPanel();
   }, [closeOptionsPanel, interactionDisabled]);
 
+  // ── 统一面板的联合列表入参 —— **组件作用域单点定义** ────────────────────────
+  // 种子收藏 effect 与面板渲染必须用同一份口径:effect 里裸调 unifiedModelEntries
+  // (不带可见性 / 排除 / agents / scope)会枚举出面板里根本不显示的行,于是投出一条
+  // 永远看不见的收藏 —— 而 `seeded` 是一次性标记(投完不复种),用户就此永远等不到
+  // 那条官方推荐。谓词走 useCallback / useMemo 保持引用稳定,免得 effect 每次 render 重跑。
+  const unifiedIsVisible = useCallback(
+    (
+      providerId: string,
+      model: { id: string; defaultEnabled?: boolean },
+      agent: AgentKind,
+    ): boolean =>
+      deviceId
+        ? isDeviceModelVisible(remoteProviders.modelVisibilityOverrides, agent, providerId, model)
+        : isModelEnabled(agent, providerId, model),
+    // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是本机可见性偏好的外部刷新信号(值本身不进判定)。
+    [deviceId, remoteProviders.modelVisibilityOverrides, visibilityVersion],
+  );
+  const unifiedExcludeProvider = useMemo(
+    () =>
+      excludeChatBridgedCodex
+        ? (provider: ProviderView, agent: AgentKind): boolean =>
+            agent === 'codex' && isChatBridgedCodexProvider(provider)
+        : undefined,
+    [excludeChatBridgedCodex],
+  );
+  const unifiedExcludeModel = useMemo(
+    () =>
+      excludeSubscriptionDirect
+        ? (model: { id: string }): boolean => isSubscriptionDirectModel(model.id)
+        : undefined,
+    [excludeSubscriptionDirect],
+  );
+  const unifiedScope: 'draft' | 'session' = actualRoute ? 'session' : 'draft';
+  const unifiedAgentsKey = unifiedAgents ? unifiedAgents.join(',') : 'all';
+
   // 官方默认推荐 → 一次性**种子收藏**(Chris 2026-08-16 裁决,替代列表里的「默认」
   // 小节):服务端目录用 `newSessionDefault` 标记推荐模型(gateway 下发),首个命中
   // 项以收藏形态投放。只投一次、取消不复种、已有收藏的用户不打扰 —— 这三条都由
@@ -1192,15 +1226,28 @@ function ModelSelectorContentView({
   // 标记来自被控端目录,控制端的本机收藏不该被它污染。
   useEffect(() => {
     if (!unifiedPanel || deviceId) return;
-    for (const entry of unifiedModelEntries({ providers })) {
+    const entries = unifiedModelEntries({
+      providers,
+      ...(unifiedAgents ? { agents: unifiedAgents } : {}),
+      isVisible: unifiedIsVisible,
+      ...(unifiedExcludeProvider ? { excludeProvider: unifiedExcludeProvider } : {}),
+      ...(unifiedExcludeModel ? { excludeModel: unifiedExcludeModel } : {}),
+      scope: unifiedScope,
+    });
+    for (const entry of entries) {
       const provider = providers.find((item) => item.id === entry.providerId);
       if (!provider) continue;
-      const markedAgent = entry.candidates.find((agent) => {
+      const markedAgents = entry.candidates.filter((agent) => {
         const wireId = entry.capabilities[agent]?.wireModelId ?? entry.modelId;
         const marked = getModel(provider, wireId, agent)?.newSessionDefault;
         return Array.isArray(marked) && marked.includes(agent as 'claude-code' | 'codex');
       });
-      if (!markedAgent) continue;
+      if (markedAgents.length === 0) continue;
+      // 引擎按**该行的推荐引擎**优先取:同一行在 cc / codex 下都带标记时,无脑取候选序
+      // 第一个会把用户钉在与官方推荐不符的引擎上(种子收藏是配置副本,引擎写死在里面)。
+      const markedAgent = markedAgents.includes(entry.recommended)
+        ? entry.recommended
+        : markedAgents[0]!;
       seedDefaultFavorite({
         providerId: entry.providerId,
         modelId: entry.modelId,
@@ -1208,7 +1255,19 @@ function ModelSelectorContentView({
       });
       break;
     }
-  }, [providers, unifiedPanel, deviceId]);
+    // 一行都没命中 → **什么都不做**(不落 seeded):目录还没到 / 这一版没下发推荐时落
+    // 标记,等于把这一版的官方推荐永久作废。
+    // biome-ignore lint/correctness/useExhaustiveDependencies: unifiedAgents 以 unifiedAgentsKey 表达身份(数组每次 render 都是新引用)。
+  }, [
+    providers,
+    unifiedPanel,
+    deviceId,
+    unifiedIsVisible,
+    unifiedExcludeProvider,
+    unifiedExcludeModel,
+    unifiedScope,
+    unifiedAgentsKey,
+  ]);
 
   // 模型清单来源:本机会话从 live providers 派生(builtin + 自定义合集);device-link 远程会话
   // 必须列**被控端**模型(cc/codex.capabilities.availableModels,deviceId 作用域),不读控制端本地
@@ -2308,8 +2367,9 @@ function ModelSelectorContentView({
   const showRemoteStatusFooter =
     remoteStatusInList !== null && (hasAnyModel || trimmedQuery.length > 0);
 
-  // 搜索框 —— 药丸样式。两种面板形态(既有分段 / 统一联合列表)共用同一份,
-  // 避免两处各写一遍后 placeholder、禁用态、a11y 名慢慢漂移。
+  // 搜索框 —— 药丸样式,**只给既有分段面板用**。统一面板的搜索行是设计稿的无框平铺形态
+  // (见下方 unifiedPanel 分支),与这里的胶囊框是两套视觉,刻意不共用;共用的只有
+  // placeholder / a11y 名的同一条 i18n key。
   const searchField = (
     <div
       className={cn(
@@ -2349,14 +2409,8 @@ function ModelSelectorContentView({
   // 联合列表的可见性 / 排除口径必须与既有面板**逐条对齐**(否则「统一面板里能看到、
   // 切回旧面板就没了」),故这里复用同一批判定函数,只是补上 agent 维度。
   if (unifiedPanel) {
-    const unifiedIsVisible = (
-      providerId: string,
-      model: { id: string; defaultEnabled?: boolean },
-      agent: AgentKind,
-    ): boolean =>
-      deviceId
-        ? isDeviceModelVisible(remoteProviders.modelVisibilityOverrides, agent, providerId, model)
-        : isModelEnabled(agent, providerId, model);
+    // 可见性 / 排除谓词与 scope 一律从组件作用域取(见 unifiedIsVisible 的定义处):
+    // 种子收藏 effect 用的是同一份,两边不能各写一遍。
     const unifiedProviderLabel = (providerId: string): string => {
       const provider = providers.find((entry) => entry.id === providerId);
       return provider ? providerDisplayName(provider, t) : providerId;
@@ -2434,17 +2488,10 @@ function ModelSelectorContentView({
         <UnifiedModelPanel
           providers={providers}
           {...(unifiedAgents ? { agents: unifiedAgents } : {})}
-          scope={actualRoute ? 'session' : 'draft'}
+          scope={unifiedScope}
           isVisible={unifiedIsVisible}
-          {...(excludeChatBridgedCodex
-            ? {
-                excludeProvider: (provider: ProviderView, agent: AgentKind) =>
-                  agent === 'codex' && isChatBridgedCodexProvider(provider),
-              }
-            : {})}
-          {...(excludeSubscriptionDirect
-            ? { excludeModel: (model: { id: string }) => isSubscriptionDirectModel(model.id) }
-            : {})}
+          {...(unifiedExcludeProvider ? { excludeProvider: unifiedExcludeProvider } : {})}
+          {...(unifiedExcludeModel ? { excludeModel: unifiedExcludeModel } : {})}
           sourceVersion={[
             visibilityVersion,
             deviceId ?? '',
@@ -2523,10 +2570,14 @@ function ModelSelectorContentView({
             <button
               type="button"
               data-layout-toggle
+              disabled={interactionDisabled}
               onClick={() =>
                 setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')
               }
-              className="shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+              className={cn(
+                'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+                interactionDisabled && 'cursor-not-allowed opacity-50',
+              )}
             >
               {pickerLayout === 'badge'
                 ? t('newChat.modelSelector.unified.layoutClassic')
@@ -2535,8 +2586,12 @@ function ModelSelectorContentView({
             <button
               type="button"
               data-layout-original
+              disabled={interactionDisabled}
               onClick={() => setModelPickerLayout('original')}
-              className="shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+              className={cn(
+                'shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+                interactionDisabled && 'cursor-not-allowed opacity-50',
+              )}
             >
               {t('newChat.modelSelector.unified.layoutOriginal')}
             </button>
@@ -2716,8 +2771,12 @@ function ModelSelectorContentView({
               <button
                 type="button"
                 data-try-unified-picker
+                disabled={interactionDisabled}
                 onClick={() => setModelPickerLayout('classic')}
-                className="shrink-0 whitespace-nowrap rounded-[8px] px-3 py-2 text-12 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]"
+                className={cn(
+                  'shrink-0 whitespace-nowrap rounded-[8px] px-3 py-2 text-12 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
+                  interactionDisabled && 'cursor-not-allowed opacity-50',
+                )}
               >
                 {t('newChat.modelSelector.unified.layoutTryUnified')}
               </button>
@@ -2889,7 +2948,8 @@ export function ModelSelector({
         setKeepOpenForAgentConfirmation(true);
         try {
           const applied = await onCrossEngineSelect(args);
-          setOpenWithoutAutoRefresh(applied !== false);
+          // 执行了切换 → 收面板;取消 → 留在原地(open 保持 true)。
+          setOpenWithoutAutoRefresh(applied === false);
           return applied !== false;
         } finally {
           setKeepOpenForAgentConfirmation(false);

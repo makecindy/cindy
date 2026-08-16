@@ -41,6 +41,128 @@ const ENGINE_BADGE_TINT: Record<UnifiedEngine, string> = {
   pi: '#a78bfa',
 };
 
+/**
+ * 行内价格展示(设计稿 v4 定稿的 F 样式):
+ *   - `free` → 「限时免费」淡染小徽标;
+ *   - `tier` → $ 档串($×1-3);**有折扣时**按折扣比例点亮,灰格是省掉的部分,尾随
+ *     「↓X%」淡染小字。
+ * 颜色语义(Chris 2026-08-14 裁决,第二版):**颜色只由点亮格数决定** —— 亮 1 格绿、
+ * 2 格黄、3 格红,与模型档位无关。$$$ 打六折亮两格就是黄,$$ 打六折亮一格就是绿;
+ * 无折扣行全亮,自然落回档位色。精确省幅由 ↓X% 与悬停说明表达。
+ * 不传 = 无报价,行内不渲染任何价格节点(别把每行都加宽)。
+ */
+export interface UnifiedRowPriceDisplay {
+  kind: 'free' | 'tier';
+  /** 符号个数:按标准价分档(折扣不改变)。 */
+  tier?: 1 | 2 | 3;
+  /**
+   * 档串用的货币符号,按**该行报价的币种**取(CNY → ¥、USD → $)。设计稿里中文报价
+   * 是 ¥¥¥,写死 $ 会让国内用户看到一串对不上账单的美元号。
+   */
+  symbol?: string;
+  /** 折扣行:折后价占比(0-100,亮段宽度);无折扣不传。 */
+  paidPct?: number;
+  /** 折扣行:↓X% 的 X。 */
+  discountPct?: number;
+  /** 已本地化的悬停说明(折扣幅度全文)。 */
+  title?: string;
+}
+
+/**
+ * $ 档串节点 —— classic 与 badge **共用同一份结构**,两套样式的差别只有三处,全部参数化:
+ * 点亮量公式、亮段裁切百分比的字符串格式、要不要把点亮量暴露成 `data-price-lit`。
+ * (抽出来之前是逐字复制的两段 ~55 行,改一处必漏另一处。)
+ */
+function PriceTierMarks({
+  priceDisplay,
+  symbol,
+  tier,
+  litOf,
+  formatClipPct,
+  exposeLit,
+}: {
+  priceDisplay: UnifiedRowPriceDisplay;
+  symbol: string;
+  tier: 1 | 2 | 3;
+  /** 点亮量(单位:字符数)。classic 整格(≥1),badge 允许半格(≥0.5)。 */
+  litOf: (paidPct: number, tier: 1 | 2 | 3) => number;
+  /** 亮段裁切百分比的字符串格式:classic 不带小数,badge 一位小数(既有 DOM 断言按此)。 */
+  formatClipPct: (pct: number) => string;
+  /** badge 才把点亮量暴露成 `data-price-lit`(调试 / 测试锚点)。 */
+  exposeLit: boolean;
+}) {
+  const marks = symbol.repeat(tier);
+  const { paidPct, discountPct } = priceDisplay;
+  return (
+    <span
+      data-price-tier
+      className="flex shrink-0 items-center gap-1"
+      {...(priceDisplay.title ? { title: priceDisplay.title } : {})}
+    >
+      {paidPct !== undefined && discountPct !== undefined ? (
+        (() => {
+          const lit = litOf(paidPct, tier);
+          // 颜色按点亮字符数四舍五入取 1 绿 / 2 黄 / 3 红(见 UnifiedRowPriceDisplay 头注)。
+          const colorTier = Math.min(3, Math.max(1, Math.round(lit))) as 1 | 2 | 3;
+          return (
+            <>
+              <span
+                aria-hidden
+                className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
+              >
+                <span className="invisible">{marks}</span>
+                <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
+                  {marks}
+                </span>
+                <span
+                  {...(exposeLit ? { 'data-price-lit': lit.toFixed(2) } : {})}
+                  className="absolute inset-0"
+                  style={{
+                    color: PRICE_TIER_COLORS[`t${colorTier}`],
+                    clipPath: `inset(0 ${formatClipPct(100 - (lit / tier) * 100)}% 0 0)`,
+                  }}
+                >
+                  {marks}
+                </span>
+              </span>
+              <span
+                data-discount-badge
+                // 设计稿 `.badge.save-tint`:淡染胶囊(14% 底 + 同色字),不是裸绿字 ——
+                // 裸字在长模型名旁边会被读成名字的一部分。
+                className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
+                style={{
+                  color: EFFORT_TIER_COLORS.low,
+                  backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+                }}
+              >
+                {`↓${discountPct}%`}
+              </span>
+            </>
+          );
+        })()
+      ) : (
+        // 无折扣:全格点亮 → 颜色按格数(1 绿 / 2 黄 / 3 红),与折扣行同一条规则。
+        <span
+          className="text-11 font-semibold leading-none tracking-[0.5px]"
+          style={{ color: PRICE_TIER_COLORS[`t${tier}`] }}
+        >
+          {marks}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 整格点亮(classic,Chris 2026-08-14 第二版):亮几格 = round(实付比例 × 格数),至少 1 格。 */
+const litWholeMarks = (paidPct: number, tier: 1 | 2 | 3): number =>
+  Math.min(tier, Math.max(1, Math.round((paidPct / 100) * tier)));
+/**
+ * 按比例点亮(badge,Chris 2026-08-16 裁决):亮宽 = 档数 × 实付比例,**下限 0.5 个字符**
+ * (↓85% 这类只按比例会剩一条彩缝,太少上色很怪)。
+ */
+const litFractionalMarks = (paidPct: number, tier: 1 | 2 | 3): number =>
+  Math.min(tier, Math.max(0.5, (paidPct / 100) * tier));
+
 /** 单行(双行布局):L1 图标 · 名称 · ☆ · 三元组 · 勾;L2 一句描述。 */
 export function UnifiedModelRow({
   entry,
@@ -84,33 +206,8 @@ export function UnifiedModelRow({
   onStar: () => void;
   /** ← 键:打开该行的配置浮层并把焦点送进去(键盘用户的浮层入口,与既有面板同键位)。 */
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
-  /**
-   * 行内价格展示(设计稿 v4 定稿的 F 样式):
-   *   - `free` → 「限时免费」淡染小徽标;
-   *   - `tier` → $ 档串($×1-3);**有折扣时**按折扣比例整格点亮,灰格是省掉的部分,
-   *     尾随「↓X%」淡染小字。
-   * 颜色语义(Chris 2026-08-14 裁决,第二版):**颜色只由点亮格数决定** —— 亮 1 格绿、
-   * 2 格黄、3 格红,与模型档位无关。$$$ 打六折亮两格就是黄,$$ 打六折亮一格就是绿;
-   * 无折扣行全亮,自然落回档位色。点亮格数 = round(实付比例 × 格数),至少 1 格
-   * (整格点亮,不再在字形中间裁切);精确省幅由 ↓X% 与悬停说明表达。
-   * 不传 = 无报价,行内不渲染任何价格节点(别把每行都加宽)。
-   */
-  priceDisplay?: {
-    kind: 'free' | 'tier';
-    /** 符号个数:按标准价分档(折扣不改变)。 */
-    tier?: 1 | 2 | 3;
-    /**
-     * 档串用的货币符号,按**该行报价的币种**取(CNY → ¥、USD → $)。设计稿里中文报价
-     * 是 ¥¥¥,写死 $ 会让国内用户看到一串对不上账单的美元号。
-     */
-    symbol?: string;
-    /** 折扣行:折后价占比(0-100,亮段宽度);无折扣不传。 */
-    paidPct?: number;
-    /** 折扣行:↓X% 的 X。 */
-    discountPct?: number;
-    /** 已本地化的悬停说明(折扣幅度全文)。 */
-    title?: string;
-  };
+  /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
+  priceDisplay?: UnifiedRowPriceDisplay;
   /**
    * 已本地化的「订阅」小签(设计稿 `.badge.sub`)。仅**订阅接入且无按量报价**的行传 ——
    * 那类模型走套餐额度,行内画 $ 档串会误导成按量计费。
@@ -143,6 +240,8 @@ export function UnifiedModelRow({
   const rowRootProps = {
     role: 'option' as const,
     'aria-selected': selected,
+    // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
+    'aria-keyshortcuts': 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     'data-unified-anchor': anchorKey(anchor),
@@ -202,11 +301,16 @@ export function UnifiedModelRow({
       ) : config.engine === 'codex' ? (
         <CodexMark size={14} variant="brand" />
       ) : (
-        <PiMark size={13} className="text-[#a78bfa]" />
+        // PiMark 上游无官方品牌色,只有 currentColor 一条路 —— 底色由下面 badgeStyle 的
+        // `color` 给,取的就是 ENGINE_BADGE_TINT.pi,不在这里手抄第二份色号。
+        <PiMark size={13} />
       );
     const badgeStyle = {
       backgroundColor: `color-mix(in srgb, ${tint} 14%, transparent)`,
       boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${tint} 30%, transparent)`,
+      // 给 currentColor 兜底(pi 的 mark 靠它染色);cc / codex 的 brand variant 自带
+      // 固定配色,继承下来的 color 用不上。
+      color: tint,
     };
     return (
       <div
@@ -272,64 +376,14 @@ export function UnifiedModelRow({
           </span>
         )}
         {priceDisplay?.kind === 'tier' && priceDisplay.tier !== undefined && (
-          <span
-            data-price-tier
-            className="flex shrink-0 items-center gap-1"
-            {...(priceDisplay.title ? { title: priceDisplay.title } : {})}
-          >
-            {priceDisplay.paidPct !== undefined && priceDisplay.discountPct !== undefined ? (
-              (() => {
-                // badge 样式(Chris 2026-08-16 裁决):亮宽 = 档数 × 实付比例,**下限
-                // 0.5 个字符**(↓85% 这类只按比例会剩一条彩缝,太少上色很怪);颜色仍按
-                // 点亮字符数四舍五入取 1 绿 / 2 黄 / 3 红。
-                const litChars = Math.min(
-                  priceDisplay.tier,
-                  Math.max(0.5, (priceDisplay.paidPct / 100) * priceDisplay.tier),
-                );
-                const colorTier = Math.min(3, Math.max(1, Math.round(litChars))) as 1 | 2 | 3;
-                return (
-                  <>
-                    <span
-                      aria-hidden
-                      className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
-                    >
-                      <span className="invisible">{priceSymbol.repeat(priceDisplay.tier)}</span>
-                      <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
-                        {priceSymbol.repeat(priceDisplay.tier)}
-                      </span>
-                      <span
-                        data-price-lit={litChars.toFixed(2)}
-                        className="absolute inset-0"
-                        style={{
-                          color: PRICE_TIER_COLORS[`t${colorTier}`],
-                          clipPath: `inset(0 ${(100 - (litChars / priceDisplay.tier) * 100).toFixed(1)}% 0 0)`,
-                        }}
-                      >
-                        {priceSymbol.repeat(priceDisplay.tier)}
-                      </span>
-                    </span>
-                    <span
-                      data-discount-badge
-                      className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
-                      style={{
-                        color: EFFORT_TIER_COLORS.low,
-                        backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
-                      }}
-                    >
-                      {`↓${priceDisplay.discountPct}%`}
-                    </span>
-                  </>
-                );
-              })()
-            ) : (
-              <span
-                className="text-11 font-semibold leading-none tracking-[0.5px]"
-                style={{ color: PRICE_TIER_COLORS[`t${priceDisplay.tier}`] }}
-              >
-                {priceSymbol.repeat(priceDisplay.tier)}
-              </span>
-            )}
-          </span>
+          <PriceTierMarks
+            priceDisplay={priceDisplay}
+            symbol={priceSymbol}
+            tier={priceDisplay.tier}
+            litOf={litFractionalMarks}
+            formatClipPct={(pct) => pct.toFixed(1)}
+            exposeLit
+          />
         )}
         {starButton}
         {/* 右缘簇:⚡ + 档位字 + 来源字签(常驻,任何滚动位置都读得出这行是谁家的)。
@@ -417,64 +471,15 @@ export function UnifiedModelRow({
           </span>
         )}
         {priceDisplay?.kind === 'tier' && priceDisplay.tier !== undefined && (
-          <span
-            data-price-tier
-            className="flex shrink-0 items-center gap-1"
-            {...(priceDisplay.title ? { title: priceDisplay.title } : {})}
-          >
-            {priceDisplay.paidPct !== undefined && priceDisplay.discountPct !== undefined ? (
-              (() => {
-                // 整格点亮(Chris 2026-08-14 第二版):亮几格 = round(实付比例 × 格数),
-                // 至少 1 格;颜色只由亮格数决定(1 绿 / 2 黄 / 3 红),与模型档位无关。
-                const litCount = Math.min(
-                  priceDisplay.tier,
-                  Math.max(1, Math.round((priceDisplay.paidPct / 100) * priceDisplay.tier)),
-                ) as 1 | 2 | 3;
-                return (
-                  <>
-                    <span
-                      aria-hidden
-                      className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
-                    >
-                      <span className="invisible">{priceSymbol.repeat(priceDisplay.tier)}</span>
-                      <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
-                        {priceSymbol.repeat(priceDisplay.tier)}
-                      </span>
-                      <span
-                        className="absolute inset-0"
-                        style={{
-                          color: PRICE_TIER_COLORS[`t${litCount}`],
-                          clipPath: `inset(0 ${100 - (litCount / priceDisplay.tier) * 100}% 0 0)`,
-                        }}
-                      >
-                        {priceSymbol.repeat(priceDisplay.tier)}
-                      </span>
-                    </span>
-                    <span
-                      data-discount-badge
-                      // 设计稿 `.badge.save-tint`:淡染胶囊(14% 底 + 同色字),不是裸绿字 ——
-                      // 裸字在长模型名旁边会被读成名字的一部分。
-                      className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
-                      style={{
-                        color: EFFORT_TIER_COLORS.low,
-                        backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
-                      }}
-                    >
-                      {`↓${priceDisplay.discountPct}%`}
-                    </span>
-                  </>
-                );
-              })()
-            ) : (
-              // 无折扣:全格点亮 → 颜色按格数(1 绿 / 2 黄 / 3 红),与折扣行同一条规则。
-              <span
-                className="text-11 font-semibold leading-none tracking-[0.5px]"
-                style={{ color: PRICE_TIER_COLORS[`t${priceDisplay.tier}`] }}
-              >
-                {priceSymbol.repeat(priceDisplay.tier)}
-              </span>
-            )}
-          </span>
+          <PriceTierMarks
+            priceDisplay={priceDisplay}
+            symbol={priceSymbol}
+            tier={priceDisplay.tier}
+            litOf={litWholeMarks}
+            // classic 的裁切百分比恒是整数(整格点亮),按既有 DOM 形态不带小数。
+            formatClipPct={(pct) => String(pct)}
+            exposeLit={false}
+          />
         )}
         {starButton}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。

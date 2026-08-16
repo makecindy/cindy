@@ -11,7 +11,6 @@
 import { describe, expect, it } from 'vitest';
 
 import type {
-  ProviderView,
   UnifiedAgentCapability,
   UnifiedModelEntry,
 } from '@cindy/model-providers';
@@ -59,7 +58,6 @@ function entryOf(over: Partial<UnifiedModelEntry> = {}): UnifiedModelEntry {
     providerId: 'anthropic',
     modelId: 'claude-opus-5',
     displayName: 'Claude Opus 5',
-    sourceConnected: true,
     candidates: ['claude-code'],
     recommended: 'claude-code',
     nativeAgent: 'claude-code',
@@ -67,29 +65,6 @@ function entryOf(over: Partial<UnifiedModelEntry> = {}): UnifiedModelEntry {
     ...over,
   };
 }
-
-/** 分组判据只读 id / auth.method / name,其余字段本层不消费 —— 最小夹具即可。 */
-function providerViewOf(id: string, method: 'oauth' | 'managed' | 'apiKey'): ProviderView {
-  return {
-    id,
-    name: id,
-    source: method === 'apiKey' ? 'user' : 'builtin',
-    agents: ['claude-code'],
-    auth: { method },
-    routing: {},
-    models: {},
-    connected: true,
-  } as unknown as ProviderView;
-}
-
-/** 与 entryOf 夹具们配套的供应商表:三家 OAuth 授权登录 + 网关 + 一个自定义。 */
-const PROVIDERS: readonly ProviderView[] = [
-  providerViewOf('anthropic', 'oauth'),
-  providerViewOf('openai', 'oauth'),
-  providerViewOf('xai', 'oauth'),
-  providerViewOf('xd', 'managed'),
-  providerViewOf('custom-a', 'apiKey'),
-];
 
 function favoriteOf(over: Partial<ModelFavoriteItem> = {}): ModelFavoriteItem {
   return {
@@ -540,25 +515,25 @@ describe('buildUnifiedRail', () => {
       entryOf({ providerId: 'xd', modelId: 'c' }),
     ];
     // ★ 常驻(2026-08-13 裁决:空收藏也显示,点进去看引导空态,不再按有无收藏隐藏)。
-    expect(buildUnifiedRail(entries, [])).toEqual([
+    expect(buildUnifiedRail(entries)).toEqual([
       { kind: 'favorites' },
       { kind: 'all' },
       { kind: 'provider', providerId: 'xd' },
       { kind: 'provider', providerId: 'anthropic' },
     ]);
-    expect(buildUnifiedRail(entries, [favoriteOf()])[0]).toEqual({ kind: 'favorites' });
+    expect(buildUnifiedRail(entries)[0]).toEqual({ kind: 'favorites' });
   });
 
   it('会话内多一格「同引擎」,位置在 ★ 之下、全部之上', () => {
     const entries = [entryOf({ providerId: 'xd', modelId: 'a' })];
-    expect(buildUnifiedRail(entries, [favoriteOf()], 'codex')).toEqual([
+    expect(buildUnifiedRail(entries, 'codex')).toEqual([
       { kind: 'favorites' },
       { kind: 'engine', agent: 'codex' },
       { kind: 'all' },
       { kind: 'provider', providerId: 'xd' },
     ]);
     // 草稿场景不出现这一格。
-    expect(buildUnifiedRail(entries, []).some((item) => item.kind === 'engine')).toBe(false);
+    expect(buildUnifiedRail(entries).some((item) => item.kind === 'engine')).toBe(false);
   });
 });
 

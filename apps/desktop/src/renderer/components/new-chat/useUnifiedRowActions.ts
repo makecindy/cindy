@@ -207,7 +207,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     );
   };
 
-  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
+  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry) => {
     if (interactionDisabled || anchor.kind === 'fav') return;
     clearModelEngineOverride(anchor.providerId, anchor.modelId);
     const recommendedAgent = entry.recommended;
@@ -221,9 +221,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     if (defaultEffort) {
       modelMemory?.setEffort(recommendedAgent, anchor.providerId, recommendedWireId, defaultEffort);
     }
-    if (config.fast) {
-      modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
-    }
+    // Fast 无条件收回:`config.fast` 是**当前生效引擎**那一格的值,拿它当门会漏掉「行现在
+    // 落在 codex(Fast 关),推荐引擎槽里还留着上次开的 Fast」这一路 —— 恢复推荐后行会
+    // 当场翻回带 ⚡ 的样子。清的槽与上面的深度一样按推荐引擎 + 推荐引擎 wire id 走。
+    modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
   };
 
   const addFavorite: UnifiedRowActions['addFavorite'] = (anchor, config) => {
