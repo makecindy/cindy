@@ -736,12 +736,15 @@ export function UnifiedModelPanel({
         <div
           aria-hidden
           // 复刻真组头的静止位形:文字距列表顶 16px(= 列表 p-2 8px + 组头 pt-2 8px),
-          // 接管瞬间与列表顶部的真组头逐像素重合。收尾照设计稿 .sec:实底渐隐到透明
-          // (78% 实底),不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
-          className="pointer-events-none absolute inset-x-0 top-0 z-[6] h-10 truncate px-[18px] pt-4 text-11 leading-none text-[var(--text-tertiary)]"
+          // 接管瞬间与列表顶部的真组头逐像素重合。收尾照设计稿 .sec:实底渐隐到透明,
+          // 不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
+          // 上下间距必须对称:文字上方净空 16px,下方同样留 15px 实底(文字底 27px +
+          // 15 = 42px)再接 12px 渐隐尾;实底只到文字下缘就渐隐会让下一行的字贴着题头
+          // 文字冒出来(Chris 2026-08-16 实测「贴底」)。
+          className="pointer-events-none absolute inset-x-0 top-0 z-[6] h-[54px] truncate px-[18px] pt-4 text-11 leading-none text-[var(--text-tertiary)]"
           style={{
             background:
-              'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 30px, transparent)',
+              'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 42px, transparent)',
           }}
         >
           {stickyLabel}
