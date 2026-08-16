@@ -244,6 +244,17 @@ describe('Agent Island display state', () => {
     expect(afterRunningUpdate.sessions.map((session) => session.sessionId)).toEqual(['done']);
   });
 
+  it('keeps unread errors in the same waiting tier as needs-interaction, ahead of unread completions', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Done' }, doneEvent(), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'err', title: 'Err' }, terminalErrorEvent('boom'), 1_100);
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, statusEvent(true, 'Running'), 1_200);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_300);
+
+    const display = buildAgentIslandDisplayState(state, 1_400);
+    expect(display.sessions.map((session) => session.sessionId)).toEqual(['ask', 'err', 'done']);
+  });
+
   it('builds a CodeIsland-style recent activity preview per session', () => {
     const state = createAgentIslandState();
 
@@ -827,10 +838,10 @@ describe('Agent Island display state', () => {
     ]);
   });
 
-  it('prioritizes interaction, terminal error, completion, then running sessions', () => {
+  it('prioritizes waiting (interaction and error), then unread completion, then running', () => {
     const state = createAgentIslandState();
-    // Deliberately create the lower-priority states later: phase priority must
-    // win before the sidebar-style prompt/fallback time is considered.
+    // Interaction and error share the waiting tier; later activity wins inside
+    // that tier. Completion and running stay below waiting even if newer.
     applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_000);
     applyAgentIslandEvent(state, { sessionId: 'error', title: 'Error' }, terminalErrorEvent('failed'), 1_100);
     applyAgentIslandEvent(state, { sessionId: 'completed', title: 'Completed' }, doneEvent(), 1_200);
@@ -838,6 +849,8 @@ describe('Agent Island display state', () => {
 
     const display = buildAgentIslandDisplayState(state, 1_400);
 
+    // Waiting 同档按活动时间:更新的 error 排在更早的 ask 前。当前面仍给挡路交互
+    // (权限 / 提问),那是岛上的展示面,不是第三套优先级。
     expect(display.currentSessionId).toBe('ask');
     expect(display.pillSnapshot).toMatchObject({
       priorityId: 'ask',
@@ -849,8 +862,8 @@ describe('Agent Island display state', () => {
     });
     expect(display.shadowVisible).toBe(true);
     expect(display.sessions.map((session) => session.sessionId)).toEqual([
-      'ask',
       'error',
+      'ask',
       'completed',
       'running',
     ]);

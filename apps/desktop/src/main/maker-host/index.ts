@@ -16,9 +16,9 @@ import {
   ClaudeCodeAgent,
   CodexAgent,
   configureDefaultImageResizer,
-  type AutoReviewRequest,
   type McpProvider,
 } from '@cindy/maker-core';
+import type { ProviderView } from '@cindy/model-providers';
 import {
   getActiveCatalog,
   setActiveCatalogChangedListener,
@@ -111,6 +111,7 @@ import { buildPiAgent } from './pi-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
+  getDesktopProviderService,
   reloadActiveCatalogForEndpointChange,
   refreshDiscoveredCodexModels,
   setNativeProviderClaimListener,
@@ -132,8 +133,10 @@ import {
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
-import { findCatalogModel, resolveAutoReviewBudget } from './auto-review-budget.js';
-import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import {
+  AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
+  createAutoReviewModelRouter,
+} from './auto-review-model-router.js';
 import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
@@ -218,6 +221,7 @@ import {
 import {
   buildCodexSubagentSpawnArgs,
   resolveCodexSubagentModelFallback,
+  resolveCodexSubagentRouteSnapshot,
 } from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
@@ -260,20 +264,6 @@ let _maker: Maker | null = null;
 /** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
 let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
-/**
- * 本次审核请求的额度。按模型能力自适应:能关思考的走紧凑档,强制思考的
- * (以及目录里查不到的)给足思考+结论的空间 —— 固定 384 token 会让 DeepSeek
- * 这类模型正文恒为空。详见 auto-review-budget.ts。
- */
-function autoReviewBudgetFor(request: AutoReviewRequest) {
-  return resolveAutoReviewBudget(findCatalogModel(
-    getActiveCatalog().providers,
-    request.providerId,
-    request.agentKind,
-    request.model,
-  ));
-}
-
 let providerAccessRuntimeRefreshListener: (() => void) | null = null;
 
 /** Register the bootstrap-owned runtime reconciliation that follows provider access changes. */
@@ -281,24 +271,15 @@ export function setProviderAccessRuntimeRefreshListener(listener: (() => void) |
   providerAccessRuntimeRefreshListener = listener;
 }
 
+const requestAutoReviewText = createAutoReviewModelRouter({
+  logger: desktopMakerLogger,
+});
+
 const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
-  // 重试守卫必须按同一份额度计时,否则放宽额度的那一档会被自己的守卫切断。
-  resolveRequestTimeoutMs: (request) => autoReviewBudgetFor(request).timeoutMs,
-  requestText: async (request, prompt) => {
-    const maker = _maker;
-    if (!maker) return null;
-    const budget = autoReviewBudgetFor(request);
-    const result = await requestUtilityText(maker, prompt, {
-      providerId: request.providerId?.trim() || undefined,
-      agentKind: request.agentKind,
-      model: request.model,
-      maxTokens: budget.maxTokens,
-      timeoutMs: budget.timeoutMs,
-      ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
-    });
-    return result.ok ? result.text : null;
-  },
+  managesRetries: true,
+  resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
+  requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
 });
 
 /**
@@ -1449,17 +1430,42 @@ export function getMaker(): Maker {
           subagentModelSettings,
           ctx.remoteHostId,
         );
+        let subagentProviderViews: ProviderView[] | undefined;
+        if (
+          !ctx.remoteHostId
+          && subagentModelSettings.codexSubagentsEnabled
+          && subagentModelSettings.codex?.trim()
+          && !subagentModelSettings.codexProviderId?.trim()
+        ) {
+          try {
+            subagentProviderViews = await getDesktopProviderService().listProviders({
+              allowSideEffects: false,
+            });
+          } catch (err) {
+            desktopMakerLogger.warn('Codex implicit subagent Provider resolution failed', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const subagentRoute = resolveCodexSubagentRouteSnapshot(
+          subagentModelSettings,
+          ctx.remoteHostId,
+          subagentProviderViews,
+        );
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
           // model/list 无影响,不加 hostPurpose 分支。
           extraArgs: [
             ...mcpExtraArgs,
-            ...(!isReview ? buildCodexSubagentSpawnArgs(subagentModelSettings) : []),
+            ...(!isReview
+              ? buildCodexSubagentSpawnArgs(subagentModelSettings, subagentRoute)
+              : []),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
+          ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
@@ -1509,8 +1515,13 @@ export function getMaker(): Maker {
       },
       unregisterCodexMcpThreadContext,
       prepareCodexResumeSession: prepareExternalCodexSessionForResume,
-      registerCodexSystemPromptForThread: ({ sessionId, threadId, text }) =>
-        registerCodexProxyComposed(sessionId, threadId, text),
+      registerCodexSystemPromptForThread: ({
+        sessionId,
+        threadId,
+        text,
+        subagentRoute,
+      }) =>
+        registerCodexProxyComposed(sessionId, threadId, text, { subagentRoute }),
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);

@@ -147,3 +147,12 @@ export function buildPlanReconcileNote(summary: OpenPlanSummary): string {
     '== 对账说明结束,以下是用户的新消息 ==',
   ].join('\n');
 }
+
+export function buildCompletedPlanGuardNote(): string {
+  return [
+    '[计划状态]上一轮计划已全部完成并收口。',
+    '不要因为用户只说“继续”或类似模糊指令就恢复、重开或修改该计划。',
+    '若用户没有明确要求重做旧步骤,应说明当前没有未完成计划,并优先处理用户的新消息。',
+    '== 状态说明结束,以下是用户的新消息 ==',
+  ].join('\n');
+}

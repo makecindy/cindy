@@ -814,6 +814,7 @@ export function SessionCard({
                 canUnarchive={!remoteWritesBlocked}
                 onUnarchive={handleUnarchiveSelect}
                 yieldToOrdinalBadge={ordinalBadgeLabel != null}
+                ordinalBadgeLabel={ordinalBadgeLabel}
               />
             )}
           </div>
@@ -1191,6 +1192,7 @@ function TimeActionsSlot({
   onArchiveNow,
   onUnarchive,
   yieldToOrdinalBadge = false,
+  ordinalBadgeLabel,
 }: {
   sessionId: string;
   /** 任务信息复选(C 期)需要读 totalTokenUsage / totalMoney 等字段。 */
@@ -1209,6 +1211,7 @@ function TimeActionsSlot({
   onUnarchive: () => void;
   /** mod+1..9 序号徽标出现时让位:徽标独占右缘,不与时间/badge 并排。 */
   yieldToOrdinalBadge?: boolean;
+  ordinalBadgeLabel?: string | null;
 }) {
   const { t } = useTranslation();
   // 任务信息复选(C / C' 期):与 SessionItem 的时间槽同源;默认仅 time 与旧渲染等价。
@@ -1225,11 +1228,12 @@ function TimeActionsSlot({
   );
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
+      <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
       {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
       <div
         className={cn(
           // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
-          'flex items-center gap-1 transition-opacity duration-[120ms]',
+          'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
           !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
           (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
           // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
@@ -1245,6 +1249,19 @@ function TimeActionsSlot({
         />
       </div>
 
+      {canQuickArchive && archivePending && (
+        <span
+          aria-hidden
+          className="invisible col-start-1 row-start-1 inline-flex h-[22px] w-max min-w-14 items-center justify-center whitespace-nowrap rounded-full px-[9px] text-11 font-semibold"
+        >
+          {t('ccAgent.sidebar.sessionMenu.archived')}
+        </span>
+      )}
+      {yieldToOrdinalBadge && ordinalBadgeLabel ? (
+        <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
+          <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+        </span>
+      ) : null}
       {canQuickArchive && archivePending && (
         <button
           ref={confirmPillRef}
@@ -1270,46 +1287,59 @@ function TimeActionsSlot({
       )}
 
       {!archivePending && (
-        <div
-          // 渐显(120ms)配 pointer-events 守卫:淡出期间按钮不占鼠标位置,
-          // 不会拦下卡片点击;键盘焦点不受 pointer-events 影响。
-          className={cn(
-            'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
-            'transition-opacity duration-[120ms]',
-            menuOpen
-              ? 'opacity-100'
-              : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
-          )}
-        >
-          <CardAction
-            variant="list"
-            isActive={isActive}
-            label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-            onClick={onOpenMenu}
+        <>
+          <div
+            aria-hidden
+            className={cn(
+              'invisible col-start-1 row-start-1 flex h-[22px] items-center gap-0.5',
+              !menuOpen && 'hidden group-hover/card:flex group-focus-within/slot:flex',
+            )}
           >
-            <EllipsisVertical size={14} strokeWidth={2} />
-          </CardAction>
-          {isArchived && canUnarchive ? (
+            <span className="size-5 shrink-0" />
+            {(isArchived && canUnarchive) || canQuickArchive ? <span className="size-5 shrink-0" /> : null}
+          </div>
+          <div
+            // 渐显(120ms)配 pointer-events 守卫:淡出期间按钮不占鼠标位置,
+            // 不会拦下卡片点击;键盘焦点不受 pointer-events 影响。
+            className={cn(
+              'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
+              'transition-opacity duration-[120ms]',
+              menuOpen
+                ? 'opacity-100'
+                : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
+            )}
+          >
             <CardAction
               variant="list"
               isActive={isActive}
-              label={t('ccAgent.sidebar.sessionMenu.unarchive')}
-              onClick={() => onUnarchive()}
+              label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+              onClick={onOpenMenu}
             >
-              <Undo size={14} strokeWidth={2} />
+              <EllipsisVertical size={14} strokeWidth={2} />
             </CardAction>
-          ) : canQuickArchive ? (
-            <CardAction
-              variant="list"
-              isActive={isActive}
-              label={t('ccAgent.sidebar.sessionMenu.archived')}
-              onClick={() => setArchivePending(true)}
-            >
-              <Archive size={14} strokeWidth={2} />
-            </CardAction>
-          ) : null}
-        </div>
+            {isArchived && canUnarchive ? (
+              <CardAction
+                variant="list"
+                isActive={isActive}
+                label={t('ccAgent.sidebar.sessionMenu.unarchive')}
+                onClick={() => onUnarchive()}
+              >
+                <Undo size={14} strokeWidth={2} />
+              </CardAction>
+            ) : canQuickArchive ? (
+              <CardAction
+                variant="list"
+                isActive={isActive}
+                label={t('ccAgent.sidebar.sessionMenu.archived')}
+                onClick={() => setArchivePending(true)}
+              >
+                <Archive size={14} strokeWidth={2} />
+              </CardAction>
+            ) : null}
+          </div>
+        </>
       )}
+      </div>
     </div>
   );
 }

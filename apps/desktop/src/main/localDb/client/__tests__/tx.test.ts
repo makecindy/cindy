@@ -42,6 +42,7 @@ CREATE TABLE sessions (
   orca_role TEXT,
   workspace_kind TEXT NOT NULL DEFAULT 'project',
   codex_history_has_product_prompt INTEGER,
+  codex_plan_json TEXT,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
   created_at INTEGER NOT NULL,
@@ -468,40 +469,48 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('rewind.commit soft-deletes target-and-after messages and resets session context', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
-        ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
-      );
+  it.each([false, true])(
+    'rewind.commit soft-deletes messages and resets session context (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        await client.exec('UPDATE sessions SET codex_plan_json = ? WHERE id = ?', [
+          JSON.stringify({ turnId: 'turn-old', plan: [], state: 'sealed' }),
+          's1',
+        ]);
+        await client.exec(
+          'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+          ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
+        );
 
-      await client.tx('rewind.commit', {
-        sessionId: 's1',
-        targetCreatedAt: 200,
-        sdkSessionId: 'sdk-after-rewind',
-        now: 999,
-      });
+        await client.tx('rewind.commit', {
+          sessionId: 's1',
+          targetCreatedAt: 200,
+          sdkSessionId: 'sdk-after-rewind',
+          now: 999,
+        });
 
-      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
-        [
-          { id: 'm1', rewind_at: null },
-          { id: 'm2', rewind_at: 999 },
-        ],
-      );
-      await expect(
-        client.queryOne(
-          'SELECT user_send_at, context_tokens, context_window, sdk_session_id FROM sessions WHERE id = ?',
-          ['s1'],
-        ),
-      ).resolves.toEqual({
-        user_send_at: 999,
-        context_tokens: 0,
-        context_window: 0,
-        sdk_session_id: 'sdk-after-rewind',
-      });
-    });
-  });
+        await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
+          [
+            { id: 'm1', rewind_at: null },
+            { id: 'm2', rewind_at: 999 },
+          ],
+        );
+        await expect(
+          client.queryOne(
+            'SELECT user_send_at, context_tokens, context_window, sdk_session_id, codex_plan_json FROM sessions WHERE id = ?',
+            ['s1'],
+          ),
+        ).resolves.toEqual({
+          user_send_at: 999,
+          context_tokens: 0,
+          context_window: 0,
+          sdk_session_id: 'sdk-after-rewind',
+          codex_plan_json: null,
+        });
+      }, { useInlineWorker });
+    },
+  );
 
   it('rewind.commit uses target message id to avoid same-timestamp over-delete', async () => {
     await withClient(async (client) => {

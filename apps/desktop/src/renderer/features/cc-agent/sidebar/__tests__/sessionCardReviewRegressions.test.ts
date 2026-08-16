@@ -163,6 +163,48 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('session-card-progress');
   });
 
+  it('lets text-mode info slots shrink to their visible content', () => {
+    expect(sessionItemSource).not.toMatch(
+      /group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end min-w-14/,
+    );
+    expect(automationGroupSource).not.toContain('min-w-14 max-w-[96px]');
+    expect(automationGroupSource).toContain(
+      'group/slot relative ml-auto flex h-6 max-w-[96px] shrink-0 items-center justify-end',
+    );
+    expect(sessionItemSource).toContain('grid h-6 grid-cols-[max-content] items-center justify-items-end');
+    expect(sessionItemSource).toContain(
+      "menuPos === null && 'hidden group-hover:flex group-focus-within/slot:flex'",
+    );
+    expect(automationGroupSource).toContain(
+      'grid h-6 max-w-[96px] grid-cols-[max-content] items-center justify-items-end',
+    );
+    expect(automationGroupSource).toContain(
+      "!menuOpen && 'hidden group-hover:block group-focus-within/slot:block'",
+    );
+    expect(sessionCardSource).toContain('grid h-[22px] grid-cols-[max-content] items-center justify-items-end');
+    expect(sessionCardSource).toContain(
+      "!menuOpen && 'hidden group-hover/card:flex group-focus-within/slot:flex'",
+    );
+    expect(sessionItemSource).toContain(
+      'invisible col-start-1 row-start-1 inline-flex',
+    );
+    expect(sessionItemSource).toContain(
+      '<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />',
+    );
+    expect(sessionCardSource).toContain(
+      'invisible col-start-1 row-start-1 inline-flex',
+    );
+    expect(sessionCardSource).toContain(
+      '<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />',
+    );
+    expect(sessionItemSource).not.toContain(
+      'invisible col-start-1 row-start-1 inline-flex h-6 items-center px-1.5 py-[2px] text-11 leading-none',
+    );
+    expect(sessionCardSource).not.toContain(
+      'invisible col-start-1 row-start-1 inline-flex h-5 items-center px-1.5 py-[2px] text-11 leading-none',
+    );
+  });
+
   it('keeps card info anchored to the bottom meta row instead of the overlay layout', () => {
     // 时间/信息槽固定在底部 meta 行右端(ml-auto),不再依赖 overlay/block 双态测量。
     // C 期起时间渲染并入 SessionInfoMeta(任务信息复选),锚点与让位语义不变。
@@ -174,6 +216,18 @@ describe('SessionCard review regressions', () => {
   it('keeps archive confirmation pills clear of time and ordinal overlays', () => {
     expect(sessionCardSource).toContain('w-max min-w-14');
     expect(sessionCardSource).toContain('whitespace-nowrap text-11 font-semibold');
+    expect(sessionCardSource).toContain(
+      'invisible col-start-1 row-start-1 inline-flex h-[22px] w-max min-w-14 items-center justify-center whitespace-nowrap rounded-full px-[9px] text-11 font-semibold',
+    );
+    expect(sessionCardSource).not.toContain(
+      'invisible col-start-1 row-start-1 inline-block h-[22px] w-14',
+    );
+    expect(sessionItemSource).toContain(
+      'invisible col-start-1 row-start-1 inline-block h-6 w-14',
+    );
+    expect(sessionItemSource).toContain(
+      'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
+    );
     expect(sessionCardSource).toContain(
       '!isEditing && !archivePending && ordinalBadgeLabel != null',
     );
