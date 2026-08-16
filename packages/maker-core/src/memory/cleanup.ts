@@ -100,6 +100,12 @@ export interface ArchiveItem {
    * recheck the shard before moving it)。读失败 (并发删除) 为 null。
    */
   expectedHash: string | null;
+  /**
+   * 重复组保留副本 (reason=duplicate 时) — plan 审阅时点的 contentHash,
+   * run 校验其仍存在且内容一致, 任一变化则失败要求重新规划 (Codex P1 on
+   * #2561 第二十九轮: 同时校验重复组的保留副本)。
+   */
+  keep?: { filename: string; contentHash: string };
 }
 
 /** 完全重复组 (title+description+body 三者一致, 仅 filename 不同)。 */
@@ -261,6 +267,10 @@ export async function planMemoryCleanup(
         reason: 'duplicate',
         detail: `duplicate of ${keep.filename}`,
         expectedHash,
+        // 绑定保留副本的审阅时点内容 hash — run 校验 keep 仍存在且内容一致,
+        // 否则重复组不成立, 归档会让最后一份已审阅内容退出正常路径
+        // (Codex P1 on #2561 第二十九轮)。
+        keep: { filename: keep.filename, contentHash: contentHash(keep) },
       });
     }
   }
@@ -328,8 +338,22 @@ export async function planMemoryCleanup(
   }
 
   // ── 4. digest 精简: 保留最新 N, 其余归档 ──────────────────────────────
-  const digests = records
-    .filter((r) => r.frontmatter.type === 'digest')
+  // 缺 updatedAt 的 digest 被 parseRawShard 每次读取填当前时间 — 按它排序
+  // 等价于按 readdir/解析先后而非真实新旧, 精简会误归档实际最新的 digest
+  // (Codex P1 on #2561 第二十九轮: 不要按解析时刻排列无时间戳 digest)。
+  // raw 检查是否含 updatedAt 字段, 缺 → 不参与精简 (仅报告, 不归档)。
+  const digestMeta: Array<{ rec: MemoryRecord; hasTs: boolean }> = [];
+  for (const r of records) {
+    if (r.frontmatter.type !== 'digest') continue;
+    const rr = await storage.readWithRaw(r.filename);
+    digestMeta.push({
+      rec: r,
+      hasTs: rr !== null && /^updatedAt\s*:/m.test(rr.raw),
+    });
+  }
+  const digests = digestMeta
+    .filter((d) => d.hasTs)
+    .map((d) => d.rec)
     .sort((a, b) => {
       const d = b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt);
       if (d !== 0) return d;
@@ -405,6 +429,19 @@ export async function runMemoryCleanup(
   for (const item of items) {
     const src = path.join(plan.shardDir, item.filename);
     try {
+      // 重复组保留副本校验 (Codex P1 on #2561 第二十九轮): keep 在 plan 后
+      // 被更新/删除则重复组不再成立 — 归档待删副本会让最后一份已审阅内容
+      // 退出 MEMORY.md/FTS 正常路径, 必须失败并要求重新规划。
+      if (item.keep) {
+        const keepRec = await new MemoryStorage(plan.shardDir).readWithRaw(item.keep.filename);
+        if (!keepRec || contentHash(keepRec.rec) !== item.keep.contentHash) {
+          result.failed.push({
+            filename: item.filename,
+            error: `duplicate keeper ${item.keep.filename} changed since plan; replan required`,
+          });
+          continue;
+        }
+      }
       // 幂等 + 移动前校验: 只对 ENOENT (源已被上次运行归档) 静默跳过;
       // 其他读错误 (EACCES/EPERM/瞬态锁定) 必须暴露为 failed, 不能伪装成
       // 幂等 — 否则 CLI 报成功但分片仍在索引里, 自动化不重试 (Codex P2 on

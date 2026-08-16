@@ -6,7 +6,7 @@
  * 归档/备份同名冲突循环后缀 (含同 clock rerun)。
  */
 
-import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, unlink } from 'node:fs/promises';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -177,9 +177,59 @@ describe('planMemoryCleanup', () => {
     // digest 冗余是确定性动作 → 进 archiveItems。
     expect(plan.archiveItems.map((i) => i.filename)).toEqual(['digest_old.md']);
   });
+
+  it('excludes digests without updatedAt from retention pruning', async () => {
+    // 缺 updatedAt 的 digest 会被 parseRawShard 每次读填当前时间 — 按解析时刻
+    // 排序会误归档实际最新的 digest (Codex P1 on #2561 第二十九轮)。
+    await shard('digest_old.md', 'digest', 'Digest 1', 'hook', 'old', '2026-01-01T00:00:00.000Z');
+    await writeFile(
+      path.join(dir, 'digest_nots.md'),
+      '---\ntitle: No TS\ndescription: hook\ntype: digest\n---\nbody\n',
+      'utf8',
+    );
+
+    const plan = await planMemoryCleanup(dir);
+    // 无时间戳 digest 不参与精简: 不进 keep 也不进 archive (仅报告)。
+    expect(plan.digests.keep).toEqual(['digest_old.md']);
+    expect(plan.digests.archive).toEqual([]);
+    expect(plan.archiveItems).toHaveLength(0);
+  });
 });
 
 describe('runMemoryCleanup', () => {
+  it('fails duplicate archive when keeper changed since plan', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟 plan 后宿主更新保留副本 (keep) — 重复组不再成立, 归档待删副本会
+    // 让最后一份已审阅内容退出正常路径, 必须 failed 要求重新规划
+    // (Codex P1 on #2561 第二十九轮: 同时校验重复组的保留副本)。
+    await writeFile(
+      path.join(dir, 'feedback_b.md'),
+      "---\ntitle: CHANGED\ndescription: new\ntype: feedback\nupdatedAt: '2026-04-01T00:00:00.000Z'\n---\nchanged by host\n",
+      'utf8',
+    );
+
+    const result = await runMemoryCleanup(plan);
+    expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+    expect(result.archived).toHaveLength(0);
+    // 待删副本仍留在活动分片 (未归档)。
+    await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
+  });
+
+  it('fails duplicate archive when keeper was deleted since plan', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    await unlink(path.join(dir, 'feedback_b.md')); // plan 后宿主删除 keep
+
+    const result = await runMemoryCleanup(plan);
+    expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+    expect(result.archived).toHaveLength(0);
+  });
+
   it('archives duplicates into .archive and rebuilds MEMORY.md', async () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
