@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   applyDesktopDevStartupConfig,
+  DESKTOP_DEV_REGIONS,
   desktopUserDataDirNameForRegion,
   resolveDesktopDevRegion,
 } from './shared/desktop-dev-region.mjs';
@@ -17,6 +18,10 @@ const forceTimeoutMs = 5000;
 const pollIntervalMs = 150;
 const startupReadyTimeoutMs = 120_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
+const desktopDevCacheRelativeDirs = Object.freeze([
+  path.join('apps', 'desktop', 'node_modules', '.vite'),
+  path.join('apps', 'desktop', '.vite'),
+]);
 
 /**
  * 产品默认 userData 目录基名。⚠️ 值必须与
@@ -220,6 +225,42 @@ function upsertEnvValue(content, key, value, options = {}) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function desktopDevCacheDirs(root = rootDir) {
+  return desktopDevCacheRelativeDirs.map((entry) => path.join(root, entry));
+}
+
+function assertDesktopDevCachePath(root, target) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  const allowedTargets = new Set(desktopDevCacheDirs(resolvedRoot).map((entry) => path.resolve(entry)));
+  if (!allowedTargets.has(resolvedTarget)) {
+    throw new Error(`Refusing to remove unexpected desktop dev cache path: ${resolvedTarget}`);
+  }
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Refusing to remove desktop dev cache outside repository: ${resolvedTarget}`);
+  }
+}
+
+export function clearDesktopDevCaches(root = rootDir, { logger = console } = {}) {
+  const removed = [];
+  for (const cacheDir of desktopDevCacheDirs(root)) {
+    assertDesktopDevCachePath(root, cacheDir);
+    if (!fs.existsSync(cacheDir)) continue;
+    fs.rmSync(cacheDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    removed.push(cacheDir);
+  }
+
+  if (removed.length > 0) {
+    logger.log(
+      `==> Cleared desktop dev cache: ${removed.map((entry) => path.relative(root, entry)).join(', ')}`,
+    );
+  } else {
+    logger.log('==> Desktop dev cache already clean.');
+  }
+  return removed;
 }
 
 function listWindowsProcesses() {
@@ -447,6 +488,101 @@ function userDataDirNamed(dirName) {
   }
   const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config');
   return path.join(xdgConfig, dirName);
+}
+
+export function hasIsolationIntent(argv = [], env = process.env) {
+  return argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated='))
+    || env.XDT_ISOLATED === '1';
+}
+
+export function officialProductionUserDataDirs() {
+  return DESKTOP_DEV_REGIONS.map((region) => productionUserDataDir(region));
+}
+
+/** 与 devCliFlags ISOLATION_NAME_RE 一致：非法名字回落默认沙箱，不把路径段写进目录。 */
+export const ISOLATION_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+export function sanitizeIsolationName(raw) {
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  return ISOLATION_NAME_RE.test(name) ? name : '';
+}
+
+function volumeIsCaseInsensitive(existingDir) {
+  let dir = existingDir;
+  for (;;) {
+    const parent = path.dirname(dir);
+    const atRoot = parent === dir;
+    if (!atRoot) {
+      try {
+        if (fs.statSync(parent).dev !== fs.statSync(dir).dev) return false;
+      } catch {
+        return false;
+      }
+    }
+    const name = path.basename(dir);
+    const flipped = name.replace(/[a-zA-Z]/g, (ch) => (
+      ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase()
+    ));
+    if (flipped !== name) {
+      try {
+        return fs.realpathSync.native(path.join(parent, flipped))
+          === fs.realpathSync.native(dir);
+      } catch {
+        return false;
+      }
+    }
+    if (atRoot) return false;
+    dir = parent;
+  }
+}
+
+export function canonicalizeUserDataDir(dir) {
+  const resolved = path.resolve(dir);
+  try {
+    const real = fs.realpathSync.native(resolved);
+    return volumeIsCaseInsensitive(real) ? real.toLowerCase() : real;
+  } catch {
+    // 叶子还不存在:沿最近存在祖先做 realpath,再按该卷语义接回剩余段。
+  }
+  let current = resolved;
+  const suffix = [];
+  for (;;) {
+    const parent = path.dirname(current);
+    suffix.unshift(path.basename(current));
+    if (parent === current) return resolved;
+    current = parent;
+    try {
+      const ancestorReal = fs.realpathSync.native(current);
+      const joined = path.join(ancestorReal, ...suffix);
+      return volumeIsCaseInsensitive(ancestorReal) ? joined.toLowerCase() : joined;
+    } catch {
+      // 继续上溯
+    }
+  }
+}
+
+export function isOfficialProductionUserDataDir(dir) {
+  const resolved = canonicalizeUserDataDir(dir);
+  return officialProductionUserDataDirs().some(
+    (official) => canonicalizeUserDataDir(official) === resolved,
+  );
+}
+
+export function resolveRestartTargetUserDataDir({
+  envUserDataDir,
+  isolatedArg,
+  isolatedEnv,
+  isolatedName,
+  selectedRegion,
+}) {
+  const isolationName = sanitizeIsolationName(
+    isolatedArg ? parseIsolationName(isolatedArg) : isolatedName,
+  );
+  const isolated = Boolean(isolatedArg) || isolatedEnv === '1';
+  return envUserDataDir
+    || (isolated
+      ? defaultIsolatedUserDataDir(isolationName, selectedRegion)
+      : productionUserDataDir(selectedRegion));
 }
 
 export function defaultIsolatedUserDataDir(isolationName, region = 'global') {
@@ -791,9 +927,9 @@ async function main() {
       '--preserve-running only supports remote mode: sharing remote login storage with a local auth server could invalidate the persisted credential',
     );
   }
-  if (preserveRunning && isolatedArg) {
+  if (preserveRunning && hasIsolationIntent(argv, process.env)) {
     throw new Error(
-      '--preserve-running reuses the current Cindy login via shared userData and cannot be combined with --isolated',
+      '--preserve-running reuses the current Cindy login via shared userData and cannot be combined with --isolated or XDT_ISOLATED=1',
     );
   }
   if (startupConfig) {
@@ -853,8 +989,6 @@ async function main() {
       // 路径以默认身份打开造成双身份互写(#912 review P1)。
       process.env.XDT_USER_DATA_DIR_EPOCH = '1';
     }
-    fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
-    console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);
   }
   if (startupConfig) ensureDesktopEnv();
 
@@ -887,10 +1021,33 @@ async function main() {
   // --isolated 名字,或用户自己停掉那个实例。preserve-running 不进此门 ——
   // 它的语义就是共享 userData 的被动预览。检测是尽力而为:靠 helper 进程命令行
   // 上的 --user-data-dir,对方实例刚启动还没起 helper 时可能漏检。
-  const targetUserDataDir = process.env.XDT_USER_DATA_DIR
-    || (isolatedArg
-      ? defaultIsolatedUserDataDir(parseIsolationName(isolatedArg), selectedRegion)
-      : productionUserDataDir(selectedRegion));
+  const targetUserDataDir = resolveRestartTargetUserDataDir({
+    envUserDataDir: process.env.XDT_USER_DATA_DIR,
+    isolatedArg,
+    isolatedEnv: process.env.XDT_ISOLATED,
+    isolatedName: process.env.XDT_ISOLATED_NAME,
+    selectedRegion,
+  });
+  if (
+    hasIsolationIntent(argv, process.env)
+    && isOfficialProductionUserDataDir(targetUserDataDir)
+  ) {
+    throw new Error(
+      `--isolated cannot use the official Cindy profile (${targetUserDataDir}). ` +
+        'Omit XDT_USER_DATA_DIR, or point it at a sandbox directory.',
+    );
+  }
+  if (startupConfig && hasIsolationIntent(argv, process.env)) {
+    if (!process.env.XDT_USER_DATA_DIR) {
+      process.env.XDT_USER_DATA_DIR = targetUserDataDir;
+      process.env.XDT_USER_DATA_DIR_EPOCH = '1';
+    }
+    fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
+    const isolationName = isolatedArg
+      ? parseIsolationName(isolatedArg)
+      : (process.env.XDT_ISOLATED_NAME || '');
+    console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);
+  }
   if (!preserveRunning) {
     const conflicts = listDesktopDevProcesses().filter(
       (proc) => !commandContainsPath(proc.command, rootDir)
@@ -1011,6 +1168,8 @@ async function main() {
   }
 
   if (killOnly) return;
+
+  if (!preserveRunning) clearDesktopDevCaches(rootDir);
 
   let startupStatusPath = null;
   if (waitReady) {
