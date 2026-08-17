@@ -6494,8 +6494,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (reroute && shouldApplyExclusiveProviderReroute(o.providerId)) {
           o.providerId = reroute;
         }
-      } else if (!o.providerId) {
-        const pin = await pinExclusiveSessionProvider(o.agentKind, o.model, null);
+      } else if (shouldApplyExclusiveProviderReroute(o.providerId)) {
+        const pin = await pinExclusiveSessionProvider(
+          o.agentKind,
+          o.model,
+          o.providerId ?? null,
+        );
         if (pin) o.providerId = pin;
       }
     }
