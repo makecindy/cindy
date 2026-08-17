@@ -352,6 +352,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         // 让后续每次委派打到攻击者选定的 endpoint。与 permission file 同类,必须从
         // bash/模型工具的 spawn 边界剥离(review)。
         'CINDY_PI_SUBAGENT_RUNTIME_FILE',
+        'CINDY_PI_SUBAGENT_OWNER_ID',
       ]),
     );
     const noProxy = (captured.env.NO_PROXY ?? '').split(',');
@@ -848,6 +849,49 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       id: 'subagent-auto',
       value: 'allow',
     });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('requires confirmation before an Auto Subagent exports parent context', async () => {
+    const handle = await start('auto');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-fork', 'subagent', {
+      agent: 'worker',
+      task: 'continue the parent investigation',
+      context: 'fork',
+    });
+
+    expect(await waitForResponse('subagent-fork')).toMatchObject({ value: 'user-deny' });
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it('requires confirmation before an Auto Subagent switches child model', async () => {
+    const handle = await start('auto', undefined, true);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-model', 'subagent', {
+      tasks: [{ agent: 'worker', task: 'inspect the repository', model: 'm-next' }],
+    });
+
+    expect(await waitForResponse('subagent-model')).toMatchObject({ value: 'user-deny' });
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it('keeps an explicit current-model Subagent silent in Auto', async () => {
+    const handle = await start('auto');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-current-model', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+      model: 'm',
+    });
+
+    expect(await waitForResponse('subagent-current-model')).toMatchObject({ value: 'allow' });
     expect(resolver).not.toHaveBeenCalled();
   });
 

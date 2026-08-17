@@ -70,6 +70,8 @@ export interface PiSubagentRunStatus {
   runId: string;
   taskId: string;
   parentSessionId: string;
+  /** Runtime instance allowed to mutate permissions and answer approvals. */
+  runtimeOwnerId?: string;
   runnerInstanceId: string;
   runnerPid?: number;
   interactiveOwner?: 'host' | 'extension';
@@ -135,6 +137,7 @@ function parseStatus(value: unknown, expectedRunId: string): PiSubagentRunStatus
   if (raw.version !== 1 || raw.runId !== expectedRunId) return null;
   if (typeof raw.taskId !== 'string' || !raw.taskId) return null;
   if (typeof raw.parentSessionId !== 'string' || !raw.parentSessionId) return null;
+  if (raw.runtimeOwnerId !== undefined && (typeof raw.runtimeOwnerId !== 'string' || !raw.runtimeOwnerId)) return null;
   if (typeof raw.runnerInstanceId !== 'string' || !raw.runnerInstanceId) return null;
   if (!isState(raw.state) || !finiteNonNegative(raw.startedAt) || !finiteNonNegative(raw.updatedAt)) return null;
   if (!Array.isArray(raw.tasks)) return null;
@@ -556,8 +559,11 @@ async function waitForControlReceipt(
 export async function syncPiSubagentPermissions(
   root: string,
   snapshot: unknown,
+  runtimeOwnerId?: string,
 ): Promise<number> {
-  const runs = (await listPiSubagentRuns(root)).filter((run) => !isPiSubagentTerminal(run.state));
+  const runs = (await listPiSubagentRuns(root)).filter((run) =>
+    !isPiSubagentTerminal(run.state)
+    && (runtimeOwnerId === undefined || run.runtimeOwnerId === runtimeOwnerId));
   let updated = 0;
   for (const run of runs) {
     try {
@@ -584,6 +590,7 @@ export async function controlPiSubagentRuns(
     approvalId?: string;
     confirmed?: boolean;
     value?: string;
+    runtimeOwnerId?: string;
   } = {},
 ): Promise<number> {
   const id = taskId.trim();
@@ -606,6 +613,7 @@ export async function controlPiSubagentRuns(
   const runs = (await listPiSubagentRuns(root)).filter(
     (run) => {
       if (!matchesRunReference(run, id) || isPiSubagentTerminal(run.state)) return false;
+      if (options.runtimeOwnerId !== undefined && run.runtimeOwnerId !== options.runtimeOwnerId) return false;
       if (!options.childId) return true;
       const task = run.tasks.find((candidate) => candidate.childId === options.childId);
       if (!task) return false;
@@ -631,6 +639,7 @@ interface ResumeRunnerConfig {
   runId: string;
   taskId: string;
   parentSessionId: string;
+  runtimeOwnerId?: string;
   runDir: string;
   cwd: string;
   binary: string;
@@ -664,6 +673,7 @@ interface ResumeRunnerConfig {
 interface PiSubagentResumeLaunch {
   nodeExecutable: string;
   env: NodeJS.ProcessEnv;
+  runtimeOwnerId: string;
   permissionSnapshot: unknown;
   runnerFallbackFile?: string;
   runtimeSnapshot?: {
@@ -827,6 +837,7 @@ async function resumePiSubagentRunUnlocked(
     permissionFile,
     title: sourceConfig.title ? `Resume: ${sourceConfig.title}` : 'Resumed Subagent',
     description: followUp,
+    runtimeOwnerId: launch.runtimeOwnerId,
     interactiveOwner: 'host',
     parentPid: undefined,
     mode: selectedTasks.length > 1 ? 'parallel' : 'single',
@@ -860,6 +871,7 @@ async function resumePiSubagentRunUnlocked(
       runId,
       taskId: sourceConfig.taskId,
       parentSessionId: sourceConfig.parentSessionId,
+      runtimeOwnerId: launch.runtimeOwnerId,
       runnerInstanceId: `launch-pending-${runId}`,
       state: 'queued',
       title: config.title,
@@ -892,6 +904,7 @@ async function resumePiSubagentRunUnlocked(
       runId,
       taskId: sourceConfig.taskId,
       parentSessionId: sourceConfig.parentSessionId,
+      runtimeOwnerId: launch.runtimeOwnerId,
       runnerInstanceId: `launch-error-${runId}`,
       state: 'failed',
       title: config.title,

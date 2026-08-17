@@ -249,7 +249,12 @@ describe('Cindy durable PI Subagent runner', () => {
     }
     expect(await readFile(path.join(fixture.runDir, 'result.json'), 'utf8')).toContain('fixture result');
     expect(await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8')).toContain('child_event');
-    expect((await readFile(fixture.tokensFile, 'utf8')).trim().split('\n').map(JSON.parse)).toEqual([null, null]);
+    expect(
+      (await readFile(fixture.tokensFile, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+    ).toEqual([null, null]);
     await waitForClose(fixture.child, fixture.stderr);
   });
 
@@ -345,6 +350,7 @@ describe('Cindy durable PI Subagent runner', () => {
       'continue from the prior result',
       {
         nodeExecutable: process.execPath,
+        runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
         env: {
           ...process.env,
@@ -367,6 +373,7 @@ describe('Cindy durable PI Subagent runner', () => {
       return runs.find((run) => run.runId === resumedRunId && run.state === 'completed') ?? null;
     });
     expect(resumed.tasks[0]?.sessionId).toBe(first.tasks[0]?.sessionId);
+    expect(resumed.runtimeOwnerId).toBe('resume-owner');
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'permission.json'), 'utf8'))
       .resolves.toContain('/current-parent');
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'pi-home', 'models.json')))
@@ -392,6 +399,7 @@ describe('Cindy durable PI Subagent runner', () => {
       'continue for a second resumed generation',
       {
         nodeExecutable: process.execPath,
+        runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
         env: {
           ...process.env,
@@ -438,6 +446,7 @@ describe('Cindy durable PI Subagent runner', () => {
       'continue from redirected catalog',
       {
         nodeExecutable: process.execPath,
+        runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
         env: process.env,
         permissionSnapshot: { mode: 'ask', readOnlyRoots: [] },
@@ -460,6 +469,7 @@ describe('Cindy durable PI Subagent runner', () => {
       'continue without leaving partial staging',
       {
         nodeExecutable: process.execPath,
+        runtimeOwnerId: 'resume-owner',
         runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
         env: process.env,
         permissionSnapshot: { unserializable: 1n },
@@ -481,6 +491,7 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitForClose(fixture.child, fixture.stderr);
     const launch = {
       nodeExecutable: process.execPath,
+      runtimeOwnerId: 'resume-owner',
       runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
       env: {
         ...process.env,

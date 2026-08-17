@@ -257,6 +257,7 @@ function main() {
       runId: config.runId,
       taskId: config.taskId,
       parentSessionId: config.parentSessionId,
+      runtimeOwnerId: config.runtimeOwnerId,
       interactiveOwner: config.interactiveOwner,
       runnerInstanceId: runnerInstanceId,
       runnerPid: process.pid,

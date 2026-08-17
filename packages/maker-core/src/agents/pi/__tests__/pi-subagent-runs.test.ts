@@ -31,6 +31,7 @@ function status(runId: string, overrides: Partial<PiSubagentRunStatus> = {}): Pi
     runId,
     taskId: 'tool-1',
     parentSessionId: 'session-1',
+    runtimeOwnerId: 'owner-a',
     runnerInstanceId: 'runner-1',
     runnerPid: process.pid,
     state: 'running',
@@ -168,6 +169,49 @@ describe('PI durable subagent run store', () => {
     await expect(syncPiSubagentPermissions(root, { mode: 'ask', readOnlyRoots: [] })).resolves.toBe(1);
     await expect(readFile(path.join(root, activeId, 'permission.json'), 'utf8')).resolves.toContain('"mode":"ask"');
     await expect(readFile(path.join(root, terminalId, 'permission.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('hot-syncs permissions only into active runs owned by the current runtime', async () => {
+    const root = await makeRoot();
+    const ownedId = '123e4567-e89b-42d3-a456-426614174014';
+    const foreignId = '123e4567-e89b-42d3-a456-426614174015';
+    const legacyId = '123e4567-e89b-42d3-a456-426614174016';
+    await writeStatus(root, status(ownedId, { runtimeOwnerId: 'owner-a' }));
+    await writeStatus(root, status(foreignId, { runtimeOwnerId: 'owner-b' }));
+    await writeStatus(root, status(legacyId, { runtimeOwnerId: undefined }));
+
+    await expect(syncPiSubagentPermissions(
+      root,
+      { mode: 'bypassPermissions', readOnlyRoots: [] },
+      'owner-a',
+    )).resolves.toBe(1);
+    await expect(readFile(path.join(root, ownedId, 'permission.json'), 'utf8'))
+      .resolves.toContain('bypassPermissions');
+    await expect(readFile(path.join(root, foreignId, 'permission.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(path.join(root, legacyId, 'permission.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('writes controls only into active runs owned by the current runtime', async () => {
+    const root = await makeRoot();
+    const ownedId = '123e4567-e89b-42d3-a456-426614174017';
+    const foreignId = '123e4567-e89b-42d3-a456-426614174018';
+    const legacyId = '123e4567-e89b-42d3-a456-426614174019';
+    await writeStatus(root, status(ownedId, { runtimeOwnerId: 'owner-a' }));
+    await writeStatus(root, status(foreignId, { runtimeOwnerId: 'owner-b' }));
+    await writeStatus(root, status(legacyId, { runtimeOwnerId: undefined }));
+
+    await expect(controlPiSubagentRuns(root, 'tool-1', 'stop', {
+      runtimeOwnerId: 'owner-a',
+    })).resolves.toBe(0);
+    await expect(readControls(root, ownedId)).resolves.toEqual([
+      expect.objectContaining({ action: 'stop' }),
+    ]);
+    await expect(readdir(path.join(root, foreignId, 'controls')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readdir(path.join(root, legacyId, 'controls')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('leaves corrupt run directories untouched instead of guessing their lifecycle', async () => {

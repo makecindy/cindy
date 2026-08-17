@@ -54,6 +54,8 @@ export const CINDY_SUBAGENT_ENV = {
   runnerFile: 'CINDY_PI_SUBAGENT_RUNNER_FILE',
   /** Node, or Electron launched with ELECTRON_RUN_AS_NODE=1. */
   nodeExecutable: 'CINDY_PI_SUBAGENT_NODE',
+  /** Host runtime instance that owns permission sync and approval forwarding. */
+  ownerId: 'CINDY_PI_SUBAGENT_OWNER_ID',
 } as const;
 
 /**
@@ -131,6 +133,7 @@ const RUNTIME_FILE_ENV = 'CINDY_PI_SUBAGENT_RUNTIME_FILE';
 const RUN_ROOT_ENV = 'CINDY_PI_SUBAGENT_RUN_ROOT';
 const RUNNER_FILE_ENV = 'CINDY_PI_SUBAGENT_RUNNER_FILE';
 const NODE_EXECUTABLE_ENV = 'CINDY_PI_SUBAGENT_NODE';
+const OWNER_ID_ENV = 'CINDY_PI_SUBAGENT_OWNER_ID';
 const PERMISSION_FILE_ENV = 'CINDY_PI_PERMISSION_FILE';
 const PARENT_SESSION_ENV = 'CINDY_PI_SESSION_ID';
 const SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
@@ -420,7 +423,8 @@ function writePrivateJson(file, value) {
 
 function durableStatuses() {
   const root = process.env[RUN_ROOT_ENV];
-  if (!root) return [];
+  const runtimeOwnerId = process.env[OWNER_ID_ENV];
+  if (!root || !runtimeOwnerId) return [];
   let entries;
   try { entries = readdirSync(root, { withFileTypes: true }); } catch (err) { return []; }
   const statuses = [];
@@ -431,7 +435,15 @@ function durableStatuses() {
       const stat = statSync(file);
       if (!stat.isFile() || stat.size > 2 * 1024 * 1024) continue;
       const status = JSON.parse(readFileSync(file, 'utf8'));
-      if (status && status.version === 1 && status.runId === entry.name) statuses.push(status);
+      // Shared userData can contain runs for the same task opened by another
+      // Desktop instance. The in-model management actions are a control plane,
+      // so legacy or foreign ownership must fail closed just like host controls.
+      if (
+        status
+        && status.version === 1
+        && status.runId === entry.name
+        && status.runtimeOwnerId === runtimeOwnerId
+      ) statuses.push(status);
     } catch (err) { /* unreadable runs fail closed */ }
   }
   return statuses.sort(function (left, right) { return Number(right.startedAt || 0) - Number(left.startedAt || 0); });
@@ -620,7 +632,8 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
   const configHome = process.env[CONFIG_HOME_ENV];
   const sourcePermissionFile = process.env[PERMISSION_FILE_ENV];
   const parentSessionId = process.env[PARENT_SESSION_ENV];
-  if (!runRoot || !runnerFile || !nodeExecutable || !configHome || !sourcePermissionFile || !parentSessionId) {
+  const runtimeOwnerId = process.env[OWNER_ID_ENV];
+  if (!runRoot || !runnerFile || !nodeExecutable || !configHome || !sourcePermissionFile || !parentSessionId || !runtimeOwnerId) {
     throw new Error('subagent: durable runner is unavailable for this session.');
   }
   const permission = readPermissionSnapshot();
@@ -635,6 +648,7 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
     runId: runId,
     taskId: taskId,
     parentSessionId: parentSessionId,
+    runtimeOwnerId: runtimeOwnerId,
     parentPid: process.pid,
     interactiveOwner: interactiveOwner,
     runDir: runDir,
@@ -705,6 +719,7 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
       runId: runId,
       taskId: taskId,
       parentSessionId: parentSessionId,
+      runtimeOwnerId: runtimeOwnerId,
       runnerInstanceId: 'launch-pending-' + runId,
       state: 'queued',
       title: config.title,
@@ -739,6 +754,7 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
       runId: runId,
       taskId: taskId,
       parentSessionId: parentSessionId,
+      runtimeOwnerId: runtimeOwnerId,
       runnerInstanceId: 'launch-error-' + runId,
       state: 'failed',
       title: config.title,

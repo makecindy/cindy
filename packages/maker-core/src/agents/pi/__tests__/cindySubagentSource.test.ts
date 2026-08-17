@@ -53,6 +53,15 @@ describe('cindy-subagent extension source', () => {
     }
   });
 
+  it('keeps durable management scoped to the current runtime owner', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      'const runtimeOwnerId = process.env[OWNER_ID_ENV];',
+    );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      'status.runtimeOwnerId === runtimeOwnerId',
+    );
+  });
+
   it('contains no template literals (String.raw would interpolate them at build time)', () => {
     // 模板里出现 ${...} 会被外层 String.raw 当插值吃掉,注入的源码将缺字段且不易发现。
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('`');

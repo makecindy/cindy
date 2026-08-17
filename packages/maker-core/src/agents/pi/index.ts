@@ -76,12 +76,16 @@ import {
   CINDY_SUBAGENT_ENV,
   CINDY_SUBAGENT_EXTENSION_FILENAME,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
+  CINDY_SUBAGENT_TOOL_NAME,
 } from './cindy-subagent-source.js';
 import {
   CINDY_SUBAGENT_RUNNER_FILENAME,
   CINDY_SUBAGENT_RUNNER_SOURCE,
 } from './cindy-subagent-runner-source.js';
-import { normalizePiToolForAutoReview } from './auto-review-policy.js';
+import {
+  normalizePiToolForAutoReview,
+  piSubagentSpawnRequiresUserConfirmation,
+} from './auto-review-policy.js';
 import {
   controlPiSubagentRuns,
   countPiSubagentRunDirectories,
@@ -1588,6 +1592,7 @@ export class PiAgent extends BaseAgent {
     const runtimeInstanceId = remote
       ? stableSessionPathSegment(sid)
       : randomBytes(8).toString('hex');
+    const subagentRuntimeOwnerId = opts.sessionInstanceId?.trim() || runtimeInstanceId;
     // 轮 20-V1 HIGH:远端路径必须 POSIX join —— path.join 在 Windows 本地会把
     // runtimeDir 与文件名拼成反斜杠(远端 shell 不认, 权限文件/子代理 runtime
     // 写不进删不掉, 破坏权限门与子代理路由)。runtimeDir 已是 posix(956 行)。
@@ -1687,7 +1692,7 @@ export class PiAgent extends BaseAgent {
           await writeFile(permissionFile, JSON.stringify(snapshot) + '\n');
           try {
             if (localSubagentSupported) {
-              await syncPiSubagentPermissions(subagentRunRoot, snapshot);
+              await syncPiSubagentPermissions(subagentRunRoot, snapshot, subagentRuntimeOwnerId);
             }
           } catch (error) {
             // A stale Full Access copy in any detached child is a privilege
@@ -1695,8 +1700,12 @@ export class PiAgent extends BaseAgent {
             // failure; never keep mixed permission generations alive.
             const activeRuns = await listPiSubagentRuns(subagentRunRoot).catch(() => []);
             await Promise.all(activeRuns
-              .filter((run) => !isPiSubagentTerminal(run.state))
-              .map((run) => controlPiSubagentRuns(subagentRunRoot, run.taskId, 'stop')),
+              .filter((run) =>
+                !isPiSubagentTerminal(run.state)
+                && run.runtimeOwnerId === subagentRuntimeOwnerId)
+              .map((run) => controlPiSubagentRuns(subagentRunRoot, run.taskId, 'stop', {
+                runtimeOwnerId: subagentRuntimeOwnerId,
+              })),
             ).catch(() => undefined);
             throw error;
           }
@@ -2204,6 +2213,9 @@ export class PiAgent extends BaseAgent {
       task: PiSubagentRunStatus['tasks'][number],
     ): Promise<void> => {
       if (closed) return;
+      // Shared userData can contain active runs from another Desktop instance.
+      // Missing ownership is legacy metadata and must fail closed here.
+      if (status.runtimeOwnerId !== subagentRuntimeOwnerId) return;
       const approval = task.pendingApproval;
       if (!approval || status.interactiveOwner === 'extension') return;
       const turnChangeCapture = approval.method === 'confirm'
@@ -2254,6 +2266,7 @@ export class PiAgent extends BaseAgent {
             childId: task.childId,
             approvalId: approval.id,
             confirmed: true,
+            runtimeOwnerId: subagentRuntimeOwnerId,
           });
           if (controlled > 0) piSubagentApprovalDeliveries.add(key);
         } catch (error) {
@@ -2402,6 +2415,12 @@ export class PiAgent extends BaseAgent {
         if (permissionMode !== 'auto') {
           return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
         }
+        if (
+          toolName === CINDY_SUBAGENT_TOOL_NAME
+          && piSubagentSpawnRequiresUserConfirmation(input, [mutableModel, mutableWireModel])
+        ) {
+          return requestUserDecision({ forcePrompt: true });
+        }
         try {
           const decision = await reviewAutoAction(normalizePiToolForAutoReview({
             toolName,
@@ -2455,6 +2474,7 @@ export class PiAgent extends BaseAgent {
           ...(approval.method === 'input'
             ? { value: resolution }
             : { confirmed: resolution === 'allow' }),
+          runtimeOwnerId: subagentRuntimeOwnerId,
         });
         if (controlled > 0) {
           piSubagentApprovalDeliveries.add(key);
@@ -2704,6 +2724,7 @@ export class PiAgent extends BaseAgent {
         // 只从 bash/模型工具的 spawn 边界剥离;子代理自己的 spawn 不走 bridge 的 bash 钩子,
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
+        CINDY_SUBAGENT_ENV.ownerId,
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
         ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
       ]));
@@ -2750,6 +2771,7 @@ export class PiAgent extends BaseAgent {
           [CINDY_SUBAGENT_ENV.runRoot]: subagentRunRoot,
           [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
           [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
+          [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
         } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。
@@ -2809,6 +2831,7 @@ export class PiAgent extends BaseAgent {
             this.handleExtensionUiRequest(event, proc, () => ({
               resolver: interactionResolver,
               permissionMode,
+              currentModelIds: [mutableModel, mutableWireModel],
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
@@ -3557,7 +3580,9 @@ export class PiAgent extends BaseAgent {
       async stopBackgroundTask(taskId: string): Promise<void> {
         if (closed) return;
         if (!localSubagentSupported) throw new Error('PI Subagent is available only in local PI sessions.');
-        await controlPiSubagentRuns(subagentRunRoot, taskId, 'stop');
+        await controlPiSubagentRuns(subagentRunRoot, taskId, 'stop', {
+          runtimeOwnerId: subagentRuntimeOwnerId,
+        });
         await refreshPiSubagentRuns();
       },
 
@@ -3575,6 +3600,7 @@ export class PiAgent extends BaseAgent {
           const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
             nodeExecutable: process.execPath,
             env: durableSpawnEnv,
+            runtimeOwnerId: subagentRuntimeOwnerId,
             permissionSnapshot: {
               ...requestedPermissionSnapshot,
               mode: permissionMode,
@@ -4238,6 +4264,7 @@ export class PiAgent extends BaseAgent {
     getPermissionCtx: () => {
       resolver: InteractionResolver | null;
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
+      currentModelIds: readonly string[];
       workspaceRoots: string[];
       readRoots: string[];
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
@@ -4343,6 +4370,7 @@ export class PiAgent extends BaseAgent {
       const {
         resolver,
         permissionMode,
+        currentModelIds,
         workspaceRoots,
         readRoots,
         reviewAutoAction,
@@ -4582,6 +4610,13 @@ export class PiAgent extends BaseAgent {
           sendPermissionResolution(
             await requestUserConfirmation({ forcePrompt: turnPolicyForcePrompt }),
           );
+          return;
+        }
+        if (
+          toolName === CINDY_SUBAGENT_TOOL_NAME
+          && piSubagentSpawnRequiresUserConfirmation(input, currentModelIds)
+        ) {
+          sendPermissionResolution(await requestUserConfirmation({ forcePrompt: true }));
           return;
         }
         try {

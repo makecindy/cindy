@@ -36,6 +36,32 @@ export interface PiAutoReviewContext {
   readRoots?: string[];
 }
 
+/**
+ * A normal first-party spawn stays silent in Auto, but carrying parent context
+ * or selecting a different child model crosses a data-routing boundary before
+ * any child tool call exists. Those variants need an explicit user decision.
+ */
+export function piSubagentSpawnRequiresUserConfirmation(
+  input: Record<string, unknown>,
+  currentModelIds: readonly string[],
+): boolean {
+  if (input.context === 'fork') return true;
+  const explicitModels: string[] = [];
+  if (typeof input.model === 'string' && input.model.trim()) {
+    explicitModels.push(input.model.trim());
+  }
+  if (Array.isArray(input.tasks)) {
+    for (const task of input.tasks) {
+      if (!task || typeof task !== 'object' || Array.isArray(task)) continue;
+      const model = (task as Record<string, unknown>).model;
+      if (typeof model === 'string' && model.trim()) explicitModels.push(model.trim());
+    }
+  }
+  if (explicitModels.length === 0) return false;
+  const current = new Set(currentModelIds.map((model) => model.trim()).filter(Boolean));
+  return explicitModels.some((model) => !current.has(model));
+}
+
 /** 给当前模型 reviewer 的完整 MCP/未知工具证据；输入来自 JSON RPC，可安全序列化。 */
 function describeOtherTool(toolName: string, input: Record<string, unknown>): string {
   try {

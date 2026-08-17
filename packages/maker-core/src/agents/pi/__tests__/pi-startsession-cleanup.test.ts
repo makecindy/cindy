@@ -265,6 +265,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       runId,
       taskId: 'tool-subagent-approval',
       parentSessionId: 's1',
+      runtimeOwnerId: 'pi-instance-1',
       interactiveOwner: 'host',
       runnerInstanceId: 'runner-subagent-approval',
       state: 'running',
@@ -458,6 +459,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       runId,
       taskId: 'tool-turn-change',
       parentSessionId: 's1',
+      runtimeOwnerId: 'pi-instance-1',
       runnerInstanceId: 'runner-turn-change',
       state: 'running',
       startedAt: 1,
@@ -494,6 +496,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         childId: `${runId}-1`,
         approvalId: 'capture-1',
         confirmed: true,
+        runtimeOwnerId: 'pi-instance-1',
       },
     ));
     expect(noteOpaqueWrite).toHaveBeenCalledWith({
@@ -527,6 +530,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         childId: run.tasks[0]!.childId,
         approvalId: 'approval-1',
         confirmed,
+        runtimeOwnerId: 'pi-instance-1',
       },
     ));
     expect(resolver).toHaveBeenCalledOnce();
@@ -608,6 +612,23 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       'approval',
       expect.objectContaining({ value: 'system-deny' }),
     ));
+    await handle.close();
+  });
+
+  it('never answers durable Subagent approvals owned by another runtime', async () => {
+    const run = pendingSubagentRun(
+      { toolName: 'write', input: { path: 'a.txt' } },
+      { runtimeOwnerId: 'another-runtime' },
+    );
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    expect(control).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
     await handle.close();
   });
 
