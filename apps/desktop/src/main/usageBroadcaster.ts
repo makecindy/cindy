@@ -928,7 +928,7 @@ function glmGenerationOf(providerId: string): number {
 }
 
 /**
- * GLM 用量条件提交令牌(七轮根因修复,审计规划 §2):调用方在**发起 fetch 之前**
+ * GLM 用量条件提交令牌(#2768 七轮根因修复):调用方在**发起 fetch 之前**
  * 领取,fetch 完成后随 record/clear 带回;期间任何 clear(世代 bump)或 owner 切换
  * (epoch 前进)都会令令牌失效,store 直接拒绝提交。它取代「写完再验 + 补偿」形态
  * ——补偿自身仍是跨 await 的先检查后动作,窗口永远关不干净(#2768 四~七轮实证)。

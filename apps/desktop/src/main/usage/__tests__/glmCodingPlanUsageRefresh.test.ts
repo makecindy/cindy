@@ -6,7 +6,7 @@
  * (世代 bump)/ owner 切换(epoch 前进)→ 提交被 store 拒绝;「写完再验+补偿」
  * 形态(compensateIfStale / cachedBelongsToSource / isRefreshStillCurrent)已删。
  *
- * 覆盖(标注 T1-T4 为审计规划 §5 的硬门槛):
+ * 覆盖(标注 T1-T4 为独立复审方设定的硬门槛):
  *   - T1: readSource 瞬时失败 → 零 clear、返回缓存快照(读路径不删)
  *   - T2: CRUD 落在 fetch 期间 → 提交被拒(四~七轮全部场景的通用挡板)
  *   - T3: owner 切换落在 fetch 期间且两账号身份字段完全相同 → 新快照存活
