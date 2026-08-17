@@ -107,7 +107,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     )),
     getLiveSession: vi.fn(() => null),
     reserveTeamDispatchSettlement: vi.fn(() => vi.fn()),
-    resumeWorkerSession: vi.fn(async () => {}),
+    resumeWorkerSession: vi.fn(async () => true),
     updateWorkerStatus: vi.fn(async (workerId, status) => {
       calls.push(`updateWorkerStatus:${status}`);
       workers = workers.map((worker) => (
@@ -315,6 +315,7 @@ describe('OrcaTeamService', () => {
       resumeWorkerSession: vi.fn(async () => {
         notifyResumeEntered();
         await resumeRelease;
+        return true;
       }),
     });
 
@@ -358,6 +359,37 @@ describe('OrcaTeamService', () => {
     });
     expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
     expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
+  });
+
+  it('closes a worker revived during a cross-instance terminal transition', async () => {
+    const { deps, service } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => ({
+        ok: false,
+        dispatchOutcome: {
+          kind: 'host-send',
+          accepted: false,
+          code: 'SEND_FAILED',
+          message: 'ORCA_TEAM_INACTIVE: team team-1 has already ended',
+          source: params.dispatchMeta.source,
+          context: params.dispatchMeta.context,
+        },
+      } satisfies DispatchWorkerMessageResult)),
+    });
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: 'too late after resume',
+        dispatchMeta: { source: 'test-source', context: 'cross-instance-terminal-race' },
+      }),
+    ).resolves.toMatchObject({
+      dispatched: false,
+      dispatchOutcome: expect.objectContaining({
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      }),
+    });
+    expect(deps.resumeWorkerSession).toHaveBeenCalledOnce();
+    expect(deps.closeWorkerSession).toHaveBeenCalledWith('worker-session-1');
   });
 
   it('does not resume a running worker that still has a live session', async () => {

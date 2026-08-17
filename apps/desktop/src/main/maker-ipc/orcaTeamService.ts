@@ -181,7 +181,8 @@ export interface OrcaTeamServiceDeps {
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null;
-  resumeWorkerSession(worker: OrcaWorkerRecordSnapshot, link: OrcaWorkerLinkSnapshot): Promise<void>;
+  /** Rechecks shared durable lifecycle state; true only when this call created a live handle. */
+  resumeWorkerSession(worker: OrcaWorkerRecordSnapshot, link: OrcaWorkerLinkSnapshot): Promise<boolean>;
   /** Visible to end_team before dormant worker rehydrate begins; release after host dispatch settles. */
   reserveTeamDispatchSettlement(teamId: string): () => void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
@@ -532,14 +533,40 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     };
   }
 
+  function isTerminalTeamDispatchFailure(value: unknown): boolean {
+    const message = value instanceof Error
+      ? value.message
+      : typeof value === 'object' && value !== null && 'message' in value
+        ? String(value.message)
+        : String(value);
+    return message.includes('ORCA_TEAM_INACTIVE') || message.includes('ORCA_TEAM_TERMINATING');
+  }
+
+  async function closeResumedWorkerAfterTerminalFailure(
+    worker: OrcaWorkerRecordSnapshot,
+    didResume: boolean,
+    failure: unknown,
+  ): Promise<void> {
+    if (!didResume || !isTerminalTeamDispatchFailure(failure)) return;
+    try {
+      await deps.closeWorkerSession(worker.sessionId);
+    } catch (closeError) {
+      deps.log.warn('orca: failed to close worker resumed after terminal team transition', {
+        workerId: worker.id,
+        sessionId: worker.sessionId,
+        error: closeError instanceof Error ? closeError.message : String(closeError),
+      });
+    }
+  }
+
   function sendToWorkerFailureFromDispatchOutcome(outcome: CollabDispatchFailureOutcome): Extract<SendToWorkerResult, { ok: false }> {
     if (outcome.kind === 'host-send') {
       const errorCode: SendToWorkerFailureCode = (() => {
         switch (outcome.code) {
           case 'SESSION_NOT_FOUND':
             return 'NOT_FOUND';
-          case 'SESSION_RUNNING':
           // 凭证切换等待其它 Codex 会话空闲,同属"等会儿再试"语义。
+          case 'SESSION_RUNNING':
           case 'CREDENTIAL_SWITCH_BUSY':
             return 'BUSY';
           case 'WORKDIR_MISSING':
@@ -620,12 +647,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
       let result: DispatchWorkerMessageResult;
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
+      let resumedForDispatch = false;
       try {
         // Runtime liveness is independent from the persisted worker status. After a restart a
         // running/error worker can be dormant too, and must rehydrate through the Worker-specific
         // path so its stored permission mode and Orca vendor options are preserved.
         if (!wasLiveBeforeDispatch) {
-          await deps.resumeWorkerSession(target, link);
+          resumedForDispatch = await deps.resumeWorkerSession(target, link);
         }
         result = await deps.dispatchWorkerMessage({
           targetSessionId: params.targetSessionId,
@@ -654,6 +682,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         });
       } catch (err) {
         await rollbackAccepted();
+        await closeResumedWorkerAfterTerminalFailure(target, resumedForDispatch, err);
         return {
           dispatched: false,
           dispatchOutcome: dispatchFailureFromThrown(err, params.dispatchMeta),
@@ -662,6 +691,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
       if (!result.ok) {
         await rollbackAccepted();
+        await closeResumedWorkerAfterTerminalFailure(
+          target,
+          resumedForDispatch,
+          result.dispatchOutcome,
+        );
         return {
           dispatched: false,
           dispatchOutcome: result.dispatchOutcome,

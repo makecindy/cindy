@@ -6546,6 +6546,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { session, didInjectOrcaInstructions, didInjectProjectContext };
   }
 
+  async function readActiveOrcaWorkerSessionForResume(target: {
+    id: string;
+    teamId: string;
+    leadSessionId: string;
+    sessionId: string;
+  }): Promise<typeof sessions.$inferSelect | null> {
+    const [activeResume] = await getDbClient()
+      .drizzle.select({ session: sessions })
+      .from(orcaWorkers)
+      .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+      .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+      .where(and(
+        eq(orcaWorkers.id, target.id),
+        eq(orcaWorkers.teamId, target.teamId),
+        eq(orcaWorkers.sessionId, target.sessionId),
+        eq(orcaTeams.leadSessionId, target.leadSessionId),
+        eq(orcaTeams.status, 'active'),
+        eq(sessions.status, 'active'),
+      ))
+      .limit(1);
+    return activeResume?.session ?? null;
+  }
+
+  function inactiveOrcaWorkerResumeError(target: { teamId: string; sessionId: string }): Error {
+    return new Error(
+      `ORCA_TEAM_INACTIVE: team ${target.teamId} or worker session ${target.sessionId} is no longer active`,
+    );
+  }
+
   // switchFocus 和 sendToWorker 都可能唤醒 idle worker；统一走这里才能保留 extraDirs。
   async function resumeOrcaWorkerSessionIfMissing(target: {
     id: string;
@@ -6556,13 +6585,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const live = maker.getSession(target.sessionId);
     if (live) return false;
 
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, target.sessionId))
-      .limit(1);
-    if (!row) return false;
+    // listWorkersByLead can become stale when another Desktop instance shares
+    // userData. Re-read both lifecycle rows here instead of reviving an archived
+    // session from an id-only lookup.
+    const row = await readActiveOrcaWorkerSessionForResume(target);
+    if (!row) throw inactiveOrcaWorkerResumeError(target);
 
     const workerVendorOptions = {
       orcaRole: 'worker' as const,
@@ -6591,7 +6618,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(extraDirs.length > 0 ? { extraDirs } : {}),
     });
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
+    // Remote preparation may wait long enough for another instance to end the
+    // team. Recheck immediately before local rehydration.
+    if (!await readActiveOrcaWorkerSessionForResume(target)) {
+      throw inactiveOrcaWorkerResumeError(target);
+    }
     const { session: resumedSession } = await bootstrapSession(opts);
+    // If the terminal write won during bootstrap, do not leave the archived
+    // Worker live in this process while the later dispatch fence rejects it.
+    if (!await readActiveOrcaWorkerSessionForResume(target)) {
+      await maker.closeSession(resumedSession.id).catch((closeError) => {
+        log.warn('resumeOrcaWorkerSessionIfMissing: failed to close stale resumed worker', {
+          sessionId: resumedSession.id,
+          error: closeError instanceof Error ? closeError.message : String(closeError),
+        });
+      });
+      throw inactiveOrcaWorkerResumeError(target);
+    }
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
     return true;
   }
@@ -9549,9 +9592,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     reserveTeamDispatchSettlement: (teamId) =>
       orcaInterAgentDispatcher.reserveTeamDispatchSettlement(teamId),
-    resumeWorkerSession: async (target) => {
-      await resumeOrcaWorkerSessionIfMissing(target);
-    },
+    resumeWorkerSession: (target) => resumeOrcaWorkerSessionIfMissing(target),
     updateWorkerStatus,
     markWorkerIdle: async (workerId) => {
       const now = Date.now();

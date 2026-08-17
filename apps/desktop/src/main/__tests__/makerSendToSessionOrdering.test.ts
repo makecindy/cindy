@@ -756,6 +756,11 @@ describe('sendToSession ordering', () => {
   });
 
   it('preserves stored permission and extraDirs when sendToWorker resumes a worker', () => {
+    const resumeLifecycleRead = extractBetween(
+      source,
+      'async function readActiveOrcaWorkerSessionForResume',
+      'function inactiveOrcaWorkerResumeError',
+    );
     const resumeBranch = extractBetween(
       source,
       'async function resumeOrcaWorkerSessionIfMissing',
@@ -777,13 +782,19 @@ describe('sendToSession ordering', () => {
       'idleWorker: async ({ callerLeadSessionId, workerId, expectedStatus }) => {',
     );
 
+    expect(resumeLifecycleRead).toContain('.innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))');
+    expect(resumeLifecycleRead).toContain('.innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))');
+    expect(resumeLifecycleRead).toContain("eq(orcaTeams.status, 'active')");
+    expect(resumeLifecycleRead).toContain("eq(sessions.status, 'active')");
     expect(resumeBranch).toContain('const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);');
+    expect(resumeBranch).toContain('const row = await readActiveOrcaWorkerSessionForResume(target);');
+    expect(resumeBranch).toContain('if (!row) throw inactiveOrcaWorkerResumeError(target);');
+    expect(resumeBranch).toContain('if (!await readActiveOrcaWorkerSessionForResume(target)) {');
     expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
     expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
     expectOrder(resumeBranch, 'const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);', 'const opts = buildCreateOptsWithStderr({');
     expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
-    expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
-    expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain('resumeWorkerSession: (target) => resumeOrcaWorkerSessionIfMissing(target),');
     expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
     expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
   });
