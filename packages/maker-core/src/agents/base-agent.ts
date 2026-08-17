@@ -421,7 +421,20 @@ export interface PiManagedPackageMutationRequest {
   action: 'install' | 'update' | 'remove';
   source: string;
   /** Host-trusted evidence. This value is never accepted from Renderer or model input. */
-  authorization: 'exact-user-command' | 'confirmed-tool-call';
+  authorization:
+    | 'local-desktop-command'
+    | 'authenticated-im-command'
+    | 'confirmed-tool-call';
+}
+
+/** Main-owned native confirmation was dismissed before any package mutation began. */
+export class PiManagedPackageMutationCancelledError extends Error {
+  readonly code = 'PI_PACKAGE_MUTATION_CANCELLED';
+
+  constructor() {
+    super('Pi extension mutation cancelled');
+    this.name = 'PiManagedPackageMutationCancelledError';
+  }
 }
 
 export interface PiExtensionUiStrings {

@@ -123,6 +123,7 @@ vi.mock('../rpc-client.js', () => ({
   },
 }));
 
+import { PiManagedPackageMutationCancelledError, type TurnPermissionPolicy } from '../../base-agent.js';
 import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -922,13 +923,108 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: 'npm:context-mode',
-        authorization: 'exact-user-command',
+        authorization: 'local-desktop-command',
       });
       const prompt = captured.requests.find((request) => request.type === 'prompt');
       expect(prompt?.message).toContain('[Cindy internal Pi extension operation receipt]');
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
       expect(prompt?.message).toContain('Do not run bash');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('trusts only a Main-owned authenticated IM policy for exact package commands', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-authenticated-im-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const imPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'telegram', taskId: 'message-1' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
+    try {
+      await handle.send({
+        type: 'user',
+        content: 'pi update npm:context-mode',
+      }, { turnPermissionPolicy: imPolicy });
+      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
+        action: 'update',
+        source: 'npm:context-mode',
+        authorization: 'authenticated-im-command',
+      });
+
+      await handle.send({
+        type: 'user',
+        content: 'pi remove npm:context-mode',
+      }, { origin: { kind: 'im' } as never });
+      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
+        action: 'remove',
+        source: 'npm:context-mode',
+        authorization: 'local-desktop-command',
+      });
+
+      await handle.steer({
+        type: 'user',
+        content: 'pi update npm:context-mode',
+      });
+      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
+        action: 'update',
+        source: 'npm:context-mode',
+        authorization: 'local-desktop-command',
+      });
+
+      await handle.steer({
+        type: 'user',
+        content: 'pi install npm:context-mode',
+      }, { turnPermissionPolicy: imPolicy });
+      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
+        action: 'install',
+        source: 'npm:context-mode',
+        authorization: 'authenticated-im-command',
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('renders Main-owned package confirmation cancellation without logging it as a backend failure', async () => {
+    const warn = vi.fn();
+    const deps = buildDeps();
+    deps.logger = { ...noopLogger, warn };
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '已取消。',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationSuccess: {
+        install: 'Pi 扩展已安装。',
+        update: 'Pi 扩展已更新。',
+        remove: 'Pi 扩展已卸载。',
+      },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      throw new PiManagedPackageMutationCancelledError();
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-cancelled-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: 'pi install npm:context-mode' });
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      expect(prompt).toContain('"cancelled":true');
+      expect(prompt).toContain('"error":"已取消。"');
+      expect(warn).not.toHaveBeenCalled();
     } finally {
       await handle.close();
     }
@@ -1080,7 +1176,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/context-mode'),
-        authorization: 'exact-user-command',
+        authorization: 'local-desktop-command',
       });
 
       await handle.send({
@@ -1090,7 +1186,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'install',
         source: path.resolve(cwd, './extensions/file-context-mode'),
-        authorization: 'exact-user-command',
+        authorization: 'local-desktop-command',
       });
 
       handle.setInteractionResolver?.(
@@ -1129,7 +1225,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: path.win32.resolve(workingDir, 'C:extensions\\context-mode'),
-        authorization: 'exact-user-command',
+        authorization: 'local-desktop-command',
       });
     } finally {
       await handle.close();
