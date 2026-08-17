@@ -4,6 +4,7 @@ import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activi
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
   createSessionControlService,
+  rebuildSessionQueueItem,
   sessionQueueOriginForDispatcher,
 } from '../sessionControlService.js';
 
@@ -167,6 +168,63 @@ describe('session control domain service', () => {
       }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
     expect(foreign.deps.removeQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['plain text', 'before', 'replacement'],
+    ['JSON object', '{"action":"old"}', '{"action":"new"}'],
+    ['JSON array', '["old"]', '["new"]'],
+  ])(
+    'replaces session-origin %s as raw provider and persisted history text',
+    async (_label, before, replacement) => {
+      const queued = item({
+        kind: 'session',
+        senderSessionId: 'caller',
+        displayText: before,
+      });
+      queued.text = before;
+      queued.persistedContent = before;
+      queued.chatMessage.content = before;
+      const { deps, service } = setup({ queueItem: queued });
+
+      await expect(
+        service.updateQueuedMessage({
+          callerSessionId: 'caller',
+          targetSessionId: 'target',
+          queuedMessageId: 'queued-1',
+          message: replacement,
+        }),
+      ).resolves.toEqual({ ok: true, queuedMessageId: 'queued-1' });
+
+      expect(deps.replaceQueuedMessage).toHaveBeenCalledWith(
+        'target',
+        'queued-1',
+        expect.objectContaining({
+          text: replacement,
+          persistedContent: replacement,
+          chatMessage: expect.objectContaining({ content: replacement }),
+          origin: expect.objectContaining({ displayText: replacement }),
+        }),
+      );
+    },
+  );
+
+  it('keeps renderer composer envelopes intact when rebuilding a non-session queue item', () => {
+    const queued = item();
+    queued.persistedContent = JSON.stringify({
+      text: 'before',
+      images: [{ fileId: 'image-1' }],
+      files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
+    });
+
+    const updated = rebuildSessionQueueItem(queued, 'replacement');
+
+    expect(JSON.parse(updated.persistedContent)).toEqual({
+      text: 'replacement',
+      images: [{ fileId: 'image-1' }],
+      files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
+      slashCommandRanges: [],
+    });
   });
 
   it('steers only a live supported turn and never falls back after a terminal race', async () => {

@@ -252,6 +252,11 @@ export function rebuildSessionQueueItem(
 ): AgentInputQueuedMessage {
   const updated = updateQueuedMessageText(item, message);
   if (updated.origin?.kind === 'session') {
+    // send_to_session owns raw user text, not a renderer composer envelope.
+    // A valid JSON object/array is still literal message content, so editing it
+    // must replace the persisted history row wholesale instead of merging a
+    // synthetic `text` property into the old JSON value.
+    updated.persistedContent = message;
     updated.origin = { ...updated.origin, displayText: message };
   }
   return updated;

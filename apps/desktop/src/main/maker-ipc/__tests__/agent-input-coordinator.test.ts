@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { rebuildSessionQueueItem } from '../sessionControlService.js';
 import type {
   AgentInputCoordinatorDeps,
   AgentInputHostSendFailureCode,
@@ -7940,6 +7941,56 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       h.persistQueueSnapshot.mock.calls.at(-1)?.[1].find((item) => item.clientId === 'q-2')?.text,
     ).toBe('second-edited');
   });
+
+  it.each([
+    ['JSON object', '{"action":"old"}', '{"action":"new"}'],
+    ['JSON array', '["old"]', '["new"]'],
+  ])(
+    'session-origin %s 编辑后 provider 与重开历史共用新的 raw 正文',
+    async (_label, before, replacement) => {
+      const h = createHarness();
+      const sid = `replace-session-raw-${_label}`;
+      h.coordinator.enqueue(sid, makeItem('q-active', 'active'));
+      await flush();
+
+      const queued = makeItem('q-edited', before, {
+        persistedContent: before,
+        origin: {
+          kind: 'session',
+          senderSessionId: 'caller',
+          displayText: before,
+        },
+      });
+      h.coordinator.enqueue(sid, queued);
+      await flush();
+
+      expect(
+        h.coordinator.replaceQueuedMessage(
+          sid,
+          queued.clientId,
+          rebuildSessionQueueItem(queued, replacement),
+        ),
+      ).toBe(true);
+
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: replacement,
+      });
+      expect(
+        mocks.createMessage.mock.calls.find(
+          (call) => (call[1] as { clientId?: string }).clientId === queued.clientId,
+        )?.[1],
+      ).toMatchObject({
+        clientId: queued.clientId,
+        role: 'user',
+        content: replacement,
+      });
+    },
+  );
 
   it('编辑保留主机接收时间,清空边界后的条目崩溃恢复时不会被误删', async () => {
     const h = createHarness();
