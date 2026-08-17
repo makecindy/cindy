@@ -660,6 +660,25 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   let userMessagePersisted = false;
   let turnChangeSetStarted = false;
   let terminalTransitionPending = false;
+  const originalAcquireVendorDispatchLease = params.acquireVendorDispatchLease;
+  const acquireVendorDispatchLease: SessionSendOptions['acquireVendorDispatchLease'] =
+    originalAcquireVendorDispatchLease
+      ? () => {
+        try {
+          const acquisition = originalAcquireVendorDispatchLease();
+          if (acquisition instanceof Promise) {
+            return acquisition.catch((err) => {
+              terminalTransitionPending = isPendingOrcaTeamTransitionError(err);
+              throw err;
+            });
+          }
+          return acquisition;
+        } catch (err) {
+          terminalTransitionPending = isPendingOrcaTeamTransitionError(err);
+          throw err;
+        }
+      }
+      : undefined;
   const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,
@@ -676,7 +695,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
         turnChangeSetStarted = true;
         await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
       },
-      acquireVendorDispatchLease: params.acquireVendorDispatchLease,
+      acquireVendorDispatchLease,
       onDispatching: () => {
         try {
           params.beforeVendorDispatch?.();

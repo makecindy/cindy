@@ -12,6 +12,10 @@ import {
 } from './localDb/client/IsolatedSqliteClient.js';
 import { getCurrentDbClientUserId } from './localDb/client/current.js';
 import { resolveBetterSqliteNativeBinding } from './localDb/betterSqliteFactory.js';
+import {
+  orcaTeamTerminalFence,
+  type OrcaTeamTerminalFenceState,
+} from './orcaTeamTerminalFence.js';
 
 const log = createLogger('orca-team-dispatch-lease');
 
@@ -23,6 +27,7 @@ interface OrcaTeamDispatchDbScope {
 export interface OrcaTeamDispatchLeaseDeps {
   resolveScope(): OrcaTeamDispatchDbScope | null;
   createClient(options: CreateDbClientOptions): Promise<IsolatedSqliteClient>;
+  getTerminalFenceState(teamId: string): OrcaTeamTerminalFenceState;
 }
 
 export type OrcaTeamDispatchLeaseRelease = () => Promise<void>;
@@ -56,6 +61,19 @@ export class OrcaTeamDispatchLeaseCoordinator {
         [teamId],
       );
       if (row?.status !== 'active') {
+        throw new Error(`ORCA_TEAM_INACTIVE: team ${teamId} has already ended`);
+      }
+      // BEGIN IMMEDIATE protects against durable terminal writers, but an
+      // in-process end_team may already have raised its synchronous fence while
+      // still waiting for this transaction. Recheck after the final DB read so
+      // no await remains between the local fence and returning the vendor lease.
+      const fenceState = this.deps.getTerminalFenceState(teamId);
+      if (fenceState === 'pending') {
+        throw new Error(
+          `ORCA_TEAM_TERMINATING: team ${teamId} terminal transition is still pending`,
+        );
+      }
+      if (fenceState === 'terminal') {
         throw new Error(`ORCA_TEAM_INACTIVE: team ${teamId} has already ended`);
       }
 
@@ -159,6 +177,7 @@ function resolveCurrentScope(): OrcaTeamDispatchDbScope | null {
 const coordinator = new OrcaTeamDispatchLeaseCoordinator({
   resolveScope: resolveCurrentScope,
   createClient: createIsolatedSqliteClient,
+  getTerminalFenceState: (teamId) => orcaTeamTerminalFence.getState(teamId),
 });
 
 export function acquireOrcaTeamDispatchLease(

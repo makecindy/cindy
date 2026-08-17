@@ -746,6 +746,53 @@ describe('Orca lead/worker dispatcher', () => {
     expect(releases[1]).toHaveBeenCalledOnce();
   });
 
+  it('retries a direct send when the vendor lease detects a pending terminal transition', async () => {
+    const transitionSettled = deferredVoid();
+    const releaseLease = vi.fn();
+    const acquireVendorDispatchLease = vi
+      .fn<() => Promise<() => void>>()
+      .mockRejectedValueOnce(new Error(
+        'ORCA_TEAM_TERMINATING: team team-1 terminal transition is still pending',
+      ))
+      .mockResolvedValueOnce(releaseLease);
+    const h = createHarness({
+      createId: vi
+        .fn<() => string>()
+        .mockReturnValueOnce('client-lease-pending')
+        .mockReturnValueOnce('client-lease-retry'),
+      acquireVendorDispatchLease,
+      waitForOrcaTeamTerminalTransition: vi.fn(async () => {
+        await transitionSettled.promise;
+        return 'open' as const;
+      }),
+    });
+
+    const dispatch = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Retry after lease fence rollback',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'lease-pending-rollback-test' },
+    });
+    await vi.waitFor(() => {
+      expect(h.deps.waitForOrcaTeamTerminalTransition).toHaveBeenCalledWith('team-1');
+    });
+
+    transitionSettled.resolve();
+    await expect(dispatch).resolves.toMatchObject({
+      ok: true,
+      mode: 'dispatched',
+      clientId: 'client-lease-retry',
+    });
+    expect(acquireVendorDispatchLease).toHaveBeenCalledTimes(2);
+    expect(h.deps.rewindPersistedUserMessage).toHaveBeenCalledWith(
+      'target-session',
+      'client-lease-pending',
+    );
+    expect(releaseLease).toHaveBeenCalledOnce();
+  });
+
   it('does not retry a direct send when a later pending terminal transition commits', async () => {
     const releaseReservation = vi.fn();
     const liveSession = createLiveSession(async (_message, opts) => {

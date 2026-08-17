@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createWorkerDbClient, type DbClient } from '../localDb/client/DbClient.js';
 import {
@@ -57,6 +57,7 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     const coordinator = new OrcaTeamDispatchLeaseCoordinator({
       resolveScope: () => ({ key: 'owner-1', options }),
       createClient: async () => leaseClient,
+      getTerminalFenceState: () => 'open',
     });
 
     const release = await coordinator.acquire('team-1');
@@ -88,6 +89,7 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     const coordinator = new OrcaTeamDispatchLeaseCoordinator({
       resolveScope: () => ({ key: 'owner-1', options }),
       createClient: async () => leaseClient,
+      getTerminalFenceState: () => 'open',
     });
 
     await expect(coordinator.acquire('team-ended')).rejects.toThrow(
@@ -97,6 +99,31 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     await setup.exec("UPDATE orca_teams SET status = 'active' WHERE id = 'team-ended'");
     const release = await coordinator.acquire('team-ended');
     expect(release).toBeTypeOf('function');
+    await release();
+  });
+
+  it('rejects a locally pending terminal transition after the durable active check', async () => {
+    const options = await createClientOptions();
+    const setup = await trackedClient(options);
+    await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-pending', 'active')");
+    const leaseClient = await trackedLeaseClient(options);
+    const getTerminalFenceState = vi.fn<() => 'open' | 'pending' | 'terminal'>(
+      () => 'pending',
+    );
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => leaseClient,
+      getTerminalFenceState,
+    });
+
+    await expect(coordinator.acquire('team-pending')).rejects.toThrow(
+      'ORCA_TEAM_TERMINATING: team team-pending terminal transition is still pending',
+    );
+    expect(getTerminalFenceState).toHaveBeenCalledWith('team-pending');
+
+    getTerminalFenceState.mockReturnValue('open');
+    const release = await coordinator.acquire('team-pending');
     await release();
   });
 });
