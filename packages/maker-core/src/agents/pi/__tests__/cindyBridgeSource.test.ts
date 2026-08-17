@@ -1,8 +1,10 @@
 import {
+  globSync,
   linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  opendirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -27,6 +29,10 @@ import {
 } from '../cindy-bridge-source.js';
 
 type ReviewSearchHelpers = {
+  collectReadonlyCredentialEvidence: (
+    toolName: string,
+    input: unknown,
+  ) => { paths: string[]; touchesCredential: boolean };
   filterReviewGrepResult: (
     result: unknown,
     input: unknown,
@@ -56,25 +62,35 @@ function loadReviewSearchHelpers(
   const helperEnd = source.indexOf("// ── MCP streamable-HTTP");
   const findStart = source.indexOf("function rgGlob(");
   const findEnd = source.indexOf("export default async function cindyBridge");
+  const selectorGlobs = /^const CREDENTIAL_SELECTOR_GLOBS = .*;$/m.exec(source)?.[0];
   if (
     helperStart < 0 ||
     helperEnd <= helperStart ||
     findStart < 0 ||
-    findEnd <= findStart
+    findEnd <= findStart ||
+    !selectorGlobs
   ) {
     throw new Error(
       "Review search helpers were not found in the generated bridge",
     );
   }
   const executableSource = [
+    "const CREDENTIAL_PATH_PATTERNS: RegExp[] = [/(?:^|[\\\\/])\\.env(?:\\.[^\\\\/]+)?$/i, /\\.pem$/i];",
     "const REVIEW_CREDENTIAL_PATH_PATTERNS: RegExp[] = [/(?:^|[\\\\/])node_modules(?:[\\\\/]|$)/i];",
     "const REVIEW_CREDENTIAL_GLOB_PATTERNS: string[] = [];",
+    selectorGlobs,
+    "function touchesCredentialPath(input: unknown): boolean {",
+    "  if (typeof input === 'string') return CREDENTIAL_PATH_PATTERNS.some((re) => re.test(input));",
+    "  if (Array.isArray(input)) return input.some(touchesCredentialPath);",
+    "  return false;",
+    "}",
     source.slice(helperStart, helperEnd),
     "function currentPermissionState() {",
     "  return { reviewOnly: true, reviewReadPaths: (globalThis as any).__reviewReadPaths };",
     "}",
     "function managedRipgrepPath() { return (globalThis as any).__managedRipgrepPath; }",
     source.slice(findStart, findEnd),
+    "(globalThis as any).collectReadonlyCredentialEvidence = collectReadonlyCredentialEvidence;",
     "(globalThis as any).filterReviewGrepResult = filterReviewGrepResult;",
     "(globalThis as any).reviewSearchPathIsVisible = reviewSearchPathIsVisible;",
     "(globalThis as any).rgGlob = rgGlob;",
@@ -100,6 +116,7 @@ function loadReviewSearchHelpers(
   };
   runInNewContext(compiled, context);
   if (
+    !context.collectReadonlyCredentialEvidence ||
     !context.filterReviewGrepResult ||
     !context.reviewSearchPathIsVisible ||
     !context.rgGlob
@@ -142,6 +159,677 @@ describe('cindy-bridge extension source', () => {
       .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
     expect(errors).toEqual([]);
   });
+
+  it('restricts readonly credential evidence to path and selector fields', () => {
+    const helpers = loadReviewSearchHelpers('/repo');
+    const evidence = (toolName: string, input: unknown) => {
+      const value = helpers.collectReadonlyCredentialEvidence(toolName, input);
+      return { paths: [...value.paths], touchesCredential: value.touchesCredential };
+    };
+
+    expect(evidence('grep', { pattern: '.env', path: 'src', context: '.env.local' })).toEqual({
+      paths: ['src'],
+      touchesCredential: false,
+    });
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '.env*' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.n?trc' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: 'src/.n?trc' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '*.p?m' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.config/g?/**' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '?.key' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.env.?' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.ssh-*/**' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', globs: ['*.key', '!secret.key'] }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '**/.cargo/credentia?s.bak' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '**/.m2/settings.xml.bak' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.s?h' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: 'id_rsa.*' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.s?h/config' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.config/g?/hosts.yml' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.a?s/credentials' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: '.config/g?-*/**' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: '.', glob: 'nested/.config/g?-*/**' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '.e[n-o]v' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '[.-0]env*' }).touchesCredential).toBe(true);
+    expect(evidence('find', { pattern: '.e{n,foo}v', path: 'src' }).touchesCredential).toBe(true);
+    expect(evidence('find', { pattern: '{safe,.e[n-o]v}', path: 'src' }).touchesCredential).toBe(true);
+    expect(evidence('find', { pattern: '@(safe|.env)', path: 'src' }).touchesCredential).toBe(true);
+    expect(evidence('find', { pattern: '.e{o,p}v', path: 'src' }).touchesCredential).toBe(false);
+    expect(evidence('find', { pattern: '.e[o-p]v', path: 'src' }).touchesCredential).toBe(false);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '.environment*' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '!.env*' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', globs: ['*', '!.env*'] }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', globs: ['source.ts', '!.env*'] }).touchesCredential).toBe(false);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '[!.]*.ts' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '*.ts' }).touchesCredential).toBe(true);
+    expect(evidence('find', { pattern: '*.ts', path: 'src' }).touchesCredential).toBe(false);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '.n?tes' }).touchesCredential).toBe(false);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '[!.]*.png' }).touchesCredential).toBe(true);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '?.txt' }).touchesCredential).toBe(false);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '.envrc?' }).touchesCredential).toBe(false);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '.netrcfoo' }).touchesCredential).toBe(false);
+    expect(evidence('grep', { pattern: 'KEY', path: 'src', glob: '.sshhelper' }).touchesCredential).toBe(false);
+    expect(evidence('find', { pattern: '.env', path: 'src' }).touchesCredential).toBe(true);
+    expect(evidence('read', { path: '.env.local', offset: 1 }).touchesCredential).toBe(true);
+    expect(evidence('ls', { path: 'src/.environment' }).touchesCredential).toBe(false);
+    expect(evidence('read', { path: 42 }).touchesCredential).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'collects canonical credential targets without flagging ordinary symlinks',
+    () => {
+      const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+      const helperStart = source.indexOf('const CREDENTIAL_PATH_PATTERNS');
+      const helperEnd = source.indexOf('// 从 bash 子进程读取任意进程的初始环境');
+      expect(helperStart).toBeGreaterThan(-1);
+      expect(helperEnd).toBeGreaterThan(helperStart);
+
+      const executableSource = [
+        source.slice(helperStart, helperEnd),
+        '(globalThis as any).collectResolvedCredentialPaths = collectResolvedCredentialPaths;',
+        '(globalThis as any).bashInputReadTargets = bashInputReadTargets;',
+        '(globalThis as any).bashInputReadEvidence = bashInputReadEvidence;',
+        '(globalThis as any).parseShellInputRedirections = parseShellInputRedirections;',
+        '(globalThis as any).resolvedCredentialEvidenceForHost = resolvedCredentialEvidenceForHost;',
+      ].join('\n');
+      const compiled = ts.transpileModule(executableSource, {
+        compilerOptions: {
+          module: ts.ModuleKind.None,
+          target: ts.ScriptTarget.ES2022,
+        },
+      }).outputText;
+      const tempRoot = mkdtempSync(path.join(tmpdir(), 'cindy-pi-credential-link-'));
+      const context: {
+        globSync: typeof globSync;
+        opendirSync: typeof opendirSync;
+        realpathSync: typeof realpathSync;
+        statSync: typeof statSync;
+        path: typeof path;
+        process: { cwd: () => string; env: NodeJS.ProcessEnv };
+        collectResolvedCredentialPaths?: (input: unknown) => string[];
+        bashInputReadTargets?: (input: unknown) => string[];
+        bashInputReadEvidence?: (input: unknown) => { targets: string[]; unresolved: boolean };
+        parseShellInputRedirections?: (command: string) => {
+          command: string;
+          targets: string[];
+          targetPrefixes: string[];
+          targetMayExpand: boolean[];
+          hasUnresolvedTarget: boolean;
+        };
+        resolvedCredentialEvidenceForHost?: (
+          paths: readonly string[],
+          credentialRead: boolean,
+        ) => string[] | null;
+      } = {
+        globSync,
+        opendirSync,
+        realpathSync,
+        statSync,
+        path,
+        process: { cwd: () => tempRoot, env: { HOME: tempRoot, PATH: process.env.PATH } },
+      };
+      runInNewContext(compiled, context);
+
+      try {
+        const secretPath = path.join(tempRoot, 'secrets', '.env');
+        const ordinaryPath = path.join(tempRoot, 'ordinary.txt');
+        const secretLink = path.join(tempRoot, 'innocent.txt');
+        const ordinaryLink = path.join(tempRoot, 'ordinary-link.txt');
+        const escapedSecretLink = path.join(tempRoot, 'innocent\\q');
+        const nestedDir = path.join(tempRoot, 'nested');
+        const dashDir = path.join(tempRoot, '-credential-dir');
+        const nestedSecretLink = path.join(nestedDir, 'nested-innocent.txt');
+        const dashSecretLink = path.join(dashDir, 'innocent.txt');
+        const lateSecretLink = path.join(nestedDir, 'late-only-secret-link');
+        const scopedLinkName = 'scoped-innocent.txt';
+        const rootScopedSecretLink = path.join(tempRoot, scopedLinkName);
+        const nestedScopedOrdinaryLink = path.join(nestedDir, scopedLinkName);
+        const cdRedirectName = 'cd-innocent';
+        const rootCdRedirectSecretLink = path.join(tempRoot, cdRedirectName);
+        const nestedCdRedirectOrdinaryLink = path.join(nestedDir, cdRedirectName);
+        const nestedOrdinaryReadName = 'ordinary-after-cd.txt';
+        const nestedOrdinaryReadLink = path.join(nestedDir, nestedOrdinaryReadName);
+        const cdPathRoot = path.join(tempRoot, 'cdpath-root');
+        const cdPathSubDir = path.join(cdPathRoot, 'sub');
+        const cdPathSecretLink = path.join(cdPathSubDir, 'link');
+        const cwdSwitchName = 'cwd-switch-link';
+        const rootCwdSwitchOrdinaryLink = path.join(tempRoot, cwdSwitchName);
+        const nestedCwdSwitchSecretLink = path.join(nestedDir, cwdSwitchName);
+        const stackOtherDir = path.join(tempRoot, 'stack-other');
+        const stackOtherOrdinaryLink = path.join(stackOtherDir, cwdSwitchName);
+        const ordinaryGlobDir = path.join(tempRoot, 'ordinary-glob');
+        const ordinaryGlobPath = path.join(ordinaryGlobDir, 'ordinary.txt');
+        const dotglobDir = path.join(tempRoot, 'dotglob-only');
+        const dotglobSecretPath = path.join(dotglobDir, '.env');
+        const largeGlobDir = path.join(tempRoot, 'large-glob');
+        const workGlobDir = path.join(tempRoot, 'work-glob');
+        const deepGlobDir = path.join(tempRoot, 'deep-glob');
+        mkdirSync(path.dirname(secretPath), { recursive: true });
+        mkdirSync(nestedDir, { recursive: true });
+        mkdirSync(dashDir, { recursive: true });
+        mkdirSync(cdPathSubDir, { recursive: true });
+        mkdirSync(stackOtherDir);
+        mkdirSync(ordinaryGlobDir);
+        mkdirSync(dotglobDir);
+        mkdirSync(largeGlobDir);
+        mkdirSync(workGlobDir);
+        mkdirSync(deepGlobDir);
+        writeFileSync(secretPath, 'FAKE PRIVATE KEY');
+        writeFileSync(ordinaryPath, 'ordinary');
+        writeFileSync(ordinaryGlobPath, 'ordinary glob content');
+        writeFileSync(dotglobSecretPath, 'DOTGLOB_SECRET=must-not-leak');
+        for (let index = 0; index <= 1_024; index += 1) {
+          writeFileSync(path.join(largeGlobDir, `match-${index}.txt`), 'ordinary');
+        }
+        for (let index = 0; index < 4_096; index += 1) {
+          writeFileSync(path.join(workGlobDir, `nonmatch-${index}.txt`), 'ordinary');
+        }
+        let deepCursor = deepGlobDir;
+        for (let depth = 0; depth <= 64; depth += 1) {
+          deepCursor = path.join(deepCursor, `level-${depth}`);
+          mkdirSync(deepCursor);
+        }
+        writeFileSync(path.join(deepCursor, 'ordinary.txt'), 'ordinary');
+        symlinkSync(secretPath, secretLink);
+        symlinkSync(secretPath, nestedSecretLink);
+        symlinkSync(secretPath, dashSecretLink);
+        symlinkSync(secretPath, lateSecretLink);
+        symlinkSync(secretPath, rootScopedSecretLink);
+        symlinkSync(secretPath, escapedSecretLink);
+        symlinkSync(secretPath, rootCdRedirectSecretLink);
+        symlinkSync(ordinaryPath, nestedScopedOrdinaryLink);
+        symlinkSync(ordinaryPath, nestedCdRedirectOrdinaryLink);
+        symlinkSync(ordinaryPath, nestedOrdinaryReadLink);
+        symlinkSync(secretPath, cdPathSecretLink);
+        symlinkSync(ordinaryPath, rootCwdSwitchOrdinaryLink);
+        symlinkSync(secretPath, nestedCwdSwitchSecretLink);
+        symlinkSync(ordinaryPath, stackOtherOrdinaryLink);
+        symlinkSync(ordinaryPath, ordinaryLink);
+
+        expect(context.collectResolvedCredentialPaths?.({ path: secretLink })).toEqual([
+          realpathSync(secretPath),
+        ]);
+        expect(context.collectResolvedCredentialPaths?.({ path: ordinaryLink })).toEqual([]);
+        expect(context.resolvedCredentialEvidenceForHost?.([], true)).toBeNull();
+        expect(context.resolvedCredentialEvidenceForHost?.([], false)).toEqual([]);
+        expect(context.resolvedCredentialEvidenceForHost?.([secretPath], true)).toEqual([secretPath]);
+
+        const secretCommand = `cat<${secretLink}`;
+        const ordinaryCommand = `cat<${ordinaryLink}`;
+        expect(context.parseShellInputRedirections?.(secretCommand).command.trim()).toBe('cat');
+        expect(context.bashInputReadTargets?.({ command: secretCommand })).toEqual([secretLink]);
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: secretCommand }),
+        )).toEqual([realpathSync(secretPath)]);
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: ordinaryCommand }),
+        )).toEqual([]);
+        const escapedBackslashCommand = 'cat <"innocent\\\\q"';
+        expect(context.bashInputReadEvidence?.({ command: escapedBackslashCommand })).toEqual({
+          targets: [escapedSecretLink],
+          unresolved: true,
+        });
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: escapedBackslashCommand }),
+        )).toEqual([realpathSync(secretPath)]);
+        for (const cdRedirectOperator of ['<>', '<']) {
+          const command = `cd ${nestedDir} ${cdRedirectOperator}${cdRedirectName} && cat <${nestedOrdinaryReadName}`;
+          const evidence = context.bashInputReadEvidence?.({ command });
+          expect(evidence?.unresolved, command).toBe(false);
+          expect(evidence?.targets, command).toEqual([
+            rootCdRedirectSecretLink,
+            nestedOrdinaryReadLink,
+          ]);
+          expect(context.collectResolvedCredentialPaths?.(evidence?.targets), command)
+            .toEqual([realpathSync(secretPath)]);
+        }
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({
+            command: `cd ${nestedDir} <ordinary-link.txt && cat <${nestedOrdinaryReadName}`,
+          }),
+        )).toEqual([]);
+        const readWriteSecretCommand = `cat 3<>${secretLink}`;
+        expect(context.parseShellInputRedirections?.(readWriteSecretCommand)).toEqual({
+          command: readWriteSecretCommand,
+          targets: [secretLink],
+          targetPrefixes: ['cat 3'],
+          targetMayExpand: [false],
+          hasUnresolvedTarget: false,
+        });
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: readWriteSecretCommand }),
+        )).toEqual([realpathSync(secretPath)]);
+        for (const expandedCommand of [
+          `cat <>${path.join(tempRoot, 'innocent.*')}`,
+          'cat <>~/innocent.*',
+        ]) {
+          expect(context.collectResolvedCredentialPaths?.(
+            context.bashInputReadTargets?.({ command: expandedCommand }),
+          ), expandedCommand).toEqual([realpathSync(secretPath)]);
+        }
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${ordinaryGlobDir} && cat <*.txt`,
+        })).toEqual({ targets: [ordinaryGlobPath], unresolved: false });
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${largeGlobDir} && cat <*.txt`,
+        })).toEqual({ targets: [], unresolved: true });
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${workGlobDir} && cat <*.json`,
+        })).toEqual({ targets: [], unresolved: true });
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${deepGlobDir} && cat <**/*`,
+        })).toEqual({ targets: [], unresolved: true });
+        context.process.env.BASHOPTS = 'checkwinsize:dotglob';
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${dotglobDir} && cat <*>`,
+        })).toEqual({ targets: [], unresolved: true });
+        delete context.process.env.BASHOPTS;
+        for (const command of [
+          `cd ${dotglobDir} && shopt -s dotglob; cat <*>`,
+          `cd ${dotglobDir} && builtin shopt -s nullglob dotglob && cat <*>`,
+          `cd ${dotglobDir} && builtin 2>/dev/null shopt -s dotglob; cat <*>`,
+          `cd ${dotglobDir} && command shopt -u dotglob; cat <*>`,
+          `cd ${dotglobDir} && set +f; cat <*>`,
+          `cd ${dotglobDir} && set -o noglob; cat <*>`,
+          `cd ${dotglobDir} && GLOBIGNORE=ordinary; cat <*>`,
+          `cd ${dotglobDir} && export GLOBIGNORE=ordinary; cat <*>`,
+          `cd ${dotglobDir} && declare GLOBIGNORE=ordinary; cat <*>`,
+          `cd ${dotglobDir} && printf -v GLOBIGNORE ordinary; cat <*>`,
+          `cd ${dotglobDir} && read GLOBIGNORE <<<ordinary; cat <*>`,
+          `cd ${dotglobDir} && unset GLOBIGNORE; cat <*>`,
+          `cd ${dotglobDir} && trap 'shopt -s dotglob' DEBUG; cat <*>`,
+          `cd ${dotglobDir} && LC_COLLATE=C; cat <[.-0]env`,
+          `HOME=${dotglobDir}; cat <~/*`,
+        ]) {
+          expect(context.bashInputReadEvidence?.({ command }), command)
+            .toEqual({ targets: [], unresolved: true });
+        }
+        for (const command of [
+          `cd ${ordinaryGlobDir} && shopt -q dotglob; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && shopt -p dotglob; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && set -euo pipefail; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && printf '%s' GLOBIGNORE; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && printf '%s' "$GLOBIGNORE"; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && >$LOG shopt -q dotglob; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && GLOBIGNORE_TEXT=x; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && trap; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && (shopt -s dotglob); cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && bash -O dotglob -c true; cat <ordinary*`,
+          `cd ${ordinaryGlobDir} && shopt -s dotglob <ordinary*`,
+        ]) {
+          expect(context.bashInputReadEvidence?.({ command }), command)
+            .toEqual({ targets: [ordinaryGlobPath], unresolved: false });
+        }
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${ordinaryGlobDir} && cat <*.txt`,
+        })).toEqual({ targets: [ordinaryGlobPath], unresolved: false });
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: "cat <>'innocent.*'" }),
+        )).toEqual([]);
+        const nestedCommand = `cd ${nestedDir} && cat <nested-innocent.txt`;
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: nestedCommand }),
+        )).toEqual([realpathSync(secretPath)]);
+
+        context.process.env.CDPATH = cdPathRoot;
+        for (const cdRedirectOperator of ['<', '<>']) {
+          const command = `cd sub ${cdRedirectOperator}ordinary-link.txt && cat <link`;
+          expect(context.bashInputReadEvidence?.({ command }), command).toEqual({
+            targets: [ordinaryLink, path.join(tempRoot, 'link')],
+            unresolved: true,
+          });
+        }
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ./nested <ordinary-link.txt && cat <${nestedOrdinaryReadName}`,
+        })).toEqual({
+          targets: [ordinaryLink, nestedOrdinaryReadLink],
+          unresolved: false,
+        });
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${nestedDir} && cat <${nestedOrdinaryReadName}`,
+        })).toEqual({ targets: [nestedOrdinaryReadLink], unresolved: false });
+        context.process.env.CDPATH = '.:';
+        expect(context.bashInputReadEvidence?.({ command: 'cd nested && cat <nested-innocent.txt' }))
+          .toEqual({ targets: [nestedSecretLink], unresolved: false });
+        delete context.process.env.CDPATH;
+
+        context.process.env.BASHOPTS = 'checkwinsize:cdable_vars';
+        context.process.env.sub = cdPathSubDir;
+        expect(context.bashInputReadEvidence?.({ command: 'cd sub && cat <link' }))
+          .toEqual({ targets: [path.join(tempRoot, 'link')], unresolved: true });
+        delete context.process.env.BASHOPTS;
+        delete context.process.env.sub;
+
+        context.process.env.BASH_ENV = path.join(tempRoot, 'shell-startup');
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${nestedDir} && cat <${nestedOrdinaryReadName}`,
+        })).toEqual({
+          targets: [path.join(tempRoot, nestedOrdinaryReadName)],
+          unresolved: true,
+        });
+        delete context.process.env.BASH_ENV;
+        context.process.env.ENV = 'development';
+        expect(context.bashInputReadEvidence?.({ command: nestedCommand }))
+          .toEqual({ targets: [nestedSecretLink], unresolved: false });
+        delete context.process.env.ENV;
+        for (const builtin of ['cd', 'pushd']) {
+          context.process.env[`BASH_FUNC_${builtin}%%`] = '() { builtin cd "$HOME"; }';
+          expect(context.bashInputReadEvidence?.({
+            command: `${builtin} ${nestedDir} && cat <${nestedOrdinaryReadName}`,
+          }), builtin).toEqual({ targets: [path.join(tempRoot, nestedOrdinaryReadName)], unresolved: true });
+          delete context.process.env[`BASH_FUNC_${builtin}%%`];
+        }
+
+        const redirectedDirectoryCommands = [
+          `cd ${nestedDir} >/dev/null && cat <nested-innocent.txt`,
+          `cd ${nestedDir} 2>/dev/null 3>&1 && cat <nested-innocent.txt`,
+          `pushd ${nestedDir} &>/dev/null && cat <nested-innocent.txt`,
+          `cd ${nestedDir} </dev/null >>redirect.log && cat <nested-innocent.txt`,
+          `cd ${nestedDir} <<<ready && cat <nested-innocent.txt`,
+          `cd ${nestedDir} >/dev/null \\\n&& cat <nested-innocent.txt`,
+          `cd ${nestedDir} >/dev/null # quiet\ncat <nested-innocent.txt`,
+        ];
+        for (const redirectedCommand of redirectedDirectoryCommands) {
+          expect(context.collectResolvedCredentialPaths?.(
+            context.bashInputReadTargets?.({ command: redirectedCommand }),
+          ), redirectedCommand).toEqual([realpathSync(secretPath)]);
+        }
+        for (const command of [
+          `X=1 cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `X=1 Y=2 builtin cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `X='hello world' 2>/dev/null command -- cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `X=1 2>/dev/null builtin cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `2>/dev/null X=1 command -- cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `X=1 command builtin 2>/dev/null pushd ${nestedDir} && cat <${cwdSwitchName}`,
+          `2>/dev/null cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `>/dev/null builtin cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `builtin 2>/dev/null cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `command -p 2>/dev/null cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `command -- cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `builtin -- cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `builtin command cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `command builtin 2>/dev/null pushd ${nestedDir} && cat <${cwdSwitchName}`,
+          `{saved}>/dev/null builtin cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `(2>/dev/null builtin cd ${nestedDir} && cat <${cwdSwitchName})`,
+        ]) {
+          const evidence = context.bashInputReadEvidence?.({ command });
+          expect(evidence, command).toEqual({ targets: [nestedCwdSwitchSecretLink], unresolved: false });
+          expect(context.collectResolvedCredentialPaths?.(evidence?.targets), command)
+            .toEqual([realpathSync(secretPath)]);
+        }
+        for (const command of [
+          `source change-dir.sh; cat <${cwdSwitchName}`,
+          `. ./change-dir.sh && cat <${cwdSwitchName}`,
+          `builtin source change-dir.sh; cat <${cwdSwitchName}`,
+          `builtin -- . ./change-dir.sh; cat <${cwdSwitchName}`,
+          `command eval 'cd nested'; cat <${cwdSwitchName}`,
+          `X=1 2>/dev/null source change-dir.sh; cat <${cwdSwitchName}`,
+          `false || source change-dir.sh; cat <${cwdSwitchName}`,
+        ]) {
+          expect(context.bashInputReadEvidence?.({ command }), command).toEqual({
+            targets: [rootCwdSwitchOrdinaryLink],
+            unresolved: true,
+          });
+        }
+        expect(context.bashInputReadEvidence?.({
+          command: 'source change-dir.sh <ordinary-link.txt',
+        })).toEqual({ targets: [ordinaryLink], unresolved: false });
+        expect(context.bashInputReadEvidence?.({
+          command: '(source change-dir.sh); cat <ordinary-link.txt',
+        })).toEqual({ targets: [ordinaryLink], unresolved: false });
+        expect(context.bashInputReadEvidence?.({
+          command: 'bash change-dir.sh; cat <ordinary-link.txt',
+        })).toEqual({ targets: [ordinaryLink], unresolved: false });
+        expect(context.bashInputReadEvidence?.({
+          command: `(source change-dir.sh; cat <${cwdSwitchName})`,
+        })).toEqual({ targets: [rootCwdSwitchOrdinaryLink], unresolved: true });
+        expect(context.bashInputReadEvidence?.({ command: 'source change-dir.sh' }))
+          .toEqual({ targets: [], unresolved: false });
+        expect(context.bashInputReadEvidence?.({
+          command: `printf '%s' 'source change-dir.sh'; cat <ordinary-link.txt`,
+        })).toEqual({ targets: [ordinaryLink], unresolved: false });
+
+        expect(context.bashInputReadEvidence?.({
+          command: `CDPATH=${cdPathRoot} cd sub && cat <${cwdSwitchName}`,
+        })).toEqual({
+          targets: [rootCwdSwitchOrdinaryLink],
+          unresolved: true,
+        });
+        for (const dynamicAssignmentCommand of [
+          `X=$TARGET cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `X=$(printf value) cd ${nestedDir} && cat <${cwdSwitchName}`,
+          `X=\`printf value\` cd ${nestedDir} && cat <${cwdSwitchName}`,
+        ]) {
+          const evidence = context.bashInputReadEvidence?.({ command: dynamicAssignmentCommand });
+          expect(evidence?.unresolved, dynamicAssignmentCommand).toBe(true);
+          expect(evidence?.targets.every((target) =>
+            target === rootCwdSwitchOrdinaryLink || target === nestedCwdSwitchSecretLink),
+          dynamicAssignmentCommand).toBe(true);
+        }
+        expect(context.bashInputReadEvidence?.({
+          command: `X=1 printf '%s' cd; cat <${cwdSwitchName}`,
+        })).toEqual({
+          targets: [rootCwdSwitchOrdinaryLink],
+          unresolved: false,
+        });
+        expect(context.bashInputReadEvidence?.({
+          command: `X=\`printf cd\` printf ok; cat <${cwdSwitchName}`,
+        })).toEqual({
+          targets: [rootCwdSwitchOrdinaryLink],
+          unresolved: false,
+        });
+        for (const rotation of ['+1', '-1']) {
+          const command = `pushd ${nestedDir} >/dev/null; pushd ${stackOtherDir} >/dev/null; pushd ${rotation} >/dev/null; cat <${cwdSwitchName}`;
+          const evidence = context.bashInputReadEvidence?.({ command });
+          expect(evidence?.unresolved, command).toBe(true);
+          expect(evidence?.targets, command).toContain(stackOtherOrdinaryLink);
+          expect(evidence?.targets.every((target) => [
+            rootCwdSwitchOrdinaryLink,
+            nestedCwdSwitchSecretLink,
+            stackOtherOrdinaryLink,
+          ].includes(target)), command).toBe(true);
+        }
+        for (const command of [
+          `D=cd; $D ${nestedDir} && cat <${cwdSwitchName}`,
+          `UNSET=; c${'${UNSET}'}d ${nestedDir} && cat <${cwdSwitchName}`,
+          `UNSET=; bu${'${UNSET}'}iltin -- cd ${nestedDir} && cat <${cwdSwitchName}`,
+        ]) {
+          expect(context.bashInputReadEvidence?.({ command }), command)
+            .toEqual({ targets: [rootCwdSwitchOrdinaryLink], unresolved: true });
+        }
+        const mixedConditionalCommand = `true || cd ${nestedDir} && cat <${scopedLinkName}`;
+        const mixedConditionalEvidence = context.bashInputReadEvidence?.({ command: mixedConditionalCommand });
+        expect(mixedConditionalEvidence?.targets, mixedConditionalCommand)
+          .toEqual([rootScopedSecretLink, nestedScopedOrdinaryLink]);
+        expect(context.collectResolvedCredentialPaths?.(mixedConditionalEvidence?.targets))
+          .toEqual([realpathSync(secretPath)]);
+        for (const command of [
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && builtin popd +0 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd -2 && cat <${cwdSwitchName}`,
+          `pushd -n ${nestedDir} && popd && cat <${cwdSwitchName}`,
+        ]) {
+          const evidence = context.bashInputReadEvidence?.({ command });
+          expect(evidence, command).toEqual({ targets: [nestedCwdSwitchSecretLink], unresolved: false });
+          expect(context.collectResolvedCredentialPaths?.(evidence?.targets), command)
+            .toEqual([realpathSync(secretPath)]);
+        }
+        for (const command of [
+          `pushd ${nestedDir} && popd && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd && popd && cat <${cwdSwitchName}`,
+        ]) {
+          expect(context.bashInputReadEvidence?.({ command }), command).toEqual({
+            targets: [rootCwdSwitchOrdinaryLink],
+            unresolved: false,
+          });
+        }
+        for (const command of [
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd +1 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd +2 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd -0 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd -1 && cat <${cwdSwitchName}`,
+        ]) {
+          expect(context.bashInputReadEvidence?.({ command }), command).toEqual({
+            targets: [stackOtherOrdinaryLink],
+            unresolved: false,
+          });
+        }
+        for (const command of [
+          `pushd +0 && cat <ordinary-link.txt`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && pushd +0 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd -n +0 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd -n +1 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd -n -0 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && popd -n +0 && pushd +0 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && pushd -n +0 && cat <${cwdSwitchName}`,
+          `pushd ${nestedDir} && pushd ${stackOtherDir} && pushd -n +1 && cat <${cwdSwitchName}`,
+        ]) {
+          expect(context.bashInputReadEvidence?.({ command }), command).toEqual({
+            targets: [command.startsWith('pushd +0') ? ordinaryLink : stackOtherOrdinaryLink],
+            unresolved: false,
+          });
+        }
+        const pushdRotationCommand = `pushd ${nestedDir} && pushd ${stackOtherDir} && pushd +1 && cat <${cwdSwitchName}`;
+        const pushdRotationEvidence = context.bashInputReadEvidence?.({ command: pushdRotationCommand });
+        expect(pushdRotationEvidence, pushdRotationCommand)
+          .toEqual({ targets: [nestedCwdSwitchSecretLink], unresolved: false });
+        expect(context.collectResolvedCredentialPaths?.(pushdRotationEvidence?.targets))
+          .toEqual([realpathSync(secretPath)]);
+        const sequentialPopdCommand = `pushd ${nestedDir}; pushd ${stackOtherDir}; popd; cat <${cwdSwitchName}`;
+        const sequentialPopdEvidence = context.bashInputReadEvidence?.({ command: sequentialPopdCommand });
+        expect(sequentialPopdEvidence?.unresolved, sequentialPopdCommand).toBe(true);
+        expect(sequentialPopdEvidence?.targets, sequentialPopdCommand)
+          .toContain(nestedCwdSwitchSecretLink);
+        expect(context.collectResolvedCredentialPaths?.(sequentialPopdEvidence?.targets))
+          .toEqual([realpathSync(secretPath)]);
+        expect(context.bashInputReadEvidence?.({
+          command: `popd >/dev/null; cat <ordinary-link.txt`,
+        })).toEqual({ targets: [ordinaryLink], unresolved: true });
+        context.process.env['BASH_FUNC_popd%%'] = '() { builtin cd "$HOME"; }';
+        expect(context.bashInputReadEvidence?.({
+          command: `popd >/dev/null; cat <ordinary-link.txt`,
+        })).toEqual({ targets: [ordinaryLink], unresolved: true });
+        delete context.process.env['BASH_FUNC_popd%%'];
+        expect(context.bashInputReadEvidence?.({
+          command: `pushd -n ${nestedDir} >/dev/null && cat <ordinary-link.txt`,
+        })).toEqual({
+          targets: [ordinaryLink],
+          unresolved: false,
+        });
+        expect(context.bashInputReadEvidence?.({
+          command: `true && 2>/dev/null builtin pushd ${nestedDir} && cat <${cwdSwitchName}`,
+        })).toEqual({
+          targets: [nestedCwdSwitchSecretLink],
+          unresolved: false,
+        });
+        expect(context.bashInputReadEvidence?.({
+          command: `2>/missing builtin cd ${nestedDir}; cat <${cwdSwitchName}`,
+        })).toEqual({
+          targets: [rootCwdSwitchOrdinaryLink, nestedCwdSwitchSecretLink],
+          unresolved: false,
+        });
+        const dynamicPrefixedEvidence = context.bashInputReadEvidence?.({
+          command: `>$(printf out) builtin cd ${nestedDir} && cat <ordinary-link.txt`,
+        });
+        expect(dynamicPrefixedEvidence?.unresolved).toBe(true);
+        expect(context.collectResolvedCredentialPaths?.(dynamicPrefixedEvidence?.targets)).toEqual([]);
+        expect(context.bashInputReadEvidence?.({
+          command: '>$(printf cd) cat <ordinary-link.txt',
+        })).toEqual({ targets: [ordinaryLink], unresolved: false });
+        const ordinaryPrefixedCommand = `2>/dev/null builtin -- cd ${nestedDir} && cat <${nestedOrdinaryReadName}`;
+        const ordinaryPrefixedEvidence = context.bashInputReadEvidence?.({ command: ordinaryPrefixedCommand });
+        expect(ordinaryPrefixedEvidence).toEqual({ targets: [nestedOrdinaryReadLink], unresolved: false });
+        expect(context.collectResolvedCredentialPaths?.(ordinaryPrefixedEvidence?.targets)).toEqual([]);
+        expect(context.bashInputReadEvidence?.({
+          command: `builtin $BUILTIN_OPTION cd ${nestedDir} && cat <ordinary-link.txt`,
+        })).toEqual({ targets: [ordinaryLink], unresolved: true });
+
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${nestedDir} >/dev/null && cat <${scopedLinkName}`,
+        })).toEqual({ targets: [nestedScopedOrdinaryLink], unresolved: false });
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({
+            command: `cd ${nestedDir} >/missing/output; cat <${scopedLinkName}`,
+          }),
+        )).toEqual([realpathSync(secretPath)]);
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${nestedDir} >$LOG && cat <ordinary-link.txt`,
+        })).toEqual({ targets: [ordinaryLink], unresolved: true });
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${nestedDir} {fd}>/dev/null && cat <ordinary-link.txt`,
+        })).toEqual({ targets: [ordinaryLink], unresolved: true });
+        expect(context.bashInputReadEvidence?.({
+          command: `cd ${nestedDir} <<EOF\nignored\nEOF\ncat <ordinary-link.txt`,
+        })).toEqual({ targets: [ordinaryLink], unresolved: true });
+        for (const groupedCommand of [
+          `(cd ${nestedDir} && cat <>nested-innocent.txt)`,
+          `{ cd ${nestedDir} && cat 3<>nested-innocent.txt; }`,
+          `if cd ${nestedDir}; then cat 7<>nested-innocent.txt; fi`,
+          'cd ~/nested && cat 8<>nested-innocent.txt',
+          'cd nest* && cat 9<>nested-innocent.txt',
+        ]) {
+          expect(context.collectResolvedCredentialPaths?.(
+            context.bashInputReadTargets?.({ command: groupedCommand }),
+          ), groupedCommand).toEqual([realpathSync(secretPath)]);
+        }
+        for (const scopedCommand of [
+          `(cd ${nestedDir} && true); cat <>${scopedLinkName}`,
+          `if false; then cd ${nestedDir}; fi; cat 3<>${scopedLinkName}`,
+          `false && cd ${nestedDir}; cat 4<>${scopedLinkName}`,
+          `true || cd ${nestedDir}; cat 5<>${scopedLinkName}`,
+          `cd ${path.join(tempRoot, 'missing')} && :; cat 6<>${scopedLinkName}`,
+          `case x in y) cd ${nestedDir};; esac; cat 7<>${scopedLinkName}`,
+        ]) {
+          expect(context.collectResolvedCredentialPaths?.(
+            context.bashInputReadTargets?.({ command: scopedCommand }),
+          ), scopedCommand).toEqual([realpathSync(secretPath)]);
+        }
+        const optionTerminatedCdCommand = 'cd -- -credential-dir && cat <innocent.txt';
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: optionTerminatedCdCommand }),
+        )).toEqual([realpathSync(secretPath)]);
+        const quotedNoiseCommand = `printf '%s' '; cd a; cd b; cd c; cd d; cd e; cd f'; cd ${nestedDir}; cat <nested-innocent.txt`;
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: quotedNoiseCommand }),
+        )).toEqual([realpathSync(secretPath)]);
+        const targetBeforeCdCommand = `cat <late-only-secret-link; cd ${nestedDir}`;
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: targetBeforeCdCommand }),
+        )).toEqual([]);
+        const multilineCommand = `true # cat <ignored\ncd ${nestedDir}\ncat <nested-innocent.txt`;
+        expect(context.collectResolvedCredentialPaths?.(
+          context.bashInputReadTargets?.({ command: multilineCommand }),
+        )).toEqual([realpathSync(secretPath)]);
+        const dynamicCommand = 'cat <$(printf .env)';
+        expect(context.parseShellInputRedirections?.(dynamicCommand)).toEqual({
+          command: dynamicCommand,
+          targets: [],
+          targetPrefixes: [],
+          targetMayExpand: [],
+          hasUnresolvedTarget: true,
+        });
+        expect(context.bashInputReadTargets?.({ command: dynamicCommand })).toEqual([]);
+        expect(context.bashInputReadEvidence?.({ command: dynamicCommand })).toEqual({
+          targets: [],
+          unresolved: true,
+        });
+        expect(context.bashInputReadEvidence?.({ command: 'cat <>~cindy-no-such-user/innocent.txt' }))
+          .toEqual({ targets: [], unresolved: true });
+        expect(context.parseShellInputRedirections?.('cat <>created')).toEqual({
+          command: 'cat <>created',
+          targets: ['created'],
+          targetPrefixes: ['cat '],
+          targetMayExpand: [false],
+          hasUnresolvedTarget: false,
+        });
+        expect(source).toContain("event.toolName === 'bash'\n      ? bashInputReadEvidence(event.input)");
+        expect(source).toContain('bashReadEvidence.unresolved || touchesCredentialPath(bashReadTargets)');
+        expect(source).toContain('resolvedCredentialPaths: credentialEvidenceForHost');
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('overrides find with the managed ripgrep backend instead of runtime fd download', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
