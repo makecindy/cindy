@@ -1054,6 +1054,12 @@ describe('cindy-bridge extension source', () => {
       '. ./package-mutation.sh',
       'command source ./package-mutation.sh',
       'builtin . ./package-mutation.sh',
+      "printf '%s\\0' '-u PI_CODING_AGENT_DIR pi install npm:context-mode' | xargs -0 env",
+      "printf '%s\\0' 'pi update npm:context-mode' | xargs -0 sh -c",
+      "printf '%s\\0' 'pi remove npm:context-mode' | parallel",
+      'find . -exec env -u PI_CODING_AGENT_DIR pi install npm:context-mode +',
+      '$(printf pi) install npm:context-mode',
+      'bash ./package-mutation.sh',
       'echo safe && pi install npm:context-mode',
     ];
     for (const command of commands) {
@@ -1087,6 +1093,10 @@ describe('cindy-bridge extension source', () => {
       "eval 'printf safe'",
       "eval -- 'printf safe'",
       "eval 'echo pi install npm:context-mode'",
+      "printf '%s\\0' safe | xargs -0 echo",
+      "printf '%s\\n' safe | parallel echo {}",
+      "find . -name '*.ts' -print",
+      'bash --version',
       'cat ./pi',
       'curl https://example.test/pi-install-notes',
       'sudo whoami',

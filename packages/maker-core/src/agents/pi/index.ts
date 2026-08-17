@@ -2659,9 +2659,12 @@ export class PiAgent extends BaseAgent {
     const routeManagedPackageCommand = async (
       text: string,
       imageCount: number,
+      hasAdditionalContent: boolean,
       mainOwnedContext?: MainOwnedSendContext,
     ): Promise<{ text: string; accepted: boolean }> => {
-      if (!allowPiPackageManagement || imageCount > 0) return { text, accepted: false };
+      if (!allowPiPackageManagement || imageCount > 0 || hasAdditionalContent) {
+        return { text, accepted: false };
+      }
       const authenticatedChannelCommand = mainOwnedContext?.origin.kind === 'im'
         || mainOwnedContext?.origin.kind === 'hook';
       const commandText = authenticatedChannelCommand
@@ -3229,6 +3232,7 @@ export class PiAgent extends BaseAgent {
           const managedPackageRoute = await routeManagedPackageCommand(
             text,
             images.length,
+            Array.isArray(message.content) && message.content.some((block) => block.type !== 'text'),
             sendOpts?.[MAIN_OWNED_SEND_CONTEXT],
           );
           text = managedPackageRoute.text;
@@ -3381,6 +3385,7 @@ export class PiAgent extends BaseAgent {
         const managedPackageRoute = await routeManagedPackageCommand(
           text,
           images.length,
+          Array.isArray(message.content) && message.content.some((block) => block.type !== 'text'),
           sendOpts?.[MAIN_OWNED_SEND_CONTEXT],
         );
         text = managedPackageRoute.text;

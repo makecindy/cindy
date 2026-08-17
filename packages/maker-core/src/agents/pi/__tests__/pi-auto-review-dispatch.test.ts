@@ -975,6 +975,43 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         authorization: 'authenticated-im-command',
       });
 
+      const callsBeforeAdditionalContent = mutatePiManagedPackage.mock.calls.length;
+      captured.requests = [];
+      await handle.send({
+        type: 'user',
+        content: [
+          { type: 'text', text: 'pi install npm:context-mode' },
+          { type: 'file', path: '/tmp/pi-extension-notes.txt' },
+        ],
+      }, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: imPolicy.origin,
+          rawChannelText: 'pi install npm:context-mode',
+        },
+        turnPermissionPolicy: imPolicy,
+      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeAdditionalContent);
+      expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+        .toContain('Attached file (read-only reference): `/tmp/pi-extension-notes.txt`');
+
+      captured.requests = [];
+      await handle.steer({
+        type: 'user',
+        content: [
+          { type: 'text', text: 'pi remove npm:context-mode' },
+          { type: 'mention', name: 'notes', path: '/tmp/pi-extension-notes', kind: 'dir' },
+        ],
+      }, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: imPolicy.origin,
+          rawChannelText: 'pi remove npm:context-mode',
+        },
+        turnPermissionPolicy: imPolicy,
+      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeAdditionalContent);
+      expect(captured.requests.find((request) => request.type === 'steer')?.message)
+        .toContain('`/tmp/pi-extension-notes`');
+
       await handle.send({
         type: 'user',
         content: 'pi install npm:forged-policy',

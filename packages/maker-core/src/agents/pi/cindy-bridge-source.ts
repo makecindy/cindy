@@ -127,6 +127,11 @@ function isolatedBashEnvironment(
 const PI_PACKAGE_MUTATION_SUBCOMMANDS = new Set(['install', 'update', 'remove']);
 const PI_SHELL_WRAPPERS = new Set(['sh', 'bash', 'dash', 'ksh', 'zsh']);
 const PI_PACKAGE_MUTATION_CURRENT_SHELL_EVALUATORS = new Set(['source', '.', 'eval']);
+const PI_XARGS_OPTIONS_WITH_VALUE = new Set([
+  '-a', '--arg-file', '-E', '--eof', '-I', '--replace', '-J',
+  '-L', '--max-lines', '-n', '--max-args', '-P', '--max-procs',
+  '-s', '--max-chars',
+]);
 
 function bashStaticAssignment(word: string): { name: string; value: string } | null {
   const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(word);
@@ -144,6 +149,65 @@ function bashResolveStaticWord(word: string, variables: Map<string, string>): st
 function bashCommandBasename(command: string): string {
   const normalized = command.replace(/\\/g, '/');
   return normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase();
+}
+
+function bashXargsCommand(
+  words: readonly string[],
+  start: number,
+): { command: string[]; replacement?: string } | null {
+  let cursor = start;
+  let replacement: string | undefined;
+  while (cursor < words.length) {
+    const word = words[cursor];
+    if (word === '--') {
+      cursor += 1;
+      break;
+    }
+    if (!word.startsWith('-') || word === '-') break;
+    if (/^-(?:I|J).+/.test(word)) {
+      replacement = word.slice(2);
+      cursor += 1;
+      continue;
+    }
+    if (word === '-I' || word === '--replace' || word === '-J') {
+      replacement = words[cursor + 1];
+    }
+    if (PI_XARGS_OPTIONS_WITH_VALUE.has(word)) {
+      if (cursor + 1 >= words.length) return null;
+      cursor += 2;
+      continue;
+    }
+    if (/^-(?:0|r|t|p|x)+$/.test(word) || /^(?:--null|--no-run-if-empty|--verbose|--interactive|--exit)$/.test(word)) {
+      cursor += 1;
+      continue;
+    }
+    return null;
+  }
+  return { command: words.slice(cursor), ...(replacement ? { replacement } : {}) };
+}
+
+function bashParallelCommand(words: readonly string[], start: number): string[] | null {
+  let cursor = start;
+  while (cursor < words.length) {
+    const word = words[cursor];
+    if (word === '--') {
+      cursor += 1;
+      break;
+    }
+    if (!word.startsWith('-') || word === '-') break;
+    if (/^(?:-j|--jobs|-S|--sshlogin|--block)$/.test(word)) {
+      if (cursor + 1 >= words.length) return null;
+      cursor += 2;
+      continue;
+    }
+    if (/^(?:-j|--jobs=|--block=).+/.test(word) || /^(?:--pipe|--line-buffer|--keep-order)$/.test(word)) {
+      cursor += 1;
+      continue;
+    }
+    return null;
+  }
+  const boundary = words.slice(cursor).findIndex((word) => word === ':::' || word === '::::');
+  return boundary < 0 ? words.slice(cursor) : words.slice(cursor, cursor + boundary);
 }
 
 function bashStaticCommandSegments(command: string): string[][] {
@@ -194,6 +258,7 @@ function bashStaticCommandSegments(command: string): string[][] {
 function bashStaticCommandMutatesPiPackages(
   words: readonly string[],
   variables: Map<string, string>,
+  failClosedWithoutExecutable = false,
 ): boolean {
   let cursor = 0;
   while (cursor < words.length) {
@@ -204,9 +269,9 @@ function bashStaticCommandMutatesPiPackages(
   for (let unwraps = 0; cursor < words.length && unwraps < 16; unwraps += 1) {
     const resolved = bashResolveStaticWord(words[cursor], variables);
     if (!resolved) {
-      return PI_PACKAGE_MUTATION_SUBCOMMANDS.has(
-        bashResolveStaticWord(words[cursor + 1] ?? '', variables) ?? '',
-      );
+      // A dynamic command name (including command substitution) can resolve to
+      // the Pi CLI. It is not statically provable safe at this boundary.
+      return true;
     }
     const command = bashCommandBasename(resolved);
     cursor += 1;
@@ -285,7 +350,11 @@ function bashStaticCommandMutatesPiPackages(
           return bashCommandMutatesPiPackages({ command: words[index + 1] });
         }
       }
-      return false;
+      if (words.slice(cursor).some((word) => /^-[A-Za-z]*c[A-Za-z]*$/.test(word))) return true;
+      // A script path or stdin-fed shell is executable source that cannot be
+      // inspected here. Version/help probes remain available.
+      return words.slice(cursor).some((word) =>
+        word === '-' || word === '-s' || (!word.startsWith('-') && word !== '--version' && word !== '--help'));
     }
     if (PI_PACKAGE_MUTATION_CURRENT_SHELL_EVALUATORS.has(command)) {
       // eval's arguments are executable shell source. Static arguments can be
@@ -302,11 +371,34 @@ function bashStaticCommandMutatesPiPackages(
       if (nestedWords.length === 0) return false;
       return bashCommandMutatesPiPackages({ command: nestedWords.join(' ') });
     }
+    if (command === 'xargs') {
+      const parsed = bashXargsCommand(words, cursor);
+      if (!parsed) return true;
+      if (parsed.command.length === 0) return false; // xargs defaults to echo.
+      if (parsed.replacement && parsed.command[0]?.includes(parsed.replacement)) return true;
+      return bashStaticCommandMutatesPiPackages(parsed.command, variables, true);
+    }
+    if (command === 'parallel') {
+      const nested = bashParallelCommand(words, cursor);
+      if (!nested || nested.length === 0) return true; // stdin supplies commands.
+      if (/\{(?:[.#%/]|\d[^}]*)?\}/.test(nested[0] ?? '')) return true;
+      return bashStaticCommandMutatesPiPackages(nested, variables, true);
+    }
+    if (command === 'find') {
+      const execIndex = words.findIndex((word, index) =>
+        index >= cursor && (word === '-exec' || word === '-execdir'));
+      if (execIndex >= 0) {
+        const nested = words.slice(execIndex + 1).filter((word) => word !== '+' && word !== ';');
+        if (nested.length === 0) return true;
+        return bashStaticCommandMutatesPiPackages(nested, variables, true);
+      }
+      return false;
+    }
     if (command !== 'pi' && command !== 'pi.exe') return false;
     const subcommand = bashResolveStaticWord(words[cursor] ?? '', variables);
     return subcommand !== null && PI_PACKAGE_MUTATION_SUBCOMMANDS.has(subcommand);
   }
-  return false;
+  return failClosedWithoutExecutable;
 }
 
 function bashCommandMutatesPiPackages(input: unknown): boolean {
