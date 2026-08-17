@@ -171,11 +171,13 @@ class DeferredTurnStartSubmissionTransport implements Transport {
   private readonly lineHandlers = new Set<LineHandler>();
   private readonly closeHandlers = new Set<CloseHandler>();
   private releaseTurnStartWrite: (() => void) | null = null;
+  private turnStartRequestId: unknown = null;
   readonly turnStartWriteBegan = vi.fn();
 
   async writeLine(line: string): Promise<void> {
     const message = JSON.parse(line) as { id?: unknown; method?: string };
     if (message.method === 'turn/start') {
+      this.turnStartRequestId = message.id;
       this.turnStartWriteBegan();
       await new Promise<void>((resolve) => {
         this.releaseTurnStartWrite = resolve;
@@ -196,6 +198,14 @@ class DeferredTurnStartSubmissionTransport implements Transport {
   settleTurnStartWrite(): void {
     this.releaseTurnStartWrite?.();
     this.releaseTurnStartWrite = null;
+  }
+
+  rejectTurnStart(code: number, message: string): void {
+    if (this.turnStartRequestId == null) throw new Error('turn/start request not found');
+    this.emit({
+      id: this.turnStartRequestId,
+      error: { code, message },
+    });
   }
 
   onLine(handler: LineHandler): () => void {
@@ -384,6 +394,33 @@ describe('AppServerHost.request startup timeout', () => {
 
     transport.settleTurnStartWrite();
     await vi.waitFor(() => expect(release).toHaveBeenCalledWith('submitted'));
+    await host.shutdown();
+  });
+
+  it('terminally settles a correlated turn/start rejection after submission', async () => {
+    const transport = new DeferredTurnStartSubmissionTransport();
+    const release = vi.fn();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      acquireSubmissionLease: async () => release,
+    });
+    await vi.waitFor(() => expect(transport.turnStartWriteBegan).toHaveBeenCalledOnce());
+    transport.rejectTurnStart(-32602, 'invalid model');
+
+    await expect(request).rejects.toMatchObject({
+      name: 'AppServerRpcError',
+      code: -32602,
+    });
+    expect(release.mock.calls).toEqual([
+      ['submitted'],
+      ['confirmed-undispatched'],
+    ]);
+    transport.settleTurnStartWrite();
     await host.shutdown();
   });
 

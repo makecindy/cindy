@@ -3268,6 +3268,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         (async (): Promise<void> => {
           for await (const msg of inputQueue) {
             let providerAccepted = false;
+            // Before local submission, any failure is definitively pre-vendor.
+            // After submission, only a correlated manager response may prove
+            // rejection; timeout/close must preserve the submitted row.
+            let confirmedUndispatched = true;
             try {
               const remoteTransport = remoteQuery as unknown as {
                 send: (m: unknown) => Promise<void>;
@@ -3275,6 +3279,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                   submitted: Promise<void>;
                   response: Promise<void>;
                 };
+                isAuthoritativeResponseError?: (error: unknown) => boolean;
               };
               const pending = remoteTransport.sendWithSubmission?.(msg);
               if (pending) {
@@ -3283,8 +3288,15 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // local transport submission and keep response handling intact.
                 void pending.response.catch(() => undefined);
                 await pending.submitted;
+                confirmedUndispatched = false;
                 await releaseVendorDispatchLeaseForInput(msg, 'submitted');
-                await pending.response;
+                try {
+                  await pending.response;
+                } catch (error) {
+                  confirmedUndispatched =
+                    remoteTransport.isAuthoritativeResponseError?.(error) === true;
+                  throw error;
+                }
               } else {
                 // Compatibility fallback for injected legacy test/host queries.
                 await remoteTransport.send(msg);
@@ -3311,7 +3323,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               break;
             } finally {
-              if (!providerAccepted) {
+              if (!providerAccepted && confirmedUndispatched) {
                 await releaseVendorDispatchLeaseForInput(msg, 'confirmed-undispatched');
               }
             }

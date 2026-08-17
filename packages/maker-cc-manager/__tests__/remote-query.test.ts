@@ -15,7 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { RpcClient } from '../src/client.js';
+import { RpcClient, RpcClientError } from '../src/client.js';
 import { ManagerServer } from '../src/server.js';
 import { SessionRegistry, type SdkQueryFactory, type SdkQueryLike } from '../src/session-registry.js';
 import { wireSdkHandlers } from '../src/sdk-handlers.js';
@@ -124,6 +124,20 @@ afterEach(async () => {
 });
 
 describe('RemoteQuery', () => {
+  it('classifies only correlated RPC errors as authoritative rejections', async () => {
+    const remote = await createRemoteQuery({
+      client: ctx!.client,
+      sessionId: 's-error-classification',
+      startParams: { cwd: '/w', model: 'm', env: {} },
+    });
+
+    expect(remote.isAuthoritativeResponseError(
+      new RpcClientError({ code: 'SESSION_NOT_FOUND', message: 'missing' }),
+    )).toBe(true);
+    expect(remote.isAuthoritativeResponseError(new Error('transport closed'))).toBe(false);
+    await remote.close();
+  });
+
   it('iterates init message after createRemoteQuery with startParams', async () => {
     const remote = await createRemoteQuery({
       client: ctx!.client,

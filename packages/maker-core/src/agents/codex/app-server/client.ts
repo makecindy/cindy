@@ -51,6 +51,22 @@ export class AppServerRequestTimeoutError extends Error {
   }
 }
 
+/** A correlated JSON-RPC error response from app-server. */
+export class AppServerRpcError extends Error {
+  readonly code: number;
+  readonly data?: unknown;
+
+  constructor(
+    public readonly method: string,
+    public readonly rpcError: JsonRpcErrorObject,
+  ) {
+    super(`codex app-server ${method} error ${rpcError.code}: ${rpcError.message}`);
+    this.name = 'AppServerRpcError';
+    this.code = rpcError.code;
+    this.data = rpcError.data;
+  }
+}
+
 /**
  * Keep a small bounded correlation window for writes that rejected after the
  * transport may already have handed bytes to the OS / websocket buffer.
@@ -517,10 +533,7 @@ export class AppServerClient {
     if (pending.timeoutId) clearTimeout(pending.timeoutId);
     if (error) {
       this.notifyAuthInvalidated(error, pending.method);
-      const err = new Error(`codex app-server ${pending.method} error ${error.code}: ${error.message}`);
-      // 把 code/data 挂上, 上层想区分 OVERLOADED 等可以判 (err as any).code。
-      Object.assign(err, { code: error.code, data: error.data });
-      pending.reject(err);
+      pending.reject(new AppServerRpcError(pending.method, error));
       return;
     }
     pending.resolve(result);

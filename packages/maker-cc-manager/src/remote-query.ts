@@ -28,6 +28,7 @@ import type {
   SessionAttachResult,
   SessionClosedNotification,
 } from './protocol.js';
+import { RpcClientError } from './client.js';
 import type { RpcClient, RpcPendingRequest } from './client.js';
 
 export interface RemoteQueryOptions {
@@ -69,6 +70,8 @@ export interface RemoteQuery extends AsyncIterable<unknown> {
   send(message: unknown): Promise<void>;
   /** Split local transport submission from the later query/send RPC response. */
   sendWithSubmission(message: unknown): RpcPendingRequest<void>;
+  /** True only for a correlated manager RPC error response, never timeout/close. */
+  isAuthoritativeResponseError(error: unknown): boolean;
   /** Forward to query/setModel. */
   setModel(model?: string): Promise<void>;
   /** Forward to query/setPermissionMode. */
@@ -280,6 +283,7 @@ export async function createRemoteQuery(opts: CreateRemoteQueryOptions): Promise
     sessionId: opts.sessionId,
     send,
     sendWithSubmission,
+    isAuthoritativeResponseError: (error: unknown) => error instanceof RpcClientError,
     setModel,
     setPermissionMode,
     applyFlagSettings,

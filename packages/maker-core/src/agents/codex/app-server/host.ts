@@ -30,7 +30,11 @@ import type {
   VendorDispatchLeaseOutcome,
   VendorDispatchLeaseRelease,
 } from '../../base-agent.js';
-import { AppServerClient, type SubmittedAppServerRequest } from './client.js';
+import {
+  AppServerClient,
+  AppServerRpcError,
+  type SubmittedAppServerRequest,
+} from './client.js';
 import type { Transport } from './transport.js';
 import {
   Method,
@@ -782,15 +786,15 @@ export class AppServerHost {
       throw error;
     }
 
-    // A successful response is stronger evidence than the local write callback,
-    // but a response rejection (notably the request timeout) proves nothing about
-    // a still-pending backpressured write. Keep the lease until that write settles
-    // so another DB owner cannot commit end_team before the late prompt lands.
+    // A successful response or correlated RPC rejection is stronger evidence
+    // than the local write callback. Ambiguous rejection (notably timeout/close)
+    // proves nothing about a still-pending backpressured write, so keep the lease
+    // until that write settles before allowing another DB owner to commit end_team.
     const submissionBoundary = Promise.race([
       pending.submitted,
       pending.response.then(
         () => undefined,
-        () => pending.submitted,
+        (error) => error instanceof AppServerRpcError ? undefined : pending.submitted,
       ),
     ]);
     const releaseAfterSubmission = (async () => {
@@ -811,7 +815,18 @@ export class AppServerHost {
       });
     });
 
-    const result = await pending.response;
+    let result: R;
+    try {
+      result = await pending.response;
+    } catch (error) {
+      if (error instanceof AppServerRpcError) {
+        // A correlated JSON-RPC error proves app-server rejected the turn.
+        // Serialize the terminal settlement after the local submitted marker.
+        await releaseAfterSubmission.catch(() => undefined);
+        await release?.('confirmed-undispatched');
+      }
+      throw error;
+    }
     // On success the response itself resolves submissionBoundary; still await
     // release so request() does not return before an async releaser settles.
     // Timeout/server failure returns from the await promptly while the background
