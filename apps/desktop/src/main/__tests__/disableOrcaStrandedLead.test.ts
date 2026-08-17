@@ -10,6 +10,10 @@ import { describe, expect, it } from 'vitest';
 // orcaStrandedLeadReconcile.test.ts; here we lock down that disableOrcaInternal's
 // "no active team" branch is no longer an unconditional no-op.
 const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'register.ts'), 'utf8');
+const orcaQueueItemSource = readFileSync(
+  resolve(__dirname, '..', 'maker-ipc', 'orcaQueueItem.ts'),
+  'utf8',
+);
 
 describe('disableOrcaInternal stranded-lead recovery', () => {
   it('extracts a shared clearLeadOrcaRoleState helper', () => {
@@ -100,10 +104,10 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
   });
 
   it('uses the legacy workflow id fallback for both end-team invalidation and snapshot restore', () => {
-    expect(registerSource).toContain(
+    expect(orcaQueueItemSource).toContain(
       'function resolveOrcaQueueItemTeamId(item: AgentInputQueuedMessage)',
     );
-    expect(registerSource).toContain(
+    expect(orcaQueueItemSource).toContain(
       'const legacyTeamId = item.createOpts.vendorOptions?.orcaWorkflowId;',
     );
     expect(registerSource).toContain(
@@ -121,7 +125,7 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     );
     const lockStart = registerSource.indexOf('function withOrcaLeadLifecycleLock<T>(');
     const lockEnd = registerSource.indexOf(
-      'function resolveOrcaQueueItemTeamId',
+      'function assertOrcaQueueOriginActive',
       lockStart,
     );
     const lockSource = registerSource.slice(lockStart, lockEnd);
