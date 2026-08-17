@@ -375,11 +375,19 @@ function normalizeXaiInputItem(item: unknown): {
         }
         if (partType === "input_image") {
           const nextPart: Record<string, unknown> = { type: "input_image" };
-          if (
-            typeof part.image_url === "string" ||
-            isPlainObject(part.image_url)
-          ) {
+          if (typeof part.image_url === "string") {
             nextPart.image_url = part.image_url;
+          } else if (isPlainObject(part.image_url)) {
+            if (typeof part.image_url.url === "string") {
+              nextPart.image_url = part.image_url.url;
+            }
+            if (
+              !("detail" in part) &&
+              typeof part.image_url.detail === "string"
+            ) {
+              nextPart.detail = part.image_url.detail;
+            }
+            changed = true;
           }
           if ("detail" in part) nextPart.detail = part.detail;
           if (typeof part.file_id === "string") nextPart.file_id = part.file_id;
@@ -553,5 +561,6 @@ export function createXaiModelInputRecoveryRule(
       }),
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
+    applyOnUnmatchedRetry: false,
   };
 }

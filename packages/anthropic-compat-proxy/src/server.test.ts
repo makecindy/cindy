@@ -522,6 +522,41 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
     ]);
   });
 
+  it('does not rewrite OpenAI collab history when another recovery rule retries', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, attempt: idx }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [
+        createEncryptedContentRecoveryRule({ enabled: () => true }),
+        createXaiModelInputRecoveryRule(),
+      ],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'reasoning', encrypted_content: 'gAAAsecret' },
+        { type: 'agent_message', author: 'bot', content: 'keep me' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'agent_message', author: 'bot', content: 'keep me' },
+    ]);
+  });
+
   it('keeps proactive stripping active when a provider transform rewrites the model id', async () => {
     const upstream = await startFakeUpstream((_idx, body, res) => {
       if (body.includes('encrypted_content')) {

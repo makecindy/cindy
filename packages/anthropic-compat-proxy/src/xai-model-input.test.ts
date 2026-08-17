@@ -177,6 +177,40 @@ describe("sanitizeXaiModelInputBody", () => {
     ]);
   });
 
+  it("flattens Chat-compat {image_url:{url,detail}} into Responses string + detail", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "x-ai/grok-4.6",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: {
+                url: "https://example.com/a.png",
+                detail: "high",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            image_url: "https://example.com/a.png",
+            detail: "high",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("drops empty reasoning shells and image generation items", () => {
     const out = sanitizeXaiModelInputBody({
       model: "grok-4.5",
