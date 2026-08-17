@@ -99,6 +99,20 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
   });
 
+  it('allows one line ending between a local image destination and title', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text: `![preview](<${sourcePath}>\n"caption")`, workingDir, sessionId: 'line-title' },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
+  });
+
   it('does not materialize a plain image destination with unescaped whitespace', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'secret image.png');

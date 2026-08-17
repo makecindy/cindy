@@ -453,6 +453,13 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
   });
 
+  it('starts indented code after an ATX heading inside a list item', () => {
+    const text = '- # 标题\n      [示例](xdt-file:///tmp/list-heading-code.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
   it('does not let an indented line interrupt an open paragraph', () => {
     const text = '正文\n    [报告](xdt-file:///tmp/paragraph-continuation.pdf)';
 

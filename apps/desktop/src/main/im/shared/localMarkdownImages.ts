@@ -123,9 +123,18 @@ function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
     let depth = 1;
     let insideAngleDestination = text[targetStart] === '<';
     let titleQuote: '"' | "'" | null = null;
+    let titleLineBreak = false;
     while (targetEnd < targetLimit) {
       const char = text[targetEnd];
-      if (char === '\r' || char === '\n') break;
+      if (char === '\r' || char === '\n') {
+        if (titleLineBreak || insideAngleDestination || depth !== 1) break;
+        let next = char === '\r' && text[targetEnd + 1] === '\n' ? targetEnd + 2 : targetEnd + 1;
+        while (text[next] === ' ' || text[next] === '\t') next += 1;
+        if (text[next] !== '"' && text[next] !== "'" && text[next] !== '(') break;
+        titleLineBreak = true;
+        targetEnd = next;
+        continue;
+      }
       if (char === '\\' && isMarkdownEscapablePunctuation(text[targetEnd + 1])) {
         targetEnd += 2;
         continue;
@@ -143,7 +152,7 @@ function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
       if (
         depth === 1 &&
         (char === '"' || char === "'") &&
-        (text[targetEnd - 1] === ' ' || text[targetEnd - 1] === '\t')
+        (titleLineBreak || text[targetEnd - 1] === ' ' || text[targetEnd - 1] === '\t')
       ) {
         titleQuote = char;
         targetEnd += 1;
@@ -358,7 +367,7 @@ function markdownImageDestination(raw: string): string {
     if (
       tail &&
       !/^[ \t]+$/.test(tail) &&
-      !/^[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/.test(
+      !/^(?:[ \t]+|[ \t]*\r?\n[ \t]*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/.test(
         tail,
       )
     ) {
@@ -370,7 +379,7 @@ function markdownImageDestination(raw: string): string {
     // `![alt](/work/out.png "preview")`. Unescaped whitespace is not part of
     // a plain Markdown destination, so only strip a syntactically complete title.
     const titled = target.match(
-      /^(\S+)[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/,
+      /^(\S+)(?:[ \t]+|[ \t]*\r?\n[ \t]*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/,
     );
     if (titled) target = titled[1];
     else if (hasUnescapedMarkdownWhitespace(target)) return '';

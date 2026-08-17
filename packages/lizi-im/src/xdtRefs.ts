@@ -63,7 +63,11 @@ function contentLeavesParagraphOpen(content: string): boolean {
   return true;
 }
 
-function listItemContentIndent(text: string, start: number, end: number): number | null {
+function listItemContentIndent(
+  text: string,
+  start: number,
+  end: number,
+): { indent: number; contentStart: number } | null {
   const line = text.slice(start, end);
   const match = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/);
   if (!match) return null;
@@ -71,7 +75,7 @@ function listItemContentIndent(text: string, start: number, end: number): number
   for (const char of match[2]) {
     columns += char === '\t' ? 4 - (columns % 4) : 1;
   }
-  return columns;
+  return { indent: columns, contentStart: start + match[0].length };
 }
 
 function indentedCodeStartLines(text: string): Set<number> {
@@ -95,16 +99,17 @@ function indentedCodeStartLines(text: string): Set<number> {
     const startsIndentedCode = indent >= 4 && !paragraphOpen && !containedByList;
     if (startsIndentedCode) starts.add(lineStart);
 
+    const relativeListIndent = blank
+      ? null
+      : listItemContentIndent(text, prefix.cursor, lineEnd);
     if (!blank) {
-      const relativeListIndent = listItemContentIndent(text, prefix.cursor, lineEnd);
-      if (relativeListIndent !== null) activeListIndent = indent + relativeListIndent;
+      if (relativeListIndent !== null) activeListIndent = indent + relativeListIndent.indent;
       else if (indent === 0) activeListIndent = null;
     }
     if (blank || startsIndentedCode) paragraphOpen = false;
     else if (indent < 4 || containedByList) {
-      paragraphOpen = contentLeavesParagraphOpen(
-        text.slice(prefix.cursor, lineEnd).trim(),
-      );
+      const contentStart = relativeListIndent?.contentStart ?? prefix.cursor;
+      paragraphOpen = contentLeavesParagraphOpen(text.slice(contentStart, lineEnd).trim());
     }
     lineStart = lineEnd;
   }
