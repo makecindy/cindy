@@ -35,8 +35,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.customized': '已自定义',
         'newChat.modelSelector.unified.reset': '恢复推荐',
         'newChat.modelSelector.unified.railAll': '全部',
-        'newChat.modelSelector.unified.layoutBadge': '试用新样式',
-        'newChat.modelSelector.unified.layoutClassic': '回到旧样式',
+        'newChat.modelSelector.unified.layoutBadge': '尝试样式B',
+        'newChat.modelSelector.unified.layoutClassic': '切回样式A',
         'newChat.modelSelector.unified.railSameEngine': `仅 ${options?.agent ?? ''}`,
         'newChat.modelSelector.unified.crossEngineWarning': '切换引擎会重建上下文，可能丢失内容',
         'newChat.modelSelector.category.anthropic': 'Anthropic',
@@ -1039,11 +1039,11 @@ describe('列表样式试用开关(badge · v7 引擎徽标行)', () => {
   it('面板级:footer 按钮切换样式,行进入 badge 布局并带来源字签', async () => {
     renderPanel();
     await act(async () => {
-      fireEvent.click(screen.getByText('试用新样式'));
+      fireEvent.click(screen.getByText('尝试样式B'));
     });
     const { getModelPickerLayout } = await import('@/state/modelPickerLayout');
     expect(getModelPickerLayout()).toBe('badge');
-    expect(screen.getByText('回到旧样式')).toBeTruthy();
+    expect(screen.getByText('切回样式A')).toBeTruthy();
     const row = rowFor('GPT-5.5');
     expect(row.querySelector('[data-engine-badge]')).not.toBeNull();
     expect(row.querySelector('[data-channel-tag]')?.textContent).toBe('Cindy AI');

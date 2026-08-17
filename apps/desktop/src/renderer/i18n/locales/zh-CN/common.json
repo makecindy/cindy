@@ -5641,7 +5641,7 @@
         "favoritesGroup": "收藏",
         "favoritesEmpty": "还没有收藏——把鼠标停到模型行上，点 ☆ 存到这里",
         "layoutBadge": "尝试样式B",
-        "layoutClassic": "回到样式A",
+        "layoutClassic": "切回样式A",
         "layoutTryUnified": "尝试新选择器",
         "layoutOriginal": "切回老版",
         "addFavorite": "存为收藏",
