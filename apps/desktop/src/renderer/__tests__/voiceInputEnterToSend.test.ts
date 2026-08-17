@@ -190,6 +190,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     );
     expect(chatInputSource).toContain('persistKey === editorStorageKey');
     expect(chatInputSource).toContain("frozenVoiceSend.kind !== 'send'");
+    expect(chatInputSource).toContain(
+      'frozenVoiceSend = frozenVoiceSendRef.current;',
+    );
     expect(chatInputSource).toContain('dispatchSendInFlightKeysRef');
     expect(chatInputSource).toContain('lockCurrentComposer');
     expect(chatInputSource).toContain('lockComposerForEffort');

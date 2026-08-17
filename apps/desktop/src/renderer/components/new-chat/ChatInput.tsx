@@ -2882,7 +2882,6 @@ export function ChatInput({
   );
 
   const voiceInputBusyRef = useRef(false);
-  const voiceDraftTextRef = useRef('');
   const voiceInputStopAndSendPromiseRef = useRef<Promise<void> | null>(null);
 
   // Declared before useVoiceInput so React 19 runs this cleanup first
@@ -4838,6 +4837,8 @@ export function ChatInput({
               }
             }
           }
+          // Switch during hydration may have just frozen the source send.
+          frozenVoiceSend = frozenVoiceSendRef.current;
           if (!serializedContent) {
             if (
               !frozenVoiceSend ||
