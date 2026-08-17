@@ -1,11 +1,14 @@
+import type { BotAvatarHue } from './BotAvatar';
 import type { BotCapabilities } from './botStore';
 
 export type BotTemplateId = 'control' | 'pr-steward' | 'assistant';
+/** Template cards shown in the create dialog: the real templates + a blank one. */
+export type BotTemplateChoiceId = BotTemplateId | 'custom';
 
 export interface BotTemplateDefinition {
   id: BotTemplateId;
   avatar: string;
-  avatarColor: 'violet' | 'blue' | 'amber' | 'graphite';
+  avatarColor: BotAvatarHue;
   nameKey: string;
   descriptionKey: string;
   identitySource: string;
@@ -61,7 +64,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
   },
   {
     id: 'assistant',
-    avatar: '✦',
+    avatar: '✨',
     avatarColor: 'amber',
     nameKey: 'bots.createWizard.templates.assistant.defaultName',
     descriptionKey: 'bots.createWizard.templates.assistant.defaultDescription',
@@ -82,3 +85,20 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
 export function getBotTemplate(id: BotTemplateId): BotTemplateDefinition {
   return BOT_TEMPLATES.find((template) => template.id === id) ?? BOT_TEMPLATES[0];
 }
+
+/**
+ * The blank choice in the create dialog. It is deliberately NOT part of
+ * `BOT_TEMPLATES`: it carries no identity, no capability opinion and no event
+ * subscription, so it must never be reachable through `getBotTemplate`.
+ */
+export const CUSTOM_BOT_TEMPLATE_ID = 'custom' as const;
+
+export function isBotTemplateId(id: BotTemplateChoiceId): id is BotTemplateId {
+  return id !== CUSTOM_BOT_TEMPLATE_ID;
+}
+
+/** Card order in the create dialog: recommended first, blank last. */
+export const BOT_TEMPLATE_CHOICE_IDS: readonly BotTemplateChoiceId[] = [
+  ...BOT_TEMPLATES.map((template) => template.id),
+  CUSTOM_BOT_TEMPLATE_ID,
+];

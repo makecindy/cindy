@@ -5428,26 +5428,16 @@
     "addDescription": "先创建一个本地 Bot，再按需挂载 IM 消息通道。",
     "createWizard": {
       "chooseTemplateDescription": "选择一个起点。Bot 会先创建为本地长期助手，消息通道稍后挂载。",
-      "identityDescription": "确认长期身份与推荐能力，创建后立即进入真实主任务。",
-      "recommended": "推荐",
-      "continue": "继续设置",
-      "back": "返回模板",
+      "submit": "创建并开始对话",
+      "channelsHint": "Telegram 等消息通道可以创建后在 Bot 设置里挂载。",
+      "identityOptionalLabel": "自定义身份（可选）",
+      "identityOptionalHint": "模板已自带身份设定，不改也能用。",
+      "identityRequiredLabel": "身份与职责",
+      "identityRequiredHint": "空白 Bot 没有模板文案，请写清它是谁、长期负责什么。",
       "creating": "正在创建…",
       "createFailed": "无法创建 Bot，请重试。",
-      "avatarLabel": "头像",
       "roleLabel": "长期身份与职责",
       "roleHint": "这里只定义 Bot 是谁、长期负责什么。你的资料、Skills、MCP、工具、权限、自动化和消息通道仍分别管理。",
-      "recommendedConfiguration": "推荐配置",
-      "localProfile": "Bot 形态",
-      "localProfileValue": "本地 Bot",
-      "currentHarness": "Claude · 使用当前默认模型",
-      "enabled": "启用",
-      "notEnabled": "不默认启用",
-      "taskEvents": "任务事件",
-      "automatic": "自动订阅并唤醒",
-      "channelsLater": "Telegram、飞书和 Slack 等是可挂载的消息通道，不会决定 Bot 的身份。",
-      "profileSeparationTitle": "每个 Bot 都是独立 Profile",
-      "profileSeparationDescription": "身份、用户背景、记忆、Skills、MCP、自动化、任务和消息通道分别保存，互不串用。",
       "templates": {
         "control": {
           "title": "总控",
@@ -5466,6 +5456,10 @@
           "summary": "拥有长期身份与独立记忆，不默认观察或控制其它任务。",
           "defaultName": "我的助理",
           "defaultDescription": "一个可长期使用、按需挂载能力和消息通道的个人助理。"
+        },
+        "custom": {
+          "title": "自定义",
+          "summary": "从空白身份开始，自己写设定。"
         }
       }
     },
@@ -5491,8 +5485,16 @@
     "skillCatalogError": "Skills 读取失败，已保存的选择会继续保留。",
     "skillCatalogEmpty": "当前 Harness 和项目中没有可用的 Skill。",
     "skillConfiguredUnavailable": "当前不可用 · 点按移除",
-    "create": "创建 Bot",
     "close": "关闭",
+    "avatarPicker": {
+      "open": "更换头像",
+      "emojiLabel": "表情",
+      "hueLabel": "颜色",
+      "hint": "选一个表情和底色，列表里更容易认出这个 Bot。"
+    },
+    "list": {
+      "startChat": "开始对话"
+    },
     "cancel": "取消",
     "save": "保存",
     "retry": "重试",
@@ -5502,6 +5504,16 @@
     "sessionUnavailableTitle": "这个 Bot 任务已不可用",
     "sessionUnavailableDescription": "它可能已经 Renew、归档，或不再属于这个 Bot。请返回 Bot 总览打开当前任务。",
     "settings": "Bot 设置",
+    "settingsNav": {
+      "title": "设置分组",
+      "identity": "基本信息",
+      "channels": "通道",
+      "capabilities": "能力",
+      "automation": "自动化",
+      "notifications": "通知",
+      "projects": "项目",
+      "advanced": "高级"
+    },
     "emptyTitle": "还没有 Bot",
     "emptyDescription": "Bot 比普通任务多一层长期身份、事件收件箱、自动化和消息通道。",
     "emptyBenefits": {

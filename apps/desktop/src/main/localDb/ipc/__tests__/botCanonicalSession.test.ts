@@ -4451,3 +4451,180 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 });
+
+describe('Bots list conversation projection', () => {
+  /** messages.content is a serialized structure, exactly like production rows. */
+  function insertMessage(
+    sessionId: string,
+    row: {
+      id: string;
+      role: 'user' | 'assistant' | 'tool_use';
+      content: unknown;
+      createdAt: number;
+      rewindAt?: number;
+      agentMeta?: unknown;
+    },
+  ): void {
+    h.sqlite!
+      .prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.id,
+        sessionId,
+        row.role,
+        JSON.stringify(row.content),
+        row.agentMeta === undefined ? null : JSON.stringify(row.agentMeta),
+        row.createdAt,
+        row.rewindAt ?? null,
+      );
+  }
+
+  async function canonicalFor(botId: string): Promise<string> {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId,
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    return created.canonicalSessionId as string;
+  }
+
+  it('projects the latest visible canonical message as preview + timestamp', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'user',
+      content: { text: 'Check the release branch' },
+      createdAt: 1_000,
+    });
+    insertMessage(sessionId, {
+      id: 'm2',
+      role: 'assistant',
+      content: 'Two checks are still red.',
+      createdAt: 2_000,
+    });
+
+    const [projection] = await invoke('local-db:bots:list', undefined);
+    expect(projection).toMatchObject({
+      id: 'bot-1',
+      lastMessagePreview: 'Two checks are still red.',
+      lastMessageAt: 2_000,
+    });
+    const single = await invoke('local-db:bots:get', 'bot-1');
+    expect(single.lastMessagePreview).toBe('Two checks are still red.');
+  });
+
+  it('reports no conversation for a Bot whose canonical task is still empty', async () => {
+    await canonicalFor('bot-1');
+    const single = await invoke('local-db:bots:get', 'bot-1');
+    expect(single.lastMessagePreview).toBeNull();
+    expect(single.lastMessageAt).toBeNull();
+  });
+
+  it('skips rewind-truncated, tool, hidden auto-resume and unextractable rows', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'user',
+      content: { text: 'The only real message' },
+      createdAt: 1_000,
+    });
+    insertMessage(sessionId, {
+      id: 'm2',
+      role: 'assistant',
+      content: 'Rolled back by rewind',
+      createdAt: 2_000,
+      rewindAt: 2_500,
+    });
+    insertMessage(sessionId, {
+      id: 'm3',
+      role: 'tool_use',
+      content: { name: 'Bash', input: {} },
+      createdAt: 3_000,
+    });
+    insertMessage(sessionId, {
+      id: 'm4',
+      role: 'user',
+      content: { text: 'continue' },
+      createdAt: 4_000,
+      agentMeta: { autoResume: true },
+    });
+    // Attachment-only send: no text to extract, must not shadow the real row.
+    insertMessage(sessionId, {
+      id: 'm5',
+      role: 'user',
+      content: { attachments: ['a.png'] },
+      createdAt: 5_000,
+    });
+
+    const single = await invoke('local-db:bots:get', 'bot-1');
+    expect(single.lastMessagePreview).toBe('The only real message');
+    expect(single.lastMessageAt).toBe(1_000);
+  });
+
+  it('never leaks one Bot conversation into another Bot row', async () => {
+    await invoke('local-db:bots:create', { id: 'bot-2', name: 'Research Bot' });
+    const first = await canonicalFor('bot-1');
+    const second = await canonicalFor('bot-2');
+    insertMessage(first, {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Belongs to bot-1',
+      createdAt: 1_000,
+    });
+    insertMessage(second, {
+      id: 'm2',
+      role: 'assistant',
+      content: 'Belongs to bot-2',
+      createdAt: 2_000,
+    });
+
+    const rows = (await invoke('local-db:bots:list', undefined)) as Array<{
+      id: string;
+      lastMessagePreview: string | null;
+    }>;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    expect(byId.get('bot-1')?.lastMessagePreview).toBe('Belongs to bot-1');
+    expect(byId.get('bot-2')?.lastMessagePreview).toBe('Belongs to bot-2');
+  });
+
+  it('honours the /clear boundary of the canonical task', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Before clear',
+      createdAt: 1_000,
+    });
+    h.sqlite!.prepare('UPDATE sessions SET cleared_at = 1500 WHERE id = ?').run(sessionId);
+
+    let single = await invoke('local-db:bots:get', 'bot-1');
+    expect(single.lastMessagePreview).toBeNull();
+
+    insertMessage(sessionId, {
+      id: 'm2',
+      role: 'assistant',
+      content: 'After clear',
+      createdAt: 2_000,
+    });
+    single = await invoke('local-db:bots:get', 'bot-1');
+    expect(single.lastMessagePreview).toBe('After clear');
+  });
+
+  it('keeps the Bot conversation preview out of the device-link projection', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Local only',
+      createdAt: 1_000,
+    });
+    const remote = await runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'mobile-1', channel: 'local-db:bots:get' },
+      () => h.handlers.get('local-db:bots:get')!({}, 'bot-1'),
+    );
+    expect(remote).not.toHaveProperty('lastMessagePreview');
+  });
+});

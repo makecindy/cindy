@@ -5428,26 +5428,16 @@
     "addDescription": "まずローカル Bot を作成し、必要に応じて IM チャンネルを追加します。",
     "createWizard": {
       "chooseTemplateDescription": "開始テンプレートを選びます。Bot はまずローカルの長期アシスタントとして作成され、メッセージチャンネルは後から追加します。",
-      "identityDescription": "長期的な役割と推奨機能を確認し、作成後は実際のメインタスクを開きます。",
-      "recommended": "おすすめ",
-      "continue": "続ける",
-      "back": "テンプレートに戻る",
+      "submit": "Bot を作成して会話を開始",
+      "channelsHint": "Telegram などのメッセージチャンネルは、作成後に Bot 設定で追加できます。",
+      "identityOptionalLabel": "カスタム ID（任意）",
+      "identityOptionalHint": "テンプレートには ID が含まれています。変更しなくても使えます。",
+      "identityRequiredLabel": "ID と役割",
+      "identityRequiredHint": "空白の Bot にはテンプレート文がありません。誰で、何を長期的に担当するかを記述してください。",
       "creating": "作成中…",
       "createFailed": "Bot を作成できませんでした。もう一度お試しください。",
-      "avatarLabel": "アバター",
       "roleLabel": "長期的な ID と役割",
       "roleHint": "ここでは Bot の人格と長期的な責務だけを定義します。ユーザー情報、Skills、MCP、ツール、権限、自動化、チャンネルは別々に管理されます。",
-      "recommendedConfiguration": "推奨設定",
-      "localProfile": "Bot の形態",
-      "localProfileValue": "ローカル Bot",
-      "currentHarness": "Claude · 現在の既定モデル",
-      "enabled": "有効",
-      "notEnabled": "既定では無効",
-      "taskEvents": "タスクイベント",
-      "automatic": "自動購読して起動",
-      "channelsLater": "Telegram、Feishu、Slack などは後から追加するメッセージチャンネルであり、Bot の ID を決めません。",
-      "profileSeparationTitle": "各 Bot は独立した Profile",
-      "profileSeparationDescription": "ID、ユーザー情報、メモリ、Skills、MCP、自動化、タスク、チャンネルは分離して保存され、別の Profile から流用されません。",
       "templates": {
         "control": {
           "title": "コントロール Bot",
@@ -5466,6 +5456,10 @@
           "summary": "長期的な ID と専用メモリを持ち、既定では他のタスクを監視しません。",
           "defaultName": "マイアシスタント",
           "defaultDescription": "必要に応じて機能とメッセージチャンネルを追加できる長期アシスタントです。"
+        },
+        "custom": {
+          "title": "カスタム",
+          "summary": "空白の ID から自分で書き始めます。"
         }
       }
     },
@@ -5491,8 +5485,16 @@
     "skillCatalogError": "Skill を読み込めませんでした。保存済みの選択は保持されます。",
     "skillCatalogEmpty": "この Harness とプロジェクトで利用できる Skill はありません。",
     "skillConfiguredUnavailable": "現在利用不可 — 選択して削除",
-    "create": "Bot を作成",
     "close": "閉じる",
+    "avatarPicker": {
+      "open": "アバターを変更",
+      "emojiLabel": "絵文字",
+      "hueLabel": "色",
+      "hint": "絵文字と背景色を選ぶと、一覧でこの Bot を見分けやすくなります。"
+    },
+    "list": {
+      "startChat": "会話を始める"
+    },
     "cancel": "キャンセル",
     "save": "保存",
     "retry": "再試行",
@@ -5502,6 +5504,16 @@
     "sessionUnavailableTitle": "この Bot タスクは利用できません",
     "sessionUnavailableDescription": "更新、アーカイブ、または Bot から削除された可能性があります。Bot の概要に戻って現在のタスクを開いてください。",
     "settings": "Bot 設定",
+    "settingsNav": {
+      "title": "設定セクション",
+      "identity": "基本情報",
+      "channels": "チャネル",
+      "capabilities": "機能",
+      "automation": "自動化",
+      "notifications": "通知",
+      "projects": "プロジェクト",
+      "advanced": "詳細設定"
+    },
     "emptyTitle": "Bot はまだありません",
     "emptyDescription": "Bot は通常のタスクに長期 ID、イベント受信箱、自動化、メッセージチャンネルを追加します。",
     "emptyBenefits": {

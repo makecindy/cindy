@@ -110,6 +110,13 @@ export interface BotProfile {
   capabilities: BotCapabilities;
   /** The real Cindy Session that backs this Bot's canonical conversation. */
   canonicalSessionId?: string;
+  /**
+   * Plain-text preview of the latest visible message in the canonical chat,
+   * projected main-side (read-only). Null when the conversation is still empty.
+   */
+  lastMessagePreview?: string | null;
+  /** Timestamp of that message (unix ms), null when there is none. */
+  lastMessageAt?: number | null;
   createdAt: number;
   sessions: BotSessionProjection[];
   channels?: Array<{
@@ -387,6 +394,14 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
     },
     canonicalSessionId:
       typeof item.canonicalSessionId === 'string' ? item.canonicalSessionId : undefined,
+    lastMessagePreview:
+      typeof item.lastMessagePreview === 'string' && item.lastMessagePreview
+        ? item.lastMessagePreview
+        : null,
+    lastMessageAt:
+      typeof item.lastMessageAt === 'number' && Number.isFinite(item.lastMessageAt)
+        ? item.lastMessageAt
+        : null,
     createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
     sessions: Array.isArray(item.sessions)
       ? item.sessions.filter((s): s is BotSessionProjection => !!s && typeof s.id === 'string')

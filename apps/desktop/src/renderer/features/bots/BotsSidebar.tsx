@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
   Bot,
-  ChevronRight,
-  CheckCircle2,
   CircleAlert,
   LoaderCircle,
   PauseCircle,
@@ -18,26 +16,12 @@ import { cn } from '@/lib/utils';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import type { BotHealthStatus } from '../../../shared/botLifecycle';
 import type { BotInboxItemView } from '../../../shared/botSessionEvents';
-import { getBotHealth, useBotProfiles } from './botStore';
+import { BotAvatar } from './BotAvatar';
+import { botListSubtitle, formatBotListTimestamp } from './botListDisplay';
+import { getBotHealth, refreshBotProfiles, useBotProfiles } from './botStore';
 
-const CHANNEL_LABELS = {
-  telegram: 'Telegram',
-  feishu: 'Feishu',
-  slack: 'Slack',
-  discord: 'Discord',
-  wechat: 'WeChat',
-  dingtalk: 'DingTalk',
-  wecom: 'WeCom',
-  x: 'X',
-  local: 'Local',
-} as const;
-
-const AVATAR_COLORS: Record<string, string> = {
-  violet: 'var(--accent-cta-bg)',
-  blue: 'var(--focus-ring-soft)',
-  amber: 'var(--text-secondary)',
-  graphite: 'var(--text-primary)',
-};
+/** Debounce for message-driven refreshes: one turn writes many rows. */
+const MESSAGE_REFRESH_DEBOUNCE_MS = 800;
 
 function BotsSidebarContent() {
   const { t } = useTranslation();
@@ -49,6 +33,7 @@ function BotsSidebarContent() {
   const collapsed = useSidebarCollapsedState();
   const [healthByBotId, setHealthByBotId] = useState<Record<string, BotHealthStatus>>({});
   const [attentionByBotId, setAttentionByBotId] = useState<Record<string, number>>({});
+  const now = Date.now();
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +84,35 @@ function BotsSidebarContent() {
     return () => {
       cancelled = true;
       unsubscribe();
+    };
+  }, [bots]);
+
+  // A chat list has to move when a message lands. There is no Bot-scoped
+  // message push, so reuse the existing localDb message broadcast and only
+  // refresh when the row belongs to a Bot task (a normal Cindy chat must not
+  // make the Bots list re-query).
+  useEffect(() => {
+    const botSessionIds = new Set<string>();
+    for (const bot of bots) {
+      if (bot.canonicalSessionId) botSessionIds.add(bot.canonicalSessionId);
+      for (const session of bot.sessions) botSessionIds.add(session.id);
+    }
+    if (botSessionIds.size === 0) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const subscribe = window.electronAPI?.localDb?.messages?.onCreated;
+    if (typeof subscribe !== 'function') return;
+    const unsubscribe = subscribe((payload: unknown) => {
+      const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId;
+      if (typeof sessionId !== 'string' || !botSessionIds.has(sessionId)) return;
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        refreshBotProfiles();
+      }, MESSAGE_REFRESH_DEBOUNCE_MS);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubscribe?.();
     };
   }, [bots]);
 
@@ -174,81 +188,85 @@ function BotsSidebarContent() {
           <div className="flex flex-col gap-1">
             {activeBots.map((bot) => {
               const selected = bot.id === botId;
-              const mountedChannels = (bot.channels ?? [])
-                .filter((channel) => channel.enabled)
-                .map((channel) => CHANNEL_LABELS[channel.kind]);
-              const latestRoute = (bot.routes ?? [])
-                .filter((route) => route.status !== 'archived')
-                .sort((left, right) => (right.lastActivityAt ?? 0) - (left.lastActivityAt ?? 0))[0];
-              const latestChannel = latestRoute
-                ? bot.channels?.find((channel) => channel.id === latestRoute.channelId)?.kind
-                : undefined;
-              const channelSummary = latestChannel
-                ? CHANNEL_LABELS[latestChannel]
-                : mountedChannels.length > 0
-                  ? mountedChannels.join(' · ')
-                  : CHANNEL_LABELS.local;
               const health = healthByBotId[bot.id];
               const attention = attentionByBotId[bot.id] ?? 0;
+              const subtitle = botListSubtitle(bot);
+              const subtitleText =
+                subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text;
+              const timestamp = formatBotListTimestamp(bot.lastMessageAt, now);
               return (
-                <button
-                  type="button"
+                <div
                   key={bot.id}
-                  onClick={() => navigate(`/bots/${bot.id}`)}
                   className={cn(
-                    'group flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors',
+                    'group relative flex w-full items-center gap-2 rounded-xl transition-colors',
                     selected
                       ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
                       : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
                   )}
                 >
-                  <span
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm"
-                    style={{
-                      backgroundColor: AVATAR_COLORS[bot.avatarColor] ?? AVATAR_COLORS.violet,
-                    }}
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/bots/${bot.id}`)}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-3 py-2 text-left"
                   >
-                    <span aria-hidden>{bot.avatar || (bot.channel === 'local' ? '✦' : '🤖')}</span>
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-13 font-medium" title={bot.name}>{bot.name}</span>
-                    <span className="block truncate text-10 opacity-70" title={channelSummary}>{channelSummary}</span>
-                  </span>
-                  {attention > 0 ? (
-                    <span
-                      className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium text-[var(--accent-pure-cta-fg)]"
-                      aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
-                    >
-                      {attention > 99 ? '99+' : attention}
+                    <BotAvatar bot={bot} size="sm" />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 truncate text-13 font-medium" title={bot.name}>
+                          {bot.name}
+                        </span>
+                        {timestamp ? (
+                          <span className="shrink-0 text-10 opacity-60">{timestamp}</span>
+                        ) : null}
+                      </span>
+                      <span className="mt-0.5 block truncate text-11 opacity-70" title={subtitleText}>
+                        {subtitleText}
+                      </span>
                     </span>
-                  ) : null}
-                  {health === 'recovering' ? (
-                    <LoaderCircle
-                      size={13}
-                      className="shrink-0 animate-spin text-[var(--text-secondary)]"
-                      aria-label={t('bots.lifecycle.healthStatus.recovering')}
-                    />
-                  ) : health === 'attention' ? (
-                    <CircleAlert
-                      size={13}
-                      className="shrink-0 text-[var(--text-danger)]"
-                      aria-label={t('bots.lifecycle.healthStatus.attention')}
-                    />
-                  ) : health === 'paused' ? (
-                    <PauseCircle
-                      size={13}
-                      className="shrink-0 text-[var(--text-tertiary)]"
-                      aria-label={t('bots.lifecycle.healthStatus.paused')}
-                    />
-                  ) : health === 'healthy' ? (
-                    <CheckCircle2
-                      size={13}
-                      className="shrink-0 text-[var(--status-success)]"
-                      aria-label={t('bots.lifecycle.healthStatus.healthy')}
-                    />
-                  ) : null}
-                  <ChevronRight size={14} className="shrink-0 opacity-50" />
-                </button>
+                  </button>
+                  <span className="flex shrink-0 items-center gap-1 pr-2">
+                    {attention > 0 ? (
+                      <span
+                        className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium text-[var(--accent-pure-cta-fg)]"
+                        aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
+                      >
+                        {attention > 99 ? '99+' : attention}
+                      </span>
+                    ) : null}
+                    {health === 'recovering' ? (
+                      <LoaderCircle
+                        size={13}
+                        className="shrink-0 animate-spin motion-reduce:animate-none text-[var(--text-secondary)]"
+                        aria-label={t('bots.lifecycle.healthStatus.recovering')}
+                      />
+                    ) : health === 'attention' ? (
+                      <CircleAlert
+                        size={13}
+                        className="shrink-0 text-[var(--text-danger)]"
+                        aria-label={t('bots.lifecycle.healthStatus.attention')}
+                      />
+                    ) : health === 'paused' ? (
+                      <PauseCircle
+                        size={13}
+                        className="shrink-0 text-[var(--text-tertiary)]"
+                        aria-label={t('bots.lifecycle.healthStatus.paused')}
+                      />
+                    ) : null}
+                    {/* Kept in the DOM (opacity, not display) so the gear stays
+                        keyboard reachable and the row never shifts on hover. */}
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        navigate(`/bots/${bot.id}?settings=1`);
+                      }}
+                      aria-label={t('bots.settings')}
+                      className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] opacity-0 transition-opacity hover:text-[var(--sidebar-nav-text)] focus-visible:opacity-100 group-hover:opacity-100"
+                    >
+                      <Settings2 size={13} />
+                    </button>
+                  </span>
+                </div>
               );
             })}
             {archivedBots.length > 0 ? (
@@ -271,18 +289,10 @@ function BotsSidebarContent() {
                           : 'text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover',
                       )}
                     >
-                      <span
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm opacity-70"
-                        style={{
-                          backgroundColor: AVATAR_COLORS[bot.avatarColor] ?? AVATAR_COLORS.violet,
-                        }}
-                      >
-                        <span aria-hidden>{bot.avatar || '🤖'}</span>
-                      </span>
+                      <BotAvatar bot={bot} size="sm" className="opacity-70" />
                       <span className="min-w-0 flex-1 truncate text-13 font-medium" title={bot.name}>
                         {bot.name}
                       </span>
-                      <ChevronRight size={14} className="shrink-0 opacity-50" />
                     </button>
                   );
                 })}
@@ -291,16 +301,6 @@ function BotsSidebarContent() {
           </div>
         )}
       </div>
-
-      <button
-        type="button"
-        onClick={() => navigate(botId ? `/bots/${botId}?settings=1` : '/bots')}
-        disabled={!botId}
-        className="mb-1 flex h-8 items-center gap-2 rounded-lg px-3 text-12 text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)] disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <Settings2 size={14} />
-        {t('bots.settings')}
-      </button>
     </div>
   );
 }

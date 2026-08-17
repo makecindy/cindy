@@ -907,6 +907,47 @@ registerColor('file-badge-fg', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
 }, '文件类型角标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
+// Bot 头像底色族(DESIGN.md §2 / §10 登记的窄作用域彩色例外,双模式各一档):
+// 颜色跟「这是哪个 Bot」绑定,是身份识别线索而不是状态/健康信号 —— 与文件类型角标
+// 同性质。Light 用柔和浅 tint、Dark 用同色相深 tint,两侧都保证 emoji 与首字母兜底
+// (恒用 --text-primary)清晰可读:浅 tint × #262626 ≥ 10:1,深 tint × #d4d4d4 ≥ 7:1。
+// 作用域严格限定为 Bot 头像填充,不得外溢到状态点、徽标、行背景或任何其它表面。
+registerColor('bot-avatar-red-bg', {
+  light: '#f7ded9',
+  dark: '#4a2e2a',
+}, 'Bot 头像底色 — red(登记例外族)');
+registerColor('bot-avatar-orange-bg', {
+  light: '#f9e3d2',
+  dark: '#4a3527',
+}, 'Bot 头像底色 — orange(登记例外族)');
+registerColor('bot-avatar-amber-bg', {
+  light: '#f6ebcd',
+  dark: '#473a22',
+}, 'Bot 头像底色 — amber(登记例外族)');
+registerColor('bot-avatar-green-bg', {
+  light: '#dceedd',
+  dark: '#26402a',
+}, 'Bot 头像底色 — green(登记例外族)');
+registerColor('bot-avatar-teal-bg', {
+  light: '#d6ebea',
+  dark: '#21403e',
+}, 'Bot 头像底色 — teal(登记例外族)');
+registerColor('bot-avatar-blue-bg', {
+  light: '#dce6f5',
+  dark: '#263449',
+}, 'Bot 头像底色 — blue(登记例外族)');
+registerColor('bot-avatar-violet-bg', {
+  light: '#e3ddf3',
+  dark: '#322b48',
+}, 'Bot 头像底色 — violet(登记例外族)');
+registerColor('bot-avatar-pink-bg', {
+  light: '#f6deea',
+  dark: '#452b39',
+}, 'Bot 头像底色 — pink(登记例外族)');
+registerColor('bot-avatar-graphite-bg', {
+  light: '#e5e5e5',
+  dark: '#3c3c3a',
+}, 'Bot 头像底色 — graphite 中性档(旧 graphite 数据映射到这里)');
 registerColor('chat-input-chip-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',

@@ -5428,26 +5428,16 @@
     "addDescription": "먼저 로컬 Bot을 만들고 필요할 때 IM 메시지 채널을 연결합니다.",
     "createWizard": {
       "chooseTemplateDescription": "시작 템플릿을 선택하세요. Bot은 먼저 로컬 장기 어시스턴트로 생성되고 메시지 채널은 나중에 연결합니다.",
-      "identityDescription": "장기 정체성과 권장 기능을 확인한 뒤 실제 기본 작업으로 바로 이동합니다.",
-      "recommended": "추천",
-      "continue": "계속 설정",
-      "back": "템플릿으로 돌아가기",
+      "submit": "Bot 만들고 대화 시작",
+      "channelsHint": "Telegram 등 메시지 채널은 만든 뒤 Bot 설정에서 연결할 수 있습니다.",
+      "identityOptionalLabel": "사용자 지정 정체성(선택)",
+      "identityOptionalHint": "템플릿에 이미 정체성이 있습니다. 그대로 두어도 작동합니다.",
+      "identityRequiredLabel": "정체성과 역할",
+      "identityRequiredHint": "빈 Bot에는 템플릿 문구가 없습니다. 누구이고 무엇을 장기적으로 담당하는지 적어 주세요.",
       "creating": "생성 중…",
       "createFailed": "Bot을 만들 수 없습니다. 다시 시도하세요.",
-      "avatarLabel": "아바타",
       "roleLabel": "장기 정체성과 역할",
       "roleHint": "여기서는 Bot의 정체성과 장기 책임만 정의합니다. 사용자 정보, Skills, MCP, 도구, 권한, 자동화와 채널은 각각 별도로 관리됩니다.",
-      "recommendedConfiguration": "권장 설정",
-      "localProfile": "Bot 형태",
-      "localProfileValue": "로컬 Bot",
-      "currentHarness": "Claude · 현재 기본 모델",
-      "enabled": "사용",
-      "notEnabled": "기본으로 사용 안 함",
-      "taskEvents": "작업 이벤트",
-      "automatic": "자동 구독 및 깨우기",
-      "channelsLater": "Telegram, Feishu, Slack 등은 나중에 연결하는 메시지 채널이며 Bot의 정체성을 결정하지 않습니다.",
-      "profileSeparationTitle": "각 Bot은 독립된 Profile입니다",
-      "profileSeparationDescription": "정체성, 사용자 정보, 메모리, Skills, MCP, 자동화, 작업과 채널은 분리 저장되며 다른 Profile의 값을 빌려 쓰지 않습니다.",
       "templates": {
         "control": {
           "title": "총괄 Bot",
@@ -5466,6 +5456,10 @@
           "summary": "장기 정체성과 전용 메모리를 가지며 기본으로 다른 작업을 관찰하지 않습니다.",
           "defaultName": "내 어시스턴트",
           "defaultDescription": "필요할 때 기능과 메시지 채널을 추가할 수 있는 장기 개인 어시스턴트입니다."
+        },
+        "custom": {
+          "title": "사용자 지정",
+          "summary": "빈 정체성에서 직접 작성해 시작합니다."
         }
       }
     },
@@ -5491,8 +5485,16 @@
     "skillCatalogError": "Skill을 불러오지 못했습니다. 저장된 선택은 유지됩니다.",
     "skillCatalogEmpty": "이 Harness와 프로젝트에서 사용할 수 있는 Skill이 없습니다.",
     "skillConfiguredUnavailable": "현재 사용할 수 없음 — 선택하여 제거",
-    "create": "Bot 만들기",
     "close": "닫기",
+    "avatarPicker": {
+      "open": "아바타 변경",
+      "emojiLabel": "이모지",
+      "hueLabel": "색상",
+      "hint": "이모지와 배경색을 선택하면 목록에서 이 Bot을 쉽게 알아볼 수 있습니다."
+    },
+    "list": {
+      "startChat": "대화 시작하기"
+    },
     "cancel": "취소",
     "save": "저장",
     "retry": "다시 시도",
@@ -5502,6 +5504,16 @@
     "sessionUnavailableTitle": "이 Bot 작업은 더 이상 사용할 수 없습니다",
     "sessionUnavailableDescription": "갱신 또는 보관되었거나 이 Bot에서 제거되었을 수 있습니다. Bot 개요에서 현재 작업을 여세요.",
     "settings": "Bot 설정",
+    "settingsNav": {
+      "title": "설정 섹션",
+      "identity": "기본 정보",
+      "channels": "채널",
+      "capabilities": "기능",
+      "automation": "자동화",
+      "notifications": "알림",
+      "projects": "프로젝트",
+      "advanced": "고급"
+    },
     "emptyTitle": "아직 Bot이 없습니다",
     "emptyDescription": "Bot은 일반 작업에 장기 정체성, 이벤트 수신함, 자동화와 메시지 채널을 더합니다.",
     "emptyBenefits": {

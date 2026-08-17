@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowLeft,
@@ -11,7 +11,6 @@ import {
   MessageCircleMore,
   Plus,
   RefreshCcw,
-  Settings2,
   Sparkles,
   Upload,
 } from 'lucide-react';
@@ -19,6 +18,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Spinner } from '@/components/ui/spinner';
 import * as sessionService from '@/lib/sessionService';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
@@ -47,6 +47,7 @@ import {
   type BotProfile,
 } from './botStore';
 import { AddBotDialog } from './AddBotDialog';
+import { BotAvatar, BotAvatarPicker } from './BotAvatar';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
@@ -55,36 +56,18 @@ import { BotRouteSettings } from './BotRouteSettings';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotEventInboxSettings } from './BotEventInboxSettings';
 import { BotChannelCapabilitySummary } from './BotChannelCapabilitySummary';
-
-const AVATARS = ['🤖', '✦', '◈', '◎', '☄️', '🧭'];
-const AVATAR_COLORS = ['violet', 'blue', 'amber', 'graphite'] as const;
+import {
+  BOT_SETTINGS_TABS,
+  parseBotSettingsTab,
+  type BotSettingsTabId,
+} from './botSettingsNav';
 
 function channelLabel(channel: BotChannel): string {
   return channel === 'local' ? 'Local Bot' : channel[0].toUpperCase() + channel.slice(1);
 }
 
-function avatarColorStyle(color: string): CSSProperties {
-  const colors: Record<string, string> = {
-    violet: 'var(--accent-cta-bg)',
-    blue: 'var(--focus-ring-soft)',
-    amber: 'var(--text-secondary)',
-    graphite: 'var(--text-primary)',
-  };
-  return { backgroundColor: colors[color] ?? colors.violet };
-}
-
-function BotAvatar({ bot, size = 'h-10 w-10' }: { bot: BotProfile; size?: string }) {
-  return (
-    <span
-      className={cn('inline-flex shrink-0 items-center justify-center rounded-xl text-lg', size)}
-      style={avatarColorStyle(bot.avatarColor)}
-    >
-      <span aria-hidden>{bot.avatar || '🤖'}</span>
-    </span>
-  );
-}
-
-function BotSettings({
+/** Exported for unit tests covering the settings nav / deep-link / tab-grouping behavior. */
+export function BotSettings({
   bot,
   onBack,
   onRenew,
@@ -99,6 +82,27 @@ function BotSettings({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [settingsSearchParams, setSettingsSearchParams] = useSearchParams();
+  const activeTab = useMemo(
+    () => parseBotSettingsTab(settingsSearchParams.get('tab')),
+    [settingsSearchParams],
+  );
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [activeTab]);
+  const handleSelectTab = useCallback(
+    (tab: BotSettingsTabId) => {
+      setSettingsSearchParams(
+        (current) => {
+          current.set('tab', tab);
+          return current;
+        },
+        { replace: true },
+      );
+    },
+    [setSettingsSearchParams],
+  );
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
@@ -368,7 +372,7 @@ function BotSettings({
             {t('bots.title')}
           </button>
           <header className="flex items-center gap-3">
-            <BotAvatar bot={bot} size="h-14 w-14" />
+            <BotAvatar bot={bot} size="lg" />
             <div>
               <p className="text-12 font-medium uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
                 {t('bots.lifecycle.archivedTitle')}
@@ -386,8 +390,8 @@ function BotSettings({
     );
   }
   return (
-    <main className="h-full overflow-y-auto bg-[var(--surface)] px-8 py-8" role="main">
-      <div className="mx-auto flex max-w-4xl flex-col gap-5">
+    <main className="flex h-full flex-col overflow-hidden bg-[var(--surface)]" role="main">
+      <div className="shrink-0 px-8 pb-5 pt-8">
         <button
           type="button"
           onClick={onBack}
@@ -396,8 +400,8 @@ function BotSettings({
           <ArrowLeft size={15} />
           {t('bots.backToChat')}
         </button>
-        <header className="flex items-center gap-3">
-          <BotAvatar bot={{ ...bot, avatar, avatarColor }} size="h-14 w-14" />
+        <header className="mt-3 flex items-center gap-3">
+          <BotAvatar bot={{ ...bot, avatar, avatarColor }} size="lg" />
           <div>
             <p className="text-12 font-medium uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
               {t('bots.settings')}
@@ -405,482 +409,529 @@ function BotSettings({
             <h1 className="mt-1 text-24 font-medium text-[var(--text-primary)]">{bot.name}</h1>
           </div>
         </header>
+      </div>
 
-        <section className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
-          <div>
-            <p className="text-13 font-medium text-[var(--text-primary)]">
-              {t('bots.sessionLifecycleTitle')}
-            </p>
-            <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-              {t('bots.sessionLifecycleDescription')}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={renewAndApplyProfile}
-            disabled={renewing}
-            className="inline-flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-          >
-            <RefreshCcw size={14} className={renewing ? 'animate-spin' : undefined} />
-            {renewing ? t('bots.renewing') : t('bots.renew')}
-          </button>
-        </section>
-        {profileApplyError ? (
-          <p className="-mt-2 text-12 text-[var(--text-danger)]" role="alert">
-            {profileApplyError}
-          </p>
-        ) : null}
-
-        <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
-
-        <BotEventInboxSettings bot={bot} />
-
-        <BotProjectSettings bot={bot} />
-
-        <BotRouteSettings bot={bot} onOpenTask={onOpenSession} />
-
-        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-          <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-            <Bot size={16} />
-            {t('bots.channelsTitle')}
-          </div>
-          <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-            {t('bots.channelsDescription')}
-          </p>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            <div className="flex items-center justify-between rounded-xl border border-[var(--border-default)] px-3 py-2">
-              <span>
-                <span className="block text-12 text-[var(--text-primary)]">
-                  {channelLabel('local')}
-                </span>
-                <span className="block text-10 text-[var(--text-tertiary)]">
-                  {t('bots.channelLocalOwned')}
-                </span>
-              </span>
-              <span className="text-11 text-[var(--text-secondary)]">
-                {t('bots.channelMounted')}
-              </span>
-            </div>
-            {visibleChannelConnections.map((connection) => {
-              const mounted = mountedChannelFor(connection);
-              const label =
-                connection.accountName || connection.accountKey || channelLabel(connection.kind);
-              return (
-                <div
-                  key={connection.id}
-                  className="rounded-xl border border-[var(--border-default)] px-3 py-2"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="min-w-0">
-                      <span className="block truncate text-12 text-[var(--text-primary)]">
-                        {channelLabel(connection.kind)} · {label}
-                      </span>
-                      <span className="block truncate text-10 text-[var(--text-tertiary)]">
-                        {connection.ownership === 'server-relay'
-                          ? t('bots.channelServerRelay')
-                          : t('bots.channelLocalAdapter')}
-                        {' · '}
-                        {connection.connected
-                          ? t('bots.channelConnected')
-                          : t('bots.channelOffline')}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      disabled={channelBusy !== null || !connection.routable}
-                      onClick={() => void toggleChannel(connection)}
-                      className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
-                    >
-                      {channelBusy === connection.id
-                        ? '…'
-                        : mounted
-                          ? t('bots.channelMounted')
-                          : t('bots.channelMount')}
-                    </button>
-                  </div>
-                  <BotChannelCapabilitySummary connection={connection} />
-                </div>
-              );
-            })}
-          </div>
-          {visibleChannelConnections.length === 0 ? (
-            <p className="mt-3 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-tertiary)]">
-              {t('bots.channelConnectionRequired', { channel: 'IM' })}
-            </p>
-          ) : null}
-          {channelError ? (
-            <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
-          ) : null}
-        </section>
-
-        <Dialog.Root
-          open={migrationPlan !== null}
-          onOpenChange={(open) => {
-            if (!open && channelBusy === null) setMigrationPlan(null);
-          }}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <nav
+          role="tablist"
+          aria-label={t('bots.settingsNav.title')}
+          className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--border-default)] px-4 py-2 md:w-48 md:flex-col md:overflow-visible md:border-b-0 md:border-r md:px-3 md:py-4"
         >
-          <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
-              <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
-                {t('bots.migration.title')}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                {t('bots.migration.description')}
-              </Dialog.Description>
-              {migrationPlan ? (
-                <div className="mt-4 space-y-3">
-                  <div className="rounded-xl bg-[var(--surface-chip)] p-3 text-12 text-[var(--text-secondary)]">
-                    <p className="font-medium text-[var(--text-primary)]">
-                      {channelLabel(migrationPlan.connection.kind)} ·{' '}
-                      {migrationPlan.connection.accountName || migrationPlan.connection.accountKey}
-                    </p>
-                    <p className="mt-1">
-                      {t('bots.migration.legacyTaskCount', {
-                        count: migrationPlan.candidates.length,
-                      })}
-                    </p>
-                  </div>
-                  {migrationPlan.conflicts.length > 0 ? (
-                    <div className="rounded-xl border border-[var(--text-danger)]/30 bg-[var(--surface-chip)] p-3">
-                      <p className="text-12 font-medium text-[var(--text-danger)]">
-                        {t('bots.migration.blocked')}
-                      </p>
-                      <ul className="mt-2 list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
-                        {migrationPlan.conflicts.map((conflict, index) => (
-                          <li key={`${conflict.code}:${conflict.sessionId ?? index}`}>
-                            {t(`bots.migration.conflicts.${conflict.code}`)}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {migrationPlan.warnings.length > 0 ? (
-                    <ul className="list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
-                      {migrationPlan.warnings.map((warning) => (
-                        <li key={warning.code}>{t(`bots.migration.warnings.${warning.code}`)}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  <p className="text-11 leading-5 text-[var(--text-tertiary)]">
-                    {t('bots.migration.preserveData')}
+          {BOT_SETTINGS_TABS.map((tabMeta) => {
+            const TabIcon = tabMeta.icon;
+            const selected = activeTab === tabMeta.id;
+            return (
+              <button
+                key={tabMeta.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => handleSelectTab(tabMeta.id)}
+                className={cn(
+                  'inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-12 font-medium transition-colors',
+                  selected
+                    ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                )}
+              >
+                <TabIcon size={14} />
+                {t(tabMeta.labelKey)}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+          <div className="mx-auto flex max-w-3xl flex-col gap-5 pb-6">
+            {activeTab === 'identity' ? (
+              <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+                <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+                  <ImagePlus size={16} />
+                  {t('bots.identityTitle')}
+                </div>
+                <div className="mt-4 flex items-center gap-3">
+                  <BotAvatarPicker
+                    name={name}
+                    avatar={avatar}
+                    avatarColor={avatarColor}
+                    onChange={(next) => {
+                      setAvatar(next.emoji);
+                      setAvatarColor(next.hue);
+                    }}
+                  />
+                  <p className="text-11 leading-4 text-[var(--text-tertiary)]">
+                    {t('bots.avatarPicker.hint')}
                   </p>
                 </div>
-              ) : null}
-              <div className="mt-5 flex justify-end gap-2">
-                <button
-                  type="button"
-                  disabled={channelBusy !== null}
-                  onClick={() => setMigrationPlan(null)}
-                  className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                >
-                  {t('bots.cancel')}
-                </button>
-                <button
-                  type="button"
-                  disabled={!migrationPlan?.canApply || channelBusy !== null}
-                  onClick={() => void confirmMigration()}
-                  className="h-8 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-11 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"
-                >
-                  {channelBusy ? t('bots.migration.applying') : t('bots.migration.apply')}
-                </button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+                <div className="mt-5 grid gap-4 md:grid-cols-2">
+                  <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                    {t('bots.nameLabel')}
+                    <input
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                    />
+                  </label>
+                  <div className="flex flex-col justify-end text-12 text-[var(--text-tertiary)]">
+                    {t('bots.channelLabel')}: {channelLabel(bot.channel)}
+                  </div>
+                </div>
+                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                  {t('bots.descriptionLabel')}
+                  <textarea
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                    rows={3}
+                    className="resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                  />
+                </label>
+                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                  {t('bots.identitySourceLabel')}
+                  <textarea
+                    value={identitySource}
+                    onChange={(event) => setIdentitySource(event.target.value)}
+                    placeholder={t('bots.identitySourcePlaceholder')}
+                    rows={6}
+                    className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                  />
+                  <span className="text-11 leading-5 text-[var(--text-tertiary)]">
+                    {t('bots.identitySourceDescription')}
+                  </span>
+                </label>
+                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                  {t('bots.userContextSourceLabel')}
+                  <textarea
+                    value={userContextSource}
+                    onChange={(event) => setUserContextSource(event.target.value)}
+                    placeholder={t('bots.userContextSourcePlaceholder')}
+                    rows={4}
+                    className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                  />
+                  <span className="text-11 leading-5 text-[var(--text-tertiary)]">
+                    {t('bots.userContextSourceDescription')}
+                  </span>
+                </label>
+              </section>
+            ) : null}
 
-        <Dialog.Root
-          open={rollbackRecord !== null}
-          onOpenChange={(open) => {
-            if (!open && channelBusy === null) setRollbackRecord(null);
-          }}
-        >
-          <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
-              <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
-                {t('bots.migration.rollbackTitle')}
-              </Dialog.Title>
-              <Dialog.Description className="mt-2 text-12 leading-5 text-[var(--text-secondary)]">
-                {t('bots.migration.rollbackDescription')}
-              </Dialog.Description>
-              <div className="mt-5 flex justify-end gap-2">
-                <button
-                  type="button"
-                  disabled={channelBusy !== null}
-                  onClick={() => setRollbackRecord(null)}
-                  className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                >
-                  {t('bots.cancel')}
-                </button>
-                <button
-                  type="button"
-                  disabled={channelBusy !== null}
-                  onClick={() => void confirmRollback()}
-                  className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                >
-                  {channelBusy ? t('bots.migration.rollingBack') : t('bots.migration.rollback')}
-                </button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+            {activeTab === 'channels' ? (
+              <>
+                <BotRouteSettings bot={bot} onOpenTask={onOpenSession} />
 
-        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-          <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-            <ImagePlus size={16} />
-            {t('bots.identityTitle')}
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            {AVATARS.map((item) => (
-              <button
-                type="button"
-                key={item}
-                onClick={() => setAvatar(item)}
-                className={cn(
-                  'flex h-10 w-10 items-center justify-center rounded-xl border text-lg',
-                  avatar === item
-                    ? 'border-[var(--focus-ring-soft)] bg-[var(--surface-chip)]'
-                    : 'border-[var(--border-default)] hover:bg-[var(--surface-hover)]',
-                )}
-                aria-label={t('bots.chooseAvatar', { avatar: item })}
-              >
-                {item}
-              </button>
-            ))}
-            <div className="ml-2 flex items-center gap-1.5">
-              {AVATAR_COLORS.map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  onClick={() => setAvatarColor(item)}
-                  className={cn(
-                    'h-5 w-5 rounded-full border-2 border-[var(--surface-elevated)] outline outline-1 outline-[var(--border-default)]',
-                    avatarColor === item && 'ring-2 ring-[var(--focus-ring-soft)]',
-                  )}
-                  style={avatarColorStyle(item)}
-                  aria-label={t('bots.chooseAvatarColor', { color: item })}
+                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+                    <Bot size={16} />
+                    {t('bots.channelsTitle')}
+                  </div>
+                  <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                    {t('bots.channelsDescription')}
+                  </p>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    <div className="flex items-center justify-between rounded-xl border border-[var(--border-default)] px-3 py-2">
+                      <span>
+                        <span className="block text-12 text-[var(--text-primary)]">
+                          {channelLabel('local')}
+                        </span>
+                        <span className="block text-10 text-[var(--text-tertiary)]">
+                          {t('bots.channelLocalOwned')}
+                        </span>
+                      </span>
+                      <span className="text-11 text-[var(--text-secondary)]">
+                        {t('bots.channelMounted')}
+                      </span>
+                    </div>
+                    {visibleChannelConnections.map((connection) => {
+                      const mounted = mountedChannelFor(connection);
+                      const label =
+                        connection.accountName ||
+                        connection.accountKey ||
+                        channelLabel(connection.kind);
+                      return (
+                        <div
+                          key={connection.id}
+                          className="rounded-xl border border-[var(--border-default)] px-3 py-2"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <span className="min-w-0">
+                              <span className="block truncate text-12 text-[var(--text-primary)]">
+                                {channelLabel(connection.kind)} · {label}
+                              </span>
+                              <span className="block truncate text-10 text-[var(--text-tertiary)]">
+                                {connection.ownership === 'server-relay'
+                                  ? t('bots.channelServerRelay')
+                                  : t('bots.channelLocalAdapter')}
+                                {' · '}
+                                {connection.connected
+                                  ? t('bots.channelConnected')
+                                  : t('bots.channelOffline')}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              disabled={channelBusy !== null || !connection.routable}
+                              onClick={() => void toggleChannel(connection)}
+                              className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
+                            >
+                              {channelBusy === connection.id
+                                ? '…'
+                                : mounted
+                                  ? t('bots.channelMounted')
+                                  : t('bots.channelMount')}
+                            </button>
+                          </div>
+                          <BotChannelCapabilitySummary connection={connection} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {visibleChannelConnections.length === 0 ? (
+                    <p className="mt-3 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-tertiary)]">
+                      {t('bots.channelConnectionRequired', { channel: 'IM' })}
+                    </p>
+                  ) : null}
+                  {channelError ? (
+                    <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
+                  ) : null}
+                </section>
+
+                <Dialog.Root
+                  open={migrationPlan !== null}
+                  onOpenChange={(open) => {
+                    if (!open && channelBusy === null) setMigrationPlan(null);
+                  }}
+                >
+                  <Dialog.Portal>
+                    <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+                    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
+                      <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
+                        {t('bots.migration.title')}
+                      </Dialog.Title>
+                      <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                        {t('bots.migration.description')}
+                      </Dialog.Description>
+                      {migrationPlan ? (
+                        <div className="mt-4 space-y-3">
+                          <div className="rounded-xl bg-[var(--surface-chip)] p-3 text-12 text-[var(--text-secondary)]">
+                            <p className="font-medium text-[var(--text-primary)]">
+                              {channelLabel(migrationPlan.connection.kind)} ·{' '}
+                              {migrationPlan.connection.accountName ||
+                                migrationPlan.connection.accountKey}
+                            </p>
+                            <p className="mt-1">
+                              {t('bots.migration.legacyTaskCount', {
+                                count: migrationPlan.candidates.length,
+                              })}
+                            </p>
+                          </div>
+                          {migrationPlan.conflicts.length > 0 ? (
+                            <div className="rounded-xl border border-[var(--text-danger)]/30 bg-[var(--surface-chip)] p-3">
+                              <p className="text-12 font-medium text-[var(--text-danger)]">
+                                {t('bots.migration.blocked')}
+                              </p>
+                              <ul className="mt-2 list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
+                                {migrationPlan.conflicts.map((conflict, index) => (
+                                  <li key={`${conflict.code}:${conflict.sessionId ?? index}`}>
+                                    {t(`bots.migration.conflicts.${conflict.code}`)}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                          {migrationPlan.warnings.length > 0 ? (
+                            <ul className="list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
+                              {migrationPlan.warnings.map((warning) => (
+                                <li key={warning.code}>
+                                  {t(`bots.migration.warnings.${warning.code}`)}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          <p className="text-11 leading-5 text-[var(--text-tertiary)]">
+                            {t('bots.migration.preserveData')}
+                          </p>
+                        </div>
+                      ) : null}
+                      <div className="mt-5 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={channelBusy !== null}
+                          onClick={() => setMigrationPlan(null)}
+                          className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                        >
+                          {t('bots.cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!migrationPlan?.canApply || channelBusy !== null}
+                          onClick={() => void confirmMigration()}
+                          className="h-8 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-11 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"
+                        >
+                          {channelBusy ? t('bots.migration.applying') : t('bots.migration.apply')}
+                        </button>
+                      </div>
+                    </Dialog.Content>
+                  </Dialog.Portal>
+                </Dialog.Root>
+
+                <Dialog.Root
+                  open={rollbackRecord !== null}
+                  onOpenChange={(open) => {
+                    if (!open && channelBusy === null) setRollbackRecord(null);
+                  }}
+                >
+                  <Dialog.Portal>
+                    <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+                    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
+                      <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
+                        {t('bots.migration.rollbackTitle')}
+                      </Dialog.Title>
+                      <Dialog.Description className="mt-2 text-12 leading-5 text-[var(--text-secondary)]">
+                        {t('bots.migration.rollbackDescription')}
+                      </Dialog.Description>
+                      <div className="mt-5 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={channelBusy !== null}
+                          onClick={() => setRollbackRecord(null)}
+                          className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                        >
+                          {t('bots.cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={channelBusy !== null}
+                          onClick={() => void confirmRollback()}
+                          className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                        >
+                          {channelBusy
+                            ? t('bots.migration.rollingBack')
+                            : t('bots.migration.rollback')}
+                        </button>
+                      </div>
+                    </Dialog.Content>
+                  </Dialog.Portal>
+                </Dialog.Root>
+              </>
+            ) : null}
+
+            {activeTab === 'capabilities' ? (
+              <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+                    <Sparkles size={16} />
+                    {t('bots.capabilitiesTitle')}
+                  </div>
+                  <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 text-[var(--text-secondary)]">
+                    {t(`bots.runtimeState.${runtimeState}`)}
+                  </span>
+                </div>
+                <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                  {t('bots.capabilitiesDescription')}
+                </p>
+                <p className="mt-2 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
+                  {t('bots.capabilitiesDeferred')}
+                </p>
+                <div className="mt-4 grid min-w-0 gap-4 md:grid-cols-2">
+                  <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                    <span>{t('bots.harnessLabel')}</span>
+                    <VendorSegmentedSwitcher
+                      value={vendor}
+                      hiddenVendors={hiddenVendors}
+                      dense
+                      width={300}
+                      className="max-w-full"
+                      ariaLabel={t('bots.harnessLabel')}
+                      onChange={(next) => {
+                        if (next === 'orca') return;
+                        const prefs = getDraft().lastByVendor[next];
+                        setCapabilities((current) => ({
+                          ...current,
+                          harness: next === 'cc' ? 'claude' : next,
+                          model: prefs.model,
+                          providerId: prefs.providerId ?? null,
+                          effort: prefs.effort,
+                          fastMode: getDraft().fastModeByModel[prefs.model] === true,
+                          skillMode: 'inherit',
+                        }));
+                      }}
+                    />
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                    <span>{t('bots.modelLabel')}</span>
+                    <ModelSelector
+                      modelId={capabilities.model}
+                      effort={capabilities.effort}
+                      vendorKey={vendor}
+                      currentProviderId={capabilities.providerId ?? null}
+                      triggerVariant="field"
+                      popoverSide="bottom"
+                      ariaContext={t('bots.modelLabel')}
+                      excludeSubscriptionDirect={sshRemote}
+                      excludeChatBridgedCodex={sshRemote}
+                      fastMode={vendor === 'cc' ? undefined : capabilities.fastMode}
+                      onFastModeChange={
+                        vendor === 'cc'
+                          ? undefined
+                          : (enabled) => updateCapability('fastMode', enabled)
+                      }
+                      onModelChange={(model) => updateCapability('model', model)}
+                      onEffortChange={(effort) => updateCapability('effort', effort)}
+                      onProviderChange={(providerId, model, effort) =>
+                        setCapabilities((current) => ({
+                          ...current,
+                          providerId,
+                          model: model ?? current.model,
+                          effort: effort || current.effort,
+                        }))
+                      }
+                      onNavigateToProviders={() => navigate('/settings?tab=providers')}
+                      unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
+                    />
+                  </div>
+                </div>
+                <BotCapabilitySettings
+                  bot={bot}
+                  capabilities={capabilities}
+                  selectedSkills={selectedSkills}
+                  runtimeSnapshot={canonicalProjection?.runtimeSnapshot}
+                  remoteHostId={selectedProject?.remoteHostId}
+                  onCapabilitiesChange={setCapabilities}
+                  onSelectedSkillsChange={setSelectedSkills}
                 />
-              ))}
-            </div>
-          </div>
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-              {t('bots.nameLabel')}
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-              />
-            </label>
-            <div className="flex flex-col justify-end text-12 text-[var(--text-tertiary)]">
-              {t('bots.channelLabel')}: {channelLabel(bot.channel)}
-            </div>
-          </div>
-          <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-            {t('bots.descriptionLabel')}
-            <textarea
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              rows={3}
-              className="resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-            />
-          </label>
-          <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-            {t('bots.identitySourceLabel')}
-            <textarea
-              value={identitySource}
-              onChange={(event) => setIdentitySource(event.target.value)}
-              placeholder={t('bots.identitySourcePlaceholder')}
-              rows={6}
-              className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-            />
-            <span className="text-11 leading-5 text-[var(--text-tertiary)]">
-              {t('bots.identitySourceDescription')}
-            </span>
-          </label>
-          <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-            {t('bots.userContextSourceLabel')}
-            <textarea
-              value={userContextSource}
-              onChange={(event) => setUserContextSource(event.target.value)}
-              placeholder={t('bots.userContextSourcePlaceholder')}
-              rows={4}
-              className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-            />
-            <span className="text-11 leading-5 text-[var(--text-tertiary)]">
-              {t('bots.userContextSourceDescription')}
-            </span>
-          </label>
-        </section>
+                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                  {t('bots.permissionsLabel')}
+                  <select
+                    value={capabilities.permissions}
+                    onChange={(event) =>
+                      updateCapability(
+                        'permissions',
+                        event.target.value as BotCapabilities['permissions'],
+                      )
+                    }
+                    className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                  >
+                    <option value="ask">{t('bots.permissionAsk')}</option>
+                    <option value="trusted">{t('bots.permissionTrusted')}</option>
+                  </select>
+                </label>
+              </section>
+            ) : null}
 
-        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-              <Sparkles size={16} />
-              {t('bots.capabilitiesTitle')}
-            </div>
-            <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 text-[var(--text-secondary)]">
-              {t(`bots.runtimeState.${runtimeState}`)}
-            </span>
-          </div>
-          <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-            {t('bots.capabilitiesDescription')}
-          </p>
-          <p className="mt-2 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
-            {t('bots.capabilitiesDeferred')}
-          </p>
-          <div className="mt-4 grid min-w-0 gap-4 md:grid-cols-2">
-            <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-              <span>{t('bots.harnessLabel')}</span>
-              <VendorSegmentedSwitcher
-                value={vendor}
-                hiddenVendors={hiddenVendors}
-                dense
-                width={300}
-                className="max-w-full"
-                ariaLabel={t('bots.harnessLabel')}
-                onChange={(next) => {
-                  if (next === 'orca') return;
-                  const prefs = getDraft().lastByVendor[next];
-                  setCapabilities((current) => ({
-                    ...current,
-                    harness: next === 'cc' ? 'claude' : next,
-                    model: prefs.model,
-                    providerId: prefs.providerId ?? null,
-                    effort: prefs.effort,
-                    fastMode: getDraft().fastModeByModel[prefs.model] === true,
-                    skillMode: 'inherit',
-                  }));
-                }}
+            {activeTab === 'automation' ? (
+              <BotAutomationSettings
+                bot={bot}
+                enabled={bot.capabilities.automation}
+                trusted={bot.capabilities.permissions === 'trusted'}
+                onOpenTask={onOpenSession}
               />
-            </div>
-            <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-              <span>{t('bots.modelLabel')}</span>
-              <ModelSelector
-                modelId={capabilities.model}
-                effort={capabilities.effort}
-                vendorKey={vendor}
-                currentProviderId={capabilities.providerId ?? null}
-                triggerVariant="field"
-                popoverSide="bottom"
-                ariaContext={t('bots.modelLabel')}
-                excludeSubscriptionDirect={sshRemote}
-                excludeChatBridgedCodex={sshRemote}
-                fastMode={vendor === 'cc' ? undefined : capabilities.fastMode}
-                onFastModeChange={
-                  vendor === 'cc' ? undefined : (enabled) => updateCapability('fastMode', enabled)
-                }
-                onModelChange={(model) => updateCapability('model', model)}
-                onEffortChange={(effort) => updateCapability('effort', effort)}
-                onProviderChange={(providerId, model, effort) =>
-                  setCapabilities((current) => ({
-                    ...current,
-                    providerId,
-                    model: model ?? current.model,
-                    effort: effort || current.effort,
-                  }))
-                }
-                onNavigateToProviders={() => navigate('/settings?tab=providers')}
-                unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
-              />
-            </div>
+            ) : null}
+
+            {activeTab === 'notifications' ? <BotEventInboxSettings bot={bot} /> : null}
+
+            {activeTab === 'projects' ? <BotProjectSettings bot={bot} /> : null}
+
+            {activeTab === 'advanced' ? (
+              <>
+                <section className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+                  <div>
+                    <p className="text-13 font-medium text-[var(--text-primary)]">
+                      {t('bots.sessionLifecycleTitle')}
+                    </p>
+                    <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                      {t('bots.sessionLifecycleDescription')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={renewAndApplyProfile}
+                    disabled={renewing}
+                    className="inline-flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                  >
+                    <RefreshCcw size={14} className={renewing ? 'animate-spin' : undefined} />
+                    {renewing ? t('bots.renewing') : t('bots.renew')}
+                  </button>
+                </section>
+
+                <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
+
+                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+                    <Download size={16} />
+                    {t('bots.portability.title')}
+                  </div>
+                  <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                    {t('bots.portability.description')}
+                  </p>
+                  {portabilityNotice ? (
+                    <p
+                      className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]"
+                      role="status"
+                    >
+                      {portabilityNotice}
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={portabilityBusy}
+                    onClick={() => {
+                      setPortabilityBusy(true);
+                      setPortabilityNotice(null);
+                      void exportBotBundle(bot.id)
+                        .then((result) => {
+                          if (!result.canceled) {
+                            setPortabilityNotice(
+                              result.redactionCount
+                                ? t('bots.portability.exportedRedacted', {
+                                    count: result.redactionCount,
+                                  })
+                                : t('bots.portability.exported'),
+                            );
+                          }
+                        })
+                        .catch((error: unknown) => {
+                          setPortabilityNotice(error instanceof Error ? error.message : String(error));
+                        })
+                        .finally(() => setPortabilityBusy(false));
+                    }}
+                    className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                  >
+                    <Download size={14} />
+                    {portabilityBusy ? t('bots.portability.exporting') : t('bots.portability.export')}
+                  </button>
+                </section>
+              </>
+            ) : null}
           </div>
-          <BotCapabilitySettings
-            bot={bot}
-            capabilities={capabilities}
-            selectedSkills={selectedSkills}
-            runtimeSnapshot={canonicalProjection?.runtimeSnapshot}
-            remoteHostId={selectedProject?.remoteHostId}
-            onCapabilitiesChange={setCapabilities}
-            onSelectedSkillsChange={setSelectedSkills}
-          />
-          <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-            {t('bots.permissionsLabel')}
-            <select
-              value={capabilities.permissions}
-              onChange={(event) =>
-                updateCapability(
-                  'permissions',
-                  event.target.value as BotCapabilities['permissions'],
-                )
-              }
-              className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t border-[var(--border-default)] px-8 py-3">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            {profileApplyError ? (
+              <p className="truncate text-12 text-[var(--text-danger)]" role="alert">
+                {profileApplyError}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 justify-end gap-2">
+            <button
+              type="button"
+              onClick={onBack}
+              className="h-9 rounded-lg px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
             >
-              <option value="ask">{t('bots.permissionAsk')}</option>
-              <option value="trusted">{t('bots.permissionTrusted')}</option>
-            </select>
-          </label>
-        </section>
-
-        <BotAutomationSettings
-          bot={bot}
-          enabled={bot.capabilities.automation}
-          trusted={bot.capabilities.permissions === 'trusted'}
-          onOpenTask={onOpenSession}
-        />
-
-        <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-          <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-            <Download size={16} />
-            {t('bots.portability.title')}
-          </div>
-          <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-            {t('bots.portability.description')}
-          </p>
-          {portabilityNotice ? (
-            <p
-              className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]"
-              role="status"
+              {t('bots.cancel')}
+            </button>
+            <button
+              type="button"
+              onClick={saveAndContinue}
+              disabled={saving}
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--accent-cta-bg)] px-3.5 text-12 font-medium text-[var(--accent-pure-cta-fg)] hover:opacity-90"
             >
-              {portabilityNotice}
-            </p>
-          ) : null}
-          <button
-            type="button"
-            disabled={portabilityBusy}
-            onClick={() => {
-              setPortabilityBusy(true);
-              setPortabilityNotice(null);
-              void exportBotBundle(bot.id)
-                .then((result) => {
-                  if (!result.canceled) {
-                    setPortabilityNotice(
-                      result.redactionCount
-                        ? t('bots.portability.exportedRedacted', { count: result.redactionCount })
-                        : t('bots.portability.exported'),
-                    );
-                  }
-                })
-                .catch((error: unknown) => {
-                  setPortabilityNotice(error instanceof Error ? error.message : String(error));
-                })
-                .finally(() => setPortabilityBusy(false));
-            }}
-            className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-          >
-            <Download size={14} />
-            {portabilityBusy ? t('bots.portability.exporting') : t('bots.portability.export')}
-          </button>
-        </section>
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onBack}
-            className="h-9 rounded-lg px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-          >
-            {t('bots.cancel')}
-          </button>
-          <button
-            type="button"
-            onClick={saveAndContinue}
-            disabled={saving}
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--accent-cta-bg)] px-3.5 text-12 font-medium text-[var(--accent-pure-cta-fg)] hover:opacity-90"
-          >
-            <Check size={15} />
-            {t('bots.save')}
-          </button>
+              <Check size={15} />
+              {t('bots.save')}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1265,12 +1316,20 @@ export function BotsHomeView() {
   return (
     <>
       <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
-        <p className="max-w-lg px-6 text-center text-13 text-[var(--text-secondary)]">
-          {importNotice ??
-            (createSessionError && !isCreatingSession
-              ? t('ccAgent.draft.createSessionFailed')
-              : t('ccAgent.common.loading'))}
-        </p>
+        {importNotice || (createSessionError && !isCreatingSession) ? (
+          <p className="max-w-lg px-6 text-center text-13 text-[var(--text-secondary)]">
+            {importNotice ?? t('ccAgent.draft.createSessionFailed')}
+          </p>
+        ) : (
+          // Opening a Bot is a hand-off to its canonical chat, not a page of its
+          // own: show a quiet spinner instead of full-screen "loading" text.
+          <Spinner
+            size={20}
+            className="text-[var(--text-tertiary)]"
+            role="status"
+            aria-label={t('ccAgent.common.loading')}
+          />
+        )}
       </main>
       <AddBotDialog open={addOpen} onOpenChange={closeAdd} onCreated={handleCreated} />
     </>

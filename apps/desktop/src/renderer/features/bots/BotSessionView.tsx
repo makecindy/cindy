@@ -3,6 +3,7 @@ import { ArrowLeft, CircleAlert, RefreshCcw } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { Spinner } from '@/components/ui/spinner';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 
@@ -111,7 +112,12 @@ export function BotSessionView() {
   if (gate.kind === 'loading') {
     return (
       <main className="flex h-full items-center justify-center bg-[var(--surface)]">
-        <p className="text-13 text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</p>
+        <Spinner
+          size={20}
+          className="text-[var(--text-tertiary)]"
+          role="status"
+          aria-label={t('ccAgent.common.loading')}
+        />
       </main>
     );
   }

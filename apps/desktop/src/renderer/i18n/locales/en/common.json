@@ -5430,26 +5430,16 @@
     "addDescription": "Create a local Bot first, then mount IM message channels when needed.",
     "createWizard": {
       "chooseTemplateDescription": "Choose a starting point. The Bot is created locally first; message channels mount later.",
-      "identityDescription": "Confirm its persistent identity and recommended capabilities, then open its real canonical task.",
-      "recommended": "Recommended",
-      "continue": "Continue",
-      "back": "Back to templates",
+      "submit": "Create Bot and Start Chatting",
+      "channelsHint": "Mount Telegram and other message channels later in Bot settings.",
+      "identityOptionalLabel": "Custom Identity (Optional)",
+      "identityOptionalHint": "The template already carries an identity — leave this alone and it still works.",
+      "identityRequiredLabel": "Identity and Role",
+      "identityRequiredHint": "A blank Bot has no template text, so describe who it is and what it owns.",
       "creating": "Creating…",
       "createFailed": "The Bot could not be created. Try again.",
-      "avatarLabel": "Avatar",
       "roleLabel": "Persistent identity and role",
       "roleHint": "This defines who the Bot is and what it owns long-term. User context, Skills, MCP, tools, permissions, automations, and Channels remain separate.",
-      "recommendedConfiguration": "Recommended configuration",
-      "localProfile": "Bot form",
-      "localProfileValue": "Local Bot",
-      "currentHarness": "Claude · current default model",
-      "enabled": "Enabled",
-      "notEnabled": "Not enabled by default",
-      "taskEvents": "Task events",
-      "automatic": "Subscribe and wake automatically",
-      "channelsLater": "Telegram, Feishu, Slack, and other IM surfaces are mountable Channels; they do not define the Bot identity.",
-      "profileSeparationTitle": "Every Bot is an isolated Profile",
-      "profileSeparationDescription": "Identity, user context, memory, Skills, MCP, automations, tasks, and message Channels are stored separately and never borrowed from another Profile.",
       "templates": {
         "control": {
           "title": "Control Bot",
@@ -5468,6 +5458,10 @@
           "summary": "Keeps a persistent identity and private memory without observing other tasks by default.",
           "defaultName": "My assistant",
           "defaultDescription": "A persistent personal assistant with capabilities and message Channels you can add later."
+        },
+        "custom": {
+          "title": "Custom",
+          "summary": "Start from a blank identity you write yourself."
         }
       }
     },
@@ -5493,8 +5487,16 @@
     "skillCatalogError": "Skills could not be loaded. Saved selections are preserved.",
     "skillCatalogEmpty": "No available Skills were found for this Harness and project.",
     "skillConfiguredUnavailable": "Unavailable — select to remove",
-    "create": "Create bot",
     "close": "Close",
+    "avatarPicker": {
+      "open": "Change Avatar",
+      "emojiLabel": "Emoji",
+      "hueLabel": "Color",
+      "hint": "Pick an emoji and a color so this Bot is easy to spot in the list."
+    },
+    "list": {
+      "startChat": "Start the conversation"
+    },
     "cancel": "Cancel",
     "save": "Save",
     "retry": "Retry",
@@ -5504,6 +5506,16 @@
     "sessionUnavailableTitle": "This Bot task is no longer available",
     "sessionUnavailableDescription": "It may have been renewed, archived, or removed from this Bot. Return to the Bot overview to open its current task.",
     "settings": "Bot settings",
+    "settingsNav": {
+      "title": "Settings sections",
+      "identity": "Basic info",
+      "channels": "Channels",
+      "capabilities": "Capabilities",
+      "automation": "Automation",
+      "notifications": "Notifications",
+      "projects": "Projects",
+      "advanced": "Advanced"
+    },
     "emptyTitle": "No Bots yet",
     "emptyDescription": "Bots add persistent identity, an event inbox, automations, and message Channels to a normal task.",
     "emptyBenefits": {

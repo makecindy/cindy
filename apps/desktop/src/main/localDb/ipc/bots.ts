@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import type { OpenDialogOptions } from 'electron';
-import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
 import type { BotsReplaceCanonicalSessionResult } from '../client/tx/types.js';
@@ -28,6 +28,7 @@ import {
   botSessionLinks,
   botWorkspaceAttachments,
   botWorkspaceLeases,
+  messages,
   sessions,
 } from '../schema';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
@@ -37,7 +38,7 @@ import { resolveBusinessSessionId } from '../../sessionIds.js';
 import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap.js';
 import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store.js';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace.js';
-import { sessionCreateToRow, sessionToCamel } from '../mapper.js';
+import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
 import { botProfileContentChanged, mergeBotProfileCapabilities } from './botProfileVersioning.js';
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
 import { normalizeBotSessionControlMode } from '../../../shared/botSessionControl.js';
@@ -168,6 +169,53 @@ function readStringList(value: unknown, field: string, maxItems = 100): string[]
   return [...new Set(out)];
 }
 
+/** How many candidate rows the preview query inspects (see below). */
+const CANONICAL_PREVIEW_SCAN = 5;
+
+/**
+ * Latest visible message of a Bot's canonical chat, for the Bots list rows.
+ *
+ * Read-only projection, same visibility rules as the sidebar preview of an
+ * ordinary task (`LATEST_MSG_CONTENT_SQL` in `ipc/sessions.ts`): only
+ * user / assistant rows, no rewind-truncated rows, no hidden auto-resume
+ * prompts, and nothing before the session's `/clear` boundary. One indexed
+ * query per Bot on `idx_messages_session_created`, no join.
+ *
+ * A small window instead of `LIMIT 1`: `content` is a serialized structure, and
+ * rows whose text cannot be extracted (attachment-only sends, synthetic UI
+ * triggers) must be skipped rather than shown as an empty preview.
+ */
+async function readCanonicalChatPreview(
+  db: ReturnType<typeof getDbClient>['drizzle'],
+  canonicalSessionId: string | null,
+  clearedAt: number | null,
+): Promise<{ preview: string | null; createdAt: number | null }> {
+  if (!canonicalSessionId) return { preview: null, createdAt: null };
+  const rows = await db
+    .select({
+      role: messages.role,
+      content: messages.content,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, canonicalSessionId),
+        inArray(messages.role, ['user', 'assistant']),
+        isNull(messages.rewindAt),
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        ...(clearedAt !== null ? [gt(messages.createdAt, clearedAt)] : []),
+      ),
+    )
+    .orderBy(desc(messages.createdAt))
+    .limit(CANONICAL_PREVIEW_SCAN);
+  for (const row of rows) {
+    const preview = extractMessagePreview(row.content, row.role);
+    if (preview) return { preview, createdAt: row.createdAt ?? null };
+  }
+  return { preview: null, createdAt: null };
+}
+
 async function readProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId: string) {
   const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
   if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
@@ -230,6 +278,11 @@ async function readProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId:
     .from(botRoutes)
     .where(eq(botRoutes.botId, botId))
     .orderBy(desc(botRoutes.updatedAt));
+  const latestMessage = await readCanonicalChatPreview(
+    db,
+    profile.canonicalSessionId ?? null,
+    byId.get(profile.canonicalSessionId ?? '')?.clearedAt ?? null,
+  );
   const config = parseJson(version?.capabilitiesJson ?? '{}');
   return {
     id: profile.id,
@@ -243,6 +296,8 @@ async function readProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId:
     status: profile.status,
     currentVersion: profile.currentVersion,
     canonicalSessionId: profile.canonicalSessionId ?? undefined,
+    lastMessagePreview: latestMessage.preview,
+    lastMessageAt: latestMessage.createdAt,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
     skills: Array.isArray(config.skills)
