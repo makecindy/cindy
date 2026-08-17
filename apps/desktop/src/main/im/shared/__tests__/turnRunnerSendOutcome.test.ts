@@ -926,6 +926,48 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('does not resend an interaction attachment after an uncertain upload result', async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'cindy-im-uncertain-staging-'));
+    const stagedFile = path.join(tempDir, 'report.pdf');
+    await writeFile(stagedFile, 'private report');
+    try {
+      mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+      mocks.materializeLocalMarkdownFiles.mockResolvedValueOnce({
+        files: [{ absPath: stagedFile, displayName: 'report.pdf' }],
+        tempDirs: [tempDir],
+        text: 'report',
+      });
+      mocks.feishuIm.sendFile.mockResolvedValueOnce({
+        ok: false,
+        reason: 'UPLOAD_UNCERTAIN',
+      });
+      mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+      mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-uncertain-media' });
+      mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+      const h = setupSession(async () => ({ accepted: true }));
+      const onTurnComplete = vi.fn();
+
+      await runDefaultTurn(onTurnComplete);
+      h.emit({
+        type: 'text',
+        data: { text: '[report](xdt-file:///F:/XDMaker/report.pdf)', isFinal: true },
+      });
+      await h.dispatchInteraction({
+        kind: 'ask_user_question',
+        requestId: 'ask-uncertain-media',
+        questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+      });
+      h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+
+      await waitForAssertion(() => expect(onTurnComplete).toHaveBeenCalledOnce());
+      expect(mocks.feishuIm.sendFile).toHaveBeenCalledOnce();
+      expect(existsSync(tempDir)).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('removes a delivered staged attachment even when another interaction medium fails', async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), 'cindy-im-partial-staging-'));
     const stagedFile = path.join(tempDir, 'report.pdf');

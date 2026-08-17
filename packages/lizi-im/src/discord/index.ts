@@ -408,14 +408,25 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (stat.size === 0) return { ok: false, reason: 'EMPTY' };
     if (stat.size > MAX_OUTBOUND_FILE_BYTES) return { ok: false, reason: 'TOO_LARGE' };
 
+    let channel: Awaited<ReturnType<typeof this.requireDmChannel>>;
     try {
-      const channel = await this.requireDmChannel(userId);
+      channel = await this.requireDmChannel(userId);
+    } catch {
+      // DM resolution failed before an upload request existed, so retrying is safe.
+      return { ok: false, reason: 'UPLOAD_FAIL' };
+    }
+
+    try {
       const sent = await channel.send({
         files: [{ attachment: absPath, name: displayName ?? path.basename(absPath) }],
       });
       return { ok: true, messageId: encodeMessageId(channel.id, sent.id) };
     } catch (err) {
-      return { ok: false, reason: isPayloadTooLarge(err) ? 'TOO_LARGE' : 'UPLOAD_FAIL' };
+      if (isPayloadTooLarge(err)) return { ok: false, reason: 'TOO_LARGE' };
+      return {
+        ok: false,
+        reason: isDiscordUploadOutcomeUncertain(err) ? 'UPLOAD_UNCERTAIN' : 'UPLOAD_FAIL',
+      };
     }
   }
 

@@ -96,6 +96,34 @@ describe('DiscordIM outbound', () => {
     });
   });
 
+  it.each([
+    ['network failure', new TypeError('network disconnected after upload')],
+    ['server failure', Object.assign(new Error('Server Error'), { status: 500 })],
+    ['rate limit', Object.assign(new Error('Too Many Requests'), { status: 429 })],
+  ])('maps an uncertain %s to UPLOAD_UNCERTAIN', async (_label, failure) => {
+    const file = tempFile(1);
+    const channel = makeChannel('dm-1');
+    channel.send.mockRejectedValueOnce(failure);
+    const im = makeIm(channel);
+
+    await expect(im.sendFile('user-1', file)).resolves.toEqual({
+      ok: false,
+      reason: 'UPLOAD_UNCERTAIN',
+    });
+  });
+
+  it('keeps an explicit upload 400 retryable', async () => {
+    const file = tempFile(1);
+    const channel = makeChannel('dm-1');
+    channel.send.mockRejectedValueOnce(Object.assign(new Error('Bad Request'), { status: 400 }));
+    const im = makeIm(channel);
+
+    await expect(im.sendFile('user-1', file)).resolves.toEqual({
+      ok: false,
+      reason: 'UPLOAD_FAIL',
+    });
+  });
+
   it('maps missing and empty files', async () => {
     const channel = makeChannel('dm-1');
     const im = makeIm(channel);

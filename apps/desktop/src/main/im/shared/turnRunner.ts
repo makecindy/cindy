@@ -3007,6 +3007,7 @@ export function createTurnRunner(
     threadTs: string | undefined,
   ): Promise<void> {
     const delivered = new Set<string>();
+    const nonRetryable = new Set<string>();
     for (const absPath of turn.mediaAbsPaths) {
       if (turn.cleanupRequested) break;
       try {
@@ -3019,6 +3020,9 @@ export function createTurnRunner(
         if (result.ok) {
           delivered.add(absPath);
           continue;
+        }
+        if (result.reason === 'UPLOAD_UNCERTAIN') {
+          nonRetryable.add(absPath);
         }
         log.error(`${channel} media fallback failed`, {
           kind: 'terminal-media-fallback',
@@ -3034,10 +3038,11 @@ export function createTurnRunner(
         });
       }
     }
-    if (delivered.size > 0) {
-      await cleanupDeliveredStagedMedia(turn, delivered);
-      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
-      for (const absPath of delivered) {
+    const settled = new Set([...delivered, ...nonRetryable]);
+    if (settled.size > 0) {
+      await cleanupDeliveredStagedMedia(turn, settled);
+      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !settled.has(absPath));
+      for (const absPath of settled) {
         turn.imageMediaAbsPaths.delete(absPath);
         turn.mediaDisplayNames.delete(absPath);
       }

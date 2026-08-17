@@ -927,15 +927,21 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const api = this.api;
     if (!api) return { ok: false, reason: 'SEND_FAIL' };
 
+    const target = this.targetOf(userId);
+    const form = new FormData();
+    form.set('chat_id', target.chat_id);
+    if (target.message_thread_id !== undefined) {
+      form.set('message_thread_id', String(target.message_thread_id));
+    }
+    const name = displayName ?? path.basename(absPath);
     try {
-      const target = this.targetOf(userId);
-      const form = new FormData();
-      form.set('chat_id', target.chat_id);
-      if (target.message_thread_id !== undefined) {
-        form.set('message_thread_id', String(target.message_thread_id));
-      }
-      const name = displayName ?? path.basename(absPath);
       form.set('document', new Blob([fs.readFileSync(absPath)]), name);
+    } catch {
+      // No request was made, so the local failure is safe to retry.
+      return { ok: false, reason: 'UPLOAD_FAIL' };
+    }
+
+    try {
       const sent = await api.callForm<TgMessage>('sendDocument', form);
       this.recordOwnEcho(userId, '', sent, [name]);
       return { ok: true, messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
@@ -943,7 +949,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (err instanceof TelegramApiError && err.errorCode === 413) {
         return { ok: false, reason: 'TOO_LARGE' };
       }
-      return { ok: false, reason: 'UPLOAD_FAIL' };
+      if (err instanceof TelegramApiError && err.errorCode >= 400 && err.errorCode < 500) {
+        return {
+          ok: false,
+          reason: err.errorCode === 429 ? 'UPLOAD_UNCERTAIN' : 'UPLOAD_FAIL',
+        };
+      }
+      return { ok: false, reason: 'UPLOAD_UNCERTAIN' };
     }
   }
 

@@ -346,6 +346,12 @@ export interface StreamingTextHandle {
 
 export interface SendFileResult {
   ok: boolean;
-  reason?: 'NOT_FOUND' | 'EMPTY' | 'TOO_LARGE' | 'UPLOAD_FAIL' | 'SEND_FAIL';
+  reason?:
+    | 'NOT_FOUND'
+    | 'EMPTY'
+    | 'TOO_LARGE'
+    | 'UPLOAD_FAIL'
+    | 'UPLOAD_UNCERTAIN'
+    | 'SEND_FAIL';
   messageId?: string;
 }

@@ -1491,6 +1491,44 @@ describe('TelegramIM', () => {
 
   it.each([
     ['网络错误', new TypeError('fetch failed')],
+    ['5xx', new TelegramApiError('sendDocument', 500, 'Internal Server Error')],
+    ['429', new TelegramApiError('sendDocument', 429, 'Too Many Requests', 3)],
+  ])('附件发送%s时返回不可重试的不确定结果', async (_label, failure) => {
+    await connect();
+    const absPath = path.join(tmpDir, 'uncertain-document.pdf');
+    fs.writeFileSync(absPath, 'document');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendDocument') throw failure;
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+
+    await expect(im.sendFile(OWNER_ID, absPath)).resolves.toEqual({
+      ok: false,
+      reason: 'UPLOAD_UNCERTAIN',
+    });
+  });
+
+  it('附件被 400 明确拒绝时保留为可安全重试', async () => {
+    await connect();
+    const absPath = path.join(tmpDir, 'rejected-document.pdf');
+    fs.writeFileSync(absPath, 'document');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendDocument') {
+        throw new TelegramApiError('sendDocument', 400, 'Bad Request');
+      }
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+
+    await expect(im.sendFile(OWNER_ID, absPath)).resolves.toEqual({
+      ok: false,
+      reason: 'UPLOAD_FAIL',
+    });
+  });
+
+  it.each([
+    ['网络错误', new TypeError('fetch failed')],
     ['5xx', new TelegramApiError('sendPhoto', 500, 'Internal Server Error')],
     ['429', new TelegramApiError('sendPhoto', 429, 'Too Many Requests', 3)],
   ])('单图发送%s时不确认已交付并标记为不可重试', async (_label, failure) => {
