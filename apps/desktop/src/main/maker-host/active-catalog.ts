@@ -672,8 +672,8 @@ function projectXaiPiModel(provider: Provider, model: CatalogModel): CatalogMode
       ? { contextWindowVerified: model.contextWindowVerified }
       : {}),
     ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
-    efforts: model.efforts,
-    defaultEffort: model.defaultEffort,
+    // Official Pi effort maps stay authoritative, including explicit empty lists.
+    // CC/Codex root efforts must not leak into the Pi projection.
     status: model.status,
     defaultEnabled: model.defaultEnabled,
   };
