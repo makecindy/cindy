@@ -3584,6 +3584,9 @@ export function ChatInput({
     // the next task never paints the previous session's listening/refining text.
     saveCurrentEditorDraft();
     restoreNextDraft();
+    // The reused composer now shows the destination draft. Drop the source
+    // send lock so the next task is immediately editable.
+    setSendDispatchInFlight(false);
     if (wasBusyWithoutSend && prevEditorKey && prevEditorKey === voiceOwnerKey) {
       const sourceKey = prevEditorKey;
       const persistDetachedVoice = (previousVoiceText: string, nextVoiceText: string) => {
@@ -4887,16 +4890,23 @@ export function ChatInput({
             slashCommandsReady ? mergedCommands : null,
           )
         ) {
-          planModeEntry?.onToggle(!planModeEntry.enabled);
-          isRestoringRef.current = true;
-          try {
-            editor.commands.clearContent(true);
-          } finally {
-            isRestoringRef.current = false;
+          const editorOwnsSource = editorOwnsSourceDraft({
+            editorDestroyed: editor.isDestroyed,
+            editorStorageKey: storageKeyForDraftRef.current,
+            sourceStorageKey,
+          });
+          if (editorOwnsSource) {
+            planModeEntry?.onToggle(!planModeEntry.enabled);
+            isRestoringRef.current = true;
+            try {
+              editor.commands.clearContent(true);
+            } finally {
+              isRestoringRef.current = false;
+            }
+            historyIndexRef.current = -1;
+            hydratedHistoryDocumentRef.current = null;
+            draftRef.current = null;
           }
-          historyIndexRef.current = -1;
-          hydratedHistoryDocumentRef.current = null;
-          draftRef.current = null;
           if (sourceStorageKey) {
             if (
               shouldPreservePlanModeComposerDraft(
@@ -4908,7 +4918,7 @@ export function ChatInput({
               saveComposerDraft(
                 sourceStorageKey,
                 {
-                  text: editor.getJSON(),
+                  text: editorOwnsSource ? editor.getJSON() : (existingDraft?.text ?? null),
                   attachments: attachmentsForSend,
                   quotes: existingDraft?.quotes ?? [],
                   browserComments: commentsForSend,
@@ -5373,8 +5383,10 @@ export function ChatInput({
             const coordinator = effortChangeCoordinatorRef.current;
             let runtimeSettled = false;
             let timeoutId: ReturnType<typeof setTimeout> | undefined;
-            captureSendFocusForRestore();
-            setSendDispatchInFlight(true);
+            const lockComposerForEffort =
+              !optimisticallyClearRemoteComposer &&
+              storageKeyForDraftRef.current === sourceStorageKey;
+            if (lockComposerForEffort) setSendDispatchInFlight(true);
             try {
               await Promise.race([
                 coordinator.awaitRuntimeSettled(sessionId).then(() => {
@@ -5386,7 +5398,12 @@ export function ChatInput({
               ]);
             } finally {
               if (timeoutId !== undefined) clearTimeout(timeoutId);
-              setSendDispatchInFlight(false);
+              if (
+                lockComposerForEffort &&
+                storageKeyForDraftRef.current === sourceStorageKey
+              ) {
+                setSendDispatchInFlight(false);
+              }
             }
 
             // 不把 timeout 写成全局 dirty：若迟到的是「持久化失败、runtime 尚未触碰」，旧实现
@@ -5443,7 +5460,12 @@ export function ChatInput({
         if (!optimisticallyClearRemoteComposer) clearSentComposer();
       } finally {
         dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);
-        if (lockCurrentComposer) setSendDispatchInFlight(false);
+        if (
+          lockCurrentComposer &&
+          storageKeyForDraftRef.current === sourceStorageKey
+        ) {
+          setSendDispatchInFlight(false);
+        }
         finishAgentSendDispatch();
       }
     },

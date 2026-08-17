@@ -183,6 +183,18 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(chatInputSource).toContain("frozenVoiceSend.kind !== 'send'");
     expect(chatInputSource).toContain('dispatchSendInFlightKeysRef');
     expect(chatInputSource).toContain('lockCurrentComposer');
+    expect(chatInputSource).toContain('lockComposerForEffort');
+    const planCommandSendBlock = extractBetween(
+      chatInputSource,
+      'isPlanModeComposerCommandText(',
+      'const text = formatBrowserCommentsForSend(',
+    );
+    expect(planCommandSendBlock).toContain('const editorOwnsSource = editorOwnsSourceDraft({');
+    expect(planCommandSendBlock).toContain('if (editorOwnsSource) {');
+    expect(planCommandSendBlock).toContain('editor.commands.clearContent(true)');
+    expect(planCommandSendBlock.indexOf('if (editorOwnsSource) {')).toBeLessThan(
+      planCommandSendBlock.indexOf('editor.commands.clearContent(true)'),
+    );
     expect(chatInputSource).toContain('resolveSourceOwnedComposerExtras({');
     expect(chatInputSource).toContain('sourceAttachments:');
     expect(chatInputSource).toContain('sourceComments:');
@@ -242,7 +254,11 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(restoreEffectBlock).toContain('latestStorageKeyRef.current === storageKey');
     expect(restoreEffectBlock).toContain('if (!isCurrentTransition()) return;');
     expect(restoreEffectBlock).toContain('restoreNextDraft();');
+    expect(restoreEffectBlock).toContain('setSendDispatchInFlight(false);');
     expect(restoreEffectBlock).toContain('wasBusyWithoutSend');
+    expect(restoreEffectBlock.indexOf('restoreNextDraft();')).toBeLessThan(
+      restoreEffectBlock.indexOf('setSendDispatchInFlight(false);'),
+    );
 
     const waitForBusyCompletionBlock = extractBetween(
       voiceInputSource,
