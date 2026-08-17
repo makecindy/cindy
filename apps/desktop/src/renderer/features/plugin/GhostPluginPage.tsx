@@ -127,6 +127,7 @@ import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker'
 import {
   // 受体模型的两条纯推导:reapprove 路由判定 + 「市场复核目标是否命中已装」。
   // main 的卡片改版不再走 catalogItems 交织,orderPluginCatalogItems 已无引用故不引入。
+  canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
   pluginPresentationOrigin,
@@ -1382,7 +1383,11 @@ export function GhostPluginPage({
               marketDetailRequestRef.current += 1;
               setMarketDetail(null);
             }}
-            onInstall={mode !== 'signed-out' ? () => void handleInstallFromMarket() : undefined}
+            onInstall={
+              canOfferMarketInstall(mode, marketDetail.ghostId)
+                ? () => void handleInstallFromMarket()
+                : undefined
+            }
             onIconLoadError={handleMarketIconLoadError}
           />
         </div>
@@ -1724,7 +1729,7 @@ export function GhostPluginPage({
                                 busy={marketBusyId !== null}
                                 onSelect={() => void handleSelectMarket(item.pluginId)}
                                 onInstall={
-                                  mode !== 'signed-out'
+                                  canOfferMarketInstall(mode, item.ghostId)
                                     ? () => void handleInstallMarketItem(item.pluginId)
                                     : undefined
                                 }
@@ -1744,7 +1749,7 @@ export function GhostPluginPage({
                           busy={marketBusyId !== null}
                           onSelect={() => void handleSelectMarket(item.pluginId)}
                           onInstall={
-                            mode !== 'signed-out'
+                            canOfferMarketInstall(mode, item.ghostId)
                               ? () => void handleInstallMarketItem(item.pluginId)
                               : undefined
                           }

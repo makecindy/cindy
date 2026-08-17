@@ -969,6 +969,9 @@ export class PluginMarketService {
       if (!selected) {
         throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
       }
+      if (!isGhostAvailableForActiveSession(selected.ghostId)) {
+        throwIpcError('PERMISSION_DENIED', 'This Plugin requires a Cindy account');
+      }
       const plugin = await this.api.detail(pluginId);
       requireSameMarketOwner(owner);
       // 详情响应必须与请求的 pluginId 绑定:server 换身份会让用户审阅到别的插件。

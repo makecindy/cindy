@@ -2185,6 +2185,24 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('rejects installing an account-managed public plugin in account-free local mode', async () => {
+    runtime.session = {
+      mode: 'local',
+      dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    runtime.accountGhostAvailable = false;
+    const item = summary({ ghostId: 'cindy-art', defaultInstall: true });
+    const h = harness([item]);
+
+    await expect(h.service.install(item.id, reviewedInstallOptions(item))).rejects.toThrow(
+      '[PERMISSION_DENIED]',
+    );
+    expect(h.api.detail).not.toHaveBeenCalled();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('does not re-enable an installed defaultInstall package disabled by the user', async () => {
     const item = summary({ defaultInstall: true });
     runtime.ghosts = [
