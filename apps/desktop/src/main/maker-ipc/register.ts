@@ -9580,11 +9580,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionQueueSnapshot: async (sessionId) => {
       // 先补崩溃恢复,保证重启后 lead 仍能看到快照恢复出的排队消息。
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-      const projection = inputCoordinator.getProjection(sessionId);
+      const snapshot = inputCoordinator.getQueueControlSnapshot(sessionId);
       const inspection = inputCoordinator.getQueueInspection(sessionId);
       return {
-        pendingQueue: projection.pendingQueue,
-        steeringClientIds: projection.steeringQueueClientIds,
+        pendingQueue: snapshot.pendingQueue,
+        steeringClientIds: snapshot.steeringQueueClientIds,
         consumingClientIds: inspection
           .filter((entry) => entry.consuming)
           .map((entry) => entry.queuedMessageId),
@@ -9908,12 +9908,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!inputCoordinator.isQueueRestored(sessionId)) {
         throw new Error(`queue restore incomplete for ${sessionId}`);
       }
-      const projection = inputCoordinator.getProjection(sessionId);
+      const snapshot = inputCoordinator.getQueueControlSnapshot(sessionId);
       const consumingClientIds = inputCoordinator
         .getQueueInspection(sessionId)
         .filter((entry) => entry.consuming)
         .map((entry) => entry.queuedMessageId);
-      return { pendingQueue: projection.pendingQueue, consumingClientIds };
+      return { pendingQueue: snapshot.pendingQueue, consumingClientIds };
     },
     replaceQueuedMessage: (sessionId, clientId, next) =>
       inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),

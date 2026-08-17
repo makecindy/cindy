@@ -7853,6 +7853,40 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     ).toBe('second-edited');
   });
 
+  it('编辑保留主机接收时间,清空边界后的条目崩溃恢复时不会被误删', async () => {
+    const h = createHarness();
+    const sid = 'replace-after-clear';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'before'));
+    await flush();
+
+    const projected = h.coordinator.getProjection(sid).pendingQueue[0];
+    const authoritative = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0];
+    expect(projected?.hostAcceptedAtMs).toBeUndefined();
+    expect(authoritative?.hostAcceptedAtMs).toEqual(expect.any(Number));
+
+    // 模拟旧调用方从脱敏投影重建整条消息。coordinator 的最终替换边界仍须
+    // 锚定首次 host receipt，避免编辑后持久化出一个无接收时间的快照。
+    expect(h.coordinator.replaceQueuedMessage(sid, 'q-1', makeItem('q-1', 'after'))).toBe(true);
+    await flush();
+    const snapshot = h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? [];
+    const acceptedAtMs = authoritative?.hostAcceptedAtMs;
+    expect(snapshot[0]).toMatchObject({
+      clientId: 'q-1',
+      text: 'after',
+      hostAcceptedAtMs: acceptedAtMs,
+    });
+
+    const restarted = createHarness();
+    restarted.setLoadClearBoundary(async () => (acceptedAtMs ?? 1) - 1);
+    restarted.setLoadQueueSnapshot(async () => snapshot);
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.getProjection(sid).pendingQueue).toEqual([
+      expect.objectContaining({ clientId: 'q-1', text: 'after' }),
+    ]);
+  });
+
   it('拒绝身份漂移与不存在的条目', async () => {
     const h = createHarness();
     const sid = 'replace-guards';

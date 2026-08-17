@@ -908,6 +908,22 @@ export class AgentInputCoordinator {
     return this.toProjection(sessionId, this.getState(sessionId));
   }
 
+  /**
+   * Main-only control snapshot. Queue mutation services need the authoritative
+   * item rather than the renderer/device-link projection: projected rows omit
+   * host receipts and trusted reference context that edits must either retain
+   * or deliberately invalidate while rebuilding the message.
+   */
+  getQueueControlSnapshot(
+    sessionId: string,
+  ): Pick<AgentInputProjection, 'pendingQueue' | 'steeringQueueClientIds'> {
+    const state = this.getState(sessionId);
+    return {
+      pendingQueue: [...state.pendingQueue],
+      steeringQueueClientIds: [...state.steeringQueueClientIds],
+    };
+  }
+
   /** Main-only inspection view for cindy_helper; never crosses renderer/device-link IPC. */
   getQueueInspection(sessionId: string): SessionQueueInspectionEntry[] {
     const state = this.getState(sessionId);
@@ -2661,8 +2677,17 @@ export class AgentInputCoordinator {
     if (state.steeringQueueClientIds.includes(clientId)) return false;
     const index = state.pendingQueue.findIndex((q) => q.clientId === clientId);
     if (index < 0) return false;
+    const current = state.pendingQueue[index];
+    if (!current) return false;
+    // The receipt is stamped by this host at first acceptance and is not part
+    // of public projections. Never let an edit erase or forge the clear/restart
+    // recovery boundary even if a future caller accidentally rebuilds from a
+    // projected row again.
+    const replacement = { ...next };
+    if (current.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
+    else replacement.hostAcceptedAtMs = current.hostAcceptedAtMs;
     const nextQueue = [...state.pendingQueue];
-    nextQueue[index] = next;
+    nextQueue[index] = replacement;
     state.pendingQueue = nextQueue;
     this.emit(sessionId);
     return true;
