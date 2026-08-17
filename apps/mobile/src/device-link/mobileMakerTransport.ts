@@ -406,14 +406,6 @@ export interface MobileMakerTransport {
    * handler)。只生成不落库,持久化仍走 patchSessionMeta;失败/无素材时 title 为 null。
    */
   regenerateSessionTitle(sessionId: string): Promise<{ title: string | null }>;
-  /**
-   * 用指定正文生成智能标题(与桌面远程 Goal 同一通道)。只生成不落库。
-   */
-  generateSessionTitle(
-    message: string,
-    agentKind: MobileAgentKind,
-    sessionId?: string,
-  ): Promise<{ title: string | null }>;
   listMessages(sessionId: string, opts?: MessageListOptions): Promise<RemoteMessage[]>;
   aroundMessages(sessionId: string, messageId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   aroundMessagesByClientId(sessionId: string, clientId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
@@ -667,8 +659,6 @@ export function createMobileMakerTransport({
       call('local-db:messages:dismiss-error', [sessionId, clientId]),
     ackInterruptedTurn: (sessionId) => call('local-db:sessions:ack-interrupted', [sessionId]),
     regenerateSessionTitle: (sessionId) => call('maker:regenerate-title', [{ sessionId }]),
-    generateSessionTitle: (message, agentKind, sessionId) =>
-      call('maker:generate-title', [{ message, agentKind, ...(sessionId ? { sessionId } : {}) }]),
     listMessages: (sessionId, opts) => call('local-db:messages:list', [sessionId, opts]),
     aroundMessages: (sessionId, messageId, opts) =>
       call('local-db:messages:around', [sessionId, messageId, opts]),

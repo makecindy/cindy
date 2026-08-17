@@ -1502,9 +1502,7 @@ describe('new session model', () => {
 describe('persistRemoteGoalSessionTitle', () => {
   function makeMaker(overrides: {
     title?: string;
-    generated?: string | null;
     getSession?: () => Promise<{ title: string }>;
-    generateSessionTitle?: () => Promise<{ title: string | null }>;
   } = {}) {
     return {
       getSession: overrides.getSession
@@ -1512,25 +1510,16 @@ describe('persistRemoteGoalSessionTitle', () => {
       patchSessionMeta: vi.fn(async (_id: string, patch: { title?: string }) => ({
         title: patch.title ?? 'New Maker',
       })),
-      generateSessionTitle: overrides.generateSessionTitle
-        ?? vi.fn(async () => ({ title: overrides.generated ?? '登录失败排查' })),
     };
   }
 
-  it('writes the objective placeholder then the generated title while the session is still a sentinel', async () => {
-    const maker = makeMaker({ title: 'New Maker', generated: '登录失败排查' });
+  it('writes the objective while the authoritative title is still a sentinel', async () => {
+    const maker = makeMaker({ title: 'New Maker' });
     await persistRemoteGoalSessionTitle(maker, {
       sessionId: 's-goal',
       objective: '帮我排查登录失败',
-      agentKind: 'claude-code',
     });
-    expect(maker.patchSessionMeta).toHaveBeenNthCalledWith(1, 's-goal', { title: '帮我排查登录失败' });
-    expect(maker.generateSessionTitle).toHaveBeenCalledWith(
-      '帮我排查登录失败',
-      'claude-code',
-      's-goal',
-    );
-    expect(maker.patchSessionMeta).toHaveBeenNthCalledWith(2, 's-goal', { title: '登录失败排查' });
+    expect(maker.patchSessionMeta).toHaveBeenCalledWith('s-goal', { title: '帮我排查登录失败' });
   });
 
   it('does not overwrite a title the user already renamed', async () => {
@@ -1538,26 +1527,21 @@ describe('persistRemoteGoalSessionTitle', () => {
     await persistRemoteGoalSessionTitle(maker, {
       sessionId: 's-goal',
       objective: '帮我排查登录失败',
-      agentKind: 'claude-code',
     });
     expect(maker.patchSessionMeta).not.toHaveBeenCalled();
-    expect(maker.generateSessionTitle).not.toHaveBeenCalled();
   });
 
-  it('keeps the placeholder when generate-title fails', async () => {
+  it('does not write when the current title cannot be read', async () => {
     const maker = makeMaker({
-      title: 'New Maker',
-      generateSessionTitle: vi.fn(async () => {
-        throw new Error('CHANNEL_NOT_ALLOWED');
+      getSession: vi.fn(async () => {
+        throw new Error('INVOKE_TIMEOUT');
       }),
     });
     await persistRemoteGoalSessionTitle(maker, {
       sessionId: 's-goal',
       objective: '帮我排查登录失败',
-      agentKind: 'claude-code',
     });
-    expect(maker.patchSessionMeta).toHaveBeenCalledTimes(1);
-    expect(maker.patchSessionMeta).toHaveBeenCalledWith('s-goal', { title: '帮我排查登录失败' });
+    expect(maker.patchSessionMeta).not.toHaveBeenCalled();
   });
 });
 
@@ -2407,6 +2391,7 @@ describe('submit guard catalog wiring (source locks)', () => {
     );
     expect(settleSlice).toContain('remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title)');
     expect(settleSlice).toContain('void persistRemoteGoalSessionTitle(maker,');
+    expect(settleSlice).not.toContain('generateSessionTitle');
     expect(settleSlice).not.toMatch(/await maker\.patchSessionMeta/);
   });
 });

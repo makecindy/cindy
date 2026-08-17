@@ -146,7 +146,6 @@ describe('mobile maker transport', () => {
     await maker.aroundMessages('s1', 'message-id', { radius: 60 });
     await maker.aroundMessagesByClientId('s1', 'client-id', { radius: 40 });
     await maker.patchSessionMeta('s1', { title: 'Renamed' });
-    await maker.generateSessionTitle('帮我排查登录失败', 'claude-code', 's1');
     await maker.send('s1', 'hello', undefined, { throwOnStartFailure: true });
     await maker.listActiveSessions();
 
@@ -170,11 +169,6 @@ describe('mobile maker transport', () => {
         deviceId: 'dev-1',
         channel: 'local-db:sessions:patch-meta',
         args: ['s1', { title: 'Renamed' }],
-      },
-      {
-        deviceId: 'dev-1',
-        channel: 'maker:generate-title',
-        args: [{ message: '帮我排查登录失败', agentKind: 'claude-code', sessionId: 's1' }],
       },
       {
         deviceId: 'dev-1',

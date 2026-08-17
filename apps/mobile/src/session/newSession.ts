@@ -904,9 +904,8 @@ export function sessionFromCreateResult(
 }
 
 /**
- * 手机 Goal 的权威起名:对齐桌面远程 Goal。
- * 先用目标文案写占位,再 generate-title 覆盖;用户已改名则停手。
- * Goal 首轮不经 enqueue,被控端不会自动起名,这里必须把标题真正写回库。
+ * 手机 Goal 把目标原文写回被控端。Goal 首轮不经 enqueue,被控端不会自动起名。
+ * 读到哨兵才写;读失败 fail-closed,绝不把未知状态当成 New Maker。
  */
 export async function persistRemoteGoalSessionTitle(
   maker: {
@@ -915,67 +914,31 @@ export async function persistRemoteGoalSessionTitle(
       sessionId: string,
       patch: { title: string },
     ) => Promise<Pick<RemoteSession, 'title'>>;
-    generateSessionTitle: (
-      message: string,
-      agentKind: NewSessionAgentKind,
-      sessionId?: string,
-    ) => Promise<{ title: string | null }>;
   },
   input: {
     sessionId: string;
     objective: string;
-    agentKind: NewSessionAgentKind;
     isCurrent?: () => boolean;
   },
 ): Promise<void> {
   const placeholder = deriveOptimisticSessionTitle({ text: input.objective });
   if (!placeholder) return;
   const stillCurrent = () => input.isCurrent?.() ?? true;
-  const currentTitle = async (): Promise<string> => {
-    try {
-      return (await maker.getSession(input.sessionId)).title?.trim() ?? '';
-    } catch {
-      return DEFAULT_DRAFT_SESSION_TITLE;
-    }
-  };
   if (!stillCurrent()) return;
-  const existing = await currentTitle();
+  let existing: string;
+  try {
+    existing = (await maker.getSession(input.sessionId)).title?.trim() ?? '';
+  } catch {
+    return;
+  }
+  if (!stillCurrent()) return;
   if (existing && !isDefaultDraftSessionTitle(existing) && existing !== 'New remote session') {
     return;
   }
   try {
-    if (stillCurrent()) {
-      await maker.patchSessionMeta(input.sessionId, { title: placeholder });
-    }
+    await maker.patchSessionMeta(input.sessionId, { title: placeholder });
   } catch {
-    // 占位失败不挡智能标题。
-  }
-  if (!stillCurrent()) return;
-  let generated = '';
-  try {
-    generated = (await maker.generateSessionTitle(
-      input.objective,
-      input.agentKind,
-      input.sessionId,
-    )).title?.trim() ?? '';
-  } catch {
-    return;
-  }
-  if (!generated || !stillCurrent()) return;
-  const latest = await currentTitle();
-  if (
-    latest
-    && !isDefaultDraftSessionTitle(latest)
-    && latest !== 'New remote session'
-    && latest !== placeholder
-  ) {
-    return;
-  }
-  if (!stillCurrent()) return;
-  try {
-    await maker.patchSessionMeta(input.sessionId, { title: generated });
-  } catch {
-    // 智能标题写回失败不影响 Goal 主流程。
+    // 写回失败不影响 Goal 主流程;本进程预览仍盖着第一帧。
   }
 }
 

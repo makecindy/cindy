@@ -5068,7 +5068,6 @@ export default function NewRemoteSessionScreen() {
         void persistRemoteGoalSessionTitle(maker, {
           sessionId: result.sessionId,
           objective: input.objective,
-          agentKind: finalDraft.agentKind,
           isCurrent: () => isCurrentOwner() && ensureDeviceAlive(),
         });
       }
