@@ -197,6 +197,15 @@ describe('newSessionCreation pipeline', () => {
     // fresh getSession 失败(makeMaker 默认抛 NOT_FOUND)时权威覆盖没发生,管线
     // 收口前必须主动清 pendingLocalCreation 禁发标(codex P2)。
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.pendingLocalCreation).toBe(false);
+    // 入队成功只解禁,标题预览要等到权威标题离开哨兵才让位。
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      sessionFromCreateResult({ sessionId: 's2' }, { ...DRAFT, firstMessage: '' }),
+    ]);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.title).toBe('hello world');
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      { ...sessionFromCreateResult({ sessionId: 's2' }, DRAFT), title: '登录失败排查' },
+    ]);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.title).toBe('登录失败排查');
   });
 
   it('首条消息 enqueue 前应用手机控制端准备的可信引用快照', async () => {

@@ -79,6 +79,16 @@ describe('desktop 会话标题投影出口', () => {
     expect(draftRoute).toContain(
       'remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);',
     );
+    // 远程归属切换会提前 return,撤回必须排在它前面,否则空会话会一直顶着没发出去的原文。
+    const remotePreviewClear = draftRoute.indexOf(
+      'remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);',
+    );
+    const ownerChangedReturn = draftRoute.indexOf(
+      'if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;',
+      remotePreviewClear,
+    );
+    expect(remotePreviewClear).toBeGreaterThan(-1);
+    expect(ownerChangedReturn).toBeGreaterThan(remotePreviewClear);
     // createSession 返回 null 是 return,不进外层 catch,必须就地撤回。
     expect(draftRoute).toContain(
       'if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);\n              toastCreateSessionFailed();',

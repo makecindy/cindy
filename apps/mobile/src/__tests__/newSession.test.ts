@@ -2335,6 +2335,16 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(lastCheck).toBeGreaterThan(0);
     expect(settleSlice.slice(lastCheck)).not.toMatch(/await /);
   });
+
+  it('goal settle 用标题预览盖哨兵,不把目标文案写成用户改名', () => {
+    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const settleSlice = goalSlice.slice(
+      goalSlice.indexOf('── settle 段'),
+      goalSlice.indexOf('router.replace({'),
+    );
+    expect(settleSlice).toContain('remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title)');
+    expect(settleSlice).not.toContain('patchSessionMeta');
+  });
 });
 
 describe('fast memory restore wiring (source locks)', () => {

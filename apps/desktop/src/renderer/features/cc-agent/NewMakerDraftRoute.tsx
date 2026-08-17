@@ -3749,13 +3749,14 @@ export function NewMakerDraftRoute() {
               : undefined,
           });
         } catch (err) {
-          if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
-          log.error('[draft send]', err);
           // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
+          // 归属切换也会提前 return,必须先撤;否则已建、未发出首条的空会话会一直顶着原文。
           if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
           if (remoteOptimisticTitleSessionId) {
             remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
           }
+          if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
+          log.error('[draft send]', err);
           toast.error(
             isRemotePrecreatedWorktreeCleanupPendingError(err)
               ? t('ccAgent.draft.remoteWorktreeCleanupPending')
