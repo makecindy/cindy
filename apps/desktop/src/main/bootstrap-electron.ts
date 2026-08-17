@@ -7078,7 +7078,12 @@ app.on('ready', async () => {
                   error: err instanceof Error ? err.message : String(err),
                 });
               }
-              const entryStillLive = () => handle.isLive() && !isAppSessionBoundaryPending();
+              // Cleanup is owed to this start() entry, not the process-wide boundary
+              // flag. Same-owner Ghost repair holds beginAppSessionBoundary() across
+              // teardown + commit; if that flag gated reset/Pi shutdown, an in-flight
+              // A→B restartCodex would skip shutdownCodexEnvironment forever while
+              // discovery still marked the entry complete and adoptable.
+              const entryStillLive = () => handle.isLive();
               await refreshCustomProvidersIntoCatalog(entryStillLive);
               // A new start() is already a new incarnation (same-owner rollover adopts
               // instead). Bind reset/discovery/Pi teardown to this entry so a later

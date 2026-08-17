@@ -162,6 +162,10 @@ describe('account provider readiness wiring', () => {
     expect(bootstrapSource).toContain('needsIncompleteDiscoveryResume');
     expect(bootstrapSource).toContain('shouldFirePendingReadinessStart');
     expect(bootstrapSource).toContain('handle.isLive()');
+    expect(bootstrapSource).toContain('const entryStillLive = () => handle.isLive();');
+    expect(bootstrapSource).not.toContain(
+      'handle.isLive() && !isAppSessionBoundaryPending()',
+    );
     expect(bootstrapSource).toContain('handle.markDiscoveryComplete()');
     expect(bootstrapSource).toContain('startedHandle?.isLive()');
     expect(bootstrapSource).toContain('markDiscoveryComplete()');

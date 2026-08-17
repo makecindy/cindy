@@ -30,6 +30,24 @@ describe('resetAccountProviderRuntimes', () => {
     );
     expect(shutdownCodexEnvironment).not.toHaveBeenCalled();
   });
+
+  it('still shuts down Codex when only a transient boundary flips during restart', async () => {
+    const shutdownCodexEnvironment = vi.fn(async () => {});
+    let handleLive = true;
+    let boundaryPending = false;
+    await resetAccountProviderRuntimes(
+      {
+        restartCodex: async () => {
+          boundaryPending = true;
+        },
+        shutdownCodexEnvironment,
+        log: { warn: vi.fn() },
+      },
+      () => handleLive,
+    );
+    expect(boundaryPending).toBe(true);
+    expect(shutdownCodexEnvironment).toHaveBeenCalledOnce();
+  });
 });
 
 describe('discoverAccountProviderModels', () => {
