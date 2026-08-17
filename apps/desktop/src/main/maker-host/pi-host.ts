@@ -878,6 +878,11 @@ export function buildPiNativeProvidersFromConfigs(
           reasoning?: boolean;
           reasoningEfforts?: PiReasoningEffort[];
           piApi?: PiNativeApi;
+          route?: {
+            baseUrl: string;
+            wireProtocol: ProviderWireProtocol;
+            requestPath?: string;
+          };
         }>;
       };
     };
@@ -935,7 +940,11 @@ export function buildPiNativeProvidersFromConfigs(
       (model, index) => bundledModels[index] ?? officialById.get(model.id),
     );
     const modelApis = rt.models.map(
-      (model, index) => model.piApi ?? runtimeApi ?? metadataModels[index]?.api,
+      (model, index) =>
+        model.piApi ??
+        (model.route ? wireProtocolToPiApi(model.route.wireProtocol) : undefined) ??
+        runtimeApi ??
+        metadataModels[index]?.api,
     );
     const unresolvedModelIndex = modelApis.findIndex((api) => api === undefined);
     if (unresolvedModelIndex >= 0) {
@@ -986,7 +995,11 @@ export function buildPiNativeProvidersFromConfigs(
         return {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
-          ...(bundledModel?.baseUrl ? { baseUrl: bundledModel.baseUrl } : {}),
+          ...(m.route?.baseUrl
+            ? { baseUrl: m.route.baseUrl }
+            : bundledModel?.baseUrl
+              ? { baseUrl: bundledModel.baseUrl }
+              : {}),
           name: bundledModel?.name ?? m.name,
           contextWindow: bundledModel?.contextWindow ?? m.contextWindow,
           ...(bundledModel?.maxTokens ? { maxTokens: bundledModel.maxTokens } : {}),

@@ -2170,32 +2170,56 @@
             {
               "id": "minimax-m3",
               "name": "MiniMax M3",
-              "piApi": "anthropic-messages"
+              "piApi": "anthropic-messages",
+              "route": {
+                "baseUrl": "https://opencode.ai/zen/go",
+                "wireProtocol": "anthropic-messages"
+              }
             },
             {
               "id": "minimax-m2.7",
               "name": "MiniMax M2.7",
-              "piApi": "anthropic-messages"
+              "piApi": "anthropic-messages",
+              "route": {
+                "baseUrl": "https://opencode.ai/zen/go",
+                "wireProtocol": "anthropic-messages"
+              }
             },
             {
               "id": "minimax-m2.5",
               "name": "MiniMax M2.5",
-              "piApi": "anthropic-messages"
+              "piApi": "anthropic-messages",
+              "route": {
+                "baseUrl": "https://opencode.ai/zen/go",
+                "wireProtocol": "anthropic-messages"
+              }
             },
             {
               "id": "qwen3.7-max",
               "name": "Qwen3.7 Max",
-              "piApi": "anthropic-messages"
+              "piApi": "anthropic-messages",
+              "route": {
+                "baseUrl": "https://opencode.ai/zen/go",
+                "wireProtocol": "anthropic-messages"
+              }
             },
             {
               "id": "qwen3.7-plus",
               "name": "Qwen3.7 Plus",
-              "piApi": "anthropic-messages"
+              "piApi": "anthropic-messages",
+              "route": {
+                "baseUrl": "https://opencode.ai/zen/go",
+                "wireProtocol": "anthropic-messages"
+              }
             },
             {
               "id": "qwen3.6-plus",
               "name": "Qwen3.6 Plus",
-              "piApi": "anthropic-messages"
+              "piApi": "anthropic-messages",
+              "route": {
+                "baseUrl": "https://opencode.ai/zen/go",
+                "wireProtocol": "anthropic-messages"
+              }
             },
             {
               "id": "grok-4.5",

@@ -1287,6 +1287,48 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     },
   );
 
+  it('keeps a per-model endpoint paired with its protocol override', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://opencode.ai/zen/go/v1',
+              wireProtocol: 'openai-chat',
+              models: [
+                {
+                  id: 'minimax-m3',
+                  name: 'MiniMax M3',
+                  piApi: 'anthropic-messages',
+                  route: {
+                    baseUrl: 'https://opencode.ai/zen/go',
+                    wireProtocol: 'anthropic-messages',
+                  },
+                },
+              ],
+            }),
+          },
+        },
+      ],
+      () => null,
+    );
+
+    expect(providers[0]).toMatchObject({
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      api: 'openai-completions',
+      models: [
+        {
+          id: 'minimax-m3',
+          api: 'anthropic-messages',
+          baseUrl: 'https://opencode.ai/zen/go',
+        },
+      ],
+    });
+  });
+
   it.each([
     ['openai-chat', 'openai-completions'],
     ['anthropic-messages', 'anthropic-messages'],

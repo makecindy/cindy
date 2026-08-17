@@ -393,7 +393,6 @@ describe('sanitizePresets', () => {
     }
   });
 });
-
 describe('parseCatalog presets 容错', () => {
   it('presets 含坏条目时目录仍解析成功、坏条目被清洗', () => {
     const parsed = parseCatalog(minimalCatalog({ presets: [VALID_PRESET, { broken: true }] as never }));
@@ -1064,6 +1063,16 @@ describe('官方渠道预设契约', () => {
     ]);
     for (const [modelId, piApi] of expectedOverrides) {
       expect(piModels.find((model) => model.id === modelId), modelId).toMatchObject({ piApi });
+    }
+    for (const modelId of [...expectedOverrides.entries()]
+      .filter(([, piApi]) => piApi === 'anthropic-messages')
+      .map(([modelId]) => modelId)) {
+      expect(piModels.find((model) => model.id === modelId), modelId).toMatchObject({
+        route: {
+          baseUrl: 'https://opencode.ai/zen/go',
+          wireProtocol: 'anthropic-messages',
+        },
+      });
     }
     for (const model of piModels.filter((candidate) => !expectedOverrides.has(candidate.id))) {
       expect(model.piApi, model.id).toBeUndefined();
