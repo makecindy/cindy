@@ -57,6 +57,7 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'maker:goal:resume': 30_000,
   'maker:goal:set': 30_000,
   'maker:message:delete': 30_000,
+  'maker:generate-title': 30_000,
   'maker:regenerate-title': 30_000,
   'maker:rewind:commit': 30_000,
   'maker:send': 30_000,

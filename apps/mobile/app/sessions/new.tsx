@@ -153,6 +153,7 @@ import {
   pickInitialNewSessionWorkspace,
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
+  persistRemoteGoalSessionTitle,
   sessionFromCreateResult,
   compensatePrecreatedWorktree,
   reconcileEffortAfterFallback,
@@ -5064,6 +5065,12 @@ export default function NewRemoteSessionScreen() {
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
       if (session.title && !isDefaultDraftSessionTitle(session.title)) {
         remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title);
+        void persistRemoteGoalSessionTitle(maker, {
+          sessionId: result.sessionId,
+          objective: input.objective,
+          agentKind: finalDraft.agentKind,
+          isCurrent: () => isCurrentOwner() && ensureDeviceAlive(),
+        });
       }
       if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       // 目标流不带 composer 附件(与桌面一致),跳转即丢引用:已上传的中转对象在此

@@ -588,9 +588,8 @@ function recomputeSessions(): void {
   for (const sessionId of [...sessionLiveActivity.keys()]) {
     if (!sessionDeviceIndex.has(sessionId)) sessionLiveActivity.delete(sessionId);
   }
-  for (const sessionId of [...pendingTitlePreview.keys()]) {
-    if (!sessionDeviceIndex.has(sessionId)) dropPendingTitlePreview(sessionId);
-  }
+  // 预览不因列表短暂缺席回收:旧 sessions:list 可能在远端建会话前发出、入队成功后才回来。
+  // 权威标题落地、明确失败撤回、归档/删除、设备移除、clear() 才会丢掉。
   // 数组级同样调和:全部元素引用与序都未变时保留旧数组引用——useRemoteSessions 的
   // useSyncExternalStore 快照经 Object.is 即可短路,消费屏对无关 emit 零重渲染。
   mergedSessions = sameElementRefs(mergedSessions, next) ? mergedSessions : next;
