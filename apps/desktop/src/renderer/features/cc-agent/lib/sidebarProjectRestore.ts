@@ -39,9 +39,7 @@ export function registerSidebarProjectRestoreHandler(
 
 export function requestSidebarProjectRestore(projectKey: string): Promise<boolean> {
   const handler = sidebarProjectRestoreHandler;
-  if (!handler) {
-    return Promise.reject(new Error('Sidebar project restore handler is unavailable'));
-  }
+  if (!handler) return Promise.resolve(false);
   return handler(projectKey);
 }
 

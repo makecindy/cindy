@@ -341,9 +341,7 @@ describe('sidebar project restore coordinator', () => {
     expect(handler).toHaveBeenCalledWith(PROJECT_KEY);
 
     unregister();
-    await expect(requestSidebarProjectRestore(PROJECT_KEY)).rejects.toThrow(
-      'Sidebar project restore handler is unavailable',
-    );
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(false);
   });
 
   it('does not let an older cleanup unregister the current sidebar owner', async () => {
