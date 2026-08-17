@@ -7097,7 +7097,11 @@ app.on('ready', async () => {
               // A→B restartCodex would skip shutdownCodexEnvironment forever while
               // discovery still marked the entry complete and adoptable.
               const entryStillLive = () => handle.isLive();
-              await refreshCustomProvidersIntoCatalog(entryStillLive);
+              // Catalog writes die with a real owner teardown (`invalidateAdoption`).
+              // Codex/Pi cleanup stays owed to this entry across a same-owner bump.
+              const catalogMayWrite = () =>
+                handle.isLive() && accountProviderReadinessBarrier.isCurrentAdoptable();
+              await refreshCustomProvidersIntoCatalog(catalogMayWrite);
               // A new start() is already a new incarnation (same-owner rollover adopts
               // instead). Bind reset/discovery/Pi teardown to this entry so a later
               // generation bump cannot skip A→B cleanup, and a replaced entry cannot
@@ -7112,14 +7116,14 @@ app.on('ready', async () => {
                   entryStillLive,
                 );
               }
-              if (handle.isLive()) {
+              if (catalogMayWrite()) {
                 await discoverAccountProviderModels(
                   {
                     loadXaiLkg: loadXaiModelsFromDiskCache,
                     refreshProviderModels: requestProviderModelAutoRefresh,
                     log: accountSwitchLog,
                   },
-                  () => handle.isLive(),
+                  catalogMayWrite,
                 );
                 handle.markDiscoveryComplete();
               }

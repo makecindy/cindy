@@ -161,6 +161,9 @@ describe('account provider readiness wiring', () => {
     expect(bootstrapSource).toContain('shouldFirePendingReadinessStart');
     expect(bootstrapSource).toContain('handle.isLive()');
     expect(bootstrapSource).toContain('const entryStillLive = () => handle.isLive();');
+    expect(bootstrapSource).toContain(
+      'handle.isLive() && accountProviderReadinessBarrier.isCurrentAdoptable()',
+    );
     expect(bootstrapSource).not.toContain(
       'handle.isLive() && !isAppSessionBoundaryPending()',
     );
