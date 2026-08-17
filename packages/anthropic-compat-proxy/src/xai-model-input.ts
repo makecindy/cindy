@@ -452,8 +452,9 @@ function normalizeXaiInputItem(item: unknown): {
 export interface SanitizeXaiModelInputOptions {
   /**
    * false = 丢掉全部 reasoning（含带密文的）。
-   * 省略时按 `supportsXaiReasoningModel(body.model)`：grok-code* / grok-build*
-   * 为 false，其余 Grok 为 true。
+   * 省略时：能识别的 grok-code* / grok-build* 为 false，能识别的通用 Grok
+   * 为 true；看不出底层型号的自定义别名保守为 false（否则 coding 模型
+   * 会在修完 agent_message 后仍因 reasoning 被拒）。
    */
   supportsReasoning?: boolean;
 }
@@ -472,7 +473,7 @@ export function sanitizeXaiModelInputBody(
   opts: SanitizeXaiModelInputOptions = {},
 ): Record<string, unknown> | null {
   const supportsReasoning =
-    opts.supportsReasoning ?? supportsXaiReasoningModel(body.model);
+    opts.supportsReasoning ?? defaultSupportsReasoning(body.model);
   let source = body;
   let wrappedSingleItem = false;
   if (isPlainObject(body.input) && !Array.isArray(body.input)) {
@@ -504,6 +505,13 @@ export function sanitizeXaiModelInputBody(
   return { ...source, input };
 }
 
+function defaultSupportsReasoning(model: unknown): boolean {
+  // 自定义 LiteLLM 别名看不出底层是 grok-4.5 还是 grok-code：保守丢掉 reasoning，
+  // 避免唯一一次 422 重试修完非法 item 后仍被 coding 模型拒。
+  if (!looksLikeXaiResponsesModel(model)) return false;
+  return supportsXaiReasoningModel(model);
+}
+
 function resolveSupportsReasoning(
   model: unknown,
   opts: {
@@ -515,7 +523,7 @@ function resolveSupportsReasoning(
     return opts.supportsReasoning;
   if (opts.supportsReasoningForModel)
     return opts.supportsReasoningForModel(model);
-  return supportsXaiReasoningModel(model);
+  return defaultSupportsReasoning(model);
 }
 
 /** Recovery / active-strip 用：非 JSON 或无需改写 → null。 */

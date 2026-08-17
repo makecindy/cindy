@@ -309,6 +309,28 @@ describe("sanitizeXaiModelInputBody", () => {
     ).toBeNull();
   });
 
+  it("drops reasoning for unrecognized LiteLLM aliases", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "litellm-hidden-coding",
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_1",
+          summary: [],
+          encrypted_content: "BLOB",
+        },
+        { type: "agent_message", author: "bot", content: "hi" },
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "[collab bot]\nhi" }],
+      },
+    ]);
+  });
+
   it("wraps a single object input into an array before sanitizing", () => {
     const out = sanitizeXaiModelInputBody({
       model: "grok-4.5",
@@ -414,6 +436,27 @@ describe("createXaiModelInputRecoveryRule", () => {
       Buffer.from(
         JSON.stringify({
           model: "x-ai/grok-code-fast",
+          input: [
+            { type: "reasoning", encrypted_content: "BLOB" },
+            { type: "agent_message", author: "bot", content: "hi" },
+          ],
+        }),
+      ),
+    );
+    expect(JSON.parse(stripped!.toString("utf8")).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "[collab bot]\nhi" }],
+      },
+    ]);
+  });
+
+  it("drops reasoning when recovering a hidden coding-model alias", () => {
+    const stripped = rule.strip(
+      Buffer.from(
+        JSON.stringify({
+          model: "litellm-hidden-coding",
           input: [
             { type: "reasoning", encrypted_content: "BLOB" },
             { type: "agent_message", author: "bot", content: "hi" },
