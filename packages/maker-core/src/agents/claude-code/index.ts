@@ -1413,7 +1413,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       parent_tool_use_id: null;
       uuid?: string;
     };
+    type VendorDispatchLeaseAcquire = NonNullable<SendOptions['acquireVendorDispatchLease']>;
     type VendorDispatchLeaseRelease = () => void | Promise<void>;
+    const vendorDispatchLeaseAcquireByInput = new WeakMap<
+      SdkUserInput,
+      VendorDispatchLeaseAcquire
+    >();
     const vendorDispatchLeaseByInput = new WeakMap<SdkUserInput, VendorDispatchLeaseRelease>();
     const queuedVendorDispatchLeaseInputs = new Set<SdkUserInput>();
 
@@ -4851,7 +4856,25 @@ export class ClaudeCodeAgent extends BaseAgent {
         await replayRuntimeDrift(runtimeSnapshot, 'invalid resume rebuild');
         releaseGate();
         if (replayInput) {
-          if (!inputQueue.push(replayInput)) throw new Error('fresh retry input queue rejected replay');
+          // The original lease covered only the first provider submission. It may
+          // still be awaiting its local-handoff release when invalid-resume recovery
+          // starts, so settle it before acquiring a fresh lease for the replay.
+          await releaseVendorDispatchLeaseForInput(replayInput);
+          const reacquireVendorDispatchLease =
+            vendorDispatchLeaseAcquireByInput.get(replayInput);
+          const releaseVendorDispatchLease =
+            await reacquireVendorDispatchLease?.();
+          if (typeof releaseVendorDispatchLease === 'function') {
+            retainVendorDispatchLease(replayInput, releaseVendorDispatchLease);
+          }
+          try {
+            if (!inputQueue.push(replayInput)) {
+              throw new Error('fresh retry input queue rejected replay');
+            }
+          } catch (error) {
+            await releaseVendorDispatchLeaseForInput(replayInput);
+            throw error;
+          }
           armUpstreamResponseIdle();
         }
         return true;
@@ -5439,6 +5462,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           };
           const releaseVendorDispatchLease =
             await sendOpts?.acquireVendorDispatchLease?.();
+          if (sendOpts?.acquireVendorDispatchLease) {
+            vendorDispatchLeaseAcquireByInput.set(
+              sdkInput,
+              sendOpts.acquireVendorDispatchLease,
+            );
+          }
           if (typeof releaseVendorDispatchLease === 'function') {
             retainVendorDispatchLease(sdkInput, releaseVendorDispatchLease);
           }

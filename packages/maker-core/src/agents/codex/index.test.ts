@@ -7124,7 +7124,11 @@ describe('CodexAgent MCP thread context hooks', () => {
           model: 'gpt-5.4',
           workingDir: '/repo',
         });
-        await handle.send({ type: 'user', content: 'hello' });
+        const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
+        await handle.send(
+          { type: 'user', content: 'hello' },
+          { acquireVendorDispatchLease },
+        );
         expect(turnStartCount(host)).toBe(1);
 
         const handlers = host.getThreadHandlers();
@@ -7156,6 +7160,15 @@ describe('CodexAgent MCP thread context hooks', () => {
         // 退避（首档 2s ±25%）后重投同一份 turnParams。
         await vi.advanceTimersByTimeAsync(3_000);
         expect(turnStartCount(host)).toBe(2);
+        const turnStartOptions = host.request.mock.calls
+          .filter(([method]) => method === Method.TurnStart)
+          .map((call) => (call as unknown[])[2] as {
+            acquireSubmissionLease?: unknown;
+          });
+        expect(turnStartOptions).toHaveLength(2);
+        expect(turnStartOptions.every(
+          (options) => options.acquireSubmissionLease === acquireVendorDispatchLease,
+        )).toBe(true);
 
         await handle.close();
       } finally {

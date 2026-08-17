@@ -380,6 +380,11 @@ describe('sendToSession ordering', () => {
       'const rewindPersistedUserMessageAfterFailedDispatch',
       'let live = maker.getSession(targetSessionId);',
     );
+    const awaitedGitBaselineBlock = extractBetween(
+      source,
+      'async function sendUserMessageWithAwaitedGitBaseline',
+      'async function sendToSessionInternal',
+    );
 
     expect(source).toContain('assertDesktopSendDispatched');
     expect(orcaInterAgentDispatcherSource).toContain('resolveCollabDispatchResult');
@@ -448,13 +453,45 @@ describe('sendToSession ordering', () => {
       'await inputCoordinator.retainPersistedOrcaCleanupRecovery(',
       'throw error;',
     );
+    expect(liveBranch).toContain(
+      'const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);',
+    );
+    expect(liveBranch).toContain('if (!dispatchUnconfirmed) {');
+    expect(liveBranch).toContain(
+      'await rewindPersistedUserMessageAfterFailedDispatch();',
+    );
+    expectOrder(
+      liveBranch,
+      'if (!dispatchUnconfirmed) {',
+      'await rewindPersistedUserMessageAfterFailedDispatch();',
+    );
+    expect(liveBranch).toContain('commitAgentIslandUserPrompt(targetSessionId, clientId);');
+    expect(liveBranch).toContain('dispatchUnconfirmed: true as const');
     expect(resumedBranch).toContain(
+      'const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);',
+    );
+    expect(resumedBranch).toContain('if (!dispatchUnconfirmed) {');
+    expect(resumedBranch).toContain('commitAgentIslandUserPrompt(targetSessionId, clientId);');
+    expect(resumedBranch).toContain('dispatchUnconfirmed: true as const');
+    expectOrder(
+      resumedBranch,
+      'if (!dispatchUnconfirmed) {',
       'await rewindPersistedUserMessageAfterFailedDispatch();',
     );
     expectOrder(
       resumedBranch,
       'await rewindPersistedUserMessageAfterFailedDispatch();',
       'if (isSessionRunningError(err))',
+    );
+    expect(awaitedGitBaselineBlock).toContain(
+      'const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);',
+    );
+    expect(awaitedGitBaselineBlock).toContain(
+      'if (turnChangeSetStarted && !dispatchUnconfirmed)',
+    );
+    expect(awaitedGitBaselineBlock).toContain('if (baselineStarted && !dispatchUnconfirmed)');
+    expect(awaitedGitBaselineBlock).toContain(
+      'if (dispatchUnconfirmed && pendingHandoff && turnChangeSetStarted)',
     );
   });
 

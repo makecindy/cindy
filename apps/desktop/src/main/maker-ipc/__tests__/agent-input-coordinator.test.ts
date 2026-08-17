@@ -3600,6 +3600,36 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(retainSettled).toBe(true);
   });
 
+  it('keeps retrying direct-send cleanup when its recovery snapshot write fails', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'direct-cleanup-snapshot-failure';
+    const item = makeOrcaItem('orca-direct-retry', 'undelivered report', 'team-active');
+
+    await h.coordinator.ensureQueueRestored(sid);
+    h.persistQueueSnapshot.mockClear();
+    h.persistQueueSnapshot.mockRejectedValueOnce(new Error('snapshot database busy'));
+    h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('message database busy'));
+
+    await expect(
+      h.coordinator.retainPersistedOrcaCleanupRecovery(
+        sid,
+        item,
+        new Error('message database busy'),
+      ),
+    ).rejects.toThrow('snapshot database busy');
+    await flush();
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.hasKnownClientId(sid, item.clientId)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flush();
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.hasKnownClientId(sid, item.clientId)).toBe(false);
+  });
+
   it('holds the Orca pre-vendor reservation until a queued send settles', async () => {
     const h = createHarness();
     const sid = 'orca-dispatch-reservation';

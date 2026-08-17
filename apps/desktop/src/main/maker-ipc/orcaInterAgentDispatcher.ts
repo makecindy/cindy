@@ -144,6 +144,8 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'WORKTREE_UNAVAILABLE'
         | 'INTERNAL';
       message: string;
+      /** Provider acceptance may have happened; accepted side effects must be preserved. */
+      dispatchUnconfirmed?: true;
     };
 
 /** 通过既有 sendToSessionInternal 重建或排队目标 session 时传入的最小参数。 */
@@ -566,6 +568,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           ...createHostSendFailure(result.errorCode === 'BUSY' ? 'SESSION_RUNNING' : 'SEND_FAILED', result.message),
           source: params.meta.source,
           context: params.meta.context,
+          ...(result.dispatchUnconfirmed ? { dispatchUnconfirmed: true as const } : {}),
         },
         isPendingOrcaTeamTransitionError(result.message),
       );

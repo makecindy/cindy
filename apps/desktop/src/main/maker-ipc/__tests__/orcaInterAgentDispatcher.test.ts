@@ -610,6 +610,48 @@ describe('Orca lead/worker dispatcher', () => {
     expect(rollback).not.toHaveBeenCalled();
   });
 
+  it('preserves resumed-send accepted state when provider acceptance is unconfirmed', async () => {
+    const accepted = vi.fn();
+    const rollback = vi.fn();
+    const sendToSessionInternal = vi
+      .fn<OrcaInterAgentDispatcherDeps<TestSessionMeta>['sendToSessionInternal']>()
+      .mockImplementationOnce(async (params) => {
+        await params.onAccepted?.();
+        return {
+          ok: false,
+          errorCode: 'AGENT_NOT_READY',
+          message: 'provider response lost',
+          dispatchUnconfirmed: true,
+        };
+      });
+    const h = createHarness({
+      getLiveSession: vi.fn(() => null),
+      sendToSessionInternal,
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Possibly accepted resumed work',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'unconfirmed-resumed-test' },
+      onAccepted: accepted,
+      onAcceptedRollback: rollback,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SEND_FAILED',
+        dispatchUnconfirmed: true,
+      },
+    });
+    expect(accepted).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
   it('rewinds the persisted direct user row when the final team fence cancels dispatch', async () => {
     const accepted = vi.fn();
     const rollback = vi.fn();

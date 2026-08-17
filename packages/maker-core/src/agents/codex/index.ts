@@ -10331,6 +10331,7 @@ export class CodexAgent extends BaseAgent {
               // 且无人可解（review #844 codex P1）。与正常 turn/start 同款边界。
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+                acquireSubmissionLease: sendOpts?.acquireVendorDispatchLease,
               });
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
               // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为

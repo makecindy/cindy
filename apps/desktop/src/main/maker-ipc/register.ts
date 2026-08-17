@@ -527,7 +527,10 @@ import {
   cancelIOSSimulatorSessionOperations,
 } from '../mcp-integrations/ios-simulator.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
-import type { CollabDispatchOutcome } from './collabSendOutcome.js';
+import {
+  isTurnDispatchUnconfirmedSendError,
+  type CollabDispatchOutcome,
+} from './collabSendOutcome.js';
 import { runAcceptedCallback } from './acceptedCallbackRunner.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
@@ -1458,6 +1461,8 @@ type SendToSessionInternalResult =
         | 'WORKTREE_UNAVAILABLE'
         | 'INTERNAL';
       message: string;
+      /** Provider acceptance may have happened; callers must preserve accepted state. */
+      dispatchUnconfirmed?: true;
     };
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
@@ -7953,11 +7958,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return sendResult;
     } catch (err) {
-      if (turnChangeSetStarted) {
+      const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);
+      if (turnChangeSetStarted && !dispatchUnconfirmed) {
         clearPendingTurnChangeSets(session.id);
       }
-      if (baselineStarted) {
+      if (baselineStarted && !dispatchUnconfirmed) {
         gitSnapshotCoordinator?.onTurnAbort(session.id);
+      }
+      if (dispatchUnconfirmed && pendingHandoff && turnChangeSetStarted) {
+        agentHandoffPending.consume(session.id);
       }
       throw err;
     }
@@ -8545,7 +8554,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
           };
         } catch (err) {
-          await rewindPersistedUserMessageAfterFailedDispatch();
+          const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);
+          if (!dispatchUnconfirmed) {
+            await rewindPersistedUserMessageAfterFailedDispatch();
+          }
           if (isSessionRunningError(err)) {
             if (userPromptPreviewStarted) {
               rollbackAgentIslandUserPrompt(
@@ -8576,16 +8588,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             };
           }
           if (userPromptPreviewStarted) {
-            rollbackAgentIslandUserPrompt(
-              targetSessionId,
-              clientId,
-              'send_to_session:live:failed-before-dispatch',
-            );
+            if (dispatchUnconfirmed) {
+              commitAgentIslandUserPrompt(targetSessionId, clientId);
+            } else {
+              rollbackAgentIslandUserPrompt(
+                targetSessionId,
+                clientId,
+                'send_to_session:live:failed-before-dispatch',
+              );
+            }
           }
           return {
             ok: false as const,
             errorCode: 'INTERNAL' as const,
             message: err instanceof Error ? err.message : String(err),
+            ...(dispatchUnconfirmed ? { dispatchUnconfirmed: true as const } : {}),
           };
         }
       }
@@ -8653,7 +8670,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
         };
       } catch (err) {
-        await rewindPersistedUserMessageAfterFailedDispatch();
+        const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);
+        if (!dispatchUnconfirmed) {
+          await rewindPersistedUserMessageAfterFailedDispatch();
+        }
         if (isSessionRunningError(err)) {
           if (userPromptPreviewStarted) {
             rollbackAgentIslandUserPrompt(
@@ -8684,16 +8704,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           };
         }
         if (userPromptPreviewStarted) {
-          rollbackAgentIslandUserPrompt(
-            targetSessionId,
-            clientId,
-            'send_to_session:resumed:failed-before-dispatch',
-          );
+          if (dispatchUnconfirmed) {
+            commitAgentIslandUserPrompt(targetSessionId, clientId);
+          } else {
+            rollbackAgentIslandUserPrompt(
+              targetSessionId,
+              clientId,
+              'send_to_session:resumed:failed-before-dispatch',
+            );
+          }
         }
         return {
           ok: false as const,
           errorCode: 'AGENT_NOT_READY' as const,
           message: err instanceof Error ? err.message : String(err),
+          ...(dispatchUnconfirmed ? { dispatchUnconfirmed: true as const } : {}),
         };
       }
     });

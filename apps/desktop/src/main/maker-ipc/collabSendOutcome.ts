@@ -52,7 +52,7 @@ function isSessionRunningSendError(err: unknown): boolean {
   return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
 }
 
-function isTurnDispatchUnconfirmedSendError(err: unknown): boolean {
+export function isTurnDispatchUnconfirmedSendError(err: unknown): boolean {
   return Boolean(
     err
     && typeof err === 'object'

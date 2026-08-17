@@ -87,6 +87,7 @@ const MAX_AUTO_RESUME_DISPATCH_ATTEMPTS = 3;
 const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
+const ORCA_CLEANUP_RECOVERY_RETRY_DELAY_MS = 1_000;
 const ACTIVE_TURN_CLEANUP_SNAPSHOT_KIND = 'active-turn-cleanup';
 
 type PersistedQueueSnapshotItem = AgentInputQueuedMessage & {
@@ -626,6 +627,8 @@ interface SessionInputState {
   recovery: AgentInputRecovery;
   /** 已落库但从未交给 provider、且仍需完成 DB rewind 的内部清理债务。 */
   activeTurnCleanupRecoveryItem: AgentInputQueuedMessage | null;
+  /** cleanup rewind 失败后的进程内兜底；独立于普通 queue 的 SESSION_RUNNING timer。 */
+  orcaCleanupRecoveryRetryTimer: ReturnType<typeof setTimeout> | null;
   drainScheduled: boolean;
   drainWakeupGeneration: number;
   /** Codex emits terminal error followed by done; queued work must not drain between the pair. */
@@ -701,6 +704,7 @@ function createInitialInputState(
     autoResumeAttemptToken: null,
     recovery: null,
     activeTurnCleanupRecoveryItem: null,
+    orcaCleanupRecoveryRetryTimer: null,
     drainScheduled: false,
     drainWakeupGeneration: 0,
     pendingExternalTerminalDone: false,
@@ -1380,8 +1384,14 @@ export class AgentInputCoordinator {
     state.activeTurnCleanupRecoveryItem = item;
     state.error = errorMessage(error);
     state.stickyError = null;
-    await this.emitAndWaitForQueueSnapshot(sessionId);
-    this.scheduleDrain(sessionId, 'direct-orca-cleanup-recovery');
+    try {
+      await this.emitAndWaitForQueueSnapshot(sessionId);
+    } finally {
+      // Snapshot persistence and process-local cleanup are independent recovery
+      // routes. Even when the durable handoff fails, keep retrying the in-memory
+      // debt rather than leaving the visible, never-dispatched row stranded.
+      this.scheduleDrain(sessionId, 'direct-orca-cleanup-recovery');
+    }
   }
 
   /**
@@ -3008,6 +3018,7 @@ export class AgentInputCoordinator {
         : Math.max(prev.clearBoundaryMs, observedClearBoundaryMs);
     this.clearAbortReconcileRetry(prev);
     this.clearSessionRunningRetry(prev);
+    this.clearOrcaCleanupRecoveryRetry(prev);
     this.clearCredentialSwitchWait(prev);
     this.clearPendingExternalTerminalDone(prev);
     this.abortInputBoundary(sessionId);
@@ -3543,6 +3554,33 @@ export class AgentInputCoordinator {
     state.drainWakeupGeneration += 1;
   }
 
+  private scheduleOrcaCleanupRecoveryRetry(
+    sessionId: string,
+    state: SessionInputState,
+    cleanupRecovery: AgentInputQueuedMessage,
+  ): void {
+    if (state.orcaCleanupRecoveryRetryTimer) return;
+    const generation = state.generation;
+    const clientId = cleanupRecovery.clientId;
+    state.orcaCleanupRecoveryRetryTimer = setTimeout(() => {
+      const latest = this.getState(sessionId);
+      if (latest !== state) return;
+      latest.orcaCleanupRecoveryRetryTimer = null;
+      if (
+        latest.generation !== generation ||
+        latest.activeTurnCleanupRecoveryItem?.clientId !== clientId
+      ) return;
+      this.scheduleDrain(sessionId, 'orca-cleanup-recovery-retry');
+    }, ORCA_CLEANUP_RECOVERY_RETRY_DELAY_MS);
+  }
+
+  private clearOrcaCleanupRecoveryRetry(state: SessionInputState): void {
+    if (state.orcaCleanupRecoveryRetryTimer) {
+      clearTimeout(state.orcaCleanupRecoveryRetryTimer);
+    }
+    state.orcaCleanupRecoveryRetryTimer = null;
+  }
+
   private async drain(sessionId: string, reason: string): Promise<void> {
     const state = this.getState(sessionId);
     if (await this.discardInactiveOrcaRecovery(sessionId, state)) return;
@@ -3925,6 +3963,9 @@ export class AgentInputCoordinator {
           teamId,
           ...discarded,
         });
+        if (state.activeTurnCleanupRecoveryItem?.clientId !== cleanupRecovery.clientId) {
+          this.clearOrcaCleanupRecoveryRetry(state);
+        }
         return (
           discarded.pendingDiscarded > 0 ||
           discarded.activeCancelled ||
@@ -3939,6 +3980,7 @@ export class AgentInputCoordinator {
           teamId,
           error: errorMessage(error),
         });
+        this.scheduleOrcaCleanupRecoveryRetry(sessionId, state, cleanupRecovery);
         return true;
       }
     }

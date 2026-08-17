@@ -711,13 +711,34 @@ describe('Claude invalid-resume recovery', () => {
 
   it('suppresses the failed resume boundary, replays one input, and finishes on a fresh query', async () => {
     const clear = vi.fn(async () => true);
+    const leaseOrder: string[] = [];
+    let consumedInputs = 0;
     const h = await startHarness({
       resumeSessionId: 'sdk-old',
       transcriptExists: true,
       onInvalidResumeSession: clear,
+      onPromptConsumed: () => {
+        consumedInputs += 1;
+        leaseOrder.push(`consume-${consumedInputs}`);
+      },
     });
 
-    await h.handle.send({ type: 'user', content: 'hello once' });
+    let leaseAttempt = 0;
+    const acquireVendorDispatchLease = vi.fn(async () => {
+      leaseAttempt += 1;
+      const attempt = leaseAttempt;
+      leaseOrder.push(`acquire-${attempt}`);
+      return () => {
+        leaseOrder.push(`release-${attempt}`);
+      };
+    });
+    await h.handle.send(
+      { type: 'user', content: 'hello once' },
+      { acquireVendorDispatchLease },
+    );
+    await vi.waitFor(() => {
+      expect(leaseOrder).toEqual(['acquire-1', 'consume-1', 'release-1']);
+    });
     h.streams[0].emit({
       type: 'result',
       is_error: true,
@@ -729,6 +750,17 @@ describe('Claude invalid-resume recovery', () => {
       new Error('Claude Code returned an error result: No conversation found with session ID: sdk-old'),
     );
     await vi.waitFor(() => expect(h.queryOptions).toHaveLength(2));
+    await vi.waitFor(() => {
+      expect(leaseOrder).toEqual([
+        'acquire-1',
+        'consume-1',
+        'release-1',
+        'acquire-2',
+        'consume-2',
+        'release-2',
+      ]);
+    });
+    expect(acquireVendorDispatchLease).toHaveBeenCalledTimes(2);
     h.streams[1].emit({
       type: 'system',
       subtype: 'init',
