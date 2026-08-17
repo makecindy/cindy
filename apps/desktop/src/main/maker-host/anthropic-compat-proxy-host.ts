@@ -26,8 +26,11 @@ import {
   createEncryptedContentRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createXaiModelInputRecoveryRule,
+  createXaiModelInputSanitizeTransform,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
+  sanitizeXaiModelInputFromBody,
   stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
@@ -78,6 +81,7 @@ import {
   emptyTextStripController,
   emptyThinkingStripController,
   encryptedStripController,
+  xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
@@ -592,6 +596,14 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
         // 旧 #794 strip 继续兜底。
         buildVisionBridgeProxyTransform(log),
+        // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
+        // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。
+        createActiveStripTransform({
+          controller: xaiModelInputStripController,
+          enabled: () => true,
+          strip: sanitizeXaiModelInputFromBody,
+        }),
+        createXaiModelInputSanitizeTransform(),
         stripNonAnthropicFields,
       ],
       recoveryRules: [
@@ -626,6 +638,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // 重发,always-on(moonshot 实测不报错,但 LiteLLM 版本差 / 真 Anthropic
         // 上游会报;主动 transform 已检测即修,此为第二道防线)。
         createDuplicateToolUseIdRecoveryRule(),
+        // xAI ModelInput 422（含 LiteLLM 包装的 XaiException）→ 洗 input[] 重发。
+        createXaiModelInputRecoveryRule({
+          onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
+        }),
       ],
       logger: log,
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop
