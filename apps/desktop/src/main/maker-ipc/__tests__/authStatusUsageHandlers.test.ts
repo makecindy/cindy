@@ -1194,6 +1194,7 @@ describe('maker usage IPC handlers', () => {
       consumeCodexRateLimitReset: vi.fn(),
       readClaudeSubscriptionUsageSnapshot: vi.fn().mockResolvedValue(null),
       readGlmCodingPlanUsageSnapshot: vi.fn().mockResolvedValue(null),
+      readXaiSubscriptionUsageSnapshot: vi.fn().mockResolvedValue(null),
       readClaudeAccountUsageSnapshot: vi.fn(),
       triggerClaudeAccountUsageRefresh: vi.fn(),
       readModelPricing: vi.fn(),
@@ -1216,6 +1217,37 @@ describe('maker usage IPC handlers', () => {
       totalTokens: 42,
     });
     expect(readAgentTodayUsage).toHaveBeenCalledWith('codex');
+  });
+
+  it('rejects SuperGrok usage reads from untrusted senders', async () => {
+    const harness = new IpcHarness();
+    const readXaiSubscriptionUsageSnapshot = vi.fn().mockResolvedValue({ planLabel: 'SuperGrok Heavy' });
+    const assertTrustedSender = vi.fn(() => {
+      throw new Error('[PERMISSION_DENIED] untrusted');
+    });
+    registerMakerUsageHandlers(harness, makeUsageDeps({
+      readXaiSubscriptionUsageSnapshot,
+      assertTrustedSender,
+    }));
+
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION)).rejects.toThrow(
+      /PERMISSION_DENIED/,
+    );
+    expect(readXaiSubscriptionUsageSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('reads SuperGrok usage after the trusted-sender gate passes', async () => {
+    const harness = new IpcHarness();
+    const snapshot = { planLabel: 'SuperGrok Heavy', creditUsagePercent: 2 };
+    const readXaiSubscriptionUsageSnapshot = vi.fn().mockResolvedValue(snapshot);
+    const assertTrustedSender = vi.fn();
+    registerMakerUsageHandlers(harness, makeUsageDeps({
+      readXaiSubscriptionUsageSnapshot,
+      assertTrustedSender,
+    }));
+
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION)).resolves.toEqual(snapshot);
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
   });
 
   it('warm-starts Claude account usage refresh when snapshot is empty', async () => {

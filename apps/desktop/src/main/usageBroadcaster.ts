@@ -23,6 +23,8 @@
 
 import { BrowserWindow } from 'electron';
 
+import { isTrustedAppRendererWindow } from './security/trustedAppRenderer.js';
+
 import { incrementDailySpend, getTodaySpend, localDayKey } from './localDb/dailySpend';
 import { getGatewayModelPricing } from './usage/modelPricing';
 import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
@@ -34,6 +36,7 @@ import {
   type ClaudeSubscriptionUsageSnapshot,
 } from '../shared/claudeSubscriptionUsage';
 import type { GlmCodingPlanUsageSnapshot } from '../shared/glmCodingPlanUsage';
+import type { XaiSubscriptionUsageSnapshot } from '../shared/xaiSubscriptionUsage';
 import type { AgentKind } from '@cindy/maker-core';
 
 import {
@@ -62,6 +65,8 @@ export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-chan
  * payload = { providerId, snapshot: GlmCodingPlanUsageSnapshot | null } (null = 清除)。
  */
 export const USAGE_GLM_CODING_PLAN_CHANGED = 'usage:glm-coding-plan-changed';
+/** IPC channel: main → renderer 推 SuperGrok 账号周用量快照。 */
+export const USAGE_XAI_SUBSCRIPTION_CHANGED = 'usage:xai-subscription-changed';
 
 export interface TodaySpendPayload {
   /** 本地时区 YYYY-MM-DD。 */
@@ -892,6 +897,7 @@ export async function readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubsc
   return claudeSubscriptionUsageSnapshot;
 }
 
+
 // ── GLM Coding Plan usage (persisted per-provider snapshots) ─────────────────
 // 与 Claude subscription 段同源设计(内存缓存 + 落库 + 广播),差异:
 //   - 归属维度是 provider id(GLM Coding Plan 是用户自定义 provider,可配多个实例);
@@ -1126,6 +1132,170 @@ export async function readGlmCodingPlanUsageSnapshot(
   return glmCodingPlanUsageSnapshots.get(providerId) ?? null;
 }
 
+
+// ── xAI / SuperGrok subscription usage (persisted latest snapshot) ──────────
+// agent_kind='xai'。单源全量替换,没有 headers 增量 merge。
+
+const XAI_SUBSCRIPTION_USAGE_KIND = 'xai';
+
+let xaiSubscriptionUsageOwnerInitialized = false;
+let xaiSubscriptionUsageOwner: string | null = null;
+let xaiSubscriptionUsageHydrated = false;
+let xaiSubscriptionUsageSnapshot: XaiSubscriptionUsageSnapshot | null = null;
+let xaiSubscriptionUsageLoadPromise: Promise<void> | null = null;
+let xaiSubscriptionUsageGeneration = 0;
+/**
+ * 磁盘 hydrate 不能直接给 Renderer。换号后若 DELETE 没落盘就退出,
+ * 冷启动只按 agent_kind='xai' 读会把账号 A 的套餐/周用量交给账号 B。
+ * 只有本进程成功 record 过一次当前凭证的快照,才允许读出。
+ */
+let xaiSubscriptionUsageServable = false;
+
+function resetXaiSubscriptionUsageCacheIfOwnerChanged(): void {
+  const owner = currentAccountUsageOwner();
+  if (xaiSubscriptionUsageOwnerInitialized && owner === xaiSubscriptionUsageOwner) return;
+  const isFirstInit = !xaiSubscriptionUsageOwnerInitialized;
+  xaiSubscriptionUsageOwnerInitialized = true;
+  xaiSubscriptionUsageOwner = owner;
+  if (isFirstInit) return;
+  xaiSubscriptionUsageHydrated = false;
+  xaiSubscriptionUsageSnapshot = null;
+  xaiSubscriptionUsageServable = false;
+  xaiSubscriptionUsageGeneration += 1;
+}
+
+async function ensureXaiSubscriptionUsageLoaded(): Promise<void> {
+  resetXaiSubscriptionUsageCacheIfOwnerChanged();
+  if (xaiSubscriptionUsageHydrated) return;
+  if (!xaiSubscriptionUsageLoadPromise) {
+    const generation = xaiSubscriptionUsageGeneration;
+    xaiSubscriptionUsageLoadPromise = (async () => {
+      try {
+        if (!xaiSubscriptionUsageOwner) return;
+        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
+          'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
+          [XAI_SUBSCRIPTION_USAGE_KIND],
+        );
+        if (generation !== xaiSubscriptionUsageGeneration) return;
+        xaiSubscriptionUsageHydrated = true;
+        if (!row?.snapshot) return;
+        const parsed = JSON.parse(row.snapshot);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const persisted = parsed as XaiSubscriptionUsageSnapshot;
+          // record() 可能在 hydration 失败期间已经把更新的快照放进内存;
+          // 迟到的磁盘行只能补空,不能盖掉更新的内存值。
+          if (!xaiSubscriptionUsageSnapshot) {
+            xaiSubscriptionUsageSnapshot = persisted;
+          } else {
+            const memoryAt = xaiSubscriptionUsageSnapshot.updatedAt ?? 0;
+            const diskAt = persisted.updatedAt ?? 0;
+            if (diskAt > memoryAt) xaiSubscriptionUsageSnapshot = persisted;
+          }
+        }
+      } catch (err) {
+        log.warn(
+          'readXaiSubscriptionUsageSnapshot failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+  }
+  try {
+    await xaiSubscriptionUsageLoadPromise;
+  } finally {
+    xaiSubscriptionUsageLoadPromise = null;
+  }
+}
+
+export async function recordXaiSubscriptionUsageSnapshot(snapshot: unknown): Promise<void> {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
+
+  const generation = xaiSubscriptionUsageGeneration;
+  await ensureXaiSubscriptionUsageLoaded();
+  if (generation !== xaiSubscriptionUsageGeneration) return;
+
+  const incoming = snapshot as XaiSubscriptionUsageSnapshot;
+  const current = xaiSubscriptionUsageSnapshot;
+  // 磁盘 hydrate 在本进程 record 之前不可信。无指纹的首次写入不得并入旧账号字段。
+  if (!xaiSubscriptionUsageServable || !current) {
+    xaiSubscriptionUsageSnapshot = incoming;
+  } else if (
+    current.accountFingerprint
+    && incoming.accountFingerprint
+    && current.accountFingerprint !== incoming.accountFingerprint
+  ) {
+    xaiSubscriptionUsageSnapshot = incoming;
+  } else {
+    // 已核验的同账号:只覆盖解析到的字段。incoming 里的 null 不能把套餐/周百分比抹掉。
+    xaiSubscriptionUsageSnapshot = {
+      planLabel: incoming.planLabel ?? current.planLabel ?? null,
+      creditUsagePercent: incoming.creditUsagePercent ?? current.creditUsagePercent ?? null,
+      resetsAt: incoming.resetsAt ?? current.resetsAt ?? null,
+      productUsage: incoming.productUsage ?? current.productUsage ?? [],
+      prepaidBalance: incoming.prepaidBalance ?? current.prepaidBalance ?? null,
+      source: incoming.source ?? current.source ?? null,
+      updatedAt: incoming.updatedAt ?? current.updatedAt ?? null,
+      accountFingerprint: incoming.accountFingerprint ?? current.accountFingerprint ?? null,
+    };
+  }
+  const next = xaiSubscriptionUsageSnapshot;
+  xaiSubscriptionUsageServable = true;
+  broadcastXaiSubscriptionUsage(next);
+
+  if (!xaiSubscriptionUsageHydrated) {
+    log.warn('skip persisting xai subscription usage snapshot: hydration unavailable');
+    return;
+  }
+
+  try {
+    await getDbClient().exec(
+      `INSERT INTO account_usage_snapshots (agent_kind, snapshot, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(agent_kind) DO UPDATE SET
+         snapshot = excluded.snapshot,
+         updated_at = excluded.updated_at`,
+      [XAI_SUBSCRIPTION_USAGE_KIND, JSON.stringify(next), Date.now()],
+    );
+    if (generation !== xaiSubscriptionUsageGeneration) {
+      await getDbClient().exec(
+        'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
+        [XAI_SUBSCRIPTION_USAGE_KIND],
+      );
+    }
+  } catch (err) {
+    log.warn(
+      'recordXaiSubscriptionUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function clearXaiSubscriptionUsageSnapshot(): Promise<void> {
+  resetXaiSubscriptionUsageCacheIfOwnerChanged();
+  xaiSubscriptionUsageHydrated = true;
+  xaiSubscriptionUsageSnapshot = null;
+  xaiSubscriptionUsageServable = false;
+  xaiSubscriptionUsageGeneration += 1;
+  broadcastXaiSubscriptionUsage(null);
+
+  try {
+    await getDbClient().exec(
+      'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
+      [XAI_SUBSCRIPTION_USAGE_KIND],
+    );
+  } catch (err) {
+    log.warn(
+      'clearXaiSubscriptionUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null> {
+  await ensureXaiSubscriptionUsageLoaded();
+  return xaiSubscriptionUsageServable ? xaiSubscriptionUsageSnapshot : null;
+}
+
 // ── 内部广播 ─────────────────────────────────────────────────────────────────
 
 function broadcastTodaySpend(payload: TodaySpendPayload): void {
@@ -1172,5 +1342,12 @@ function broadcastGlmCodingPlanUsage(
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_GLM_CODING_PLAN_CHANGED, stamped);
     }
+  }
+}
+
+function broadcastXaiSubscriptionUsage(payload: XaiSubscriptionUsageSnapshot | null): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppRendererWindow(win)) continue;
+    win.webContents.send(USAGE_XAI_SUBSCRIPTION_CHANGED, payload);
   }
 }

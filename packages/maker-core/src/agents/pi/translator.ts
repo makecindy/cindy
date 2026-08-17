@@ -21,8 +21,18 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  holdStandaloneStopTokenDelta,
+  stripInternalWebCitations,
+  type StandaloneStopTokenHold,
+} from '@cindy/maker-shared/internal-citation';
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import {
+  UPSTREAM_OVERLOAD_REASON,
+  formatOverloadRetryMessage,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
@@ -82,6 +92,11 @@ export interface PiTranslateContext {
   /** contentIndex → 当前消息内的 thinking block 状态。 */
   thinkingBlocks: Map<number, PiThinkingBlock>;
   /**
+   * contentIndex → 独立停止符暂存。text_delta 可能把 `<|eos|>` 拆开，
+   * 必须按本块判定，不能和别的 text block 共用。
+   */
+  streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
+  /**
    * 本 turn 最后一条 assistant 消息的全文(每次非空 message_end 覆盖;agent_start 重置)。
    * 用于 agent_settled 的 done.data.result —— 与 CC/Codex 对齐:register.ts 的
    * will-assistant-message 出口钩子与 Orca worker 终态 finalText 都读 done.data.result,
@@ -130,6 +145,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     isStreaming: false,
     thinkingSeq: 0,
     thinkingBlocks: new Map(),
+    streamStopTokenByIndex: new Map(),
     finalAssistantText: '',
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
@@ -257,7 +273,10 @@ function applyDelegatedUsage(
 function assistantTextOf(message: PiAssistantMessage): string {
   const parts: string[] = [];
   for (const block of message.content ?? []) {
-    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const visible = stripInternalWebCitations(block.text);
+      if (visible.length > 0) parts.push(visible);
+    }
   }
   return parts.join('\n\n');
 }
@@ -271,6 +290,24 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
     ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
   };
+}
+
+function parsePiAutoRetryProgress(
+  event: PiRpcEvent,
+): { attempt: number; maxAttempts: number } | null {
+  const attempt = event.attempt;
+  const maxAttempts = event.maxAttempts;
+  if (
+    typeof attempt !== 'number'
+    || typeof maxAttempts !== 'number'
+    || !Number.isSafeInteger(attempt)
+    || !Number.isSafeInteger(maxAttempts)
+    || attempt < 1
+    || maxAttempts < attempt
+  ) {
+    return null;
+  }
+  return { attempt, maxAttempts };
 }
 
 function toolResultFullText(result: unknown): string {
@@ -336,6 +373,7 @@ export function translatePiEvent(
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
       ctx.subagentToolCalls.clear();
+      ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -345,6 +383,7 @@ export function translatePiEvent(
 
     case 'message_start': {
       ctx.thinkingBlocks.clear();
+      ctx.streamStopTokenByIndex.clear();
       startPiGenerationHeartbeat(ctx);
       return;
     }
@@ -571,16 +610,33 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_start': {
+      // 走 CC/Codex 同一套 `(auto-retry N/M)` 跨 agent 协议。这个后缀在 mobile /
+      // Telegram 投影里**只表示过载**，不能拿去编码未分类 5xx —— 否则手机会把普通
+      // 供应商故障显示成「模型服务繁忙」。
+      //
+      // 第 1 次不透出：单次抖动 pi 一次重试就过，提示只会闪一下徒增噪音
+      // （与 claude-code translator 的 api_retry 防噪口径一致）。
+      // 未分类错误同样静默：渠道 / 手机没有对应本地化契约，CC 也只透过载类。
+      const progress = parsePiAutoRetryProgress(event);
+      if (!progress || progress.attempt < 2) return;
       const sdkError = typeof event.errorMessage === 'string'
         ? redactSensitiveText(event.errorMessage)
         : undefined;
+      const rawMessage = (sdkError && sdkError.trim())
+        || ctx.pendingAssistantError?.message
+        || '';
+      const signals = extractNonSecretErrorSignals(rawMessage);
+      const errorStatus = ctx.pendingAssistantError?.errorStatus ?? signals.errorStatus;
+      if (parseOverloadError(rawMessage, errorStatus) === null) return;
       queue.push({
         type: 'error',
         data: {
-          message: `Transient provider error, retrying (${String(event.attempt)}/${String(event.maxAttempts)})…`,
+          message: formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
           isTerminal: false,
           willRetry: true,
-          sdkError,
+          reason: UPSTREAM_OVERLOAD_REASON,
+          ...(sdkError ? { sdkError } : {}),
+          ...(errorStatus !== undefined ? { errorStatus } : {}),
         },
         source: 'pi',
       });
@@ -671,7 +727,13 @@ function handleAssistantDelta(
   switch (delta.type) {
     case 'text_delta': {
       if (typeof delta.delta === 'string' && delta.delta.length > 0) {
-        queue.push({ type: 'text', data: { text: delta.delta, isFinal: false }, source: 'pi' });
+        const buffer = ctx.streamStopTokenByIndex.get(contentIndex)
+          ?? { pending: '', emitted: false };
+        const visible = holdStandaloneStopTokenDelta(buffer, delta.delta);
+        ctx.streamStopTokenByIndex.set(contentIndex, buffer);
+        if (visible && visible.length > 0) {
+          queue.push({ type: 'text', data: { text: visible, isFinal: false }, source: 'pi' });
+        }
       }
       return;
     }

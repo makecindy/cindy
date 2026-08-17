@@ -13,9 +13,9 @@
  *   - recency:顶层条目按组内最新活动倒序;项目 / 对话组内部同样按最近活动
  *     倒序,不沿用 groupSessions 的 active-first。
  *   - priority:等你处理(waiting)> 完成未读(unread)> 运行中 > 其余;同档内按
- *     recency(刚离开的已看过任务用离开时刻,避免掉进其余档后按旧发送时间沉底)。
- *     正在看的任务用 heldPriorityRanks 钉住打开时的档位,离开后再落到其余档最前
- *     (2026-08-15 用户裁决)。四档口径对齐 Codex 侧栏(waiting:0 / unread:1 /
+ *     recency。从完成未读切走时用离开时刻把它排到其余档最前;已读已完成任务
+ *     之间与按时间排序同口径,浏览不改序(2026-08-17 用户裁决)。正在看的任务
+ *     用 heldPriorityRanks 钉住打开时的档位。四档口径对齐 Codex 侧栏(waiting:0 / unread:1 /
  *     active:2 / idle:3,2026-08-13 用户裁决"参考 Codex"):此前三档把「等你
  *     回答」和「跑完没看」混在同一档,完成未读一多就把真正要回应的淹掉。
  *   - manual:项目行按 manualProjectOrder;散排对话与对话组不进手动顺序,
@@ -49,12 +49,12 @@ export interface MainListPriorityContext {
   waitingSessionIds?: ReadonlySet<string>;
   /**
    * 正在看的任务打开时的档位。看的过程中 attention 被清掉后,自然档会掉到
-   * 「其余」;这里钉住较差方向,离开后再按 recentlyViewedAtMs 落到其余档最前。
+   * 「其余」;这里钉住较差方向。只有从完成未读切走时才写 recentlyViewedAtMs。
    */
   heldPriorityRanks?: ReadonlyMap<string, number>;
   /**
-   * 任务被切走的时刻(unix ms)。只在自然档为 rest 时参与 priority 同档 recency,
-   * 不改 recency 排序,也不抬 waiting / unread / running。
+   * 从完成未读切走的时刻(unix ms)。只给那一次回落写离开时间,让它排到其余档
+   * 最前;已读已完成任务之间仍按 sessionActivityMs,浏览不改序。
    */
   recentlyViewedAtMs?: ReadonlyMap<string, number>;
 }
@@ -106,7 +106,8 @@ export interface ViewedPriorityHoldState {
 }
 
 /**
- * 看的时候钉住打开时的档位;切走后再落到其余档,并用离开时刻参与 rest 档 recency。
+ * 看的时候钉住打开时的档位。只有离开时仍钉着完成未读档,才写离开时刻——
+ * 已读已完成任务之间跟按时间排序一样,浏览不改序。
  * 就地更新传入的 map,方便渲染层跨渲染保留。
  */
 export function advanceViewedPriorityHold(
@@ -119,7 +120,9 @@ export function advanceViewedPriorityHold(
   nowMs: number,
 ): ViewedPriorityHoldState {
   if (state.prevViewedId && state.prevViewedId !== viewedSessionId) {
-    state.recentlyViewedAtMs.set(state.prevViewedId, nowMs);
+    if (state.heldPriorityRanks.get(state.prevViewedId) === LIVE_TASK_PRIORITY.unread) {
+      state.recentlyViewedAtMs.set(state.prevViewedId, nowMs);
+    }
     state.heldPriorityRanks.delete(state.prevViewedId);
   }
   if (viewedSessionId) {

@@ -1081,7 +1081,7 @@ export function GhostPluginPage() {
     [confirm, ghosts, navigate, openGhostConfiguration, t],
   );
 
-  /** 卡片/详情主动作分发:面板型开页面内面板,指令/Host 能力型起对话,工具型进管理。 */
+  /** 卡片胶囊/详情主动作分发:面板型开页面内面板,指令/Host 能力型起对话,工具型进管理。整卡点击不走这里。 */
   const handlePrimaryAction = useCallback(
     (item: Pick<GhostPluginListItem, 'id' | 'name' | 'tabPanel' | 'canUse' | 'hostCapability'>) => {
       const action = ghostPrimaryAction(item);
@@ -2048,7 +2048,8 @@ function GhostPluginActions({
 
 /**
  * 已安装插件卡片(设计定稿):
- * - 整卡可点 = 主动作(面板「使用」/ 指令「对话」/ 工具型与停用态进管理);
+ * - 整卡可点 = 进详情(与滑杆管理入口同目标);
+ * - 主动作留在右下角胶囊(面板「使用」/ 指令或能力「对话」/ 工具型无按钮);
  * - 无启用开关(收进详情页);滑杆图标 = 管理入口;
  * - 更新 = 文字胶囊「更新到 vX」,无任何小圆点(绿点专职未读语义,PR-B 接入)。
  */
@@ -2081,12 +2082,11 @@ export function GhostPluginCard({
   const unread = useGhostUnread(item.id);
   const unreadSummary = useGhostUnreadSummary(item.id);
   const primary = ghostPrimaryAction(item);
-  const cardAction = enabled && primary !== 'manage' ? onPrimary : onManage;
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    cardAction();
+    onManage();
   };
   let primaryControl: ReactNode;
   if (!enabled) {
@@ -2122,7 +2122,7 @@ export function GhostPluginCard({
     <article
       role="button"
       tabIndex={0}
-      onClick={cardAction}
+      onClick={onManage}
       onKeyDown={handleCardKeyDown}
       aria-label={item.name}
       className={cn(
@@ -2177,17 +2177,13 @@ export function GhostPluginCard({
           {unreadSummary || item.description || item.id}
         </span>
       </span>
-      {/* 右列控制区:自行消费点击,不冒泡到整卡主动作(纯冒泡拦截层,无独立语义)。 */}
-      <span
-        className="flex shrink-0 flex-col items-end justify-between gap-2 self-stretch"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-      >
+      {/* 右列只在真实控件上拦截冒泡;空白与「由 Agent 调用」提示仍走整卡进详情。 */}
+      <span className="flex shrink-0 flex-col items-end justify-between gap-2 self-stretch">
         <span className="flex items-center gap-1.5">
           {updateVersion && onUpdate ? (
             <button
               type="button"
-              onClick={onUpdate}
+              onClick={stopAnd(onUpdate)}
               disabled={updateBusy}
               aria-label={t('settings.ghosts.page.updateAria', {
                 name: item.name,
@@ -2206,7 +2202,7 @@ export function GhostPluginCard({
           ) : null}
           <button
             type="button"
-            onClick={onManage}
+            onClick={stopAnd(onManage)}
             aria-label={t('settings.ghosts.page.manageAria', { name: item.name })}
             title={t('settings.ghosts.page.manageAction')}
             className="grid size-7 place-items-center rounded-full text-[var(--text-tertiary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
@@ -2218,6 +2214,13 @@ export function GhostPluginCard({
       </span>
     </article>
   );
+}
+
+function stopAnd(handler: () => void) {
+  return (event: { stopPropagation: () => void }) => {
+    event.stopPropagation();
+    handler();
+  };
 }
 
 function CardPillButton({
@@ -2234,7 +2237,7 @@ function CardPillButton({
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={stopAnd(onClick)}
       aria-label={ariaLabel ?? label}
       className={cn(
         'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-3.5 text-12 font-medium text-[var(--text-primary)]',

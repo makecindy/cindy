@@ -12,6 +12,7 @@ import type {
 } from '@cindy/maker-shared/device-link-contract';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import type { GlmCodingPlanUsageSnapshot } from '../../shared/glmCodingPlanUsage.js';
+import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import type { ClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import type { ModelPricingMap } from '../usage/modelPricing.js';
 import type { UsageHistoryPayload, UsageHistoryReadOptions } from '../usage/usageHistory.js';
@@ -62,6 +63,8 @@ export interface MakerUsageHandlerDeps {
   consumeCodexRateLimitReset(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
   readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readGlmCodingPlanUsageSnapshot(providerId: string): Promise<GlmCodingPlanUsageSnapshot | null>;
+  readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null>;
+  assertTrustedSender?(event: unknown): void;
   readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null;
   triggerClaudeAccountUsageRefresh(force: boolean): Promise<void>;
   readModelPricing(): Promise<ModelPricingMap | null>;
@@ -153,6 +156,11 @@ export function registerMakerUsageHandlers(
       return await deps.readGlmCodingPlanUsageSnapshot(id);
     },
   );
+
+  registry.handle(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION, async (event) => {
+    deps.assertTrustedSender?.(event);
+    return await deps.readXaiSubscriptionUsageSnapshot();
+  });
 
   // device-link v1:保留旧扁平 USD 形状，不能把 CNY 伪装成 *Usd。
   registry.handle(MAKER_INVOKE.USAGE_MODEL_PRICING, async () => {

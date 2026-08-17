@@ -77,6 +77,21 @@ describe('AuthContext auth-state races', () => {
     expect(source).toContain("if (action.type === 'start-browser')");
     expect(source).toContain("setLoginState({ step: 'browser-redirect', label: action.label });");
   });
+
+  it('auto-continues a sole method-choice so fake pickers never paint', () => {
+    expect(source).toContain('soleLoginMethod(result.state.methods)');
+    expect(source).toContain("type: 'start-browser'");
+    expect(source).toContain('providerOrConnectionId: sole.connectionId');
+    expect(source).toContain("type: 'request-code'");
+    expect(source).toContain("kind: 'email'");
+    expect(source).toContain('identifier: result.state.email');
+    const projectWaiting = source.indexOf(
+      "setLoginState({ step: 'browser-redirect', label: action.label });",
+    );
+    const autoStart = source.indexOf('soleLoginMethod(result.state.methods)');
+    expect(projectWaiting).toBeGreaterThan(-1);
+    expect(autoStart).toBeGreaterThan(projectWaiting);
+  });
 });
 
 describe('data-owner live push fencing', () => {

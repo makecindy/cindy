@@ -12,6 +12,18 @@
 
 ## 2026-08
 
+- **08-16** **登录：唯一 SSO 不再经过 method-choice（拍板人 = 用户）**——
+  用户已经从登录首页选了企业 SSO（组织标识探测），或邮箱 / 组织探测结果只剩
+  一条 SSO、没有个人邮箱验证码替补时，再出「选择登录方式」是假选择（截图上只剩
+  「以企业身份登录」一行）。`soleAutoStartSsoMethod` 命中后直接进入
+  `browser-redirect`。仍经过 method-choice 的：企业 SSO + 个人邮箱；多条 SSO
+  连接。跨区企业仍先 `realm-confirmation`，确认后再套同一条唯一 SSO 规则。
+  跨区「连接企业所在区域」点继续后，确认窗必须立刻消失并进入等待登录；桌面
+  renderer 在 method-choice 唯一 SSO 时改派 `start-browser`，复用既有
+  `browser-redirect` 乐观投影，不得在 main 里套住浏览器授权把确认框卡住。
+  个人邮箱探测若只剩验证码一种方式，同样不经过「以个人身份登录」假选择，直接发码。
+  （→ `DESIGN.md §16.4` method-choice 行；`packages/auth-client` `soleAutoStartSsoMethod`）
+
 - **08-03** **排版立法:字重梯改四档、桌面字号白名单建档(拍板人 = 用户,issue #1505)**——
   本条**推翻**原 `DESIGN.md §3` 的「字重只允许 400/500、never bold」表述(§3 Principles /
   §7 Don'ts / §9 Iteration Guide 三处同步改写)。背景:2026-08-03 全仓走查发现桌面端在无守卫

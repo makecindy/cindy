@@ -146,7 +146,7 @@ describe('resolveProviderModelEfforts', () => {
       'resolveModelEfforts(\n          newModelId,\n          providerId,\n          targetAgentKind,\n        )',
     );
     expect(source.slice(modelChangeStart, modelChangeEnd)).toMatch(
-      /resolveModelEfforts\(\s*newModelId,\s*effectiveSourceId\s*\)/,
+      /resolveModelEfforts\(\s*newModelId,\s*effectiveSourceId,\s*\)/,
     );
     expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
       '{ effort: eff, fastMode: restoredFast }',
