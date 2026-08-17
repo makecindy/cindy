@@ -2665,9 +2665,10 @@ export class PiAgent extends BaseAgent {
       if (!allowPiPackageManagement || imageCount > 0 || hasAdditionalContent) {
         return { text, accepted: false };
       }
-      const authenticatedChannelCommand = mainOwnedContext?.origin.kind === 'im'
+      const mainOwnedChannelCommand = mainOwnedContext?.origin.kind === 'im'
         || mainOwnedContext?.origin.kind === 'hook';
-      const commandText = authenticatedChannelCommand
+      const authenticatedImCommand = mainOwnedContext?.origin.kind === 'im';
+      const commandText = mainOwnedChannelCommand
         ? mainOwnedContext.rawChannelText
         : text;
       const command = commandText === undefined ? undefined : parsePiManagedPackageCommand(commandText);
@@ -2684,7 +2685,7 @@ export class PiAgent extends BaseAgent {
             result: await this.deps.mutatePiManagedPackage!({
               action: command.action,
               source: resolvedSource,
-              authorization: authenticatedChannelCommand
+              authorization: authenticatedImCommand
                 ? 'authenticated-im-command'
                 : 'local-desktop-command',
             }),

@@ -1099,7 +1099,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'remove',
         source: 'npm:context-mode',
-        authorization: 'authenticated-im-command',
+        authorization: 'local-desktop-command',
       });
     } finally {
       await handle.close();

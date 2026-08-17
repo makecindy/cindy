@@ -36,6 +36,7 @@ import {
   consumePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
   type PiPackageMutationGrant,
+  type PiPackageMutationGrantBinding,
 } from './pi-package-mutation-grant.js';
 import { killProcessTree } from '../scheduler-host/proc-util.js';
 
@@ -1168,6 +1169,20 @@ export async function listPiPackages(): Promise<PiPackageListResult> {
   return listPiPackagesNow();
 }
 
+/**
+ * Captures the package identity presented before Main asks the user to enable
+ * it. The later mutation must match this value again under the shared lock.
+ */
+export async function capturePiPackageEnableFingerprint(source: string): Promise<string | null> {
+  const normalizedSource = requireSource(source);
+  return enqueueMutation(async () => {
+    const inspected = await inspectAllPackagesFreshUnderMutationLock();
+    const target = await findAffectedInspectedPackage(inspected, normalizedSource);
+    if (!target) throw new Error('Pi package is not installed');
+    return target.contentFingerprint ?? null;
+  });
+}
+
 export async function resolveManagedPiPackageResources(
   options?: { snapshotRoot: string },
 ): Promise<PiManagedPackageResources> {
@@ -1684,11 +1699,12 @@ export async function mutatePiPackage(
   request: PiPackageMutationRequest,
   grant?: PiPackageMutationGrant,
 ): Promise<PiPackageMutationResult> {
+  let grantBinding: Readonly<PiPackageMutationGrantBinding> = {};
   if (piPackageMutationNeedsGrant(request)) {
     // The grant is an in-process, one-shot capability issued only after Main
     // observed a real user decision (or an exact whole user command). Renderer
     // booleans and Full Access never cross this boundary.
-    consumePiPackageMutationGrant(request, grant);
+    grantBinding = consumePiPackageMutationGrant(request, grant);
   }
   const source = requireSource(request.source);
   if (request.action === 'install' && isRelativeLocalPiPackageSource(source)) {
@@ -1766,7 +1782,9 @@ export async function mutatePiPackage(
       ]);
     } else if (request.action === 'set-enabled') {
       if (typeof request.enabled !== 'boolean') throw new Error('enabled must be a boolean');
-      const inspected = await inspectAllPackages();
+      const inspected = request.enabled
+        ? await inspectAllPackagesFreshUnderMutationLock()
+        : await inspectAllPackages();
       const target = await findAffectedInspectedPackage(inspected, source);
       if (!target) throw new Error('Pi package is not installed');
       affectedSource = target.rawSource;
@@ -1775,6 +1793,12 @@ export async function mutatePiPackage(
       const approved = new Set(state.approvedExtensionSources);
       const approvedFingerprints = { ...state.approvedExtensionFingerprints };
       if (request.enabled) {
+        if (
+          !Object.hasOwn(grantBinding, 'expectedPackageFingerprint')
+          || grantBinding.expectedPackageFingerprint !== (target.contentFingerprint ?? null)
+        ) {
+          throw new Error('Pi extension package changed after authorization');
+        }
         if (target.view.resources.some((resource) => resource.kind === 'extension')) {
           if (!target.contentFingerprint) {
             throw new Error('Pi extension package fingerprint is unavailable');

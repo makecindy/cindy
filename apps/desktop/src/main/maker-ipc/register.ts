@@ -507,6 +507,7 @@ import {
   type PiPackageMutationRequest,
 } from '../../shared/piPackages.js';
 import {
+  capturePiPackageEnableFingerprint,
   listManagedPiPromptCommands,
   listPiPackages,
   mutatePiPackage,
@@ -6156,6 +6157,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return runPiPackageMutationIpcBoundary(async () => {
       if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
 
+      const grantBinding = request.action === 'set-enabled' && request.enabled === true
+        ? { expectedPackageFingerprint: await capturePiPackageEnableFingerprint(request.source) }
+        : undefined;
+
       const source = request.source.trim();
       const copy =
         request.action === 'set-enabled'
@@ -6201,7 +6206,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (decision.response !== 0) {
         throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
       }
-      return mutatePiPackage(request, issuePiPackageMutationGrant(request));
+      return mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding));
     }, t('settings.piPackages.operationFailed'), (error) => {
       log.warn('Pi extension mutation failed', {
         action: request.action,

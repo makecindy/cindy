@@ -185,7 +185,10 @@ async function mutateAuthorized(
   request: import('../../../shared/piPackages.js').PiPackageMutationRequest,
 ) {
   const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
-  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request));
+  const binding = request.action === 'set-enabled' && request.enabled === true
+    ? { expectedPackageFingerprint: await store.capturePiPackageEnableFingerprint(request.source) }
+    : undefined;
+  return store.mutatePiPackage(request, issuePiPackageMutationGrant(request, binding));
 }
 
 describe('Pi package executable-code boundary', () => {
@@ -345,6 +348,30 @@ describe('Pi package executable-code boundary', () => {
       fs.readFile(snapshotSkill, 'utf8'),
       fs.readFile(snapshotPrompt, 'utf8'),
     ])).resolves.toEqual(frozenResources);
+  });
+
+  it('rejects an enable grant when another instance replaces package bytes after confirmation', async () => {
+    const { root, source } = await createPackage();
+    const firstStore = await import('../pi-package-store.js');
+    const expectedPackageFingerprint = await firstStore.capturePiPackageEnableFingerprint(source);
+    const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
+    const request = { action: 'set-enabled' as const, source, enabled: true };
+    const grant = issuePiPackageMutationGrant(request, { expectedPackageFingerprint });
+
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+    await fs.writeFile(
+      path.join(root, 'extensions', 'index.ts'),
+      'export default function replacedAfterConfirmation() {}',
+    );
+    await secondStore.listPiPackages();
+
+    await expect(firstStore.mutatePiPackage(request, grant)).rejects.toThrow(
+      /changed after authorization/i,
+    );
+    await expect(firstStore.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
   });
 
   it('preserves npm hoisted dependencies in the isolated session snapshot', async () => {
@@ -881,6 +908,7 @@ describe('Pi package executable-code boundary', () => {
     const listener = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
     runtime.listOutcomes = [
+      { stdout: runtime.listOutput, exitCode: 0 },
       { stdout: runtime.listOutput, exitCode: 0 },
       { stderr: 'list failed after state write', exitCode: 1 },
     ];
