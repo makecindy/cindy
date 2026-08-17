@@ -287,8 +287,9 @@ export function marketUpdateAllowsPermissionExpansion(
 }
 
 /**
- * 市场装入成功后是否打开已装详情。
- * 首装:装完即开(2026-07-26)。更新/替换:留在当前页,方便连续更新多个插件。
+ * 市场装入成功后是否打开已装详情(同时收起市场详情)。
+ * 首装:装完即开(2026-07-26)。更新/替换:留在当前页——列表就留列表,
+ * 市场详情就刷新详情,方便连续更新,也不把替换用户从原详情踢回列表。
  */
 export function shouldOpenInstalledDetailAfterMarketSuccess(isUpdate: boolean): boolean {
   return !isUpdate;
@@ -1327,11 +1328,13 @@ export function GhostPluginPage({
                 name: installed.ghost.manifest.name,
               }),
         );
-        setMarketDetail((current) =>
-          current?.pluginId === marketDetail.pluginId ? null : current,
-        );
         if (shouldOpenInstalledDetailAfterMarketSuccess(isUpdate)) {
+          setMarketDetail((current) =>
+            current?.pluginId === marketDetail.pluginId ? null : current,
+          );
           setSelectedId(installed.ghost.manifest.id);
+        } else {
+          await refreshVisibleMarketDetail(marketDetail.pluginId).catch(() => undefined);
         }
         await refreshMarket();
       } catch (error) {
@@ -1348,6 +1351,7 @@ export function GhostPluginPage({
       isMarketBusyLeaseActive,
       installReviewedMarketPackage,
       refreshMarket,
+      refreshVisibleMarketDetail,
       releaseMarketBusy,
       t,
     ],

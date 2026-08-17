@@ -20,4 +20,10 @@ describe('market install confirmation', () => {
       '下载真实包;权限卡已在页面确认,Host 只在真实包超出已审清单时再弹',
     );
   });
+
+  it('refreshes the current market detail after an update instead of closing it', () => {
+    expect(pageSource).toContain(
+      'await refreshVisibleMarketDetail(marketDetail.pluginId).catch(() => undefined);',
+    );
+  });
 });

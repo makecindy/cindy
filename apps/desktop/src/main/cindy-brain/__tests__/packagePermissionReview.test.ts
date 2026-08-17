@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { marketPackageNeedsHostReview } from '../packagePermissionReview';
+import type { GhostManifest } from '../../../shared/ghost';
+import {
+  marketPackageNeedsHostReview,
+  marketPackageOauthIdentityChanged,
+} from '../packagePermissionReview';
 
 describe('marketPackageNeedsHostReview', () => {
   it('skips Host when the user already reviewed every permission in the real package', () => {
@@ -61,5 +65,65 @@ describe('marketPackageNeedsHostReview', () => {
         extrasVersusReviewedCount: 0,
       }),
     ).toBe(true);
+  });
+});
+
+function oauthManifest(clientId: string): GhostManifest {
+  return {
+    schemaVersion: 2,
+    id: 'oauth-plugin',
+    name: 'OAuth Plugin',
+    version: '1.0.0',
+    kind: 'chip',
+    entry: 'main.js',
+    slots: ['network'],
+    network: {
+      hosts: ['api.example.com'],
+      secrets: [
+        {
+          key: 'account',
+          label: 'Account',
+          source: 'oauth',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+          oauth: {
+            authorizeUrl: 'https://accounts.example.com/authorize',
+            tokenUrl: 'https://accounts.example.com/token',
+            clientId,
+          },
+        },
+      ],
+    },
+  };
+}
+
+describe('marketPackageOauthIdentityChanged', () => {
+  it('detects a clientId mismatch between the reviewed catalog and the real package', () => {
+    expect(
+      marketPackageOauthIdentityChanged(
+        oauthManifest('preview-client'),
+        oauthManifest('real-client'),
+        oauthManifest('real-client'),
+      ),
+    ).toBe(true);
+  });
+
+  it('detects a clientId mismatch between the installed baseline and the real package', () => {
+    expect(
+      marketPackageOauthIdentityChanged(
+        oauthManifest('old-client'),
+        oauthManifest('old-client'),
+        oauthManifest('new-client'),
+      ),
+    ).toBe(true);
+  });
+
+  it('stays quiet when reviewed, installed, and real package share the same client', () => {
+    expect(
+      marketPackageOauthIdentityChanged(
+        oauthManifest('same-client'),
+        oauthManifest('same-client'),
+        oauthManifest('same-client'),
+      ),
+    ).toBe(false);
   });
 });

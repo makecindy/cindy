@@ -1,3 +1,7 @@
+import {
+  changedBuiltinOauthClientSecretKeys,
+  type GhostManifest,
+} from '../../shared/ghost.js';
 import type { PluginMarketPackageReviewFacts } from '../../shared/pluginMarket.js';
 
 /** 真实安装包需要用户复核时，交给 PluginMarketService 转成可恢复结果。 */
@@ -29,4 +33,24 @@ export function marketPackageNeedsHostReview(input: {
     return input.addedCount === null || input.addedCount > 0;
   }
   return input.unreviewedCount > 0;
+}
+
+/**
+ * 内置 OAuth clientId 是否相对用户已确认的清单或已装基线发生了变化。
+ * 权限投影不含 clientId,必须单独比;已装基线与预览清单都要比真实包。
+ */
+export function marketPackageOauthIdentityChanged(
+  reviewed: GhostManifest | undefined,
+  installedBaseline: GhostManifest | null,
+  actual: GhostManifest,
+): boolean {
+  if (
+    installedBaseline &&
+    changedBuiltinOauthClientSecretKeys(installedBaseline, actual).length > 0
+  ) {
+    return true;
+  }
+  return Boolean(
+    reviewed && changedBuiltinOauthClientSecretKeys(reviewed, actual).length > 0,
+  );
 }
