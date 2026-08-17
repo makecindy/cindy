@@ -5059,6 +5059,14 @@ export default function NewRemoteSessionScreen() {
           firstMessage: input.objective,
         });
         session = { ...session, title: titled.title };
+        if (titled.title) {
+          try {
+            const persisted = await maker.patchSessionMeta(result.sessionId, { title: titled.title });
+            session = { ...persisted, title: persisted.title || titled.title };
+          } catch {
+            // 本地先顶着目标文案;写回失败交给后续同步,不挡跳转。
+          }
+        }
       }
       if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);

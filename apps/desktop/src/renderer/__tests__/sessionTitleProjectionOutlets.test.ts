@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 const RENDERER_ROOT = resolve(__dirname, '..');
 
 function read(relPath: string): string {
-  return readFileSync(resolve(RENDERER_ROOT, relPath), 'utf8');
+  return readFileSync(resolve(RENDERER_ROOT, relPath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 const railNav = read('features/cc-agent/sidebar/RailNav.tsx');

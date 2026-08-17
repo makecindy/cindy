@@ -519,6 +519,7 @@ describe('newSessionCreation pipeline', () => {
     // 禁发标同步清除:用户要用 composer 重发回填草稿,不能被 pendingLocalCreation
     // 卡到 load 成功才解禁(codex P2)。
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's5')?.pendingLocalCreation).toBe(false);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's5')?.title).toBe('New Maker');
   });
 
   it('enqueue 回执丢失但队列里已有该 clientId → 按成功收敛,不打扰用户', async () => {

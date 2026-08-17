@@ -28,6 +28,7 @@
 import { useSyncExternalStore } from 'react';
 import * as ExpoCrypto from 'expo-crypto';
 import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -561,7 +562,12 @@ function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed'
     // 禁发标——弱网下 fresh getSession / 会话页 load 可能都还没成功,不清的话
     // 用户拿着回填草稿仍被禁发,只能干等 load(codex review P2)。
     remoteSessionStore.setInputProjection(task.sessionId, null);
-    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, { pendingLocalCreation: false });
+    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, {
+      pendingLocalCreation: false,
+    });
+    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, {
+      title: DEFAULT_DRAFT_SESSION_TITLE,
+    });
   }
   emit();
 }
