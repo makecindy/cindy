@@ -21,7 +21,8 @@
 import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { zstdCompress, zstdDecompress } from 'node:zlib';
 
 import type { LocalRequestHandler } from '@cindy/anthropic-compat-proxy';
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
@@ -39,6 +40,9 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+
+const zstdCompressAsync = promisify(zstdCompress);
+const zstdDecompressAsync = promisify(zstdDecompress);
 
 const log = createMakerLogger('cc-bridge');
 
@@ -420,22 +424,25 @@ function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> |
   return { ...body, model: body.model.slice(0, -'[1m]'.length) };
 }
 
-function rewriteOpenaiContextProfileRequest(
+async function rewriteOpenaiContextProfileRequest(
   rawBody: Buffer,
   parsedBody: unknown,
   contentEncoding: string | undefined,
-): { body: Buffer; contentEncoding: string | undefined } | null {
+): Promise<{ body: Buffer; contentEncoding: string | undefined } | null> {
   const parsedProfile = withOpenaiContextProfileModel(parsedBody);
   if (parsedProfile) {
     return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
   }
   if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
   try {
-    const decoded = JSON.parse(zstdDecompressSync(rawBody).toString('utf8')) as unknown;
+    // Near-1M-token payloads are large enough to stall Electron main. Node's async
+    // zstd APIs move compression work to the libuv worker pool.
+    const decodedBody = await zstdDecompressAsync(rawBody);
+    const decoded = JSON.parse(decodedBody.toString('utf8')) as unknown;
     const compressedProfile = withOpenaiContextProfileModel(decoded);
     if (!compressedProfile) return null;
     return {
-      body: zstdCompressSync(Buffer.from(JSON.stringify(compressedProfile))),
+      body: await zstdCompressAsync(Buffer.from(JSON.stringify(compressedProfile))),
       contentEncoding,
     };
   } catch {
@@ -553,7 +560,11 @@ export function getPiNativeSubscriptionHandler(
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
       if (providerId === 'openai') {
-        const rewritten = rewriteOpenaiContextProfileRequest(rawBody, parsedBody, contentEncoding);
+        const rewritten = await rewriteOpenaiContextProfileRequest(
+          rawBody,
+          parsedBody,
+          contentEncoding,
+        );
         if (rewritten) {
           outboundBody = rewritten.body;
           contentEncoding = rewritten.contentEncoding;

@@ -289,13 +289,22 @@ describe('Pi provider-aware model routing', () => {
             id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
             baseUrl: 'http://127.0.0.1:9988', inheritModels: true,
             apiKeyEnvVar: 'CINDY_PI_OPENAI_PROXY_KEY',
-            models: [{
-              id: 'chatgpt/gpt-cindy-daily-test',
-              wireId: 'gpt-cindy-daily-test',
-              catalogAddition: true,
-              contextWindow: 272_000,
-              maxTokens: 32_000,
-            }],
+            models: [
+              {
+                id: 'chatgpt/gpt-5.6-sol',
+                wireId: 'gpt-5.6-sol',
+                api: 'openai-codex-responses',
+                contextWindow: 1_000_000,
+                maxTokens: 128_000,
+              },
+              {
+                id: 'chatgpt/gpt-cindy-daily-test',
+                wireId: 'gpt-cindy-daily-test',
+                catalogAddition: true,
+                contextWindow: 272_000,
+                maxTokens: 32_000,
+              },
+            ],
           },
           {
             id: 'xai', sourceProviderId: 'xai', name: 'xAI',
@@ -338,9 +347,15 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers.anthropic?.models).toBeUndefined();
     expect(models.providers['openai-codex']).not.toHaveProperty('api');
     expect(models.providers['openai-codex']?.models).toEqual([
+      expect.objectContaining({
+        id: 'gpt-5.6-sol',
+        api: 'openai-codex-responses',
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      }),
       expect.objectContaining({ id: 'gpt-cindy-daily-test' }),
     ]);
-    expect(models.providers['openai-codex']?.models?.[0]).not.toHaveProperty('api');
+    expect(models.providers['openai-codex']?.models?.[1]).not.toHaveProperty('api');
     expect(models.providers.xai).not.toHaveProperty('api');
     expect(models.providers.xai?.models).toEqual([
       expect.objectContaining({

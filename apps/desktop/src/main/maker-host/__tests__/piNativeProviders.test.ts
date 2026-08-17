@@ -426,6 +426,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         {
           id: 'chatgpt/gpt-5.6-sol',
           wireId: 'gpt-5.6-sol',
+          api: 'openai-codex-responses',
         },
         {
           id: 'chatgpt/gpt-5.7',
@@ -434,8 +435,11 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         },
       ],
     });
-    expect(providers[1]?.models[0]?.api).toBeUndefined();
     expect(providers[1]?.models[0]?.catalogAddition).toBeUndefined();
+    expect(providers[1]?.models[0]).toMatchObject({
+      api: 'openai-codex-responses',
+      contextWindow: 272_000,
+    });
     expect(providers[2]).toMatchObject({
       sourceProviderId: 'xai',
       baseUrl: 'http://127.0.0.1:4567/v1',
@@ -508,6 +512,10 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       expect.objectContaining({
         id: 'chatgpt/gpt-5.6-sol',
         wireId: 'gpt-5.6-sol',
+        api: 'openai-codex-responses',
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+        compat: bundled.compat,
       }),
       expect.objectContaining({
         id: 'chatgpt/gpt-5.6-sol[1m]',

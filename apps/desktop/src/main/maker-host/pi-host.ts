@@ -456,9 +456,9 @@ function catalogCostForPiNative(cost: {
 
 /**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
- * provider catalog. No model is copied into models.json unless the daily Cindy
- * catalog explicitly carries a piApi correction/addition; the version-matched
- * PI binary remains the baseline authority for model-specific APIs and quirks.
+ * provider catalog. Registry metadata is authoritative for OpenAI subscription
+ * models; the version-matched PI binary remains authoritative for native API and
+ * compat details that Cindy must preserve when materializing the overlay.
  */
 export function buildPiSubscriptionNativeProviders(
   catalog: Catalog,
@@ -536,8 +536,43 @@ export function buildPiSubscriptionNativeProviders(
           !!model.piApi &&
           !!bundledModel &&
           bundledModel.api !== model.piApi;
-        const preserved = isProtocolCorrection ? bundledModel : contextProfileTemplate;
+        const isRegistryBaselineOverlay = sourceProviderId === 'openai' && !!bundledModel;
         const catalogCost = catalogCostForPiNative(model.cost);
+        if (isRegistryBaselineOverlay) {
+          const input = model.supportsImageInput === undefined
+            ? [...bundledModel.input]
+            : model.supportsImageInput
+              ? ['text', 'image'] as Array<'text' | 'image'>
+              : ['text'] as Array<'text' | 'image'>;
+          const cost = catalogCost ?? bundledModel.cost;
+          return {
+            id: model.id,
+            wireId,
+            // Materialize Registry metadata for same-id OpenAI models. `api`
+            // makes inheritModels emit the overlay into models.json, while PI's
+            // bundled provider remains authoritative for native transport quirks.
+            api: bundledModel.api,
+            ...(bundledModel.baseUrl ? { baseUrl: bundledModel.baseUrl } : {}),
+            name: model.name,
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxOutput ?? bundledModel.maxTokens,
+            reasoning: model.efforts.length > 0,
+            input,
+            thinkingLevelMap: Object.fromEntries(
+              PI_REASONING_EFFORTS.map((effort) => [
+                effort,
+                model.efforts.includes(effort) ? effort : null,
+              ]),
+            ),
+            ...(cost ? { cost: { ...cost } } : {}),
+            ...(bundledModel.headers ? { headers: { ...bundledModel.headers } } : {}),
+            ...(bundledModel.compat ? { compat: structuredClone(bundledModel.compat) } : {}),
+            ...(bundledModel.samplingParams
+              ? { samplingParams: structuredClone(bundledModel.samplingParams) }
+              : {}),
+          };
+        }
+        const preserved = isProtocolCorrection ? bundledModel : contextProfileTemplate;
         return {
           id: model.id,
           wireId,
