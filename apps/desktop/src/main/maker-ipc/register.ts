@@ -493,6 +493,7 @@ import {
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
+  isExclusiveXaiModelId,
   isSubscriptionDirectRoute,
 } from '../../shared/subscriptionModels.js';
 import {
@@ -4632,7 +4633,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         void modelPromise
           .then((m) => {
             if (m && m.startsWith(CHATGPT_MODEL_PREFIX)) triggerCodexAccountUsageRefresh();
-            if (m && m.startsWith(XAI_MODEL_PREFIX)) triggerXaiSubscriptionUsageRefresh();
+            if (m && isExclusiveXaiModelId(m)) triggerXaiSubscriptionUsageRefresh();
           })
           .catch(() => {
             /* 模型解析失败: 跳过, 非致命 */
@@ -4694,7 +4695,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               pricingModel.startsWith('codex/');
             const isCodexXaiProviderRoute =
               (sessionProvider == null || sessionProvider === 'xai') &&
-              pricingModel.startsWith(XAI_MODEL_PREFIX);
+              isExclusiveXaiModelId(pricingModel);
             const isCodexOpenAiProviderRoute =
               sessionProvider == null || sessionProvider === 'openai';
             const hasGatewayKey = Boolean(readClaudeApiKey());
@@ -4844,14 +4845,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         void modelPromise
           .then((model) => {
             const hasGatewayKey = Boolean(readClaudeApiKey());
-            if (!isRemoteCodexSession && model.startsWith(XAI_MODEL_PREFIX)) {
+            if (!isRemoteCodexSession && isExclusiveXaiModelId(model)) {
               triggerXaiSubscriptionUsageRefresh();
               return;
             }
             if (
               !isRemoteCodexSession &&
               !isCustomProviderRoute &&
-              !model.startsWith(XAI_MODEL_PREFIX) &&
+              !isExclusiveXaiModelId(model) &&
               (codexAuthInjection === 'env-key' ||
                 model.startsWith('codex/') ||
                 (sessionProvider === 'xd' && hasGatewayKey))
