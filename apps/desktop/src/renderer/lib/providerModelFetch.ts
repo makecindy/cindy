@@ -109,10 +109,57 @@ function headerRowsEqual(
  * 由 main 侧以 renderer 值优先覆盖,这里只决定「是否附带 savedProviderId」。
  */
 export function modelFetchCanReuseSavedCredentials(
-  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'>,
+  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'> &
+    Partial<Pick<ProviderModelFetchSignatureFields, 'requestPath'>>,
   baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode'>,
   authMode: CustomProviderAuthMode,
 ): boolean {
+  return (
+    authMode === baseline.authMode &&
+    form.baseUrl.trim() === baseline.baseUrl.trim() &&
+    form.modelsUrl.trim() === baseline.modelsUrl.trim()
+  );
+}
+
+/**
+ * Restore an untouched hydrated key after an endpoint edit is reverted to the
+ * saved base/models target. Explicit key edits always win, including clearing
+ * the field, so this helper only fills an actually empty, revision-zero draft.
+ */
+export function restoreHydratedApiKey<
+  T extends Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl' | 'apiKey'>,
+>(
+  form: T,
+  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode' | 'apiKey'>,
+  authMode: CustomProviderAuthMode,
+  keyEditRevision: number,
+): T {
+  if (
+    authMode !== 'apiKey' ||
+    keyEditRevision !== 0 ||
+    form.apiKey.trim() ||
+    !baseline.apiKey.trim() ||
+    !modelFetchCanReuseSavedCredentials(form, baseline, authMode)
+  ) {
+    return form;
+  }
+  return { ...form, apiKey: baseline.apiKey };
+}
+
+/**
+ * Decide whether a hydrated API key may be sent to the saved provider's endpoint.
+ * requestPath is a routing detail within the same base/models URL and does not
+ * change the credential target; baseUrl/modelsUrl changes still require an edit.
+ */
+export function canSendHydratedApiKey(
+  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'> &
+    Partial<Pick<ProviderModelFetchSignatureFields, 'requestPath'>>,
+  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode'> &
+    Partial<Pick<SavedProviderProbeBaseline, 'requestPath'>>,
+  authMode: CustomProviderAuthMode,
+  keyEditRevision: number,
+): boolean {
+  if (keyEditRevision > 0) return true;
   return (
     authMode === baseline.authMode &&
     form.baseUrl.trim() === baseline.baseUrl.trim() &&

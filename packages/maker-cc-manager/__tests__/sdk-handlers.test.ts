@@ -152,6 +152,23 @@ async function waitFor(
 }
 
 describe('sdk-handlers end-to-end', () => {
+  it('rewrites controller-local Claude config paths at the remote RPC boundary', async () => {
+    await ctx!.client.request('query/start', {
+      sessionId: 'remote-env',
+      cwd: '/Users/david/repo',
+      model: 'm',
+      env: {
+        ANTHROPIC_API_KEY: 'sk-gw',
+        CLAUDE_CONFIG_DIR: 'C:\\Users\\Admin\\AppData\\Roaming\\Cindy-dev2\\claude-home',
+      },
+    });
+
+    expect(latestFactoryOptions?.env).toEqual({
+      ANTHROPIC_API_KEY: 'sk-gw',
+      CLAUDE_CONFIG_DIR: expect.stringMatching(/\/.xdt-server\/v1\/claude-home$/),
+    });
+  });
+
   it('query/start returns sessionId + emits init notification', async () => {
     const result = await ctx!.client.request<{ sessionId: string }>('query/start', {
       sessionId: 'sess-1',

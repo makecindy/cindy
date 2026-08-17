@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { clearWorkersCache } from '@/features/cc-agent/hooks/useWorkers';
+import { setSelectedMachineOwner } from '@/features/device-link/selectedMachineStore';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import {
@@ -34,8 +35,10 @@ import { sessionsStore } from '@/lib/sessionsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
+import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
+import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
@@ -96,10 +99,18 @@ function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
+  setSelectedMachineOwner(dataOwnerId);
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({
+  children,
+  enableSessionExpiredPrompt = true,
+}: {
+  children: ReactNode;
+  /** Secondary renderers keep auth state for owner scoping but do not own global prompts. */
+  enableSessionExpiredPrompt?: boolean;
+}) {
   const [user, setUser] = useState<User | null>(null);
   const [mode, setMode] = useState<'signed-out' | 'local' | 'cloud'>('signed-out');
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
@@ -172,7 +183,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setNewMakerDraftOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
+      setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
+      setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();
@@ -272,6 +285,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [accountDeletionRestored, isAuthenticated, t]);
 
   useEffect(() => {
+    if (!enableSessionExpiredPrompt) return;
     let handling = false;
     return window.electronAPI.onAuthSessionExpired((payload) => {
       if (handling) return;
@@ -305,7 +319,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         handling = false;
       });
     });
-  }, [confirm, t]);
+  }, [confirm, enableSessionExpiredPrompt, t]);
 
   const loadLoginState = useCallback(async (): Promise<DesktopLoginActionResult> => {
     const result = await authServiceRef.current!.getLoginState();
@@ -340,6 +354,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);
@@ -354,6 +369,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);

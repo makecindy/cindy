@@ -40,7 +40,7 @@ export const PROTOCOL_VERSION = 3 as const;
  * 无关依赖变化而变。desktop 用这个（而非 bundle sha256）判断远端 daemon
  * 是否需要 upgrade,避免无关的 pnpm install 触发全量远端重装。
  */
-export const CC_MGR_BUNDLE_VERSION = '0.0.7' as const;
+export const CC_MGR_BUNDLE_VERSION = '0.0.8' as const;
 
 export type RpcId = number;
 

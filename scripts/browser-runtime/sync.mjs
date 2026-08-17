@@ -248,6 +248,82 @@ function header(srcLabel) {
  * src/shim/* for anything that can live at the adapter boundary.
  */
 const LOCAL_PATCHES = {
+  'extension/src/browser/chrome.executables.ts': [
+    {
+      desc: 'detect macOS Google Chrome Beta after stable Chromium-family browsers',
+      find: `    {
+      kind: "chromium",
+      path: path.join(os.homedir(), "Applications/Chromium.app/Contents/MacOS/Chromium"),
+    },
+    {
+      kind: "canary",`,
+      replace: `    {
+      kind: "chromium",
+      path: path.join(os.homedir(), "Applications/Chromium.app/Contents/MacOS/Chromium"),
+    },
+    {
+      kind: "chrome",
+      path: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+    },
+    {
+      kind: "chrome",
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+      ),
+    },
+    {
+      kind: "canary",`,
+    },
+    {
+      desc: 'classify macOS Google Chrome Beta within the Chrome-only fallback',
+      find: `function findGoogleChromeExecutableMac(): BrowserExecutable | null {
+  return findFirstChromeExecutable([
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    path.join(
+      os.homedir(),
+      "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    ),
+  ]);
+}`,
+      replace: `function findGoogleChromeExecutableMac(): BrowserExecutable | null {
+  return findFirstExecutable([
+    {
+      kind: "chrome",
+      path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    },
+    {
+      kind: "chrome",
+      path: path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    },
+    {
+      kind: "chrome",
+      path: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+    },
+    {
+      kind: "chrome",
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+      ),
+    },
+    {
+      kind: "canary",
+      path: "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    },
+    {
+      kind: "canary",
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      ),
+    },
+  ]);
+}`,
+    },
+  ],
   'extension/src/browser/config.ts': [
     {
       desc: 'preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access',

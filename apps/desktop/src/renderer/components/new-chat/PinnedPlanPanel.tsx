@@ -40,7 +40,10 @@ export function PinnedPlanPanel({
 }: {
   sessionId: string | null;
   messages: readonly ChatMessage[];
-  /** 保留旧调用方的兼容参数;计划胶囊现在始终使用静态灰度进度环。 */
+  /**
+   * 会话是否真的在跑(调用方传 isStreaming)。胶囊上的进度环始终静态;该值只
+   * 透传给浮层里 in_progress 行的呼吸动画——空闲时静止,不谎报步骤仍在执行。
+   */
   animated: boolean;
   /** 与 composer 同宽(inputWidth),胶囊在该宽度内居中,浮层不超出。 */
   width: number;

@@ -22,14 +22,22 @@
 interface PendingUpgrade {
   currentVersion: string;
   availableVersion: string;
+  /** 轮 22:哪个 daemon 需要升级 —— 'cc' | 'pi'。 */
+  agent: 'cc' | 'pi';
 }
 
 // ============================================================
 // Store internals
 // ============================================================
 
+// 轮 22-F2 MEDIUM 修复:同 host 的 cc/pi 两个 daemon 可能同时有版本差 ——
+// 按 `${hostId}:${agent}` 双键存, 各自独立渲染 banner。
 const state = new Map<string, PendingUpgrade>();
 const listeners = new Set<() => void>();
+
+function hostAgentKey(hostId: string, agent: string): string {
+  return `${hostId}:${agent}`;
+}
 
 // inflightUpgradeHosts: 用户点了「立即升级」从 UpgradeBanner 触发 force-upgrade
 // IPC 期间, 这条 hostId 进集合; finally 出。
@@ -56,16 +64,19 @@ function notify(): void {
   listeners.forEach((l) => l());
 }
 
-function setState(hostId: string, next: PendingUpgrade | null): void {
+function setState(hostId: string, next: PendingUpgrade | null, agent?: 'cc' | 'pi'): void {
+  // 轮 22-G4 HIGH:clear 路径(next === null)必须显式传 agent —— next?.agent
+  // 在 null 时永远取 'cc', 导致 ${hostId}:pi 永远清不掉, pi banner 不消失。
+  const key = hostAgentKey(hostId, agent ?? next?.agent ?? 'cc');
   if (next === null) {
-    if (!state.delete(hostId)) return; // no-op if was absent
+    if (!state.delete(key)) return; // no-op if was absent
   } else {
-    const prev = state.get(hostId);
+    const prev = state.get(key);
     // Skip notify if shallow-equal (avoid re-rendering banner unnecessarily)
-    if (prev && prev.currentVersion === next.currentVersion && prev.availableVersion === next.availableVersion) {
+    if (prev && prev.currentVersion === next.currentVersion && prev.availableVersion === next.availableVersion && prev.agent === next.agent) {
       return;
     }
-    state.set(hostId, next);
+    state.set(key, next);
   }
   notify();
 }
@@ -81,8 +92,8 @@ export function subscribeCcMgrUpgradeStore(listener: () => void): () => void {
   };
 }
 
-export function getCcMgrUpgradeSnapshot(hostId: string): PendingUpgrade | null {
-  return state.get(hostId) ?? null;
+export function getCcMgrUpgradeSnapshot(hostId: string, agent: 'cc' | 'pi' = 'cc'): PendingUpgrade | null {
+  return state.get(hostAgentKey(hostId, agent)) ?? null;
 }
 
 // ============================================================
@@ -106,7 +117,7 @@ export function installCcMgrUpgradeListener(): () => void {
         .ccMgrListPendingUpgrades()
         .then(({ pending }) => {
           for (const p of pending) {
-            setState(p.hostId, { currentVersion: p.currentVersion, availableVersion: p.availableVersion });
+            setState(p.hostId, { currentVersion: p.currentVersion, availableVersion: p.availableVersion, agent: p.agent });
           }
         })
         .catch((err) => {
@@ -122,7 +133,16 @@ export function installCcMgrUpgradeListener(): () => void {
   trySnapshot(3, 500);
 
   return window.electronAPI.remoteSsh.onCcMgrUpgradeAvailable((payload) => {
-    setState(payload.hostId, payload.available);
+    // 轮 22-F2:available 与 agent 分开 —— available=null 时用 payload.agent 定位。
+    // 轮 22-G4 HIGH:clear 路径显式传 payload.agent(否则 setState 用 null?.agent
+    // 永远清 'cc', pi 的 pending 残留)。
+    setState(
+      payload.hostId,
+      payload.available === null
+        ? null
+        : { ...payload.available, agent: payload.agent },
+      payload.agent,
+    );
   });
 }
 
@@ -138,12 +158,13 @@ export function installCcMgrUpgradeListener(): () => void {
  * 失败时 throw — 调用方 (UpgradeBanner) 显示 inline error 即可, silent toast
  * 的 'failed' phase 也会弹一条独立 error toast 给完整诊断。
  */
-export async function forceUpgradeCcMgr(hostId: string, sessionId?: string): Promise<{ daemonReady: boolean }> {
+export async function forceUpgradeCcMgr(hostId: string, sessionId?: string, agent: 'cc' | 'pi' = 'cc'): Promise<{ daemonReady: boolean }> {
   setInflightUpgrade(sessionId, true);
   try {
     // 把 sessionId 透到 main 端: main 现在只 soft-close 这个 banner-clicker
     // session, 同 host 其它 session 不动 (避免 in-flight turn 静默丢)。
-    const r = await window.electronAPI.remoteSsh.ccMgrForceUpgrade(hostId, sessionId);
+    // 轮 22:agent 参数区分 cc-mgr / pi-manager 升级。
+    const r = await window.electronAPI.remoteSsh.ccMgrForceUpgrade(hostId, sessionId, agent);
     return { daemonReady: r.daemonReady };
   } finally {
     setInflightUpgrade(sessionId, false);
@@ -155,6 +176,6 @@ export async function forceUpgradeCcMgr(hostId: string, sessionId?: string): Pro
  * 直到下次 desktop 重启或显式重连 host (silent install 再次探到版本差距才会
  * 重新写入 pending)。
  */
-export async function dismissCcMgrUpgrade(hostId: string): Promise<void> {
-  await window.electronAPI.remoteSsh.ccMgrDismissPendingUpgrade(hostId);
+export async function dismissCcMgrUpgrade(hostId: string, agent: 'cc' | 'pi' = 'cc'): Promise<void> {
+  await window.electronAPI.remoteSsh.ccMgrDismissPendingUpgrade(hostId, agent);
 }

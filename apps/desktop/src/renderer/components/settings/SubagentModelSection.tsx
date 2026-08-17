@@ -438,7 +438,7 @@ export function SubagentModelSection() {
             <div className="min-w-0 flex-1">
               {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择
                   面板,处处同行为):供应商分段、订阅来源全开,(model, providerId) 原子
-                  落库。仅 effort/Fast 配置列保持关闭(configurationEnabled=false)——
+                  落库。仅 effort/Fast 配置列与行内摘要保持关闭(configurationEnabled=false)——
                   子代理派发通道 CLAUDE_CODE_SUBAGENT_MODEL 只有模型 id,没有 effort/Fast
                   维度,展示可调项会承诺一个不存在的能力(功能特殊化理由,见 PR 说明)。 */}
               <ModelSelector

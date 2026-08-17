@@ -16,6 +16,17 @@ export const messages = {
     welcome:
       '🎉 已绑定为本 bot 的 owner~\n之后只有你能跟我聊天。如需更换 owner，请到 desktop 的 Settings 页清除 bot 凭证后重新保存。',
   },
+  group: {
+    /** 非 owner 在群里 @bot 的礼貌回应(per-user 冷却防刷屏, 与 telegram 同语义)。 */
+    strangerNotice:
+      '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.',
+    /**
+     * 开场白卡已发出但话题 id 无法恢复、撤回也失败时的兜底提示 — 回复落在
+     * 开场白所在话题内, 本轮不起 turn(降级群 lane 会一边留着「思考中」的
+     * 开场白卡一边把回答刷进群主流)。per-opener 冷却防重投事件重复提示。
+     */
+    threadOrphanNotice: '开话题出了点小问题, 这条没能处理, 麻烦再 @ 我一次~',
+  },
   // (inbound.skipped removed — orchestrator owns the wording for "pure
   // unsupported" / "mixed unsupported" replies; @cindy/im just emits the raw
   // entries via IMMessageEvent.unsupported.)

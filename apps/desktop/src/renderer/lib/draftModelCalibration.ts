@@ -88,14 +88,13 @@ function markedDefaultModelIdForAgent(
   providers: readonly ProviderView[],
   agent: AgentKind,
 ): string | null {
-  const flagAgent: 'claude-code' | 'codex' = agent === 'codex' ? 'codex' : 'claude-code';
   for (const provider of providersByPreference(providers, agent)) {
     const userProvider = provider.source === 'user';
     const flagged = (provider.models[agent] ?? [])
       .filter(
         (model) =>
           model.defaultEnabled !== false &&
-          (model.newSessionDefault?.includes(flagAgent) ?? false) &&
+          (model.newSessionDefault?.includes(agent) ?? false) &&
           isModelSelectableForNewRoute(model, { userProvider }),
       )
       .slice()
@@ -113,8 +112,8 @@ function markedDefaultModelIdForAgent(
  *   0. 目录/服务端**显式标记**为新对话默认（`newSessionDefault`）、且可用且默认可见的模型
  *      优先 —— 未显式选过模型的用户应跟随它，即便种子恰好是另一个可用模型（种子是
  *      capabilities 未到位时算的冷启动值，不反映标记）。按订阅优先取第一家提供它的来源，
- *      同一来源多个被标记时按 sortOrder 决胜。pi 按 claude-code 口径判定（pi 的模型宇宙是
- *      cc-compatible 模型的镜像）。**没有任何模型被标记时这步为空转，行为回到 1/2**（非破坏性）。
+ *      同一来源多个被标记时按 sortOrder 决胜。每个 Agent 只接受自己的标记，不跨 Agent
+ *      借用默认策略。**没有任何模型被标记时这步为空转，行为回到 1/2**（非破坏性）。
  *   1. `preferredModelId` 本身可用**且默认可见** —— 默认值能用就绝不动它，避免首屏莫名换
  *      模型；来源仍按订阅优先顺序取「第一家提供它的」，让默认值也享受订阅优先；
  *   2. 否则按「订阅优先」的供应商序取第一家，返回它排序第一的默认可见模型
@@ -139,8 +138,7 @@ export function pickConnectedModelForAgent(
 ): PickedConnectedModel | null {
   const ranked = providersByPreference(providers, agent);
   if (ranked.length === 0) return null;
-  // 0. 目录/服务端显式标记的新对话默认(newSessionDefault)优先。pi 不是 wire agent,按
-  //    claude-code 口径判定(host 把含 claude-code 的模型投影进 pi tab,标记随之带上)。
+  // 0. 目录/服务端显式标记的新对话默认(newSessionDefault)优先；每个 Agent 只认自己的标记。
   const flaggedModelId = markedDefaultModelIdForAgent(ranked, agent);
   if (flaggedModelId !== null) {
     // 标记只存在于区域门控后的 XD 条目；来源选择仍必须独立遵守 ranked 的订阅优先。
@@ -269,6 +267,13 @@ export function resolveDraftSessionProviderId({
     return explicitProviderId;
   }
   if (!effectiveProviderId) return null;
+  // 预设通过「添加供应商」落地后同样属于 user provider。即使它是当前模型唯一的
+  // 已连接来源，也不能省略 providerId：main / maker-core 的 null 语义是沿用各 harness
+  // 的原生认证 fallback（Claude → Cindy gateway / Claude OAuth），不会反查目录里唯一的
+  // BYOM 来源。省略后 UI 虽显示该来源，首轮 auth gate 却会去读 gateway key，最终报
+  // `not authenticated: no_key`。用户来源必须始终显式钉住，保证其代理路由与密钥生效。
+  const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
+  if (effectiveProvider?.source === 'user') return effectiveProviderId;
   const modelDefaultProviderId = effectiveSourceIdForModel([...providers], null, model, agent);
   // main 收到 providerId=null 后按 agent 的原生来源选择启动链路，而不是只在“提供当前
   // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含

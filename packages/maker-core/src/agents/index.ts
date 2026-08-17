@@ -65,10 +65,22 @@ export {
 // 上游」这一类 —— 那类同样是"连不上"而不是"请求有问题",续跑一次就能过去。
 export { isNetworkishErrorMessage } from './shared/network-error.js';
 export {
+  AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
+  AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
+  AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
+  AUTO_REVIEW_RETRY_ATTEMPTS,
+  AUTO_REVIEW_RETRY_BACKOFF_MS,
+  AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS,
+  autoReviewRetryBudgetMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   getAutoReviewActionTextLength,
+  getAutoReviewDelegateHardCeilingMs,
+  isAutoReviewConfirmUndeliveredNotice,
+  isAutoReviewUnavailableMetadata,
   isAutoReviewUnavailableNotice,
+  isSystemPermissionDenialReason,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   type AutoReviewDecision,
   type AutoReviewDelegate,

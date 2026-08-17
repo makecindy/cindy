@@ -82,12 +82,14 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 > - **ConfirmDialog Danger** — `#EF4444` used ONLY on the confirm button background in the Danger variant. The cancel button and rest of the dialog remain grayscale.
 > - **Permission Selector Mode Highlights** — selected risky permission modes may color only the option text/icon/checkmark and the collapsed trigger text/icon. The selected row background remains grayscale. Auto Approval uses `#417CDD` in both modes (finalized 2026-07-17, same value light/dark; replaces light #000050 / dark #00D9C5). Full Access uses Heart Orange `#EA6B17` in both modes (auto-follows warning-accent, finalized 2026-07-17). These hex values are the **default-theme palette only** — other themes may override `--perm-auto-selected-text` and `--perm-bypass-selected-text` with their own accent colors, provided both modes remain color-coded, distinguishable from each other, and visually distinct from neutral text. Tokens: `--perm-auto-selected-text` and `--perm-bypass-selected-text` in `apps/desktop/src/renderer/styles/globals.css`.
 > - **Diff Add Green / Diff Del Red** — GitHub-standard diff syntax colors, used on the `+` / `-` symbol glyph, the changed-line text foreground, **and the full row background** inside code-diff renderings. Applied in three places: (1) the Edit-tool DiffView card (F-MSG-6), (2) markdown ````diff` fenced code blocks in the message stream, and (3) `.diff` / `.patch` files opened in TextLightbox (the document previewer) — there hljs `.hljs-addition` / `.hljs-deletion` are forced `display: block` so the background fills to the right edge instead of stopping at the last glyph. Line-number gutter and ctx (unchanged) lines remain strictly grayscale per the layer system. **Foreground** — Add: `#22863a` Light / `#7ee787` Dark; Del: `#b31d28` Light / `#ff7b72` Dark. **Background** — Add: `#f0fff4` Light / `#033a16` Dark; Del: `#ffeef0` Light / `#67060c` Dark. Tokens: `--diff-add-fg/-bg` and `--diff-del-fg/-bg` in `apps/desktop/src/renderer/styles/globals.css`. Updated 2026-04-21: backgrounds switched from grayscale → GitHub red/green for full-row fill so additions / deletions are unambiguous at a glance.
+> - **PR Status Colors (session-git-pr-context / sidebar task-info)** — PR state is encoded by **existing tokens only** (no new token): open = `--diff-add-fg`, closed = `--error-fg`, merged = `--focus-ring`, draft = `--text-tertiary` (single source: `PR_STATUS_COLOR` in `apps/desktop/src/renderer/features/cc-agent/gitContextPrVisuals.ts`). Registered consumers: the session-header GitContextBadge, the sidebar PR hover tooltip, and (registered 2026-08-12, sidebar-redesign C' 期) the sidebar task-info `#number` badge — a monospace PR number whose **color alone** carries the state (text label lives in the hover title; icon-shape redundancy comes from the adjacent tooltip's status icons). Unknown/unloaded status degrades to `--text-tertiary`. Scope is strictly PR-state surfaces; do not generalize these colors to other status systems.
 
 *Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, **Silver** (`#a3a3a3`) for secondary, **Stone** (`#737373`) for tertiary (per `--text-secondary` / `--text-tertiary` in `colors.ts` — the two swap between modes). Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds.*
 
 ### Gradient System
 
 - **None in the core UI.** Cindy uses no gradients; visual separation comes from flat color blocks and single-pixel borders. This is a deliberate, almost philosophical design choice. (The login canvas is also flat by ruling — see §16.5.)
+- **Session-loading wordmark sheen — narrow functional exception (Desktop approved 2026-08-10).** `BrandLoadingMark` may use one neutral `transparent → --text-primary → transparent` gradient solely as a mask-clipped highlight inside the official Light/Dark wordmark while a session's message tree is deferred. It is a loading-progress signal, not a background, separator, fill, or reusable surface treatment. It may appear only after the 200ms delayed-reveal threshold, disappears as soon as the message tree mounts, and may not leak to messages, cards, dialogs, sidebars, or static branding. Full motion and brand-surface constraints are registered in §14.4 and §15.7.
 
 ## 3. Typography Rules
 
@@ -690,6 +692,10 @@ long duration to leak into any other hover or transition.
   - **Architecture red lines**: CSS owns the form, JS owns only the timing — `rehypeStreamWordFade` wraps words in `span.stream-word` and writes a per-word `--wf-delay`. The nominal tick step is capped at **24ms per word**; when the pending lead would exceed the **320ms** lead budget, the step is compressed adaptively so rendering keeps up with any arrival rate. Words are keyed by stable content matching (same-position matches, prefix continuation, and bounded backward matching), not by document word index. Each word keeps an absolute scheduled start time / remaining delay across re-parse and remount, so already-seen words never replay. The animation itself is a pure-opacity one-shot keyframe in `globals.css` (compositor-only). The final (non-streaming) render carries **zero** wrapper spans — the plugin only mounts while `isStreaming`.
   - **Degradation**: `prefers-reduced-motion` short-circuits in JS (plugin not mounted, no spans in DOM) *and* the CSS reduce block strips the animation — double coverage, and the CSS side is safe because `.stream-word` has no own opacity declaration to get stuck on.
   - **Scope boundary**: streaming chat prose only. Skips `code`/`pre` (chips and code blocks keep whole-form) and KaTeX subtrees. Must not be applied to static content, titles, toasts, or any non-streamed text. Implementation: `apps/desktop/src/renderer/components/chat/rehypeStreamWordFade.ts` + `.stream-word` in `globals.css`; tests: `rehypeStreamWordFade.test.ts`.
+- **Session-loading wordmark sheen(会话加载字标扫光)** — the sixth sanctioned motion class (approved 2026-08-10), **only** for Desktop `BrandLoadingMark` while `MessageStream` defers its message tree during a session switch:
+  - **Definition**: the active theme's official Light/Dark Cindy wordmark sits centered in the empty message viewport at 35% opacity; after a 200ms delayed-reveal threshold, one narrow neutral highlight traverses the wordmark shape. The PNG alpha channel is the mask, so motion is confined to the glyphs and never paints a panel/background. This is functional loading feedback for a measured long switch, not a decorative brand loop: ordinary sessions complete before the reveal threshold and never show it; the mark unmounts immediately when the message tree mounts.
+  - **Parameters / performance**: highlight cycle 1.6s, `cubic-bezier(0.4, 0, 0.2, 1)`, HTML pseudo-element `transform: translateX(-120% → 350%)` only (compositor-only). The neutral gradient is the narrow §2 exception registered under “Gradient System”; it may use only `transparent` and `--text-primary`, never brand red or a component-authored chromatic value. `prefers-reduced-motion` removes both the reveal and sheen animations and shows a static wordmark; `[data-app-hidden='true']` pauses the infinite sheen via `animation-play-state` while the window is hidden.
+  - **Scope boundary**: session-switch deferred-loading overlay only. No reuse for startup, streaming, tool execution, message generation, dialogs, cards, sidebars, empty states, or static branding. The standard `animate-spinner` remains the default loader everywhere else. Implementation: `components/branding/BrandLoadingMark.tsx`, `MessageStream.tsx`, and `.brand-loading-mark*` in `globals.css`.
 - **Retired: mobile-download QR brand edge** — a rotating app-icon edge on the `MobileDownloadDialog` QR card was briefly registered here as a fourth (persistent) motion class on 2026-07-25 and **removed the same day** at the user's request: read as a strange ring turning behind the code. There is **no sanctioned persistent decorative motion** — the red lines above hold without exception. The card is now a bare QR (no edge, no border, no shadow, no tilt); its only motion is the linked ↔ onboarding size tween. Do not re-add. Contract test: `mobileDownloadDialog.test.tsx` → `keeps the QR card flat with no brand edge`.
 
 ### 14.5 聊天正文的可点性信号(Clickability in message bodies)
@@ -1017,11 +1023,11 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 |---|---|---|
 | Brand red | `#DF0C27` | `#DF0C27` |
 | Deep brand red (hover/pressed) | `#A61629` | `#A61629` |
-| Background | `#EDEDED` | `#2A2828` |
-| Card / input | `#F8F8F8` | `#312F2F` |
-| Border | `#DCDFE3` (desktop; mobile light is a global exception `#C6C9CE` — see 15.13 "Cross-platform color isomorphism") | `#434343` |
-| Secondary info | `#8C8E94` (re-tuned from Figma `#9A9DA3` in two rounds, finalized 2026-07-20) | `#6F6F6F` |
-| Body text | `#3C3F43` | `#D4D4D4` |
+| Background | `#F2F2ED` (warm ivory — 2026-08 revision, see 15.16) | `#181818` (pure neutral — 2026-08 revision) |
+| Card / input | `#FDFDF8` | `#1F1F1F` |
+| Border | `#E4E4DF` (desktop, warm; mobile light keeps its own exception `#C6C9CE` pending the mobile follow-up — see 15.13) | `#313131` |
+| Secondary info | `#888883` (2026-08 ruling: warmed + raised to ≥3.0, supersedes the 2026-07-20 `#8C8E94`; history in 15.5) | `#6F6F6F` |
+| Body text | `#1A1A1A` (near-black neutral; emphasis tier `#0C0C0C`) | `#D4D4D4` |
 | Pure white | `#FFFFFF` | `#FFFFFF` |
 
 ### 15.2 Red-Boundary Test Maps(品牌红边界)
@@ -1032,7 +1038,7 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 
 ### 15.3 Interpolation Table (sRGB per-channel `round(A+(B-A)*t)`)
 
-See the skin decision table §2 (design-stage working file, not in repo). The Light/Dark 20/40/65/75% shades are frozen with exact values in unit tests (`#EFEFEF/#F1F1F1/#F4F4F4/#F5F5F5`, `#2B2929/#2D2B2B/#2F2D2D/#2F2D2D`).
+See the skin decision table §2 (design-stage working file, not in repo). The Light/Dark 20/40/65/75% shades were frozen with exact values in unit tests (`#EFEFEF/#F1F1F1/#F4F4F4/#F5F5F5`, `#2B2929/#2D2B2B/#2F2D2D/#2F2D2D`). **Superseded 2026-08**: the interpolation shades were replaced by the ladder model of the color-ramp revision (rules in 15.16, value authority `token-decision-table.md` §9); the current frozen values live in `cindyDecisionData.ts`.
 
 ### 15.4 Cross-Theme Exemptions (not covered by CINDY overrides)
 
@@ -1040,15 +1046,16 @@ See the skin decision table §2 (design-stage working file, not in repo). The Li
 - The status four (finalized 2026-07-17; same values both modes, all 9 themes follow with no override): running `#EA6B17` / awaiting `#19D2C1` / error (status family) `#D91F37` / done `#2AAE5B`; warning foreground `warning-fg` `#F3A115` (decoupled from Toast amber `#F59E0B` — Toast keeps its group-B status quo).
 - `focus-ring` `#417CDD` (blue — never red); diff red/green; modal scrim/shadows; `overlay-lightbox`; the four Toast colors.
 - `destructive` / `search-match-bg` stay outside HSL_FORMAT_IDS coverage.
-- **hljs syntax colors** (light = highlight.js `github.css`; dark = globals.css `.dark .hljs-*` mirroring github-dark) — dual-threshold ruling (2026-07-17): syntax colors ≥3:1, body text ≥4.5:1. The hljs palettes were designed for GitHub's default canvases; CINDY's code-block canvas (`surface-elevated` `#F8F8F8`/`#312F2F`) sits close to default's, so marginal shortfalls are inherited, not CINDY-introduced (default is equally affected). Light: all syntax colors ≥3 — no remediation, itemized as exemptions. Dark: `[data-theme="cindy-dark"]` overrides `.hljs-section` to `#2573ec` (reaches 3.00:1) and sets `.hljs-punctuation` / `.hljs-tag` explicitly to `#c9d1d9` (defensive). Guarded by `cindyCodeBlockContrast.test.ts` (≥2 baseline + text ≥4.5). Full derivation: decision log.
+- **hljs syntax colors** (light = highlight.js `github.css`; dark = globals.css `.dark .hljs-*` mirroring github-dark) — dual-threshold ruling (2026-07-17): syntax colors ≥3:1, body text ≥4.5:1. The hljs palettes were designed for GitHub's default canvases; CINDY's code-block canvas (`surface-elevated`, since 2026-08 `#FDFDF8`/`#1F1F1F`; code block fill `perm-code-bg` `#FAFAF5`/`#191919`) sits close to default's, so marginal shortfalls are inherited, not CINDY-introduced (default is equally affected). Light: all syntax colors ≥3 — no remediation, itemized as exemptions. Dark: `[data-theme="cindy-dark"]` overrides `.hljs-section` to `#2573ec` (3.00:1 on the pre-2026-08 canvas; 3.72:1 after the darker revision — margins only improved, override retained) and sets `.hljs-punctuation` / `.hljs-tag` explicitly to `#c9d1d9` (defensive). Guarded by `cindyCodeBlockContrast.test.ts` (≥2 baseline + text ≥4.5). Full derivation: decision log.
 - model-budget spectrum bar / GhostTool shimmer: explicitly exempt (neutral shimmer, theme-invariant).
 
 ### 15.5 U2 Explicit Exception (secondary-info color stays true to Figma)
 
-- Tokens: `text-secondary` (light `#8C8E94` / dark `#6F6F6F`) / `text-secondary-cross` (light stays `#9A9DA3`, not re-tuned).
+- Tokens: `text-secondary` (light `#888883` since 2026-08 / dark `#6F6F6F`) / `text-secondary-cross` (light merged into the same `#888883` tier in 2026-08; was `#9A9DA3`).
+- **Light side superseded 2026-08-13 (user ruling)**: light secondary info moved to `#888883` — warmed to the ivory hue (B=R−5) and raised to a ≥3.0 floor on every surface it sits on (page 3.17 / hover 3.06 / sidebar 3.06). The U2 "stay true to Figma" exemption now applies to **dark only** (`#6F6F6F` untouched).
 - Measured contrast (WCAG): × surface `2.32/2.92:1`, × elevated `2.56/2.65:1`, × chip `2.41/2.72:1` — all below the 4.5:1 body-text AA. Ruling **U2 (2026-07-16): stay true to the Figma values**, readability loss accepted as a recorded explicit deviation. (Light was later re-tuned in two rounds to `#8C8E94`, finalized 2026-07-20, desktop and mobile in sync — see decision log.)
-- Constraint: **never darken unilaterally** (`#686B72` was tried and rejected, kept only as an archived sample); changing the value requires a fresh user ruling.
-- Reverse-frozen test: `cindyThemes.test.ts` group ⑦ asserts the exact finalized values (light `#8C8E94` / dark `#6F6F6F`); injecting `#686B72` must fail; update the baseline only after a user ruling.
+- Constraint: **never darken unilaterally** (`#686B72` was tried and rejected, kept only as an archived sample); changing the value requires a fresh user ruling (the 2026-08 light change carries one).
+- Reverse-frozen test: `cindyThemes.test.ts` group ⑦ asserts the exact finalized values (light `#888883`, ruling 2026-08-13 / dark `#6F6F6F`); injecting `#686B72` must fail; update the baseline only after a user ruling.
 
 ### 15.6 HSL Format Contract
 
@@ -1063,6 +1070,13 @@ The brand block reads only `brand.icon/logo` — no compatibility with the legac
 > The logo-asset red `#F70121` is intrinsic to the official brand artwork (the WORD MARK arrow glyph); it coexists with — and differs from — UI brand red `#DF0C27`. Logos are image assets outside the token system; keep the original color. Do not "correct" it to `#DF0C27`.
 
 The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, white text, for DARK / `wordmark-light.png`, dark text, for LIGHT): both 459×156 (@2x) with a 229.5×78 render frame (its exact 2x full frame), and **neither carries a drop shadow** — `SplashScreen.test.tsx` asserts the absence. (Asset-size and shadow history: decision log.)
+
+**Sanctioned brand surface — session-switch deferred-loading overlay (Desktop approved 2026-08-10).**
+
+- **Where**: `BrandLoadingMark` mounted by `MessageStream` only while a session switch has committed the shell but deferred the message tree. It is centered as a pointer-transparent overlay in the empty message viewport and is eligible to become visible only after the 200ms delayed-reveal threshold. The live message tree and composer never carry the mark; once messages mount, the overlay unmounts immediately.
+- **Asset / theme boundary**: use only the active theme's official Light/Dark horizontal wordmark returned by `useBrandLogo`; source aspect ratio is preserved and no custom-theme asset mapping beyond that existing hook is introduced. Brand red is intrinsic to the official artwork per the asset rule above, not authored by this component.
+- **Motion / treatment**: 35% static base wordmark plus the §14.4 session-loading sheen. No character artwork, app icon, shadow, border, plate, enlarged hero composition, slogan, or additional brand copy. The single neutral mask-clipped sheen is the narrow gradient exception registered in §2; reduced motion lands on the static wordmark.
+- **Scope boundary**: this approval identifies an in-progress session switch only. It is not precedent for branding streaming, running tasks, tools, cards, dialogs, sidebars, empty states, or other working-UI surfaces; those remain neutral and use the standard spinner/cadenced patterns.
 
 **Sanctioned brand surface — conversation-share export footer (Desktop approved 2026-08-06; Mobile approved 2026-08-08).**
 
@@ -1093,18 +1107,18 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 
 ### 15.8 status-badge-fg
 
-- The orange badge (bg `status-bar-accent` `#EA6B17`) has its own foreground token `status-badge-fg`: **default mirrors `accent-pure-cta-fg`** (light white / dark black — zero change for the 9 existing themes); **CINDY overrides both modes to `#1F1F1F`** (near-black), contrast × `#EA6B17` = **5.19:1 ≥ 4.5** (user-approved; darken toward `#000000` if a future orange fails 4.5).
+- The orange badge (bg `status-bar-accent` `#EA6B17`) has its own foreground token `status-badge-fg`: **default mirrors `accent-pure-cta-fg`** (light white / dark black — zero change for the 9 existing themes); **CINDY overrides light to `#1F1F1F`, dark to `#121212`** (near-black; dark shifted with the 2026-08 ramp — see 15.16), contrast × `#EA6B17` = **5.19:1 / 5.90:1 ≥ 4.5** (user-approved; darken toward `#000000` if a future orange fails 4.5).
 - Consumers: `ContactsListPane:150` uses `status-badge-fg`; the `surface-on-card` consumers that sat on red CTAs (`RolePillDropdown:543/544`, `SkillhubDetailView:504`) moved to `accent-pure-cta-fg` (white); `surface-on-card` stays neutral-inverse (Fast toggle thumb). Registered in `cindyDecisionData` (a D2-phase addition).
 
 ### 15.10 Red-System Boundary & Neutral CTAs — current state(E1D 红色边界)
 
-- Ordinary primary actions never use brand red — they are neutral-inverse. **Neutral button four states**: light bg `#3C3F43` / text `#FCFCFC`, hover `#2E3237`, pressed `#25282C`; dark bg `#EEEEEE` / text `#252222`, hover `#E2E2E2`, pressed `#D4D4D4` (WCAG 10.32/13.60:1).
+- Ordinary primary actions never use brand red — they are neutral-inverse. **Neutral button four states**: light bg `#3C3F43` / text `#FCFCFC`, hover `#2E3237`, pressed `#25282C`; dark bg `#EEEEEE` / text `#151515` (2026-08: inverse dark text shifted with the darker ramp, was `#252222`), hover `#E2E2E2`, pressed `#D4D4D4` (WCAG 10.32/15.74:1).
 - Red is confined to semantic exceptions: `destructive`/delete, `error-*`, warning, diff red, status dots — plus the login brand accent via `--login-brand-accent` (§16). The older `brand-login-*` tokens were retired with the wave4 white-canvas login and survive only as whitelist strings in `cindyDecisionData.ts` (harmless — the whitelist permits, it does not require).
-- **send-btn family**: `send-btn-bg/-icon/-hover-bg/-pressed-bg/-disabled-bg/-disabled-icon` — CINDY overrides the whole family to the neutral four states + disabled grays `#444242`/`#585555`; defaults keep `--accent-cta-bg` with the opacity-85 hover. Whole family sits in `cindyDecisionData` REQUIRED_IDS + CINDY_EXPECTED, guarded by assertion ③.
+- **send-btn family**: `send-btn-bg/-icon/-hover-bg/-pressed-bg/-disabled-bg/-disabled-icon` — CINDY overrides the whole family to the neutral four states + disabled grays (light `#444242`/`#585555` unchanged; dark shifted 2026-08 to `#323232`/`#464646`); defaults keep `--accent-cta-bg` with the opacity-85 hover. Whole family sits in `cindyDecisionData` REQUIRED_IDS + CINDY_EXPECTED, guarded by assertion ③.
 - **Sidebar color hierarchy** (same set for light/dark):
   - Body (session titles) = `text-foreground` (= `text-primary`: light `#3C3F43` / dark `#D4D4D4`).
-  - Secondary gray (leading icons at rest / timestamps / meta / group labels) = light `#9A9DA3` / dark `#6F6F6F` (same as `text-secondary`); CINDY overrides `sidebar-muted` / `sidebar-action-icon` (HSL `220.0 4.7% 62.2%` / `0 0% 43.5%`) + `cmd-palette-item-meta` (hex).
-  - Selected pill = inverse pill: `sidebar-item-active` light `#3C3F43` / dark `#EEEEEE`, foreground `sidebar-item-active-foreground` light `#FCFCFC` / dark `#252222`, border transparent. **Any foreground sitting on `bg-sidebar-item-active` must use `text-sidebar-item-active-foreground` — `text-foreground` is forbidden there** (the token defaults to foreground, so non-CINDY themes see zero change).
+  - Secondary gray (leading icons at rest / timestamps / meta / group labels) = light `#888883` (2026-08, was `#9A9DA3`) / dark `#6F6F6F` (same as `text-secondary`); CINDY overrides `sidebar-muted` / `sidebar-action-icon` (HSL `60.0 2.1% 52.4%` / `0 0% 43.5%`) + `cmd-palette-item-meta` (hex).
+  - Selected pill = inverse pill: `sidebar-item-active` light `#3C3F43` / dark `#EEEEEE`, foreground `sidebar-item-active-foreground` light `#FCFCFC` / dark `#151515` (2026-08, was `#252222`), border transparent. **Any foreground sitting on `bg-sidebar-item-active` must use `text-sidebar-item-active-foreground` — `text-foreground` is forbidden there** (the token defaults to foreground, so non-CINDY themes see zero change).
   - Running-state leading icons (vendor glyph / Puzzle / RadioTower / Clock) = **Thinking Orange `--warning-accent` `#EA6B17`**, breathing via `session-status-breathing`; the selected state stays orange (running outranks the inverse foreground). Mobile `statusAccent` mirrors value and priority. Persistent breathing sits on an HTML wrapper; SVG stays static (engineering conventions §7).
   - Assertions: ③ CINDY_EXPECTED locks the 4 token values; ⑦ adds hierarchy assertions (secondary gray clearly weaker than body; selected-pill foreground ≥4.5 on its fill).
 - Test maps: `NEUTRAL_PRIMARY_EXPECTED_BY_ID` / `NEUTRAL_PRIMARY_FOREGROUND_BY_ID` + `RED_EXCEPTION_ALLOWED_IDS` (replacing the pre-E1D `BRAND_RED_*` maps — archived in the decision log). Assertions ⑤/⑦/⑧ enforce exact neutrals, the red whitelist, neutral contrast, and falsifiability.
@@ -1138,7 +1152,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Red boundary
 
 - Brand red `#DF0C27` only for brand display / splash, destructive actions, running/thinking emphasis, and the list active glyph (dark uses `#A61629` for the glyph).
-- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#252222`. Never brand-red these.
+- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#151515` (2026-08). Never brand-red these.
 - The red whitelist does not include carets, focus rings, ordinary buttons, or ordinary selected backgrounds. A new red consumer must document its semantics and enter the token/test whitelist first; no component-level hardcoding.
 
 #### Caret & focus
@@ -1150,6 +1164,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Cross-platform color isomorphism
 
 - Mobile color semantics must mirror the desktop token decisions: the base layers (background, body, secondary info, borders) map directly from CINDY desktop semantics — never invent a parallel mobile palette for the same meanings.
+- **Pending follow-up (2026-08)**: the desktop color-ramp revision (15.16) moved the desktop base layers; mobile has **not** been synced yet and still carries the pre-revision values (including comments claiming "in sync with desktop"). Until the mobile follow-up lands, the isomorphism baseline for mobile remains the pre-2026-08 desktop values; do not partially sync individual tokens.
 - **`colors.border` light is a mobile-wide exception, not a homepage-scoped token** (ruling 2026-07-21, PR #266): mobile light `border` / `borderTranslucent` = `#C6C9CE` / `rgba(198,201,206,0.62)`, deviating from desktop `#DCDFE3` — desktop borders usually sit on `#F8F8F8` cards, while mobile hairlines sit directly on the `#EDEDED` background, where `#DCDFE3` reads at a nearly invisible 1.14:1; the darkened 1.42:1 is device-verified legible. The value lives in `apps/mobile/src/theme/tokens.ts` global `lightColors.border`, applying to every mobile-light hairline; dark stays `#434343`, isomorphic with desktop. `chatCodeBorder` / `sheetActionBorder` / `sheetGrabber` keep independent values and do not follow this exception.
 - Mobile-only tokens carry only mobile-specific layers or geometry:
 
@@ -1204,6 +1219,18 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **Hover-token discipline**: `--update-btn-hover` is exclusively the upgrade button's hover (inverse dark CTA) — **forbidden** on ordinary ghost buttons/badges (near-black `#2E3237` under CINDY light swallows text and icons; 6 misuses cleaned up 2026-07-21). Correct picks:
   - titlebar-area (ContentHeader) ghost elements → `titlebar-button-hover` (same as the ChromeActions window buttons);
   - general light hover in the content area → `--surface-hover`.
+
+### 15.16 2026-08 Color-Ramp Revision (warm ivory light / neutral near-black dark)
+
+> Value authority: [`token-decision-table.md`](./token-decision-table.md) §9 (full ladders, text tiers, contrast matrix, approval trail). Frozen in `cindyDecisionData.ts`; this subsection pins the rules.
+
+- **Light** = warm ivory: page `#F2F2ED`; every surface/border is warm with **B = R−5** (single warmth constant; one sanctioned ceiling exception — pure white `#FFFFFF` stays for floating planes that need maximum lift above the near-white card, currently `ask-option-list-bg` only). Cards stay near-white (`#FDFDF8`) — card lift ≈9.4%, matching the original spec. Hover/chip tiers sit **below** the page (the white ceiling leaves no room above); the sidebar is its own plane one step darker (`#EEEEE9` at 90% glass opacity).
+- **Dark** = pure neutral: page `#181818`, all layers R=G=B (zero warmth), simple parallel shift from the 2026-07 values. Known debt: near-black compression keeps only ~65% of the original perceived layer separation — recorded in [#2559](https://github.com/makecindy/cindy/issues/2559), fix is the equal-luminance ladder.
+- **Text ramp (light)**: deepest emphasis `#0C0C0C` → body `#1A1A1A` (both neutral, crisp) → tertiary `#6B6B67` (warm −4) → secondary/meta `#888883` (warm −5, ≥3.0 floor) → disabled `#9D9D98` (WCAG-exempt). Warmth increases as text gets lighter; dark text tiers are all neutral (tertiary `#C1C1C1`, equal-luminance neutralized 2026-08).
+- **Dual anchoring**: interactive fills that sit on the **page** anchor to the page (`surface-hover` tier); fills that sit on **cards/popovers** anchor to the card (light `#F6F6F1`, ≈6% below card — `settings-menu-bg-selected`, `perm-item-selected-bg`, `ask-badge-bg`, `cmd-palette-item-hover`, etc.). Dark exception, this revision only: `settings-menu-bg-selected` uses the menu-hover lift `#282828`, not the page-anchored `#1D1D1D` chip. `perm-item-selected-bg`, `ask-badge-bg`, and `cmd-palette-item-hover` stay on the page-anchored chip/hover values until their own follow-up. A single token cannot serve both planes after the revision; do not "unify" them back.
+- **Twin sync**: every color carried in both hex and HSL forms (24 pairs) must stay value-identical; derived translucent inlines (e.g. `chat-input-border-focus` = tertiary at 30%) must be re-derived when their source moves.
+- **Exempt families untouched**: `login-*` (58 tokens), `diff-*`, `error-*`, `overlay-*`, semantic status colors, shadows — per §10/§16 and `protected-tokens.ts`.
+- User-tuned one-offs: dark sidebar glass `rgba(5,5,5,0.85)` (2026-08-11); light sidebar glass 90% opacity (2026-08-13/14).
 
 ## 16. Login Flow (登录链路)
 

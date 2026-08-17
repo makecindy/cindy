@@ -104,6 +104,20 @@ describe('buildClaudeEnv', () => {
     });
   });
 
+  it('does not forward a controller-local CLAUDE_CONFIG_DIR to a remote host', async () => {
+    const env = await buildClaudeEnv(
+      createAuthAdapter({
+        ANTHROPIC_API_KEY: 'sk-gw',
+        CLAUDE_CONFIG_DIR: 'C:\\Users\\Admin\\AppData\\Roaming\\Cindy-dev2\\claude-home',
+      }),
+      {},
+      { credentialMode: 'gateway-key', mode: 'remote' },
+    );
+
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-gw');
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
   it('lets behaviorFlags override an inherited CLAUDE_CODE_ATTRIBUTION_HEADER from the host env', async () => {
     // local spawn 继承宿主 process.env:宿主 shell export 过 =0 时,flags 缺席压不住
     // 继承值 —— 保留归因必须显式 '1'(desktop issue #758 的环境继承回归面)。

@@ -73,7 +73,49 @@ describe('createResponsesChatHandler', () => {
     expect(res.ended).toBe(true);
   });
 
-  it('rejects a built-in web_search tool instead of silently dropping it', async () => {
+  it('drops an unsupported built-in web_search tool and continues upstream', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools).toEqual([
+        { type: 'function', function: { name: 'exec', parameters: { type: 'object' } } },
+      ]);
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: { content: 'ok' } }] },
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const warn = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl, logger: { warn } });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'search' }],
+        tools: [
+          { type: 'function', name: 'exec', parameters: { type: 'object' } },
+          { type: 'web_search' },
+        ],
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(res.chunks.join('')).toContain('ok');
+    expect(res.ended).toBe(true);
+    expect(warn).toHaveBeenCalledWith('responses-chat bridge dropped unsupported built-in tool', {
+      model: 'custom-model',
+      tool: 'web_search',
+      index: 1,
+      action: 'continue_without_tool',
+    });
+  });
+
+  it('rejects an explicit tool_choice for a dropped web_search tool', async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const warn = vi.fn();
     const handler = createResponsesChatHandler({
@@ -87,20 +129,184 @@ describe('createResponsesChatHandler', () => {
         model: 'custom-model',
         input: [{ type: 'message', role: 'user', content: 'search' }],
         tools: [{ type: 'web_search' }],
+        tool_choice: { type: 'function', name: 'web_search' },
       },
       res: res as never,
     });
 
     expect(res.status).toBe(400);
     expect(res.chunks.join('')).toContain('unsupported_feature');
-    expect(res.chunks.join('')).toContain('tools[0]');
-    expect(res.chunks.join('')).toContain('web_search');
+    expect(res.chunks.join('')).toContain('tool_choice.web_search');
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith('responses-chat bridge rejected unsupported feature', {
       model: 'custom-model',
-      feature: 'tools[0].web_search',
+      feature: 'tool_choice.web_search',
     });
+  });
+
+  it('rejects a required tool_choice when the only tool is a dropped web_search', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const warn = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl, logger: { warn } });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'search' }],
+        tools: [{ type: 'web_search' }],
+        tool_choice: 'required',
+      },
+      res: res as never,
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.chunks.join('')).toContain('unsupported_feature');
+    expect(res.chunks.join('')).toContain('tool_choice.web_search');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps a required tool_choice when another tool survives beside web_search', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools).toEqual([
+        { type: 'function', function: { name: 'exec', parameters: { type: 'object' } } },
+      ]);
+      expect(body.tool_choice).toBe('required');
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'do it' }],
+        tools: [
+          { type: 'function', name: 'exec', parameters: { type: 'object' } },
+          { type: 'web_search' },
+        ],
+        tool_choice: 'required',
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+  });
+
+  it('keeps a same-named retained function tool selectable beside web_search', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools).toEqual([
+        { type: 'function', function: { name: 'web_search', parameters: { type: 'object' } } },
+      ]);
+      expect(body.tool_choice).toEqual({
+        type: 'function',
+        function: { name: 'web_search' },
+      });
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'call the function' }],
+        tools: [
+          { type: 'function', name: 'web_search', parameters: { type: 'object' } },
+          { type: 'web_search' },
+        ],
+        tool_choice: { type: 'function', name: 'web_search' },
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+  });
+
+  it('keeps a same-named string custom tool selectable beside web_search', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools?.map((tool: { function: { name: string } }) => tool.function.name))
+        .toContain('web_search');
+      expect(body.tool_choice).toEqual({
+        type: 'function',
+        function: { name: 'web_search' },
+      });
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'call the custom tool' }],
+        tools: ['web_search', { type: 'web_search' }],
+        tool_choice: { type: 'custom', name: 'web_search' },
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+  });
+
+  it('keeps a nested same-named function selectable beside web_search', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools?.map((tool: { function: { name: string } }) => tool.function.name))
+        .toContain('web_search');
+      expect(body.tool_choice).toEqual({
+        type: 'function',
+        function: { name: 'web_search' },
+      });
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'call the nested function' }],
+        tools: [
+          { type: 'function', function: { name: 'web_search', parameters: { type: 'object' } } },
+          { type: 'web_search' },
+        ],
+        tool_choice: { type: 'function', name: 'web_search' },
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
   });
 
   it('preserves the upstream base query when applying the chat path', async () => {

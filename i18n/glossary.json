@@ -1334,6 +1334,19 @@
       "note": "Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。"
     },
     {
+      "id": "lead",
+      "status": "proposed",
+      "en": "Lead",
+      "translations": {
+        "zh-CN": "Lead",
+        "zh-TW": "Lead",
+        "ja": "Lead",
+        "ko": "Lead"
+      },
+      "forbidden": {},
+      "note": "Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不译成 Leader / 主控 / 主导 / 队长。这里只钉大小写形态：首字母大写 Lead。存量文案里仍有小写 lead（如 lead session），先登记为 proposed，待与 Worker 一并固化。"
+    },
+    {
       "id": "worker",
       "status": "decided",
       "en": "Worker",
@@ -1624,6 +1637,52 @@
         "ko": "프로세스"
       },
       "note": "OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。"
+    },
+    {
+      "id": "china-model-group",
+      "status": "proposed",
+      "en": "China",
+      "translations": {
+        "zh-CN": "中国",
+        "zh-TW": "中國",
+        "ja": "中国",
+        "ko": "중국"
+      },
+      "note": "模型目录中由服务端显式 group:\"china\" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。"
+    },
+    {
+      "id": "ungrouped",
+      "status": "proposed",
+      "en": "Ungrouped",
+      "translations": {
+        "zh-CN": "未分组",
+        "zh-TW": "未分組",
+        "ja": "未分類",
+        "ko": "미분류"
+      },
+      "note": "模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。"
+    },
+    {
+      "id": "plugin-manual",
+      "status": "proposed",
+      "en": "Manual",
+      "translations": {
+        "zh-CN": "手册",
+        "ja": "マニュアル",
+        "ko": "매뉴얼"
+      },
+      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
+    },
+    {
+      "id": "vision-bridge",
+      "status": "proposed",
+      "en": "Vision Bridge",
+      "translations": {
+        "zh-CN": "视觉桥",
+        "ja": "ビジョンブリッジ",
+        "ko": "비전 브리지"
+      },
+      "note": "让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。"
     }
   ]
 }

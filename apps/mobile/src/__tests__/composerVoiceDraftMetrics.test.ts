@@ -78,12 +78,15 @@ describe('composer voice draft text metrics', () => {
     expect(composerTextPaddingForPlatform('ios')).toEqual({ top: 6, bottom: 0 });
     expect(composerTextPaddingForPlatform('android')).toEqual({ top: 3, bottom: 3 });
     expect(composerTextPaddingForPlatform('default')).toEqual({ top: 3, bottom: 3 });
+    expect(composerTextPaddingForPlatform('ios', { optical: false })).toEqual({ top: 3, bottom: 3 });
   });
 
   it('renders the real composer TextInput with the shared metrics', () => {
     const composerRowSource = read(COMPOSER_ROW);
     const block = styleBlock(composerRowSource, 'input');
     expect(composerRowSource).toContain("from '@/session/composerTextPlatformMetrics'");
+    expect(composerRowSource).toContain('const geometricSingleLine = !cardLayout;');
+    expect(composerRowSource).not.toContain('const geometricSingleLine = !cardLayout && !multilineShape;');
     expect(block).toContain('...COMPOSER_TEXT_STYLE');
     expect(block).toContain('paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM');
     expect(block).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
@@ -116,6 +119,10 @@ describe('composer voice draft text metrics', () => {
         .toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
       expect(overlayContent, `${rel} 覆盖层顶部内边距必须与输入框同源`)
         .toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
+      expect(source, `${rel} 收起展示态听写覆盖层必须切到几何居中`)
+        .toContain('!composerCardActive && styles.voiceDraftOverlayContentGeometric');
+      expect(source, `${rel} 几何居中不得再看收起前的多行/manual 判定`)
+        .not.toContain('!composerCardActive && !composerInputIsMultiline && styles.voiceDraftOverlayContentGeometric');
     }
   });
 

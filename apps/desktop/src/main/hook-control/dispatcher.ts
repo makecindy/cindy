@@ -59,6 +59,7 @@ import {
   type TurnDeliveryPayload,
   type TurnEndPayload,
 } from '@cindy/slack-hook-protocol';
+import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
@@ -605,6 +606,22 @@ interface PendingReopen {
   source?: TaskSource;
   accountGeneration: number;
   expiresAt: number;
+}
+
+/**
+ * 官方 legacy adapter 的消息生命周期。
+ *
+ * Slack / X 继续沿用原路径；只有 Telegram 任务接入共享内核。当前服务端仍由
+ * `turn.progress` / `turn.end` 实际发布，所以这里的 sent 表示终态已进入客户端
+ * 可靠发布边界，不冒充 Telegram Bot API 的最终回执。
+ */
+function telegramLegacyLifecycle(
+  connectionId: string,
+  requestId: string,
+  source: TaskSource | undefined,
+): TelegramMessageLifecycle | null {
+  if (source?.im !== 'telegram') return null;
+  return createTelegramMessageLifecycle(`telegram-official:${connectionId}:${requestId}`);
 }
 
 export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
@@ -1233,6 +1250,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
     const requestId = randomUUID();
     const requestKey = ackKey(entry.connectionId, requestId);
+    const messageLifecycle = telegramLegacyLifecycle(
+      entry.connectionId,
+      requestId,
+      entry.source,
+    );
     let claimed = false;
     // runner 可能在 watch() 里**同步**收口(会话已不在进程里就直接 onAbandon),
     // 那时 cancelWatch 还没赋值 —— 用这个标记决定要不要登记, 不去碰它。
@@ -1317,6 +1339,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       },
       onProgress: (text) => {
         if (revoked || !claimed || !isCurrentGeneration(entry.accountGeneration)) return;
+        if (messageLifecycle && !messageLifecycle.acceptProgress()) return;
         const send = sendFns.get(entry.connectionId);
         if (send) send(makeTurnProgress({ requestId, text }));
       },
@@ -1329,6 +1352,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (revoked || !claimed || !isCurrentGeneration(entry.accountGeneration)) return;
         const status: 'ok' | 'error' | 'cancelled' = wasCancelled ? 'cancelled' : outcome.status;
         const isError = status === 'error';
+        // Fence progress before the legacy terminal frame. Continuation
+        // callbacks can race the async attachment-collection tail.
+        const finalIntent = messageLifecycle?.beginFinal() ?? null;
         // 续跑轮的 turn.end **直发不缓存**, 与普通任务(sendOrBuffer 断线补发)刻意
         // 相反: 普通任务的消息由 server 建、断线期间没人动它, 补发就能定稿; 而续跑
         // 轮的消息在断连那一刻已被 server 的孤儿收口改写并解绑 requestId, 迟到的
@@ -1351,10 +1377,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             }),
           ) === true;
         if (!delivered) {
+          if (messageLifecycle && finalIntent) messageLifecycle.markFinalFailed(finalIntent);
           // 没发出去 => server 已把这条消息收口并解绑本轮 requestId, 再拿它当
           // reopenOf 只会被静默忽略。这条消息线到此为止, 不再登记可续跑。
           log.warn(`hook continuation turn.end dropped (connection offline): ${requestId}`);
           return;
+        }
+        if (messageLifecycle && finalIntent) {
+          messageLifecycle.markFinalSent(finalIntent);
+          if (messageLifecycle.beginCleanup()) messageLifecycle.finishCleanup();
         }
         // 续跑又失败了 -> 允许再续一次(用户还得再点一次重试, 天然限流)。
         // reopenOf 换成这一轮的 requestId: server 侧那条消息现在挂在它上面。
@@ -1423,11 +1454,17 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
     runningByRequest.set(requestKey, { sessionId, connectionId: task.connectionId });
+    const messageLifecycle = telegramLegacyLifecycle(
+      task.connectionId,
+      task.requestId,
+      task.run.source,
+    );
 
     // 进度快照直发不缓存: 断线期间的中间帧没有补发价值(turn.end 会带最终
     // 结果), 发送失败静默丢弃即可
     const onProgress = (text: string): void => {
       if (!isCurrentGeneration(task.accountGeneration)) return;
+      if (messageLifecycle && !messageLifecycle.acceptProgress()) return;
       const send = sendFns.get(task.connectionId);
       if (send) send(makeTurnProgress({ requestId: task.requestId, text }));
     };
@@ -1537,6 +1574,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ? { attachments: outcome.attachments }
         : {}),
     };
+    // Open the final fence before the legacy terminal frame enters any async
+    // outbox path. A late progress callback from the observer must never write
+    // over the answer after this point.
+    const finalIntent = messageLifecycle?.beginFinal() ?? null;
     // Protocol idempotency replays only the original ACK. The terminal record
     // is written as a pending outbox entry before sending; an offline frame
     // stays buffered in memory until onConnected flushes the full payload.
@@ -1546,6 +1587,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       ack: task.ack,
       turnEnd: durableTurnEnd(turnEnd),
     });
+    if (messageLifecycle && finalIntent) {
+      messageLifecycle.markFinalSent(finalIntent);
+      if (messageLifecycle.beginCleanup()) messageLifecycle.finishCleanup();
+    }
     // 表情换终态。连接断了也要**调**一次 —— 传一个必然失败的发送器, 让
     // ackReactions 把它记进待补发队列; 直接跳过的话那条消息会永远挂着 👀,
     // 而重连补发拿不到任何东西可补。

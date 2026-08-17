@@ -31,6 +31,7 @@ import type { CodexErrorInfo } from './app-server/protocol.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { AgentEvent } from '../../types/events.js';
+import { makeGhostManual64KiBFixture } from '../shared/ghost-manual-fixture.js';
 
 function noopLog(): {
   info: () => void;
@@ -249,6 +250,36 @@ describe('Codex assistant text streaming contract', () => {
         source: 'codex',
       },
     ]);
+  });
+});
+
+describe('translateItemNotification ghost_manual boundary', () => {
+  it('preserves a 64KB high-escape MCP envelope without truncation', async () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const q = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-manual',
+        turnId: 'turn-manual',
+        item: {
+          type: 'mcpToolCall',
+          id: 'manual-call',
+          server: 'cindy',
+          tool: 'ghost_manual',
+          status: 'completed',
+          result: { content: [{ type: 'text', text: wire }] },
+        },
+      },
+      q,
+      makeCtx(newCodexRuntimeState()),
+    );
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: wire }, source: 'codex' });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
   });
 });
 
@@ -1437,6 +1468,83 @@ describe('translateItemNotification commandExecution output normalization', () =
 });
 
 describe('translateItemNotification collabAgentToolCall', () => {
+  it('does not create a Subagent card for a provisional spawn with no child thread', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const provisional = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'spawn-before-validation',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: [],
+        prompt: 'Use the configured default model',
+        reasoningEffort: 'medium',
+        agentsStates: {},
+      },
+    };
+
+    translateItemNotification('started', provisional, q, ctx);
+    translateItemNotification('updated', provisional, q, ctx);
+
+    expect(await collect(q)).toEqual([]);
+    expect(ctx.rt.emittedToolUse.has('spawn-before-validation')).toBe(false);
+  });
+
+  it('publishes the same provisional spawn once a child receiver appears', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const provisional = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'spawn-after-validation',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: [],
+        prompt: 'Use the configured default model',
+        reasoningEffort: 'medium',
+        agentsStates: {},
+      },
+    };
+
+    translateItemNotification('started', provisional, q, ctx);
+    translateItemNotification(
+      'updated',
+      {
+        ...provisional,
+        item: {
+          ...provisional.item,
+          receiverThreadIds: ['thread-2'],
+          model: 'gpt-5.6-terra',
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    expect(events.map((event) => event.type)).toEqual(['tool_use', 'agent_task_update']);
+    expect(events[0].data).toMatchObject({
+      toolUseId: 'spawn-after-validation',
+      input: { receiverThreadIds: ['thread-2'], model: 'gpt-5.6-terra' },
+    });
+    expect(events[1].data).toMatchObject({
+      taskId: 'spawn-after-validation',
+      status: 'running',
+      model: 'gpt-5.6-terra',
+      subagentObservation: {
+        kind: 'spawn',
+        providerRunIds: ['thread-2'],
+      },
+    });
+  });
+
   it('emits provider-neutral task updates alongside existing tool events', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();

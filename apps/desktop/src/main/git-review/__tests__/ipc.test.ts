@@ -7,6 +7,7 @@ import {
   parseMarkdownPreviewPayload,
   parseOpenFilePayload,
   parseTarget,
+  openReviewFile,
   readReviewData,
   runReviewFileStageOperation,
 } from '../ipc';
@@ -167,6 +168,36 @@ describe('git-review write busy gate', () => {
       { source: 'unstaged', path: 'file.txt', oldPath: null },
     ], deps)).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
     expect(deps.resolveScope).not.toHaveBeenCalled();
+  });
+
+  it('rejects SSH workspace writes before reading status or mutating Git', async () => {
+    const deps: GitReviewDeps = {
+      resolveScope: vi.fn().mockResolvedValue({
+        disabledReason: null,
+        repoRoot: '/remote/repo',
+        source: 'remote',
+      } as ReviewScope),
+      readStatus: vi.fn(),
+      readDiffs: vi.fn(),
+    };
+
+    await expect(runReviewFileStageOperation('s1', 'stage', [
+      { source: 'unstaged', path: 'file.txt', oldPath: null },
+    ], deps)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(deps.readStatus).not.toHaveBeenCalled();
+  });
+
+  it('rejects opening a controlled-side file with the local shell', async () => {
+    const openPath = vi.fn();
+    const resolveScope = vi.fn().mockResolvedValue({
+      disabledReason: null,
+      repoRoot: '/remote/repo',
+      source: 'remote',
+    } as ReviewScope);
+
+    await expect(openReviewFile('s1', 'file.txt', { resolveScope }, openPath))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(openPath).not.toHaveBeenCalled();
   });
 });
 

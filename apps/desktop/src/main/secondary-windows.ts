@@ -15,13 +15,18 @@
  * `?secondaryWindow=1`,renderer 据此默认折叠侧栏 + 关闭走"只关本窗"语义。
  */
 
-import { BrowserWindow, app, nativeTheme, shell } from 'electron';
+import { BrowserWindow, app, nativeTheme, screen, shell } from 'electron';
 import path from 'node:path';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from './logger.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
-import { markAppContentWindow } from './windowFocusClassifier.js';
+import { isAppContentWindow, markAppContentWindow } from './windowFocusClassifier.js';
+import {
+  isPointInsideAnyWindow,
+  resolveWindowBoundsNearPoint,
+  type ScreenPoint,
+} from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
 import { resolveVibrancyConfig, type WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
@@ -80,7 +85,13 @@ export function installExternalLinkGuards(win: BrowserWindow): void {
  * 新开一个完整应用窗口并定位到指定 session。
  * @param mainWindow 主窗口,用来取当前 bounds 作为新窗初始大小(右下错开);可为 null。
  */
-export function openSessionInNewWindow(sessionId: string, mainWindow: BrowserWindow | null): void {
+export function openSessionInNewWindow(
+  sessionId: string,
+  mainWindow: BrowserWindow | null,
+  deviceId?: string | null,
+  anchorPoint?: ScreenPoint,
+): void {
+  const createdAt = performance.now();
   // frame 配置复刻主窗(bootstrap-electron.ts createWindow): Mac 隐藏标题栏留红绿灯,
   // Windows 无边框 + 自绘标题栏。
   const platformOptions =
@@ -90,9 +101,18 @@ export function openSessionInNewWindow(sessionId: string, mainWindow: BrowserWin
   const bgColor = nativeTheme.shouldUseDarkColors ? '#1f1f1e' : '#f8f8f6';
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
-  const bounds = base
-    ? { x: base.x + OFFSET_PX, y: base.y + OFFSET_PX, width: base.width, height: base.height }
+  const requestedSize = base
+    ? { width: base.width, height: base.height }
     : { width: 1280, height: 800 };
+  const bounds = anchorPoint
+    ? resolveWindowBoundsNearPoint(
+        anchorPoint,
+        requestedSize,
+        screen.getDisplayNearestPoint(anchorPoint).workArea,
+      )
+    : base
+      ? { x: base.x + OFFSET_PX, y: base.y + OFFSET_PX, ...requestedSize }
+      : requestedSize;
 
   // 副窗同样读一次 window-behavior 设置,和主窗保持 acceptFirstMouse 一致——否则
   // macOS 上用户关掉开关重启后, 主窗一次点击透传但副窗仍被 Electron 默认 false
@@ -115,6 +135,9 @@ export function openSessionInNewWindow(sessionId: string, mainWindow: BrowserWin
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       spellcheck: false,
+      // A task drag that misses a renderer drop target must never navigate the
+      // application window to the dragged plain-text fallback.
+      navigateOnDragDrop: false,
     },
   });
   markAppContentWindow(win);
@@ -133,13 +156,28 @@ export function openSessionInNewWindow(sessionId: string, mainWindow: BrowserWin
 
   installExternalLinkGuards(win);
 
-  win.once('ready-to-show', () => {
-    if (!win.isDestroyed()) win.show();
-  });
+  let shown = false;
+  const showWindow = (trigger: 'did-finish-load' | 'ready-to-show'): void => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    win.show();
+    log.info('secondary window visible', {
+      sessionId,
+      trigger,
+      elapsedMs: Math.round(performance.now() - createdAt),
+    });
+  };
+  // The boot gate intentionally resolves the session route after the document
+  // loads. Showing at did-finish-load lets the user see that the new window
+  // was created while that async route/database work continues; ready-to-show
+  // remains a fallback for platforms that do not emit the load event first.
+  win.webContents.once('did-finish-load', () => showWindow('did-finish-load'));
+  win.once('ready-to-show', () => showWindow('ready-to-show'));
 
   // 副窗启动参数:
   //   ?secondaryWindow=1   —— renderer 据此默认折叠侧栏 + 关闭只关本窗
   //   ?bootSession=<id>    —— 要定位到的 sessionId
+  //   ?bootDevice=<id>     —— device-link 远程任务的归属设备(可选)
   // hash 固定落到中性的 /cc-agent/boot 网关路由(SecondaryWindowBootGate):由它
   // 在 renderer 侧调 resolveSessionRoute 解析出 canonical route(普通 / Orca lead /
   // worker)再 navigate。main 端**不**写死 /cc-agent/<id> —— 否则 Orca lead/worker
@@ -149,16 +187,42 @@ export function openSessionInNewWindow(sessionId: string, mainWindow: BrowserWin
     const url = new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
     url.searchParams.set('secondaryWindow', '1');
     url.searchParams.set('bootSession', sessionId);
+    if (deviceId) url.searchParams.set('bootDevice', deviceId);
     url.hash = hash;
     void win.loadURL(url.toString());
   } else {
     void win.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`), {
-      query: { secondaryWindow: '1', bootSession: sessionId },
+      query: {
+        secondaryWindow: '1',
+        bootSession: sessionId,
+        ...(deviceId ? { bootDevice: deviceId } : {}),
+      },
       hash,
     });
   }
 
   log.info('opened session in new window', { sessionId });
+}
+
+/**
+ * Open a task only when the native drag ended outside every Cindy app window.
+ * The cursor is queried in main so renderer coordinates cannot drift across
+ * displays or browser zoom, and existing Cindy windows remain valid targets.
+ */
+export function openSessionInNewWindowIfDroppedOutside(
+  sessionId: string,
+  mainWindow: BrowserWindow | null,
+  sourceWindow: BrowserWindow | null,
+  deviceId?: string | null,
+): boolean {
+  const point = screen.getCursorScreenPoint();
+  const appWindowBounds = BrowserWindow.getAllWindows()
+    .filter((win) => isAppContentWindow(win) && win.isVisible() && !win.isMinimized())
+    .map((win) => win.getBounds());
+  if (isPointInsideAnyWindow(point, appWindowBounds)) return false;
+
+  openSessionInNewWindow(sessionId, sourceWindow ?? mainWindow, deviceId, point);
+  return true;
 }
 
 // E4D 毛玻璃(lead 裁决副窗同处理):遍历副窗 set,用同 resolveVibrancyConfig 映射

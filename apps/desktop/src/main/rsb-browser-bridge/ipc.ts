@@ -143,7 +143,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     return { ok: true };
   });
 
-  ipcMain.handle(RSB_BROWSER_BRIDGE_RELEASE_CHANNEL, (_e, payload: unknown) => {
+  ipcMain.handle(RSB_BROWSER_BRIDGE_RELEASE_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'release payload');
     const tabId = requireString(obj.tabId, 'tabId');
     // 可选 stale 防护:携带旧 renderer report 过的 webContentsId 时,registry
@@ -154,6 +154,18 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
         throwIpcError('INVALID_PARAMS', 'webContentsId must be an integer when provided');
       }
       expected = obj.webContentsId;
+    }
+
+    // A release is destructive: do not let one trusted renderer clear a tab
+    // registered by another renderer.  Prefer the guest's actual owner when
+    // it is still alive; after a guest crash, the current host is the only
+    // remaining trusted caller that may perform the stale cleanup.
+    const target = registry.getWebContentsByTabId(tabId);
+    if (target) {
+      const owner = resolveOwner(target);
+      if (!owner || owner.id !== event.sender.id) {
+        throwIpcError('INVALID_PARAMS', `tab ${tabId} is not hosted by the sender`);
+      }
     }
     registry.release(tabId, expected);
     return { ok: true };
@@ -351,7 +363,11 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   // pin changes only happen while automation is running and the renderer is
   // live by definition).
   const unsubscribe = registry.onPinChange((tabId, pinned) => {
-    const wc = getHostWebContents();
+    // Pin state belongs to the renderer hosting this tab, not necessarily the
+    // currently visible RSB window (the detached window may be hidden or the
+    // tab may have migrated between hosts).
+    const target = registry.getWebContentsByTabId(tabId);
+    const wc = target ? resolveOwner(target) : null;
     if (!wc || wc.isDestroyed()) return;
     wc.send(pinned ? RSB_BROWSER_BRIDGE_PIN_CHANNEL : RSB_BROWSER_BRIDGE_UNPIN_CHANNEL, {
       tabId,

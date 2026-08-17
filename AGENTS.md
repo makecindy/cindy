@@ -29,6 +29,10 @@
 - 启动、调试或验证 Desktop 时，必须先读 `docs/dev-rules/desktop-development.md`。
 - 修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、导航或 Electron
   特权能力前，必须先读 `docs/dev-rules/electron-security-and-process-boundaries.md`。
+- 新增或修改 Desktop 独立窗口、辅助窗口或弹出型 `BrowserWindow` 前，必须遵守
+  `docs/dev-rules/electron-security-and-process-boundaries.md` 的「独立辅助窗口统一生命周期
+  基线」：复用既有控制器／基础设施，不得另造平行的预热、就绪握手、隐藏复用与崩溃恢复
+  状态机。
 - 修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件或测试目录前，必须
   先读 `docs/dev-rules/credentials-and-local-storage.md`。
 - 新增或修改媒体生成、导入、缓存、附件、持久化、协议解析或回收逻辑前，必须先读
@@ -103,9 +107,9 @@
   （deny-by-default，不得改成黑名单——调试级别的功能日志是用户内容的主要泄漏源）、
   **标记代次 + 原子清除**（并发实例下仅靠时间戳会误删另一实例刚写的新崩溃标记）。
   脱敏规则**只增不减**，放宽任一条视为隐私变更、需重新评审。
-- 升级 `cindy-protocol`、修改插件分发来源边界或 device-link 协议／relay／隧道
+- 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
-  `docs/dev-rules/protocol-and-submodules.md`。
+  `docs/dev-rules/protocol-compatibility.md`。
 - 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
@@ -151,11 +155,13 @@
   `check:dco` 的失败结果不构成缺签证据，不要据此报告 DCO 问题。判定 DCO 是否通过，
   一律以 PR 上的 DCO App check 与真实提交范围（`origin/main..PR head`）的结果为准。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地
-  跑完仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
+  跑完仓库根 `pnpm test:unit:related`（只跑这次改动能影响到的单测；改到测试调度、
+  依赖清单、workspace 配置、Vitest 配置或单测 CI 时会自动退回全量 `pnpm test:unit`），
+  并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
   `package.json` 里的 `name`，如 `desktop`、`@cindy/maker-core`；没有 `typecheck`
   script 的 package 该步自动跳过），全部通过后才允许提交；任何一项失败都不得提交，
-  必须先修复。细则与唯一例外（防丢数据的兜底保存）见
+  必须先修复。GitHub CI 仍跑完整 `pnpm test:unit`。细则与唯一例外（防丢数据的兜底保存）见
   `docs/dev-rules/development-workflow.md`。
 - 在上述门禁之上按风险追加验证：跨模块、高风险或基础设施改动追加更广泛验证（如
   `pnpm test:all`），最终以 CI 门禁为准。不得通过跳过、删除或弱化测试制造通过。

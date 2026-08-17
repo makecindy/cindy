@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WebviewTag } from 'electron';
 
+import { selectPersistableFavicon } from '../../../../shared/faviconPersistence';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
 import {
   consumePendingKillCause,
@@ -66,8 +67,9 @@ export interface UseBrowserWebviewResult {
   /** 当前页面 title(`page-title-updated`)。 */
   title: string;
   /**
-   * 当前页面 favicon URL。null = 当前 webview 代际尚未观测到 favicon；
-   * 空串 = 已明确观测到页面没有 favicon。
+   * 当前页面 favicon URL。null = 当前 webview 代际尚未观测到 favicon,或观测到
+   * 但全部候选不可持久化(blob: / 超大 / 非白名单协议)——两种都不覆盖已持久化
+   * 图标;空串 = 已明确观测到页面没有 favicon。
    */
   favicon: string | null;
   /** 正在加载中(`did-start-loading` 翻 true,`did-stop-loading` 翻 false)。 */
@@ -245,7 +247,7 @@ export function useBrowserWebview(
 
     const onTitle = (e: Electron.PageTitleUpdatedEvent) => setTitle(e.title);
     const onFavicon = (e: Electron.PageFaviconUpdatedEvent) => {
-      setFavicon(e.favicons.find((candidate) => candidate.trim().length > 0) ?? '');
+      setFavicon(selectPersistableFavicon(e.favicons));
     };
     const onDidNavigate = (e: Electron.DidNavigateEvent) => {
       const previousUrl = urlRef.current;

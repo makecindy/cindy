@@ -61,6 +61,7 @@ function createHarness(): Harness {
       im_user_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       codex_history_has_product_prompt INTEGER,
+      codex_plan_json TEXT,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
       active_turn_started_at INTEGER,

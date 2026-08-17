@@ -22,6 +22,7 @@ import {
   setAnthropicDiscoveredModels,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
+  setXaiDiscoveredModels,
   setXdGatewayModels,
 } from '../active-catalog.js';
 import {
@@ -88,12 +89,13 @@ afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
   setDiscoveredCodexModels([]);
   setAnthropicDiscoveredModels([]);
+  setXaiDiscoveredModels(null);
   setXdGatewayModels([]);
   setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
 });
 
 describe('registry presence 实体化', () => {
-  it('bundled xAI 离线快照与同仓 Registry 投影逐字节一致,禁止发布期人工漂移', () => {
+  it('a loaded legacy Catalog keeps its own xAI fallback membership instead of importing Pi members', () => {
     const expected = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!expected) throw new Error('bundled catalog missing xai');
     const generatedCatalog = structuredClone(BUNDLED_CATALOG);
@@ -105,6 +107,9 @@ describe('registry presence 实体化', () => {
     setActiveCatalog(generatedCatalog);
     expect(models('xai', 'claude-code')).toEqual(expected.models['claude-code']);
     expect(models('xai', 'codex')).toEqual(expected.models.codex);
+    expect(models('xai', 'pi').map((model) => model.id)).toEqual(
+      expected.models['claude-code']?.map((model) => model.id.slice('xai/'.length)),
+    );
   });
 
   it('远端宣告 GPT-6(status+能力自洽)→ 免发现进入 codex root,并自动派生 claude/pi bridge', () => {
@@ -376,26 +381,33 @@ describe('registry presence 实体化', () => {
     for (const list of Object.values(xd?.models ?? {})) expect(list).toEqual([]);
   });
 
-  it('区域门控后的 XD /models 标记保留，并从 claude-code 可达面投影到 Pi', () => {
+  it('区域门控后的 XD /models Agent 与默认标记原样保留，不跨 Agent 投影', () => {
     setXdGatewayModels([
       {
         id: 'deepseek/deepseek-v4-pro',
-        agents: ['claude-code', 'codex'],
-        newSessionDefault: ['claude-code', 'codex'],
+        name: 'DeepSeek V4 Pro',
+        contextWindow: 200_000,
+        agents: ['claude-code', 'codex', 'pi'],
+        newSessionDefault: ['claude-code', 'codex', 'pi'],
+        perAgent: {
+          'claude-code': { wireProtocol: 'anthropic-messages' },
+          codex: { wireProtocol: 'openai-responses' },
+          pi: { wireProtocol: 'openai-responses' },
+        },
       },
     ]);
 
     expect(
       models('xd', 'claude-code').find((m) => m.id === 'deepseek/deepseek-v4-pro')
         ?.newSessionDefault,
-    ).toEqual(['claude-code', 'codex']);
+    ).toEqual(['claude-code', 'codex', 'pi']);
     expect(
       models('xd', 'codex').find((m) => m.id === 'deepseek/deepseek-v4-pro')
         ?.newSessionDefault,
-    ).toEqual(['claude-code', 'codex']);
+    ).toEqual(['claude-code', 'codex', 'pi']);
     expect(
       models('xd', 'pi').find((m) => m.id === 'deepseek/deepseek-v4-pro')?.newSessionDefault,
-    ).toEqual(['claude-code', 'codex']);
+    ).toEqual(['claude-code', 'codex', 'pi']);
   });
 });
 
@@ -517,7 +529,7 @@ describe('本地 override(local 永远最高)', () => {
     expect(models('xai', 'codex').map((model) => model.id)).toEqual(xaiOrder);
   });
 
-  it('一条 perAgent.codex patch 只修 xAI Codex 档位,claude root 与 pi 镜像不动', () => {
+  it('一条 perAgent.codex patch 只修 xAI Codex 档位,claude root 与 Pi 官方目录不动', () => {
     setActiveCatalog(baseCatalog([grokEntry()]));
     setLocalCatalogOverrides(
       overridesOf({
@@ -534,8 +546,10 @@ describe('本地 override(local 永远最高)', () => {
     });
     const claude = models('xai', 'claude-code').find((m) => m.id === 'xai/grok-test');
     expect(claude).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'] });
-    // Pi 恒定镜像 claude-code root,拿满 root 档位。
-    expect(models('xai', 'pi').find((m) => m.id === 'xai/grok-test')).toEqual(claude);
+    expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+    });
+    expect(models('xai', 'pi').some((m) => m.id === 'grok-4.6')).toBe(false);
   });
 
   it('本地 perAgent 也在 bridge 目标端生效,且不能写展示/status 字段', () => {

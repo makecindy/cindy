@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "de671e45-b2f4-4f06-adad-6cff1f4d2613",
-  "prevId": "d2cfd2d1-b722-455c-9abd-4c6366e19ed5",
+  "id": "678c1f41-343b-49e0-92d8-20247184dc60",
+  "prevId": "9b947440-3e27-474b-93c1-dc62b1bc9c35",
   "tables": {
     "account_usage_snapshots": {
       "name": "account_usage_snapshots",
@@ -1958,14 +1958,6 @@
             "fired_at"
           ],
           "isUnique": false
-        },
-        "idx_schedule_runs_session_schedule": {
-          "name": "idx_schedule_runs_session_schedule",
-          "columns": [
-            "session_id",
-            "schedule_id"
-          ],
-          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -2195,13 +2187,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "session_title_template": {
-          "name": "session_title_template",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "silent_when_idle": {
           "name": "silent_when_idle",
@@ -2850,6 +2835,13 @@
         "codex_history_has_product_prompt": {
           "name": "codex_history_has_product_prompt",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "codex_plan_json": {
+          "name": "codex_plan_json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

@@ -1,11 +1,20 @@
 /**
- * ReviewTabBody — git-backed workspace review panel.
+ * ReviewTabBody — unified workspace and recorded-message review panel.
  *
- * M1 is read-only: it shows git status/diff for the session worktree and uses
- * agent messages only as a Last turn filter.
+ * A persisted descriptor selects the data source. The toolbar remains shared;
+ * source capabilities decide which actions are available.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   AlertTriangle,
@@ -57,8 +66,9 @@ import type {
   ReviewStageOperationSummary,
 } from '@/lib/gitReview.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
+
+import { gitReviewApiFor, isReviewRemoteOversizeError } from '@/lib/gitReviewTransport';
 import { makerChatStore } from '@/lib/makerChatStore';
-import type { TurnChangeSetDetail } from '../../../../../shared/turnChangeSet';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
@@ -76,8 +86,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { buildCappedDiffData } from '../../../../../shared/gitReviewCapped';
+import { capabilitiesFor, type ReviewSourceDescriptor } from '../../../../../shared/reviewSource';
 import type { TabKindHostContext } from '../../types';
 import type { ReviewState } from './index';
+import { getReviewDiffsExpanded, setReviewDiffsExpanded } from './diffExpansionPreference';
 import { PlainUnifiedDiff, type DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
 import { MarkdownDiffPreview } from './DiffViewer/MarkdownDiffPreview';
 import { shouldVirtualizeFileList } from './DiffViewer/diffRows';
@@ -86,7 +98,7 @@ import {
   filterReviewFileJumpResults,
   findReviewFileTreeFileIndex,
   flattenReviewFileTree,
-  getReviewDiffExpansionToggle,
+  getReviewDiffExpansionAction,
   getReviewFileTreeVisibility,
   isReviewFileTreeScrollKey,
   moveReviewFileJumpSelection,
@@ -98,29 +110,12 @@ import {
 } from './fileTree';
 import { getGitApplyCopyAvailability } from './gitApplyCommand';
 import { getRichMarkdownPreviewEligibility } from './markdownPreview';
-import { useLastTurnFilter } from './useLastTurnFilter';
-import { useReviewBranchDiff, useReviewCommitDiff, useReviewCommits, useReviewFileDiff, useReviewFileDiffs, useReviewGitState } from './useReviewGitState';
+import { REVIEW_TURN_LOCAL_ONLY_ERROR, useReviewSource } from './useReviewSource';
+import { useReviewCommits, useReviewFileDiff } from './useReviewGitState';
 
 interface ReviewTabBodyProps {
   state: ReviewState;
   ctx: TabKindHostContext;
-}
-
-/**
- * source / selectedCommitOid 由外层 ReviewTabBody 持有并下发:轮次视图与
- * Git 视图共用同一个来源状态机,从轮次视图的来源下拉切走时目标 source
- * 要在 Git 视图挂载前就位(对齐 Codex 的单 source + turnSelection 模型)。
- */
-interface GitReviewBodyProps extends ReviewTabBodyProps {
-  source: ReviewSource;
-  setSource: (source: ReviewSource) => void;
-  selectedCommitOid: string | null;
-  setSelectedCommitOid: (oid: string | null) => void;
-}
-
-interface TurnReviewBodyProps extends ReviewTabBodyProps {
-  setSource: (source: ReviewSource) => void;
-  setSelectedCommitOid: (oid: string | null) => void;
 }
 
 type ReviewToggleAction = Extract<ReviewStageAction, 'stage' | 'unstage'>;
@@ -135,7 +130,8 @@ interface ReviewFileJumpRequest {
 type LoadImagePreview = (diff: FileDiff) => Promise<ReviewImagePreviewData>;
 type LoadMarkdownPreview = (diff: FileDiff) => Promise<ReviewMarkdownPreviewData>;
 
-const SECTION_ACTION_REVEAL_CLASS = 'invisible opacity-0 transition-opacity group-hover/section:visible group-hover/section:opacity-100 group-focus-within/section:visible group-focus-within/section:opacity-100';
+const SECTION_ACTION_REVEAL_CLASS =
+  'invisible opacity-0 transition-opacity group-hover/section:visible group-hover/section:opacity-100 group-focus-within/section:visible group-focus-within/section:opacity-100';
 
 // 断点按四语言最长文案(ja/ko 明显长于 zh/en)和 A/B 后 900px 窗口的
 // 240px 实际 RSB 宽校准:240px 只能容纳 source + 统计 + 主操作 / 跳转 / More
@@ -157,16 +153,26 @@ export function getBatchActionLayout(containerWidth: number): BatchActionLayout 
   return containerWidth <= REVIEW_BATCH_ICON_ONLY_MAX_WIDTH_PX ? 'icon-only' : 'full';
 }
 
-export function shouldShowBranchBaseLabel(rowWidth: number, hasBranchBaseControl: boolean): boolean {
-  return hasBranchBaseControl && Number.isFinite(rowWidth) && rowWidth >= REVIEW_BRANCH_BASE_LABEL_MIN_WIDTH_PX;
+export function shouldShowBranchBaseLabel(
+  rowWidth: number,
+  hasBranchBaseControl: boolean,
+): boolean {
+  return (
+    hasBranchBaseControl &&
+    Number.isFinite(rowWidth) &&
+    rowWidth >= REVIEW_BRANCH_BASE_LABEL_MIN_WIDTH_PX
+  );
+}
+
+export function shouldOfferReviewOpenFile(
+  remoteHostId: string | null,
+  deviceLinkDeviceId: string | null,
+): boolean {
+  return remoteHostId === null && deviceLinkDeviceId === null;
 }
 
 export type ReviewCommitActionDisabledReason =
-  | 'no-message'
-  | 'write-disabled'
-  | 'no-changes'
-  | 'no-staged'
-  | null;
+  'no-message' | 'write-disabled' | 'no-changes' | 'no-staged' | null;
 
 export function getReviewCommitActionDisabledReason({
   message,
@@ -202,7 +208,10 @@ export function getReviewCommitDropdownCompletionEffect(result: ReviewCommitRunR
   };
 }
 
-export function refreshBranchDiffAfterCommit(source: ReviewSource, refreshBranchDiff: () => void): void {
+export function refreshBranchDiffAfterCommit(
+  source: ReviewSource,
+  refreshBranchDiff: () => void,
+): void {
   if (source === 'branch') refreshBranchDiff();
 }
 
@@ -216,20 +225,33 @@ export function canUsePatchBasedReviewActions(hideWhitespace: boolean): boolean 
   return typeof hideWhitespace === 'boolean';
 }
 
-export function shouldHideWhitespaceOnlyDiff(diff: Pick<FileDiff, 'kind' | 'status' | 'hunks'>, hideWhitespace: boolean): boolean {
-  return hideWhitespace && diff.kind === 'text' && diff.status === 'modified' && diff.hunks.length === 0;
+export function shouldHideWhitespaceOnlyDiff(
+  diff: Pick<FileDiff, 'kind' | 'status' | 'hunks'>,
+  hideWhitespace: boolean,
+): boolean {
+  return (
+    hideWhitespace && diff.kind === 'text' && diff.status === 'modified' && diff.hunks.length === 0
+  );
 }
 
-export function filterWhitespaceHiddenDiffs(diffs: readonly FileDiff[], hideWhitespace: boolean): FileDiff[] {
+export function filterWhitespaceHiddenDiffs(
+  diffs: readonly FileDiff[],
+  hideWhitespace: boolean,
+): FileDiff[] {
   if (!hideWhitespace) return Array.from(diffs);
   return diffs.filter((diff) => !shouldHideWhitespaceOnlyDiff(diff, true));
 }
 
 export function getExpandedDiffSet(
   diffs: readonly Pick<FileDiff, 'id'>[],
-  collapsedPaths: ReadonlySet<string>,
+  diffsExpanded: boolean,
+  expansionOverrides: ReadonlyMap<string, boolean>,
 ): Set<string> {
-  return new Set(diffs.map((diff) => diff.id).filter((id) => !collapsedPaths.has(id)));
+  return new Set(
+    diffs
+      .map((diff) => diff.id)
+      .filter((id) => (expansionOverrides.get(id) ?? diffsExpanded) === true),
+  );
 }
 
 export function summaryEntryToPlaceholderDiff(entry: ReviewDiffSummaryEntry): FileDiff {
@@ -272,23 +294,26 @@ export function fileDiffToSummaryEntry(diff: FileDiff): ReviewDiffSummaryEntry {
 }
 
 export function getLastTurnCappedSummaryEntries(
-  worktreeCapped: { staged: ReviewCappedDiffData | null; unstaged: ReviewCappedDiffData | null } | null | undefined,
+  worktreeCapped:
+    | { staged: ReviewCappedDiffData | null; unstaged: ReviewCappedDiffData | null }
+    | null
+    | undefined,
   lastTurnPaths: ReadonlySet<string>,
 ): ReviewDiffSummaryEntry[] {
   return [
     ...(worktreeCapped?.unstaged?.files ?? []),
     ...(worktreeCapped?.staged?.files ?? []),
-  ].filter((entry) => lastTurnPaths.has(entry.path) || (entry.oldPath !== null && lastTurnPaths.has(entry.oldPath)));
+  ].filter(
+    (entry) =>
+      lastTurnPaths.has(entry.path) || (entry.oldPath !== null && lastTurnPaths.has(entry.oldPath)),
+  );
 }
 
 export function buildLastTurnCappedData(
   availableDiffs: readonly FileDiff[],
   cappedEntries: readonly ReviewDiffSummaryEntry[],
 ): ReviewCappedDiffData | null {
-  return buildCappedDiffData([
-    ...availableDiffs.map(fileDiffToSummaryEntry),
-    ...cappedEntries,
-  ]);
+  return buildCappedDiffData([...availableDiffs.map(fileDiffToSummaryEntry), ...cappedEntries]);
 }
 
 export function getCappedDiffForSource({
@@ -299,7 +324,10 @@ export function getCappedDiffForSource({
   lastTurnCapped,
 }: {
   source: ReviewSource;
-  worktreeCapped?: { staged: ReviewCappedDiffData | null; unstaged: ReviewCappedDiffData | null } | null;
+  worktreeCapped?: {
+    staged: ReviewCappedDiffData | null;
+    unstaged: ReviewCappedDiffData | null;
+  } | null;
   commitCapped?: ReviewCappedDiffData | null;
   branchCapped?: ReviewCappedDiffData | null;
   lastTurnCapped?: ReviewCappedDiffData | null;
@@ -346,17 +374,19 @@ export function scrollElementIntoContainerView(
 }
 
 export function shouldFallbackFromMissingSelectedCommit(
-  source: ReviewSource,
+  source: ReviewSource | 'turn',
   selectedCommitOid: string | null,
   commits: readonly Pick<ReviewCommit, 'oid'>[],
   commitsLoaded: boolean,
   commitsLoading = false,
 ): boolean {
-  return source === 'commit' &&
+  return (
+    source === 'commit' &&
     commitsLoaded &&
     !commitsLoading &&
     Boolean(selectedCommitOid) &&
-    !commits.some((commit) => commit.oid === selectedCommitOid);
+    !commits.some((commit) => commit.oid === selectedCommitOid)
+  );
 }
 
 export function getCurrentBranchDiffData(
@@ -365,18 +395,18 @@ export function getCurrentBranchDiffData(
 ): ReviewBranchDiffData | null {
   if (!data) return null;
   if (requestedBaseRef && data.baseRef !== requestedBaseRef) {
-    const isRequestedBaseFallback = data.warning?.code === 'base-missing' &&
-      data.warning.requestedBaseRef === requestedBaseRef;
+    const isRequestedBaseFallback =
+      data.warning?.code === 'base-missing' && data.warning.requestedBaseRef === requestedBaseRef;
     if (!isRequestedBaseFallback) return null;
   }
   return data;
 }
 
 export function useClearReviewOperationNoticeOnSourceChange(
-  source: ReviewSource,
+  source: ReviewSource | 'turn',
   clearOperationNotice: () => void,
 ): void {
-  const previousSourceRef = useRef<ReviewSource>(source);
+  const previousSourceRef = useRef<ReviewSource | 'turn'>(source);
   useEffect(() => {
     if (previousSourceRef.current === source) return;
     previousSourceRef.current = source;
@@ -384,204 +414,89 @@ export function useClearReviewOperationNoticeOnSourceChange(
   }, [clearOperationNotice, source]);
 }
 
-export function ReviewTabBody(props: ReviewTabBodyProps) {
-  const [source, setSource] = useState<ReviewSource>('unstaged');
-  const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(null);
-  if (props.state.turnTarget) {
-    return (
-      <TurnChangeSetReviewBody
-        {...props}
-        setSource={setSource}
-        setSelectedCommitOid={setSelectedCommitOid}
-      />
-    );
-  }
-  return (
-    <GitReviewTabBody
-      {...props}
-      source={source}
-      setSource={setSource}
-      selectedCommitOid={selectedCommitOid}
-      setSelectedCommitOid={setSelectedCommitOid}
-    />
-  );
+export function reviewSourceStatePatch(descriptor: ReviewSourceDescriptor) {
+  return {
+    descriptor,
+    jumpTarget: null,
+    // A partial state merge cannot delete the deprecated field. Null prevents
+    // legacy migration from reviving the previous historical source.
+    turnTarget: null,
+  };
 }
 
-function TurnChangeSetReviewBody({ state, ctx, setSource, setSelectedCommitOid }: TurnReviewBodyProps) {
-  const { t } = useTranslation();
-  const target = state.turnTarget;
-  // 变更集所属会话。协同面板里审查 worker 的轮次时,tab 桶在 lead 会话
-  // (worker 自己的桶在协同视图下不可见),数据按 targetSessionId 取。
-  const reviewSessionId = target?.targetSessionId ?? ctx.sessionId;
-  const crossSession = Boolean(target?.targetSessionId && target.targetSessionId !== ctx.sessionId);
-  // 供来源下拉的「提交」子菜单用;与 Git 视图同一 IPC,子菜单展开时刷新。
-  // 跨会话时不挂来源下拉(git 视图跟随桶会话 workdir,对 worker 语义错误),
-  // 传 null 跳过取数。
-  const commitsState = useReviewCommits(crossSession ? null : ctx.sessionId || null, state.branchBaseRef ?? null);
-  const switchToGitSource = useCallback((next: ReviewSource) => {
-    // 对齐 Codex EP 语义:切到其它来源即退出轮次审查(清 turnTarget),
-    // 轮次选择不保留;要再看本条消息需从聊天流卡片重新进入。
-    setSelectedCommitOid(null);
-    setSource(next);
-    ctx.patchState({ turnTarget: null });
-  }, [ctx, setSelectedCommitOid, setSource]);
-  const switchToCommitSource = useCallback((oid: string) => {
-    setSelectedCommitOid(oid);
-    setSource('commit');
-    ctx.patchState({ turnTarget: null });
-  }, [ctx, setSelectedCommitOid, setSource]);
-  const [changeSets, setChangeSets] = useState<TurnChangeSetDetail[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const targetIdsKey = target?.changeSetIds.join('\0') ?? '';
-  const diffs = useMemo(() => changeSets.flatMap((set) => set.diffs), [changeSets]);
-  const isPartial = changeSets.some((set) => set.state === 'partial');
-  const collapsedSet = useMemo(() => new Set(state.collapsedPaths ?? []), [state.collapsedPaths]);
-  const visibleDiffs = useMemo(
-    () => filterWhitespaceHiddenDiffs(diffs, state.hideWhitespace ?? false),
-    [diffs, state.hideWhitespace],
-  );
-  const expandedSet = useMemo(
-    () => getExpandedDiffSet(visibleDiffs, collapsedSet),
-    [collapsedSet, visibleDiffs],
-  );
-
-  useEffect(() => {
-    if (!targetIdsKey) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    if (ctx.remoteHostId !== null || ctx.deviceLinkDeviceId !== null) {
-      setChangeSets([]);
-      setError(t('rightSidebar.review.turn.localOnly'));
-      setLoading(false);
-      return;
-    }
-    void window.electronAPI.maker.getTurnChangeSets(reviewSessionId, targetIdsKey.split('\0'))
-      .then((sets) => {
-        if (cancelled) return;
-        setChangeSets(sets);
-      })
-      .catch((reason: unknown) => {
-        if (cancelled) return;
-        setError(extractIpcError(reason)?.message ?? (reason instanceof Error ? reason.message : String(reason)));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [ctx.deviceLinkDeviceId, ctx.remoteHostId, reloadToken, reviewSessionId, t, targetIdsKey]);
-
-  const selectedDiff = target?.selectedDiffId
-    ? visibleDiffs.find((diff) => diff.id === target.selectedDiffId)
-    : target?.selectedPath
-      ? visibleDiffs.find((diff) => diff.path === target.selectedPath || diff.oldPath === target.selectedPath)
-      : null;
-  const jumpRequest = selectedDiff && target
-    ? { id: selectedDiff.id, nonce: target.requestNonce }
-    : null;
-  const togglePath = useCallback((id: string) => {
-    const next = new Set(collapsedSet);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    ctx.patchState({ collapsedPaths: Array.from(next) });
-  }, [collapsedSet, ctx]);
-  const totalAdd = visibleDiffs.reduce((sum, diff) => sum + diff.additions, 0);
-  const totalDel = visibleDiffs.reduce((sum, diff) => sum + diff.deletions, 0);
-  const unavailablePreview = useCallback(() => Promise.reject(new Error('Historical preview unavailable')), []);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
-      <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 py-2">
-        {crossSession ? (
-          // 跨会话(协同 worker 的轮次):不提供 git 来源切换——git 视图跟随
-          // 桶会话的 workdir,对 worker 的 worktree 语义错误。静态标题,关 tab 退出。
-          <>
-            <FileDiffIcon size={15} className="shrink-0 text-[var(--text-secondary)]" />
-            <span className="min-w-0 truncate text-12 font-medium text-[var(--text-primary)]">
-              {t('rightSidebar.review.turn.title')}
-            </span>
-          </>
-        ) : (
-          <SourceDropdown
-            source="turn"
-            counts={{}}
-            commits={commitsState.data?.commits ?? []}
-            commitsLoading={commitsState.loading}
-            commitsError={commitsState.error}
-            commitsLoaded={commitsState.data !== null}
-            selectedCommitOid={null}
-            onChange={switchToGitSource}
-            onSelectCommit={switchToCommitSource}
-            onRefreshCommits={commitsState.refresh}
-          />
-        )}
-        <span className="min-w-0 flex-1 truncate" />
-        <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
-          <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
-          <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
-        </span>
-      </header>
-      {!loading && !error && isPartial && (
-        <div className="flex shrink-0 items-start gap-2 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
-          <span>{t('rightSidebar.review.turn.partialNotice')}</span>
-        </div>
-      )}
-      {loading ? (
-        <CenteredState icon={<Spinner size={24} />} title={t('rightSidebar.review.loadingTitle')} desc={t('rightSidebar.review.loadingDesc')} />
-      ) : error ? (
-        <CenteredState
-          icon={<AlertTriangle size={24} />}
-          title={t('rightSidebar.review.errorTitle')}
-          desc={error}
-          actionLabel={t('rightSidebar.review.refresh')}
-          onAction={() => setReloadToken((value) => value + 1)}
-        />
-      ) : visibleDiffs.length === 0 ? (
-        <CenteredState
-          icon={<FileDiffIcon size={24} />}
-          title={t('rightSidebar.review.turn.emptyTitle')}
-          desc={t('rightSidebar.review.turn.emptyDesc')}
-        />
-      ) : (
-        <DiffList
-          diffs={visibleDiffs}
-          expandedSet={expandedSet}
-          onToggleDiff={togglePath}
-          onRefresh={() => setReloadToken((value) => value + 1)}
-          refreshPending={loading}
-          viewMode={state.diffViewMode ?? 'unified'}
-          onViewModeChange={(diffViewMode) => ctx.patchState({ diffViewMode })}
-          onRichMarkdownPreviewChange={(richMarkdownPreview) => ctx.patchState({ richMarkdownPreview })}
-          wordWrap={state.wordWrap ?? false}
-          wordDiff={state.wordDiff ?? true}
-          fileTreeVisible={state.fileTreeVisible ?? false}
-          jumpRequest={jumpRequest}
-          loadImagePreview={unavailablePreview}
-          loadMarkdownPreview={unavailablePreview}
-          richMarkdownPreview={false}
-          onOpenFile={() => undefined}
-        />
-      )}
-    </div>
-  );
+export function descriptorForReviewSource(
+  source: ReviewSource,
+  branchBaseRef: string | null,
+): ReviewSourceDescriptor {
+  if (source === 'commit') return { kind: 'commit', commitOid: null };
+  if (source === 'branch') return { kind: 'branch', baseRef: branchBaseRef };
+  return { kind: source };
 }
 
-function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, setSelectedCommitOid }: GitReviewBodyProps) {
+export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  // device-link 远程会话:session 行在被控设备的 DB 里,只读查询经 gitReviewTransport
+  // 隧道到被控端执行(被控端以它自己的 session 记录解析 workdir);写操作与本机
+  // 文件打开在控制端禁用(readOnly 经 writeDisabledReasons 的 remote-device 档)。
+  const deviceLinkDeviceId = ctx.deviceLinkDeviceId ?? null;
   const sessionId = ctx.sessionId || null;
   const hideWhitespace = state.hideWhitespace ?? false;
-  const branchBaseRef = state.branchBaseRef ?? null;
-  const { data, loading, error, refresh, setData: setReviewData } = useReviewGitState(sessionId, hideWhitespace);
-  const commitsState = useReviewCommits(sessionId, branchBaseRef);
+  const descriptor = state.descriptor;
+  const messageSnapshot =
+    state.messageSnapshot ?? (descriptor.kind === 'turn-set' ? descriptor : null);
+  const source: ReviewSource | 'turn' = descriptor.kind === 'turn-set' ? 'turn' : descriptor.kind;
+  const branchBaseRef =
+    state.branchBaseRef ?? (descriptor.kind === 'branch' ? descriptor.baseRef : null);
+  const selectedCommitOid = descriptor.kind === 'commit' ? descriptor.commitOid : null;
+  const effectiveCommitOid = selectedCommitOid;
+  const crossSession =
+    descriptor.kind === 'turn-set' &&
+    Boolean(descriptor.targetSessionId && descriptor.targetSessionId !== sessionId);
+  const capabilities = useMemo(() => {
+    const sourceCapabilities = capabilitiesFor(descriptor);
+    return {
+      ...sourceCapabilities,
+      canSwitchSource:
+        descriptor.kind === 'turn-set' && crossSession ? false : sourceCapabilities.canSwitchSource,
+    };
+  }, [crossSession, descriptor]);
+  const setDescriptor = useCallback(
+    (nextDescriptor: ReviewSourceDescriptor) => {
+      ctx.patchState(reviewSourceStatePatch(nextDescriptor));
+    },
+    [ctx],
+  );
+  const setSource = useCallback(
+    (nextSource: ReviewSource) => {
+      setDescriptor(descriptorForReviewSource(nextSource, branchBaseRef));
+    },
+    [branchBaseRef, setDescriptor],
+  );
+  const selectMessageSnapshot = useCallback(() => {
+    if (messageSnapshot) setDescriptor(messageSnapshot);
+  }, [messageSnapshot, setDescriptor]);
+  const sourceState = useReviewSource(descriptor, sessionId, {
+    hideWhitespace,
+    deviceLinkDeviceId: ctx.deviceLinkDeviceId,
+    remoteHostId: ctx.remoteHostId,
+  });
+  const data = sourceState.reviewData;
+  const loading = sourceState.loading;
+  const error = sourceState.error;
+  const errorCode = sourceState.gitErrorCode;
+  const refresh = sourceState.refreshGit;
+  const setReviewData = sourceState.setReviewData;
+  const commitsState = useReviewCommits(
+    capabilities.canSwitchSource ? sessionId : null,
+    branchBaseRef,
+    deviceLinkDeviceId,
+  );
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
-  const [operationSummary, setOperationSummary] = useState<ReviewStageOperationSummary | null>(null);
+  const [operationSummary, setOperationSummary] = useState<ReviewStageOperationSummary | null>(
+    null,
+  );
   const [jumpRequest, setJumpRequest] = useState<ReviewFileJumpRequest | null>(null);
   const [selectedCappedFileId, setSelectedCappedFileId] = useState<string | null>(null);
   const [reviewWriteVersion, setReviewWriteVersion] = useState(0);
@@ -591,7 +506,6 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   // 消失时 setState 触发 effect 重挂,才能覆盖所有渲染分支切换。
   const [headerEl, setHeaderEl] = useState<HTMLElement | null>(null);
   const [headerWidth, setHeaderWidth] = useState(0);
-  const lastTurnPaths = useLastTurnFilter(sessionId, data?.scope.repoRoot ?? null);
   const runningSnapshot = useSyncExternalStore(
     makerChatStore.subscribeAll,
     makerChatStore.getRunningSnapshot,
@@ -602,167 +516,252 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   const diffViewMode: DiffViewMode = state.diffViewMode ?? 'unified';
   const fileTreeVisible = state.fileTreeVisible ?? false;
   const wordWrap = state.wordWrap ?? false;
-  const wordDiff = state.wordDiff ?? true;
+  const wordDiff = state.wordDiff ?? false;
   const richMarkdownPreview = state.richMarkdownPreview ?? true;
-  const collapsedSet = useMemo(() => new Set(state.collapsedPaths ?? []), [state.collapsedPaths]);
+  const persistedDiffsExpanded = state.diffsExpanded ?? true;
+  const diffsExpanded = getReviewDiffsExpanded(sessionId ?? '', persistedDiffsExpanded);
+  const [diffExpansionOverrides, setDiffExpansionOverrides] = useState<Map<string, boolean>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    if (!sessionId) return;
+    setReviewDiffsExpanded(sessionId, diffsExpanded);
+    if (diffsExpanded !== persistedDiffsExpanded) {
+      ctx.patchState({ diffsExpanded });
+    }
+  }, [ctx, diffsExpanded, persistedDiffsExpanded, sessionId]);
   const rawUnstaged = data?.diffs.unstaged ?? [];
   const rawStaged = data?.diffs.staged ?? [];
   const worktreeCapped = data?.diffs.capped ?? null;
-  const unstaged = useMemo(() => filterWhitespaceHiddenDiffs(rawUnstaged, hideWhitespace), [hideWhitespace, rawUnstaged]);
-  const staged = useMemo(() => filterWhitespaceHiddenDiffs(rawStaged, hideWhitespace), [hideWhitespace, rawStaged]);
+  const unstaged = useMemo(
+    () => filterWhitespaceHiddenDiffs(rawUnstaged, hideWhitespace),
+    [hideWhitespace, rawUnstaged],
+  );
+  const staged = useMemo(
+    () => filterWhitespaceHiddenDiffs(rawStaged, hideWhitespace),
+    [hideWhitespace, rawStaged],
+  );
   const commits = commitsState.data?.commits ?? [];
-  const effectiveCommitOid = source === 'commit' ? selectedCommitOid : null;
-  const commitDiffState = useReviewCommitDiff(sessionId, effectiveCommitOid, hideWhitespace);
-  const branchDiffState = useReviewBranchDiff(sessionId, branchBaseRef, hideWhitespace, source === 'branch');
-  const currentBranchDiffData = getCurrentBranchDiffData(branchDiffState.data, branchBaseRef);
-  const availableLastTurnDiffs = useMemo(
-    () => rawUnstaged.concat(rawStaged).filter((diff) => lastTurnPaths.has(diff.path)),
-    [lastTurnPaths, rawStaged, rawUnstaged],
-  );
-  const lastTurnCappedEntries = useMemo(
-    () => getLastTurnCappedSummaryEntries(worktreeCapped, lastTurnPaths),
-    [lastTurnPaths, worktreeCapped],
-  );
-  const lastTurnCapped = useMemo<ReviewCappedDiffData | null>(
-    () => buildLastTurnCappedData(availableLastTurnDiffs, lastTurnCappedEntries),
-    [availableLastTurnDiffs, lastTurnCappedEntries],
-  );
-  const lastTurnHydrationRequests = useMemo(() => {
-    if (source !== 'last-turn' || lastTurnCapped || lastTurnCappedEntries.length === 0) return [];
-    return lastTurnCappedEntries.map((entry) => ({
-      source: entry.source,
-      path: entry.path,
-      oldPath: entry.oldPath,
-      commitOid: null,
-      branchBaseRef: null,
-      ignoreWhitespace: hideWhitespace,
-    }));
-  }, [hideWhitespace, lastTurnCapped, lastTurnCappedEntries, source]);
-  const lastTurnHydratedDiffState = useReviewFileDiffs(sessionId, lastTurnHydrationRequests);
-  const hydratedLastTurnDiffs = useMemo(
-    () => lastTurnHydratedDiffState.data?.map((item) => item.diff).filter((diff): diff is FileDiff => diff !== null) ?? [],
-    [lastTurnHydratedDiffState.data],
-  );
-  const rawLastTurnDiffs = useMemo(
-    () => availableLastTurnDiffs.concat(hydratedLastTurnDiffs),
-    [availableLastTurnDiffs, hydratedLastTurnDiffs],
-  );
-  const lastTurnDiffs = useMemo(
-    () => filterWhitespaceHiddenDiffs(rawLastTurnDiffs, hideWhitespace),
-    [hideWhitespace, rawLastTurnDiffs],
-  );
-  const selectedCommitDiff = commitDiffState.data?.commitOid === effectiveCommitOid ? commitDiffState.data : null;
+  const currentBranchDiffData = sourceState.branchData;
+  const selectedCommitDiff = sourceState.commitData;
   const rawCommitDiffs = selectedCommitDiff?.diffs ?? [];
-  const commitCapped = selectedCommitDiff?.capped ?? null;
-  const commitDiffs = useMemo(() => filterWhitespaceHiddenDiffs(rawCommitDiffs, hideWhitespace), [hideWhitespace, rawCommitDiffs]);
   const rawBranchDiffs = currentBranchDiffData?.diffs ?? [];
-  const branchCapped = currentBranchDiffData?.capped ?? null;
-  const branchDiffs = useMemo(() => filterWhitespaceHiddenDiffs(rawBranchDiffs, hideWhitespace), [hideWhitespace, rawBranchDiffs]);
   const platform = window.electronAPI?.platform ?? '';
-  const branchCandidates = branchDiffState.data?.candidates ?? [];
-  const selectedBranchBaseRef = branchBaseRef && branchCandidates.some((candidate) => candidate.refName === branchBaseRef)
-    ? branchBaseRef
-    : currentBranchDiffData?.baseRef ?? branchBaseRef;
-  const currentCapped = getCappedDiffForSource({
-    source,
-    worktreeCapped,
-    commitCapped,
-    branchCapped,
-    lastTurnCapped,
-  });
+  const branchCandidates = currentBranchDiffData?.candidates ?? [];
+  const selectedBranchBaseRef =
+    branchBaseRef && branchCandidates.some((candidate) => candidate.refName === branchBaseRef)
+      ? branchBaseRef
+      : (currentBranchDiffData?.baseRef ?? branchBaseRef);
+  const currentCapped = sourceState.capped;
   const cappedSummaryDiffs = useMemo(
-    () => currentCapped ? currentCapped.files.map(summaryEntryToPlaceholderDiff) : [],
+    () => (currentCapped ? currentCapped.files.map(summaryEntryToPlaceholderDiff) : []),
     [currentCapped],
   );
-  const visibleDiffs = currentCapped
-    ? cappedSummaryDiffs
-    : source === 'commit'
-    ? commitDiffs
-    : source === 'branch'
-      ? branchDiffs
-      : source === 'staged'
-        ? staged
-        : source === 'last-turn'
-          ? lastTurnDiffs
-          : unstaged;
+  const visibleDiffs = currentCapped ? cappedSummaryDiffs : sourceState.diffs;
   const expandedSet = useMemo(
-    () => getExpandedDiffSet(visibleDiffs, collapsedSet),
-    [collapsedSet, visibleDiffs],
+    () => getExpandedDiffSet(visibleDiffs, diffsExpanded, diffExpansionOverrides),
+    [diffExpansionOverrides, diffsExpanded, visibleDiffs],
   );
+  const entryJumpDiff = state.jumpTarget?.diffId
+    ? visibleDiffs.find((diff) => diff.id === state.jumpTarget?.diffId)
+    : state.jumpTarget?.path
+      ? visibleDiffs.find(
+          (diff) => diff.path === state.jumpTarget?.path || diff.oldPath === state.jumpTarget?.path,
+        )
+      : null;
+  const resolvedJumpRequest =
+    jumpRequest ??
+    (entryJumpDiff && state.jumpTarget
+      ? { id: entryJumpDiff.id, nonce: state.jumpTarget.nonce }
+      : null);
   const selectedCappedSummaryDiff = currentCapped
-    ? cappedSummaryDiffs.find((diff) => diff.id === selectedCappedFileId) ?? cappedSummaryDiffs[0] ?? null
+    ? (cappedSummaryDiffs.find((diff) => diff.id === selectedCappedFileId) ??
+      cappedSummaryDiffs[0] ??
+      null)
     : null;
-  const expansionDiffs = currentCapped && selectedCappedSummaryDiff ? [selectedCappedSummaryDiff] : visibleDiffs;
-  const cappedFileDiffRequest = selectedCappedSummaryDiff ? {
-    source: selectedCappedSummaryDiff.source,
-    path: selectedCappedSummaryDiff.path,
-    oldPath: selectedCappedSummaryDiff.oldPath,
-    commitOid: selectedCappedSummaryDiff.source === 'commit' ? effectiveCommitOid : null,
-    branchBaseRef: selectedCappedSummaryDiff.source === 'branch' ? currentBranchDiffData?.baseRef ?? branchBaseRef : null,
-    ignoreWhitespace: hideWhitespace,
-  } : null;
-  const cappedFileDiffState = useReviewFileDiff(sessionId, cappedFileDiffRequest, reviewWriteVersion);
+  const expansionDiffs =
+    currentCapped && selectedCappedSummaryDiff ? [selectedCappedSummaryDiff] : visibleDiffs;
+  const cappedFileDiffRequest = selectedCappedSummaryDiff
+    ? {
+        source: selectedCappedSummaryDiff.source,
+        path: selectedCappedSummaryDiff.path,
+        oldPath: selectedCappedSummaryDiff.oldPath,
+        commitOid: selectedCappedSummaryDiff.source === 'commit' ? effectiveCommitOid : null,
+        branchBaseRef:
+          selectedCappedSummaryDiff.source === 'branch'
+            ? (currentBranchDiffData?.baseRef ?? branchBaseRef)
+            : null,
+        ignoreWhitespace: hideWhitespace,
+      }
+    : null;
+  const cappedFileDiffState = useReviewFileDiff(
+    sessionId,
+    cappedFileDiffRequest,
+    reviewWriteVersion,
+    deviceLinkDeviceId,
+  );
   const cappedFileDiffData = cappedFileDiffState.data;
   const maybeCappedLoadedDiff = cappedFileDiffData?.diff ?? null;
-  const cappedLoadedDiff = maybeCappedLoadedDiff?.id === selectedCappedSummaryDiff?.id
-    ? maybeCappedLoadedDiff
-    : null;
-  const lastTurnHydrating = source === 'last-turn' &&
-    lastTurnHydrationRequests.length > 0 &&
-    lastTurnHydratedDiffState.loading &&
-    hydratedLastTurnDiffs.length < lastTurnHydrationRequests.length;
-  const lastTurnHydrationError = source === 'last-turn' ? lastTurnHydratedDiffState.error : null;
-  const expansionToggle = useMemo(
-    () => getReviewDiffExpansionToggle(expansionDiffs.map((diff) => diff.id), collapsedSet),
-    [collapsedSet, expansionDiffs],
+  const cappedLoadedDiff =
+    maybeCappedLoadedDiff?.id === selectedCappedSummaryDiff?.id ? maybeCappedLoadedDiff : null;
+  const lastTurnHydrating =
+    source === 'last-turn' && sourceState.loading && sourceState.diffs.length === 0;
+  const lastTurnHydrationError = source === 'last-turn' ? sourceState.error : null;
+  const expansionAction = useMemo(
+    () =>
+      getReviewDiffExpansionAction(
+        expansionDiffs.map((diff) => diff.id),
+        diffsExpanded,
+      ),
+    [diffsExpanded, expansionDiffs],
   );
   const gitApplyAvailability = useMemo(
     () => getGitApplyCopyAvailability(visibleDiffs, hideWhitespace, platform),
     [hideWhitespace, platform, visibleDiffs],
   );
-  const loadImagePreview = useCallback<LoadImagePreview>((diff) => {
-    if (!sessionId) return Promise.reject(new Error('sessionId is required'));
-    return window.electronAPI.gitReview.imagePreview({
+  /**
+   * device-link 预览请求只发送被控端实际读取的轻量 diff 字段，裁剪 hunks / hunksPlain
+   * 等大字段以节省帧预算。markdownReader 额外读取 kind/size/status/isTooLarge/isBinary,
+   * imageReader 读取 kind。本地调用仍传完整 diff 保持兼容。
+   */
+  const trimPreviewDiff = useCallback(
+    (diff: FileDiff): FileDiff =>
+      ({
+        source: diff.source,
+        id: diff.id,
+        path: diff.path,
+        oldPath: diff.oldPath,
+        index: diff.index,
+        kind: diff.kind,
+        size: diff.size,
+        status: diff.status,
+        isTooLarge: diff.isTooLarge,
+        isBinary: diff.isBinary,
+      }) as FileDiff,
+    [],
+  );
+  const loadImagePreview = useCallback<LoadImagePreview>(
+    (diff) => {
+      if (!sessionId) return Promise.reject(new Error('sessionId is required'));
+      return gitReviewApiFor(deviceLinkDeviceId)
+        .imagePreview({
+          sessionId,
+          diff: deviceLinkDeviceId ? trimPreviewDiff(diff) : diff,
+          commitOid: diff.source === 'commit' ? effectiveCommitOid : null,
+          branchBaseRef:
+            diff.source === 'branch' ? (currentBranchDiffData?.baseRef ?? branchBaseRef) : null,
+        } as Parameters<typeof window.electronAPI.gitReview.imagePreview>[0])
+        .catch((err) => {
+          if (isReviewRemoteOversizeError(err))
+            throw new Error(t('rightSidebar.review.remote.oversizeDesc'));
+          throw err;
+        });
+    },
+    [
+      branchBaseRef,
+      currentBranchDiffData?.baseRef,
+      deviceLinkDeviceId,
+      effectiveCommitOid,
       sessionId,
-      diff,
-      commitOid: diff.source === 'commit' ? effectiveCommitOid : null,
-      branchBaseRef: diff.source === 'branch' ? currentBranchDiffData?.baseRef ?? branchBaseRef : null,
-    });
-  }, [branchBaseRef, currentBranchDiffData?.baseRef, effectiveCommitOid, sessionId]);
-  const loadMarkdownPreview = useCallback<LoadMarkdownPreview>((diff) => {
-    if (!sessionId) return Promise.reject(new Error('sessionId is required'));
-    return window.electronAPI.gitReview.markdownPreview({
+      t,
+      trimPreviewDiff,
+    ],
+  );
+  const loadMarkdownPreview = useCallback<LoadMarkdownPreview>(
+    (diff) => {
+      if (!sessionId) return Promise.reject(new Error('sessionId is required'));
+      return gitReviewApiFor(deviceLinkDeviceId)
+        .markdownPreview({
+          sessionId,
+          diff: deviceLinkDeviceId ? trimPreviewDiff(diff) : diff,
+          commitOid: diff.source === 'commit' ? effectiveCommitOid : null,
+          branchBaseRef:
+            diff.source === 'branch' ? (currentBranchDiffData?.baseRef ?? branchBaseRef) : null,
+        } as Parameters<typeof window.electronAPI.gitReview.markdownPreview>[0])
+        .catch((err) => {
+          if (isReviewRemoteOversizeError(err))
+            throw new Error(t('rightSidebar.review.remote.oversizeDesc'));
+          throw err;
+        });
+    },
+    [
+      branchBaseRef,
+      currentBranchDiffData?.baseRef,
+      deviceLinkDeviceId,
+      effectiveCommitOid,
       sessionId,
-      diff,
-      commitOid: diff.source === 'commit' ? effectiveCommitOid : null,
-      branchBaseRef: diff.source === 'branch' ? currentBranchDiffData?.baseRef ?? branchBaseRef : null,
-    });
-  }, [branchBaseRef, currentBranchDiffData?.baseRef, effectiveCommitOid, sessionId]);
-  const openReviewFile = useCallback((diff: FileDiff) => {
-    if (!sessionId) return;
-    void window.electronAPI.gitReview.openFile({ sessionId, path: diff.path })
-      .catch((err) => {
-        const message = extractIpcError(err)?.message ?? (err instanceof Error ? err.message : String(err));
+      t,
+      trimPreviewDiff,
+    ],
+  );
+  const unavailableHistoricalPreview = useCallback(
+    () => Promise.reject(new Error(t('rightSidebar.review.turn.previewUnavailable'))),
+    [t],
+  );
+  const openReviewFile = useCallback(
+    (diff: FileDiff) => {
+      if (!sessionId) return;
+      void window.electronAPI.gitReview.openFile({ sessionId, path: diff.path }).catch((err) => {
+        const message =
+          extractIpcError(err)?.message ?? (err instanceof Error ? err.message : String(err));
         toast.error(t('rightSidebar.review.openFileFailed', { error: message }));
       });
-  }, [sessionId, t]);
+    },
+    [sessionId, t],
+  );
+  // device-link 与 SSH 工作区都没有可由控制端 shell 打开的本机文件。
+  const openFileHandler =
+    capabilities.canOpenFile && shouldOfferReviewOpenFile(ctx.remoteHostId, deviceLinkDeviceId)
+      ? openReviewFile
+      : undefined;
+  // 次级视图(提交 / 分支 / 单文件)错误串的 OVERSIZE 标记 → 可读文案;其余原样。
+  const localizeReviewError = useCallback(
+    <T extends string | null>(message: T): T | string => {
+      if (message && isReviewRemoteOversizeError(message))
+        return t('rightSidebar.review.remote.oversizeDesc');
+      return message;
+    },
+    [t],
+  );
   const writeDisabledReasons = data?.status?.writeDisabledReasons ?? [];
   const effectiveWriteDisabledReasons = useMemo(() => {
     const reasons = [...writeDisabledReasons];
+    if (!capabilities.canCommit || !capabilities.canPush) reasons.push('historical-snapshot');
+    // device-link 首期只读:被控端 handler 也不实现写 op,这里是同一契约的 UI 面。
+    if (deviceLinkDeviceId) reasons.push('remote-device');
     if (agentRunning) reasons.push('agent-running');
-    return reasons;
-  }, [agentRunning, writeDisabledReasons]);
-  const canWrite = Boolean(data?.status && effectiveWriteDisabledReasons.length === 0 && !pendingKey);
-  const commitOrPushPending = pendingKey === 'commit' || pendingKey === 'commit-push' || pendingKey === 'push';
+    return Array.from(new Set(reasons));
+  }, [
+    agentRunning,
+    capabilities.canCommit,
+    capabilities.canPush,
+    deviceLinkDeviceId,
+    writeDisabledReasons,
+  ]);
+  const canWrite = Boolean(
+    capabilities.canCommit &&
+    capabilities.canPush &&
+    data?.status &&
+    effectiveWriteDisabledReasons.length === 0 &&
+    !pendingKey,
+  );
+  const commitOrPushPending =
+    pendingKey === 'commit' || pendingKey === 'commit-push' || pendingKey === 'push';
   const pushPending = pendingKey === 'push' || pendingKey === 'commit-push';
   const writeDisabledReasonText = effectiveWriteDisabledReasons
-    .map((reason) => t(`rightSidebar.review.writeDisabledReasons.${reason}`, { defaultValue: reason }))
+    .map((reason) =>
+      t(`rightSidebar.review.writeDisabledReasons.${reason}`, { defaultValue: reason }),
+    )
     .join(', ');
   const actionWriteDisabledTooltip = writeDisabledReasonText
-    ? t('rightSidebar.review.actions.disabledWriteGateWithReasons', { reasons: writeDisabledReasonText })
+    ? t('rightSidebar.review.actions.disabledWriteGateWithReasons', {
+        reasons: writeDisabledReasonText,
+      })
     : undefined;
   const pushWriteDisabledText = writeDisabledReasonText
-    ? t('rightSidebar.review.push.disabledWriteGateWithReasons', { reasons: writeDisabledReasonText })
+    ? t('rightSidebar.review.push.disabledWriteGateWithReasons', {
+        reasons: writeDisabledReasonText,
+      })
     : undefined;
   const totalAdd = visibleDiffs.reduce((sum, diff) => sum + diff.additions, 0);
   const totalDel = visibleDiffs.reduce((sum, diff) => sum + diff.deletions, 0);
@@ -770,7 +769,7 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   const statusUnstagedCount = data?.status?.unstagedCount ?? rawUnstaged.length;
   const sourceUnstagedCount = worktreeCapped?.unstaged?.stats.fileCount ?? unstaged.length;
   const sourceStagedCount = worktreeCapped?.staged?.stats.fileCount ?? staged.length;
-  const sourceLastTurnCount = lastTurnCapped?.stats.fileCount ?? availableLastTurnDiffs.length + lastTurnCappedEntries.length;
+  const sourceLastTurnCount = sourceState.lastTurnCount;
 
   const clearOperationNotice = useCallback(() => {
     setOperationError(null);
@@ -781,144 +780,179 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
 
   const refreshAll = useCallback(() => {
     clearOperationNotice();
-    refresh();
+    sourceState.refresh();
     commitsState.refresh();
-    if (source === 'commit') commitDiffState.refresh();
-    if (source === 'branch') branchDiffState.refresh();
     if (currentCapped) cappedFileDiffState.refresh();
-    if (source === 'last-turn') lastTurnHydratedDiffState.refresh();
-  }, [branchDiffState, cappedFileDiffState, clearOperationNotice, commitDiffState, commitsState, currentCapped, lastTurnHydratedDiffState, refresh, source]);
+  }, [cappedFileDiffState, clearOperationNotice, commitsState, currentCapped, sourceState]);
 
-  const messageFromOperationError = useCallback((err: unknown): string => {
-    const ipcError = extractIpcError(err);
-    if (ipcError?.code === 'STALE_DIFF') return t('rightSidebar.review.staleDiff');
-    if (ipcError?.code === 'SESSION_RUNNING') return t('rightSidebar.review.sessionRunningWriteBlocked');
-    if (ipcError?.code === 'PUSH_LEASE_EXPIRED') return t('rightSidebar.review.push.leaseExpired');
-    if (ipcError?.code === 'PUSH_NO_REMOTE') return t('rightSidebar.review.push.noRemote');
-    return ipcError?.message ?? (err instanceof Error ? err.message : String(err));
-  }, [t]);
+  const messageFromOperationError = useCallback(
+    (err: unknown): string => {
+      const ipcError = extractIpcError(err);
+      if (ipcError?.code === 'STALE_DIFF') return t('rightSidebar.review.staleDiff');
+      if (ipcError?.code === 'SESSION_RUNNING')
+        return t('rightSidebar.review.sessionRunningWriteBlocked');
+      if (ipcError?.code === 'PUSH_LEASE_EXPIRED')
+        return t('rightSidebar.review.push.leaseExpired');
+      if (ipcError?.code === 'PUSH_NO_REMOTE') return t('rightSidebar.review.push.noRemote');
+      return ipcError?.message ?? (err instanceof Error ? err.message : String(err));
+    },
+    [t],
+  );
 
   // 写操作共用的 pending/错误/收尾样板:失败时保留当前视图并触发 refresh。
-  const runWrite = useCallback(async (
-    key: string,
-    exec: () => Promise<void>,
-    decorateError?: (message: string, err: unknown) => string,
-  ): Promise<boolean> => {
-    setPendingKey(key);
-    clearOperationNotice();
-    try {
-      await exec();
-      return true;
-    } catch (err) {
-      const message = messageFromOperationError(err);
-      setOperationError(decorateError ? decorateError(message, err) : message);
-      refresh();
-      return false;
-    } finally {
-      setPendingKey(null);
-    }
-  }, [clearOperationNotice, messageFromOperationError, refresh]);
-  const updateReviewDataFromWrite = useCallback((nextData: typeof data) => {
-    if (!nextData) return;
-    setReviewWriteVersion((version) => version + 1);
-    if (hideWhitespace) {
-      refresh();
-      return;
-    }
-    setReviewData(nextData);
-  }, [hideWhitespace, refresh, setReviewData]);
+  const runWrite = useCallback(
+    async (
+      key: string,
+      exec: () => Promise<void>,
+      decorateError?: (message: string, err: unknown) => string,
+    ): Promise<boolean> => {
+      setPendingKey(key);
+      clearOperationNotice();
+      try {
+        await exec();
+        return true;
+      } catch (err) {
+        const message = messageFromOperationError(err);
+        setOperationError(decorateError ? decorateError(message, err) : message);
+        refresh();
+        return false;
+      } finally {
+        setPendingKey(null);
+      }
+    },
+    [clearOperationNotice, messageFromOperationError, refresh],
+  );
+  const updateReviewDataFromWrite = useCallback(
+    (nextData: typeof data) => {
+      if (!nextData) return;
+      setReviewWriteVersion((version) => version + 1);
+      if (hideWhitespace) {
+        refresh();
+        return;
+      }
+      setReviewData(nextData);
+    },
+    [hideWhitespace, refresh, setReviewData],
+  );
 
-  const runStageOperation = useCallback((
-    action: ReviewToggleAction,
-    targets: ReviewFileTarget[],
-    key: string,
-  ) => {
-    if (!sessionId || targets.length === 0) return;
-    void runWrite(key, async () => {
-      const api = action === 'stage'
-        ? targets.length === 1 ? window.electronAPI.gitReview.stageFile : window.electronAPI.gitReview.stageAll
-        : targets.length === 1 ? window.electronAPI.gitReview.unstageFile : window.electronAPI.gitReview.unstageAll;
-      const result = await api({ sessionId, targets });
-      updateReviewDataFromWrite(result.data);
-      setOperationSummary(result.operation);
-    });
-  }, [runWrite, sessionId, updateReviewDataFromWrite]);
-
-  const runHunkOperation = useCallback((
-    action: ReviewToggleAction,
-    diff: FileDiff,
-    hunkIndex: number,
-  ) => {
-    if (!sessionId) return;
-    void runWrite(`${action}:hunk:${diff.id}:${hunkIndex}`, async () => {
-      const api = action === 'stage' ? window.electronAPI.gitReview.stageHunk : window.electronAPI.gitReview.unstageHunk;
-      const result = await api({ sessionId, diff, hunkIndex, ignoreWhitespace: hideWhitespace });
-      updateReviewDataFromWrite(result.data);
-      setOperationSummary(result.operation);
-    });
-  }, [hideWhitespace, runWrite, sessionId, updateReviewDataFromWrite]);
-
-  const confirmDiscard = useCallback(async (
-    scope: 'file' | 'hunk' | 'section',
-    diffs: FileDiff[],
-  ): Promise<boolean> => {
-    const untrackedCount = diffs.filter((diff) => diff.status === 'untracked').length;
-    return confirm({
-      title: t(`rightSidebar.review.discard.confirm.${scope}.title`, { count: diffs.length }),
-      description: untrackedCount > 0
-        ? t(`rightSidebar.review.discard.confirm.${scope}.descWithUntracked`, {
-            count: diffs.length,
-            untrackedCount,
-          })
-        : t(`rightSidebar.review.discard.confirm.${scope}.desc`, { count: diffs.length }),
-      confirmText: t('rightSidebar.review.discard.confirm.confirm'),
-      cancelText: t('rightSidebar.review.discard.confirm.cancel'),
-    });
-  }, [confirm, t]);
-
-  const runDiscardFileOperation = useCallback((diff: FileDiff) => {
-    if (!sessionId) return;
-    void (async () => {
-      if (!await confirmDiscard('file', [diff])) return;
-      await runWrite(`discard:file:${diff.id}`, async () => {
-        const result = await window.electronAPI.gitReview.discardFile({ sessionId, targets: [targetFromDiff(diff)] });
+  const runStageOperation = useCallback(
+    (action: ReviewToggleAction, targets: ReviewFileTarget[], key: string) => {
+      if (!sessionId || targets.length === 0) return;
+      void runWrite(key, async () => {
+        const api =
+          action === 'stage'
+            ? targets.length === 1
+              ? window.electronAPI.gitReview.stageFile
+              : window.electronAPI.gitReview.stageAll
+            : targets.length === 1
+              ? window.electronAPI.gitReview.unstageFile
+              : window.electronAPI.gitReview.unstageAll;
+        const result = await api({ sessionId, targets });
         updateReviewDataFromWrite(result.data);
         setOperationSummary(result.operation);
       });
-    })();
-  }, [confirmDiscard, runWrite, sessionId, updateReviewDataFromWrite]);
+    },
+    [runWrite, sessionId, updateReviewDataFromWrite],
+  );
 
-  const runDiscardHunkOperation = useCallback((diff: FileDiff, hunkIndex: number) => {
-    if (!sessionId) return;
-    void (async () => {
-      if (!await confirmDiscard('hunk', [diff])) return;
-      await runWrite(`discard:hunk:${diff.id}:${hunkIndex}`, async () => {
-        const result = await window.electronAPI.gitReview.discardHunk({ sessionId, diff, hunkIndex, ignoreWhitespace: hideWhitespace });
+  const runHunkOperation = useCallback(
+    (action: ReviewToggleAction, diff: FileDiff, hunkIndex: number) => {
+      if (!sessionId) return;
+      void runWrite(`${action}:hunk:${diff.id}:${hunkIndex}`, async () => {
+        const api =
+          action === 'stage'
+            ? window.electronAPI.gitReview.stageHunk
+            : window.electronAPI.gitReview.unstageHunk;
+        const result = await api({ sessionId, diff, hunkIndex, ignoreWhitespace: hideWhitespace });
         updateReviewDataFromWrite(result.data);
         setOperationSummary(result.operation);
       });
-    })();
-  }, [confirmDiscard, hideWhitespace, runWrite, sessionId, updateReviewDataFromWrite]);
+    },
+    [hideWhitespace, runWrite, sessionId, updateReviewDataFromWrite],
+  );
 
-  const runDiscardSectionOperation = useCallback((diffsToDiscard: FileDiff[], key: string) => {
-    if (!sessionId || diffsToDiscard.length === 0) return;
-    void (async () => {
-      if (!await confirmDiscard('section', diffsToDiscard)) return;
-      await runWrite(key, async () => {
-        const result = await window.electronAPI.gitReview.discardAll({
-          sessionId,
-          targets: diffsToDiscard.map(targetFromDiff),
+  const confirmDiscard = useCallback(
+    async (scope: 'file' | 'hunk' | 'section', diffs: FileDiff[]): Promise<boolean> => {
+      const untrackedCount = diffs.filter((diff) => diff.status === 'untracked').length;
+      return confirm({
+        title: t(`rightSidebar.review.discard.confirm.${scope}.title`, { count: diffs.length }),
+        description:
+          untrackedCount > 0
+            ? t(`rightSidebar.review.discard.confirm.${scope}.descWithUntracked`, {
+                count: diffs.length,
+                untrackedCount,
+              })
+            : t(`rightSidebar.review.discard.confirm.${scope}.desc`, { count: diffs.length }),
+        confirmText: t('rightSidebar.review.discard.confirm.confirm'),
+        cancelText: t('rightSidebar.review.discard.confirm.cancel'),
+      });
+    },
+    [confirm, t],
+  );
+
+  const runDiscardFileOperation = useCallback(
+    (diff: FileDiff) => {
+      if (!sessionId) return;
+      void (async () => {
+        if (!(await confirmDiscard('file', [diff]))) return;
+        await runWrite(`discard:file:${diff.id}`, async () => {
+          const result = await window.electronAPI.gitReview.discardFile({
+            sessionId,
+            targets: [targetFromDiff(diff)],
+          });
+          updateReviewDataFromWrite(result.data);
+          setOperationSummary(result.operation);
         });
-        updateReviewDataFromWrite(result.data);
-        setOperationSummary(result.operation);
-      });
-    })();
-  }, [confirmDiscard, runWrite, sessionId, updateReviewDataFromWrite]);
+      })();
+    },
+    [confirmDiscard, runWrite, sessionId, updateReviewDataFromWrite],
+  );
 
-  const applyPushResult = useCallback((result: ReviewPushResult) => {
-    updateReviewDataFromWrite(result.data);
-    return result;
-  }, [updateReviewDataFromWrite]);
+  const runDiscardHunkOperation = useCallback(
+    (diff: FileDiff, hunkIndex: number) => {
+      if (!sessionId) return;
+      void (async () => {
+        if (!(await confirmDiscard('hunk', [diff]))) return;
+        await runWrite(`discard:hunk:${diff.id}:${hunkIndex}`, async () => {
+          const result = await window.electronAPI.gitReview.discardHunk({
+            sessionId,
+            diff,
+            hunkIndex,
+            ignoreWhitespace: hideWhitespace,
+          });
+          updateReviewDataFromWrite(result.data);
+          setOperationSummary(result.operation);
+        });
+      })();
+    },
+    [confirmDiscard, hideWhitespace, runWrite, sessionId, updateReviewDataFromWrite],
+  );
+
+  const runDiscardSectionOperation = useCallback(
+    (diffsToDiscard: FileDiff[], key: string) => {
+      if (!sessionId || diffsToDiscard.length === 0) return;
+      void (async () => {
+        if (!(await confirmDiscard('section', diffsToDiscard))) return;
+        await runWrite(key, async () => {
+          const result = await window.electronAPI.gitReview.discardAll({
+            sessionId,
+            targets: diffsToDiscard.map(targetFromDiff),
+          });
+          updateReviewDataFromWrite(result.data);
+          setOperationSummary(result.operation);
+        });
+      })();
+    },
+    [confirmDiscard, runWrite, sessionId, updateReviewDataFromWrite],
+  );
+
+  const applyPushResult = useCallback(
+    (result: ReviewPushResult) => {
+      updateReviewDataFromWrite(result.data);
+      return result;
+    },
+    [updateReviewDataFromWrite],
+  );
 
   const runPushFlow = useCallback(async () => {
     if (!sessionId) return;
@@ -939,43 +973,74 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
     });
     if (!ok) return;
 
-    const forceResult = applyPushResult(await window.electronAPI.gitReview.push({
-      sessionId,
-      confirmForce: {
-        remoteRef: result.remoteRef,
-        expectedOid: result.remoteOid,
-      },
-    }));
+    const forceResult = applyPushResult(
+      await window.electronAPI.gitReview.push({
+        sessionId,
+        confirmForce: {
+          remoteRef: result.remoteRef,
+          expectedOid: result.remoteOid,
+        },
+      }),
+    );
     if (forceResult.kind === 'needs-force') {
       throw new Error(t('rightSidebar.review.push.forceStillRejected'));
     }
     toast.success(t('rightSidebar.review.push.successToast'));
   }, [applyPushResult, confirm, sessionId, t]);
 
-  const decoratePushError = useCallback((message: string, err: unknown) => {
+  const decoratePushError = useCallback(
+    (message: string, err: unknown) => {
       // lease/no-remote 已是完整本地化文案;其余(hook 拒绝/凭证/网络)保留 raw 细节,
       // 但补一行本地化主文案,OperationNotice 会把首行做主展示。
-    const code = extractIpcError(err)?.code;
-    if (code === 'PUSH_LEASE_EXPIRED' || code === 'PUSH_NO_REMOTE' || code === 'SESSION_RUNNING') return message;
-    return `${t('rightSidebar.review.push.failedTitle')}\n${message}`;
-  }, [t]);
+      const code = extractIpcError(err)?.code;
+      if (code === 'PUSH_LEASE_EXPIRED' || code === 'PUSH_NO_REMOTE' || code === 'SESSION_RUNNING')
+        return message;
+      return `${t('rightSidebar.review.push.failedTitle')}\n${message}`;
+    },
+    [t],
+  );
 
-  const commitChanges = useCallback((message: string, includeUnstaged: boolean, pushAfterCommit: boolean): Promise<ReviewCommitRunResult> => {
-    if (!sessionId) return Promise.resolve({ committed: false, completed: false });
-    let committed = false;
-    return runWrite(pushAfterCommit ? 'commit-push' : 'commit', async () => {
-      const result = await window.electronAPI.gitReview.commit({ sessionId, message, includeUnstaged });
-      committed = true;
-      updateReviewDataFromWrite(result.data);
-      setSelectedCommitOid(result.commitOid);
-      commitsState.refresh();
-      refreshBranchDiffAfterCommit(source, branchDiffState.refresh);
-      if (pushAfterCommit) await runPushFlow();
-    }, (messageText, err) => {
-      if (!committed) return messageText;
-      return decoratePushError(messageText, err);
-    }).then((completed) => ({ committed, completed }));
-  }, [branchDiffState, commitsState, decoratePushError, runPushFlow, runWrite, sessionId, setSelectedCommitOid, source, updateReviewDataFromWrite]);
+  const commitChanges = useCallback(
+    (
+      message: string,
+      includeUnstaged: boolean,
+      pushAfterCommit: boolean,
+    ): Promise<ReviewCommitRunResult> => {
+      if (!sessionId) return Promise.resolve({ committed: false, completed: false });
+      let committed = false;
+      return runWrite(
+        pushAfterCommit ? 'commit-push' : 'commit',
+        async () => {
+          const result = await window.electronAPI.gitReview.commit({
+            sessionId,
+            message,
+            includeUnstaged,
+          });
+          committed = true;
+          updateReviewDataFromWrite(result.data);
+          if (source === 'commit') setDescriptor({ kind: 'commit', commitOid: result.commitOid });
+          commitsState.refresh();
+          if (source === 'branch') sourceState.refresh();
+          if (pushAfterCommit) await runPushFlow();
+        },
+        (messageText, err) => {
+          if (!committed) return messageText;
+          return decoratePushError(messageText, err);
+        },
+      ).then((completed) => ({ committed, completed }));
+    },
+    [
+      commitsState,
+      decoratePushError,
+      runPushFlow,
+      runWrite,
+      sessionId,
+      setDescriptor,
+      source,
+      sourceState,
+      updateReviewDataFromWrite,
+    ],
+  );
 
   const pushCurrentBranch = useCallback(() => {
     if (!sessionId) return;
@@ -983,71 +1048,106 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   }, [decoratePushError, runPushFlow, runWrite, sessionId]);
 
   useEffect(() => {
-    if (shouldFallbackFromMissingSelectedCommit(
-      source,
-      selectedCommitOid,
-      commits,
-      commitsState.data !== null,
-      commitsState.loading,
-    )) {
-      setSelectedCommitOid(null);
+    if (
+      shouldFallbackFromMissingSelectedCommit(
+        source,
+        selectedCommitOid,
+        commits,
+        commitsState.data !== null,
+        commitsState.loading,
+      )
+    ) {
       setSource('branch');
     }
-  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSelectedCommitOid, setSource, source]);
+  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSource, source]);
 
   const togglePath = useCallback(
     (id: string) => {
-      const next = new Set(collapsedSet);
-      if (expandedSet.has(id)) next.add(id);
-      else next.delete(id);
-      ctx.patchState({ collapsedPaths: Array.from(next) });
+      setDiffExpansionOverrides((current) => {
+        const next = new Map(current);
+        const nextExpanded = !(next.get(id) ?? diffsExpanded);
+        if (nextExpanded === diffsExpanded) next.delete(id);
+        else next.set(id, nextExpanded);
+        return next;
+      });
     },
-    [collapsedSet, ctx, expandedSet],
+    [diffsExpanded],
   );
-  const setDiffViewMode = useCallback((mode: DiffViewMode) => {
-    ctx.patchState({ diffViewMode: mode });
-  }, [ctx]);
-  const setFileTreeVisible = useCallback((visible: boolean) => {
-    ctx.patchState({ fileTreeVisible: visible });
-  }, [ctx]);
-  const setWordWrap = useCallback((nextWordWrap: boolean) => {
-    ctx.patchState({ wordWrap: nextWordWrap });
-  }, [ctx]);
-  const setWordDiff = useCallback((nextWordDiff: boolean) => {
-    ctx.patchState({ wordDiff: nextWordDiff });
-  }, [ctx]);
-  const setHideWhitespace = useCallback((nextHideWhitespace: boolean) => {
-    ctx.patchState({ hideWhitespace: nextHideWhitespace });
-  }, [ctx]);
-  const setRichMarkdownPreview = useCallback((nextRichMarkdownPreview: boolean) => {
-    ctx.patchState({ richMarkdownPreview: nextRichMarkdownPreview });
-  }, [ctx]);
-  const setBranchBaseRef = useCallback((nextBaseRef: string) => {
-    ctx.patchState({ branchBaseRef: nextBaseRef });
-  }, [ctx]);
-  const selectCommitSource = useCallback((oid: string) => {
-    setSelectedCommitOid(oid);
-    setSource('commit');
-  }, [setSelectedCommitOid, setSource]);
+  const setDiffViewMode = useCallback(
+    (mode: DiffViewMode) => {
+      ctx.patchState({ diffViewMode: mode });
+    },
+    [ctx],
+  );
+  const setFileTreeVisible = useCallback(
+    (visible: boolean) => {
+      ctx.patchState({ fileTreeVisible: visible });
+    },
+    [ctx],
+  );
+  const setWordWrap = useCallback(
+    (nextWordWrap: boolean) => {
+      ctx.patchState({ wordWrap: nextWordWrap });
+    },
+    [ctx],
+  );
+  const setWordDiff = useCallback(
+    (nextWordDiff: boolean) => {
+      ctx.patchState({ wordDiff: nextWordDiff });
+    },
+    [ctx],
+  );
+  const setHideWhitespace = useCallback(
+    (nextHideWhitespace: boolean) => {
+      ctx.patchState({ hideWhitespace: nextHideWhitespace });
+    },
+    [ctx],
+  );
+  const setRichMarkdownPreview = useCallback(
+    (nextRichMarkdownPreview: boolean) => {
+      ctx.patchState({ richMarkdownPreview: nextRichMarkdownPreview });
+    },
+    [ctx],
+  );
+  const setBranchBaseRef = useCallback(
+    (nextBaseRef: string) => {
+      ctx.patchState({
+        ...reviewSourceStatePatch({ kind: 'branch', baseRef: nextBaseRef }),
+        branchBaseRef: nextBaseRef,
+      });
+    },
+    [ctx],
+  );
+  const selectCommitSource = useCallback(
+    (oid: string) => {
+      setDescriptor({ kind: 'commit', commitOid: oid });
+    },
+    [setDescriptor],
+  );
   const requestFileJump = useCallback((diff: FileDiff) => {
     setJumpRequest((prev) => ({ id: diff.id, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
-  const selectCappedFile = useCallback((diff: FileDiff) => {
-    setSelectedCappedFileId(diff.id);
-    if (collapsedSet.has(diff.id)) {
-      const next = new Set(collapsedSet);
-      next.delete(diff.id);
-      ctx.patchState({ collapsedPaths: Array.from(next) });
-    }
-  }, [collapsedSet, ctx]);
+  const selectCappedFile = useCallback(
+    (diff: FileDiff) => {
+      setSelectedCappedFileId(diff.id);
+      if (!expandedSet.has(diff.id)) {
+        setDiffExpansionOverrides((current) => new Map(current).set(diff.id, true));
+      }
+    },
+    [expandedSet],
+  );
   const toggleAllDiffs = useCallback(() => {
-    if (expansionToggle.action === 'disabled') return;
-    ctx.patchState({ collapsedPaths: expansionToggle.nextCollapsedPaths });
-  }, [ctx, expansionToggle]);
+    if (expansionAction === 'disabled') return;
+    const nextDiffsExpanded = expansionAction === 'expand';
+    setDiffExpansionOverrides(new Map());
+    if (sessionId) setReviewDiffsExpanded(sessionId, nextDiffsExpanded);
+    ctx.patchState({ diffsExpanded: nextDiffsExpanded });
+  }, [ctx, expansionAction, sessionId]);
   const copyGitApplyCommand = useCallback(() => {
     const availability = getGitApplyCopyAvailability(visibleDiffs, hideWhitespace, platform);
     if (!availability.canCopy) return;
-    void navigator.clipboard.writeText(availability.payload.command)
+    void navigator.clipboard
+      .writeText(availability.payload.command)
       .then(() => toast.success(t('rightSidebar.review.moreMenu.copyGitApplySuccess')))
       .catch(() => toast.error(t('rightSidebar.review.moreMenu.copyGitApplyFailed')));
   }, [hideWhitespace, platform, t, visibleDiffs]);
@@ -1057,12 +1157,10 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
     const nextId = getNextCappedFileSelection(selectedCappedFileId, cappedSummaryDiffs);
     if (nextId === selectedCappedFileId) return;
     setSelectedCappedFileId(nextId);
-    if (nextId && collapsedSet.has(nextId)) {
-      const next = new Set(collapsedSet);
-      next.delete(nextId);
-      ctx.patchState({ collapsedPaths: Array.from(next) });
+    if (nextId && !expandedSet.has(nextId)) {
+      setDiffExpansionOverrides((current) => new Map(current).set(nextId, true));
     }
-  }, [cappedSummaryDiffs, collapsedSet, ctx, currentCapped, selectedCappedFileId]);
+  }, [cappedSummaryDiffs, currentCapped, expandedSet, selectedCappedFileId]);
 
   useEffect(() => {
     // 切 source 后 DiffList 重挂载、nonce 去重 ref 归零;残留的
@@ -1087,15 +1185,57 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   }, [headerEl]);
 
   if (!sessionId) {
-    return <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.noSessionTitle')} desc={t('rightSidebar.review.noSessionDesc')} />;
+    return (
+      <CenteredState
+        icon={<FileDiffIcon size={24} />}
+        title={t('rightSidebar.review.noSessionTitle')}
+        desc={t('rightSidebar.review.noSessionDesc')}
+      />
+    );
   }
 
-  if (!data && loading) {
-    return <CenteredState icon={<Spinner icon={RefreshCw} size={24} />} title={t('rightSidebar.review.loadingTitle')} desc={t('rightSidebar.review.loadingDesc')} />;
+  if (source !== 'turn' && !data && sourceState.gitLoading) {
+    return (
+      <CenteredState
+        icon={<Spinner icon={RefreshCw} size={24} />}
+        title={t('rightSidebar.review.loadingTitle')}
+        desc={t('rightSidebar.review.loadingDesc')}
+      />
+    );
   }
 
-  if (error && !data) {
-    return <CenteredState icon={<AlertTriangle size={24} />} title={t('rightSidebar.review.errorTitle')} desc={error} actionLabel={t('rightSidebar.review.refresh')} onAction={refresh} />;
+  if (source !== 'turn' && sourceState.gitError && !data) {
+    // device-link 远程会话的两类确定性失败给专属占位:老被控端无 remote-op
+    // channel(升级即解决,刷新无用),以及响应超设备互联帧预算。
+    if (deviceLinkDeviceId && errorCode === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      return (
+        <CenteredState
+          icon={<AlertTriangle size={24} />}
+          title={t('rightSidebar.review.remote.deviceTooOldTitle')}
+          desc={t('rightSidebar.review.remote.deviceTooOldDesc')}
+        />
+      );
+    }
+    if (deviceLinkDeviceId && isReviewRemoteOversizeError(sourceState.gitError)) {
+      return (
+        <CenteredState
+          icon={<AlertTriangle size={24} />}
+          title={t('rightSidebar.review.remote.oversizeTitle')}
+          desc={t('rightSidebar.review.remote.oversizeDesc')}
+          actionLabel={t('rightSidebar.review.refresh')}
+          onAction={refresh}
+        />
+      );
+    }
+    return (
+      <CenteredState
+        icon={<AlertTriangle size={24} />}
+        title={t('rightSidebar.review.errorTitle')}
+        desc={sourceState.gitError}
+        actionLabel={t('rightSidebar.review.refresh')}
+        onAction={refresh}
+      />
+    );
   }
 
   if (data?.scope.disabledReason) {
@@ -1119,22 +1259,30 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   const branchLabel = data?.scope.isDetached
     ? t('rightSidebar.review.detachedHead', { oid: data.scope.headOid?.slice(0, 7) ?? '' })
     : data?.scope.branch || t('rightSidebar.review.branchUnknown');
-  const hasAnyDiff = rawUnstaged.length + rawStaged.length + sourceUnstagedCount + sourceStagedCount > 0;
-  const reviewRefreshPending = loading || commitsState.loading || commitDiffState.loading || branchDiffState.loading || cappedFileDiffState.loading || lastTurnHydratedDiffState.loading;
+  const hasAnyDiff =
+    rawUnstaged.length + rawStaged.length + sourceUnstagedCount + sourceStagedCount > 0;
+  const reviewRefreshPending =
+    sourceState.loading ||
+    sourceState.gitLoading ||
+    commitsState.loading ||
+    cappedFileDiffState.loading;
   const toolbarLayout = getReviewToolbarLayout(headerWidth);
   const toolbarMinimal = toolbarLayout === 'minimal';
-  const toolbarShowBranch = toolbarLayout === 'wide';
+  const toolbarShowBranch = toolbarLayout === 'wide' && capabilities.showBranchInfo;
   const toolbarShowSecondaryActions = toolbarLayout !== 'minimal';
   const toolbarFileTreeVisibility = getReviewFileTreeVisibility({
     userVisible: fileTreeVisible,
     containerWidth: headerWidth,
     fileCount: visibleDiffs.length,
   });
-  const copyGitApplyDisabledTooltip = !gitApplyAvailability.canCopy
-    ? gitApplyAvailability.reason === 'hide-whitespace'
-      ? t('rightSidebar.review.moreMenu.copyGitApplyDisabledWhitespace')
-      : t('rightSidebar.review.moreMenu.copyGitApplyDisabledEmpty')
-    : undefined;
+  const copyGitApplyDisabledTooltip =
+    descriptor.kind === 'turn-set'
+      ? t('rightSidebar.review.turn.snapshotPatchUnavailable')
+      : !gitApplyAvailability.canCopy
+        ? gitApplyAvailability.reason === 'hide-whitespace'
+          ? t('rightSidebar.review.moreMenu.copyGitApplyDisabledWhitespace')
+          : t('rightSidebar.review.moreMenu.copyGitApplyDisabledEmpty')
+        : undefined;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
@@ -1145,17 +1293,16 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
           toolbarMinimal ? 'px-2' : 'px-3',
         )}
       >
-        <div className={cn(
-          'flex min-h-8 min-w-0 items-center',
-          toolbarMinimal ? 'gap-1' : 'gap-1.5',
-        )}
+        <div
+          className={cn('flex min-h-8 min-w-0 items-center', toolbarMinimal ? 'gap-1' : 'gap-1.5')}
         >
           <SourceDropdown
             source={source}
+            messageSnapshotAvailable={messageSnapshot !== null}
             counts={{
               unstaged: sourceUnstagedCount,
               staged: sourceStagedCount,
-              branch: branchDiffs.length,
+              branch: rawBranchDiffs.length,
               lastTurn: sourceLastTurnCount,
             }}
             commits={commits}
@@ -1164,7 +1311,13 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
             commitsLoaded={commitsState.data !== null}
             selectedCommitOid={selectedCommitOid}
             layout={toolbarLayout}
+            disabledReason={
+              capabilities.canSwitchSource
+                ? undefined
+                : t('rightSidebar.review.turn.crossSessionSwitchDisabled')
+            }
             onChange={setSource}
+            onSelectMessageSnapshot={selectMessageSnapshot}
             onSelectCommit={selectCommitSource}
             onRefreshCommits={commitsState.refresh}
           />
@@ -1190,26 +1343,35 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
               </div>
             </>
           )}
-          <div className={cn(
-            'flex shrink-0 items-center',
-            toolbarMinimal ? 'gap-0.5' : 'gap-1',
-            !toolbarShowBranch && 'ml-auto',
-          )}
+          <div
+            className={cn(
+              'flex shrink-0 items-center',
+              toolbarMinimal ? 'gap-0.5' : 'gap-1',
+              !toolbarShowBranch && 'ml-auto',
+            )}
           >
             <ReviewMoreMenu
               wordWrap={wordWrap}
               wordDiff={wordDiff}
               hideWhitespace={hideWhitespace}
-              diffExpansionOverflow={toolbarShowSecondaryActions ? null : {
-                action: expansionToggle.action,
-                onToggle: toggleAllDiffs,
-              }}
-              fileTreeOverflow={toolbarShowSecondaryActions ? null : {
-                preferenceVisible: fileTreeVisible,
-                temporarilyHidden: toolbarFileTreeVisibility.temporarilyHidden,
-                onToggle: () => setFileTreeVisible(!fileTreeVisible),
-              }}
-              canCopyGitApply={gitApplyAvailability.canCopy}
+              diffExpansionOverflow={
+                toolbarShowSecondaryActions
+                  ? null
+                  : {
+                      action: expansionAction,
+                      onToggle: toggleAllDiffs,
+                    }
+              }
+              fileTreeOverflow={
+                toolbarShowSecondaryActions
+                  ? null
+                  : {
+                      preferenceVisible: fileTreeVisible,
+                      temporarilyHidden: toolbarFileTreeVisibility.temporarilyHidden,
+                      onToggle: () => setFileTreeVisible(!fileTreeVisible),
+                    }
+              }
+              canCopyGitApply={descriptor.kind !== 'turn-set' && gitApplyAvailability.canCopy}
               copyGitApplyDisabledTooltip={copyGitApplyDisabledTooltip}
               onWordWrapChange={setWordWrap}
               onWordDiffChange={setWordDiff}
@@ -1222,10 +1384,7 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
             />
             {toolbarShowSecondaryActions && (
               <>
-                <DiffExpansionToggleButton
-                  action={expansionToggle.action}
-                  onToggle={toggleAllDiffs}
-                />
+                <DiffExpansionToggleButton action={expansionAction} onToggle={toggleAllDiffs} />
                 <FileTreeToggleButton
                   preferenceVisible={fileTreeVisible}
                   temporarilyHidden={toolbarFileTreeVisibility.temporarilyHidden}
@@ -1261,9 +1420,11 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
         {effectiveWriteDisabledReasons.length > 0 && (
           <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
-            <span>{t('rightSidebar.review.writeDisabledNotice', {
-              reasons: writeDisabledReasonText,
-            })}</span>
+            <span>
+              {t('rightSidebar.review.writeDisabledNotice', {
+                reasons: writeDisabledReasonText,
+              })}
+            </span>
           </div>
         )}
         {(Boolean(operationError) || (operationSummary?.failed.length ?? 0) > 0) && (
@@ -1271,27 +1432,83 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
         )}
       </header>
 
-      {currentCapped ? (
+      {!loading && !error && sourceState.isPartial && (
+        <div className="flex shrink-0 items-start gap-2 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
+          <span>{t('rightSidebar.review.turn.partialNotice')}</span>
+        </div>
+      )}
+
+      {source === 'turn' ? (
+        loading ? (
+          <CenteredState
+            icon={<Spinner size={24} />}
+            title={t('rightSidebar.review.loadingTitle')}
+            desc={t('rightSidebar.review.loadingDesc')}
+          />
+        ) : error ? (
+          <CenteredState
+            icon={<AlertTriangle size={24} />}
+            title={t('rightSidebar.review.errorTitle')}
+            desc={
+              error === REVIEW_TURN_LOCAL_ONLY_ERROR
+                ? t('rightSidebar.review.turn.localOnly')
+                : error
+            }
+            actionLabel={t('rightSidebar.review.refresh')}
+            onAction={refreshAll}
+          />
+        ) : visibleDiffs.length === 0 ? (
+          <CenteredState
+            icon={<FileDiffIcon size={24} />}
+            title={t('rightSidebar.review.turn.emptyTitle')}
+            desc={t('rightSidebar.review.turn.emptyDesc')}
+          />
+        ) : (
+          <DiffList
+            diffs={visibleDiffs}
+            expandedSet={expandedSet}
+            onToggleDiff={togglePath}
+            onRefresh={refreshAll}
+            refreshPending={reviewRefreshPending}
+            viewMode={diffViewMode}
+            onViewModeChange={setDiffViewMode}
+            onRichMarkdownPreviewChange={setRichMarkdownPreview}
+            wordWrap={wordWrap}
+            wordDiff={wordDiff}
+            fileTreeVisible={fileTreeVisible}
+            jumpRequest={resolvedJumpRequest}
+            loadImagePreview={unavailableHistoricalPreview}
+            loadMarkdownPreview={unavailableHistoricalPreview}
+            richMarkdownPreview={false}
+            richMarkdownPreviewDisabledReason={t('rightSidebar.review.turn.previewUnavailable')}
+          />
+        )
+      ) : currentCapped ? (
         <CappedSourceView
           capped={currentCapped}
           summaryDiffs={cappedSummaryDiffs}
           selectedSummaryDiff={selectedCappedSummaryDiff}
           loadedDiff={cappedLoadedDiff}
           loading={cappedFileDiffState.loading && !cappedLoadedDiff}
-          error={cappedFileDiffState.error}
+          error={localizeReviewError(cappedFileDiffState.error)}
           onSelectFile={selectCappedFile}
           onRefresh={refreshAll}
           refreshPending={reviewRefreshPending}
-          branchBaseControl={source === 'branch' ? (
-            <BranchBaseDropdown
-              candidates={branchCandidates}
-              selectedBaseRef={selectedBranchBaseRef}
-              onSelectBase={setBranchBaseRef}
-            />
-          ) : undefined}
-          topNotice={source === 'branch' && currentBranchDiffData?.warning
-            ? branchWarningText(currentBranchDiffData.warning, t)
-            : null}
+          branchBaseControl={
+            source === 'branch' ? (
+              <BranchBaseDropdown
+                candidates={branchCandidates}
+                selectedBaseRef={selectedBranchBaseRef}
+                onSelectBase={setBranchBaseRef}
+              />
+            ) : undefined
+          }
+          topNotice={
+            source === 'branch' && currentBranchDiffData?.warning
+              ? branchWarningText(currentBranchDiffData.warning, t)
+              : null
+          }
           viewMode={diffViewMode}
           onViewModeChange={setDiffViewMode}
           onRichMarkdownPreviewChange={setRichMarkdownPreview}
@@ -1302,41 +1519,53 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
           fileTreeVisible
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
-          writeAction={source === 'unstaged' ? {
-            canWrite,
-            pendingKey,
-            disabledTooltip: actionWriteDisabledTooltip,
-            actionForDiff: () => 'stage',
-            discardForDiff: (diff) => diff.source === 'unstaged',
-            hunkActionsEnabled: canUsePatchBasedReviewActions(hideWhitespace),
-            sectionAction: null,
-            sectionPendingKey: 'stage:all',
-            onFileAction: (diff) => runStageOperation('stage', [targetFromDiff(diff)], `stage:file:${diff.id}`),
-            onFileDiscard: runDiscardFileOperation,
-            onHunkAction: (diff, hunkIndex) => runHunkOperation('stage', diff, hunkIndex),
-            onHunkDiscard: runDiscardHunkOperation,
-          } : source === 'staged' ? {
-            canWrite,
-            pendingKey,
-            disabledTooltip: actionWriteDisabledTooltip,
-            actionForDiff: () => 'unstage',
-            hunkActionsEnabled: canUsePatchBasedReviewActions(hideWhitespace),
-            sectionAction: null,
-            sectionPendingKey: 'unstage:all',
-            onFileAction: (diff) => runStageOperation('unstage', [targetFromDiff(diff)], `unstage:file:${diff.id}`),
-            onHunkAction: (diff, hunkIndex) => runHunkOperation('unstage', diff, hunkIndex),
-          } : undefined}
+          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          onOpenFile={openFileHandler}
+          writeAction={
+            source === 'unstaged'
+              ? {
+                  canWrite,
+                  pendingKey,
+                  disabledTooltip: actionWriteDisabledTooltip,
+                  actionForDiff: () => 'stage',
+                  discardForDiff: (diff) => diff.source === 'unstaged',
+                  hunkActionsEnabled: canUsePatchBasedReviewActions(hideWhitespace),
+                  sectionAction: null,
+                  sectionPendingKey: 'stage:all',
+                  onFileAction: (diff) =>
+                    runStageOperation('stage', [targetFromDiff(diff)], `stage:file:${diff.id}`),
+                  onFileDiscard: runDiscardFileOperation,
+                  onHunkAction: (diff, hunkIndex) => runHunkOperation('stage', diff, hunkIndex),
+                  onHunkDiscard: runDiscardHunkOperation,
+                }
+              : source === 'staged'
+                ? {
+                    canWrite,
+                    pendingKey,
+                    disabledTooltip: actionWriteDisabledTooltip,
+                    actionForDiff: () => 'unstage',
+                    hunkActionsEnabled: canUsePatchBasedReviewActions(hideWhitespace),
+                    sectionAction: null,
+                    sectionPendingKey: 'unstage:all',
+                    onFileAction: (diff) =>
+                      runStageOperation(
+                        'unstage',
+                        [targetFromDiff(diff)],
+                        `unstage:file:${diff.id}`,
+                      ),
+                    onHunkAction: (diff, hunkIndex) => runHunkOperation('unstage', diff, hunkIndex),
+                  }
+                : undefined
+          }
         />
       ) : source === 'commit' ? (
         <CommitSourceView
           selectedCommitOid={effectiveCommitOid}
-          diffs={commitDiffs}
+          diffs={sourceState.diffs}
           rawDiffCount={rawCommitDiffs.length}
-          diffLoading={commitDiffState.loading && !selectedCommitDiff}
-          diffError={commitDiffState.error}
-          onRefreshDiff={commitDiffState.refresh}
+          diffLoading={sourceState.loading && !selectedCommitDiff}
+          diffError={localizeReviewError(sourceState.error)}
+          onRefreshDiff={sourceState.refresh}
           onRefresh={refreshAll}
           refreshPending={reviewRefreshPending}
           expandedSet={expandedSet}
@@ -1347,23 +1576,23 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           fileTreeVisible={fileTreeVisible}
-          jumpRequest={jumpRequest}
+          jumpRequest={resolvedJumpRequest}
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          onOpenFile={openFileHandler}
         />
       ) : source === 'branch' ? (
         <BranchSourceView
           candidates={branchCandidates}
           selectedBaseRef={selectedBranchBaseRef}
           warning={currentBranchDiffData?.warning ?? null}
-          diffs={branchDiffs}
+          diffs={sourceState.diffs}
           rawDiffCount={rawBranchDiffs.length}
-          diffLoading={branchDiffState.loading && !currentBranchDiffData}
-          diffError={branchDiffState.error}
+          diffLoading={sourceState.loading && !currentBranchDiffData}
+          diffError={localizeReviewError(sourceState.error)}
           onSelectBase={setBranchBaseRef}
-          onRefreshDiff={branchDiffState.refresh}
+          onRefreshDiff={sourceState.refresh}
           onRefresh={refreshAll}
           refreshPending={reviewRefreshPending}
           expandedSet={expandedSet}
@@ -1374,11 +1603,11 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           fileTreeVisible={fileTreeVisible}
-          jumpRequest={jumpRequest}
+          jumpRequest={resolvedJumpRequest}
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          onOpenFile={openFileHandler}
         />
       ) : source === 'staged' ? (
         <StagedSourceView
@@ -1391,20 +1620,24 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
           canWrite={canWrite}
           pendingKey={pendingKey}
           actionDisabledTooltip={actionWriteDisabledTooltip}
-          onFileAction={(diff) => runStageOperation('unstage', [targetFromDiff(diff)], `unstage:file:${diff.id}`)}
+          onFileAction={(diff) =>
+            runStageOperation('unstage', [targetFromDiff(diff)], `unstage:file:${diff.id}`)
+          }
           onHunkAction={(diff, hunkIndex) => runHunkOperation('unstage', diff, hunkIndex)}
-          onSectionAction={() => runStageOperation('unstage', staged.map(targetFromDiff), 'unstage:all')}
+          onSectionAction={() =>
+            runStageOperation('unstage', staged.map(targetFromDiff), 'unstage:all')
+          }
           viewMode={diffViewMode}
           onViewModeChange={setDiffViewMode}
           onRichMarkdownPreviewChange={setRichMarkdownPreview}
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           fileTreeVisible={fileTreeVisible}
-          jumpRequest={jumpRequest}
+          jumpRequest={resolvedJumpRequest}
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          onOpenFile={openFileHandler}
           hunkActionsEnabled={canUsePatchBasedReviewActions(hideWhitespace)}
         />
       ) : source === 'last-turn' && lastTurnHydrating ? (
@@ -1417,11 +1650,11 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
         <CenteredState
           icon={<AlertTriangle size={24} />}
           title={t('rightSidebar.review.errorTitle')}
-          desc={lastTurnHydrationError}
+          desc={localizeReviewError(lastTurnHydrationError)}
           actionLabel={t('rightSidebar.review.refresh')}
           onAction={refreshAll}
         />
-      ) : source === 'last-turn' && rawLastTurnDiffs.length === 0 ? (
+      ) : source === 'last-turn' && sourceState.rawDiffCount === 0 ? (
         <CenteredState
           icon={<FileDiffIcon size={24} />}
           title={t('rightSidebar.review.lastTurnEmpty.title')}
@@ -1430,9 +1663,17 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
           onAction={() => setSource('branch')}
         />
       ) : !hasAnyDiff ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.emptyTitle')} desc={t('rightSidebar.review.emptyDescGit')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.emptyTitle')}
+          desc={t('rightSidebar.review.emptyDescGit')}
+        />
       ) : visibleDiffs.length === 0 ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.filterEmptyTitle')} desc={t('rightSidebar.review.filterEmptyDesc')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.filterEmptyTitle')}
+          desc={t('rightSidebar.review.filterEmptyDesc')}
+        />
       ) : (
         <DiffList
           diffs={visibleDiffs}
@@ -1446,41 +1687,48 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
           wordWrap={wordWrap}
           wordDiff={wordDiff}
           fileTreeVisible={fileTreeVisible}
-          jumpRequest={jumpRequest}
+          jumpRequest={resolvedJumpRequest}
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
-          richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
-          writeAction={source === 'last-turn' ? undefined : {
-            canWrite,
-            pendingKey,
-            disabledTooltip: actionWriteDisabledTooltip,
-            actionForDiff: (diff) => actionForReviewDiff(source, diff),
-            discardForDiff: (diff) => discardForReviewDiff(source, diff),
-            hunkActionsEnabled: canUsePatchBasedReviewActions(hideWhitespace),
-            sectionAction: source === 'unstaged' ? 'stage' : null,
-            sectionPendingKey: 'stage:all',
-            sectionDiscardVisible: source === 'unstaged',
-            sectionDiscardPendingKey: 'discard:all',
-            onFileAction: (diff) => {
-              const action = actionForReviewDiff(source, diff);
-              if (!action) return;
-              runStageOperation(action, [targetFromDiff(diff)], `${action}:file:${diff.id}`);
-            },
-            onFileDiscard: runDiscardFileOperation,
-            onHunkAction: (diff, hunkIndex) => {
-              const action = actionForReviewDiff(source, diff);
-              if (!action) return;
-              runHunkOperation(action, diff, hunkIndex);
-            },
-            onHunkDiscard: runDiscardHunkOperation,
-            onSectionAction: source === 'unstaged'
-              ? () => runStageOperation('stage', visibleDiffs.map(targetFromDiff), 'stage:all')
-              : undefined,
-            onSectionDiscard: source === 'unstaged'
-              ? () => runDiscardSectionOperation(visibleDiffs, 'discard:all')
-              : undefined,
-          }}
+          richMarkdownPreview={capabilities.canRichPreview && richMarkdownPreview}
+          onOpenFile={openFileHandler}
+          writeAction={
+            source === 'last-turn'
+              ? undefined
+              : {
+                  canWrite,
+                  pendingKey,
+                  disabledTooltip: actionWriteDisabledTooltip,
+                  actionForDiff: (diff) => actionForReviewDiff(source, diff),
+                  discardForDiff: (diff) => discardForReviewDiff(source, diff),
+                  hunkActionsEnabled: canUsePatchBasedReviewActions(hideWhitespace),
+                  sectionAction: source === 'unstaged' ? 'stage' : null,
+                  sectionPendingKey: 'stage:all',
+                  sectionDiscardVisible: source === 'unstaged',
+                  sectionDiscardPendingKey: 'discard:all',
+                  onFileAction: (diff) => {
+                    const action = actionForReviewDiff(source, diff);
+                    if (!action) return;
+                    runStageOperation(action, [targetFromDiff(diff)], `${action}:file:${diff.id}`);
+                  },
+                  onFileDiscard: runDiscardFileOperation,
+                  onHunkAction: (diff, hunkIndex) => {
+                    const action = actionForReviewDiff(source, diff);
+                    if (!action) return;
+                    runHunkOperation(action, diff, hunkIndex);
+                  },
+                  onHunkDiscard: runDiscardHunkOperation,
+                  onSectionAction:
+                    source === 'unstaged'
+                      ? () =>
+                          runStageOperation('stage', visibleDiffs.map(targetFromDiff), 'stage:all')
+                      : undefined,
+                  onSectionDiscard:
+                    source === 'unstaged'
+                      ? () => runDiscardSectionOperation(visibleDiffs, 'discard:all')
+                      : undefined,
+                }
+          }
         />
       )}
     </div>
@@ -1537,13 +1785,14 @@ function getPushControlState({
   const disabledReason = !branch
     ? t('rightSidebar.review.push.disabledNoBranch')
     : !canWrite && !pending
-      ? writeDisabledText ?? t('rightSidebar.review.push.disabledWriteGate')
+      ? (writeDisabledText ?? t('rightSidebar.review.push.disabledWriteGate'))
       : synced
         ? t('rightSidebar.review.push.synced')
         : strictlyBehind
           ? t('rightSidebar.review.push.disabledBehindOnly', { count: behind })
           : null;
-  const tooltip = disabledReason ??
+  const tooltip =
+    disabledReason ??
     (upstream
       ? behind > 0
         ? t('rightSidebar.review.push.readyForceCandidate', { count: behind })
@@ -1581,7 +1830,11 @@ function CommitOrPushDropdown({
   push: PushControlProps;
   iconOnly?: boolean;
   platform: string;
-  onCommit: (message: string, includeUnstaged: boolean, pushAfterCommit: boolean) => Promise<ReviewCommitRunResult>;
+  onCommit: (
+    message: string,
+    includeUnstaged: boolean,
+    pushAfterCommit: boolean,
+  ) => Promise<ReviewCommitRunResult>;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1589,10 +1842,14 @@ function CommitOrPushDropdown({
   const [includeUnstaged, setIncludeUnstaged] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const writeDisabledTooltip = writeDisabledText
-    ? t('rightSidebar.review.topAction.disabledWriteGateWithReasons', { reasons: writeDisabledText })
+    ? t('rightSidebar.review.topAction.disabledWriteGateWithReasons', {
+        reasons: writeDisabledText,
+      })
     : t('rightSidebar.review.topAction.disabledWriteGate');
   const triggerDisabled = (!canWrite && !pending) || pending;
-  const triggerTooltip = !canWrite ? writeDisabledTooltip : t('rightSidebar.review.topAction.label');
+  const triggerTooltip = !canWrite
+    ? writeDisabledTooltip
+    : t('rightSidebar.review.topAction.label');
   const commitDisabledReason = getReviewCommitActionDisabledReason({
     message,
     includeUnstaged,
@@ -1600,47 +1857,58 @@ function CommitOrPushDropdown({
     unstagedCount,
     canWrite,
   });
-  const commitDisabledTooltip = commitDisabledReason === 'no-message'
-    ? t('rightSidebar.review.commit.disabledNoMessage')
-    : commitDisabledReason === 'write-disabled'
-      ? writeDisabledTooltip
-      : commitDisabledReason === 'no-changes'
-        ? t('rightSidebar.review.commit.disabledNoChanges')
-        : commitDisabledReason === 'no-staged'
-          ? t('rightSidebar.review.commit.disabledNoStaged')
-          : undefined;
+  const commitDisabledTooltip =
+    commitDisabledReason === 'no-message'
+      ? t('rightSidebar.review.commit.disabledNoMessage')
+      : commitDisabledReason === 'write-disabled'
+        ? writeDisabledTooltip
+        : commitDisabledReason === 'no-changes'
+          ? t('rightSidebar.review.commit.disabledNoChanges')
+          : commitDisabledReason === 'no-staged'
+            ? t('rightSidebar.review.commit.disabledNoStaged')
+            : undefined;
   const commitDisabled = pending || Boolean(commitDisabledReason);
   const pushState = getPushControlState({ ...push, t });
   const shortcut = platform === 'darwin' ? '⌘↩' : 'Ctrl↩';
-  const runCommit = useCallback((pushAfterCommit: boolean) => {
-    if (commitDisabled) return;
-    void onCommit(message, includeUnstaged, pushAfterCommit).then((result) => {
-      const effect = getReviewCommitDropdownCompletionEffect(result);
-      if (effect.clearMessage) setMessage('');
-      if (effect.closeDropdown) setOpen(false);
-    });
-  }, [commitDisabled, includeUnstaged, message, onCommit]);
-  const handleKeyDown = useCallback((event: KeyboardEvent) => {
-    const shortcutPressed = platform === 'darwin'
-      ? event.metaKey && event.key === 'Enter'
-      : event.ctrlKey && event.key === 'Enter';
-    if (!shortcutPressed) return;
-    event.preventDefault();
-    runCommit(false);
-  }, [platform, runCommit]);
+  const runCommit = useCallback(
+    (pushAfterCommit: boolean) => {
+      if (commitDisabled) return;
+      void onCommit(message, includeUnstaged, pushAfterCommit).then((result) => {
+        const effect = getReviewCommitDropdownCompletionEffect(result);
+        if (effect.clearMessage) setMessage('');
+        if (effect.closeDropdown) setOpen(false);
+      });
+    },
+    [commitDisabled, includeUnstaged, message, onCommit],
+  );
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      const shortcutPressed =
+        platform === 'darwin'
+          ? event.metaKey && event.key === 'Enter'
+          : event.ctrlKey && event.key === 'Enter';
+      if (!shortcutPressed) return;
+      event.preventDefault();
+      runCommit(false);
+    },
+    [platform, runCommit],
+  );
   useEffect(() => {
     if (!open) return;
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [open]);
   return (
-    <DropdownMenu open={open} onOpenChange={(nextOpen) => {
-      if (triggerDisabled) {
-        setOpen(false);
-        return;
-      }
-      setOpen(nextOpen);
-    }}>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (triggerDisabled) {
+          setOpen(false);
+          return;
+        }
+        setOpen(nextOpen);
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Tip text={triggerTooltip}>
           <button
@@ -1657,7 +1925,9 @@ function CommitOrPushDropdown({
             )}
           >
             {pending ? <Spinner size={12} /> : <Check size={12} />}
-            <span className={cn(iconOnly && 'sr-only')}>{t('rightSidebar.review.topAction.label')}</span>
+            <span className={cn(iconOnly && 'sr-only')}>
+              {t('rightSidebar.review.topAction.label')}
+            </span>
           </button>
         </Tip>
       </DropdownMenuTrigger>
@@ -1670,7 +1940,9 @@ function CommitOrPushDropdown({
       >
         <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[var(--surface-chip)] px-2.5 py-2 text-12">
           <GitBranch size={13} className="shrink-0 text-[var(--text-tertiary)]" />
-          <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">{branchLabel}</span>
+          <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">
+            {branchLabel}
+          </span>
           <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
             <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
             <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
@@ -1700,7 +1972,9 @@ function CommitOrPushDropdown({
           <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
             {includeUnstaged && <Check size={10} />}
           </span>
-          <span className="min-w-0 flex-1 truncate">{t('rightSidebar.review.commit.includeUnstaged')}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {t('rightSidebar.review.commit.includeUnstaged')}
+          </span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-1 bg-[var(--border-default)]" />
         <CommitDropdownAction
@@ -1772,7 +2046,9 @@ function CommitDropdownAction({
         disabled && 'cursor-not-allowed opacity-50',
       )}
     >
-      <span className="flex h-3 w-3 shrink-0 items-center justify-center text-[var(--text-secondary)]">{icon}</span>
+      <span className="flex h-3 w-3 shrink-0 items-center justify-center text-[var(--text-secondary)]">
+        {icon}
+      </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {children}
       {shortcut && (
@@ -1813,48 +2089,63 @@ function FileJumpPopover({
   }, [query, results.length]);
 
   const close = useCallback(() => setOpen(false), []);
-  const selectResult = useCallback((result: ReviewFileJumpResult | null | undefined) => {
-    if (!result) return;
-    onSelectFile(result.diff);
-    close();
-  }, [close, onSelectFile]);
-  const handleOpenChange = useCallback((nextOpen: boolean) => {
-    if (disabled) {
-      setOpen(false);
-      return;
-    }
-    if (nextOpen) {
-      setQuery('');
-      setSelectedIndex(diffs.length > 0 ? 0 : -1);
-    }
-    setOpen(nextOpen);
-  }, [diffs.length, disabled]);
-  const handleKeyDown = useCallback((event: KeyboardEvent) => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setSelectedIndex((current) => moveReviewFileJumpSelection(current, 1, results.length));
-      return;
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setSelectedIndex((current) => moveReviewFileJumpSelection(current, -1, results.length));
-      return;
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      selectResult(results[selectedIndex]);
-      return;
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault();
+  const selectResult = useCallback(
+    (result: ReviewFileJumpResult | null | undefined) => {
+      if (!result) return;
+      onSelectFile(result.diff);
       close();
-    }
-  }, [close, results, selectResult, selectedIndex]);
+    },
+    [close, onSelectFile],
+  );
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (disabled) {
+        setOpen(false);
+        return;
+      }
+      if (nextOpen) {
+        setQuery('');
+        setSelectedIndex(diffs.length > 0 ? 0 : -1);
+      }
+      setOpen(nextOpen);
+    },
+    [diffs.length, disabled],
+  );
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSelectedIndex((current) => moveReviewFileJumpSelection(current, 1, results.length));
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSelectedIndex((current) => moveReviewFileJumpSelection(current, -1, results.length));
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        selectResult(results[selectedIndex]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    },
+    [close, results, selectResult, selectedIndex],
+  );
 
   return (
     <Popover open={open && !disabled} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-        <Tip text={disabled ? t('rightSidebar.review.fileJump.disabled') : t('rightSidebar.review.fileJump.tooltip')}>
+        <Tip
+          text={
+            disabled
+              ? t('rightSidebar.review.fileJump.disabled')
+              : t('rightSidebar.review.fileJump.tooltip')
+          }
+        >
           <button
             type="button"
             disabled={disabled}
@@ -1880,7 +2171,10 @@ function FileJumpPopover({
       >
         <div onKeyDown={handleKeyDown}>
           <label className="relative block">
-            <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
+            <Search
+              size={12}
+              className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
+            />
             <input
               ref={inputRef}
               value={query}
@@ -1978,11 +2272,12 @@ function FileTreeToggleButton({
   onToggle: () => void;
 }) {
   const { t } = useTranslation();
-  const label = preferenceVisible && temporarilyHidden
-    ? t('rightSidebar.review.fileTree.temporarilyHidden')
-    : preferenceVisible
-    ? t('rightSidebar.review.fileTree.hide')
-    : t('rightSidebar.review.fileTree.show');
+  const label =
+    preferenceVisible && temporarilyHidden
+      ? t('rightSidebar.review.fileTree.temporarilyHidden')
+      : preferenceVisible
+        ? t('rightSidebar.review.fileTree.hide')
+        : t('rightSidebar.review.fileTree.show');
   return (
     <Tip text={label}>
       <button
@@ -2101,31 +2396,57 @@ export function ReviewMoreMenu({
           onSelect={() => onWordWrapChange(!wordWrap)}
           className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
         >
-          {wordWrap
-            ? <WrapText size={12} className="text-[var(--text-secondary)]" />
-            : <ArrowRight size={12} className="text-[var(--text-secondary)]" />}
-          <span>{t(wordWrap ? 'rightSidebar.review.moreMenu.wordWrapDisable' : 'rightSidebar.review.moreMenu.wordWrapEnable')}</span>
+          {wordWrap ? (
+            <WrapText size={12} className="text-[var(--text-secondary)]" />
+          ) : (
+            <ArrowRight size={12} className="text-[var(--text-secondary)]" />
+          )}
+          <span>
+            {t(
+              wordWrap
+                ? 'rightSidebar.review.moreMenu.wordWrapDisable'
+                : 'rightSidebar.review.moreMenu.wordWrapEnable',
+            )}
+          </span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => onWordDiffChange(!wordDiff)}
           className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
         >
-          {wordDiff
-            ? <Diff size={12} className="text-[var(--text-secondary)]" />
-            : <SquareSplitHorizontal size={12} className="text-[var(--text-secondary)]" />}
-          <span>{t(wordDiff ? 'rightSidebar.review.moreMenu.wordDiffDisable' : 'rightSidebar.review.moreMenu.wordDiffEnable')}</span>
+          {wordDiff ? (
+            <Diff size={12} className="text-[var(--text-secondary)]" />
+          ) : (
+            <SquareSplitHorizontal size={12} className="text-[var(--text-secondary)]" />
+          )}
+          <span>
+            {t(
+              wordDiff
+                ? 'rightSidebar.review.moreMenu.wordDiffDisable'
+                : 'rightSidebar.review.moreMenu.wordDiffEnable',
+            )}
+          </span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => onHideWhitespaceChange(!hideWhitespace)}
           className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
         >
-          {hideWhitespace
-            ? <EyeOff size={12} className="text-[var(--text-secondary)]" />
-            : <Eye size={12} className="text-[var(--text-secondary)]" />}
-          <span>{t(hideWhitespace ? 'rightSidebar.review.moreMenu.showWhitespace' : 'rightSidebar.review.moreMenu.hideWhitespace')}</span>
+          {hideWhitespace ? (
+            <EyeOff size={12} className="text-[var(--text-secondary)]" />
+          ) : (
+            <Eye size={12} className="text-[var(--text-secondary)]" />
+          )}
+          <span>
+            {t(
+              hideWhitespace
+                ? 'rightSidebar.review.moreMenu.showWhitespace'
+                : 'rightSidebar.review.moreMenu.hideWhitespace',
+            )}
+          </span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-1 bg-[var(--border-default)]" />
-        {canCopyGitApply || !copyGitApplyDisabledTooltip ? copyItem : (
+        {canCopyGitApply || !copyGitApplyDisabledTooltip ? (
+          copyItem
+        ) : (
           <Tip text={copyGitApplyDisabledTooltip}>
             <span className="block">{copyItem}</span>
           </Tip>
@@ -2135,10 +2456,7 @@ export function ReviewMoreMenu({
   );
 }
 
-function DiffExpansionMenuItem({
-  action,
-  onToggle,
-}: DiffExpansionOverflowProps) {
+function DiffExpansionMenuItem({ action, onToggle }: DiffExpansionOverflowProps) {
   const { t } = useTranslation();
   const disabled = action === 'disabled';
   const label = disabled
@@ -2161,9 +2479,11 @@ function DiffExpansionMenuItem({
         disabled && 'cursor-not-allowed opacity-50',
       )}
     >
-      {action === 'collapse'
-        ? <UnfoldVertical size={12} className="text-[var(--text-secondary)]" />
-        : <FoldVertical size={12} className="text-[var(--text-secondary)]" />}
+      {action === 'collapse' ? (
+        <UnfoldVertical size={12} className="text-[var(--text-secondary)]" />
+      ) : (
+        <FoldVertical size={12} className="text-[var(--text-secondary)]" />
+      )}
       <span className="min-w-0 truncate">{label}</span>
     </DropdownMenuItem>
   );
@@ -2171,7 +2491,9 @@ function DiffExpansionMenuItem({
     <Tip text={label}>
       <span className="block">{item}</span>
     </Tip>
-  ) : item;
+  ) : (
+    item
+  );
 }
 
 function FileTreeMenuItem({
@@ -2180,19 +2502,22 @@ function FileTreeMenuItem({
   onToggle,
 }: FileTreeOverflowProps) {
   const { t } = useTranslation();
-  const label = preferenceVisible && temporarilyHidden
-    ? t('rightSidebar.review.fileTree.temporarilyHidden')
-    : preferenceVisible
-      ? t('rightSidebar.review.fileTree.hide')
-      : t('rightSidebar.review.fileTree.show');
+  const label =
+    preferenceVisible && temporarilyHidden
+      ? t('rightSidebar.review.fileTree.temporarilyHidden')
+      : preferenceVisible
+        ? t('rightSidebar.review.fileTree.hide')
+        : t('rightSidebar.review.fileTree.show');
   return (
     <DropdownMenuItem
       onSelect={onToggle}
       className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
     >
-      {preferenceVisible
-        ? <FolderOpen size={12} className="text-[var(--text-secondary)]" />
-        : <Folder size={12} className="text-[var(--text-secondary)]" />}
+      {preferenceVisible ? (
+        <FolderOpen size={12} className="text-[var(--text-secondary)]" />
+      ) : (
+        <Folder size={12} className="text-[var(--text-secondary)]" />
+      )}
       <span className="min-w-0 truncate">{label}</span>
     </DropdownMenuItem>
   );
@@ -2200,6 +2525,7 @@ function FileTreeMenuItem({
 
 export function SourceDropdown({
   source,
+  messageSnapshotAvailable = false,
   counts,
   commits,
   commitsLoading,
@@ -2207,12 +2533,16 @@ export function SourceDropdown({
   commitsLoaded,
   selectedCommitOid,
   layout = 'wide',
+  disabledReason,
   onChange,
+  onSelectMessageSnapshot,
   onSelectCommit,
   onRefreshCommits,
 }: {
-  /** `'turn'` 表示轮次审查(turnTarget)选中态:非 git 来源,仅作为当前项展示。 */
+  /** `'turn'` is the selected label for a persisted turn-set descriptor. */
   source: ReviewSource | 'turn';
+  /** Whether the exact message snapshot remains available after selecting a Git source. */
+  messageSnapshotAvailable?: boolean;
   counts: { unstaged?: number; staged?: number; branch?: number; lastTurn?: number };
   commits?: ReviewCommit[];
   commitsLoading?: boolean;
@@ -2220,16 +2550,19 @@ export function SourceDropdown({
   commitsLoaded?: boolean;
   selectedCommitOid?: string | null;
   layout?: ReviewToolbarLayout;
+  disabledReason?: string;
   onChange: (source: ReviewSource) => void;
+  onSelectMessageSnapshot?: () => void;
   onSelectCommit?: (oid: string) => void;
   onRefreshCommits?: () => void;
 }) {
   const { t } = useTranslation();
-  // 轮次项只在轮次审查态存在(进入它的唯一入口是聊天流的变更卡片);
-  // 切走即清 turnTarget、不提供"切回轮次"的常驻项,对齐 Codex 的 EP 语义。
-  const turnOption: SourceDropdownOption | null = source === 'turn'
-    ? { source: 'turn', label: t('rightSidebar.review.turn.title') }
-    : null;
+  const [open, setOpen] = useState(false);
+  // 消息快照独立于当前来源保存；切到 Git 来源后仍可精确返回原消息的变更。
+  const turnOption: SourceDropdownOption | null =
+    source === 'turn' || messageSnapshotAvailable
+      ? { source: 'turn', label: t('rightSidebar.review.turn.title') }
+      : null;
   const options: SourceDropdownOption[] = [
     { source: 'unstaged', label: t('rightSidebar.review.source.unstaged'), count: counts.unstaged },
     { source: 'staged', label: t('rightSidebar.review.source.staged'), count: counts.staged },
@@ -2238,24 +2571,40 @@ export function SourceDropdown({
     { source: 'last-turn', label: t('rightSidebar.review.source.lastTurn') },
   ];
   const directOptions = options.filter((option) => option.source !== 'commit');
-  const selected = turnOption ?? options.find((option) => option.source === source) ?? options[0];
+  const selected =
+    source === 'turn' && turnOption
+      ? turnOption
+      : (options.find((option) => option.source === source) ?? options[0]);
   const commitList = commits ?? [];
   const commitMenuLoaded = commitsLoaded ?? false;
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(nextOpen) => setOpen(disabledReason ? false : nextOpen)}
+    >
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={t('rightSidebar.review.sourceDropdownAria')}
-          className={cn(
-            'flex h-7 shrink-0 items-center justify-between rounded-full border border-transparent bg-transparent px-1.5 text-left text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
-            layout === 'wide' ? 'max-w-[11rem]' : 'max-w-[10rem]',
-          )}
-        >
-          <span className="truncate">{selected.label}</span>
-          <SourceCountBadge count={selected.count} />
-          <ChevronDown size={13} className={cn('shrink-0 text-[var(--text-tertiary)]', layout === 'minimal' ? 'ml-1' : 'ml-2')} />
-        </button>
+        <Tip text={disabledReason ?? t('rightSidebar.review.sourceDropdownAria')}>
+          <button
+            type="button"
+            aria-disabled={Boolean(disabledReason)}
+            aria-label={t('rightSidebar.review.sourceDropdownAria')}
+            className={cn(
+              'flex h-7 shrink-0 items-center justify-between rounded-full border border-transparent bg-transparent px-1.5 text-left text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
+              layout === 'wide' ? 'max-w-[11rem]' : 'max-w-[10rem]',
+              disabledReason && 'cursor-not-allowed opacity-50 hover:bg-transparent',
+            )}
+          >
+            <span className="truncate">{selected.label}</span>
+            <SourceCountBadge count={selected.count} />
+            <ChevronDown
+              size={13}
+              className={cn(
+                'shrink-0 text-[var(--text-tertiary)]',
+                layout === 'minimal' ? 'ml-1' : 'ml-2',
+              )}
+            />
+          </button>
+        </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
@@ -2265,8 +2614,9 @@ export function SourceDropdown({
         {turnOption && (
           <SourceDropdownItem
             option={turnOption}
-            active
+            active={source === 'turn'}
             onChange={onChange}
+            onSelectMessageSnapshot={onSelectMessageSnapshot}
           />
         )}
         {directOptions.slice(0, 2).map((option) => (
@@ -2277,12 +2627,15 @@ export function SourceDropdown({
             onChange={onChange}
           />
         ))}
-        <DropdownMenuSub onOpenChange={(open) => {
-          if (open) onRefreshCommits?.();
-        }}
+        <DropdownMenuSub
+          onOpenChange={(open) => {
+            if (open) onRefreshCommits?.();
+          }}
         >
           <DropdownMenuSubTrigger className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)] data-[state=open]:bg-[var(--cmd-palette-item-hover)]">
-            <span className="min-w-0 flex-1 truncate">{t('rightSidebar.review.source.commit')}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {t('rightSidebar.review.source.commit')}
+            </span>
             <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]">
               {source === 'commit' && <Check size={12} />}
             </span>
@@ -2309,7 +2662,12 @@ export function SourceDropdown({
                   }}
                   className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
-                  <Spinner icon={RefreshCw} size={12} spinning={commitsLoading} className="text-[var(--text-secondary)]" />
+                  <Spinner
+                    icon={RefreshCw}
+                    size={12}
+                    spinning={commitsLoading}
+                    className="text-[var(--text-secondary)]"
+                  />
                   <span>{t('rightSidebar.review.commitMenu.retry')}</span>
                 </DropdownMenuItem>
               </>
@@ -2329,31 +2687,36 @@ export function SourceDropdown({
                 <FileDiffIcon size={12} />
                 <span>{t('rightSidebar.review.commitMenu.empty')}</span>
               </DropdownMenuItem>
-            ) : commitList.map((commit) => {
-              const title = commit.title || t('rightSidebar.review.untitledCommit');
-              const active = commit.oid === selectedCommitOid;
-              return (
-                <Tip key={commit.oid} text={title} side="left">
-                  <DropdownMenuItem
-                    onSelect={() => onSelectCommit?.(commit.oid)}
-                    className={cn(
-                      'flex h-8 min-w-0 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
-                      active && 'bg-[var(--surface-chip)]',
-                    )}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{title}</span>
-                    <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
-                      {t('rightSidebar.review.commitMenu.relativeTime', {
-                        time: formatSidebarTime(new Date(commit.authorTime * 1000).toISOString(), t),
-                      })}
-                    </span>
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]">
-                      {active && <Check size={12} />}
-                    </span>
-                  </DropdownMenuItem>
-                </Tip>
-              );
-            })}
+            ) : (
+              commitList.map((commit) => {
+                const title = commit.title || t('rightSidebar.review.untitledCommit');
+                const active = commit.oid === selectedCommitOid;
+                return (
+                  <Tip key={commit.oid} text={title} side="left">
+                    <DropdownMenuItem
+                      onSelect={() => onSelectCommit?.(commit.oid)}
+                      className={cn(
+                        'flex h-8 min-w-0 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+                        active && 'bg-[var(--surface-chip)]',
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{title}</span>
+                      <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
+                        {t('rightSidebar.review.commitMenu.relativeTime', {
+                          time: formatSidebarTime(
+                            new Date(commit.authorTime * 1000).toISOString(),
+                            t,
+                          ),
+                        })}
+                      </span>
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]">
+                        {active && <Check size={12} />}
+                      </span>
+                    </DropdownMenuItem>
+                  </Tip>
+                );
+              })
+            )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         {directOptions.slice(2).map((option) => (
@@ -2388,16 +2751,21 @@ function SourceDropdownItem({
   option,
   active,
   onChange,
+  onSelectMessageSnapshot,
 }: {
   option: SourceDropdownOption;
   active: boolean;
   onChange: (source: ReviewSource) => void;
+  onSelectMessageSnapshot?: () => void;
 }) {
   return (
     <DropdownMenuItem
-      // 轮次伪选项已是选中态,点它只关菜单,不产生来源切换。
       onSelect={() => {
-        if (option.source !== 'turn') onChange(option.source);
+        if (option.source === 'turn') {
+          if (!active) onSelectMessageSnapshot?.();
+          return;
+        }
+        onChange(option.source);
       }}
       className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
     >
@@ -2419,14 +2787,16 @@ function targetFromDiff(diff: FileDiff): ReviewFileTarget {
 }
 
 export function partialAllowed(diff: FileDiff): boolean {
-  return diff.kind === 'text' &&
+  return (
+    diff.kind === 'text' &&
     !diff.isBinary &&
     !diff.isSubmodule &&
     diff.status !== 'renamed' &&
     diff.status !== 'copied' &&
     diff.status !== 'deleted' &&
     diff.status !== 'typechange' &&
-    !isTypechangeModeChange(diff);
+    !isTypechangeModeChange(diff)
+  );
 }
 
 function isRenameLikeDiff(diff: FileDiff): boolean {
@@ -2448,25 +2818,37 @@ function isTypechangeModeChange(diff: FileDiff): boolean {
 }
 
 function actionLabel(action: ReviewToggleAction, t: (key: string) => string): string {
-  return action === 'stage' ? t('rightSidebar.review.actions.stage') : t('rightSidebar.review.actions.unstage');
+  return action === 'stage'
+    ? t('rightSidebar.review.actions.stage')
+    : t('rightSidebar.review.actions.unstage');
 }
 
 function hunkActionLabel(action: ReviewToggleAction, t: (key: string) => string): string {
-  return action === 'stage' ? t('rightSidebar.review.actions.stageHunk') : t('rightSidebar.review.actions.unstageHunk');
+  return action === 'stage'
+    ? t('rightSidebar.review.actions.stageHunk')
+    : t('rightSidebar.review.actions.unstageHunk');
 }
 
 function allActionLabel(action: ReviewToggleAction, t: (key: string) => string): string {
-  return action === 'stage' ? t('rightSidebar.review.actions.stageAll') : t('rightSidebar.review.actions.unstageAll');
+  return action === 'stage'
+    ? t('rightSidebar.review.actions.stageAll')
+    : t('rightSidebar.review.actions.unstageAll');
 }
 
-export function actionForReviewDiff(source: ReviewSource, diff: Pick<FileDiff, 'source'>): ReviewToggleAction | null {
+export function actionForReviewDiff(
+  source: ReviewSource,
+  diff: Pick<FileDiff, 'source'>,
+): ReviewToggleAction | null {
   void diff;
   if (source === 'unstaged') return 'stage';
   if (source === 'staged') return 'unstage';
   return null;
 }
 
-export function discardForReviewDiff(source: ReviewSource, diff: Pick<FileDiff, 'source'>): boolean {
+export function discardForReviewDiff(
+  source: ReviewSource,
+  diff: Pick<FileDiff, 'source'>,
+): boolean {
   if (source === 'unstaged') return diff.source === 'unstaged';
   return false;
 }
@@ -2496,10 +2878,11 @@ function OperationNotice({
   if (!error && failed.length === 0) return null;
   return (
     <div className="mt-2 rounded-[8px] border border-[var(--error-border)] bg-[var(--error-bg)] px-2.5 py-2 text-11 leading-relaxed text-[var(--error-fg)]">
-      {errorTitle ?? t('rightSidebar.review.actions.partialFailure', {
-        succeeded: summary?.succeeded.length ?? 0,
-        failed: failed.length,
-      })}
+      {errorTitle ??
+        t('rightSidebar.review.actions.partialFailure', {
+          succeeded: summary?.succeeded.length ?? 0,
+          failed: failed.length,
+        })}
       {errorDetails && (
         <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-10 text-[var(--error-fg-strong)]">
           {errorDetails}
@@ -2551,6 +2934,7 @@ function DiffList({
   loadImagePreview,
   loadMarkdownPreview,
   richMarkdownPreview,
+  richMarkdownPreviewDisabledReason,
   onOpenFile,
   writeAction,
 }: {
@@ -2571,7 +2955,8 @@ function DiffList({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  richMarkdownPreviewDisabledReason?: string;
+  onOpenFile?: (diff: FileDiff) => void;
   writeAction?: WriteActionProps;
 }) {
   const parentRef = useRef<HTMLDivElement | null>(null);
@@ -2595,7 +2980,7 @@ function DiffList({
   const fileVirtualizer = useVirtualizer({
     count: diffs.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) => expandedSet.has(diffs[index]?.id) ? 360 : 45,
+    estimateSize: (index) => (expandedSet.has(diffs[index]?.id) ? 360 : 45),
     overscan: 8,
     getItemKey: (index) => diffs[index]?.id ?? index,
   });
@@ -2635,16 +3020,22 @@ function DiffList({
     }
   }, []);
 
-  const beginProgrammaticScrollSuppression = useCallback((targetId: string) => {
-    endProgrammaticScrollSuppression();
-    programmaticScrollSuppressedRef.current = true;
-    programmaticScrollTargetRef.current = targetId;
-  }, [endProgrammaticScrollSuppression]);
+  const beginProgrammaticScrollSuppression = useCallback(
+    (targetId: string) => {
+      endProgrammaticScrollSuppression();
+      programmaticScrollSuppressedRef.current = true;
+      programmaticScrollTargetRef.current = targetId;
+    },
+    [endProgrammaticScrollSuppression],
+  );
 
-  useEffect(() => () => {
-    if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
-    endProgrammaticScrollSuppression();
-  }, [endProgrammaticScrollSuppression]);
+  useEffect(
+    () => () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+      endProgrammaticScrollSuppression();
+    },
+    [endProgrammaticScrollSuppression],
+  );
 
   useEffect(() => {
     const targetId = programmaticScrollTargetRef.current;
@@ -2668,12 +3059,15 @@ function DiffList({
     if (pinnedTargetId && id === pinnedTargetId) {
       endProgrammaticScrollSuppression();
     }
-    setActiveFileId((currentId) => nextReviewFileTreeActiveIdFromScroll({
-      currentActiveFileId: currentId,
-      candidateId: id,
-      suppressed,
-      pinnedTargetId,
-    }).activeFileId);
+    setActiveFileId(
+      (currentId) =>
+        nextReviewFileTreeActiveIdFromScroll({
+          currentActiveFileId: currentId,
+          candidateId: id,
+          suppressed,
+          pinnedTargetId,
+        }).activeFileId,
+    );
   }, [endProgrammaticScrollSuppression]);
 
   const scheduleActiveFileSync = useCallback(() => {
@@ -2684,29 +3078,32 @@ function DiffList({
     });
   }, [syncActiveFileFromScroll]);
 
-  const schedulePreciseScrollToFile = useCallback((targetId: string, attemptsLeft = 16) => {
-    if (preciseScrollRafRef.current !== null) {
-      cancelAnimationFrame(preciseScrollRafRef.current);
-    }
-    preciseScrollRafRef.current = requestAnimationFrame(() => {
-      preciseScrollRafRef.current = null;
-      const targetStillPinned = programmaticScrollTargetRef.current === targetId;
-      const row = findFileRowElement(parentRef.current, targetId);
-      const step = nextReviewFileJumpPreciseScrollStep({
-        targetStillPinned,
-        rowMounted: Boolean(row),
-        attemptsLeft,
+  const schedulePreciseScrollToFile = useCallback(
+    (targetId: string, attemptsLeft = 16) => {
+      if (preciseScrollRafRef.current !== null) {
+        cancelAnimationFrame(preciseScrollRafRef.current);
+      }
+      preciseScrollRafRef.current = requestAnimationFrame(() => {
+        preciseScrollRafRef.current = null;
+        const targetStillPinned = programmaticScrollTargetRef.current === targetId;
+        const row = findFileRowElement(parentRef.current, targetId);
+        const step = nextReviewFileJumpPreciseScrollStep({
+          targetStillPinned,
+          rowMounted: Boolean(row),
+          attemptsLeft,
+        });
+        if (step.action === 'scroll' && row) {
+          scrollElementIntoContainerView(parentRef.current, row, 'start');
+          scheduleActiveFileSync();
+          return;
+        }
+        if (step.action === 'retry') {
+          schedulePreciseScrollToFile(targetId, step.nextAttemptsLeft);
+        }
       });
-      if (step.action === 'scroll' && row) {
-        scrollElementIntoContainerView(parentRef.current, row, 'start');
-        scheduleActiveFileSync();
-        return;
-      }
-      if (step.action === 'retry') {
-        schedulePreciseScrollToFile(targetId, step.nextAttemptsLeft);
-      }
-    });
-  }, [scheduleActiveFileSync]);
+    },
+    [scheduleActiveFileSync],
+  );
 
   const handleUserScrollIntent = useCallback(() => {
     if (programmaticScrollTargetRef.current || programmaticScrollSuppressedRef.current) {
@@ -2714,23 +3111,37 @@ function DiffList({
     }
   }, [endProgrammaticScrollSuppression]);
 
-  const handleUserScrollKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (isReviewFileTreeScrollKey(event.key)) {
-      handleUserScrollIntent();
-    }
-  }, [handleUserScrollIntent]);
+  const handleUserScrollKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (isReviewFileTreeScrollKey(event.key)) {
+        handleUserScrollIntent();
+      }
+    },
+    [handleUserScrollIntent],
+  );
 
-  const scrollToFile = useCallback((diff: FileDiff) => {
-    setActiveFileId(diff.id);
-    const index = diffs.findIndex((item) => item.id === diff.id);
-    if (index < 0) return;
-    beginProgrammaticScrollSuppression(diff.id);
-    if (!expandedSet.has(diff.id)) onToggleDiff(diff.id);
-    if (virtualized) {
-      fileVirtualizer.scrollToIndex(index, { align: 'start' });
-    }
-    schedulePreciseScrollToFile(diff.id);
-  }, [beginProgrammaticScrollSuppression, diffs, expandedSet, fileVirtualizer, onToggleDiff, schedulePreciseScrollToFile, virtualized]);
+  const scrollToFile = useCallback(
+    (diff: FileDiff) => {
+      setActiveFileId(diff.id);
+      const index = diffs.findIndex((item) => item.id === diff.id);
+      if (index < 0) return;
+      beginProgrammaticScrollSuppression(diff.id);
+      if (!expandedSet.has(diff.id)) onToggleDiff(diff.id);
+      if (virtualized) {
+        fileVirtualizer.scrollToIndex(index, { align: 'start' });
+      }
+      schedulePreciseScrollToFile(diff.id);
+    },
+    [
+      beginProgrammaticScrollSuppression,
+      diffs,
+      expandedSet,
+      fileVirtualizer,
+      onToggleDiff,
+      schedulePreciseScrollToFile,
+      virtualized,
+    ],
+  );
 
   useEffect(() => {
     if (!jumpRequest || consumedJumpNonceRef.current === jumpRequest.nonce) return;
@@ -2773,6 +3184,7 @@ function DiffList({
         viewMode={viewMode}
         onViewModeChange={onViewModeChange}
         richMarkdownPreview={richMarkdownPreview}
+        richMarkdownPreviewDisabledReason={richMarkdownPreviewDisabledReason}
         onRichMarkdownPreviewChange={onRichMarkdownPreviewChange}
       />
       {topNotice && (
@@ -2795,10 +3207,7 @@ function DiffList({
                 onKeyDownCapture={handleUserScrollKeyDown}
                 className={cn('h-full min-h-0 min-w-0 overflow-y-auto', hasBatchActions && 'pb-14')}
               >
-                <div
-                  className="relative w-full"
-                  style={{ height: fileVirtualizer.getTotalSize() }}
-                >
+                <div className="relative w-full" style={{ height: fileVirtualizer.getTotalSize() }}>
                   {fileVirtualizer.getVirtualItems().map((item) => {
                     const diff = diffs[item.index];
                     if (!diff) return null;
@@ -2825,7 +3234,10 @@ function DiffList({
                 onTouchStart={handleUserScrollIntent}
                 onPointerDownCapture={handleUserScrollIntent}
                 onKeyDownCapture={handleUserScrollKeyDown}
-                className={cn('flex h-full min-h-0 min-w-0 flex-col overflow-y-auto', hasBatchActions && 'pb-14')}
+                className={cn(
+                  'flex h-full min-h-0 min-w-0 flex-col overflow-y-auto',
+                  hasBatchActions && 'pb-14',
+                )}
               >
                 {diffs.map(renderFileRow)}
               </div>
@@ -2860,7 +3272,9 @@ function findFileRowElement(container: HTMLElement | null, id: string): HTMLElem
 
 function findFileTreeRowElement(container: HTMLElement | null, id: string): HTMLElement | null {
   if (!container) return null;
-  const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-review-file-tree-node-id]'));
+  const rows = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-review-file-tree-node-id]'),
+  );
   return rows.find((row) => row.dataset.reviewFileTreeNodeId === id) ?? null;
 }
 
@@ -2957,7 +3371,10 @@ export function ReviewFileTreeSidebar({
     >
       <div className="shrink-0 border-b border-[var(--border-default)] p-2">
         <label className="relative block">
-          <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
+          <Search
+            size={12}
+            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
+          />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -3032,7 +3449,11 @@ function ReviewFileTreeRow({
         className="flex h-7 w-full min-w-0 items-center gap-1 pr-2 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         style={{ paddingLeft }}
       >
-        {collapsed ? <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" /> : <ChevronDown size={12} className="shrink-0 text-[var(--text-tertiary)]" />}
+        {collapsed ? (
+          <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" />
+        ) : (
+          <ChevronDown size={12} className="shrink-0 text-[var(--text-tertiary)]" />
+        )}
         <span className="min-w-0 truncate font-medium">{node.name}</span>
       </button>
     );
@@ -3114,6 +3535,7 @@ export function ReviewDiffListHeader({
   viewMode,
   onViewModeChange,
   richMarkdownPreview,
+  richMarkdownPreviewDisabledReason,
   onRichMarkdownPreviewChange,
 }: {
   fileCount: number;
@@ -3123,6 +3545,7 @@ export function ReviewDiffListHeader({
   viewMode: DiffViewMode;
   onViewModeChange: (mode: DiffViewMode) => void;
   richMarkdownPreview: boolean;
+  richMarkdownPreviewDisabledReason?: string;
   onRichMarkdownPreviewChange: (richMarkdownPreview: boolean) => void;
 }) {
   const { t } = useTranslation();
@@ -3147,12 +3570,21 @@ export function ReviewDiffListHeader({
   }, [rowEl]);
 
   return (
-    <div ref={setRowEl} className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 text-12">
-      <div data-testid="review-diff-list-header-left" className="flex min-w-0 flex-1 items-center gap-2">
+    <div
+      ref={setRowEl}
+      className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 text-12"
+    >
+      <div
+        data-testid="review-diff-list-header-left"
+        className="flex min-w-0 flex-1 items-center gap-2"
+      >
         {branchBaseControl && (
           <>
             {showBranchBaseLabel && (
-              <span data-testid="review-branch-base-label" className="shrink-0 text-11 text-[var(--text-tertiary)]">
+              <span
+                data-testid="review-branch-base-label"
+                className="shrink-0 text-11 text-[var(--text-tertiary)]"
+              >
                 {t('rightSidebar.review.branch.baseLabel')}
               </span>
             )}
@@ -3165,10 +3597,14 @@ export function ReviewDiffListHeader({
           {t('rightSidebar.review.fileCount', { count: fileCount })}
         </span>
       </div>
-      <div data-testid="review-diff-list-header-actions" className="ml-auto flex shrink-0 items-center gap-1">
+      <div
+        data-testid="review-diff-list-header-actions"
+        className="ml-auto flex shrink-0 items-center gap-1"
+      >
         <ReviewRefreshButton pending={refreshPending} onRefresh={onRefresh} />
         <RichMarkdownPreviewToggleButton
           enabled={richMarkdownPreview}
+          disabledReason={richMarkdownPreviewDisabledReason}
           onToggle={() => onRichMarkdownPreviewChange(!richMarkdownPreview)}
         />
         <DiffViewModeToggle mode={viewMode} onChange={onViewModeChange} />
@@ -3179,25 +3615,34 @@ export function ReviewDiffListHeader({
 
 function RichMarkdownPreviewToggleButton({
   enabled,
+  disabledReason,
   onToggle,
 }: {
   enabled: boolean;
+  disabledReason?: string;
   onToggle: () => void;
 }) {
   const { t } = useTranslation();
-  const label = t(enabled
-    ? 'rightSidebar.review.moreMenu.richPreviewDisable'
-    : 'rightSidebar.review.moreMenu.richPreviewEnable');
+  const label = t(
+    enabled
+      ? 'rightSidebar.review.moreMenu.richPreviewDisable'
+      : 'rightSidebar.review.moreMenu.richPreviewEnable',
+  );
   return (
-    <Tip text={label}>
+    <Tip text={disabledReason ?? label}>
       <button
         type="button"
+        aria-disabled={Boolean(disabledReason)}
         aria-pressed={enabled}
         aria-label={label}
-        onClick={onToggle}
+        onClick={() => {
+          if (!disabledReason) onToggle();
+        }}
         className={cn(
           'flex h-6 w-6 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
           enabled && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
+          disabledReason &&
+            'cursor-not-allowed opacity-50 hover:bg-transparent hover:text-[var(--text-secondary)]',
         )}
       >
         {enabled ? <Image size={13} /> : <ImageOff size={13} />}
@@ -3254,7 +3699,8 @@ function DiffViewModeToggle({
           onClick={() => onChange(option.mode)}
           className={cn(
             'rounded-full px-2 text-10 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-            option.mode === mode && 'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)]',
+            option.mode === mode &&
+              'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)]',
           )}
         >
           {option.label}
@@ -3312,7 +3758,7 @@ export function CappedSourceView({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
   writeAction?: WriteActionProps;
 }) {
   const { t } = useTranslation();
@@ -3376,7 +3822,11 @@ export function CappedSourceView({
         <div className="flex h-full min-h-0 min-w-0">
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
             {!selectedSummaryDiff ? (
-              <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.emptyTitle')} desc={t('rightSidebar.review.emptyDescGit')} />
+              <CenteredState
+                icon={<FileDiffIcon size={24} />}
+                title={t('rightSidebar.review.emptyTitle')}
+                desc={t('rightSidebar.review.emptyDescGit')}
+              />
             ) : loading ? (
               <CappedFileState
                 icon={<Spinner icon={RefreshCw} size={20} />}
@@ -3427,15 +3877,7 @@ export function CappedSourceView({
   );
 }
 
-function CappedFileState({
-  icon,
-  title,
-  desc,
-}: {
-  icon: ReactNode;
-  title: string;
-  desc: string;
-}) {
+function CappedFileState({ icon, title, desc }: { icon: ReactNode; title: string; desc: string }) {
   return (
     <div className="m-3 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
       <div className="flex items-center gap-2 font-medium text-[var(--text-primary)]">
@@ -3490,24 +3932,48 @@ function CommitSourceView({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
 
   if (!selectedCommitOid) {
-    return <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.noCommitsTitle')} desc={t('rightSidebar.review.noCommitsDesc')} />;
+    return (
+      <CenteredState
+        icon={<FileDiffIcon size={24} />}
+        title={t('rightSidebar.review.noCommitsTitle')}
+        desc={t('rightSidebar.review.noCommitsDesc')}
+      />
+    );
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {diffLoading ? (
-        <CenteredState icon={<Spinner icon={RefreshCw} size={24} />} title={t('rightSidebar.review.commitDiffLoadingTitle')} desc={selectedCommitOid.slice(0, 7)} />
+        <CenteredState
+          icon={<Spinner icon={RefreshCw} size={24} />}
+          title={t('rightSidebar.review.commitDiffLoadingTitle')}
+          desc={selectedCommitOid.slice(0, 7)}
+        />
       ) : diffError && diffs.length === 0 ? (
-        <CenteredState icon={<AlertTriangle size={24} />} title={t('rightSidebar.review.commitDiffErrorTitle')} desc={diffError} actionLabel={t('rightSidebar.review.refresh')} onAction={onRefreshDiff} />
+        <CenteredState
+          icon={<AlertTriangle size={24} />}
+          title={t('rightSidebar.review.commitDiffErrorTitle')}
+          desc={diffError}
+          actionLabel={t('rightSidebar.review.refresh')}
+          onAction={onRefreshDiff}
+        />
       ) : diffs.length === 0 && rawDiffCount > 0 ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.filterEmptyTitle')} desc={t('rightSidebar.review.filterEmptyDesc')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.filterEmptyTitle')}
+          desc={t('rightSidebar.review.filterEmptyDesc')}
+        />
       ) : diffs.length === 0 ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.commitDiffEmptyTitle')} desc={t('rightSidebar.review.commitDiffEmptyDesc')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.commitDiffEmptyTitle')}
+          desc={t('rightSidebar.review.commitDiffEmptyDesc')}
+        />
       ) : (
         <DiffList
           diffs={diffs}
@@ -3581,28 +4047,60 @@ function BranchSourceView({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
   const blockingWarning = warning && warning.code !== 'base-missing' ? warning : null;
 
   if (diffLoading) {
-    return <CenteredState icon={<Spinner icon={RefreshCw} size={24} />} title={t('rightSidebar.review.branch.loadingTitle')} desc={t('rightSidebar.review.branch.loadingDesc')} />;
+    return (
+      <CenteredState
+        icon={<Spinner icon={RefreshCw} size={24} />}
+        title={t('rightSidebar.review.branch.loadingTitle')}
+        desc={t('rightSidebar.review.branch.loadingDesc')}
+      />
+    );
   }
   if (diffError && rawDiffCount === 0) {
-    return <CenteredState icon={<AlertTriangle size={24} />} title={t('rightSidebar.review.branch.errorTitle')} desc={diffError} actionLabel={t('rightSidebar.review.refresh')} onAction={onRefreshDiff} />;
+    return (
+      <CenteredState
+        icon={<AlertTriangle size={24} />}
+        title={t('rightSidebar.review.branch.errorTitle')}
+        desc={diffError}
+        actionLabel={t('rightSidebar.review.refresh')}
+        onAction={onRefreshDiff}
+      />
+    );
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {candidates.length === 0 ? (
-        <CenteredState icon={<GitBranch size={24} />} title={t('rightSidebar.review.branch.noCandidatesTitle')} desc={t('rightSidebar.review.branch.noCandidatesDesc')} />
+        <CenteredState
+          icon={<GitBranch size={24} />}
+          title={t('rightSidebar.review.branch.noCandidatesTitle')}
+          desc={t('rightSidebar.review.branch.noCandidatesDesc')}
+        />
       ) : blockingWarning ? (
-        <CenteredState icon={<AlertTriangle size={24} />} title={t('rightSidebar.review.branch.warningTitle')} desc={branchWarningText(blockingWarning, t)} actionLabel={t('rightSidebar.review.refresh')} onAction={onRefreshDiff} />
+        <CenteredState
+          icon={<AlertTriangle size={24} />}
+          title={t('rightSidebar.review.branch.warningTitle')}
+          desc={branchWarningText(blockingWarning, t)}
+          actionLabel={t('rightSidebar.review.refresh')}
+          onAction={onRefreshDiff}
+        />
       ) : diffs.length === 0 && rawDiffCount > 0 ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.filterEmptyTitle')} desc={t('rightSidebar.review.filterEmptyDesc')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.filterEmptyTitle')}
+          desc={t('rightSidebar.review.filterEmptyDesc')}
+        />
       ) : diffs.length === 0 ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.branch.emptyTitle')} desc={t('rightSidebar.review.branch.emptyDesc')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.branch.emptyTitle')}
+          desc={t('rightSidebar.review.branch.emptyDesc')}
+        />
       ) : (
         <DiffList
           diffs={diffs}
@@ -3610,13 +4108,13 @@ function BranchSourceView({
           onToggleDiff={onToggleDiff}
           onRefresh={onRefresh}
           refreshPending={refreshPending}
-          branchBaseControl={(
+          branchBaseControl={
             <BranchBaseDropdown
               candidates={candidates}
               selectedBaseRef={selectedBaseRef}
               onSelectBase={onSelectBase}
             />
-          )}
+          }
           topNotice={warning && !blockingWarning ? branchWarningText(warning, t) : null}
           viewMode={viewMode}
           onViewModeChange={onViewModeChange}
@@ -3645,7 +4143,8 @@ export function BranchBaseDropdown({
   onSelectBase: (baseRef: string) => void;
 }) {
   const { t } = useTranslation();
-  const selected = candidates.find((candidate) => candidate.refName === selectedBaseRef) ?? candidates[0] ?? null;
+  const selected =
+    candidates.find((candidate) => candidate.refName === selectedBaseRef) ?? candidates[0] ?? null;
   const label = selected?.shortName ?? t('rightSidebar.review.branch.basePlaceholder');
   const tooltip = selected
     ? t('rightSidebar.review.branch.baseTooltip', { base: selected.refName })
@@ -3695,14 +4194,20 @@ export function BranchBaseDropdown({
   );
 }
 
-function branchWarningText(warning: ReviewBranchDiffWarning, t: (key: string, opts?: Record<string, unknown>) => string): string {
+function branchWarningText(
+  warning: ReviewBranchDiffWarning,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
   switch (warning.code) {
     case 'base-missing':
       return t('rightSidebar.review.branch.baseMissing', { base: warning.requestedBaseRef ?? '' });
     case 'merge-base-missing':
       return t('rightSidebar.review.branch.mergeBaseMissing');
     case 'too-many-files':
-      return t('rightSidebar.review.branch.tooManyFiles', { count: warning.fileCount ?? 0, limit: warning.limit ?? 0 });
+      return t('rightSidebar.review.branch.tooManyFiles', {
+        count: warning.fileCount ?? 0,
+        limit: warning.limit ?? 0,
+      });
     case 'unborn':
       return t('rightSidebar.review.branch.unborn');
     case 'no-base-candidates':
@@ -3784,7 +4289,13 @@ function ActionButton({
   if (!iconOnly && (!disabled || !disabledTooltip)) return button;
   return (
     <Tip text={disabled && disabledTooltip ? disabledTooltip : label}>
-      <span className={cn('inline-flex', className?.includes('w-full') && 'w-full', className?.includes('flex-1') && 'flex-1')}>
+      <span
+        className={cn(
+          'inline-flex',
+          className?.includes('w-full') && 'w-full',
+          className?.includes('flex-1') && 'flex-1',
+        )}
+      >
         {button}
       </span>
     </Tip>
@@ -3840,16 +4351,24 @@ function StagedSourceView({
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   hunkActionsEnabled: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
   const filteredEmpty = diffs.length === 0 && stagedCount > 0;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {filteredEmpty ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.filterEmptyTitle')} desc={t('rightSidebar.review.filterEmptyDesc')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.filterEmptyTitle')}
+          desc={t('rightSidebar.review.filterEmptyDesc')}
+        />
       ) : diffs.length === 0 ? (
-        <CenteredState icon={<FileDiffIcon size={24} />} title={t('rightSidebar.review.stagedEmptyTitle')} desc={t('rightSidebar.review.stagedEmptyDesc')} />
+        <CenteredState
+          icon={<FileDiffIcon size={24} />}
+          title={t('rightSidebar.review.stagedEmptyTitle')}
+          desc={t('rightSidebar.review.stagedEmptyDesc')}
+        />
       ) : (
         <DiffList
           diffs={diffs}
@@ -3911,7 +4430,7 @@ function FileRow({
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onImagePreviewLoad: () => void;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
   const fileName = basename(diff.path);
@@ -3919,36 +4438,53 @@ function FileRow({
   const canDiscard = writeAction?.discardForDiff?.(diff) ?? false;
   const filePending = action ? writeAction?.pendingKey === `${action}:file:${diff.id}` : false;
   const discardFilePending = writeAction?.pendingKey === `discard:file:${diff.id}`;
-  const hasFileActions = Boolean(writeAction && ((canDiscard && writeAction.onFileDiscard) || action));
+  const hasFileActions = Boolean(
+    writeAction && ((canDiscard && writeAction.onFileDiscard) || action),
+  );
   const fileActionsPending = Boolean(filePending || discardFilePending);
   const hunkActionsEnabled = writeAction?.hunkActionsEnabled ?? true;
   const canPartial = hunkActionsEnabled && partialAllowed(diff);
   const showRenamePartialNotice = Boolean(hunkActionsEnabled && action && isRenameLikeDiff(diff));
-  const showTypechangePartialNotice = Boolean(hunkActionsEnabled && action && isTypechangeLikeDiff(diff));
-  const showsPathTransition = Boolean(diff.oldPath && (diff.status === 'renamed' || diff.status === 'copied'));
+  const showTypechangePartialNotice = Boolean(
+    hunkActionsEnabled && action && isTypechangeLikeDiff(diff),
+  );
+  const showsPathTransition = Boolean(
+    diff.oldPath && (diff.status === 'renamed' || diff.status === 'copied'),
+  );
   const richMarkdownEligibility = getRichMarkdownPreviewEligibility(diff, richMarkdownPreview);
-  const changeChip = diff.status === 'renamed'
-    ? t('rightSidebar.review.changeStatus.renamed')
-    : diff.status === 'copied'
-      ? t('rightSidebar.review.changeStatus.copied')
-      : null;
+  const changeChip =
+    diff.status === 'renamed'
+      ? t('rightSidebar.review.changeStatus.renamed')
+      : diff.status === 'copied'
+        ? t('rightSidebar.review.changeStatus.copied')
+        : null;
   const hunkActions = [
-    ...(writeAction && canDiscard && canPartial && writeAction.onHunkDiscard ? [{
-      label: t('rightSidebar.review.actions.discardHunk'),
-      disabled: !writeAction.canWrite,
-      disabledTooltip: !writeAction.canWrite ? writeAction.disabledTooltip : undefined,
-      isPending: (hunkIndex: number) => writeAction.pendingKey === `discard:hunk:${diff.id}:${hunkIndex}`,
-      onClick: (hunkIndex: number) => writeAction.onHunkDiscard?.(diff, hunkIndex),
-      icon: 'revert' as const,
-    }] : []),
-    ...(writeAction && action && canPartial ? [{
-      label: hunkActionLabel(action, t),
-      disabled: !writeAction.canWrite,
-      disabledTooltip: !writeAction.canWrite ? writeAction.disabledTooltip : undefined,
-      isPending: (hunkIndex: number) => writeAction.pendingKey === `${action}:hunk:${diff.id}:${hunkIndex}`,
-      onClick: (hunkIndex: number) => writeAction.onHunkAction(diff, hunkIndex),
-      icon: action === 'stage' ? 'plus' as const : 'minus' as const,
-    }] : []),
+    ...(writeAction && canDiscard && canPartial && writeAction.onHunkDiscard
+      ? [
+          {
+            label: t('rightSidebar.review.actions.discardHunk'),
+            disabled: !writeAction.canWrite,
+            disabledTooltip: !writeAction.canWrite ? writeAction.disabledTooltip : undefined,
+            isPending: (hunkIndex: number) =>
+              writeAction.pendingKey === `discard:hunk:${diff.id}:${hunkIndex}`,
+            onClick: (hunkIndex: number) => writeAction.onHunkDiscard?.(diff, hunkIndex),
+            icon: 'revert' as const,
+          },
+        ]
+      : []),
+    ...(writeAction && action && canPartial
+      ? [
+          {
+            label: hunkActionLabel(action, t),
+            disabled: !writeAction.canWrite,
+            disabledTooltip: !writeAction.canWrite ? writeAction.disabledTooltip : undefined,
+            isPending: (hunkIndex: number) =>
+              writeAction.pendingKey === `${action}:hunk:${diff.id}:${hunkIndex}`,
+            onClick: (hunkIndex: number) => writeAction.onHunkAction(diff, hunkIndex),
+            icon: action === 'stage' ? ('plus' as const) : ('minus' as const),
+          },
+        ]
+      : []),
   ];
   const plainDiffBody = (
     <PlainUnifiedDiff
@@ -3969,10 +4505,12 @@ function FileRow({
       data-review-file-id={diff.id}
       className="group/file min-w-0 border-b border-[var(--border-default)]"
     >
-      <div className={cn(
-        'relative flex w-full items-center gap-2 px-3 py-2 hover:bg-[var(--surface-hover)]',
-        hasFileActions && 'pr-20',
-      )}>
+      <div
+        className={cn(
+          'relative flex w-full items-center gap-2 px-3 py-2 hover:bg-[var(--surface-hover)]',
+          hasFileActions && 'pr-20',
+        )}
+      >
         <button
           type="button"
           onClick={onToggle}
@@ -3985,7 +4523,9 @@ function FileRow({
             <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" />
           )}
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-13 font-medium text-[var(--text-primary)]">{fileName}</span>
+            <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
+              {fileName}
+            </span>
             <span className="block truncate text-10 text-[var(--text-tertiary)]">
               {showsPathTransition ? (
                 <>
@@ -3993,7 +4533,9 @@ function FileRow({
                   <span className="px-1">→</span>
                   <span>{diff.path}</span>
                 </>
-              ) : diff.path}
+              ) : (
+                diff.path
+              )}
             </span>
           </span>
         </button>
@@ -4063,7 +4605,9 @@ function FileRow({
               fallback={plainDiffBody}
               onPreviewSettled={onImagePreviewLoad}
             />
-          ) : plainDiffBody}
+          ) : (
+            plainDiffBody
+          )}
         </div>
       )}
     </div>

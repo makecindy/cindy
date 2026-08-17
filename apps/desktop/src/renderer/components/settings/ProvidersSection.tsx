@@ -38,6 +38,7 @@ import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useApiKey } from '@/hooks/useApiKey';
+import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -1494,9 +1495,10 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
       aria-current={selected}
       className={cn(
         'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
-        !selected && 'hover:bg-[var(--surface-hover)]',
+        selected
+          ? 'bg-[var(--settings-menu-bg-selected)]'
+          : 'hover:bg-[var(--settings-menu-bg-hover)]',
       )}
-      style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
@@ -1554,9 +1556,10 @@ function ListRow({
     <div
       className={cn(
         'relative flex w-full items-center rounded-lg text-left transition-colors',
-        !selected && 'hover:bg-[var(--surface-hover)]',
+        selected
+          ? 'bg-[var(--settings-menu-bg-selected)]'
+          : 'hover:bg-[var(--settings-menu-bg-hover)]',
       )}
-      style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       {sortable && (
         <button
@@ -1662,7 +1665,7 @@ function SuggestionRow({
           : 'settings.providers.detect.hintInstalled',
         { cli: cliName },
       )}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
     >
       <div
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg opacity-70"
@@ -1726,6 +1729,7 @@ export function ProvidersSection() {
   const [dialog, setDialog] = useState<
     null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
   >(null);
+  const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
   const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
@@ -2085,8 +2089,16 @@ export function ProvidersSection() {
         await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
         toast.success(t('settings.providers.models.refreshDone'));
         refetch();
-      } catch {
-        toast.error(t('settings.providers.models.refreshFailed'));
+      } catch (err) {
+        // 目录拉取被禁用(XDT_DISABLE_MODELS_FETCH)时 main 根本没
+        // 发起请求——这是预期内的跳过,用 info 如实提示,不和真实网络失败
+        // 混为一谈地报「刷新失败,请稍后再试」。
+        const ipcError = extractIpcError(err);
+        if (ipcError?.code === 'MODEL_CATALOG_FETCH_DISABLED') {
+          toast.info(t('settings.providers.models.refreshFetchDisabled'));
+        } else {
+          toast.error(t('settings.providers.models.refreshFailed'));
+        }
       } finally {
         finishProviderRefresh(p.id);
       }
@@ -2242,6 +2254,7 @@ export function ProvidersSection() {
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
               <button
+                ref={addProviderButtonRef}
                 type="button"
                 onClick={() => setWizard({})}
                 className="flex h-9 w-full items-center justify-center gap-1.5 rounded-full border border-dashed text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
@@ -2465,6 +2478,7 @@ export function ProvidersSection() {
         <CustomProviderDialog
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           existingIds={providers.map((p) => p.id)}
+          returnFocusRef={dialog.mode === 'create' ? addProviderButtonRef : undefined}
           onClose={() => setDialog(null)}
           onSaved={() => {
             setDialog(null);

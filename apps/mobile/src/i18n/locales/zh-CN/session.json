@@ -210,6 +210,8 @@
     "workingDir": "工作目录",
     "aiRenameUnsupported": "被控设备版本过旧，暂不支持自动起名。",
     "aiRenameOffline": "被控设备不在线，稍后再试。",
+    "aiRenameNoMaterial": "任务中还没有可用于命名的消息，请先发送消息。",
+    "aiRenameProviderUnsupported": "当前供应商暂不支持自动起名，请切换供应商后再试。",
     "aiRenameFailed": "自动起名失败，请重试。",
     "contextUsageSummary": "上下文 {{percent}}%",
     "copied": "已复制",

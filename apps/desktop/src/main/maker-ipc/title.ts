@@ -11,7 +11,7 @@
  * regenerate-title:重命名输入框的 Magic 按钮入口——素材来自 main 直读 DB 的
  * 「对话开场 + 最近几轮消息」(与 sessionTaskSummary 同一套 /clear、rewind
  * 可见性口径):开场锚定会话主题,最近窗口反映当前进展,避免只看最后一轮时
- * 被"继续""好的"这类短追问带偏。失败统一返 null,由 renderer 提示。
+ * 被"继续""好的"这类短追问带偏。预期失败用 IPC 错误码区分,由 renderer 场景化提示。
  */
 
 import { ipcMain } from 'electron';
@@ -25,7 +25,11 @@ import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { generateTitleViaProvider } from '../maker-host/title-one-shot.js';
+import {
+  generateTitleViaProvider,
+  generateTitleViaProviderResult,
+  type TitleOneShotResult,
+} from '../maker-host/title-one-shot.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import {
   regenerateTitleMaterial,
@@ -35,6 +39,7 @@ import { createLogger } from '../logger.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { buildAutoTitlePrompt, buildRegenerateTitlePrompt } from './title-prompt.js';
 
@@ -134,16 +139,16 @@ export interface RegenerateTitleDeps {
     sessionId: string,
     agentKind: AgentKind,
     prompt: string,
-  ) => Promise<string | null>;
+  ) => Promise<TitleOneShotResult>;
 }
 
 async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
   const [row] = await getDbClient()
-    .drizzle.select({ agentKind: sessions.agentKind })
+    .drizzle.select({ agentKind: sessions.agentKind, status: sessions.status })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  if (!row) return null;
+  if (!row || row.status === 'deleted') return null;
   return dbToMakerAgentKind(row.agentKind);
 }
 
@@ -151,7 +156,7 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
   readSessionAgentKind: readSessionAgentKindFromDb,
   collectMaterial: regenerateTitleMaterial,
   generateTitle: (sessionId, agentKind, prompt) =>
-    generateTitleViaProvider(
+    generateTitleViaProviderResult(
       { sessionId, agentKind, prompt },
       {
         readSessionProviderId: readSessionProviderIdFromDb,
@@ -162,24 +167,36 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
 
 /**
  * 按会话「开场 + 最近对话」重新起标题(重命名输入框 Magic 按钮)。
- * 会话不存在 / 没有任何对话素材 / 生成失败统一返回 null,不抛——renderer 据 null 提示重试。
+ * 预期失败走统一 IPC 错误码，让本机与 device-link 控制端都能展示场景化提示。
  */
 export async function regenerateMakerSessionTitle(
   sessionId: string,
   deps: RegenerateTitleDeps = defaultRegenerateDeps,
   latestTurnIsInFlight: boolean | (() => boolean) = false,
-): Promise<string | null> {
-  if (!sessionId) return null;
+): Promise<string> {
+  if (!sessionId) throwIpcError('INVALID_PARAMS', 'sessionId is required');
   try {
     const { recent, opening } = await deps.collectMaterial(
       sessionId,
       REGENERATE_RECENT_WINDOW,
       latestTurnIsInFlight,
     );
-    // 空会话(草稿)没有素材,起不出有意义的标题
-    if (recent.length === 0) return null;
     const agentKind = await deps.readSessionAgentKind(sessionId);
-    if (!agentKind) return null;
+    if (!agentKind) {
+      log.info('regenerate session title skipped', {
+        sessionId,
+        reason: 'session-not-found',
+      });
+      throwIpcError('NOT_FOUND', 'Session not found');
+    }
+    // 空会话(草稿)没有素材,起不出有意义的标题
+    if (recent.length === 0) {
+      log.info('regenerate session title skipped', {
+        sessionId,
+        reason: 'no-material',
+      });
+      throwIpcError('TITLE_NO_MATERIAL', 'No text messages are available for AI naming');
+    }
     // 最近窗口已经覆盖到会话开头时,开场消息就在 transcript 里,不再单独给出。
     // 用 rowid 成员判断做精确判定——时间戳启发式在同毫秒批量落库(开场行被
     // 同时间戳的后续行挤出窗口)或 createdAt 为 null 时都会误判,review 已两次指出。
@@ -198,16 +215,38 @@ export async function regenerateMakerSessionTitle(
       agentKind,
       buildRegenerateTitlePrompt(openingText, transcript, getResolvedMainLocale()),
     );
+    if (generated.status !== 'ok') {
+      const context = { sessionId, agentKind, reason: generated.status };
+      if (generated.status === 'unsupported-provider') {
+        log.info('regenerate session title skipped', context);
+        throwIpcError(
+          'TITLE_PROVIDER_UNSUPPORTED',
+          'The current provider does not support AI naming',
+        );
+      }
+      log.warn('regenerate session title generation failed', context);
+      throwIpcError('INTERNAL', 'AI title generation failed');
+    }
     // Regenerate has a stricter product contract than the shared auto-title path:
     // one line, ≤20 Unicode characters, and no transcript/meta wrapper. The model is
     // not trusted to enforce this by prompt alone.
-    return validateTitleOutput(generated, 20);
+    const title = validateTitleOutput(generated.title, 20);
+    if (!title) {
+      log.warn('regenerate session title rejected model output', {
+        sessionId,
+        agentKind,
+        reason: 'invalid-output',
+      });
+      throwIpcError('INTERNAL', 'AI title generation failed');
+    }
+    return title;
   } catch (err) {
-    log.warn('regenerate session title failed (swallowed)', {
+    if (isIpcError(err)) throw err;
+    log.warn('regenerate session title failed', {
       sessionId,
       error: String(err),
     });
-    return null;
+    throwIpcError('INTERNAL', 'AI title generation failed');
   }
 }
 

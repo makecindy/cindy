@@ -392,6 +392,8 @@ export interface AgentInputCoordinatorDeps {
   onUserMessagePersisting?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /** Called after the durable user row exists; ownership of staged attachments may be released. */
   onUserMessagePersisted?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  /** Called only after the durable row also survives the current clear/rewind generation. */
+  onUserMessageQueryable?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * Called when the user-row write failed. A queued turn remains retryable;
    * an accepted steer does not, because replay could duplicate model input.
@@ -1373,8 +1375,8 @@ export class AgentInputCoordinator {
     //  - UI 续跑(「继续」按钮,sendUiTrigger):等价 retryLastError——清 recovery
     //    重发队首 A(原样重发是既有 retryLastError 对 queue-head 的语义),合成
     //    continue 项不入队,避免 A 与 continue 双发。
-    // 自动来源(scheduler / orca)与 resume(继续队列)维持既有「不清」语义:
-    // 自动化项不代表用户表态,resume 是机械放行,显式点重试/删除仍是唯一出路。
+    // 自动来源(scheduler / orca)不代表用户表态,维持「不清」语义。暂停队列的
+    // Continue 则由 resume 原子清除与当前队首匹配的 recovery 后重发原消息。
     if (state.recovery?.kind === 'queue-head' && !automaticOrigin) {
       const abandonedClientId = state.recovery.clientId;
       if (isUiContinuationItem(item)) {
@@ -2099,9 +2101,27 @@ export class AgentInputCoordinator {
 
   resume(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
+    const recovery = state.recovery;
+    const pausedQueueHeadRecoveryClientId =
+      state.queuePaused &&
+      recovery?.kind === 'queue-head' &&
+      state.pendingQueue[0]?.clientId === recovery.clientId
+        ? recovery.clientId
+        : null;
     state.queuePaused = false;
     state.queuePausedByRestore = false;
-    this.clearErrorUnlessQueueHeadBlocked(state);
+    if (pausedQueueHeadRecoveryClientId !== null) {
+      state.error = null;
+      state.stickyError = null;
+      state.recovery = null;
+      log.info('paused queue resume resets queue-head recovery', {
+        sessionId,
+        clientId: pausedQueueHeadRecoveryClientId,
+      });
+      this.touchUserSend(sessionId);
+    } else {
+      this.clearErrorUnlessQueueHeadBlocked(state);
+    }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'resume');
     this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'resume');
@@ -2847,6 +2867,9 @@ export class AgentInputCoordinator {
 
   /**
    * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。
+   * @param opts.preserveAutoResumeIntent 为 true 时保留当前自动续跑接管态。
+   *   仅用于 provider rebuild 在退避 timer 触发前关闭旧 Session 的交棒窗口；
+   *   active turn / steer / drain 等旧实例运行态仍照常清理。
    *   用于 rehydrate / 凭证切换 close-rebuild 窗口:abort 会取消驱动本次重建的
    *   input signal(#1930),但**其余清理必须照常**(activeTurn / steer / queue
    *   状态不能残留,否则 rebuild 失败或 close 后不 rebuild 时 coordinator
@@ -2854,10 +2877,12 @@ export class AgentInputCoordinator {
    */
   onSessionClosed(
     sessionId: string,
-    opts?: { preserveInputBoundary?: boolean },
+    opts?: { preserveInputBoundary?: boolean; preserveAutoResumeIntent?: boolean },
   ): void {
     const state = this.getState(sessionId);
-    this.supersedePendingAutoResumeRecoveries(sessionId);
+    if (!opts?.preserveAutoResumeIntent) {
+      this.supersedePendingAutoResumeRecoveries(sessionId);
+    }
     const releasedAbortLock = state.queueAbortPending;
     this.cancelScheduledDrain(state);
     this.clearAbortReconcileRetry(state);
@@ -3051,26 +3076,37 @@ export class AgentInputCoordinator {
     return state.activeTurn !== null || this.deps.isTurnRunning(sessionId);
   }
 
+  /**
+   * 队首为何不可派发 —— getDrainableHead 的解释版,两者共用同一份 gate 序列
+   * (#2506 wake/drain 可观测性:此前 drain 被 gate 挡住时零日志,排队输入
+   * 静默滞留后无从定位断点)。返回 null = 队首可派发。
+   */
+  private explainDrainBlockGate(sessionId: string, state: SessionInputState): string | null {
+    if (this.queueRestorePromises.has(sessionId)) return 'queue-restore-in-progress';
+    if (this.restoreAttempted.has(sessionId) && !this.restoredQueueSessions.has(sessionId))
+      return 'queue-restore-failed';
+    if (state.pendingQueue.length === 0) return 'queue-empty';
+    if (state.queuePaused)
+      return state.queuePausedByRestore ? 'queue-paused-by-restore' : 'queue-paused';
+    if (state.queueAbortPending) return 'abort-pending';
+    if (state.queueInteractionLocks.length > 0) return 'interaction-lock';
+    if (state.steeringQueueClientIds.length > 0) return 'steering-in-flight';
+    if (state.recovery) return 'recovery-pending';
+    if (this.deps.hasPendingCredentialSwitch?.(sessionId)) return 'credential-switch-gate';
+    if (this.isDispatchBoundaryBusy(sessionId, state)) return 'dispatch-boundary-busy';
+    const head = state.pendingQueue[0];
+    if (!head) return 'queue-empty';
+    if (this.getDrainableCompact(sessionId, state)) return 'compact-first';
+    if (state.queueEditLocks.includes(head.clientId)) return 'edit-lock';
+    return null;
+  }
+
   private getDrainableHead(
     sessionId: string,
     state: SessionInputState,
   ): AgentInputQueuedMessage | null {
-    if (this.queueRestorePromises.has(sessionId)) return null;
-    if (this.restoreAttempted.has(sessionId) && !this.restoredQueueSessions.has(sessionId))
-      return null;
-    if (state.pendingQueue.length === 0) return null;
-    if (state.queuePaused) return null;
-    if (state.queueAbortPending) return null;
-    if (state.queueInteractionLocks.length > 0) return null;
-    if (state.steeringQueueClientIds.length > 0) return null;
-    if (state.recovery) return null;
-    if (this.deps.hasPendingCredentialSwitch?.(sessionId)) return null;
-    if (this.isDispatchBoundaryBusy(sessionId, state)) return null;
-    const head = state.pendingQueue[0];
-    if (!head) return null;
-    if (this.getDrainableCompact(sessionId, state)) return null;
-    if (state.queueEditLocks.includes(head.clientId)) return null;
-    return head;
+    if (this.explainDrainBlockGate(sessionId, state) !== null) return null;
+    return state.pendingQueue[0] ?? null;
   }
 
   private getDrainableCompact(
@@ -3124,6 +3160,32 @@ export class AgentInputCoordinator {
     }
     const head = this.getDrainableHead(sessionId, state);
     if (!head) {
+      // #2506 结果级诊断:排队输入被 gate 挡住时留痕(此前零日志,gate-clear
+      // 到成功 drain 之间的静默滞留无从定位)。只记 id / 布尔 / 枚举,不记正文;
+      // 空队列的例行 drain 不记,避免每次 turn-done 都产生噪音。
+      // 级别按 gate 分层(Codex review):turn 运行中排队、恢复暂停、交互锁等
+      // 都是**正常态**,每次 drain 尝试都会进这里 —— packaged 默认 info,记
+      // info 会让普通排队持续刷日志、淹没真正的异常断点,复现期排障走 DEBUG
+      // (工程规范)。只有 queue-restore-failed(快照恢复确已失败,队列滞留到
+      // 人工介入,非瞬态)保留 info 常驻观测。
+      const gate = this.explainDrainBlockGate(sessionId, state);
+      if (gate !== null && gate !== 'queue-empty') {
+        const logAt = gate === 'queue-restore-failed' ? log.info : log.debug;
+        logAt('drain blocked', {
+          sessionId,
+          reason,
+          gate,
+          queueLength: state.pendingQueue.length,
+          headClientId: state.pendingQueue[0]?.clientId ?? null,
+          queuePaused: state.queuePaused,
+          queuePausedByRestore: state.queuePausedByRestore,
+          queueRestoreInProgress: this.queueRestorePromises.has(sessionId),
+          recoveryKind: state.recovery?.kind ?? null,
+          hasActiveTurn: state.activeTurn !== null,
+          turnRunning: this.deps.isTurnRunning(sessionId),
+          credentialSwitchGate: this.deps.hasPendingCredentialSwitch?.(sessionId) === true,
+        });
+      }
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
@@ -3258,6 +3320,7 @@ export class AgentInputCoordinator {
                 active.persisted = true;
                 active.persisting = false;
                 active.dispatchLifecycle = 'awaiting-dispatch-hooks';
+                this.notifyUserMessageQueryable(sessionId, head);
                 // 跨过 DB 持久化边界即刻收窄快照:此后崩溃属 interrupted-turn
                 // 辖区,若等到下一次 emit(turn done)才写,长 turn 内崩溃会把
                 // 已送达的消息二次恢复(issue #761)。
@@ -3382,6 +3445,7 @@ export class AgentInputCoordinator {
       }
       latest.error = errorMessage(err);
       latest.stickyError = null;
+      const piImageCapabilityRejected = isPiImageInputUnsupportedError(err);
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
       const schedulerOrigin = this.setActiveTurnRecovery(latest, head) === 'dropped-scheduler';
@@ -3391,6 +3455,10 @@ export class AgentInputCoordinator {
         // (用户 Retry / clearError)—— 现在没有了,不主动清就等于把会话永久钉在"有活跃
         // turn":之后所有用户与调度消息全部积压到 coordinator 被重置
         // (review #944 第十轮 P1)。
+        latest.activeTurn = null;
+      } else if (piImageCapabilityRejected) {
+        // Pi 图片能力拒绝发生在 vendor RPC 之前，不会再有 terminal event 来释放 activeTurn；
+        // 已持久化的用户行仍保留 active-turn recovery，供用户切换到视觉模型后重试。
         latest.activeTurn = null;
       }
       this.notifyRejectedUserTurn(sessionId, head);
@@ -4550,6 +4618,18 @@ export class AgentInputCoordinator {
     }
   }
 
+  private notifyUserMessageQueryable(sessionId: string, item: AgentInputQueuedMessage): void {
+    try {
+      this.deps.onUserMessageQueryable?.(sessionId, item);
+    } catch (err) {
+      log.warn('onUserMessageQueryable failed', {
+        sessionId,
+        clientId: item.clientId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
   private notifyUserMessagePersisting(sessionId: string, item: AgentInputQueuedMessage): void {
     try {
       this.deps.onUserMessagePersisting?.(sessionId, item);
@@ -4655,6 +4735,7 @@ export class AgentInputCoordinator {
       if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
       active.persisted = true;
       active.persisting = false;
+      this.notifyUserMessageQueryable(sessionId, item);
       // 同 drain onPersisted:steer 消息落库后立即收窄快照,避免长 turn 内崩溃二次恢复。
       this.maybePersistQueueSnapshot(sessionId);
       this.settlePendingTerminalEventAfterPersist(sessionId, active);

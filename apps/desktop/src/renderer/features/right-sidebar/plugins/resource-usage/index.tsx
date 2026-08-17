@@ -1,20 +1,19 @@
 /**
- * resource-usage plugin —— 右栏「资源用量」页签(本机进程 CPU / 内存快照)。
+ * resource-usage —— 本机进程 CPU / 内存快照视图。
  *
- * 约束:
- *  - 每会话单例(singleton),进「+」菜单;数据是全局的(本机进程),不随
- *    session 变化 —— 单例只是避免同一会话开一堆重复面板。SSH 任务不订阅
- *    本机数据,以明确不可用态避免把控制端进程误认为远端任务进程。
- *  - 无持久化状态(纯实时视图,重启后从头采样即可)。
- *  - 注册:模块顶层 import-side-effect,由 plugins/index.ts 汇总。
+ * 新入口由独立的资源用量 BrowserWindow 承载；这里继续注册隐藏的兼容
+ * plugin，让数据库中已持久化的旧页签仍可原位恢复和关闭，但不再允许新建。
  */
 
+import { lazy } from 'react';
 import { Activity } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { ResourceUsageBody } from './ResourceUsageBody';
+const ResourceUsageBody = lazy(() =>
+  import('./ResourceUsageBody').then((module) => ({ default: module.ResourceUsageBody })),
+);
 
 export type ResourceUsageState = Record<never, never>;
 
@@ -32,8 +31,9 @@ const plugin: TabKindPlugin<ResourceUsageState> = {
     kind: 'resource-usage',
     labelKey: 'rightSidebar.tabs.kinds.resourceUsage',
     icon: Activity,
-    order: 18, // background-tasks=17 与 web-browser=20 之间
+    order: 18,
     enabled: true,
+    hiddenFromMenu: true,
     singleton: true,
   },
   TabPillTitle: ResourceUsageTabPillTitle,

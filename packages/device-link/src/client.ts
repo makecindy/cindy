@@ -831,7 +831,7 @@ export class DeviceLinkClient {
   /**
    * 请求 server 给本账号已注册推送 token 的移动设备发系统推送(fire-and-forget)。
    * 返回是否真的发出:离线或 server 未声明 notify capability 时静默跳过返回 false
-   * (旧 server 对未知 kind 是静默黑洞,capability gate 是协议要求,见协议仓文档)。
+   * (旧 server 对未知 kind 是静默黑洞，capability gate 是本地协议包的兼容要求)。
    * 失败(RATE_LIMITED / BAD_REQUEST)由 relay-error 帧回报,经 onFrame 交 host 记日志。
    */
   sendNotify(payload: NotifyPayload): boolean {

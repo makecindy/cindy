@@ -8,7 +8,6 @@
 import type { AgentKind, CustomProviderConfig } from '@cindy/model-providers';
 
 import {
-  readCustomProviderHeaders,
   readCustomProviderHeadersForMutation,
   removeCustomProviderHeaders,
   storeCustomProviderHeaders,
@@ -57,9 +56,13 @@ export function hydrateCustomProviderHeaders(
   for (const agent of CUSTOM_PROVIDER_RUNTIME_AGENTS) {
     const runtime = runtimes[agent];
     if (!runtime) continue;
-    const headers = readCustomProviderHeaders(config.id, agent);
-    if (headers && Object.keys(headers).length > 0) {
-      runtimes[agent] = { ...runtime, headers };
+    try {
+      const headers = readCustomProviderHeadersForMutation(config.id, agent);
+      if (headers && Object.keys(headers).length > 0) {
+        runtimes[agent] = { ...runtime, headers, headersState: 'configured' };
+      }
+    } catch {
+      runtimes[agent] = { ...runtime, headersState: 'unknown' };
     }
   }
   return { ...config, runtimes };

@@ -18,6 +18,7 @@
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import fs from 'node:fs';
 import path from 'node:path';
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
 
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
@@ -34,6 +35,8 @@ import type {
   ListCustomizationsResult,
 } from './types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
+import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
+import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
@@ -104,12 +107,23 @@ export interface MakerDeps {
    * (即跟改造前行为一致, native auto-memory 走自家)。
    */
   makerMemory?: MakerMemoryManager;
+  /**
+   * 可选: 视觉桥钩子（层 B）的全局默认。host 创建 Maker 时注入一次，所有
+   * createSession 自动带上；单个 createSession 的 visionBridge 优先。缺省不注入 =
+   * 零干扰（见 docs/vision-bridge-design.md 层 B）。
+   */
+  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
   agentKind: AgentKind;
   /** 可选：UI 显示用 */
   title?: string;
+  /**
+   * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在把用户贴图交给 agent 前
+   * 用视觉模型转成文字描述（见 docs/vision-bridge-design.md 层 B）。缺省不注入 = 零干扰。
+   */
+  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /** 可选：父会话 id，用于 fork / orchestration 等会话关系。 */
   parentSessionId?: string;
   /**
@@ -159,40 +173,112 @@ function canonicalPiRuntimePath(value: string): string {
   }
 }
 
-function mergePiRuntimeSkillStatuses(
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 250;
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET = 2_048;
+
+async function fingerprintPiProjectSkillForPalette(
+  sourcePath: string,
+  canonicalRepoRoot: string,
+  budget: { remainingEntries: number; deadlineAtMs: number },
+): ReturnType<typeof fingerprintPiProjectSkillEntrypoint> {
+  const remainingMs = budget.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) return null;
+  let timeout: number | NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      fingerprintPiProjectSkillEntrypoint(sourcePath, canonicalRepoRoot, { budget }),
+      new Promise<null>((resolve) => {
+        timeout = setNodeTimeout(() => resolve(null), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearNodeTimeout(timeout);
+  }
+}
+
+async function mergePiRuntimeSkillStatuses(
   result: ListAgentSkillsResult,
   manifest: PiRuntimeCapabilityManifest | undefined,
-): ListAgentSkillsResult {
+): Promise<ListAgentSkillsResult> {
   if (manifest?.status !== 'loaded') return result;
-  const loadedProjectSkills = new Map(
-    manifest.commands.flatMap((command) => {
-      const baseDir = command.sourceInfo.baseDir;
-      if (
-        command.source !== 'skill'
-        || command.sourceInfo.scope !== 'project'
-        || typeof baseDir !== 'string'
-        || !command.name.startsWith('skill:')
-      ) return [];
-      return [[[
-        command.name.slice('skill:'.length),
-        canonicalPiRuntimePath(baseDir),
-      ].join('\0'), command.name] as const];
-    }),
-  );
-  if (loadedProjectSkills.size === 0) return result;
+  const loadedExplicitSkills = new Map<string, string>();
+  const loadedLegacyProjectSkills = new Map<string, string>();
+  const changedProjectSkills = new Map<string, string>();
+  const fingerprintBudget = {
+    remainingEntries: PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET,
+    deadlineAtMs: Date.now() + PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS,
+  };
+  for (const skill of manifest.projectResources?.loadedSkills ?? []) {
+    const canonicalSourcePath = canonicalPiRuntimePath(skill.sourcePath);
+    if (!skill.snapshotDigest || !skill.sourceFingerprint || !skill.canonicalRepoRoot) {
+      changedProjectSkills.set(canonicalSourcePath, skill.sourcePath);
+      continue;
+    }
+    const currentFingerprint = await fingerprintPiProjectSkillForPalette(
+      skill.sourcePath,
+      skill.canonicalRepoRoot,
+      fingerprintBudget,
+    );
+    if (
+      currentFingerprint?.contentDigest !== skill.snapshotDigest
+      || currentFingerprint.sourceStateDigest !== skill.sourceFingerprint
+    ) {
+      changedProjectSkills.set(canonicalSourcePath, skill.sourcePath);
+      continue;
+    }
+    loadedExplicitSkills.set(canonicalSourcePath, skill.commandName);
+  }
+  for (const command of manifest.commands) {
+    const baseDir = command.sourceInfo.baseDir;
+    if (command.source !== 'skill' || !command.name.startsWith('skill:')) continue;
+    const skillName = command.name.slice('skill:'.length);
+    if (command.sourceInfo.scope === 'project' && typeof baseDir === 'string') {
+      loadedLegacyProjectSkills.set(
+        [skillName, canonicalPiRuntimePath(baseDir)].join('\0'),
+        command.name,
+      );
+      continue;
+    }
+    // Pinned Pi reports explicit --skill with a paired baseDir + SKILL.md path.
+    // The shared helper rejects partial/mismatched provenance before a
+    // user/global collision can mark a project scanner result loaded. Match
+    // explicit resources by path because frontmatter names need not equal
+    // their containing folder names.
+    const explicitPath = piExplicitSkillRuntimePath(command);
+    if (explicitPath) {
+      loadedExplicitSkills.set(canonicalPiRuntimePath(explicitPath), command.name);
+    }
+  }
+  if (
+    loadedExplicitSkills.size === 0
+    && loadedLegacyProjectSkills.size === 0
+    && changedProjectSkills.size === 0
+  ) return result;
+  const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
+    path: skillPath,
+    message: 'Project skill changed after this Pi session started; restart the session to load the current version.',
+  }));
   return {
     ...result,
     skills: result.skills.map((skill) => {
-      const runtimeCommandName = skill.scope === 'repo' && skill.path
-        ? loadedProjectSkills.get([
-          skill.name,
-          canonicalPiRuntimePath(path.dirname(path.dirname(skill.path))),
-        ].join('\0'))
-        : undefined;
+      let runtimeCommandName: string | undefined;
+      if (skill.scope === 'repo' && skill.path) {
+        const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
+        if (!changedProjectSkills.has(canonicalSkillPath)) {
+          runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath)
+            ?? [skill.path, path.dirname(path.dirname(skill.path))]
+              .map(canonicalPiRuntimePath)
+              .map((skillPath) => loadedLegacyProjectSkills.get([skill.name, skillPath].join('\0')))
+              .find((commandName) => commandName !== undefined);
+        }
+      }
       return runtimeCommandName
         ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
         : skill;
     }),
+    ...(changedSkillErrors.length > 0
+      ? { errors: [...(result.errors ?? []), ...changedSkillErrors] }
+      : {}),
   };
 }
 
@@ -254,10 +340,13 @@ export class Maker {
   private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
   public readonly makerMemory: MakerMemoryManager | undefined;
+  /** 视觉桥钩子（层 B）全局默认（可选）。见 MakerDeps.visionBridge。 */
+  protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
     this.storage = deps.storage;
+    this.visionBridge = deps.visionBridge;
     // 不 child 自己名字 — host 传进来的 logger 通常已经命名(如 'maker'),
     // 再 child 'maker' 会变成 'maker/maker'。host 自己决定 root scope 名字。
     this.logger = deps.logger;
@@ -448,7 +537,7 @@ export class Maker {
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
         onInvalidResumeSession:
-          opts.agentKind === 'claude-code'
+          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
             ? (expectedSdkSessionId) =>
                 this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
             : undefined,
@@ -516,15 +605,19 @@ export class Maker {
         });
       }
     } catch (error) {
+      // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage
+      // 写失败时, 已启动的 agent handle(PI 远端 daemon session / CC / Codex)必须
+      // close, 否则 PI 无 codexThreadClaim 时 handle 不关, 远端 pi-manager session/
+      // MCP bridge 残留成「用户看不到、Maker 管不到」的半创建状态。
+      try {
+        await handle.close();
+      } catch (closeError) {
+        this.logger.warn('failed to close agent handle after session storage failure', {
+          sessionId: id,
+          error: String(closeError),
+        });
+      }
       if (codexThreadClaim) {
-        try {
-          await handle.close();
-        } catch (closeError) {
-          this.logger.warn('failed to close Codex handle after session storage failure', {
-            sessionId: id,
-            error: String(closeError),
-          });
-        }
         codexThreadClaim.release();
       }
       throw error;
@@ -565,6 +658,8 @@ export class Maker {
       // 透传 remoteHostId 让 host 层在 hot path 上能 O(1) 判 local/remote
       // (不用每次 send 回 DB 读 SessionMeta — register.ts checkWorkDirExists 走这条)。
       remoteHostId: meta.remoteHostId ?? null,
+      // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
+      visionBridge: startOpts.visionBridge ?? this.visionBridge,
     });
 
     // 当 SDK 回填 sdkSessionId 时持久化
@@ -751,6 +846,17 @@ export class Maker {
   }
 
   /**
+   * Return the close cause for the exact runtime Session instance.
+   *
+   * A missing explicit cause means the vendor/Session closed itself. Keep this
+   * keyed by instance rather than business session id: a replacement can be
+   * created before a late close notification from the old instance arrives.
+   */
+  getSessionCloseReason(session: Session): MakerSessionCloseReason {
+    return this.closeReasons.get(session) ?? 'unexpected';
+  }
+
+  /**
    * Maker 进程级 shutdown — app.before-quit / 信号 / 崩溃 hook 调一次。
    *
    * **强制退出语义** (与 normal logout 路径不同): agent.dispose() 和 session.close()
@@ -777,6 +883,14 @@ export class Maker {
     const agentEntries = Object.entries(this.agents);
 
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
+
+    // shutdown() calls detach() directly instead of closeSession(), so record
+    // the explicit cause before any asynchronous close callback can run. This
+    // prevents app exit from looking like an unexpected provider rebuild and
+    // accidentally preserving an automatic retry lease.
+    for (const session of sessSnapshot) {
+      if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+    }
 
     // **agent.dispose 优先排队**: 微任务 ordering 不是强保证 (dispose 内部还有 await
     // hostPromise 等 hop), 但先排队意味着 SIGTERM 那一步至少不会被 session-close

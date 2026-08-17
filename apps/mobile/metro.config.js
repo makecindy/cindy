@@ -15,20 +15,11 @@ const workspaceTsSourcePackages = [
   'model-providers',
 ];
 
-// cindy-protocol submodule 里的源码直发协议包中,源码内部用**显式 .js 扩展名**的那些
-// (为满足服务端 moduleResolution: node16 的类型检查)。esbuild / Vite 会自动把
-// ./x.js 回落到 ./x.ts,Metro 不会——所以这些包也必须走下方 .js→.ts 分流。
-// 边界:只列内部用 .js 扩展名的包。device-link-protocol 用无扩展名相对导入,
-// 走 Metro 默认解析即可,不在此列。
-const protocolTsSourcePackages = [
-  'model-access-protocol',
-];
-
 config.resolver.disableHierarchicalLookup = true;
 // 关掉层级查找后,Metro 只查显式列出的 node_modules。pnpm hoisted 布局(根 .npmrc
 // node-linker=hoisted)下,workspace:* 依赖**不会**提升到根 node_modules,只链接在消费方包
 // 自己的 node_modules 下(如 packages/device-link/node_modules/@cindy/device-link-protocol →
-// cindy-protocol submodule)——不把这些目录列进来,TS 源码包引用的任何 workspace 依赖在
+// packages/device-link-protocol)——不把这些目录列进来,TS 源码包引用的任何 workspace 依赖在
 // 打 bundle 时都会 Unable to resolve(2026-07-16 iOS 冷更实踩)。
 // 追加在末尾:常规依赖仍按 app → 根的原顺序命中,行为不变,只补此前查不到的路径。
 // 边界:只覆盖这一层——若这些包的 workspace 依赖自己再新增 workspace 依赖(或新的 TS 源码包
@@ -44,7 +35,7 @@ config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
   '@cindy/device-link-protocol': path.join(
     workspaceRoot,
-    'cindy-protocol/packages/device-link-protocol',
+    'packages/device-link-protocol',
   ),
   react: path.join(appNodeModules, 'react'),
   'react-native': path.join(workspaceNodeModules, 'react-native'),
@@ -61,15 +52,8 @@ const defaultResolveRequest = config.resolver.resolveRequest;
 const rnDevToolsSettingsManager = '../../src/private/devsupport/rndevtools/ReactDevToolsSettingsManager';
 
 function isWorkspaceTsSourcePackage(originModulePath) {
-  if (workspaceTsSourcePackages.some((packageName) => (
+  return workspaceTsSourcePackages.some((packageName) => (
     originModulePath.includes(`${path.sep}packages${path.sep}${packageName}${path.sep}`)
-  ))) {
-    return true;
-  }
-  return protocolTsSourcePackages.some((packageName) => (
-    originModulePath.includes(
-      `${path.sep}cindy-protocol${path.sep}packages${path.sep}${packageName}${path.sep}`,
-    )
   ));
 }
 

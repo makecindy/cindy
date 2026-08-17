@@ -19,7 +19,8 @@
     "allowOnce": "允許一次",
     "allowOnceAccessibility": "允許一次權限請求",
     "allowOnceConfirm": "確認允許一次",
-    "highRisk": "高風險"
+    "highRisk": "高風險",
+    "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。"
   },
   "planMode": {
     "label": "計劃模式",

@@ -350,14 +350,12 @@ describe('newMakerDraft store', () => {
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
   });
 
-  it('patchVendorPrefsPreservingModelChoice:会话同步草稿默认不打显式选择标记', async () => {
+  it('patchVendorPrefsPreservingModelChoice:只改思考档不打显式选择标记', async () => {
     const m1 = await loadModule();
     m1.patchVendorPrefsPreservingModelChoice('cc', {
-      model: 'claude-opus-4-8',
       effort: 'high',
     });
 
-    expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
     expect(m1.getDraft().lastByVendor.cc.effort).toBe('high');
     expect(m1.getDraft().modelChosenByVendor).toEqual({});
     expect(m1.getPersistedVendorModel('cc')).toBe('');
@@ -367,31 +365,92 @@ describe('newMakerDraft store', () => {
     expect(m1.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
   });
 
-  it('patchVendorPrefsPreservingModelChoice:会话同步 model 会清掉旧显式选模标记', async () => {
+  it('patchVendorPrefsPreservingModelChoice:已有任务换模后只改思考档不得清掉选模标记', async () => {
     const m1 = await loadModule();
     m1.patchVendorPrefs('cc', { model: 'claude-sonnet-4-6' });
     expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
     expect(m1.getPersistedVendorModel('cc')).toBe('claude-sonnet-4-6');
 
     m1.patchVendorPrefsPreservingModelChoice('cc', {
-      model: 'claude-opus-4-8',
+      model: 'claude-sonnet-4-6',
       effort: 'high',
     });
 
-    expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
-    expect(m1.getDraft().modelChosenByVendor).toEqual({});
-    expect(m1.getPersistedVendorModel('cc')).toBe('');
+    expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-sonnet-4-6');
+    expect(m1.getDraft().lastByVendor.cc.effort).toBe('high');
+    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
+    expect(m1.getPersistedVendorModel('cc')).toBe('claude-sonnet-4-6');
   });
 
-  it('patchVendorPrefsPreservingModelChoice:会话同步同一 model 保留旧显式选模标记', async () => {
+  it('patchVendorPrefsPreservingModelChoice:可写回活动模型但不打标也不清标', async () => {
     const m1 = await loadModule();
-    m1.patchVendorPrefs('cc', { model: 'claude-opus-4-8' });
-    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
-
     m1.patchVendorPrefsPreservingModelChoice('cc', {
       model: 'claude-opus-4-8',
       effort: 'high',
     });
+    expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
+    expect(m1.getDraft().modelChosenByVendor).toEqual({});
+    expect(m1.getPersistedVendorModel('cc')).toBe('');
+
+    m1.patchVendorPrefs('cc', { model: 'claude-sonnet-4-6', effort: 'medium' });
+    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
+
+    m1.patchVendorPrefsPreservingModelChoice('cc', {
+      model: 'claude-opus-4-8',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+    expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-sonnet-4-6');
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBeNull();
+    expect(m1.getDraft().lastByVendor.cc.effort).toBe('medium');
+    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
+    expect(m1.getPersistedVendorModel('cc')).toBe('claude-sonnet-4-6');
+  });
+
+  it('patchVendorPrefsPreservingModelChoice:已打标且活动模型一致时才更新思考档', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-sonnet-4-6', effort: 'medium' });
+
+    m1.patchVendorPrefsPreservingModelChoice('cc', {
+      effort: 'high',
+    });
+    expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-sonnet-4-6');
+    expect(m1.getDraft().lastByVendor.cc.effort).toBe('high');
+    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
+  });
+
+  it('patchVendorPrefsPreservingModelChoice:未打标且不带 model 时不得改活动模型', async () => {
+    const m1 = await loadModule();
+    const seedModel = m1.getDraft().lastByVendor.cc.model;
+
+    m1.patchVendorPrefsPreservingModelChoice('cc', {
+      effort: 'high',
+    });
+
+    expect(m1.getDraft().lastByVendor.cc.model).toBe(seedModel);
+    expect(m1.getDraft().lastByVendor.cc.effort).toBe('high');
+    expect(m1.getDraft().modelChosenByVendor).toEqual({});
+    expect(m1.getPersistedVendorModel('cc')).toBe('');
+  });
+
+  it('patchVendorPrefsPreservingModelChoice:未打标时仍可写回活动模型与来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefsPreservingModelChoice('cc', {
+      model: 'claude-opus-4-8',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+    expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('anthropic');
+    expect(m1.getDraft().lastByVendor.cc.effort).toBe('high');
+    expect(m1.getDraft().modelChosenByVendor).toEqual({});
+    expect(m1.getPersistedVendorModel('cc')).toBe('');
+  });
+
+  it('已有任务换模走 patchVendorPrefs,下次新建跟随这次选择', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-sonnet-4-6' });
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-4-8', effort: 'high' });
 
     expect(m1.getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
     expect(m1.getDraft().lastByVendor.cc.effort).toBe('high');

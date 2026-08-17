@@ -1,4 +1,16 @@
 import { createLogger } from '@/lib/logger';
+import {
+  clearClaimedLegacySidebarStorage,
+  readClaimedLegacySidebarStorage,
+  readSidebarOwnerStorage,
+  writeSidebarOwnerStorage,
+} from '@/lib/sidebarOwnerStorage';
+import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
+import {
+  normalizeSidebarPinnedOrder,
+  type SidebarPinnedOrderMutation,
+  type SidebarSettingsSnapshot,
+} from '../../../../../shared/sidebarSettings';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
 const log = createLogger('SidebarFilterCore');
@@ -19,22 +31,54 @@ export const STATUS_KEY = 'cc-agent.sidebar.filter.status';
 export const PROJECTS_KEY = 'cc-agent.sidebar.filter.projects';
 export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
+export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
+export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
+export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
+/** 单一混排列表(未按设备切段)里唯一对话组的折叠状态 key。 */
+export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
 export const SORT_BY_KEY = 'cc-agent.sidebar.filter.sortBy';
+export const TASK_INFO_KEY = 'cc-agent.sidebar.filter.taskInfo';
 export const MANUAL_PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.manualProjectOrder';
 export const MANUAL_PINNED_ORDER_KEY = 'cc-agent.sidebar.pinnedSessionOrder';
 
 export type FilterStatus = 'active' | 'archived' | 'all';
-/** 'all' 字符串字面量 = 选中"全部"；string[] = 仅显示其中的 normalized workingDir。 */
+/**
+ * 项目筛选里的「对话」哨兵 = 无项目归属的任务。不是真实 projectKey,
+ * 不能走路径归一化,也不能被项目 GC 清掉。
+ */
+export const DIALOGUE_FILTER_KEY = 'dialogue';
+/** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
 /** M41: vendor filter — 'all' = 全部；'cc' = 仅 Claude；'codex' = 仅 Codex。 */
 export type FilterVendor = 'all' | 'cc' | 'codex';
-/** Sidebar 主列表分组方式。默认 project，date 用于按最近活跃日期分组。 */
-export type FilterGroupBy = 'project' | 'date';
+/**
+ * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
+ *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
+ *   - flat:   「按项目分组」关——全部平铺,行尾带项目来源标签。
+ * 旧值 'date'(按日期分组)已删除,存量值回退 'project'。
+ */
+export type FilterGroupBy = 'project' | 'flat';
 /** 最近活跃范围筛选。默认 all。 */
 export type FilterLastActivity = 'all' | '1d' | '3d' | '7d' | '30d';
-/** Sidebar 主列表排序方式。默认 recency。manual/alphabetic 只用于 Project 分组。 */
-export type FilterSortBy = 'recency' | 'time' | 'manual' | 'alphabetic';
+/** Sidebar 主列表排序方式。默认 recency(菜单文案「按时间排序」= 最近活动在前)。
+ *  manual 只用于 Project 分组;priority = 等待处理 > 运行中 > 其余按最近活动(D 期新增)。
+ *  （侧边栏重设计裁决：alphabetic 与 time(旧「最早优先」)已删除，存量值回退到
+ *  recency——时间排序只保留最近优先一档。） */
+export type FilterSortBy = 'recency' | 'manual' | 'priority';
+
+/** 切到平铺时,手动排序失去项目行载体,回落到按时间;其它档位保持。 */
+export function nextSortByAfterGroupByChange(
+  groupBy: FilterGroupBy,
+  sortBy: FilterSortBy,
+): FilterSortBy {
+  return groupBy === 'flat' && sortBy === 'manual' ? 'recency' : sortBy;
+}
+/**
+ * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
+ * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里四个选项的排列另有固定顺序。
+ */
+export type TaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -82,16 +126,8 @@ export function loadStatus(): FilterStatus {
  *   - JSON.parse 后 === 'all' 字符串
  *   - JSON.parse 后是非空字符串数组（每项均为非空 string）；空数组 → 'all'
  */
-export function loadProjects(): FilterProjects {
-  const storage = safeStorage();
-  if (!storage) return 'all';
-  let raw: string | null = null;
-  try {
-    raw = storage.getItem(PROJECTS_KEY);
-  } catch (err) {
-    log.warn('[useSidebarFilter] failed to read projects:', err);
-    return 'all';
-  }
+export function loadProjects(ownerId: string | null): FilterProjects {
+  const raw = readSidebarOwnerStorage(PROJECTS_KEY, ownerId);
   if (raw == null) return 'all';
   let parsed: unknown;
   try {
@@ -102,7 +138,7 @@ export function loadProjects(): FilterProjects {
   }
   if (parsed === 'all') return 'all';
   if (Array.isArray(parsed)) {
-    const cleaned = normalizeProjectKeyList(parsed);
+    const cleaned = normalizeFilterProjectList(parsed);
     if (cleaned.length === 0) return 'all';
     return cleaned;
   }
@@ -121,13 +157,9 @@ export function persistStatus(s: FilterStatus): void {
   }
 }
 
-export function persistProjects(p: FilterProjects): void {
-  const storage = safeStorage();
-  if (!storage) return;
-  try {
-    storage.setItem(PROJECTS_KEY, JSON.stringify(p));
-  } catch (err) {
-    log.warn('[useSidebarFilter] failed to persist projects:', err);
+export function persistProjects(p: FilterProjects, ownerId: string | null): void {
+  if (!writeSidebarOwnerStorage(PROJECTS_KEY, ownerId, JSON.stringify(p))) {
+    log.warn('[useSidebarFilter] failed to persist projects');
   }
 }
 
@@ -144,16 +176,13 @@ export function persistProjects(p: FilterProjects): void {
  * 返回值如果与 prev 引用相同（语义上无变化），调用方可短路不写 storage。
  * 实际上本函数总是返回新对象（除非语义无变化才返回 prev）。
  */
-export function nextProjectsAfterToggle(
-  prev: FilterProjects,
-  workingDir: string,
-): FilterProjects {
-  const projectKey = normalizeProjectKey(workingDir);
+export function nextProjectsAfterToggle(prev: FilterProjects, workingDir: string): FilterProjects {
+  const projectKey = normalizeFilterEntry(workingDir);
   if (!projectKey) return prev;
   if (prev === 'all') {
     return [projectKey];
   }
-  const normalizedPrev = normalizeProjectKeyList(prev);
+  const normalizedPrev = normalizeFilterProjectList(prev);
   const idx = normalizedPrev.indexOf(projectKey);
   if (idx >= 0) {
     if (normalizedPrev.length === 1) {
@@ -172,9 +201,9 @@ export function nextProjectsAfterToggle(
  */
 export function includeProjectInFilter(prev: FilterProjects, workingDir: string): FilterProjects {
   if (prev === 'all') return prev;
-  const projectKey = normalizeProjectKey(workingDir);
+  const projectKey = normalizeFilterEntry(workingDir);
   if (!projectKey) return prev;
-  const normalizedPrev = normalizeProjectKeyList(prev);
+  const normalizedPrev = normalizeFilterProjectList(prev);
   if (normalizedPrev.includes(projectKey)) {
     return arraysEqual(normalizedPrev, prev) ? prev : normalizedPrev;
   }
@@ -200,8 +229,9 @@ export function removeProjectsFromFilter(
       .filter((projectKey): projectKey is string => projectKey != null),
   );
   if (hiddenComparisonKeys.size === 0) return prev;
-  const normalizedPrev = normalizeProjectKeyList(prev);
+  const normalizedPrev = normalizeFilterProjectList(prev);
   const filtered = normalizedPrev.filter((projectKey) => {
+    if (projectKey === DIALOGUE_FILTER_KEY) return true;
     const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
     return comparisonKey == null || !hiddenComparisonKeys.has(comparisonKey);
   });
@@ -242,12 +272,12 @@ export function persistVendor(v: FilterVendor): void {
 
 /* ============================== groupBy load/persist ============================== */
 
-const GROUP_BY_VALUES: ReadonlySet<string> = new Set<FilterGroupBy>(['project', 'date']);
+const GROUP_BY_VALUES: ReadonlySet<string> = new Set<FilterGroupBy>(['project', 'flat']);
 
 /**
  * 读 localStorage 中的 groupBy;任何异常 / 非法值 / 未设置 → 'project'。
- * 「按工作目录分组」是 Cindy 作为工作台的设计基线默认值;用户显式切到
- * 'date' 时由 persistGroupBy 写入 storage,下次启动读回,保留其选择。
+ * 「按工作目录分组」是 Cindy 作为工作台的设计基线默认值。
+ * 旧值 'date'(按日期分组,D 期删除)不在合法集合内,自动回退 'project'。
  */
 export function loadGroupBy(): FilterGroupBy {
   const storage = safeStorage();
@@ -273,9 +303,109 @@ export function persistGroupBy(groupBy: FilterGroupBy): void {
   }
 }
 
+/* ============================== groupDialogue load/persist ============================== */
+
+/**
+ * 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;
+ * false = 散排在主列表里与项目行混排。
+ * **默认 true**(2026-08-12 用户裁决,推翻 D 期定稿的默认关):默认配置是
+ * 设备 + 项目 + 对话三层都分组。老用户与新用户同一套分组默认(用户明确要求),
+ * 差异只在显示模式(见 useSidebarCardMode)。
+ */
+export function loadGroupDialogue(): boolean {
+  const storage = safeStorage();
+  if (!storage) return true;
+  try {
+    return storage.getItem(GROUP_DIALOGUE_KEY) !== 'false';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read groupDialogue:', err);
+    return true;
+  }
+}
+
+export function persistGroupDialogue(groupDialogue: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(GROUP_DIALOGUE_KEY, String(groupDialogue));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist groupDialogue:', err);
+  }
+}
+
+/* ============================== groupDevice load/persist ============================== */
+
+/**
+ * 「按设备分组」开关(E 期):默认开(定稿)。仅在有远程设备连接时可见/生效
+ * (与顶部设备切换栏同一出现条件);仅本机时选项隐藏、效果自然为单段。
+ */
+export function loadGroupDevice(): boolean {
+  const storage = safeStorage();
+  if (!storage) return true;
+  try {
+    return storage.getItem(GROUP_DEVICE_KEY) !== 'false';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read groupDevice:', err);
+    return true;
+  }
+}
+
+export function persistGroupDevice(groupDevice: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(GROUP_DEVICE_KEY, String(groupDevice));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist groupDevice:', err);
+  }
+}
+
+/* ==================== dialogue group collapsed load/persist ==================== */
+
+/**
+ * 「对话」组行的折叠状态(与项目行折叠同级的分组折叠,默认展开)。
+ * 项目折叠是 owner-scoped(useCollapsedProjects);对话组按分组 key 记忆:
+ * 单一混排列表只有一个组(DIALOGUE_GROUP_ALL_KEY),按设备分组时每个设备段
+ * 各有一个对话组('local' / deviceId),折叠互相独立(2026-08-12 实机反馈:
+ * 共用一个 boolean 会点一个全展开)。条目是有限的短字符串、无 GC 需求,
+ * 按显示类偏好走本地 localStorage 即可。
+ * 兼容旧格式:曾是单个 boolean 字符串,'true' 迁移为 [DIALOGUE_GROUP_ALL_KEY]。
+ */
+export function loadDialogueGroupCollapsedKeys(): ReadonlySet<string> {
+  const storage = safeStorage();
+  if (!storage) return new Set();
+  try {
+    const raw = storage.getItem(DIALOGUE_GROUP_COLLAPSED_KEY);
+    if (!raw || raw === 'false') return new Set();
+    if (raw === 'true') return new Set([DIALOGUE_GROUP_ALL_KEY]);
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === 'string'));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read dialogueGroupCollapsed:', err);
+    return new Set();
+  }
+}
+
+export function persistDialogueGroupCollapsedKeys(keys: ReadonlySet<string>): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify([...keys]));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist dialogueGroupCollapsed:', err);
+  }
+}
+
 /* ============================== lastActivity load/persist ============================== */
 
-const LAST_ACTIVITY_VALUES: ReadonlySet<string> = new Set<FilterLastActivity>(['all', '1d', '3d', '7d', '30d']);
+const LAST_ACTIVITY_VALUES: ReadonlySet<string> = new Set<FilterLastActivity>([
+  'all',
+  '1d',
+  '3d',
+  '7d',
+  '30d',
+]);
 
 export function loadLastActivity(): FilterLastActivity {
   const storage = safeStorage();
@@ -305,11 +435,14 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
 
 const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>([
   'recency',
-  'time',
   'manual',
-  'alphabetic',
+  'priority',
 ]);
 
+/**
+ * 读 sortBy。已删除的 'alphabetic' / 'time'(旧「最早优先」)存量值不在合法集合内，
+ * 自动回退 'recency'——时间排序现在只保留「最近优先」一档,菜单里就叫「按时间排序」。
+ */
 export function loadSortBy(): FilterSortBy {
   const storage = safeStorage();
   if (!storage) return 'recency';
@@ -334,18 +467,74 @@ export function persistSortBy(sortBy: FilterSortBy): void {
   }
 }
 
-/* ============================== manual project order load/persist ============================== */
+/* ============================== taskInfo load/persist ============================== */
 
-export function loadManualProjectOrder(): string[] {
+const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
+  'time',
+  'pr',
+  'tokens',
+  'cost',
+]);
+/** 默认只显示最近活动时间（现状行为）。 */
+export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
+
+/**
+ * 读任务行右侧信息复选。存储为 JSON string[]；非法值逐项剔除。
+ * 与其它维度不同：空数组是合法状态（用户显式全不选 = 行右侧留空），
+ * 只有解析失败 / 未设置才回落默认。
+ */
+export function loadTaskInfoFields(): TaskInfoField[] {
   const storage = safeStorage();
-  if (!storage) return [];
+  if (!storage) return [...DEFAULT_TASK_INFO_FIELDS];
   let raw: string | null = null;
   try {
-    raw = storage.getItem(MANUAL_PROJECT_ORDER_KEY);
+    raw = storage.getItem(TASK_INFO_KEY);
   } catch (err) {
-    log.warn('[useSidebarFilter] failed to read manualProjectOrder:', err);
-    return [];
+    log.warn('[useSidebarFilter] failed to read taskInfo:', err);
+    return [...DEFAULT_TASK_INFO_FIELDS];
   }
+  if (raw == null) return [...DEFAULT_TASK_INFO_FIELDS];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [...DEFAULT_TASK_INFO_FIELDS];
+    const seen = new Set<string>();
+    const cleaned: TaskInfoField[] = [];
+    for (const value of parsed) {
+      if (typeof value !== 'string' || !TASK_INFO_VALUES.has(value) || seen.has(value)) continue;
+      seen.add(value);
+      cleaned.push(value as TaskInfoField);
+    }
+    return cleaned;
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to parse taskInfo JSON:', err);
+    return [...DEFAULT_TASK_INFO_FIELDS];
+  }
+}
+
+export function persistTaskInfoFields(fields: readonly TaskInfoField[]): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(TASK_INFO_KEY, JSON.stringify(fields));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist taskInfo:', err);
+  }
+}
+
+/** 切换某个信息项的勾选状态。空数组合法（全不选）。语义无变化时返回 prev。 */
+export function nextTaskInfoAfterToggle(
+  prev: readonly TaskInfoField[],
+  field: TaskInfoField,
+): TaskInfoField[] {
+  const idx = prev.indexOf(field);
+  if (idx >= 0) return prev.slice(0, idx).concat(prev.slice(idx + 1));
+  return prev.concat(field);
+}
+
+/* ============================== manual project order load/persist ============================== */
+
+export function loadManualProjectOrder(ownerId: string | null): string[] {
+  const raw = readSidebarOwnerStorage(MANUAL_PROJECT_ORDER_KEY, ownerId);
   if (raw == null) return [];
   let parsed: unknown;
   try {
@@ -366,13 +555,9 @@ export function loadManualProjectOrder(): string[] {
   return cleaned;
 }
 
-export function persistManualProjectOrder(order: readonly string[]): void {
-  const storage = safeStorage();
-  if (!storage) return;
-  try {
-    storage.setItem(MANUAL_PROJECT_ORDER_KEY, JSON.stringify(order));
-  } catch (err) {
-    log.warn('[useSidebarFilter] failed to persist manualProjectOrder:', err);
+export function persistManualProjectOrder(order: readonly string[], ownerId: string | null): void {
+  if (!writeSidebarOwnerStorage(MANUAL_PROJECT_ORDER_KEY, ownerId, JSON.stringify(order))) {
+    log.warn('[useSidebarFilter] failed to persist manualProjectOrder');
   }
 }
 
@@ -428,38 +613,67 @@ export function moveManualProjectOrder(
 /* ============================== manual pinned sidebar order load/persist ============================== */
 
 /**
- * 数据落在 main 进程 electron-store(userData/sidebar-settings.json),通过 IPC 同步读 / 异步写,
- * 跨 dev (http://localhost) / installed (file://) 共享(localStorage 按 origin 隔离不通)。
+ * 数据落在 main 进程 owner namespace，通过 IPC 同步读 / 异步写。
  *
- * 一次性 migration:老版本数据在 renderer 的 localStorage 里,首次 load 发现新存储为空
- * 时把 localStorage 内容搬过去 + 清掉老 key。
+ * 一次性 migration:老版本数据在 renderer 的 localStorage 里；Main 明确报告 scoped
+ * 状态尚未初始化时才搬过去。确认落盘后由 Main 的单调 consumed 标记停止读取旧值；
+ * unscoped key 继续保留，避免破坏仍在使用它的旧版本实例。
  */
-export function loadManualPinnedOrder(): string[] {
-  if (typeof window?.electronAPI === 'undefined') return [];
-  const stored = window.electronAPI.sidebarSettingsLoadPinnedOrderSync();
-  if (stored.length > 0) return stored;
-  // 一次性 migration
-  const storage = safeStorage();
-  if (!storage) return [];
-  const raw = storage.getItem(MANUAL_PINNED_ORDER_KEY);
-  storage.removeItem(MANUAL_PINNED_ORDER_KEY);
-  if (!raw) return [];
+export interface LoadedManualPinnedOrder {
+  order: string[];
+  needsLegacyMigration: boolean;
+}
+
+export function loadManualPinnedOrder(snapshot: SidebarSettingsSnapshot): LoadedManualPinnedOrder {
+  if (snapshot.pinnedOrderIsAuthoritative) {
+    // Main authority includes an explicit empty snapshot. Its durable consumed
+    // bit makes the captured copy unreadable without deleting the compatibility key.
+    clearClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, snapshot.dataOwnerId);
+    return {
+      order: Array.from(snapshot.pinnedOrder),
+      needsLegacyMigration: false,
+    };
+  }
+  // Claim the unscoped key before attempting migration so another account
+  // cannot consume this owner's legacy order while Main is temporarily blocked.
+  const raw = readClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, snapshot.dataOwnerId);
+  if (raw === null) {
+    return {
+      order: Array.from(snapshot.pinnedOrder),
+      needsLegacyMigration: false,
+    };
+  }
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const legacy = parsed.filter((v): v is string => typeof v === 'string' && v.length > 0);
-    if (legacy.length > 0) {
-      void window.electronAPI.sidebarSettingsSavePinnedOrder(legacy);
+    if (!Array.isArray(parsed)) {
+      return {
+        order: Array.from(snapshot.pinnedOrder),
+        needsLegacyMigration: false,
+      };
     }
-    return legacy;
+    const legacy = normalizeSidebarPinnedOrder(parsed);
+    return {
+      order: Array.from(legacy),
+      needsLegacyMigration: true,
+    };
   } catch {
-    return [];
+    return {
+      order: Array.from(snapshot.pinnedOrder),
+      needsLegacyMigration: false,
+    };
   }
 }
 
-export function persistManualPinnedOrder(order: readonly string[]): void {
-  if (typeof window?.electronAPI === 'undefined') return;
-  void window.electronAPI.sidebarSettingsSavePinnedOrder(order);
+export function persistManualPinnedOrder(
+  mutation: SidebarPinnedOrderMutation,
+  ownerStamp: DataOwnerPushStamp,
+): Promise<string[]> {
+  if (typeof window?.electronAPI === 'undefined') return Promise.resolve([]);
+  return window.electronAPI.sidebarSettings.mutatePinnedOrder(mutation, ownerStamp);
+}
+
+export function finishManualPinnedOrderLegacyMigration(ownerId: string | null): void {
+  clearClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, ownerId);
 }
 
 /**
@@ -539,12 +753,32 @@ export function gcProjectsAgainstActive(
 ): FilterProjects {
   if (prev === 'all') return prev;
   const activeSet = new Set(normalizeProjectKeyList(activeWorkingDirs));
-  const normalizedPrev = normalizeProjectKeyList(prev);
-  const filtered = normalizedPrev.filter((wd) => activeSet.has(wd));
+  const normalizedPrev = normalizeFilterProjectList(prev);
+  const filtered = normalizedPrev.filter(
+    (wd) => wd === DIALOGUE_FILTER_KEY || activeSet.has(wd),
+  );
   if (filtered.length === 0) return 'all';
   if (filtered.length === normalizedPrev.length && arraysEqual(normalizedPrev, prev)) return prev;
   if (filtered.length === normalizedPrev.length) return normalizedPrev;
   return filtered;
+}
+
+function normalizeFilterEntry(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  if (raw === DIALOGUE_FILTER_KEY) return DIALOGUE_FILTER_KEY;
+  return normalizeProjectKey(raw);
+}
+
+function normalizeFilterProjectList(values: readonly unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const key = normalizeFilterEntry(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
 }
 
 function normalizeProjectKeyList(values: readonly unknown[]): string[] {

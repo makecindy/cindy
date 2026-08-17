@@ -5,16 +5,22 @@
  * 可见性 override 走真实 modelVisibilityPrefs(localStorage 由 jsdom 提供,用例间重置)。
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildUnionRows,
   countModelsByAgent,
+  getHiddenAgents,
   isCapabilityRow,
   isRowDisabled,
   isRowDiverged,
+  loadCollapsedMap,
 } from '@/components/settings/UnifiedModelList';
-import { __resetForTest, setModelVisibility } from '@/state/modelVisibilityPrefs';
+import {
+  __resetForTest,
+  setModelVisibility,
+  setModelVisibilityOwner,
+} from '@/state/modelVisibilityPrefs';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
@@ -35,6 +41,25 @@ const provider = {
   },
   connected: true,
 } as unknown as ProviderView;
+
+beforeEach(() => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      maker: {
+        claimLegacyModelVisibilityOwner: () => ({
+          dataOwnerId: 'test-owner',
+          ownerGeneration: 1,
+          claimed: true,
+          claimedByOtherOwner: false,
+          canInitialize: true,
+        }),
+        syncModelVisibility: async () => undefined,
+      },
+    },
+  });
+  setModelVisibilityOwner('test-owner', 1, 'cloud');
+});
 
 afterEach(() => {
   __resetForTest();
@@ -120,6 +145,24 @@ describe('isRowDiverged', () => {
     const ccOnly = rows[1];
     setModelVisibility('claude-code', 'p1', 'cc-only', false);
     expect(isRowDiverged('p1', ccOnly)).toBe(false);
+  });
+
+  it('三 Agent 中两端隐藏时保留全部隐藏 Agent', () => {
+    const threeAgent = {
+      ...provider,
+      agents: ['claude-code', 'codex', 'pi'],
+      models: {
+        ...provider.models,
+        pi: [model('shared', 500_000)],
+      },
+    } as ProviderView;
+    const shared = buildUnionRows(threeAgent)[0];
+
+    setModelVisibility('claude-code', 'p1', 'shared', false);
+    setModelVisibility('codex', 'p1', 'shared', false);
+
+    expect(isRowDiverged('p1', shared)).toBe(true);
+    expect(getHiddenAgents('p1', shared)).toEqual(['claude-code', 'codex']);
   });
 });
 
@@ -255,5 +298,52 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     const rows = buildUnionRows(withImage);
     expect(isCapabilityRow(rows.find((r) => r.id === 'gpt-image-2')!, false)).toBe(true);
     expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
+  });
+});
+
+describe('折叠态 v1/v2 → v3 迁移(other 恢复旧语义,新增 ungrouped)', () => {
+  const V1 = 'xdt:modelListCollapsedGroups:v1';
+  const V2 = 'xdt:modelListCollapsedGroups:v2';
+  const V3 = 'xdt:modelListCollapsedGroups:v3';
+
+  afterEach(() => {
+    window.localStorage.removeItem(V1);
+    window.localStorage.removeItem(V2);
+    window.localStorage.removeItem(V3);
+  });
+
+  it('v2 的 non-chat 恢复成 other,旧 other 搬到 ungrouped,其余分组原样保留', () => {
+    window.localStorage.setItem(
+      V2,
+      JSON.stringify({ 'non-chat': true, other: false, image: false, china: true }),
+    );
+    expect(loadCollapsedMap()).toEqual({
+      other: true,
+      ungrouped: false,
+      image: false,
+      china: true,
+    });
+  });
+
+  it('v1 的 other 保留旧语义,不搬到 ungrouped', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true, embedding: false }));
+    expect(loadCollapsedMap()).toEqual({ other: true, embedding: false });
+  });
+
+  it('v2 已存在时优先迁移 v2,不再回读 v1', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V2, JSON.stringify({ image: true }));
+    expect(loadCollapsedMap()).toEqual({ image: true });
+  });
+
+  it('v3 已存在时直接使用,不再回读旧版本', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V2, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V3, JSON.stringify({ ungrouped: true }));
+    expect(loadCollapsedMap()).toEqual({ ungrouped: true });
+  });
+
+  it('三代都没有 → 空表(全部跟随默认)', () => {
+    expect(loadCollapsedMap()).toEqual({});
   });
 });

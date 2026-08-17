@@ -22,8 +22,10 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { getBootSessionId } from '@/lib/secondaryWindow';
+import { getBootDeviceId, getBootSessionId } from '@/lib/secondaryWindow';
+import { getSessionFor } from '@/lib/makerTransport';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SecondaryWindowBootGate');
@@ -45,7 +47,20 @@ export function SecondaryWindowBootGate() {
     }
 
     let cancelled = false;
-    void resolveSessionRoute(bootSessionId)
+    const bootDeviceId = getBootDeviceId();
+    void (async () => {
+      if (!bootDeviceId) return resolveSessionRoute(bootSessionId);
+
+      // The remote session is not in the local DB. Pin its origin before any
+      // metadata read so getSessionFor tunnels to the owning device even when
+      // the secondary window's remote mirror has not hydrated yet.
+      remoteProjectsStore.pinSessionOrigin(bootDeviceId, bootSessionId);
+      const mirroredSession = remoteProjectsStore
+        .getMergedRemoteSessions()
+        .find((session) => session.id === bootSessionId);
+      const remoteSession = mirroredSession ?? (await getSessionFor(bootSessionId));
+      return resolveSessionRoute(bootSessionId, remoteSession);
+    })()
       .then((target) => {
         if (cancelled) return;
         navigate(target, { replace: true });

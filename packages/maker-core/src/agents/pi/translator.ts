@@ -17,6 +17,10 @@
 
 import type { Logger } from '../../interfaces/logger.js';
 import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
+import {
+  extractNonSecretErrorSignals,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { PiRpcEvent } from './rpc-client.js';
@@ -40,6 +44,14 @@ interface PiAssistantMessage {
   timestamp?: number;
   model?: string;
   stopReason?: string;
+  errorMessage?: string;
+}
+
+interface PiPendingAssistantError {
+  message: string;
+  sdkError: string;
+  errorStatus?: 401 | 429 | 529;
+  usageLimit?: true;
 }
 
 interface PiThinkingBlock {
@@ -76,6 +88,11 @@ export interface PiTranslateContext {
    * 不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
    */
   finalAssistantText: string;
+  /**
+   * Pi 会先用 message_end(stopReason=error) 报 provider 错误，之后仍可能自动重试。
+   * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
+   */
+  pendingAssistantError: PiPendingAssistantError | null;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
@@ -122,6 +139,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
     subagentToolCalls: new Map(),
+    pendingAssistantError: null,
   };
 }
 
@@ -138,6 +156,7 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
 export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.isStreaming = false;
+  ctx.pendingAssistantError = null;
   ctx.subagentToolCalls.clear();
 }
 
@@ -243,6 +262,17 @@ function assistantTextOf(message: PiAssistantMessage): string {
   return parts.join('\n\n');
 }
 
+function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
+  const signals = extractNonSecretErrorSignals(rawError);
+  const redactedError = redactSensitiveText(rawError);
+  return {
+    message: redactedError,
+    sdkError: redactedError,
+    ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
+    ...(signals.usageLimit ? { usageLimit: true } : {}),
+  };
+}
+
 function toolResultFullText(result: unknown): string {
   if (typeof result !== 'object' || result === null) return '';
   const content = (result as { content?: unknown }).content;
@@ -297,6 +327,7 @@ export function translatePiEvent(
       ctx.turnCacheRead = 0;
       ctx.turnCacheWrite = 0;
       ctx.finalAssistantText = '';
+      ctx.pendingAssistantError = null;
       ctx.turnWallClockStartedAt = Date.now();
       ctx.generationDurationMs = 0;
       ctx.generationTimingReliable = true;
@@ -352,7 +383,14 @@ export function translatePiEvent(
         ctx.generationTimingReliable = false;
       }
       const fullText = assistantTextOf(message);
-      if (fullText.length > 0) {
+      if (message.stopReason === 'error') {
+        const rawError = message.errorMessage?.trim() || fullText.trim() || 'Pi agent request failed';
+        ctx.pendingAssistantError = piAssistantErrorOf(rawError);
+      } else {
+        // A normal assistant message proves an earlier provider failure recovered.
+        ctx.pendingAssistantError = null;
+      }
+      if (message.stopReason !== 'error' && fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。
         ctx.finalAssistantText = fullText;
         queue.push({
@@ -486,6 +524,18 @@ export function translatePiEvent(
     case 'agent_settled': {
       ctx.isStreaming = false;
       stopPiGenerationHeartbeat(ctx);
+      const pendingAssistantError = ctx.pendingAssistantError;
+      ctx.pendingAssistantError = null;
+      if (pendingAssistantError) {
+        queue.push({
+          type: 'error',
+          data: {
+            ...pendingAssistantError,
+            isTerminal: true,
+          },
+          source: 'pi',
+        });
+      }
       queue.push({
         type: 'done',
         data: {
@@ -521,13 +571,16 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_start': {
+      const sdkError = typeof event.errorMessage === 'string'
+        ? redactSensitiveText(event.errorMessage)
+        : undefined;
       queue.push({
         type: 'error',
         data: {
           message: `Transient provider error, retrying (${String(event.attempt)}/${String(event.maxAttempts)})…`,
           isTerminal: false,
           willRetry: true,
-          sdkError: typeof event.errorMessage === 'string' ? event.errorMessage : undefined,
+          sdkError,
         },
         source: 'pi',
       });
@@ -535,11 +588,21 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_end': {
-      if (event.success === true) return;
+      if (event.success === true) {
+        ctx.pendingAssistantError = null;
+        return;
+      }
+      const rawFinalError = typeof event.finalError === 'string' && event.finalError.trim()
+        ? event.finalError.trim()
+        : null;
+      const finalError = rawFinalError
+        ? piAssistantErrorOf(rawFinalError)
+        : ctx.pendingAssistantError ?? piAssistantErrorOf('pi auto-retry failed');
+      ctx.pendingAssistantError = null;
       queue.push({
         type: 'error',
         data: {
-          message: typeof event.finalError === 'string' ? event.finalError : 'pi auto-retry failed',
+          ...finalError,
           isTerminal: true,
         },
         source: 'pi',

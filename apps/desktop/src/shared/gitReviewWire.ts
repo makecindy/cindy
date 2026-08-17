@@ -33,7 +33,7 @@ export interface ReviewScope {
   headOid: string | null;
   isDetached: boolean;
   isUnborn: boolean;
-  source: 'telemetry' | 'worktree' | 'workingDir' | null;
+  source: 'telemetry' | 'worktree' | 'workingDir' | 'remote' | null;
   aheadBehind: AheadBehind;
   disabledReason: ReviewDisableReason | null;
   disabledMessage: string | null;
@@ -258,6 +258,13 @@ export interface ReviewBranchBaseCandidate {
   remote: string | null;
   oid: string;
   isStaleRisk?: boolean;
+  /**
+   * This ref is the repository's default branch — the remote's published HEAD,
+   * a conventional `main`/`master`, or whatever `init.defaultBranch` names.
+   * Only the branch reader can see that config, so consumers must not try to
+   * recognize a default by its name alone.
+   */
+  isDefaultBranch?: boolean;
 }
 
 export type ReviewBranchDiffWarningCode =

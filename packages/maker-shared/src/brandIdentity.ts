@@ -17,7 +17,7 @@
  *    com.xd.cindycn / com.xd.cindy 同一套);exe 名 cn/global 同值 'Cindy'
  *    (2026-07-26 显示名统一决策,文件层双装隔离随之放弃,dev 仍独立)。
  *  - 历史兼容锚点(旧 scheme 解析、旧 userData / DB 文件识别)由
- *    `legacySchemes` / `legacyUserDataDirNames` / `legacyDbFilePrefixes`
+ *    `legacySchemes` / `legacyUserDataDirNames(ByRegion)` / `legacyDbFilePrefixes`
  *    承载,只增不减:老用户机器上的存量注册与文件可能永远带着旧值。
  *  - 永久不随本配置变化的标识符(settings 键名 `xdtMaker.*`、
  *    `xdt-image://` 等进程内 scheme、`.cshare` 扩展名、
@@ -97,16 +97,28 @@ export interface BrandIdentity {
   /** 历史 scheme,永久保持注册 + 解析兼容(存量链接不能死)。只增不减。 */
   readonly legacySchemes: readonly string[];
   /**
-   * Electron userData 目录名(cn / dev 基线值 = package.json productName,
-   * Electron 默认派生)。区域值走 `brandUserDataDirName(region)`:global 构建
-   * 在 main 入口早期 setPath 切到区域目录,与 cn 彻底分库(数据库 / 登录态 /
-   * 单实例锁随 userData 目录天然隔离)。
+   * Electron 默认派生的 userData 目录名(= package.json productName)。已发布的
+   * cn 构建沿用该目录；global 继续使用历史独立目录 `CindyGlobal`，避免启动时
+   * 改名或搬迁用户数据。
    */
   readonly userDataDirName: string;
-  /** 按区域派生的 userData 目录名(cn 保持 productName 默认,global 独立目录)。 */
+  /** 按区域派生的 userData 目录名。 */
   readonly userDataDirNameByRegion: Readonly<Record<CindyRegion, string>>;
-  /** 历史 userData 目录名(orphan-reaper 等按路径识别的消费点需匹配全量)。只增不减。 */
+  /** 品牌翻转前的共享历史 userData 目录名(首登 mToc 迁移使用)。只增不减。 */
   readonly legacyUserDataDirNames: readonly string[];
+  /**
+   * 各区域曾经使用过的 userData 目录名。按路径识别进程的消费点只能匹配本区域，
+   * 不能把另一发行版的历史目录纳入自己的 kill / 回收范围。只增不减。
+   */
+  readonly legacyUserDataDirNamesByRegion: Readonly<
+    Record<CindyRegion, readonly string[]>
+  >;
+  /**
+   * 各区域的 sessions.working_dir 迁移来源。它与进程路径归属清单故意分离。
+   */
+  readonly legacyDialogueUserDataDirNamesByRegion: Readonly<
+    Record<CindyRegion, readonly string[]>
+  >;
   /**
    * 更新分发 CDN / OSS 的一级路径前缀(渠道身份,老客户端永远只看自己的前缀)。
    * ⚠️ 两区共用(owner 决策 2026-07-18):cn / global 的发布渠道靠**不同
@@ -158,6 +170,17 @@ export const BRAND_IDENTITY: BrandIdentity = Object.freeze({
     dev: 'CindyDev',
   }),
   legacyUserDataDirNames: Object.freeze(['xdt-maker']),
+  legacyUserDataDirNamesByRegion: Object.freeze({
+    cn: Object.freeze(['xdt-maker']),
+    global: Object.freeze([]),
+    dev: Object.freeze([]),
+  }),
+  legacyDialogueUserDataDirNamesByRegion: Object.freeze({
+    cn: Object.freeze(['xdt-maker']),
+    // xdt-maker 是旧 CN 渠道的数据来源；Global 不导入或改写 CN 的历史 cwd。
+    global: Object.freeze([]),
+    dev: Object.freeze([]),
+  }),
   cdnPrefix: 'cindy',
   updaterName: 'cindy-updater',
   dbFilePrefix: 'cindy',
@@ -202,13 +225,34 @@ export function allDeepLinkSchemes(identity: BrandIdentity = BRAND_IDENTITY): re
 }
 
 /**
- * 按路径识别本产品 userData 的全部目录名(本区域当前 + 历史),本区域目录名
- * 恒为首位。⚠️ 故意**不包含另一区域**的目录:同机双装时 orphan-reaper 等
- * 按路径匹配的消费点只应认领自己区域的进程 / 文件,跨区域匹配会误杀。
+ * 按路径识别本产品 userData 的全部目录名(本区域当前 + 本区域明确拥有的历史名)，
+ * 本区域目录名恒为首位。⚠️ 故意**不包含另一区域当前或历史使用的目录**：同机双装
+ * 时 orphan-reaper 等按路径匹配的消费点只应认领自己区域的进程，跨区域匹配会误杀。
  */
 export function allUserDataDirNames(
   region: CindyRegion = DEFAULT_CINDY_REGION,
   identity: BrandIdentity = BRAND_IDENTITY,
 ): readonly string[] {
-  return [identity.userDataDirNameByRegion[region], ...identity.legacyUserDataDirNames];
+  return [
+    identity.userDataDirNameByRegion[region],
+    ...identity.legacyUserDataDirNamesByRegion[region],
+  ];
+}
+
+/**
+ * 按区域取持久化 dialogue cwd 的历史 userData 目录名。只用于数据迁移，
+ * 绝不能用于判断进程归属或清理另一实例。
+ */
+export function legacyDialogueUserDataDirNames(
+  region: CindyRegion = DEFAULT_CINDY_REGION,
+  identity: BrandIdentity = BRAND_IDENTITY,
+): readonly string[] {
+  return identity.legacyDialogueUserDataDirNamesByRegion[region];
+}
+
+/** 品牌翻转前的共享老目录候选，仅供 cn 的 mToc 首登数据导入。 */
+export function legacyBrandUserDataDirNames(
+  identity: BrandIdentity = BRAND_IDENTITY,
+): readonly string[] {
+  return identity.legacyUserDataDirNames;
 }

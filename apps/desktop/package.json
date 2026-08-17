@@ -51,7 +51,6 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@cindy/auth-client": "workspace:*",
-    "@cindy/model-access-protocol": "workspace:*",
     "@cindy/plugin-protocol": "workspace:*",
     "@cindy/slack-hook-protocol": "workspace:*",
     "@codemirror/commands": "^6.10.3",
@@ -93,6 +92,7 @@
     "@cindy/ios-simulator-runtime": "workspace:*",
     "@cindy/maker-cc-manager": "workspace:*",
     "@cindy/maker-core": "workspace:*",
+    "@cindy/maker-pi-manager": "workspace:*",
     "@cindy/maker-remote-ssh": "workspace:*",
     "@cindy/maker-scheduler": "workspace:*",
     "@cindy/maker-shared": "workspace:*",

@@ -74,11 +74,18 @@ export function providerSecretStorageKey(id: ProviderSecretId): string {
  */
 export const REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY = 'remote_mcp_bridge_token';
 
+/**
+ * Host-only HMAC key for remote Pi proxy session tokens. Unlike the derived
+ * per-session token, this value never enters a child/remote process env.
+ */
+export const PI_PROXY_DERIVATION_KEY_STORAGE_KEY = 'pi_proxy_derivation_key';
+
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   STORAGE_KEYS['voice-asr'].toLowerCase(),
   STORAGE_KEYS['gemini'].toLowerCase(),
   STORAGE_KEYS['openai-images'].toLowerCase(),
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
+  PI_PROXY_DERIVATION_KEY_STORAGE_KEY.toLowerCase(),
 ]);
 
 /** Custom-provider runtime header blobs are main-only credential material. */
@@ -122,6 +129,12 @@ export function customProviderSecretStorageKey(providerId: string, agent: string
   assertSafeKeyPart(providerId, 'providerId');
   assertSafeKeyPart(agent, 'agent');
   return `provider_key_${providerId}_${agent}`;
+}
+
+const CUSTOM_PROVIDER_RUNTIME_KEY_RE = /^provider_key_[a-zA-Z0-9_-]+_(?:claude-code|codex|pi)$/;
+
+export function isCustomProviderRuntimeKeyStorageKey(storageKey: unknown): boolean {
+  return typeof storageKey === 'string' && CUSTOM_PROVIDER_RUNTIME_KEY_RE.test(storageKey);
 }
 
 /**

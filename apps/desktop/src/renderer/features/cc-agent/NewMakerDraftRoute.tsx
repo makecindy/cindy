@@ -51,7 +51,6 @@ import {
   type FolderPickerSelectSource,
 } from '@/components/new-chat/FolderPickerPopover';
 import { DeviceSwitcherPill } from '@/components/new-chat/DeviceSwitcherPill';
-import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import {
   AddRemoteProjectDialog,
   type RemoteProjectTarget,
@@ -131,6 +130,12 @@ import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
+import {
+  createDeferredUiAssignment,
+  dispatchDeferredUiAssignment,
+  rememberDeferredUiAssignment,
+  type DeferredUiAssignment,
+} from './deferredUiAssignment';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
@@ -233,10 +238,7 @@ import {
 } from './deviceLinkDraftDefaults';
 import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLinkModelMirror';
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
-import {
-  DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE,
-  resolveNewMakerDraftRightSidebar,
-} from './newMakerDraftRightSidebar';
+import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
@@ -368,6 +370,7 @@ function draftEnableOrcaOptions(
   collab: CollabDraft,
   providers: ProviderView[],
   providersReady: boolean,
+  deferDelegateTask = false,
 ) {
   const preferredAgent: 'claude-code' | 'codex' | 'pi' =
     collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
@@ -396,7 +399,8 @@ function draftEnableOrcaOptions(
       workerAgent,
       role: cfg.role,
       label: createWorkerLabel(cfg.role, []),
-      delegateTask: cfg.initialTask || undefined,
+      delegateTask: cfg.initialTask,
+      ...(deferDelegateTask ? { deferDelegateTask: true } : {}),
       workerPermissionMode: cfg.workerPermissionMode,
     };
   }
@@ -432,7 +436,8 @@ function draftEnableOrcaOptions(
     effort: cfg.effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined,
     fast: cfg.fast,
     providerId,
-    delegateTask: cfg.initialTask || undefined,
+    delegateTask: cfg.initialTask,
+    ...(deferDelegateTask ? { deferDelegateTask: true } : {}),
     workerPermissionMode: cfg.workerPermissionMode,
   };
 }
@@ -607,7 +612,18 @@ export function NewMakerDraftRoute() {
           ? 'ccAgent.draft.remoteProviderUnsupported'
           : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
             ? 'ccAgent.draft.remoteNativeOauthUnavailable'
-            : 'ccAgent.draft.createSessionFailed';
+            // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint
+            // 未就绪 —— main 侧已映射同名 IPC code, 这里走已存在 5 语言的
+            // logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE
+            // (引导去 Settings → Model Providers), 不再显示 raw 英文。
+            : code === 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'
+              ? 'logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'
+              // 轮 42 P2(codex-connector):远端 Pi + loopback-only BYOM 被 main
+              // 映射成 REMOTE_LOCAL_ONLY_PROVIDER —— 这里不映射会落通用失败
+              // toast, 隐藏「换网关/远端可达 BYOM」的行动指引。
+              : code === 'REMOTE_LOCAL_ONLY_PROVIDER'
+                ? 'logic.errors.remoteError.REMOTE_LOCAL_ONLY_PROVIDER'
+                : 'ccAgent.draft.createSessionFailed';
     toast.error(t(key));
   };
 
@@ -632,8 +648,6 @@ export function NewMakerDraftRoute() {
     ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
-  const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
-  // B2b:面板所在侧 —— 展开入口留守面板消失的那一侧(缺省经典右侧)。
   const rightSidebarSide = outletContext?.rightSidebarSide ?? 'right';
   const setRightSidebarAvailable = outletContext?.setRightSidebarAvailable;
   const setRightSidebarSessionId = outletContext?.setRightSidebarSessionId;
@@ -676,6 +690,10 @@ export function NewMakerDraftRoute() {
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(
     null,
   );
+  // 探测成功且确认目录不具备 worktree 资格(非 git / 无 git / 已在 worktree 内)= true:
+  // 发送门放行普通会话(2026-08-07 裁决,勾选记忆只对合格目录生效)。null = 探测中或
+  // 失败,维持 fail closed——「确认不是 git」和「探测不出来」不是一回事。
+  const [wtConfirmedIneligible, setWtConfirmedIneligible] = useState<boolean | null>(null);
   // repo-scoped 分支偏好以工作端 main 为权威。target ref 在换设备 / repo 的同步动作里先行
   // 改写，挡住 React commit 前一瞬间到达的旧 GET / APPLY / push；seq 另挡异步 GET 晚到。
   const wtBranchTargetRef = useRef<DraftWorktreeBranchTarget>({
@@ -2032,6 +2050,7 @@ export function NewMakerDraftRoute() {
         setWtBaseRepo(null);
         setWtSourceBranch('');
         setWtSupportsRecoveryKeyDiscard(null);
+        setWtConfirmedIneligible(null);
       }
       if (deviceChanged) {
         // A checkbox write belongs to the previous work device. Invalidate its
@@ -2146,13 +2165,11 @@ export function NewMakerDraftRoute() {
         return;
       }
 
-      // fail-closed:Pi 是本地专属 agent,PiAgent.startSession 拒绝任何 remoteHostId
-      // (agents/pi/index.ts)。SSH 目标会带 remoteHostId 建会话 → 首消息必然起不来。
-      // dialog 侧已按 agentVendor 过滤掉 SSH 主机,这里是防非 UI 路径(编程调用 / 未来回归)
-      // 漏进 Pi+SSH 的兜底,抛清晰错误由 dialog 呈现,而不是建出一条注定失败的会话(codex review P1)。
-      if (draftVendor === 'pi') {
-        throw new Error(t('ccAgent.draft.piRemoteUnsupported'));
-      }
+      // 轮 35 CRITICAL 移除:Pi 已支持 SSH 远端(pi-manager daemon + SshPiTransport,
+      // startSession 全量支持 remoteHostId)。此前的「Pi 本地专属」fail-closed
+      // 守卫与 dialog 的 SSH 过滤是过时逻辑 —— 后端早已装配 getRemotePiTransport
+      // 等全套钩子, 守卫只会阻止用户创建远端 Pi 会话。远端不支持的子能力
+      // (如 fork) 由各自入口 fail-closed, 不在会话创建层面整体拦截。
 
       // SSH:lazy-create(workspaceKind='project',第一条消息发出时 agent 进程才真正起),
       // 立即建会话记录并 navigate 过去。建会话约定与本文件其它 createSession 路径一致
@@ -2816,6 +2833,9 @@ export function NewMakerDraftRoute() {
   const handleWtRecoveryKeyDiscardSupportChange = useCallback((supported: boolean | null) => {
     setWtSupportsRecoveryKeyDiscard(supported);
   }, []);
+  const handleWtConfirmedIneligibleChange = useCallback((confirmed: boolean | null) => {
+    setWtConfirmedIneligible(confirmed);
+  }, []);
   const handleWtNameChange = useCallback((name: string) => {
     setWtName(name);
   }, []);
@@ -2837,6 +2857,7 @@ export function NewMakerDraftRoute() {
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
+    confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
@@ -2847,6 +2868,7 @@ export function NewMakerDraftRoute() {
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
+    confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
@@ -2967,15 +2989,28 @@ export function NewMakerDraftRoute() {
       // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
       // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 则只在
       // Worktree ON 时阻塞；OFF 仍可直接创建普通 session，保持两条轴独立。
+      // 确认不合格(2026-08-07 裁决)时控件隐藏、勾选不生效，偏好写入在途不应
+      // 卡住普通会话创建——确认不合格目录永远不会创建 worktree。
       if (
-        wtPreferenceSavingRef.current
-        || wtPreferenceAuthorityUnknownRef.current
-        || (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current)
+        selectedWorktree.confirmedIneligible !== true
+        && (
+          wtPreferenceSavingRef.current
+          || wtPreferenceAuthorityUnknownRef.current
+          || (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current)
+        )
       ) {
         toast.warning(t('ccAgent.draft.deviceStillLoading'));
         return false;
       }
-      if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {
+      // 确认不合格(探测成功、目录无 worktree 资格)时勾选记忆不生效:整段 ON 门跳过,
+      // 按普通会话创建(2026-08-07 裁决)。confirmedIneligible === null(探测中/失败)
+      // 仍走 fail-closed —— 探测不出来不等于确认不是 git。
+      if (
+        selectedWorkingDir
+        && !isRemoteProjectDraft
+        && selectedWorktree.enabled
+        && selectedWorktree.confirmedIneligible !== true
+      ) {
         if (!selectedWorktree.baseRepo) {
           toast.error(t('ccAgent.draft.worktreeMissingRepo'));
           return false;
@@ -3052,6 +3087,7 @@ export function NewMakerDraftRoute() {
             if (
               effectiveWorkingDir &&
               wt.enabled &&
+              wt.confirmedIneligible !== true &&
               wt.baseRepo &&
               wt.supportsRecoveryKeyDiscard === true
             ) {
@@ -3266,10 +3302,12 @@ export function NewMakerDraftRoute() {
                 ? {
                     remoteCollab: {
                       deviceId,
+                      pendingLeadInput: message,
                       options: draftEnableOrcaOptions(
                         effectiveCollab,
                         deviceProviders,
                         !deviceProvidersLoading,
+                        true,
                       ),
                     },
                   }
@@ -3469,16 +3507,25 @@ export function NewMakerDraftRoute() {
                 // 才进入 1.6s 平滑期, overlay 从 "空 ChatView" 自然过渡到 "已在
                 // streaming 的 ChatView", 不暴露中间空窗。clear 时机见本 async 块末尾。
 
+                let deferredUiAssignment: DeferredUiAssignment | undefined;
                 if (shouldEnableCollab) {
                   try {
+                    const orcaOptions = draftEnableOrcaOptions(
+                      effectiveCollab,
+                      localProviders,
+                      !localProvidersLoading,
+                      true,
+                    );
                     const result = await window.electronAPI.maker.enableOrca(
                       newSession.id,
-                      draftEnableOrcaOptions(
-                        effectiveCollab,
-                        localProviders,
-                        !localProvidersLoading,
-                      ),
+                      orcaOptions,
                     );
+                    deferredUiAssignment = createDeferredUiAssignment({
+                      options: orcaOptions,
+                      workerSessionId: result.workerSessionId,
+                      snapshotBeforeMs: result.uiAssignmentSnapshotBeforeMs,
+                    });
+                    rememberDeferredUiAssignment(newSession.id, deferredUiAssignment);
                     // worktree 创建在后台完成,组件可能已经切走;这里读取当前 URL,
                     // 避免用 render 时捕获的旧路由误判。
                     if (getCurrentRoutePath() === `/cc-agent/${newSession.id}`) {
@@ -3520,7 +3567,17 @@ export function NewMakerDraftRoute() {
                       : {}),
                   },
                 );
-                if (accepted) opts?.onAccepted?.();
+                if (accepted) {
+                  opts?.onAccepted?.();
+                  void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment).catch(
+                    (err) => {
+                      log.error('[draft worktree send] deferred Worker assignment failed', err);
+                      toast.error(t('newChat.collaboration.assignmentFailed'));
+                    },
+                  );
+                } else if (deferredUiAssignment) {
+                  toast.error(t('newChat.collaboration.assignmentFailed'));
+                }
                 // sendMessage 会先同步 push user message,再异步返回 enqueue 是否接受。
                 // await 完成时 messages 已经有 user bubble + isStreaming=true,
                 // 此时 clear 让 worktreePreparing 进入 1.6s 平滑期 (overlay 自然
@@ -3595,12 +3652,25 @@ export function NewMakerDraftRoute() {
           // 不阻断 send 流程。worker 类型由 popover 选择,失败回退到单 session 路由。
           let orcaNavTarget: string | null = null;
           let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
+          let deferredUiAssignment: DeferredUiAssignment | undefined;
           if (shouldEnableCollab) {
             try {
+              const orcaOptions = draftEnableOrcaOptions(
+                effectiveCollab,
+                localProviders,
+                !localProvidersLoading,
+                true,
+              );
               const result = await window.electronAPI.maker.enableOrca(
                 newSession.id,
-                draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
+                orcaOptions,
               );
+              deferredUiAssignment = createDeferredUiAssignment({
+                options: orcaOptions,
+                workerSessionId: result.workerSessionId,
+                snapshotBeforeMs: result.uiAssignmentSnapshotBeforeMs,
+              });
+              rememberDeferredUiAssignment(newSession.id, deferredUiAssignment);
               orcaNavTarget = `/cc-agent/${newSession.id}`;
               orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
             } catch (err) {
@@ -3624,6 +3694,7 @@ export function NewMakerDraftRoute() {
             ...(opts?.slashCommandRanges !== undefined
               ? { slashCommandRanges: opts.slashCommandRanges }
               : {}),
+            ...(deferredUiAssignment ? { deferredUiAssignment } : {}),
           });
           opts?.onAccepted?.();
           // 草稿已经成功移交给新会话(setPending),清掉 NEW_MAKER_DRAFT_KEY
@@ -3741,14 +3812,25 @@ export function NewMakerDraftRoute() {
         // while an in-flight branch write only blocks a Worktree-enabled
         // project.  OFF remains an ordinary base-repo create even if the
         // independent branch preference transaction is still settling.
+        // 确认不合格(2026-08-07 裁决)时跳过偏好写入守卫,与 Send 同口径。
         if (
-          wtPreferenceSavingRef.current
-          || wtPreferenceAuthorityUnknownRef.current
-          || (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current)
+          selectedWorktree.confirmedIneligible !== true
+          && (
+            wtPreferenceSavingRef.current
+            || wtPreferenceAuthorityUnknownRef.current
+            || (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current)
+          )
         ) {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
-        if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {
+        // 与 handleSend 同口径:确认不合格时勾选记忆不生效,整段 ON 门跳过、按普通
+        // 会话创建;null(探测中/失败)仍 fail closed(2026-08-07 裁决)。
+        if (
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.enabled
+          && selectedWorktree.confirmedIneligible !== true
+        ) {
           if (!selectedWorktree.baseRepo) {
             throw new Error(t('ccAgent.draft.worktreeMissingRepo'));
           }
@@ -3837,6 +3919,7 @@ export function NewMakerDraftRoute() {
           if (
             selectedWorkingDir
             && selectedWorktree.enabled
+            && selectedWorktree.confirmedIneligible !== true
             && selectedWorktree.baseRepo
             && selectedWorktree.supportsRecoveryKeyDiscard === true
           ) {
@@ -3987,10 +4070,12 @@ export function NewMakerDraftRoute() {
               ? {
                   remoteCollab: {
                     deviceId,
+                    pendingLeadInput: objective,
                     options: draftEnableOrcaOptions(
                       effectiveCollab,
                       deviceProviders,
                       !deviceProvidersLoading,
+                      true,
                     ),
                   },
                 }
@@ -4079,8 +4164,13 @@ export function NewMakerDraftRoute() {
           navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
           return;
         }
+        // 确认不合格时按普通会话走(上方 ON 门已放行,这里必须一起排除,否则
+        // baseRepo 为 null 会命中下方的非空断言)。
         const useLocalGoalWorktree = Boolean(
-          selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled,
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.enabled
+          && selectedWorktree.confirmedIneligible !== true,
         );
         const goalSessionId = makeDraftSessionId();
         let goalWorkingDir = selectedWorkingDir;
@@ -4160,12 +4250,25 @@ export function NewMakerDraftRoute() {
         // session 不匹配返回 stale-context(codex P2)——与 Send 路径同口径,把 reveal
         // 塞进 navigate state,由 CCAgentSessionView mount 后消费。
         let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
+        let deferredUiAssignment: DeferredUiAssignment | undefined;
         if (shouldEnableCollab) {
           try {
+            const orcaOptions = draftEnableOrcaOptions(
+              effectiveCollab,
+              localProviders,
+              !localProvidersLoading,
+              true,
+            );
             const result = await window.electronAPI.maker.enableOrca(
               newSession.id,
-              draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
+              orcaOptions,
             );
+            deferredUiAssignment = createDeferredUiAssignment({
+              options: orcaOptions,
+              workerSessionId: result.workerSessionId,
+              snapshotBeforeMs: result.uiAssignmentSnapshotBeforeMs,
+            });
+            rememberDeferredUiAssignment(newSession.id, deferredUiAssignment);
             orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
           } catch (err) {
             log.error('[draft goal] enableOrca failed (continuing as single session)', err);
@@ -4177,11 +4280,18 @@ export function NewMakerDraftRoute() {
         // setGoal 内部 ensureSession(拉起 agent)+ 发首轮(带目标指令)。
         try {
           await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
+          void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment).catch((err) => {
+            log.error('[draft goal] deferred Worker assignment failed', err);
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          });
         } catch (err) {
           // 首轮没发出去 → 下面的 autoNameSession 也不会跑,权威标题永不回流。
           // 不撤回的话标题预览会永久盖着 DB 里的哨兵(理由同 worktree 分支的
           // restoreFirstMessageDraft)。异常照旧抛给调用方展示。
           if (optimisticGoalTitle) emitAutoTitlePreviewCleared(newSession.id);
+          if (deferredUiAssignment) {
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          }
           throw err;
         }
         // 自动起名:/goal 新建的会话不经普通发送路径,scheduleAutoName 漏触发 → 标题会停在默认。
@@ -4358,35 +4468,16 @@ export function NewMakerDraftRoute() {
           {/* mac 上本页不渲染通用 ContentHeader 且顶部无交互元素,垫一条透明
           窗口拖拽条(windowDrag.tsx 约定) */}
           <InvisibleWindowDragStrip />
-          {/* Windows 折叠态显示展开入口,面板贴右在右上、贴左镜像左上,
-            与 CCAgentSessionView 同规则。展开态的折叠按钮归属右栏 TabBar。
-            mac 不渲染(2026-07-09 Lizi 口径):
-            折叠 toggle 无论面板贴哪侧都恒钉窗口右上角(MainLayout 浮层)。 */}
+          {/* 固定入口由 MainLayout 承载；入口在右侧且未内嵌时保留第一行位置，
+            避免其它 chip 与它重叠。 */}
           {!IS_MAC_PLATFORM &&
-            rightSidebarCollapsed &&
             draftRightSidebar.available &&
-            onToggleRightSidebar &&
-            (rightSidebarSide === 'right' ? (
+            rightSidebarCollapsed &&
+            rightSidebarSide === 'right' && (
               <TopRightChipStack>
-                <div style={DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE}>
-                  <RightSidebarToggle
-                    collapsed={rightSidebarCollapsed}
-                    onToggle={onToggleRightSidebar}
-                    side="right"
-                  />
-                </div>
+                <div aria-hidden className="h-7 w-7 shrink-0" />
               </TopRightChipStack>
-            ) : (
-              <div className="pointer-events-none absolute left-3 top-3 z-20">
-                <div style={DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE}>
-                  <RightSidebarToggle
-                    collapsed={rightSidebarCollapsed}
-                    onToggle={onToggleRightSidebar}
-                    side="left"
-                  />
-                </div>
-              </div>
-            ))}
+            )}
           <main
             data-testid="create-agent-main"
             className={cn(
@@ -4486,6 +4577,7 @@ export function NewMakerDraftRoute() {
                   onSourceBranchChange={handleWtSourceBranchChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
+                  onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}
                   onSuggestedNameChange={handleWtNameChange}
                   // SSH 远程仍禁用 worktree(远端 git 探测未落地);device-link 远程可用:
                   // 探测/建议名/创建全部经隧道在被控端执行(与 488cb33 前口径一致)。

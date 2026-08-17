@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +37,22 @@ afterEach(async () => {
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
+
+/** 探针创建真实符号链接来检测 OS 能力，不靠平台名猜测（开发者模式 Windows 可以 symlink）。 */
+function canCreateSymlink(): boolean {
+  const probe = mkdtempSync(path.join(os.tmpdir(), 'cindy-ios-artifact-symlink-probe-'));
+  try {
+    writeFileSync(path.join(probe, 'target'), 'probe');
+    symlinkSync(path.join(probe, 'target'), path.join(probe, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const canLink = canCreateSymlink();
 
 async function createFixture(
   patch: {
@@ -285,7 +302,7 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     });
   });
 
-  it('rejects a symlinked executable before invoking codesign', async () => {
+  it.skipIf(!canLink)('rejects a symlinked executable before invoking codesign', async () => {
     const fixture = await createFixture();
     const targetPath = path.join(fixture.root, 'replacement');
     await writeFile(targetPath, 'native-sidecar');
@@ -293,17 +310,18 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     await symlink(targetPath, fixture.executablePath);
     const commandRunner = createCommandRunner(fixture);
 
-    await expect(
-      verifyIOSSimulatorPackagedSidecarArtifact({
-        resourcesPath: fixture.resourcesPath,
-        version: VERSION,
-        architecture: 'arm64',
-        platform: 'darwin',
-        commandRunner,
-      }),
-    ).rejects.toThrow('verification failed');
-    expect(commandRunner).not.toHaveBeenCalled();
-  });
+      await expect(
+        verifyIOSSimulatorPackagedSidecarArtifact({
+          resourcesPath: fixture.resourcesPath,
+          version: VERSION,
+          architecture: 'arm64',
+          platform: 'darwin',
+          commandRunner,
+        }),
+      ).rejects.toThrow('verification failed');
+      expect(commandRunner).not.toHaveBeenCalled();
+    },
+  );
 
   it('fails a final pre-spawn check after the verified executable changes', async () => {
     const fixture = await createFixture();

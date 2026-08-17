@@ -32,6 +32,7 @@ const sdkMock = vi.hoisted(() => ({
 
 const imageResizerMock = vi.hoisted(() => ({
   process: vi.fn(async (p: string) => p),
+  validateBuffer: vi.fn(async () => true),
 }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -249,7 +250,128 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     ]);
 
     await handle.setModel?.('claude-sonnet-5');
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
     expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+    expect(firstQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      firstQuery.setModel.mock.invocationCallOrder[0],
+    );
+
+    await handle.close();
+  });
+
+  it('widens the live Claude allowlist before switching to a later-loaded gateway model', async () => {
+    const { handle, firstQuery, agent } = await startRewindableSession();
+
+    agent.capabilities.availableModels.push({
+      id: 'x-ai/grok-4.6',
+      displayName: 'Grok 4.6',
+      contextWindow: 256_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+
+    await handle.setModel?.('x-ai/grok-4.6');
+
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5', 'x-ai/grok-4.6'],
+    });
+    expect(firstQuery.setModel).toHaveBeenCalledWith('x-ai/grok-4.6');
+    expect(firstQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      firstQuery.setModel.mock.invocationCallOrder[0],
+    );
+    expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
+  it('uses the session provider route when the same model id has different windows', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
+    const workingDir = await makeTempDir();
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const resolveVerifiedContextWindow = vi.fn((providerId: string | null | undefined, modelId: string) => {
+      if (modelId !== 'shared-model') return null;
+      if (providerId === 'xd') return 256_000;
+      return 1_000_000;
+    });
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: {
+        availableModels: [
+          ...TEST_MODELS,
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 1_000_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolveVerifiedContextWindow,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-window',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+
+    await handle.setModel?.('shared-model', { providerId: 'xd' });
+
+    expect(resolveVerifiedContextWindow).toHaveBeenCalledWith('xd', 'shared-model');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
+  it('does not apply the flattened catalog window when the host resolver returns null', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
+    const workingDir = await makeTempDir();
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const resolveVerifiedContextWindow = vi.fn(() => null);
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: {
+        availableModels: [
+          ...TEST_MODELS,
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 256_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolveVerifiedContextWindow,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-unverified-window',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(0);
+
+    await handle.setModel?.('shared-model', { providerId: 'xd' });
+
+    expect(resolveVerifiedContextWindow).toHaveBeenCalledWith('xd', 'shared-model');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(0);
 
     await handle.close();
   });
@@ -267,11 +389,11 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
   it('falls back to the model-supported xhigh when an older runtime rejects max', async () => {
     const { handle, firstQuery } = await startRewindableSession();
+
+    await handle.setModel?.('claude-sonnet-5');
     firstQuery.applyFlagSettings
       .mockRejectedValueOnce(new Error('invalid effortLevel: max'))
       .mockResolvedValueOnce(undefined);
-
-    await handle.setModel?.('claude-sonnet-5');
     await expect(handle.setEffort?.('max')).resolves.toBeUndefined();
 
     expect(firstQuery.applyFlagSettings.mock.calls.slice(-2)).toEqual([
@@ -422,7 +544,13 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as { options: Record<string, unknown> };
     expect(rebuildArgs.options.model).toBe('claude-opus-4-6[1m]');
     // sonnet-5 fixture 窗口 500K < 1M → wire 串不带 [1m](窗口驱动规则)。
+    expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
     expect(secondQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+    expect(secondQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      secondQuery.setModel.mock.invocationCallOrder[0],
+    );
 
     await handle.close();
   });

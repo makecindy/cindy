@@ -11,7 +11,11 @@ import path from 'node:path';
 import { app } from 'electron';
 import JSZip from 'jszip';
 
-import { getCurrentUserId } from '../authManager';
+import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
+import {
+  assertGhostSkillProjectionBoundaryStableForOwner,
+  withSharedGlobalSkillProjectionMutation,
+} from '../authBoundaryQuarantine.js';
 import { createLogger, maskPath } from '../logger';
 import {
   prepareSharedGlobalSkillLinks,
@@ -552,7 +556,13 @@ export async function importLocalSkill(params: ImportLocalParams): Promise<Impor
 
     const projectWorkingDir = await reconcileProjectLinks(finalDir);
     try {
-      const linkResult = await prepareSharedGlobalSkillLinks();
+      const ownerId = getCurrentDataOwnerId();
+      const linkResult = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
+        prepareSharedGlobalSkillLinks({
+          assertOwnerStable: () =>
+            assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
+        }),
+      );
       for (const warning of linkResult.warnings) {
         log.warn('[importLocal] shared global skill link warning:', warning);
       }

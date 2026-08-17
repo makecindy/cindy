@@ -233,7 +233,8 @@ describe('注入接线(源码级守卫)', () => {
     expect(source).toContain(
       'deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true',
     );
-    expect(source).toContain('prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)');
+    // 注入链:normalized → withHandoff → withPlanReconcile → mobile note(最外层)。
+    expect(source).toContain('prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)');
     expect(source).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
     // 落库内容必须仍取 persistUserMessage.content —— 若改成 outgoing,提示语会写进
     // 用户消息、污染界面显示的原话。

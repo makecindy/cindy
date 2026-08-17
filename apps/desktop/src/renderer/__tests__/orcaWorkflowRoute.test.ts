@@ -63,6 +63,18 @@ const workerPanelSource = readTextLf(
   resolve(__dirname, '..', 'features', 'cc-agent', 'OrcaWorkerPanel.tsx'),
   'utf8',
 );
+const workersTabBodySource = readTextLf(
+  resolve(
+    __dirname,
+    '..',
+    'features',
+    'right-sidebar',
+    'plugins',
+    'orca-workers',
+    'OrcaWorkersTabBody.tsx',
+  ),
+  'utf8',
+);
 const workerSelectionHookSource = readTextLf(
   resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'useOrcaWorkerSelection.ts'),
   'utf8',
@@ -398,8 +410,17 @@ describe('OrcaWorkflowRoute source invariants', () => {
   });
 
   it('does not navigate the detached sidebar window to settings from the worker toolbar', () => {
+    // 硬上限时 + 按钮跳转到协同设置（codex P1 逃生口），但分离侧栏窗口与 device-link 受控面板
+    // 不能整壳替换成设置路由（前者固定 /sidebar-window 壳路由，后者上限走 device-link 远程路径）。
+    // 实现用 onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings} 在调用处守卫：
+    // 两类面板下传 undefined，+ 按钮回退为 disabled（不再呈现点了没反应的「设置 · 协同」按钮）。
     expect(workerPanelSource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
-    expect(workerPanelSource).toContain('settingsEnabled={!isSidebarWindow()}');
+    expect(workerPanelSource).toContain('onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}');
+    expect(workerPanelSource).toContain("navigate('/settings?section=collaboration')");
+    expect(workerPanelSource).not.toContain('settingsEnabled');
+    expect(workersTabBodySource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
+    expect(workersTabBodySource).toContain('<OrcaWorkerPanel {...workerPanelProps} />');
+    expect(workersTabBodySource).toContain('<RoutedOrcaWorkerPanel {...workerPanelProps} />');
   });
 
   it('marks the collaboration worker chat as sidebar-embedded so it cannot replace the host route', () => {

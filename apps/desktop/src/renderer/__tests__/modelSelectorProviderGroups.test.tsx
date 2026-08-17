@@ -25,6 +25,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.aria': `Select model. Current: ${options?.model ?? ''}`,
         'newChat.modelSelector.trigger.ariaWithEffort': `Select model. Current: ${options?.model ?? ''}, effort: ${options?.effort ?? ''}`,
+        'newChat.modelSelector.modelListAria': '模型列表',
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
@@ -373,12 +374,21 @@ describe('ModelSelector provider groups', () => {
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
   });
 
+  it('hides effort summaries when the entry only supports selecting a model id', async () => {
+    renderSelector({ configurationEnabled: false });
+    await openDropdown();
+
+    const popover = screen.getByTestId('model-options-popover');
+    expect(within(popover).queryByTitle('high')).toBeNull();
+    expect(within(popover).queryByTitle('medium')).toBeNull();
+  });
+
   it('keeps the create-agent secondary panel at the original left/center position with layout coordinates', async () => {
     renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
     await openDropdown();
     await waitForSearchInputFocus();
 
-    const modelList = screen.getByRole('listbox', { name: 'Model list' });
+    const modelList = screen.getByRole('listbox', { name: '模型列表' });
     const row = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
     await openModelOptionsPanel(row);
 
@@ -487,7 +497,7 @@ describe('ModelSelector provider groups', () => {
     // keydown 后 React 同步 flush 的具体顺序。
     await waitFor(() => {
       expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
-      expect(screen.getByRole('listbox', { name: 'Model list' })).toBeTruthy();
+      expect(screen.getByRole('listbox', { name: '模型列表' })).toBeTruthy();
     });
   });
 
@@ -497,7 +507,7 @@ describe('ModelSelector provider groups', () => {
 
     const searchInput = await waitForSearchInputFocus();
 
-    const modelList = screen.getByRole('listbox', { name: 'Model list' });
+    const modelList = screen.getByRole('listbox', { name: '模型列表' });
     const originalRow = within(modelList).getByRole('option', { name: /Opus 4\.8/ });
     await openModelOptionsPanel(originalRow);
     await screen.findByTestId('model-options-floating-panel');

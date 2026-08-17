@@ -20,20 +20,30 @@ import {
   GROUP_BY_KEY,
   LAST_ACTIVITY_KEY,
   SORT_BY_KEY,
+  TASK_INFO_KEY,
   MANUAL_PROJECT_ORDER_KEY,
+  DIALOGUE_GROUP_COLLAPSED_KEY,
+  DIALOGUE_GROUP_ALL_KEY,
   loadStatus,
   loadProjects,
   loadGroupBy,
   loadLastActivity,
   loadSortBy,
+  loadTaskInfoFields,
   loadManualProjectOrder,
+  loadDialogueGroupCollapsedKeys,
+  persistDialogueGroupCollapsedKeys,
   persistStatus,
   persistProjects,
   persistGroupBy,
   persistLastActivity,
   persistSortBy,
+  persistTaskInfoFields,
+  nextTaskInfoAfterToggle,
   persistManualProjectOrder,
+  DIALOGUE_FILTER_KEY,
   nextProjectsAfterToggle,
+  nextSortByAfterGroupByChange,
   includeProjectInFilter,
   removeProjectsFromFilter,
   gcProjectsAgainstActive,
@@ -43,6 +53,13 @@ import {
   mergeVisibleReorder,
   type FilterProjects,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
+import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
+
+const OWNER_ID = 'owner-a';
+
+function ownerKey(baseKey: string): string {
+  return sidebarOwnerStorageKey(baseKey, OWNER_ID);
+}
 
 /* ------------ in-memory localStorage shim ------------ */
 
@@ -115,45 +132,47 @@ describe('loadProjects', () => {
   afterEach(() => uninstallLocalStorage());
 
   it("defaults to 'all' when storage is empty", () => {
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("returns 'all' when persisted as the literal 'all'", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify('all'));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it('returns the persisted array', () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(['/a/b', '/c/d']));
-    expect(loadProjects()).toEqual(['local:/a/b', 'local:/c/d']);
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/a/b', 'local:/c/d']);
   });
 
   it("falls back to 'all' on empty array", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify([]));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
+  });
+
+  it('preserves the dialogue sentinel in persisted project filters', () => {
+    persistProjects([DIALOGUE_FILTER_KEY, '/a/b'], OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toEqual([DIALOGUE_FILTER_KEY, 'local:/a/b']);
   });
 
   it('cleans non-string entries from a mixed array', () => {
-    localStorage.setItem(
-      PROJECTS_KEY,
-      JSON.stringify(['/a/b', 42, null, '/c/d', '']),
-    );
-    expect(loadProjects()).toEqual(['local:/a/b', 'local:/c/d']);
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(['/a/b', 42, null, '/c/d', '']));
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/a/b', 'local:/c/d']);
   });
 
   it("falls back to 'all' on broken JSON", () => {
     localStorage.setItem(PROJECTS_KEY, '{not-json');
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("falls back to 'all' on shape mismatch (object instead of array)", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify({ foo: 'bar' }));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("returns 'all' when localStorage is unavailable", () => {
     uninstallLocalStorage();
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 });
 
@@ -165,9 +184,9 @@ describe('loadGroupBy', () => {
     expect(loadGroupBy()).toBe('project');
   });
 
-  it("returns 'date' / 'project' when persisted", () => {
-    localStorage.setItem(GROUP_BY_KEY, 'date');
-    expect(loadGroupBy()).toBe('date');
+  it("returns 'flat' / 'project' when persisted", () => {
+    localStorage.setItem(GROUP_BY_KEY, 'flat');
+    expect(loadGroupBy()).toBe('flat');
     localStorage.setItem(GROUP_BY_KEY, 'project');
     expect(loadGroupBy()).toBe('project');
   });
@@ -182,10 +201,10 @@ describe('loadGroupBy', () => {
     expect(loadGroupBy()).toBe('project');
   });
 
-  // 用户显式选过 'date' → 持久化生效,下次启动仍是 'date'(不被默认值覆盖)。
-  it("respects an explicit persisted 'date' across reloads", () => {
+  // 侧边栏重设计 D 期:按日期分组已删除;老用户存量 'date' 静默回退默认。
+  it("falls back to 'project' on the removed 'date' legacy value", () => {
     localStorage.setItem(GROUP_BY_KEY, 'date');
-    expect(loadGroupBy()).toBe('date');
+    expect(loadGroupBy()).toBe('project');
   });
 });
 
@@ -224,12 +243,10 @@ describe('loadSortBy', () => {
   });
 
   it('returns persisted sort modes', () => {
-    localStorage.setItem(SORT_BY_KEY, 'time');
-    expect(loadSortBy()).toBe('time');
+    localStorage.setItem(SORT_BY_KEY, 'priority');
+    expect(loadSortBy()).toBe('priority');
     localStorage.setItem(SORT_BY_KEY, 'manual');
     expect(loadSortBy()).toBe('manual');
-    localStorage.setItem(SORT_BY_KEY, 'alphabetic');
-    expect(loadSortBy()).toBe('alphabetic');
     localStorage.setItem(SORT_BY_KEY, 'recency');
     expect(loadSortBy()).toBe('recency');
   });
@@ -239,9 +256,99 @@ describe('loadSortBy', () => {
     expect(loadSortBy()).toBe('recency');
   });
 
+  it("falls back to 'recency' on the removed 'alphabetic' legacy value", () => {
+    // 侧边栏重设计裁决:按名称排序已删除;老用户存量值静默回退默认。
+    localStorage.setItem(SORT_BY_KEY, 'alphabetic');
+    expect(loadSortBy()).toBe('recency');
+  });
+
+  it("falls back to 'recency' on the removed 'time' (oldest-first) legacy value", () => {
+    // 2026-08-12 用户裁决:「最早优先」删除,时间排序只保留最近活动在前一档;
+    // 存量值静默回退到 recency(菜单文案「按时间排序」)。
+    localStorage.setItem(SORT_BY_KEY, 'time');
+    expect(loadSortBy()).toBe('recency');
+  });
+
   it("returns 'recency' when localStorage is unavailable", () => {
     uninstallLocalStorage();
     expect(loadSortBy()).toBe('recency');
+  });
+});
+
+describe('nextSortByAfterGroupByChange', () => {
+  it('flat + manual 回落到 recency;其它组合保持', () => {
+    expect(nextSortByAfterGroupByChange('flat', 'manual')).toBe('recency');
+    expect(nextSortByAfterGroupByChange('flat', 'priority')).toBe('priority');
+    expect(nextSortByAfterGroupByChange('flat', 'recency')).toBe('recency');
+    expect(nextSortByAfterGroupByChange('project', 'manual')).toBe('manual');
+  });
+});
+
+describe('taskInfoFields（任务行右侧信息复选）', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it("defaults to ['time'] when storage is empty", () => {
+    expect(loadTaskInfoFields()).toEqual(['time']);
+  });
+
+  it('空数组是合法状态（用户显式全不选），不回落默认', () => {
+    persistTaskInfoFields([]);
+    expect(loadTaskInfoFields()).toEqual([]);
+  });
+
+  it('persist → load round-trips and drops illegal / duplicate entries', () => {
+    persistTaskInfoFields(['pr', 'tokens', 'cost', 'time']);
+    expect(loadTaskInfoFields()).toEqual(['pr', 'tokens', 'cost', 'time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'bogus', 'time', 42, 'cost']));
+    expect(loadTaskInfoFields()).toEqual(['time', 'cost']);
+  });
+
+  it('falls back to default on broken JSON or shape mismatch', () => {
+    localStorage.setItem(TASK_INFO_KEY, '{not-json');
+    expect(loadTaskInfoFields()).toEqual(['time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ fields: ['time'] }));
+    expect(loadTaskInfoFields()).toEqual(['time']);
+  });
+
+  it('nextTaskInfoAfterToggle toggles membership and allows empty', () => {
+    expect(nextTaskInfoAfterToggle(['time'], 'cost')).toEqual(['time', 'cost']);
+    expect(nextTaskInfoAfterToggle(['time', 'cost'], 'time')).toEqual(['cost']);
+    expect(nextTaskInfoAfterToggle(['cost'], 'cost')).toEqual([]);
+    expect(nextTaskInfoAfterToggle([], 'pr')).toEqual(['pr']);
+  });
+});
+
+describe('dialogueGroupCollapsedKeys（对话组按分组 key 独立折叠）', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('defaults to empty set when storage is empty', () => {
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+  });
+
+  it("migrates legacy boolean: 'true' → [DIALOGUE_GROUP_ALL_KEY], 'false' → empty", () => {
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, 'true');
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([DIALOGUE_GROUP_ALL_KEY]);
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, 'false');
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+  });
+
+  it('persist → load round-trips per-device keys independently', () => {
+    persistDialogueGroupCollapsedKeys(new Set(['local', 'device-1']));
+    const keys = loadDialogueGroupCollapsedKeys();
+    expect(keys.has('local')).toBe(true);
+    expect(keys.has('device-1')).toBe(true);
+    expect(keys.has('device-2')).toBe(false);
+  });
+
+  it('falls back to empty on broken JSON / shape mismatch and drops non-string entries', () => {
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, '{not-json');
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify({ all: true }));
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
+    localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify(['local', 42, 'device-1']));
+    expect([...loadDialogueGroupCollapsedKeys()]).toEqual(['local', 'device-1']);
   });
 });
 
@@ -250,7 +357,7 @@ describe('loadManualProjectOrder', () => {
   afterEach(() => uninstallLocalStorage());
 
   it('defaults to an empty array when storage is empty', () => {
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
   });
 
   it('returns a cleaned unique order array', () => {
@@ -258,14 +365,14 @@ describe('loadManualProjectOrder', () => {
       MANUAL_PROJECT_ORDER_KEY,
       JSON.stringify(['local:/b', 42, 'local:/a', 'local:/b', '', null]),
     );
-    expect(loadManualProjectOrder()).toEqual(['local:/b', 'local:/a']);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual(['local:/b', 'local:/a']);
   });
 
   it('falls back to an empty array on broken JSON or shape mismatch', () => {
     localStorage.setItem(MANUAL_PROJECT_ORDER_KEY, '{not-json');
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
     localStorage.setItem(MANUAL_PROJECT_ORDER_KEY, JSON.stringify({ order: ['local:/a'] }));
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
   });
 });
 
@@ -285,18 +392,22 @@ describe('persist round-trip', () => {
   });
 
   it("persistProjects('all') → loadProjects() returns 'all'", () => {
-    persistProjects('all');
-    expect(loadProjects()).toBe('all');
+    persistProjects('all', OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it('persistProjects([…]) → loadProjects() returns the array', () => {
-    persistProjects(['local:/foo', 'local:/bar']);
-    expect(loadProjects()).toEqual(['local:/foo', 'local:/bar']);
+    persistProjects(['local:/foo', 'local:/bar'], OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/foo', 'local:/bar']);
+    expect(localStorage.getItem(ownerKey(PROJECTS_KEY))).toBe(
+      JSON.stringify(['local:/foo', 'local:/bar']),
+    );
+    expect(loadProjects('owner-b')).toBe('all');
   });
 
   it('persistGroupBy → loadGroupBy returns the same value', () => {
-    persistGroupBy('date');
-    expect(loadGroupBy()).toBe('date');
+    persistGroupBy('flat');
+    expect(loadGroupBy()).toBe('flat');
     persistGroupBy('project');
     expect(loadGroupBy()).toBe('project');
   });
@@ -309,19 +420,20 @@ describe('persist round-trip', () => {
   });
 
   it('persistSortBy → loadSortBy returns the same value', () => {
-    persistSortBy('time');
-    expect(loadSortBy()).toBe('time');
+    persistSortBy('priority');
+    expect(loadSortBy()).toBe('priority');
     persistSortBy('manual');
     expect(loadSortBy()).toBe('manual');
-    persistSortBy('alphabetic');
-    expect(loadSortBy()).toBe('alphabetic');
     persistSortBy('recency');
     expect(loadSortBy()).toBe('recency');
   });
 
   it('persistManualProjectOrder → loadManualProjectOrder returns the same order', () => {
-    persistManualProjectOrder(['local:/b', 'local:/a']);
-    expect(loadManualProjectOrder()).toEqual(['local:/b', 'local:/a']);
+    persistManualProjectOrder(['local:/b', 'local:/a'], OWNER_ID);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual(['local:/b', 'local:/a']);
+    expect(localStorage.getItem(ownerKey(MANUAL_PROJECT_ORDER_KEY))).toBe(
+      JSON.stringify(['local:/b', 'local:/a']),
+    );
   });
 });
 
@@ -340,7 +452,10 @@ describe('nextProjectsAfterToggle', () => {
 
   it('removing one of multiple keeps order of the remaining', () => {
     const prev: FilterProjects = ['local:/proj-a', 'local:/proj-b', 'local:/proj-c'];
-    expect(nextProjectsAfterToggle(prev, 'local:/proj-b')).toEqual(['local:/proj-a', 'local:/proj-c']);
+    expect(nextProjectsAfterToggle(prev, 'local:/proj-b')).toEqual([
+      'local:/proj-a',
+      'local:/proj-c',
+    ]);
   });
 
   it("removing the last entry falls back to 'all'", () => {
@@ -353,6 +468,17 @@ describe('nextProjectsAfterToggle', () => {
     const snapshot = [...prev];
     nextProjectsAfterToggle(prev, 'local:/proj-c');
     expect(prev).toEqual(snapshot);
+  });
+
+  it("toggles the dialogue sentinel without treating it as a project path", () => {
+    expect(nextProjectsAfterToggle('all', DIALOGUE_FILTER_KEY)).toEqual([DIALOGUE_FILTER_KEY]);
+    expect(nextProjectsAfterToggle([DIALOGUE_FILTER_KEY], 'local:/proj-a')).toEqual([
+      DIALOGUE_FILTER_KEY,
+      'local:/proj-a',
+    ]);
+    expect(nextProjectsAfterToggle([DIALOGUE_FILTER_KEY, 'local:/proj-a'], DIALOGUE_FILTER_KEY)).toEqual([
+      'local:/proj-a',
+    ]);
   });
 });
 
@@ -403,23 +529,15 @@ describe('removeProjectsFromFilter', () => {
         ]),
         'win32',
       ),
-    ).toEqual([
-      'remote:host-a:C:/Repo',
-      'device:device-a:C:/Repo',
-      'local:/Users/Lee/Repo',
-    ]);
+    ).toEqual(['remote:host-a:C:/Repo', 'device:device-a:C:/Repo', 'local:/Users/Lee/Repo']);
   });
 
   it('keeps a different-cased POSIX double-slash project in the filter', () => {
     const prev: FilterProjects = ['local://mnt/Repo', 'local://mnt/repo'];
 
-    expect(
-      removeProjectsFromFilter(
-        prev,
-        new Set(['local://mnt/Repo']),
-        'linux',
-      ),
-    ).toEqual(['local://mnt/repo']);
+    expect(removeProjectsFromFilter(prev, new Set(['local://mnt/Repo']), 'linux')).toEqual([
+      'local://mnt/repo',
+    ]);
   });
 
   it("falls back to 'all' after removing the final explicit project", () => {
@@ -427,11 +545,16 @@ describe('removeProjectsFromFilter', () => {
     expect(removeProjectsFromFilter(prev, new Set(['local:/a']), 'linux')).toBe('all');
   });
 
+  it('keeps the dialogue sentinel when hidden-project snapshots arrive', () => {
+    const prev: FilterProjects = [DIALOGUE_FILTER_KEY, 'local:/a'];
+    expect(removeProjectsFromFilter(prev, new Set(['local:/a']), 'linux')).toEqual([
+      DIALOGUE_FILTER_KEY,
+    ]);
+  });
+
   it('is idempotent for unrelated and repeated hidden snapshots', () => {
     const unrelated: FilterProjects = ['local:/b'];
-    expect(
-      removeProjectsFromFilter(unrelated, new Set(['local:/a']), 'linux'),
-    ).toBe(unrelated);
+    expect(removeProjectsFromFilter(unrelated, new Set(['local:/a']), 'linux')).toBe(unrelated);
 
     const afterFirstRemoval = removeProjectsFromFilter(
       ['local:/a', 'local:/b'],
@@ -439,9 +562,9 @@ describe('removeProjectsFromFilter', () => {
       'linux',
     );
     expect(afterFirstRemoval).toEqual(['local:/b']);
-    expect(
-      removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']), 'linux'),
-    ).toBe(afterFirstRemoval);
+    expect(removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']), 'linux')).toBe(
+      afterFirstRemoval,
+    );
   });
 });
 
@@ -480,39 +603,55 @@ describe('gcProjectsAgainstActive', () => {
     const prev: FilterProjects = ['local:/a'];
     expect(gcProjectsAgainstActive(prev, [])).toBe('all');
   });
+
+  it('keeps the dialogue sentinel when GC drops stale projects', () => {
+    const prev: FilterProjects = [DIALOGUE_FILTER_KEY, 'local:/gone'];
+    expect(gcProjectsAgainstActive(prev, ['local:/a'])).toEqual([DIALOGUE_FILTER_KEY]);
+  });
+
+  it('keeps dialogue-only filters even when no projects remain', () => {
+    expect(gcProjectsAgainstActive([DIALOGUE_FILTER_KEY], [])).toEqual([DIALOGUE_FILTER_KEY]);
+  });
 });
 
 describe('manual project ordering', () => {
   it('normalizes by removing stale entries and appending new active dirs', () => {
-    expect(normalizeManualProjectOrder(['local:/b', 'local:/stale', 'local:/a'], ['local:/a', 'local:/b', '/c'])).toEqual([
-      'local:/b',
-      'local:/a',
-      'local:/c',
-    ]);
+    expect(
+      normalizeManualProjectOrder(
+        ['local:/b', 'local:/stale', 'local:/a'],
+        ['local:/a', 'local:/b', '/c'],
+      ),
+    ).toEqual(['local:/b', 'local:/a', 'local:/c']);
   });
 
   it('moves a project before a target', () => {
-    expect(moveManualProjectOrder(['local:/a', 'local:/b', '/c'], ['local:/a', 'local:/b', '/c'], 'local:/c', 'local:/a', 'before')).toEqual([
-      'local:/c',
-      'local:/a',
-      'local:/b',
-    ]);
+    expect(
+      moveManualProjectOrder(
+        ['local:/a', 'local:/b', '/c'],
+        ['local:/a', 'local:/b', '/c'],
+        'local:/c',
+        'local:/a',
+        'before',
+      ),
+    ).toEqual(['local:/c', 'local:/a', 'local:/b']);
   });
 
   it('moves a project after a target, seeding from active dirs when no order exists', () => {
-    expect(moveManualProjectOrder([], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/c', 'after')).toEqual([
-      'local:/b',
-      'local:/c',
-      'local:/a',
-    ]);
+    expect(
+      moveManualProjectOrder([], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/c', 'after'),
+    ).toEqual(['local:/b', 'local:/c', 'local:/a']);
   });
 
   it('keeps the order unchanged for an adjacent no-op drop', () => {
-    expect(moveManualProjectOrder(['local:/a', 'local:/b', '/c'], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/b', 'before')).toEqual([
-      'local:/a',
-      'local:/b',
-      'local:/c',
-    ]);
+    expect(
+      moveManualProjectOrder(
+        ['local:/a', 'local:/b', '/c'],
+        ['local:/a', 'local:/b', '/c'],
+        'local:/a',
+        'local:/b',
+        'before',
+      ),
+    ).toEqual(['local:/a', 'local:/b', 'local:/c']);
   });
 });
 
