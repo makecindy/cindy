@@ -117,6 +117,35 @@ describe('PI native subscription forwarding', () => {
     expect(Buffer.concat(res.chunks).toString('utf8')).toContain('event: done');
   });
 
+  it('keeps Pi 1M as a distinct local model but sends the official bare id upstream', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('openai', 'session-1m', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = { model: 'gpt-5.6-sol[1m]', input: 'hello' };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 2,
+        method: 'POST',
+        url: '/codex/responses',
+        headers: { 'content-type': 'application/json', 'content-encoding': 'zstd' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(
+      Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'),
+    );
+    expect(request).toEqual({ model: 'gpt-5.6-sol', input: 'hello' });
+    expect(fetchMock.mock.calls[0]![1]?.headers).not.toHaveProperty('content-encoding');
+  });
+
   it('destroys the local bridge response when a native upstream stream fails after headers', async () => {
     const upstreamError = new Error('native upstream disconnected mid-stream');
     let sentFirstChunk = false;

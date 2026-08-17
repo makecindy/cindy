@@ -88,6 +88,12 @@ describe("model registry", () => {
       })?.price,
     ).toMatchObject({ inputPerMtok: 5, outputPerMtok: 30 });
     expect(
+      resolveModelReferencePrice(registry, "openai", "chatgpt/gpt-5.6-sol[1m]", {
+        agent: "claude-code",
+        inputTokens: 272_001,
+      })?.price,
+    ).toMatchObject({ inputPerMtok: 10, outputPerMtok: 45 });
+    expect(
       resolveModelReferencePrice(registry, "openai", "gpt-5.6-sol", {
         agent: "codex",
         inputTokens: 272_001,

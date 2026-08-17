@@ -178,6 +178,39 @@ describe('registry presence 实体化', () => {
     });
   });
 
+  it('同一 OpenAI modelId 的长上下文 entry 只生成 Claude/Pi 独立选择', () => {
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({ contextWindow: 272_000 }),
+        gpt6Entry({
+          id: 'openai/gpt-6[1m]',
+          name: 'GPT-6 (1M · 高消耗)',
+          contextWindow: 1_000_000,
+          routes: [{ providerId: 'openai', modelId: 'gpt-6', agents: ['claude-code'] }],
+        }),
+      ]),
+    );
+
+    expect(models('openai', 'codex').filter((m) => m.id.startsWith('gpt-6'))).toMatchObject([
+      { id: 'gpt-6', contextWindow: 272_000 },
+    ]);
+    for (const agent of ['claude-code', 'pi'] as const) {
+      expect(
+        models('openai', agent)
+          .filter((m) => m.id.startsWith('chatgpt/gpt-6'))
+          .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow })),
+      ).toEqual([
+        { id: 'chatgpt/gpt-6', name: 'GPT-6', contextWindow: 272_000 },
+        {
+          id: 'chatgpt/gpt-6[1m]',
+          name: 'GPT-6 (1M · 高消耗)',
+          contextWindow: 1_000_000,
+        },
+      ]);
+    }
+    expect(getModelPlaneWarnings()).toEqual([]);
+  });
+
   it('没有 Registry entry 时 Pi 保留 Codex discovery 的既有字段', () => {
     setActiveCatalog(baseCatalog());
     setDiscoveredCodexModels([

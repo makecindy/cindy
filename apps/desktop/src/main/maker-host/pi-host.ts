@@ -484,16 +484,22 @@ export function buildPiSubscriptionNativeProviders(
             : model.id;
         const bundledModels = bundledModelsByProvider?.get(piProviderId);
         const bundledModel = bundledModels?.get(wireId);
+        const contextProfileTemplate =
+          sourceProviderId === 'openai' && wireId.endsWith('[1m]')
+            ? bundledModels?.get(wireId.slice(0, -'[1m]'.length))
+            : undefined;
         // A missing/empty/partial PI probe is not evidence that the daily
         // catalog annotation is wrong. Keep annotated rows in the overlay so
         // inheritModels cannot filter out a confirmed addition or correction.
         const isAnnotatedAddition = !!model.piApi && !bundledModel;
+        const isContextProfileAddition =
+          sourceProviderId === 'openai' && wireId.endsWith('[1m]') && !bundledModel;
         const isProtocolCorrection =
           sourceProviderId !== 'openai' &&
           !!model.piApi &&
           !!bundledModel &&
           bundledModel.api !== model.piApi;
-        const preserved = isProtocolCorrection ? bundledModel : undefined;
+        const preserved = isProtocolCorrection ? bundledModel : contextProfileTemplate;
         const catalogCost = catalogCostForPiNative(model.cost);
         return {
           id: model.id,
@@ -502,7 +508,7 @@ export function buildPiSubscriptionNativeProviders(
           // portable piApi marks a daily catalog addition here. Existing models
           // stay untouched so their full bundled compat/pricing metadata survives;
           // only IDs proven absent from this exact PI binary are added.
-          ...(sourceProviderId === 'openai' && isAnnotatedAddition
+          ...(sourceProviderId === 'openai' && (isAnnotatedAddition || isContextProfileAddition)
             ? { catalogAddition: true }
             : {}),
           // SuperGrok 没有官方列模型通道，Cindy 目录是成员唯一来源。
@@ -522,8 +528,10 @@ export function buildPiSubscriptionNativeProviders(
           (isAnnotatedAddition || isProtocolCorrection)
             ? { api: model.piApi }
             : {}),
-          name: preserved?.name ?? model.name,
-          contextWindow: preserved?.contextWindow ?? model.contextWindow,
+          name: isContextProfileAddition ? model.name : (preserved?.name ?? model.name),
+          contextWindow: isContextProfileAddition
+            ? model.contextWindow
+            : (preserved?.contextWindow ?? model.contextWindow),
           ...(preserved?.maxTokens
             ? { maxTokens: preserved.maxTokens }
             : model.maxOutput

@@ -54,6 +54,7 @@ import {
 import {
   applyRegistryConsumerOverlay,
   applyRootRegistryPlan,
+  consumerPlanKey,
   planRegistryRoots,
   toChatgptBridgeModel,
   rootPlanKey,
@@ -841,11 +842,27 @@ function computeMerged(): Catalog {
         prepareClaudeModel,
         preparePiModel,
       );
+      const appendConsumerAdditions = (
+        agent: 'claude-code' | 'pi',
+        models: CatalogModel[],
+      ): CatalogModel[] => {
+        const additions = plan.consumerAdditions.get(consumerPlanKey('openai', agent)) ?? [];
+        if (additions.length === 0) return models;
+        const seen = new Set(models.map((model) => model.id));
+        return [...models, ...additions.filter((model) => !seen.has(model.id))];
+      };
       return {
         ...projected,
         models: {
           ...projected.models,
-          pi: applyPiApiAnnotations('openai', projected.models.pi ?? []),
+          'claude-code': appendConsumerAdditions(
+            'claude-code',
+            projected.models['claude-code'] ?? [],
+          ),
+          pi: applyPiApiAnnotations(
+            'openai',
+            appendConsumerAdditions('pi', projected.models.pi ?? []),
+          ),
         },
       };
     }

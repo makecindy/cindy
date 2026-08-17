@@ -162,6 +162,14 @@ export interface ModelPlaneRegistryPlan {
   roots: Map<string, RootRegistryPlan>;
   /** key = `${providerId}:${consumer}`；wire bridge 用 perAgent，Pi 用 entry 基线。 */
   consumers: Map<string, Map<string, Partial<CatalogModel>>>;
+  /**
+   * key = `${providerId}:${consumer}`；同一上游 modelId 的显式消费端变体。
+   *
+   * 这类条目用不同 canonical entry id 表达独立选择，但 route.modelId 仍保持厂商官方
+   * model id。旧客户端会因没有 canonical root 而安全忽略；理解该语义的新客户端只在
+   * route 明确授权的 bridge 与 Pi 投影中物化，不污染 canonical root（尤其不改 Codex）。
+   */
+  consumerAdditions: Map<string, CatalogModel[]>;
   warnings: ModelPlaneWarning[];
 }
 
@@ -268,7 +276,12 @@ function effectiveRouteFields(
  * status 缺失的 metadata-only 条目);deprecated 实体化强制 defaultEnabled=false。
  */
 export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPlaneRegistryPlan {
-  const plan: ModelPlaneRegistryPlan = { roots: new Map(), consumers: new Map(), warnings: [] };
+  const plan: ModelPlaneRegistryPlan = {
+    roots: new Map(),
+    consumers: new Map(),
+    consumerAdditions: new Map(),
+    warnings: [],
+  };
   if (!registry) return plan;
   const claimedRootRoutes = new Set<string>();
   for (const entry of registry.models) {
@@ -278,6 +291,58 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
       if (!policy) continue;
       const routeAgents = route.agents as readonly RootAgentKind[];
       const memberRoots = policy.roots.filter((agent) => routeAgents.includes(agent));
+      const canonicalPrefix = `${route.providerId}/`;
+      const consumerAliasId = entry.id.startsWith(canonicalPrefix)
+        ? entry.id.slice(canonicalPrefix.length)
+        : null;
+      const isConsumerAlias =
+        consumerAliasId !== null &&
+        consumerAliasId.length > 0 &&
+        consumerAliasId !== route.modelId;
+
+      // OpenAI 的包月长上下文是同一官方 modelId 的显式 opt-in。Registry 用不同 entry id
+      // 建立独立选择，route.modelId 仍写官方裸 id；route 只点名 claude-code，因此不能为了
+      // 物化它而把 Codex root 一起抬高。Pi 继续按产品约定从同一 entry 基线投影。
+      if (
+        route.providerId === 'openai' &&
+        memberRoots.length === 0 &&
+        isConsumerAlias &&
+        routeAgents.includes('claude-code')
+      ) {
+        if (status === null) continue;
+        for (const consumer of ['claude-code', 'pi'] as const) {
+          const fields = effectiveRouteFields(
+            entry,
+            consumer === 'claude-code' ? 'claude-code' : undefined,
+          );
+          if (fields.validationError) {
+            plan.warnings.push({
+              source: 'registry',
+              providerId: route.providerId,
+              agent: policy.piRoot,
+              modelId: consumerAliasId,
+              reason: `${consumer} consumer alias ${fields.validationError}`,
+            });
+            continue;
+          }
+          const materialized = toMaterializedModel(consumerAliasId, fields, status);
+          if (typeof materialized === 'string') {
+            plan.warnings.push({
+              source: 'registry',
+              providerId: route.providerId,
+              agent: policy.piRoot,
+              modelId: consumerAliasId,
+              reason: `${consumer} consumer alias ${materialized}`,
+            });
+            continue;
+          }
+          const key = consumerPlanKey(route.providerId, consumer);
+          const additions = plan.consumerAdditions.get(key) ?? [];
+          additions.push(toChatgptBridgeModel(materialized));
+          plan.consumerAdditions.set(key, additions);
+        }
+        continue;
+      }
       // 有 lifecycle presence、却没有 canonical root 的 route 无法产生任何实体或
       // 投影源。把它当作者错误隔离，而不是留下一个看似授权 bridge、实际永远不生效
       // 的幽灵配置。metadata-only 旧条目不升级为 presence，因此保持静默兼容。

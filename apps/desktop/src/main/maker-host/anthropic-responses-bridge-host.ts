@@ -411,6 +411,14 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Pi 用独立 `[1m]` 模型项承载上下文/压缩策略；ChatGPT 上游仍只接受官方裸 model id。 */
+function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> | null {
+  if (!isPlainRecord(body) || typeof body.model !== 'string' || !body.model.endsWith('[1m]')) {
+    return null;
+  }
+  return { ...body, model: body.model.slice(0, -'[1m]'.length) };
+}
+
 /**
  * PI already emits xAI-native payloads, so this path bypasses the Messages →
  * Responses bridge that normally supplies xAI's model-gated server tools.
@@ -520,7 +528,13 @@ export function getPiNativeSubscriptionHandler(
       headers.accept = ctx.headers.accept ?? 'text/event-stream';
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
-      if (providerId === 'xai') {
+      if (providerId === 'openai') {
+        const withBareModel = withOpenaiContextProfileModel(parsedBody);
+        if (withBareModel) {
+          outboundBody = Buffer.from(JSON.stringify(withBareModel));
+          contentEncoding = undefined;
+        }
+      } else if (providerId === 'xai') {
         const withServerTools = withNativeXaiServerSideTools(parsedBody);
         if (withServerTools) {
           outboundBody = Buffer.from(JSON.stringify(withServerTools));
