@@ -475,6 +475,37 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent abort stops background wake tasks', () => {
+  it('graceful stop cancels a Session send while Claude is still converting attachments', async () => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream();
+    const session = wrapInSession(handle);
+    let resolveResize!: (value: string) => void;
+    imageResizerMock.process.mockImplementationOnce(
+      () => new Promise<string>((resolve) => { resolveResize = resolve; }),
+    );
+
+    const imagePath = path.join(os.tmpdir(), 'graceful-stop-pre-acceptance.png');
+    const send = session.send({
+      type: 'user',
+      content: [{ type: 'image', path: imagePath }],
+    });
+    await waitFor(() => imageResizerMock.process.mock.calls.length > 0, 'attachment conversion started');
+
+    const firstStop = session.requestGracefulStop();
+    const secondStop = session.requestGracefulStop();
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+    resolveResize(imagePath);
+
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(Promise.all([firstStop, secondStop])).resolves.toEqual([
+      { status: 'requested', turnGeneration: 1 },
+      { status: 'requested', turnGeneration: 1 },
+    ]);
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+    stream.end();
+    await session.close().catch(() => undefined);
+  });
+
   it('graceful stop sends only the SDK interrupt without closing or stopping background tasks', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
     await handle.send({ type: 'user', content: 'long turn' });

@@ -107,6 +107,114 @@ function waitForSessionEvent(session: Session, type: AgentEvent['type']): Promis
 }
 
 describe('Session graceful-stop control state', () => {
+  it('cancels and joins a pre-acceptance send reservation before reporting stop requested', async () => {
+    const stub = createHandle();
+    let running = false;
+    let sendSignal: AbortSignal | undefined;
+    let releaseConversion!: () => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+    const conversion = new Promise<void>((resolve) => { releaseConversion = resolve; });
+    stub.handle.send = vi.fn(async (_message, opts) => {
+      running = true;
+      sendSignal = opts?.signal;
+      markSendStarted();
+      await conversion;
+      if (opts?.signal?.aborted) {
+        running = false;
+        throw new Error('provider input cancelled before acceptance');
+      }
+    });
+    stub.handle.isTurnRunning = () => running;
+    const session = createSession(stub);
+
+    const send = session.send('slow attachment');
+    await sendStarted;
+    const firstStop = session.requestGracefulStop();
+    const secondStop = session.requestGracefulStop();
+
+    expect(sendSignal?.aborted).toBe(true);
+    expect(stub.requestGracefulStop).not.toHaveBeenCalled();
+    releaseConversion();
+
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(Promise.all([firstStop, secondStop])).resolves.toEqual([
+      { status: 'requested', turnGeneration: 1 },
+      { status: 'requested', turnGeneration: 1 },
+    ]);
+    expect(stub.requestGracefulStop).not.toHaveBeenCalled();
+    expect(session.getTurnControlSnapshot().active).toBe(false);
+  });
+
+  it('falls through to the provider soft interrupt when acceptance wins the reservation race', async () => {
+    const stub = createHandle();
+    let running = false;
+    let releaseAcceptance!: () => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+    const acceptance = new Promise<void>((resolve) => { releaseAcceptance = resolve; });
+    stub.handle.send = vi.fn(async () => {
+      running = true;
+      markSendStarted();
+      await acceptance;
+    });
+    stub.handle.isTurnRunning = () => running;
+    const session = createSession(stub);
+
+    const send = session.send('accept while stop races');
+    await sendStarted;
+    const stop = session.requestGracefulStop();
+    releaseAcceptance();
+
+    await expect(send).resolves.toEqual({ accepted: true });
+    await expect(stop).resolves.toEqual({ status: 'requested', turnGeneration: 1 });
+    expect(stub.requestGracefulStop).toHaveBeenCalledOnce();
+    expect(stub.abort).not.toHaveBeenCalled();
+  });
+
+  it('reports an unconfirmed stop when a cancelled reservation never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createHandle();
+      let running = false;
+      let releaseAcceptance!: () => void;
+      let markSendStarted!: () => void;
+      let sendSignal: AbortSignal | undefined;
+      const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+      const acceptance = new Promise<void>((resolve) => { releaseAcceptance = resolve; });
+      stub.handle.send = vi.fn(async (_message, opts) => {
+        running = true;
+        sendSignal = opts?.signal;
+        markSendStarted();
+        await acceptance;
+        if (opts?.signal?.aborted) {
+          running = false;
+          throw new Error('provider input cancelled before acceptance');
+        }
+      });
+      stub.handle.isTurnRunning = () => running;
+      const session = createSession(stub);
+
+      const send = session.send('hung acceptance');
+      await sendStarted;
+      const stop = session.requestGracefulStop();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(stop).resolves.toEqual({
+        status: 'unconfirmed',
+        turnGeneration: 1,
+        reason: 'provider-acceptance-timeout',
+      });
+      expect(sendSignal?.aborted).toBe(true);
+      expect(stub.requestGracefulStop).not.toHaveBeenCalled();
+
+      releaseAcceptance();
+      await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('tracks only stop-control facts and clears them at terminal', async () => {
     const stub = createHandle();
     const session = createSession(stub);

@@ -6113,10 +6113,21 @@ describe('AgentInputCoordinator steer transaction', () => {
     ]);
     expect(newSteerSignal?.aborted).toBe(false);
 
-    oldGate.reject(new Error('old generation failed late'));
+    oldGate.reject(new Error('[NO_ACTIVE_TURN] old generation failed late'));
     await expect(oldSteerPromise).resolves.toBe(false);
     await flush();
 
+    const currentState = (
+      h.coordinator as unknown as {
+        getState: (sessionId: string) => {
+          activeTurn: { item: AgentInputQueuedMessage | null } | null;
+          queueAbortPending: boolean;
+        };
+      }
+    ).getState(sid);
+    expect(currentState.activeTurn?.item?.clientId).toBe('new-turn');
+    expect(currentState.queueAbortPending).toBe(false);
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).steeringQueueClientIds).toEqual(['reused-steer']);
     expect(latestProjection(h.projections).error).toBeNull();
     expect(h.coordinator.getQueueInspection(sid)).toEqual([
@@ -6134,6 +6145,55 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(newSteerSignal?.aborted).toBe(true);
     await expect(newSteerPromise).resolves.toBe(false);
     expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+  });
+
+  it('does not let a superseded steer release a newer turn boundary in the same generation', async () => {
+    const h = createHarness();
+    const sid = 'steer-stale-request-token-reused-client-id';
+    const oldTurn = makeItem('old-turn', 'old turn');
+    const newTurn = makeItem('new-turn', 'new turn');
+    const oldSteer = makeItem('reused-steer', 'old steer');
+    const newSteer = makeItem('reused-steer', 'new steer');
+    const oldGate = deferred<void>();
+    const newGate = deferred<void>();
+
+    h.setAgentKind('codex');
+    h.steerToAgent
+      .mockImplementationOnce(() => oldGate.promise)
+      .mockImplementationOnce(() => newGate.promise);
+
+    h.coordinator.enqueue(sid, oldTurn);
+    await flush();
+    const oldSteerPromise = h.coordinator.steer(sid, oldSteer);
+    await flush();
+
+    h.coordinator.stop(sid);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    h.coordinator.enqueue(sid, newTurn);
+    await flush();
+    const newSteerPromise = h.coordinator.steer(sid, newSteer);
+    await flush();
+
+    oldGate.reject(new Error('[NO_ACTIVE_TURN] superseded steer failed late'));
+    await expect(oldSteerPromise).resolves.toBe(false);
+    await flush();
+
+    const currentState = (
+      h.coordinator as unknown as {
+        getState: (sessionId: string) => {
+          activeTurn: { item: AgentInputQueuedMessage | null } | null;
+        };
+      }
+    ).getState(sid);
+    expect(currentState.activeTurn?.item?.clientId).toBe('new-turn');
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual(['reused-steer']);
+
+    newGate.resolve();
+    await expect(newSteerPromise).resolves.toBe(true);
   });
 });
 

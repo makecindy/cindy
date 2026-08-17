@@ -552,6 +552,8 @@ interface SessionInputState {
   steeringQueueClientIds: string[];
   /** Identity of the currently owned steer transaction for each visible clientId. */
   steeringRequestTokens: Map<string, symbol>;
+  /** Monotonic owner identity for late callbacks after the visible marker is gone. */
+  latestSteerRequestSequence: number;
   /** Direct composer steers have no pendingQueue row while delivery is still reversible. */
   directSteeringItems: AgentInputQueuedMessage[];
   queuePaused: boolean;
@@ -646,6 +648,7 @@ function createInitialInputState(
     pendingCompacts: [],
     steeringQueueClientIds: [],
     steeringRequestTokens: new Map(),
+    latestSteerRequestSequence: 0,
     directSteeringItems: [],
     queuePaused: false,
     queuePausedByRestore: false,
@@ -1762,6 +1765,8 @@ export class AgentInputCoordinator {
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
     const steerRequestToken = Symbol('agent-input-steer-request');
+    const steerRequestSequence = state.latestSteerRequestSequence + 1;
+    state.latestSteerRequestSequence = steerRequestSequence;
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
@@ -1864,6 +1869,21 @@ export class AgentInputCoordinator {
       });
     } catch (err) {
       const latest = this.getState(sessionId);
+      if (
+        latest.generation !== steerGeneration ||
+        latest.latestSteerRequestSequence !== steerRequestSequence
+      ) {
+        // A clear/new steer owns the current state. The old callback may only release its own
+        // controller; it must not alter the replacement turn, projection, or Stop boundary.
+        this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
+        log.info('ignoring stale steer completion after request ownership changed', {
+          sessionId,
+          clientId: item.clientId,
+          steerGeneration,
+          currentGeneration: latest.generation,
+        });
+        return false;
+      }
       const markerStillPresent = this.clearSteeringMarker(latest, item.clientId, {
         generation: steerGeneration,
         token: steerRequestToken,
@@ -1871,6 +1891,16 @@ export class AgentInputCoordinator {
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
 
       if (isNoActiveTurnError(err)) {
+        if (!markerStillPresent) {
+          // Stop/close owns the abort boundary after clearing this marker. Its token-guarded
+          // reconciliation path is the only code allowed to release that lock.
+          log.info('steer no-active-turn after marker cancelled (stop/close raced)', {
+            sessionId,
+            clientId: item.clientId,
+          });
+          this.emit(sessionId);
+          return false;
+        }
         // maker-core 权威判定无活跃 turn — 先让 host 校准可能 stale 的 busy
         // tracker, 否则下面 fallback / drain 仍会被假忙挡住 (见 deps 注释)。
         this.deps.reconcileTurnIdle?.(sessionId);
@@ -1885,15 +1915,6 @@ export class AgentInputCoordinator {
             staleClientId: latest.activeTurn.item?.clientId,
           });
           this.onTurnEvent(sessionId, 'done');
-        }
-        if (!markerStillPresent) {
-          log.info('steer no-active-turn after marker cancelled (stop/close raced)', {
-            sessionId,
-            clientId: item.clientId,
-          });
-          this.releaseAbortLockAndDrain(sessionId, 'steer-no-active-cancelled');
-          this.emit(sessionId);
-          return false;
         }
         log.info('steer fallback to normal turn dispatch (no active turn)', {
           sessionId,
@@ -1944,6 +1965,9 @@ export class AgentInputCoordinator {
       } else if (
         isSteerDeliveryUncertainError(err) &&
         latest.generation === steerGeneration &&
+        latest.latestSteerRequestSequence === steerRequestSequence &&
+        (steerVendorTurnGeneration === null ||
+          this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration) &&
         !latest.steeringRequestTokens.has(item.clientId)
       ) {
         // Stop/close 赢在 ack 返回前(marker 已被 stop 清):RPC 已发出,结果同样

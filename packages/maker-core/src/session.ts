@@ -114,6 +114,9 @@ export const STALL_ABORT_RECOVERY_GRACE_MS = 10_000;
  */
 export const MANUAL_ABORT_RECOVERY_GRACE_MS = 15_000;
 
+/** Shared confirmation budget for provider interrupt ACK and send acceptance. */
+const GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
+
 /**
  * turn 零事件看门狗的计时分片长度。额度按片累加,片尾核对真实经过时间,
  * 借此把系统挂起(合盖睡眠)的那段排除掉 —— 见 armTurnStallSlice。
@@ -325,10 +328,32 @@ type TurnControlState = {
 };
 
 type SendReservation = {
+  generation: number;
   phase: 'accepting' | 'dispatching';
   cancelled: boolean;
   abortController: AbortController;
+  settled: Promise<SendReservationOutcome>;
+  settle(outcome: SendReservationOutcome): void;
+  gracefulStopPromise: Promise<SessionGracefulStopResult> | null;
 };
+
+type SendReservationOutcome = 'accepted' | 'undispatched' | 'unconfirmed';
+
+function createSendReservation(generation: number): SendReservation {
+  let resolveSettled!: (outcome: SendReservationOutcome) => void;
+  const settled = new Promise<SendReservationOutcome>((resolve) => {
+    resolveSettled = resolve;
+  });
+  return {
+    generation,
+    phase: 'accepting',
+    cancelled: false,
+    abortController: new AbortController(),
+    settled,
+    settle: resolveSettled,
+    gracefulStopPromise: null,
+  };
+}
 
 export class Session {
   readonly id: string;
@@ -516,23 +541,20 @@ export class Session {
     if (this.sendReservation !== null) {
       throw this.createSessionRunningError();
     }
-    const reservation: SendReservation = {
-      phase: 'accepting',
-      cancelled: false,
-      abortController: new AbortController(),
-    };
-    this.sendReservation = reservation;
     // 新一轮 turn 的代号（见 turnGeneration）：看门狗的善后动作据此判断"还是不是那个
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     const previousTurnGeneration = this.turnGeneration;
     this.turnGeneration += 1;
     const reservedTurnGeneration = this.turnGeneration;
+    const reservation = createSendReservation(reservedTurnGeneration);
+    this.sendReservation = reservation;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
     let originInstalled = false;
     let turnDispatched = false;
     let dispatchConfirmedUndispatched = false;
+    let dispatchUnconfirmed = false;
     let previousTurnOrigin: SendOrigin | null = null;
     let previousTurnAttemptToken: number | null = null;
     const turnLifecycleObserver = this.turnLifecycleObserver;
@@ -644,6 +666,7 @@ export class Session {
         this.sendReservation = null;
       }
       if (e instanceof TurnDispatchUnconfirmedError) {
+        dispatchUnconfirmed = true;
         // Reserve Session shutdown before closing the handle. This suppresses
         // a synthetic terminal event from transport teardown and fences any
         // late provider activity before the orchestrator reports blocked.
@@ -693,6 +716,9 @@ export class Session {
         }
       }
       if (!turnDispatched) this.clearTurnControl(reservedTurnGeneration);
+      reservation.settle(
+        turnDispatched ? 'accepted' : dispatchUnconfirmed ? 'unconfirmed' : 'undispatched',
+      );
     }
   }
 
@@ -802,6 +828,8 @@ export class Session {
   }
 
   async requestGracefulStop(): Promise<SessionGracefulStopResult> {
+    const reservation = this.sendReservation;
+    if (reservation) return this.requestGracefulStopForReservation(reservation);
     const control = this.turnControlState;
     if (!control || control.generation !== this.turnGeneration || !this.isHandleTurnRunning()) {
       return { status: 'no-active-turn' };
@@ -825,6 +853,81 @@ export class Session {
       return { status: 'waiting-for-safe-point', turnGeneration: control.generation };
     }
     return this.issueGracefulStop(control);
+  }
+
+  /** Fence a graceful stop against input that the provider has not accepted yet. */
+  private requestGracefulStopForReservation(
+    reservation: SendReservation,
+  ): Promise<SessionGracefulStopResult> {
+    if (reservation.gracefulStopPromise) return reservation.gracefulStopPromise;
+    this.cancelSendReservation(reservation);
+    const control = this.turnControlState;
+    if (control?.generation === reservation.generation) control.gracefulStopState = 'requesting';
+
+    const result = this.waitForSendReservationSettlement(reservation).then(async (outcome) => {
+      const currentControl = this.turnControlState;
+      if (outcome === 'undispatched') {
+        if (currentControl?.generation === reservation.generation) {
+          currentControl.gracefulStopState = 'requested';
+        }
+        return { status: 'requested', turnGeneration: reservation.generation } as const;
+      }
+      if (outcome === 'unconfirmed' || outcome === 'timeout') {
+        if (currentControl?.generation === reservation.generation) {
+          currentControl.gracefulStopState = 'unconfirmed';
+        }
+        return {
+          status: 'unconfirmed',
+          turnGeneration: reservation.generation,
+          reason: outcome === 'timeout'
+            ? 'provider-acceptance-timeout'
+            : 'provider-acceptance-unconfirmed',
+        } as const;
+      }
+
+      // The provider accepted while cancellation raced; only its own soft-interrupt ACK can
+      // confirm the stop from this point onward.
+      if (
+        !currentControl ||
+        currentControl.generation !== reservation.generation ||
+        !this.isHandleTurnRunning()
+      ) {
+        return { status: 'requested', turnGeneration: reservation.generation } as const;
+      }
+      if (!this.handle.requestGracefulStop) {
+        return { status: 'unsupported', reason: 'provider-not-supported' } as const;
+      }
+      if (!this.isGracefulStopSafePoint(currentControl)) {
+        currentControl.gracefulStopState = 'waiting-for-safe-point';
+        return {
+          status: 'waiting-for-safe-point',
+          turnGeneration: currentControl.generation,
+        } as const;
+      }
+      return this.issueGracefulStop(currentControl);
+    });
+    reservation.gracefulStopPromise = result;
+    return result;
+  }
+
+  private waitForSendReservationSettlement(
+    reservation: SendReservation,
+  ): Promise<SendReservationOutcome | 'timeout'> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve('timeout');
+      }, GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS);
+      (timeout as unknown as { unref?: () => void }).unref?.();
+      void reservation.settled.then((outcome) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(outcome);
+      });
+    });
   }
 
   /**
@@ -1503,7 +1606,7 @@ export class Session {
           turnGeneration: control.generation,
           reason: 'provider-confirmation-timeout',
         });
-      }, 5_000);
+      }, GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS);
       (timeout as unknown as { unref?: () => void }).unref?.();
       void request.then(
         () => {
