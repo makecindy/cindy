@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  discoverAccountProviderModels,
   refreshProviderModelsAfterAccountReady,
   resetAccountProviderRuntimes,
 } from '../account-provider-model-refresh.js';
@@ -28,6 +29,25 @@ describe('resetAccountProviderRuntimes', () => {
       () => allow,
     );
     expect(shutdownCodexEnvironment).not.toHaveBeenCalled();
+  });
+});
+
+describe('discoverAccountProviderModels', () => {
+  it('does not start provider refresh after shouldContinue flips', async () => {
+    const refreshProviderModels = vi.fn(async () => {});
+    let allow = true;
+    await discoverAccountProviderModels(
+      {
+        loadXaiLkg: async () => {
+          allow = false;
+          return true;
+        },
+        refreshProviderModels,
+        log: { warn: vi.fn() },
+      },
+      () => allow,
+    );
+    expect(refreshProviderModels).not.toHaveBeenCalled();
   });
 });
 

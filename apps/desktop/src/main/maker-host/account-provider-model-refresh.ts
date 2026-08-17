@@ -57,7 +57,9 @@ export async function resetAccountProviderRuntimes(
 
 export async function discoverAccountProviderModels(
   deps: Pick<AccountProviderModelRefreshDeps, 'loadXaiLkg' | 'refreshProviderModels' | 'log'>,
+  shouldContinue: () => boolean = () => true,
 ): Promise<void> {
+  if (!shouldContinue()) return;
   try {
     // Account readiness is also the owner boundary. Restore this owner's authoritative xAI LKG
     // before the HTTP refresh so an offline/timeout result never exposes the generic fallback in
@@ -68,6 +70,8 @@ export async function discoverAccountProviderModels(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+
+  if (!shouldContinue()) return;
 
   const backgroundRefresh = deps
     .refreshProviderModels('startup', ['xd', 'openai', 'xai'])

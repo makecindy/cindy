@@ -541,10 +541,7 @@ import {
   discoverAccountProviderModels,
   resetAccountProviderRuntimes,
 } from './maker-host/account-provider-model-refresh.js';
-import {
-  accountProviderReadinessBarrier,
-  isSameOwnerScopeKey,
-} from './maker-host/account-provider-readiness-barrier.js';
+import { accountProviderReadinessBarrier } from './maker-host/account-provider-readiness-barrier.js';
 import {
   accountProviderReadinessArm,
   shouldFirePendingReadinessStart,
@@ -7021,21 +7018,25 @@ app.on('ready', async () => {
       // 模型发现必须排在 Codex 重启序列之后：后者末尾会按 auth 边界重读
       // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
       const resumeIncompleteDiscovery = async (): Promise<void> => {
-        const scopeKey = activeOwnerScopeKey();
+        const handle = accountProviderReadinessBarrier.currentHandle();
         if (
+          !handle ||
           getActiveAppSession().dataOwnerId !== userId ||
-          !accountProviderReadinessBarrier.needsIncompleteDiscoveryResume(scopeKey)
+          !accountProviderReadinessBarrier.needsIncompleteDiscoveryResume(handle.scopeKey)
         ) {
           return;
         }
-        await discoverAccountProviderModels({
-          loadXaiLkg: loadXaiModelsFromDiskCache,
-          refreshProviderModels: requestProviderModelAutoRefresh,
-          log: accountSwitchLog,
-        });
-        if (accountProviderReadinessBarrier.hasAdoptableSameOwner(activeOwnerScopeKey())) {
-          accountProviderReadinessBarrier.markDiscoveryComplete();
-        }
+        const stillThisEntry = () =>
+          handle.isLive() && getActiveAppSession().dataOwnerId === userId;
+        await discoverAccountProviderModels(
+          {
+            loadXaiLkg: loadXaiModelsFromDiskCache,
+            refreshProviderModels: requestProviderModelAutoRefresh,
+            log: accountSwitchLog,
+          },
+          stillThisEntry,
+        );
+        handle.markDiscoveryComplete();
       };
       const startProviderReadiness = (): void => {
         if (!makerProviderRefreshConfigured) {
@@ -7060,7 +7061,7 @@ app.on('ready', async () => {
         }
         const providerReadiness = accountProviderReadinessBarrier.start(
           providerScopeKey,
-          async () => {
+          async (handle) => {
             const startedAt = performance.now();
             try {
               // 自定义 MCP 与自定义供应商都只服务 Agent 路由，不应该阻塞任务列表。
@@ -7077,37 +7078,34 @@ app.on('ready', async () => {
                   error: err instanceof Error ? err.message : String(err),
                 });
               }
-              const stillExactScope = () =>
-                activeOwnerScopeKey() === providerScopeKey && !isAppSessionBoundaryPending();
-              const stillSameOwnerIncarnation = () =>
-                accountProviderReadinessBarrier.isCurrentAdoptable() &&
-                isSameOwnerScopeKey(activeOwnerScopeKey(), providerScopeKey);
-              await refreshCustomProvidersIntoCatalog(stillSameOwnerIncarnation);
-              // Real account switch keeps Codex reset *before* discovery so models_cache
-              // is re-read on the new auth boundary. Same-owner generation rollover skips
-              // the destructive reset but still finishes catalog discovery so adopt can
-              // only succeed for a complete model list.
-              if (stillExactScope()) {
+              const entryStillLive = () => handle.isLive() && !isAppSessionBoundaryPending();
+              await refreshCustomProvidersIntoCatalog(entryStillLive);
+              // A new start() is already a new incarnation (same-owner rollover adopts
+              // instead). Bind reset/discovery/Pi teardown to this entry so a later
+              // generation bump cannot skip A→B cleanup, and a replaced entry cannot
+              // mark the next incarnation complete.
+              if (entryStillLive()) {
                 await resetAccountProviderRuntimes(
                   {
                     restartCodex: restartCodexAfterAuthModeChange,
                     shutdownCodexEnvironment,
                     log: accountSwitchLog,
                   },
-                  stillExactScope,
+                  entryStillLive,
                 );
               }
-              if (stillSameOwnerIncarnation()) {
-                await discoverAccountProviderModels({
-                  loadXaiLkg: loadXaiModelsFromDiskCache,
-                  refreshProviderModels: requestProviderModelAutoRefresh,
-                  log: accountSwitchLog,
-                });
-                if (stillSameOwnerIncarnation()) {
-                  accountProviderReadinessBarrier.markDiscoveryComplete();
-                }
+              if (handle.isLive()) {
+                await discoverAccountProviderModels(
+                  {
+                    loadXaiLkg: loadXaiModelsFromDiskCache,
+                    refreshProviderModels: requestProviderModelAutoRefresh,
+                    log: accountSwitchLog,
+                  },
+                  () => handle.isLive(),
+                );
+                handle.markDiscoveryComplete();
               }
-              if (!stillExactScope()) return;
+              if (!entryStillLive()) return;
               // Pi bridge 与 Codex 同源（HTTP bridge + gateway key），账号切换后也必须
               // 清掉旧账号环境，让下一次 Pi 会话按新账号凭证重建。
               try {
@@ -7156,8 +7154,10 @@ app.on('ready', async () => {
         // them only after discovery settles. The Maker lifecycle hook remains the final guard for
         // every direct create path. The scope check prevents an old completion from reviving hosts
         // after an account boundary.
+        const startedHandle = accountProviderReadinessBarrier.currentHandle();
         void providerReadiness.then(() => {
           if (
+            !startedHandle?.isLive() ||
             !shouldStartReadinessConsumers({
               capturedScopeKey: providerScopeKey,
               currentScopeKey: activeOwnerScopeKey(),

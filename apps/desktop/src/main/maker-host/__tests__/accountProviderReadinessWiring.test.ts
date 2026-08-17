@@ -161,6 +161,9 @@ describe('account provider readiness wiring', () => {
     expect(bootstrapSource).toContain('invalidateAdoption()');
     expect(bootstrapSource).toContain('needsIncompleteDiscoveryResume');
     expect(bootstrapSource).toContain('shouldFirePendingReadinessStart');
+    expect(bootstrapSource).toContain('handle.isLive()');
+    expect(bootstrapSource).toContain('handle.markDiscoveryComplete()');
+    expect(bootstrapSource).toContain('startedHandle?.isLive()');
     expect(bootstrapSource).toContain('markDiscoveryComplete()');
     expect(bootstrapSource).toContain('discoverAccountProviderModels(');
     expect(bootstrapSource).toContain('resetAccountProviderRuntimes(');

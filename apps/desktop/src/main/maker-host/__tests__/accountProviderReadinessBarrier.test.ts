@@ -217,6 +217,53 @@ describe('createAccountProviderReadinessBarrier', () => {
     expect(barrier.needsIncompleteDiscoveryResume('cloud:owner-a:3')).toBe(false);
   });
 
+  it('does not let a replaced entry mark the next incarnation complete', async () => {
+    const firstWork = deferred();
+    const barrier = createAccountProviderReadinessBarrier();
+    const first = barrier.start(
+      'cloud:owner-a:1',
+      async (handle) => {
+        await firstWork.promise;
+        handle.markDiscoveryComplete();
+      },
+      vi.fn(),
+    );
+
+    barrier.invalidateAdoption();
+    barrier.start('cloud:owner-a:5', async () => {}, vi.fn());
+    firstWork.resolve();
+    await first;
+
+    expect(barrier.hasScope('cloud:owner-a:5')).toBe(true);
+    expect(barrier.isDiscoveryComplete()).toBe(false);
+    expect(barrier.currentHandle()?.isLive()).toBe(true);
+  });
+
+  it('keeps a live handle across a same-owner generation bump until adopt', async () => {
+    const work = deferred();
+    const barrier = createAccountProviderReadinessBarrier();
+    let seenLiveAfterBump = false;
+    barrier.start(
+      'cloud:owner-a:1',
+      async (handle) => {
+        await work.promise;
+        seenLiveAfterBump = handle.isLive();
+        handle.markDiscoveryComplete();
+      },
+      vi.fn(),
+    );
+    const handle = barrier.currentHandle();
+    expect(handle?.isLive()).toBe(true);
+    work.resolve();
+    await barrier.waitForPreviousScope('cloud:owner-a:3');
+    expect(seenLiveAfterBump).toBe(true);
+    await expect(barrier.adoptSameOwnerAfterPreviousSettles('cloud:owner-a:3')).resolves.toBe(
+      true,
+    );
+    expect(handle?.isLive()).toBe(false);
+    expect(barrier.currentHandle()?.isLive()).toBe(true);
+  });
+
   it('starts a new task after teardown invalidates the previous incarnation', async () => {
     const first = vi.fn(async () => {});
     const second = vi.fn(async () => {});

@@ -30,9 +30,34 @@ interface ReadinessEntry {
   consumersStarted: boolean;
 }
 
+export interface AccountProviderReadinessHandle {
+  readonly scopeKey: string;
+  isLive(): boolean;
+  markDiscoveryComplete(): boolean;
+}
+
 export type AccountProviderReadinessBarrier = ReturnType<
   typeof createAccountProviderReadinessBarrier
 >;
+
+function createHandle(
+  readCurrent: () => ReadinessEntry | null,
+  entry: ReadinessEntry,
+): AccountProviderReadinessHandle {
+  return {
+    get scopeKey() {
+      return entry.scopeKey;
+    },
+    isLive() {
+      return readCurrent() === entry;
+    },
+    markDiscoveryComplete() {
+      if (readCurrent() !== entry) return false;
+      entry.discoveryComplete = true;
+      return true;
+    },
+  };
+}
 
 export function createAccountProviderReadinessBarrier() {
   let current: ReadinessEntry | null = null;
@@ -70,6 +95,10 @@ export function createAccountProviderReadinessBarrier() {
       if (current) current.adoptable = false;
     },
 
+    currentHandle(): AccountProviderReadinessHandle | null {
+      return current ? createHandle(() => current, current) : null;
+    },
+
     markDiscoveryComplete(): void {
       if (current) current.discoveryComplete = true;
     },
@@ -82,7 +111,7 @@ export function createAccountProviderReadinessBarrier() {
 
     start(
       scopeKey: string,
-      task: () => Promise<void>,
+      task: (handle: AccountProviderReadinessHandle) => Promise<void>,
       onError: (error: unknown) => void,
     ): Promise<void> {
       if (current?.scopeKey === scopeKey) return current.promise;
@@ -99,8 +128,9 @@ export function createAccountProviderReadinessBarrier() {
         discoveryComplete: false,
         consumersStarted: false,
       };
+      const handle = createHandle(() => current, entry);
       entry.promise = Promise.resolve()
-        .then(task)
+        .then(() => task(handle))
         .catch((error) => {
           try {
             onError(error);
