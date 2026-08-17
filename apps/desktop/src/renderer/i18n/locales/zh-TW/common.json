@@ -8352,7 +8352,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
+      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；整理時預設概括或泛化使用者提供的原話與範例，不要直接複製可識別個人、對話或業務的資訊；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -8361,7 +8361,8 @@
       "typeFeature": "功能建議",
       "titleLabel": "標題",
       "bodyLabel": "正文(Markdown)",
-      "privacyHint": "偵測到常見金鑰、個人路徑及電子郵件地址時，系統會自動遮蔽。提交前請檢查公開內容。",
+      "privacyHint": "Issue 的標題與正文將公開顯示，且可能被搜尋或快取。系統只能遮蔽部分常見敏感資訊，無法辨識所有語意隱私。",
+      "privacyConfirm": "我已檢查以上公開內容，不包含不應公開的個人、對話或業務資訊",
       "submissionMethodLabel": "釋出方式",
       "identityGithubUser": "GitHub 帳號 @{{login}} 直接釋出",
       "identityGithubUserHint": "你將成為該 Issue 的 GitHub 作者，可以在 GitHub 編輯或關閉",
