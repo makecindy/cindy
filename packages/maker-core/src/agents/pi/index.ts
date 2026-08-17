@@ -4118,13 +4118,33 @@ export class PiAgent extends BaseAgent {
             proc.send({ type: 'extension_ui_response', id, cancelled: true });
             return;
           }
-          const result = boundedPiManagedPackageToolResult(
-            await mutate({
+          let result: unknown;
+          try {
+            result = boundedPiManagedPackageToolResult(
+              await mutate({
+                action,
+                source: resolvePiManagedPackageSource(source, context.workingDir),
+                authorization: 'confirmed-tool-call',
+              }),
+            );
+          } catch (error) {
+            // Extension UI responses are model-visible. Keep raw spawn,
+            // filesystem, inspection and Pi CLI details in the local log only.
+            this.deps.logger.warn('pi extension mutation failed', {
               action,
-              source: resolvePiManagedPackageSource(source, context.workingDir),
-              authorization: 'confirmed-tool-call',
-            }),
-          );
+              sessionId: context.sessionId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            proc.send({
+              type: 'extension_ui_response',
+              id,
+              value: JSON.stringify({
+                ok: false,
+                error: resolvePiExtensionUiStrings(this.deps).mutationFailed,
+              }),
+            });
+            return;
+          }
           proc.send({
             type: 'extension_ui_response',
             id,

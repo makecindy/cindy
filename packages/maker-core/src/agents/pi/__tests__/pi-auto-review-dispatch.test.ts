@@ -414,6 +414,59 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it.each([
+    ['spawn', "spawn /Users/example/private/pi ENOENT"],
+    ['filesystem', "EACCES: open '/Users/example/Library/Application Support/Cindy/pi-package-home/state'"],
+    ['inspection', "failed to inspect /private/tmp/secret-package/package.json"],
+    ['Pi CLI', "npm ERR! raw stderr from /private/tmp/pi-package-home"],
+  ])('keeps raw %s failures out of extension tool responses', async (kind, rawError) => {
+    const warn = vi.fn();
+    const deps = buildDeps();
+    deps.logger = { ...noopLogger, warn };
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationSuccess: {
+        install: 'Pi 扩展已安装。',
+        update: 'Pi 扩展已更新。',
+        remove: 'Pi 扩展已卸载。',
+      },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      throw new Error(rawError);
+    });
+    const sessionId = `managed-package-tool-${kind.toLowerCase().replace(/\s+/g, '-')}-failure-session`;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId,
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      handle.setInteractionResolver?.(
+        vi.fn(async () => ({
+          kind: 'permission',
+          behavior: 'allow',
+        })) as never,
+      );
+      fireManagedPackageRequest(`pkg-${kind}`, 'install', 'npm:context-mode');
+
+      const response = await waitForResponse(`pkg-${kind}`);
+      expect(JSON.parse(String(response.value))).toEqual({
+        ok: false,
+        error: 'Pi 扩展操作失败。',
+      });
+      expect(String(response.value)).not.toContain(rawError);
+      expect(warn).toHaveBeenCalledWith('pi extension mutation failed', {
+        action: 'install',
+        sessionId,
+        message: rawError,
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('fails closed when managed extension confirmation is denied or the callback fails', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
     const deps = buildDeps();
