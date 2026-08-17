@@ -437,6 +437,30 @@ function normalizeXaiInputItem(item: unknown): {
           parts.push(part);
           continue;
         }
+        if (partType === "refusal") {
+          parts.push({
+            type: role === "assistant" ? "output_text" : "input_text",
+            text: typeof part.refusal === "string" ? part.refusal : "",
+          });
+          changed = true;
+          continue;
+        }
+        if (typeof part.text === "string" && part.text.length > 0) {
+          parts.push({
+            type: role === "assistant" ? "output_text" : "input_text",
+            text: part.text,
+          });
+          changed = true;
+          continue;
+        }
+        if (typeof part.refusal === "string" && part.refusal.length > 0) {
+          parts.push({
+            type: role === "assistant" ? "output_text" : "input_text",
+            text: part.refusal,
+          });
+          changed = true;
+          continue;
+        }
         changed = true;
       }
       next.content = parts;
