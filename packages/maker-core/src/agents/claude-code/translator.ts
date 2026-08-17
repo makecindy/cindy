@@ -21,6 +21,11 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  holdStandaloneStopTokenDelta,
+  stripInternalWebCitations,
+  type StandaloneStopTokenHold,
+} from '@cindy/maker-shared/internal-citation';
 import type { createAsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
@@ -143,6 +148,12 @@ export interface RuntimeState {
    * translator 在 handleResult 里按上一条 result 做 delta, 再把 per-turn usage 交给 UsageTracker。
    */
   lastResultUsageAggregate: ResultUsageAggregate | null;
+  /**
+   * 按 parent + content-block index 隔离的停止符清洗缓冲。text_delta 可能把
+   * `<|eos|>` 拆开，必须先拼回该块的快照再清洗。`emitted` 只表示本块是否已
+   * 发出可见正文，不能看整轮 `uiEmittedText`，也不能跨 text block 复用。
+   */
+  streamStopTokenByKey: Map<string, StandaloneStopTokenHold>;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -156,6 +167,7 @@ export function newRuntimeState(): RuntimeState {
     excludedSubagentTaskIds: new Set(),
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
+    streamStopTokenByKey: new Map(),
   };
 }
 
@@ -1065,6 +1077,8 @@ function mapTaskUpdatedStatus(status: string | undefined, hasError: boolean): Ag
  */
 function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
   if (block.type === 'text') {
+    // Silent-stop 看上游有没有交出 text block，不看展示层清洗后还剩什么。
+    // 整条只剩 `<|eos|>` 仍算正常收口；泄漏只在可见文本 / 落库路径隐藏。
     return typeof block.text === 'string' && block.text.length > 0;
   }
   if (block.type === 'thinking' || block.type === 'redacted_thinking') {
@@ -1154,17 +1168,25 @@ function handleAssistant(
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
-      ctx.turn.text += block.text;
-      if (block.text.length > 0) {
-        ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += block.text;
+      const parentStreamKey = parentToolUseId ?? '__main__';
+      const prefix = `${parentStreamKey}:`;
+      for (const key of ctx.rt.streamStopTokenByKey.keys()) {
+        if (key === parentStreamKey || key.startsWith(prefix)) {
+          ctx.rt.streamStopTokenByKey.delete(key);
+        }
       }
-      queue.push({
-        type: 'text',
-        data: { text: block.text, isFinal: true },
-        source: 'claude-code',
-        agentMeta: assistantMeta,
-      });
+      const visibleText = stripInternalWebCitations(block.text);
+      ctx.turn.text += visibleText;
+      if (visibleText.length > 0) {
+        ctx.turn.hasEmittedText = true;
+        ctx.turn.uiEmittedText += visibleText;
+        queue.push({
+          type: 'text',
+          data: { text: visibleText, isFinal: true },
+          source: 'claude-code',
+          agentMeta: assistantMeta,
+        });
+      }
     } else if (block.type === 'tool_use') {
       ctx.turn.toolUses += 1;
       // ctx.log.info('SDK ▷ tool_use', {
@@ -1223,6 +1245,7 @@ function handleStreamEvent(
 ): void {
   const event = msg.event as {
     type?: string;
+    index?: number;
     delta?: Record<string, unknown>;
     usage?: Record<string, number>;
     message?: { model?: string; usage?: Record<string, number> };
@@ -1237,6 +1260,10 @@ function handleStreamEvent(
   // 冗余 add: 防 SDK 顺序契约变化 (stream_event 先于 assistant message yield), Set 幂等。
   if (event.type === 'content_block_start') {
     const cb = event.content_block;
+    if (cb && cb.type === 'text') {
+      const blockIndex = typeof event.index === 'number' ? event.index : 0;
+      ctx.rt.streamStopTokenByKey.delete(`${parentToolUseId ?? '__main__'}:${blockIndex}`);
+    }
     if (cb && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
       if (typeof cb.name === 'string' && cb.name.length > 0) {
         ctx.rt.toolUseIdToName.set(cb.id, cb.name);
@@ -1248,14 +1275,16 @@ function handleStreamEvent(
   // SDKPartialAssistantMessage 自带 parent_tool_use_id；并发 subagent 会在同一 Query
   // 事件流中交错，必须按 parent 隔离模型，不能使用会话级 lastAssistantMeta 串联。
   // 老 SDK / 单测若没有 wrapper 元数据，才保留旧兜底行为。
-  const streamKey = parentToolUseId ?? '__main__';
+  const parentStreamKey = parentToolUseId ?? '__main__';
+  const blockIndex = typeof event.index === 'number' ? event.index : 0;
+  const streamKey = `${parentStreamKey}:${blockIndex}`;
   const eventModel = event.message?.model;
   if (typeof eventModel === 'string' && eventModel) {
-    ctx.rt.streamModelByParentToolUseId.set(streamKey, eventModel);
+    ctx.rt.streamModelByParentToolUseId.set(parentStreamKey, eventModel);
   }
   const streamModel = typeof eventModel === 'string' && eventModel
     ? eventModel
-    : ctx.rt.streamModelByParentToolUseId.get(streamKey);
+    : ctx.rt.streamModelByParentToolUseId.get(parentStreamKey);
   const fallbackMeta: Record<string, unknown> | undefined = parentToolUseId
     ? {
         parentUuid: parentToolUseId,
@@ -1274,16 +1303,20 @@ function handleStreamEvent(
     const delta = event.delta as { type?: string; text?: string; thinking?: string } | undefined;
     if (!delta) return;
     if (delta.type === 'text_delta' && typeof delta.text === 'string') {
-      if (delta.text.length > 0) {
+      const buffer = ctx.rt.streamStopTokenByKey.get(streamKey)
+        ?? { pending: '', emitted: false };
+      const visibleDelta = holdStandaloneStopTokenDelta(buffer, delta.text);
+      ctx.rt.streamStopTokenByKey.set(streamKey, buffer);
+      if (visibleDelta && visibleDelta.length > 0) {
         ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += delta.text;
+        ctx.turn.uiEmittedText += visibleDelta;
+        queue.push({
+          type: 'text',
+          data: { text: visibleDelta, isFinal: false },
+          source: 'claude-code',
+          agentMeta: fallbackMeta,
+        });
       }
-      queue.push({
-        type: 'text',
-        data: { text: delta.text, isFinal: false },
-        source: 'claude-code',
-        agentMeta: fallbackMeta,
-      });
     } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
       // 第一次见 thinking_delta 时 lazy-init 一个 buffer (老链路 agentManager.ts:2322-2335)
       if (!ctx.rt.currentThinking) {
@@ -1561,7 +1594,9 @@ function handleResult(
   // 的正常轮会被误判成空响应 terminal error(Codex P2)。tracker.getTurnUsage() 在 endTurn
   // 之前读到的正是本轮 streamed 累计;真正的空网关响应该累计也为 0, 不影响判定。
   const emitted = ctx.turn.uiEmittedText;
-  const full = !msg.is_error && typeof msg.result === 'string' ? msg.result : '';
+  const full = !msg.is_error && typeof msg.result === 'string'
+    ? stripInternalWebCitations(msg.result)
+    : '';
   let turnUsageDeltaAllZero: boolean;
   if (resultUsage) {
     turnUsageDeltaAllZero =

@@ -1296,6 +1296,14 @@ registerColor('diff-add-fg', {
   light: '#22863a',
   dark: '#7ee787',
 }, 'GitHub Diff Green (Light)');
+registerColor('pr-open-on-light', {
+  light: '#2EA043',
+  dark: '#2EA043',
+}, 'Sidebar PR open green on light surfaces (unselected Light / selected Dark pill)');
+registerColor('pr-open-on-dark', {
+  light: '#3FB950',
+  dark: '#3FB950',
+}, 'Sidebar PR open green on dark surfaces (unselected Dark / selected Light pill)');
 registerColor('diff-add-bg', {
   light: '#f0fff4',
   dark: '#033a16',

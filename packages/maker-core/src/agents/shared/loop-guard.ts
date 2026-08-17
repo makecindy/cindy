@@ -16,6 +16,16 @@ const DEFAULT_WINDOW_SIZE = 12;
 /** 第 2 层:窗口填满后, distinct 指纹数 ≤ 此值即判循环(2 = 一直在 ≤2 种调用里转)。 */
 const DEFAULT_WINDOW_DISTINCT_LIMIT = 2;
 /**
+ * 第 3 层(轮转):更长窗口 + 更宽 distinct 上限,抓第 2 层漏掉的 3-4 个调用
+ * 轮转(ABCDABCD…)。实锤:xai/grok 单 turn 在 4 个不同 Grep 里轮转一千多次
+ * 调用(2026-08),distinct=4 > 2 从第 2 层漏网。16/4 = 每种指纹平均重复 4 次
+ * 才判,比直接把第 2 层 distinct 提到 4 的误判面小;连续 16 次调用零新指纹
+ * 的合法工作流(纯读排查也会穿插不同参数)实践中几乎不存在。
+ */
+const DEFAULT_ROTATION_WINDOW_SIZE = 16;
+/** 第 3 层:轮转窗口填满后, distinct 指纹数 ≤ 此值即判循环。 */
+const DEFAULT_ROTATION_DISTINCT_LIMIT = 4;
+/**
  * TaskOutput 是 SDK 明确定义的等待/轮询工具。状态文本不变只代表任务仍在等待,
  * 不能作为模型死循环证据。它本身不进入指纹,但也不重置普通工具的轨迹,
  * 避免模型通过在重复调用间插入轮询来绕过检测。
@@ -34,21 +44,26 @@ export interface ToolLoopGuardOptions {
   windowSize?: number;
   /** 第 2 层:窗口内 distinct 指纹 ≤ 此值判循环。 */
   windowDistinctLimit?: number;
+  /** 第 3 层:轮转检测的滑动窗口大小。 */
+  rotationWindowSize?: number;
+  /** 第 3 层:轮转窗口内 distinct 指纹 ≤ 此值判循环。 */
+  rotationDistinctLimit?: number;
 }
 
-/** 命中哪一层判据。consecutive=机械重复 / pingpong=短循环。 */
-export type ToolLoopReason = 'consecutive' | 'pingpong';
+/** 命中哪一层判据。consecutive=机械重复 / pingpong=短循环 / rotation=3-4 调用轮转。 */
+export type ToolLoopReason = 'consecutive' | 'pingpong' | 'rotation';
 
 export type ToolLoopGuardVerdict =
   | { kind: 'ok' }
   | { kind: 'hard'; reason: ToolLoopReason; count: number; toolName: string };
 
 /**
- * Result-aware tool loop detector(两层防御)。
+ * Result-aware tool loop detector(三层防御)。
  *
  * 只在非轮询工具结果返回后判断。任一层命中即返回 hard, 由调用方决定如何中断:
  *   1. 连续完全相同(name+input+output)—— 快路径, 零误判;
  *   2. name+input 滑动窗口多样性坍缩 —— 抓 ABAB 交替 / output 易变的重复;
+ *   3. 更长窗口的轮转检测 —— 抓 3-4 个调用的 ABCD 轮转(第 2 层 distinct 上限盖不住)。
  *
  * 不按调用总数或任意长度的重复序列硬中断:仅凭工具 trace 无法区分合法批处理、
  * 稳定状态轮询与死循环,有限窗口也只能移动误判/漏判边界。
@@ -59,6 +74,8 @@ export class ToolLoopGuard {
   readonly consecutiveLimit: number;
   readonly windowSize: number;
   readonly windowDistinctLimit: number;
+  readonly rotationWindowSize: number;
+  readonly rotationDistinctLimit: number;
 
   private pendingToolUses = new Map<string, PendingToolUse>();
 
@@ -66,13 +83,15 @@ export class ToolLoopGuard {
   private lastFullFingerprint: string | null = null;
   private consecutiveStreak = 0;
 
-  // 第 2 层状态: 最近 windowSize 个 name+input 指纹
+  // 第 2/3 层共用状态: 最近 max(windowSize, rotationWindowSize) 个 name+input 指纹
   private callWindow: string[] = [];
 
   constructor(options: ToolLoopGuardOptions = {}) {
     this.consecutiveLimit = options.consecutiveLimit ?? DEFAULT_CONSECUTIVE_LIMIT;
     this.windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE;
     this.windowDistinctLimit = options.windowDistinctLimit ?? DEFAULT_WINDOW_DISTINCT_LIMIT;
+    this.rotationWindowSize = options.rotationWindowSize ?? DEFAULT_ROTATION_WINDOW_SIZE;
+    this.rotationDistinctLimit = options.rotationDistinctLimit ?? DEFAULT_ROTATION_DISTINCT_LIMIT;
   }
 
   /**
@@ -112,17 +131,35 @@ export class ToolLoopGuard {
       };
     }
 
-    // 第 2 层: name+input 滑动窗口多样性坍缩(指纹不含 output)
+    // 第 2/3 层: name+input 滑动窗口多样性坍缩(指纹不含 output)
     const callFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, null);
     this.callWindow.push(callFingerprint);
-    if (this.callWindow.length > this.windowSize) this.callWindow.shift();
+    const bufferSize = Math.max(this.windowSize, this.rotationWindowSize);
+    if (this.callWindow.length > bufferSize) this.callWindow.shift();
+
+    // 第 2 层: 短窗口 ping-pong(≤2 种调用来回打转)
     if (this.callWindow.length >= this.windowSize) {
-      const distinct = new Set(this.callWindow).size;
+      const recent = this.callWindow.slice(-this.windowSize);
+      const distinct = new Set(recent).size;
       if (distinct <= this.windowDistinctLimit) {
         return {
           kind: 'hard',
           reason: 'pingpong',
-          count: this.callWindow.length,
+          count: recent.length,
+          toolName: toolUse.name,
+        };
+      }
+    }
+
+    // 第 3 层: 长窗口轮转(3-4 种调用 ABCD 轮转,第 2 层 distinct 上限盖不住)
+    if (this.callWindow.length >= this.rotationWindowSize) {
+      const recent = this.callWindow.slice(-this.rotationWindowSize);
+      const distinct = new Set(recent).size;
+      if (distinct <= this.rotationDistinctLimit) {
+        return {
+          kind: 'hard',
+          reason: 'rotation',
+          count: recent.length,
           toolName: toolUse.name,
         };
       }

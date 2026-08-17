@@ -49,6 +49,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 交互卡的**语义层**（`ask_user_question` / `plan_review` / 权限确认） | `im/shared/interactionCardModel.ts` | 选项集与决策模型两侧真跑同一份：至多 6 个选项（`MAX_OPTIONS`）、multiSelect 降级单选、只渲染第一问、plan 正文截断 1500（`MAX_PLAN_LEN`）、按钮文案的**产品级**上限 30（`BTN_LABEL_MAX`）、无选项降级时唯一按钮「继续」，以及 buttonId → 决策对象的构造与 header/body 拆分。官方那条链路由 `hook-control/interactions.ts` 直接 import 本模块（对 `@cindy/maker-core` 刻意只做 type-only 依赖，免得 hook 链路在运行期加载整个 barrel）。**渲染不在这里**——按钮文案来源、标题格式、省略号样式、尺寸上限都是各自渲染侧的事，见第三节 |
 | **计划对账注入**（plan reconcile） | `maker-ipc/planReconcile.ts`（`summarizeOpenPlan` + `buildPlanReconcileNote`） | 两侧在真实用户轮次发送前查询未收口计划并前置对账说明。官方侧：`hook-control/session-runner.ts`（仅 `req.source?.im` 存在时注入,自动派发不注入）；个人侧：`im/shared/turnRunner.ts`。两侧共用同一份查询与文案构造,差异仅在"什么算普通用户轮次"的判定各走各的来源分类 |
 | 群消息本地库的**保留策略** | `im/shared/groupWindowCore.ts` | 上限数值（每命名空间 1 GiB 正文 + 500 万行安全阀）、回收低水位（0.9）与回收实现都在这一处；两侧把同一份 `DEFAULT_GROUP_WINDOW_RETENTION` 传进同一个 `recordGroupWindowEntry`。**额度靠 provider 命名空间隔离**：官方 `telegram:<principalId>`、个人 `telegram-personal:<botId>`，统计与回收都按 provider 过滤，两个账号各算各的、消息不串。一个边界要记住：两侧各持有一份 `{ ...DEFAULT }` **可变副本**（为的是测试能用小阈值把回收逼出来），所以共享的是"模块初始化时的那组数字"，运行期改一侧不会传导到另一侧 |
+| **上游过载 / 限流自动重试进度** | `im/shared/turnRetryNotice.ts`（`turnRetryNotice`） | 非终止 error 翻成渠道进度的**文案与判定**两侧真跑这一份：只认过载（`(auto-retry N/M)` + `upstream-overload` / 529）、终态 429 外层重投、以及 Auto 档审阅器不可用。Pi / Claude / Codex 过载重试都走「模型服务繁忙，正在自动重试（N/M）」；其它非终止 error（普通 5xx、未分类供应商抖动）保持静默。个人侧 `turnRunner`、官方侧 `turnPresenter` 都读这一份。**载体怎么发**不在这里——个人是过程消息原地编辑，官方私聊是草稿，见第三节 |
 
 ### 放在共享目录、但**只有一侧消费**的
 

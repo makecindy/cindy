@@ -375,4 +375,15 @@ describe('MorphPopover interaction contract', () => {
     const panel = await screen.findByRole('group', { name: 'Morph panel' });
     expect(panel.querySelector('[data-morph-ghost]')).toBeNull();
   });
+
+  it('内容区 overflow-x 保持 hidden,避免 1px border-box 偏差闪出横向滚动条', async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    expect(content.className).toContain('overflow-x-hidden');
+    await waitFor(() => {
+      expect(content.style.overflowX).toBe('hidden');
+    });
+  });
 });
