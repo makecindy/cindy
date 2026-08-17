@@ -6,6 +6,7 @@ interface FakeNode {
   type: { name: string };
   isText: boolean;
   isTextblock: boolean;
+  text?: string | null;
   attrs: Record<string, unknown>;
 }
 
@@ -26,7 +27,13 @@ const paragraph = (): FakeNode => ({
   isTextblock: true,
   attrs: {},
 });
-const text = (): FakeNode => ({ type: { name: 'text' }, isText: true, isTextblock: false, attrs: {} });
+const text = (content = ''): FakeNode => ({
+  type: { name: 'text' },
+  isText: true,
+  isTextblock: false,
+  text: content,
+  attrs: {},
+});
 const hardBreak = (): FakeNode => ({
   type: { name: 'hardBreak' },
   isText: false,
@@ -79,6 +86,11 @@ describe('isMultilineDraftDoc', () => {
     expect(isMultilineDraftDoc(fakeDoc(1, [bulletList(), listItem(), paragraph(), text()]))).toBe(
       false,
     );
+  });
+
+  it('treats a text node carrying newlines as multiline (e.g. voice transcript via insertText)', () => {
+    expect(isMultilineDraftDoc(fakeDoc(1, [paragraph(), text('line one\nline two')]))).toBe(true);
+    expect(isMultilineDraftDoc(fakeDoc(1, [paragraph(), text('single line')]))).toBe(false);
   });
 
   it('treats a collapsed paste chip carrying newlines as multiline', () => {

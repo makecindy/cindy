@@ -166,11 +166,14 @@ describe('ChatInput steer shortcut contract', () => {
     expect(chatInputSource).toContain('newChat.sendButton.queueTooltipSendMode');
     // Both keydown paths must feed the current draft shape into the resolver;
     // the render gate must refresh when the draft crosses the multiline boundary.
-    expect(chatInputSource).toContain('multilineDraft: isMultilineDraftDoc(view.state.doc)');
+    // The shared helper must also fold in the visible voice draft, which lives
+    // in a decoration and not yet in the editor doc.
+    expect(chatInputSource).toContain('multilineDraft: isComposerDraftMultiline(view.state.doc)');
     expect(chatInputSource).toContain(
-      'multilineDraft: composerDoc ? isMultilineDraftDoc(composerDoc) : false',
+      'multilineDraft: isComposerDraftMultiline(editorRef.current?.view.state.doc)',
     );
-    expect(chatInputSource).toContain('isMultilineDraftDoc(ed.state.doc)');
+    expect(chatInputSource).toContain('isComposerDraftMultiline(ed.state.doc)');
+    expect(chatInputSource).toContain("voiceDraftTextRef.current.includes('\\n')");
     expect(pendingQueuePanelSource).toContain('isPendingQueueSteerShortcut');
     expect(pendingQueuePanelSource).toContain('void onSteer(entry.clientId);');
   });

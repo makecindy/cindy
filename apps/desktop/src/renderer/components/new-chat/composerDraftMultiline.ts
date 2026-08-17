@@ -5,13 +5,15 @@
  *
  * 判据对齐序列化语义:凡是发送后消息文本会跨行的草稿都算多行——
  * 多个顶层块、多个 textblock(结构化列表的每个 listItem 各有一个)、
- * hardBreak,以及把换行折叠进 attrs.text 的原子节点(pastedTextChip 等)。
+ * hardBreak、自身含换行的文本节点(tr.insertText 可整段插入换行文本),
+ * 以及把换行折叠进 attrs.text 的原子节点(pastedTextChip 等)。
  */
 
 interface MinimalNodeInfo {
   type: { name: string };
   isText: boolean;
   isTextblock: boolean;
+  text?: string | null;
   attrs: Record<string, unknown>;
 }
 
@@ -40,12 +42,17 @@ export function isMultilineDraftDoc(doc: MinimalDoc): boolean {
       }
       return true;
     }
-    if (!node.isText) {
-      const text = node.attrs['text'];
-      if (typeof text === 'string' && text.includes('\n')) {
+    if (node.isText) {
+      if (node.text?.includes('\n')) {
         multiline = true;
         return false;
       }
+      return true;
+    }
+    const text = node.attrs['text'];
+    if (typeof text === 'string' && text.includes('\n')) {
+      multiline = true;
+      return false;
     }
     return true;
   });

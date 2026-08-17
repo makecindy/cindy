@@ -1114,6 +1114,14 @@ export function ChatInput({
       voiceDraftTextRef.current.length === 0
     );
   };
+  // 语音听写的可见草稿(VoiceInputDraftDecoration)还没落进 editor doc;
+  // 多行判定必须把它算进去,否则多行转写在 multiline 挡下会被普通 Enter
+  // 经 stop-and-send 路径误发。keydown 稳定闭包读 ref,render 侧同样经此取值。
+  const isComposerDraftMultiline = useCallback(
+    (doc: Parameters<typeof isMultilineDraftDoc>[0] | null | undefined): boolean =>
+      (doc ? isMultilineDraftDoc(doc) : false) || voiceDraftTextRef.current.includes('\n'),
+    [],
+  );
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
   const steerShortcutLabel = useMemo(
     () => (window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'),
@@ -2580,7 +2588,7 @@ export function ChatInput({
         const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
           turnRunning: showStopButtonRef.current,
           platform: window.electronAPI?.platform,
-          multilineDraft: isMultilineDraftDoc(view.state.doc),
+          multilineDraft: isComposerDraftMultiline(view.state.doc),
         });
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -2638,7 +2646,7 @@ export function ChatInput({
       const nextRenderSnapshot = composerRenderSnapshot(
         composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
-        isMultilineDraftDoc(ed.state.doc),
+        isComposerDraftMultiline(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
         renderSnapshotRef.current = nextRenderSnapshot;
@@ -2709,7 +2717,7 @@ export function ChatInput({
       const nextRenderSnapshot = composerRenderSnapshot(
         composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
-        isMultilineDraftDoc(ed.state.doc),
+        isComposerDraftMultiline(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
         renderSnapshotRef.current = nextRenderSnapshot;
@@ -3257,11 +3265,10 @@ export function ChatInput({
         }
       }
 
-      const composerDoc = editorRef.current?.view.state.doc;
       const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
         turnRunning: showStopButtonRef.current,
         platform,
-        multilineDraft: composerDoc ? isMultilineDraftDoc(composerDoc) : false,
+        multilineDraft: isComposerDraftMultiline(editorRef.current?.view.state.doc),
       });
       const isModifiedEnter = hasComposerModifier(event, platform);
       if (
@@ -3399,7 +3406,8 @@ export function ChatInput({
       window.removeEventListener('keyup', handleKeyUp, true);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, []);
+    // isComposerDraftMultiline 是空依赖 useCallback,身份稳定,effect 不会因此重挂。
+  }, [isComposerDraftMultiline]);
 
   useEffect(() => {
     return window.electronAPI.voiceInput.onGlobalShortcutTrigger((payload) => {
@@ -7533,7 +7541,7 @@ export function ChatInput({
   );
 
   const hasMessage = !isEditorEmpty(editor);
-  const composerDraftMultiline = editor ? isMultilineDraftDoc(editor.state.doc) : false;
+  const composerDraftMultiline = isComposerDraftMultiline(editor?.state.doc);
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage, composerDraftMultiline);
   const canSend = hasMessage || hasAttachments || browserComments.length > 0;
   // The tooltip advertises the send key for the draft as it currently stands;
