@@ -1877,6 +1877,13 @@ export function buildRenderItems(
     } else if (msg.role === 'tool_result') {
       // Orphan tool_result — skip
       i++;
+    } else if (
+      msg.role === 'assistant'
+      && !msg.systemCardType
+      && msg.content.trim().length === 0
+    ) {
+      // A leaked model stop token or other empty wrap-up must not become a bubble.
+      i++;
     } else {
       // Any non-tool message flushes the pending segment first so tool
       // segments appear above their text result, not after it.
