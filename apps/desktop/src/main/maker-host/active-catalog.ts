@@ -46,6 +46,7 @@ import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-acces
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
+  applyLocalOverridesToRootModel,
   hasLocalAddition,
   EMPTY_MODEL_CATALOG_OVERRIDES,
   resolveLocalBridgeExclusions,
@@ -835,7 +836,13 @@ function computeMerged(): Catalog {
           plan.warnings,
         );
       const preparePiModel = (model: CatalogModel): CatalogModel =>
-        applyRegistryConsumerOverlay(model, 'openai', 'pi', model.id, plan);
+        applyLocalOverridesToRootModel(
+          'openai',
+          'codex',
+          applyRegistryConsumerOverlay(model, 'openai', 'pi', model.id, plan),
+          localOverrides,
+          plan.warnings,
+        );
       const projected = projectCodexModelsToBridges(
         withRoot,
         excluded,
@@ -846,7 +853,27 @@ function computeMerged(): Catalog {
         agent: 'claude-code' | 'pi',
         models: CatalogModel[],
       ): CatalogModel[] => {
-        const additions = plan.consumerAdditions.get(consumerPlanKey('openai', agent)) ?? [];
+        const additions = (plan.consumerAdditions.get(consumerPlanKey('openai', agent)) ?? []).map(
+          (model) =>
+            toChatgptBridgeModel(
+              agent === 'pi'
+                ? applyLocalOverridesToRootModel(
+                    'openai',
+                    'codex',
+                    model,
+                    localOverrides,
+                    plan.warnings,
+                  )
+                : applyLocalConsumerOverrides(
+                    'openai',
+                    'claude-code',
+                    model.id,
+                    model,
+                    localOverrides,
+                    plan.warnings,
+                  ),
+            ),
+        );
         if (additions.length === 0) return models;
         const seen = new Set(models.map((model) => model.id));
         return [...models, ...additions.filter((model) => !seen.has(model.id))];

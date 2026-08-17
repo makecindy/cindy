@@ -176,6 +176,14 @@ describe('registry presence 实体化', () => {
       efforts: ['low', 'medium', 'high', 'xhigh'],
       defaultEffort: 'xhigh',
     });
+
+    setLocalCatalogOverrides(
+      overridesOf({ patches: { 'openai:gpt-6': { base: { contextWindow: 123_000 } } } }),
+    );
+    expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')?.contextWindow).toBe(123_000);
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')?.contextWindow).toBe(
+      123_000,
+    );
   });
 
   it('同一 OpenAI modelId 的长上下文 entry 只生成 Claude/Pi 独立选择', () => {
@@ -208,6 +216,14 @@ describe('registry presence 实体化', () => {
         },
       ]);
     }
+    setLocalCatalogOverrides(
+      overridesOf({
+        patches: { 'openai:gpt-6[1m]': { base: { contextWindow: 900_000 } } },
+      }),
+    );
+    expect(
+      models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6[1m]')?.contextWindow,
+    ).toBe(900_000);
     expect(getModelPlaneWarnings()).toEqual([]);
   });
 
@@ -471,6 +487,8 @@ describe('retired tombstone 与 discovery 回补', () => {
       gpt6Entry({
         id: 'openai/gpt-dead',
         status: 'retired',
+        contextWindow: 300_000,
+        perAgent: { codex: { contextWindow: 272_000 } },
         routes: [{ providerId: 'openai', modelId: 'gpt-dead', agents: ['codex'] }],
       }),
     ]);
@@ -491,6 +509,19 @@ describe('retired tombstone 与 discovery 回补', () => {
       isRegistryTombstoneForConsumer(registry, 'openai', 'chatgpt/gpt-dead', 'claude-code'),
     ).toBe(false);
     expect(isRegistryTombstoneForConsumer(registry, 'xd', 'gpt-dead', 'claude-code')).toBe(false);
+
+    const withAlias = baseCatalog([
+      gpt6Entry(),
+      gpt6Entry({
+        id: 'openai/gpt-6[1m]',
+        status: 'retired',
+        routes: [{ providerId: 'openai', modelId: 'gpt-6', agents: ['claude-code'] }],
+      }),
+    ]).modelRegistry;
+    expect(
+      isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6[1m]', 'pi'),
+    ).toBe(true);
+    expect(isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6', 'pi')).toBe(false);
   });
 
   it('discovery 回补的 retired 条目被标记,标准派生禁止新选择,keepSelected 豁免', () => {
@@ -498,6 +529,17 @@ describe('retired tombstone 与 discovery 回补', () => {
     setDiscoveredCodexModels([discoveredDead]);
     const entry = models('openai', 'codex').find((m) => m.id === 'gpt-dead');
     expect(entry?.status).toBe('retired');
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toMatchObject({
+      contextWindow: 300_000,
+      status: 'retired',
+    });
+
+    setLocalCatalogOverrides(
+      overridesOf({ patches: { 'openai:gpt-dead': { base: { contextWindow: 123_000 } } } }),
+    );
+    expect(
+      models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')?.contextWindow,
+    ).toBe(123_000);
 
     const views = buildRegistry(getActiveCatalog(), { openai: true });
     const withoutSelection = deriveModelList({ providers: views, agent: 'codex' });
@@ -538,6 +580,11 @@ describe('retired tombstone 与 discovery 回补', () => {
     expect(models('openai', 'codex').find((m) => m.id === 'gpt-dead')).toMatchObject({
       name: 'Dead Model Revived',
       status: 'active',
+    });
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toMatchObject({
+      name: 'Dead Model Revived',
+      status: 'active',
+      contextWindow: 100_000,
     });
   });
 });

@@ -57,6 +57,39 @@ export const MODEL_PLANE_POLICIES: ReadonlyMap<string, BuiltinModelPlanePolicy> 
   // xd 有意不在表内:Gateway 独占存在性(见文件头)。
 ]);
 
+function piRegistryMatch(
+  registry: ModelRegistry,
+  providerId: string,
+  piModelId: string,
+): { entry: ModelRegistryEntry; rootModelId: string } | null {
+  const policy = MODEL_PLANE_POLICIES.get(providerId);
+  if (!policy) return null;
+  const rootModelId =
+    providerId === 'openai'
+      ? piModelId.startsWith(CHATGPT_MODEL_PREFIX)
+        ? piModelId.slice(CHATGPT_MODEL_PREFIX.length)
+        : null
+      : piModelId;
+  if (!rootModelId) return null;
+
+  const exactEntry = registry.models.find((entry) => entry.id === `${providerId}/${rootModelId}`);
+  if (exactEntry) {
+    const exactRoute = exactEntry.routes.find((route) => route.providerId === providerId);
+    if (exactRoute) {
+      const isConsumerAlias = exactRoute.modelId !== rootModelId;
+      const piReachable =
+        exactRoute.agents.includes(policy.piRoot) ||
+        (providerId === 'openai' &&
+          isConsumerAlias &&
+          exactRoute.agents.includes('claude-code'));
+      if (piReachable) return { entry: exactEntry, rootModelId };
+    }
+  }
+
+  const matched = findModelRegistryRoute(registry, providerId, rootModelId, policy.piRoot);
+  return matched ? { entry: matched.entry, rootModelId } : null;
+}
+
 /**
  * Registry tombstone lookup for a concrete client consumer. This mirrors the same root/bridge
  * graph used by materialization without requiring a CatalogModel entity: retired routes are
@@ -73,14 +106,11 @@ export function isRegistryTombstoneForConsumer(
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!registry || !policy) return false;
 
-  let registryAgent: RootAgentKind | null;
   if (agent === 'pi') {
-    registryAgent = providerId === 'openai' ? 'codex' : 'claude-code';
-  } else if (policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent)) {
-    registryAgent = agent;
-  } else {
-    registryAgent = null;
+    return piRegistryMatch(registry, providerId, modelId)?.entry.status === 'retired';
   }
+  const registryAgent =
+    policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent) ? agent : null;
   if (!registryAgent) return false;
 
   return (
@@ -338,7 +368,7 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
           }
           const key = consumerPlanKey(route.providerId, consumer);
           const additions = plan.consumerAdditions.get(key) ?? [];
-          additions.push(toChatgptBridgeModel(materialized));
+          additions.push(materialized);
           plan.consumerAdditions.set(key, additions);
         }
         continue;
@@ -586,22 +616,13 @@ export function resolveRetiredRegistryModelForPi(
 ): CatalogModel | null {
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!registry || !policy) return null;
-  const rootAgent = policy.piRoot;
-  const rootModelId =
-    providerId === 'openai'
-      ? piModelId.startsWith(CHATGPT_MODEL_PREFIX)
-        ? piModelId.slice(CHATGPT_MODEL_PREFIX.length)
-        : null
-      : piModelId;
-  if (!rootModelId) return null;
-
-  const matched = findModelRegistryRoute(registry, providerId, rootModelId, rootAgent);
+  const matched = piRegistryMatch(registry, providerId, piModelId);
   if (!matched || matched.entry.status !== 'retired') return null;
-  const fields = effectiveRouteFields(matched.entry, rootAgent);
+  const fields = effectiveRouteFields(matched.entry);
   if (fields.validationError) return null;
-  const root = toMaterializedModel(rootModelId, fields, 'active');
+  const root = toMaterializedModel(matched.rootModelId, fields, 'active');
   if (typeof root === 'string') return null;
-  return projectRootModelToPi(providerId, rootAgent, { ...root, status: 'retired' });
+  return projectRootModelToPi(providerId, policy.piRoot, { ...root, status: 'retired' });
 }
 
 /**
