@@ -114,6 +114,7 @@ import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
 import { scanPiCustomizations } from './customization-scanner.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
+import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import {
   assertReviewMessageContentPaths,
@@ -786,6 +787,8 @@ async function buildPiPrompt(message: UserMessage, opts?: { remote?: boolean }):
       }
     }
   }
+  const managedImageReferences = formatManagedImageReferences(message.content);
+  if (managedImageReferences) textParts.push(managedImageReferences);
   return { text: textParts.join(' ').trim(), images };
 }
 
@@ -2918,8 +2921,74 @@ export class PiAgent extends BaseAgent {
      * setModel 的临界区正文。经 `setModelChain` 串行化后调用 —— 不要直接调它,
      * 并发进入会让 pending / 落定两次写交错。
      */
-    const switchModel = async (model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> => {
-      const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId') ? setOpts.providerId : undefined;
+    const switchModel = async (
+      model: string,
+      setOpts?: { providerId?: string | null; effort?: Effort },
+    ): Promise<void> => {
+      const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
+        ? setOpts.providerId
+        : undefined;
+      // 心跳复用活进程会把当前 (provider, model) 再下发一次。
+      // spawn 能靠 custom model id 跑在 Pi 自带目录没有的 SuperGrok
+      // 路由上（grok-4.6）；重复 set_model 反而 fail-closed。
+      // 只对显式非 null 来源做 no-op：model-only 与 providerId=null
+      // （钉回网关）仍走 RPC。
+      const assertGatewayProtocolForModel = (
+        nextModel: string,
+        nextRequestedProviderId: string | null | undefined,
+      ): void => {
+        const nextProvider = resolveProviderForModel(nextModel, nextRequestedProviderId);
+        if (nextProvider !== PI_PROVIDER_ID) return;
+        const routeProviderId = nextRequestedProviderId !== undefined
+          ? nextRequestedProviderId
+          : mutableProviderId;
+        const resolvedApi = this.deps.resolvePiGatewayModelApi?.(routeProviderId, nextModel);
+        if (
+          resolvedApi === null ||
+          (resolvedApi !== undefined &&
+            resolvedApi !== 'anthropic-messages' &&
+            resolvedApi !== 'openai-responses')
+        ) {
+          throw new Error(
+            `Model Access v3 did not provide a Pi wire protocol for model: ${nextModel}`,
+          );
+        }
+        const desiredApi = resolvedApi ?? 'anthropic-messages';
+        const configuredApi = gatewayApiByModel.get(nextModel);
+        if (configuredApi && configuredApi !== desiredApi) {
+          throw new Error(
+            `pi: provider switch for model '${nextModel}' requires API '${desiredApi}', but this session ` +
+              `started with '${configuredApi}'; restart the Pi session to change provider wire protocol.`,
+          );
+        }
+      };
+      if (
+        model === mutableModel &&
+        requestedProviderId !== undefined &&
+        requestedProviderId !== null &&
+        Object.is(requestedProviderId, mutableProviderId)
+      ) {
+        if (setOpts?.effort) {
+          assertStartupEffortAllowed(activeEffortSnapshot, setOpts.effort);
+        }
+        assertGatewayProtocolForModel(model, requestedProviderId);
+        // 同路由不打 set_model，但仍要重试子代理快照：初始写失败或确认写失败
+        // 留下 pending 时，心跳复用活进程必须能把文件重建/清 pending，
+        // 否则扩展会一直 fail-closed。不带 pending，路由已确认。
+        const provider = resolveProviderForModel(model, requestedProviderId);
+        const wireModel = resolveWireModel(provider, model);
+        if (!(await writeSubagentRuntimeFile({ model: wireModel, provider }))) {
+          deps.logger.warn('pi: same-route setModel could not refresh subagent snapshot', {
+            model,
+            provider,
+          });
+        }
+        deps.logger.debug('pi: setModel no-op; already on requested route', {
+          model,
+          providerId: requestedProviderId,
+        });
+        return;
+      }
       // 显式选一个启动快照 nativeProviderById 里“无法服务该 model”的 BYOM provider 时 fail
       // closed:要么该 provider 是会话启动后才新增的(不在快照),要么它虽在、但用户编辑
       // 配置后从中删/改了这个 model。两种都会让 resolveProviderForModel 静默回落 cindy 网关;
@@ -2934,29 +3003,7 @@ export class PiAgent extends BaseAgent {
       }
       const provider = resolveProviderForModel(model, requestedProviderId);
       const wireModel = resolveWireModel(provider, model);
-      if (provider === PI_PROVIDER_ID) {
-        const routeProviderId = requestedProviderId !== undefined
-          ? requestedProviderId
-          : mutableProviderId;
-        const resolvedApi = this.deps.resolvePiGatewayModelApi?.(routeProviderId, model);
-        if (
-          resolvedApi === null ||
-          (resolvedApi !== undefined &&
-            resolvedApi !== 'anthropic-messages' &&
-            resolvedApi !== 'openai-responses')
-        ) {
-          throw new Error(
-            `Model Access v3 did not provide a Pi wire protocol for model: ${model}`);
-        }
-        const desiredApi = resolvedApi ?? 'anthropic-messages';
-        const configuredApi = gatewayApiByModel.get(model);
-        if (configuredApi && configuredApi !== desiredApi) {
-          throw new Error(
-            `pi: provider switch for model '${model}' requires API '${desiredApi}', but this session ` +
-              `started with '${configuredApi}'; restart the Pi session to change provider wire protocol.`,
-          );
-        }
-      }
+      assertGatewayProtocolForModel(model, requestedProviderId);
       // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
       // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
       const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);

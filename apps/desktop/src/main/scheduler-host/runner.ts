@@ -1029,7 +1029,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // 对 Pi 而言失败后来源未知；继续 send 可能把内容发给旧 BYOM endpoint，
           // 不能沿用 Claude/Codex 的 non-fatal 模型切换降级。
           throw new Error(
-            `schedule Pi route sync failed before dispatch (model "${model}", provider "${reusedPiRouteProviderId ?? 'cindy'}")`,
+            `schedule Pi route sync failed before dispatch (model "${model}", provider "${reusedPiRouteProviderId ?? 'cindy'}"): ${err instanceof Error ? err.message : String(err)}`,
             { cause: err },
           );
         }
@@ -1333,7 +1333,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               await session.setModel(runtimeModel, { providerId: verdict.providerId });
             } catch (err) {
               throw new Error(
-                `schedule Pi route sync failed after pre-dispatch reroute (model "${runtimeModel}", provider "${verdict.providerId}")`,
+                `schedule Pi route sync failed after pre-dispatch reroute (model "${runtimeModel}", provider "${verdict.providerId}"): ${err instanceof Error ? err.message : String(err)}`,
                 { cause: err },
               );
             }
@@ -2142,7 +2142,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         modelApplied = false;
         if (mustSyncPiNativeRoute) {
           throw new QueuedPiRouteSyncError(
-            `schedule Pi route sync failed before queued dispatch (model "${targetModel}", provider "${nextProviderId ?? 'cindy'}")`,
+            `schedule Pi route sync failed before queued dispatch (model "${targetModel}", provider "${nextProviderId ?? 'cindy'}"): ${err instanceof Error ? err.message : String(err)}`,
             { cause: err },
           );
         }

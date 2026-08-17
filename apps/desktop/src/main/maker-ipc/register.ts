@@ -517,7 +517,11 @@ import {
   piPackageMutationNeedsGrant,
 } from '../maker-host/pi-package-mutation-grant.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
-import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
+import {
+  triggerClaudeSubscriptionUsageRefresh,
+  triggerCodexAccountUsageRefresh,
+  triggerXaiSubscriptionUsageRefresh,
+} from './usage.js';
 import {
   rebroadcastCodexTodayUsage,
   rebroadcastTodaySpend,
@@ -4639,6 +4643,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         void modelPromise
           .then((m) => {
             if (m && m.startsWith(CHATGPT_MODEL_PREFIX)) triggerCodexAccountUsageRefresh();
+            if (m && m.startsWith(XAI_MODEL_PREFIX)) triggerXaiSubscriptionUsageRefresh();
           })
           .catch(() => {
             /* 模型解析失败: 跳过, 非致命 */
@@ -4850,6 +4855,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         void modelPromise
           .then((model) => {
             const hasGatewayKey = Boolean(readClaudeApiKey());
+            if (!isRemoteCodexSession && model.startsWith(XAI_MODEL_PREFIX)) {
+              triggerXaiSubscriptionUsageRefresh();
+              return;
+            }
             if (
               !isRemoteCodexSession &&
               !isCustomProviderRoute &&
@@ -5011,11 +5020,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               triggerCodexAccountUsageRefresh();
             } else if (effectiveProvider === 'anthropic') {
               triggerClaudeSubscriptionUsageRefresh();
+            } else if (effectiveProvider === 'xai') {
+              triggerXaiSubscriptionUsageRefresh();
             } else if (effectiveProvider === 'xd' || effectiveProvider == null) {
               void triggerClaudeAccountUsageRefresh();
             }
-            // xAI 没有独立订阅窗口端点；Responses bridge 从响应 headers 实时更新
-            // useXaiRateLimit 消费的快照，无需额外网络请求。
           })();
         }
       }

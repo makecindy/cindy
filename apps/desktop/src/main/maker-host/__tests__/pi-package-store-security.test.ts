@@ -419,6 +419,50 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
+  it('keeps resources on their most specific approved root when snapshot roots overlap', async () => {
+    const ancestorRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-overlap-'));
+    roots.push(ancestorRoot);
+    const packageRoot = path.join(ancestorRoot, 'extension');
+    const extensionFile = path.join(packageRoot, 'extensions', 'index.js');
+    const skillFile = path.join(packageRoot, 'skills', 'sample', 'SKILL.md');
+    const promptFile = path.join(packageRoot, 'prompts', 'hello.md');
+    const ancestorDependency = path.join(ancestorRoot, 'node_modules', 'ancestor-only');
+    await fs.mkdir(path.dirname(extensionFile), { recursive: true });
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.mkdir(path.dirname(promptFile), { recursive: true });
+    await fs.mkdir(ancestorDependency, { recursive: true });
+    await fs.writeFile(extensionFile, [
+      "module.exports = require('ancestor-only');",
+      '',
+    ].join('\n'));
+    await fs.writeFile(skillFile, '# Sample\n');
+    await fs.writeFile(promptFile, 'Hello\n');
+    await fs.writeFile(
+      path.join(ancestorDependency, 'package.json'),
+      JSON.stringify({ name: 'ancestor-only', version: '1.0.0', main: './index.js' }),
+    );
+    await fs.writeFile(path.join(ancestorDependency, 'index.js'), "module.exports = 'unapproved';\n");
+
+    const store = await import('../pi-package-store.js');
+    const snapshotRoot = path.join(runtime.userData, 'overlapping-roots-snapshot');
+    const resources = await store.stageManagedPackageSnapshot({
+      extensions: [extensionFile],
+      skills: [{ path: skillFile, name: 'sample' }],
+      promptTemplates: [promptFile],
+      packageRoots: [ancestorRoot, packageRoot],
+    }, snapshotRoot);
+
+    expect(resources).toEqual({
+      extensions: [path.join(snapshotRoot, '1', 'extensions', 'index.js')],
+      skills: [{ path: path.join(snapshotRoot, '1', 'skills', 'sample', 'SKILL.md'), name: 'sample' }],
+      promptTemplates: [path.join(snapshotRoot, '1', 'prompts', 'hello.md')],
+      packageRoots: [path.join(snapshotRoot, '0'), path.join(snapshotRoot, '1')],
+    });
+    expect(() => createRequire(resources.extensions[0]!)(resources.extensions[0]!)).toThrow(
+      /Cannot find module 'ancestor-only'/,
+    );
+  });
+
   it('invalidates a local extension approval when its copied bytes change out of band', async () => {
     const { root } = await createPackage();
     const source = root;

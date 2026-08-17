@@ -1572,11 +1572,22 @@ function mapSnapshotPath(
   mappings: Array<{ source: string; target: string; directory: boolean }>,
 ): string {
   const resolved = path.resolve(sourcePath);
+  let containingDirectory: (typeof mappings)[number] | undefined;
   for (const mapping of mappings) {
     if (!mapping.directory && resolved === mapping.source) return mapping.target;
-    if (mapping.directory && isWithinPath(mapping.source, resolved)) {
-      return path.join(mapping.target, path.relative(mapping.source, resolved));
+    if (
+      mapping.directory
+      && isWithinPath(mapping.source, resolved)
+      && (!containingDirectory || mapping.source.length > containingDirectory.source.length)
+    ) {
+      containingDirectory = mapping;
     }
+  }
+  if (containingDirectory) {
+    return path.join(
+      containingDirectory.target,
+      path.relative(containingDirectory.source, resolved),
+    );
   }
   throw new Error('Pi extension resource is outside its inspected package root');
 }
