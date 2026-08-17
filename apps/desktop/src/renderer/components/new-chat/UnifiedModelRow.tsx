@@ -30,15 +30,16 @@ import {
 } from './unifiedModelSelection';
 
 /**
- * badge 样式的引擎徽标底色 —— 各引擎的品牌固定色(跨主题一致,语义豁免:与
- * ClaudeMark/CodexMark 的 brand variant 同一条豁免规则,不走主题 token)。
- * cc 取 Anthropic 陶土橙(ClaudeMark brand 同值);codex 取官方渐变中段蓝;
- * pi 上游无官方色,取与两者可区分的紫(同设计稿 v7)。
+ * badge 样式的引擎徽标底色 —— 一律走**语义 token**(themes/colors.ts 的
+ * `engine-badge-*`),这里只持有变量名,不留任何 hex 字面量:数值正本在注册处,
+ * 那边也写清了三支色各自的来源与「light / dark 同值是有意决策」的理由。
+ * 徽标底(14%)与描边(30%)由下面的 color-mix 从**同一个 var** 派生,PiMark 的
+ * currentColor 也接它 —— 一处改色三处同步,不会出现组件与主题各画各的。
  */
 const ENGINE_BADGE_TINT: Record<UnifiedEngine, string> = {
-  cc: '#d97757',
-  codex: '#7a9dff',
-  pi: '#a78bfa',
+  cc: 'var(--engine-badge-cc)',
+  codex: 'var(--engine-badge-codex)',
+  pi: 'var(--engine-badge-pi)',
 };
 
 /**

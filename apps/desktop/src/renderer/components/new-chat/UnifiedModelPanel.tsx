@@ -673,6 +673,19 @@ export function UnifiedModelPanel({
           modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
         agentFastModeCapable,
       }),
+    // 「该行没有收藏语境时的默认配置」:引擎 = 推荐 ⊕ 用户 override ⊕ 会话 pinned(与
+    // configOf 的模型行分支同一套合成,少给一路就会算出一个用户从没见过的引擎),
+    // **刻意不传 memoryEffort / memoryFast** —— 回落的是「该模型的默认」,不是用户上次在
+    // 那个引擎上留下的自定义档;两个记忆访问器缺省时 resolveUnifiedRowConfig 自然给出
+    // 目录默认档 + Fast 关。删除当前选中的收藏时按它回落(见 useUnifiedRowActions)。
+    resolveDefaultRowConfig: (entry) =>
+      resolveUnifiedRowConfig({
+        entry,
+        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        agentFastModeCapable,
+        ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
+      }),
+    selectedFavoriteUid: activeFavoriteUid,
     onFavoriteFlash: flashFavorite,
     onBeforeRemoveFavorite: (anchor) => {
       if (sameAnchor(flyAnchor, anchor)) closeFlyout();
@@ -1046,7 +1059,7 @@ export function UnifiedModelPanel({
                     onSelect={() => selectRow(row.anchor, config, row.favorite)}
                     onStar={() =>
                       row.favorite
-                        ? removeFavorite(row.anchor)
+                        ? removeFavorite(row.anchor, row.entry)
                         : addFavorite(row.anchor, config)
                     }
                   />
@@ -1102,7 +1115,7 @@ export function UnifiedModelPanel({
                   resetToRecommended(target.anchor, target.entry, config)
                 }
                 onAddFavorite={() => addFavorite(target.anchor, config)}
-                onRemoveFavorite={() => removeFavorite(target.anchor)}
+                onRemoveFavorite={() => removeFavorite(target.anchor, target.entry)}
               />
             );
           })()}

@@ -702,11 +702,16 @@ interface ModelSelectorProps {
     currentVendor: 'cc' | 'codex' | 'pi';
     /** 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。 */
     confirmBrowseSwitch?: () => Promise<boolean>;
+    /**
+     * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
+     * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
+     * `onCrossEngineSelect`(后者按真实结果决定要不要做清理动作)。
+     */
     onSwitch: (
       targetAgentKind: 'claude-code' | 'codex' | 'pi',
       modelId: string,
       providerId: string | null,
-    ) => void | Promise<void>;
+    ) => void | boolean | Promise<void | boolean>;
   };
 }
 
@@ -851,11 +856,16 @@ interface ModelSelectorContentProps {
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
     confirmBrowseSwitch?: () => Promise<boolean>;
+    /**
+     * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
+     * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
+     * `onCrossEngineSelect`(后者按真实结果决定要不要做清理动作)。
+     */
     onSwitch: (
       targetAgentKind: 'claude-code' | 'codex' | 'pi',
       modelId: string,
       providerId: string | null,
-    ) => void | Promise<void>;
+    ) => void | boolean | Promise<void | boolean>;
   };
   /**
    * 是否显示打开选择器触发的供应商模型发现提示。调用方可延迟短任务的提示，但一旦传 true，
@@ -2936,7 +2946,13 @@ export function ModelSelector({
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
   // 保命锁;区别只在收尾:
   //   · 调用方执行了切换(返回非 false)→ 收起面板(与旧两步分段选完即收一致);
-  //   · 用户在确认框上取消(返回 false)→ 面板留在原地,他还能接着挑别的行。
+  //   · 用户在确认框上取消 / 事务失败(返回 false)→ 面板留在原地,他还能接着挑别的行。
+  //
+  // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
+  // 不再只是确认框那一下。保命锁刻意**覆盖整个 await 期**:事务在途时面板被 Popover 的
+  // 外点判定收掉,收尾再把 open 设回 true,就成了「面板闪一下又自己弹回来」。锁按住期间
+  // 面板恒可见(open || keepOpenForAgentConfirmation),切换 in-flight 由 interactionDisabled
+  // 置灰,收尾时才按结果决定收还是留 —— 中途没有可以插进来的关闭窗口。
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;

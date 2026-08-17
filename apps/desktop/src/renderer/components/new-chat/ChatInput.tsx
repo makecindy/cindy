@@ -5482,11 +5482,16 @@ export function ChatInput({
         effort?: Effort;
         fastMode?: boolean;
       },
-    ) => {
-      if (!sessionId) return;
+    ): Promise<boolean> => {
+      // ★ 返回值 = **这次切换到底登记成功了没有**(2026-08-17 review)。此前本函数只返回
+      // void,调用方(统一面板的跨引擎链路)拿不到结果,只能在「确认框过了」这一刻就返回
+      // true —— 面板据此做的清理动作(恢复推荐清 override / 删收藏)会在事务其实失败或
+      // 被拒时照样执行,把用户原来的配置抹掉。凡是「没把这次选择落到会话上」的出口一律
+      // 返 false,只有真正登记 / 应用了才返 true。
+      if (!sessionId) return false;
       // 发送的引用水合 / 预检也可能 await。以同步登记的 session 级发送 token 为准，
       // 防止「先点发送、后选引擎」被异步准备反转成先登记切换再 maker:send。
-      if (hasPendingAgentSendDispatch(sessionId)) return;
+      if (hasPendingAgentSendDispatch(sessionId)) return false;
       // 本次点选无论落到哪个分支(登记意图 / 撤销意图 / 立即切换),都算一次本端写入:
       // 在途的远程意图读回据此作废,不会用旧快照盖掉用户刚做的选择。
       const sourceSessionId = sessionId;
@@ -5560,7 +5565,7 @@ export function ChatInput({
         // device-link 往返期间可以切到另一个任务:同一路由下 ChatInput 会带着新
         // sessionId 继续渲染,sameEngineReselectRef 等闭包也已指向新会话。旧会话的
         // 响应绝不能借最新的 ref 把模型/来源写进当前会话。
-        if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;
+        if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return false;
         // 远程往返期间状态可能已被更新的选择超车:用户又点了一次(写序号变),或另一个
         // 控制端 / 被控端的权威 sessions:patched 先到(修订号变)。此时这次 ack 携带的是
         // **旧**选择,落下去会让选择器显示过期引擎,而被控端按新意图执行下一条消息。
@@ -5580,7 +5585,9 @@ export function ChatInput({
             intentRevNow: makerChatStore.getAgentSwitchIntentRev(sourceSessionId),
           },
         });
-        if (ackAction === 'discard') return;
+        // 被更新的选择超车 → 这次点选没有落地(权威值属于后来那次),按「没切」上报:
+        // 调用方的清理若按成功走,清掉的是**用户最新那次选择**对应的配置。
+        if (ackAction === 'discard') return false;
         if (ackAction === 'apply-intent') {
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
@@ -5618,7 +5625,8 @@ export function ChatInput({
               { duration: 4000 },
             );
           }
-          return;
+          // 意图已登记 = 这次选择真的落到会话上了(真切换在下一条消息执行)。
+          return true;
         }
         if (ackAction === 'same-engine-reselect') {
           // 同引擎 no-op = 用户选回当前引擎:撤销展示意图(幂等,被控端可能已清并回流),
@@ -5636,9 +5644,10 @@ export function ChatInput({
                 result.sameEngineRevision,
               )
             : await sameEngineReselectRef.current.byModel(newModelId, result.sameEngineRevision);
-          if (applied === false) return;
+          // 被更新的选择超车(byProvider / byModel 自带修订号守卫)→ 同样按「没切」上报。
+          if (applied === false) return false;
           makerChatStore.clearAgentSwitchIntent(sourceSessionId);
-          return;
+          return true;
         }
         // 立即切换路径(harness / registry 缺省兜底,生产不走):维持旧收敛语义。
         makerChatStore.noteAgentSwitched(sourceSessionId, targetAgentKind);
@@ -5656,10 +5665,15 @@ export function ChatInput({
         if (!result.engineReady) {
           toast.error(t('newChat.chatInput.agentSwitch.engineNotReady'), { duration: 4000 });
         }
+        // 立即切换已经落库(noteAgentSwitched + 草稿同步):engineReady 只影响提示,
+        // 不改变「这次选择已应用」这一事实。
+        return true;
       } catch (err) {
         toast.error(
           t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.agentSwitch.failed' })),
         );
+        // 切换事务抛错 = 没切成:调用方不得在此之上做「成功才做」的清理。
+        return false;
       } finally {
         exclusiveTurn.release();
         finishAgentSwitchOperation();
@@ -5721,15 +5735,21 @@ export function ChatInput({
       }): Promise<boolean> => {
         // 取消 = 什么都不改;返回 false 让选择器留在原地(用户还能挑别的行)。
         if (!(await confirmAgentBrowseSwitch())) return false;
-        // 与旧两步分段一致地 fire-and-forget:切换事务自己有 session 级串行锁与
-        // in-flight 置灰,不在这里 await 把面板钉住。
-        void performAgentSwitchRef.current(
+        // ★ 必须 await 并**透传事务的真实结果**(2026-08-17 review)。此前这里 fire-and-forget
+        // 之后立即 return true —— 那个 true 只表示「确认框过了」,不表示切换登记成功。
+        // 面板侧把「成功才做」的清理(恢复推荐清 override / 删除选中收藏)挂在这个提前
+        // 布尔上,于是 switchSessionAgent 抛错、或 pending send 把切换挡掉时,用户的
+        // override / 收藏已经被清掉,原配置无从恢复。
+        //
+        // 代价是面板会在事务在途期间多停留一会儿:这段时间由 ModelSelector 的
+        // keepOpenForAgentConfirmation 保命锁按住(它已经覆盖整个 await 期),面板本身在
+        // 切换 in-flight 期间是置灰的,不会出现「面板可点却在切换中」的中间态。
+        return await performAgentSwitchRef.current(
           targetAgent,
           modelId,
           providerId,
           effort ? { effort } : undefined,
         );
-        return true;
       },
     };
   }, [

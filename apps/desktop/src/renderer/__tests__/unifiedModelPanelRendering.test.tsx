@@ -548,6 +548,153 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
 });
 
 /**
+ * 删除**当前选中的**收藏(2026-08-17 review):收藏是一份配置副本,选中它 = 草稿 / 会话
+ * 正按那份副本(自定义引擎 / 深度 / Fast)在跑。只删记录的话,视觉上选中态回落到模型行,
+ * 正在跑的那一份配置却纹丝不动 —— 与「恢复推荐只清记忆」是同一个病。
+ * 这一组锁的是「先把该模型的默认配置真的应用出去,再删记录」,以及跨引擎被拒时收藏不丢。
+ */
+describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
+  /** 收藏区恒置顶(buildUnifiedListSections),第一个 group 就是它。 */
+  function favoriteStar(): HTMLElement {
+    return within(screen.getAllByRole('group')[0]).getByRole('button', { name: '取消收藏' });
+  }
+
+  it('删的不是当前选中锚点:行为不变,只删记录', async () => {
+    addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'cc', effort: 'low' });
+    const onUnifiedSelect = vi.fn();
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    // 选中的是 Opus 5,那条收藏不是当前锚点 → 删它不影响「正在跑什么」。
+    renderPanel({
+      onUnifiedSelect,
+      onEffortChange,
+      onFastModeChange,
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+
+  it('草稿选中的收藏:默认配置经既有选中链路写回草稿(favoriteUid 置空),记录同时删除', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'cc',
+      effort: 'low',
+      fast: true,
+    });
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'cc',
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    // 默认 = 推荐引擎(gpt 家族主场 codex)+ 目录默认档 high + 无 Fast;锚点必须一起清掉,
+    // 否则草稿还指着一个已经不存在的 uid。
+    expect(onUnifiedSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      engine: 'codex',
+      effort: 'high',
+      fast: false,
+      favoriteUid: null,
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+  });
+
+  it('会话内同引擎:深度 / Fast 经实时回调复位,记录同时删除', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+      fast: true,
+    });
+    const onCrossEngineSelect = vi.fn();
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    // 默认引擎(codex)== 会话引擎 → 无损,不该弹跨引擎确认。
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+    expect(listModelFavorites()).toHaveLength(0);
+  });
+
+  it('会话内跨引擎:走既有切换事务,事务真成功才删收藏', async () => {
+    const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'cc' });
+    const onCrossEngineSelect = vi.fn(() => true);
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      onEffortChange: vi.fn(),
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    // gpt 家族主场 codex ≠ 会话的 claude-code → 回落默认 = 一次跨引擎切换。
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      targetAgent: 'codex',
+      effort: 'high',
+    });
+    await waitFor(() => {
+      expect(listModelFavorites()).toHaveLength(0);
+    });
+  });
+
+  it('会话内跨引擎被拒:收藏原样保留,配置一点不动', async () => {
+    const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'cc' });
+    const onCrossEngineSelect = vi.fn(() => false);
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      onEffortChange,
+      onFastModeChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledTimes(1);
+    // 取消 / 失败 = 一点都没应用:收藏是用户手存的东西,不可逆,绝不能先删再切。
+    expect(listModelFavorites()).toHaveLength(1);
+    expect(listModelFavorites()[0]?.uid).toBe(uid);
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * M5 新会话接线的**面板侧契约**:草稿把整行直通接走。撤掉 AgentSelect 之后,「换引擎」
  * 只剩这一条路径 —— 回传的 engine 一旦不是行上显示的那个,用户就会看着 Codex 建出
  * 一个 Claude 会话。

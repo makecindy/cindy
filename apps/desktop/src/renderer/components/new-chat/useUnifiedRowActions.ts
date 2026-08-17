@@ -73,6 +73,17 @@ export interface UnifiedRowActionsOptions {
    * 目标引擎的 wire id / 深度交给跨引擎切换事务。
    */
   resolveEngineConfig?: ((entry: UnifiedModelEntry, engine: UnifiedEngine) => UnifiedRowConfig) | undefined;
+  /**
+   * 该行**在没有收藏语境时**的默认配置(引擎 = 推荐 ⊕ 用户 override ⊕ 会话 pinned,
+   * 深度 = 目录默认,Fast = 关)。删除**当前选中的**收藏时要回落到它 —— 由调用方按
+   * `resolveUnifiedRowConfig` 的既有合成给出,本 hook 不自己再推一遍(两处各推必然漂移)。
+   */
+  resolveDefaultRowConfig?: ((entry: UnifiedModelEntry) => UnifiedRowConfig) | undefined;
+  /**
+   * 当前选中的收藏锚点 uid(已由调用方校验过「这条收藏还在」)。删除收藏时用它判断
+   * 「删的是不是正在用的那一份配置」——是的话必须先把默认配置真的应用出去。
+   */
+  selectedFavoriteUid?: string | null | undefined;
   /** ☆ 的 0.7s 点亮反馈(计时器在组件里)。 */
   onFavoriteFlash: (anchorKeyValue: string) => void;
   /** 删除收藏前的收尾(如收起绑在该锚点上的浮层)。 */
@@ -104,7 +115,11 @@ export interface UnifiedRowActions {
     config: UnifiedRowConfig,
   ) => void;
   addFavorite: (anchor: UnifiedAnchor, config: UnifiedRowConfig) => void;
-  removeFavorite: (anchor: UnifiedAnchor) => void;
+  /**
+   * 删除一条收藏。`entry` 是该收藏指向的模型行 —— 删的若正是**当前选中锚点**,要先把
+   * 该模型的默认配置真的应用出去再删(见实现处的头注)。
+   */
+  removeFavorite: (anchor: UnifiedAnchor, entry: UnifiedModelEntry) => void;
   selectRow: (
     anchor: UnifiedAnchor,
     config: UnifiedRowConfig,
@@ -123,9 +138,91 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     sessionEngineFilter,
     sessionAgent,
     resolveEngineConfig,
+    resolveDefaultRowConfig,
+    selectedFavoriteUid,
     onFavoriteFlash,
     onBeforeRemoveFavorite,
   } = options;
+
+  // ── 「把一份配置真的应用到正在跑的那一份上」的三条链路 ─────────────────────
+  // 恢复推荐(§1.4)与「删除当前选中的收藏」(§1.5)是同一件事的两个入口:都要把行回落到
+  // 默认 / 推荐配置。三条链路抽在这里,两个入口共用 —— 各写一遍必然漂移成「恢复推荐会
+  // 跨引擎确认、删收藏却静默换引擎」。
+
+  /**
+   * 这个面板画的是不是一个**已建会话**(有跨引擎切换事务可用)。草稿没有它 —— 换引擎
+   * 无损,直接写回草稿即可。两个字段必须同时具备:少了任一个,跨引擎行就没有落点。
+   */
+  const inSession = sessionEngineFilter !== undefined && sessionAgent !== undefined;
+
+  /**
+   * 无损应用:引擎没变,深度 / Fast 交给调用方的实时状态 —— 与用户在浮层里手动拖档 /
+   * 关 ⚡ 走同一条持久化链路(applyEffort / applyFast 的 live 分支),绝不预写记忆表。
+   * Fast **无条件关**:传进来的目标配置恒是「默认 / 推荐态」(无 Fast),而 config.fast
+   * 只是本次渲染看到的值,漏关一次留下的是一个用户以为已经回落、实际还在插队加速的任务;
+   * 重复关是幂等的。
+   */
+  const applyDefaultsLive = (effort: Effort | null): void => {
+    if (effort && onEffortChangeLive) onEffortChangeLive(effort);
+    if (onFastModeChangeLive) void onFastModeChangeLive(false);
+  };
+
+  /**
+   * 有损应用(会话内跨引擎):交给调用方的切换事务(确认弹窗 + 上下文重建),
+   * **事务返回非 false 才**执行 `onApplied` 的持久化收尾。
+   *
+   * 「非 false」现在是**真结果**(2026-08-17 review 第二项:ChatInput 的
+   * `onCrossEngineSelect` 已改为 await performAgentSwitch 并透传登记结果),不再是
+   * 「确认框过了」那个提前布尔 —— 取消 / 事务失败 / 被 pending send 挡下都会走到
+   * 「不收尾」这一支,不会留下「记忆或收藏已经清掉、任务还在旧配置上跑」的半套状态。
+   */
+  const runCrossEngineSwitch = (args: {
+    providerId: string;
+    /** 目标引擎的 **wire id**(发出去的那个 id,不是行的归一化身份)。 */
+    wireModelId: string;
+    targetAgent: AgentKind;
+    effort: Effort | null;
+    onApplied: () => void;
+  }): void => {
+    if (!sessionEngineFilter) return;
+    void Promise.resolve(
+      sessionEngineFilter.onCrossEngineSelect({
+        providerId: args.providerId,
+        modelId: args.wireModelId,
+        targetAgent: args.targetAgent,
+        effort: args.effort ?? '',
+      }),
+    ).then(
+      (applied) => {
+        // 只有明确的 false 表示「没切」(见 UnifiedModelPanelProps.onCrossEngineSelect);
+        // 返回 void 的调用方视为已切。
+        if (applied === false) return;
+        args.onApplied();
+      },
+      // 事务抛错(切换失败)同样按「没应用」处理。
+      () => {},
+    );
+  };
+
+  /**
+   * 草稿应用:换引擎无损,按**既有选中链路**把整份默认 / 推荐配置写回草稿
+   * (与 applyEngine 的草稿分支同形)。`favoriteUid: null` 是这条链路的要点之一 ——
+   * 草稿层的收藏锚点由它清掉,否则删完收藏草稿还指着一个不存在的 uid。
+   * `fast` 恒 false:两个入口交出来的都是默认 / 推荐态,那里没有 Fast。
+   */
+  const applyDefaultsToDraft = (args: {
+    anchor: UnifiedAnchor;
+    engine: UnifiedEngine;
+    wireModelId: string;
+    effort: Effort | null;
+  }): void => {
+    onSelect(args.anchor.providerId, args.wireModelId, args.effort ?? '', {
+      engine: args.engine,
+      fast: false,
+      favoriteUid: null,
+      rowModelId: args.anchor.modelId,
+    });
+  };
 
   const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, entry, config, engine) => {
     if (interactionDisabled) return;
@@ -252,49 +349,34 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 见 UnifiedModelPanel.configOf)。只清记忆的话,用户点完「恢复推荐」当前任务照旧用着
     // 旧引擎 / 旧深度 / 旧 Fast 在跑,浮层却已经显示成推荐态 —— 显示与事实分家。
     if (recommendedAgent === config.agent) {
-      // 引擎没变:推荐态 = 跟随推荐档 + 无 Fast。两个 live 回调即「应用」,与用户在浮层里
-      // 手动拖档 / 关 ⚡ 走同一条持久化链路(applyEffort / applyFast 的 live 分支)。
+      // 引擎没变:推荐态 = 跟随推荐档 + 无 Fast,两个 live 回调即「应用」。
       resetStoredConfig();
-      if (defaultEffort && onEffortChangeLive) onEffortChangeLive(defaultEffort);
-      // 无条件关:`config.fast` 只是本次渲染看到的值,漏关一次留下的是一个用户以为已经
-      // 恢复、实际还在插队加速的任务;重复关是幂等的。
-      if (onFastModeChangeLive) void onFastModeChangeLive(false);
+      applyDefaultsLive(defaultEffort);
       return;
     }
 
     // 推荐引擎 ≠ 当前引擎 —— 这一下等于「把行切回推荐引擎」,必须走与 applyEngine 完全
     // 相同的两条链路,不另造第三条。
-    if (sessionEngineFilter && sessionAgent !== undefined) {
+    if (inSession) {
       // 会话内换引擎有损(确认弹窗 + 上下文重建):先跑事务,**成功了才**落 override / 记忆。
       // 顺序刻意与 applyEngine 的会话分支一致(那里的规则是「不预写 override,取消不留痕」)——
       // 取消 = 一点都没应用,不会出现「override 清了、任务还在旧引擎上」的半套状态。
-      void Promise.resolve(
-        sessionEngineFilter.onCrossEngineSelect({
-          providerId: anchor.providerId,
-          modelId: recommendedWireId,
-          targetAgent: recommendedAgent,
-          effort: defaultEffort ?? '',
-        }),
-      ).then(
-        (applied) => {
-          // 只有明确的 false 表示「没切」(见 UnifiedModelPanelProps.onCrossEngineSelect);
-          // 返回 void 的调用方视为已切。
-          if (applied === false) return;
-          resetStoredConfig();
-        },
-        // 事务抛错(切换失败)同样按「没应用」处理:不留 override 已清、任务还在旧引擎的半套。
-        () => {},
-      );
+      runCrossEngineSwitch({
+        providerId: anchor.providerId,
+        wireModelId: recommendedWireId,
+        targetAgent: recommendedAgent,
+        effort: defaultEffort,
+        onApplied: resetStoredConfig,
+      });
       return;
     }
-    // 草稿换引擎无损:先落 override / 记忆,再把推荐引擎的整份配置按既有选中链路写回草稿
-    // (与 applyEngine 的草稿分支同形)。
+    // 草稿换引擎无损:先落 override / 记忆,再把推荐引擎的整份配置按既有选中链路写回草稿。
     resetStoredConfig();
-    onSelect(anchor.providerId, recommendedWireId, defaultEffort ?? '', {
+    applyDefaultsToDraft({
+      anchor,
       engine: recommendedEngine,
-      fast: false,
-      favoriteUid: null,
-      rowModelId: anchor.modelId,
+      wireModelId: recommendedWireId,
+      effort: defaultEffort,
     });
   };
 
@@ -310,10 +392,62 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     onFavoriteFlash(anchorKey(anchor));
   };
 
-  const removeFavorite: UnifiedRowActions['removeFavorite'] = (anchor) => {
+  /**
+   * 删除一条收藏。
+   *
+   * ★ 删的若正是**当前选中锚点**(2026-08-17 review):收藏是一份配置副本,选中它 =
+   * 草稿 / 会话正按那份副本(自定义引擎 / 深度 / Fast)在跑。只删记录的话,视觉上选中态
+   * 回落到模型行,**正在跑的那一份配置却纹丝不动** —— 行上写着推荐态,任务还带着收藏那份
+   * 引擎和 ⚡,配置状态与显示当场分家(与「恢复推荐只清记忆」是同一个病)。
+   *
+   * 所以要先把该模型的**默认配置真的应用出去**,再删收藏:三条链路与恢复推荐共用
+   * (applyDefaultsLive / runCrossEngineSwitch / applyDefaultsToDraft)。
+   * **顺序**:先应用、后删记录 —— 会话跨引擎那一路只有事务真成功才删,取消 / 失败时
+   * 收藏原样保留、配置一点不动,用户重试即可;反过来先删再切,一旦切换被拒,那条收藏
+   * 就永久没了(收藏是用户手存的东西,不可逆)。
+   */
+  const removeFavorite: UnifiedRowActions['removeFavorite'] = (anchor, entry) => {
     if (interactionDisabled || anchor.kind !== 'fav') return;
-    onBeforeRemoveFavorite(anchor);
-    removeModelFavorite(anchor.uid);
+    const commit = (): void => {
+      onBeforeRemoveFavorite(anchor);
+      removeModelFavorite(anchor.uid);
+    };
+    // 删的不是当前选中锚点 → 它不影响「正在跑什么」,行为不变:只删记录。
+    const fallback =
+      selectedFavoriteUid && selectedFavoriteUid === anchor.uid
+        ? resolveDefaultRowConfig?.(entry)
+        : undefined;
+    if (!fallback) {
+      commit();
+      return;
+    }
+    const wireModelId = fallback.wireModelId ?? anchor.modelId;
+    // 草稿:恒走 onSelect —— 除了把默认配置写回草稿,它还是清掉草稿层收藏锚点
+    // (favoriteUid → null)的唯一入口,同引擎也不能只发 live 回调。
+    if (!inSession) {
+      applyDefaultsToDraft({
+        anchor,
+        engine: fallback.engine,
+        wireModelId,
+        effort: fallback.effort,
+      });
+      commit();
+      return;
+    }
+    // 会话 + 默认引擎 == 当前引擎:无损,两个 live 回调把深度 / Fast 复位即可。
+    if (fallback.agent === sessionAgent) {
+      applyDefaultsLive(fallback.effort);
+      commit();
+      return;
+    }
+    // 会话 + 默认引擎 ≠ 当前引擎:有损,走跨引擎切换事务;真成功才删收藏。
+    runCrossEngineSwitch({
+      providerId: anchor.providerId,
+      wireModelId,
+      targetAgent: fallback.agent,
+      effort: fallback.effort,
+      onApplied: commit,
+    });
   };
 
   const selectRow: UnifiedRowActions['selectRow'] = (anchor, config, favorite) => {

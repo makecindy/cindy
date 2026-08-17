@@ -1088,6 +1088,29 @@ registerColor('fast-accent', {
   light: '#3B9EFF',
   dark: '#3B9EFF',
 }, 'Fast 开启态强调蓝(light/dark 同值,跨主题固定功能色)');
+// 引擎徽标(badge 列表样式的行首 22px 标识)的品牌标识色 —— 与档位色 / 价格档色 /
+// Fast 强调蓝同一类**跨主题固定功能色**(DESIGN.md §10 语义豁免):它表达的是「这一行
+// 现在挂在哪个引擎上」这个身份,不表达界面明暗层次,**light / dark 同值是有意决策**,
+// 不是漏配 dark —— 同一个引擎在两种主题下换个颜色,用户会以为自己换了引擎。
+// 各自来源:
+//   · cc    = Anthropic 陶土橙,与 ClaudeMark 的 brand variant 同一支色;
+//   · codex = Codex 官方渐变的中段蓝(CodexMark brand 的 0.5 stop);
+//   · pi    = 上游无官方品牌色,取一支与前两者可区分的紫(统一选择器设计稿 v7)。
+// 徽标底色(14%)与描边(30%)由组件用 color-mix 从**同一个 var** 派生,PiMark 的
+// currentColor 也接同一个 var —— TS 侧不再持有这三个 hex,不会出现「组件拿常量、
+// 主题拿 token」两条路各画各的。
+registerColor('engine-badge-cc', {
+  light: '#d97757',
+  dark: '#d97757',
+}, 'Claude Code 引擎徽标色 — Anthropic 陶土橙(light/dark 同值)');
+registerColor('engine-badge-codex', {
+  light: '#7a9dff',
+  dark: '#7a9dff',
+}, 'Codex 引擎徽标色 — 官方渐变中段蓝(light/dark 同值)');
+registerColor('engine-badge-pi', {
+  light: '#a78bfa',
+  dark: '#a78bfa',
+}, 'Pi 引擎徽标色 — 自选紫,上游无官方品牌色(light/dark 同值)');
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',
