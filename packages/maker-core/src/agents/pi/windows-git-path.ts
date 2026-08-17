@@ -15,6 +15,7 @@ import path from 'node:path';
 export interface WindowsGitPathProbes {
   readRegistryInstallPaths: () => readonly string[];
   whereGit: () => readonly string[];
+  readGitExecPath: (gitPath: string) => string | undefined;
   isDirectory: (candidate: string) => boolean;
   isFile: (candidate: string) => boolean;
 }
@@ -25,15 +26,18 @@ export interface ResolveWindowsGitPathOptions {
   probes?: Partial<WindowsGitPathProbes>;
 }
 
-const REGISTRY_KEYS = [
+export const WINDOWS_GIT_REGISTRY_KEYS = [
+  'HKCU\\SOFTWARE\\GitForWindows',
   'HKLM\\SOFTWARE\\GitForWindows',
   'HKLM\\SOFTWARE\\WOW6432Node\\GitForWindows',
 ] as const;
 
+export const WINDOWS_GIT_WHERE_PATTERN = '$PATH:git.exe';
+
 function defaultReadRegistryInstallPaths(): readonly string[] {
   if (process.platform !== 'win32') return [];
   const paths: string[] = [];
-  for (const key of REGISTRY_KEYS) {
+  for (const key of WINDOWS_GIT_REGISTRY_KEYS) {
     try {
       const output = execFileSync('reg', ['query', key, '/v', 'InstallPath'], {
         encoding: 'utf8',
@@ -53,7 +57,7 @@ function defaultReadRegistryInstallPaths(): readonly string[] {
 function defaultWhereGit(): readonly string[] {
   if (process.platform !== 'win32') return [];
   try {
-    const output = execFileSync('where', ['git'], {
+    const output = execFileSync('where', [WINDOWS_GIT_WHERE_PATTERN], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
@@ -64,9 +68,27 @@ function defaultWhereGit(): readonly string[] {
   }
 }
 
+function defaultReadGitExecPath(gitPath: string): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const extension = path.win32.extname(gitPath).toLowerCase();
+  if (extension !== '.exe' && extension !== '.com') return undefined;
+  try {
+    const output = execFileSync(gitPath, ['--exec-path'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2_000,
+      windowsHide: true,
+    });
+    return output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  } catch {
+    return undefined;
+  }
+}
+
 const defaultProbes: WindowsGitPathProbes = {
   readRegistryInstallPaths: defaultReadRegistryInstallPaths,
   whereGit: defaultWhereGit,
+  readGitExecPath: defaultReadGitExecPath,
   isDirectory: (candidate) => {
     try {
       return statSync(candidate).isDirectory();
@@ -121,7 +143,7 @@ export function gitInstallRootFromPath(gitPath: string): string | undefined {
     }
     return grandparent;
   }
-  return path.win32.dirname(parent);
+  return undefined;
 }
 
 type WindowsGitFileProbes = Pick<WindowsGitPathProbes, 'isDirectory' | 'isFile'>;
@@ -144,6 +166,27 @@ export function gitPathsForInstallRoot(
   const usrBin = path.win32.join(root, 'usr', 'bin');
   if (hasGitCommand(usrBin, probes) || probes.isFile(path.win32.join(usrBin, 'ls.exe'))) candidates.push(usrBin);
   return uniqueWindowsPaths(candidates);
+}
+
+function gitInstallRootFromExecPath(
+  execPath: string | undefined,
+  probes: WindowsGitFileProbes,
+): string | undefined {
+  if (!execPath) return undefined;
+  let candidate = path.win32.normalize(execPath.replaceAll('/', '\\'));
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (gitPathsForInstallRoot(candidate, probes).length > 0) return candidate;
+    const parent = path.win32.dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  return undefined;
+}
+
+function gitInstallRootForPath(gitPath: string, probes: WindowsGitPathProbes): string | undefined {
+  const inferred = gitInstallRootFromPath(gitPath);
+  if (inferred && gitPathsForInstallRoot(inferred, probes).length > 0) return inferred;
+  return gitInstallRootFromExecPath(probes.readGitExecPath(gitPath), probes);
 }
 
 export function translateMsysPathSegment(segment: string, installRoots: readonly string[], isDirectory: (candidate: string) => boolean): string | undefined {
@@ -170,7 +213,9 @@ export function resolveWindowsGitPath({ platform = process.platform, existingPat
   const original = existingPath ?? '';
   const roots = uniqueWindowsPaths([
     ...probes.readRegistryInstallPaths(),
-    ...probes.whereGit().map(gitInstallRootFromPath).filter((value): value is string => Boolean(value)),
+    ...probes.whereGit()
+      .map((gitPath) => gitInstallRootForPath(gitPath, probes))
+      .filter((value): value is string => Boolean(value)),
   ]);
   const added = roots.flatMap((root) => gitPathsForInstallRoot(root, probes));
   if (added.length === 0) return original;
