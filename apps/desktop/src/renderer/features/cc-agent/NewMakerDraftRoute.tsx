@@ -2576,6 +2576,16 @@ export function NewMakerDraftRoute() {
     applyDraftTarget({ deviceId: null, deviceName: null, workingDir: null });
   }, [effectiveDeviceLinkDeviceId, selectableDevices, selectableDevicesLoaded, applyDraftTarget]);
 
+  // 创建目标正在异步提交时，发送、建目标以及设备／工作区切换必须共用同一把锁。
+  // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，
+  // 避免其中一半提前释放后让旧草稿目标被消费。
+  const sendInFlightRef = useRef(false);
+  const [sendInFlight, setSendInFlight] = useState(false);
+  const markSendInFlight = useCallback((value: boolean) => {
+    sendInFlightRef.current = value;
+    setSendInFlight(value);
+  }, []);
+
   /**
    * 换设备(#807)。**一并清掉 workingDir 与 extraDirs** —— 上一台机器的路径在新机器上
    * 基本不存在,留着会让用户以为项目跟过来了,发送时才在被控端 path guard 上失败。
@@ -2615,40 +2625,47 @@ export function NewMakerDraftRoute() {
    */
   const handleModePickerSelect = useCallback(
     async (path: string, source: FolderPickerSelectSource) => {
-      const selectionSeq = ++modePickerSelectionSeqRef.current;
       // 与设备 pill 同款保护:发送已在途时那次调用的闭包持有旧工作区,draft 却会可见地切到
       // 新的 —— 会话建在旧工作区里,而用户刚选的那个又被 create 后的重置清掉。
       if (sendInFlightRef.current) return;
+      // 只有真正接受的选择才能作废上一轮。若锁已占用却先递增，第二次点击会同时被拒绝、
+      // 又让第一轮完成后命中 sequence fence，最终两个选择都不生效。
+      const selectionSeq = ++modePickerSelectionSeqRef.current;
       // 本机项目可能曾被用户「从侧栏移除」:任务和 workingDir 仍在,但 hidden overlay
       // 会把它们投影到「对话」。旧段头「新建项目」按钮会在重选目录时解除隐藏；按钮移除后
       // 创建页必须接过这条恢复路径。远程项目由各自设备维护可见性,纯对话也没有项目可恢复。
       if (source !== 'dialogue' && !effectiveDeviceLinkDeviceId) {
         const localProjectKey = normalizeProjectKey(path);
         if (localProjectKey?.startsWith('local:')) {
+          // 恢复和草稿目标应用是一笔提交：期间复用创建锁，阻止 Send / Goal 或其它目标切换
+          // 消费旧 workingDir。锁保持到新目标同步写入完成，reject / fence 早退也由 finally 释放。
+          markSendInFlight(true);
           try {
             // Selecting a folder commits its project restoration. The fence below only prevents
             // an older async completion from overwriting a newer draft target; rolling shared
             // visibility back could re-hide a project restored by another window.
             await requestSidebarProjectRestore(localProjectKey);
+            // 恢复在途期间手动发送和目标切换都被同一把锁挡住；这里仍保留 sequence / device
+            // fence，覆盖卸载与权威设备状态变化等不经过交互 handler 的路径。
+            if (
+              selectionSeq !== modePickerSelectionSeqRef.current ||
+              (getDraft().deviceLinkDeviceId ?? null) !== null
+            ) {
+              return;
+            }
+            handleWorkingDirChange(path);
           } catch (err) {
             log.warn('[new-maker] restore selected project failed', err);
             toast.error(t('ccAgent.sidebar.createProjectFailed'));
-            return;
+          } finally {
+            markSendInFlight(false);
           }
-          // 恢复 IPC 在途时用户仍可能通过快捷键发送或切到另一台设备。此时不能把旧的本机
-          // 选择写回新目标；保留当前草稿,让用户在最新设备语境下重新选择。
-          if (
-            selectionSeq !== modePickerSelectionSeqRef.current ||
-            sendInFlightRef.current ||
-            (getDraft().deviceLinkDeviceId ?? null) !== null
-          ) {
-            return;
-          }
+          return;
         }
       }
       handleWorkingDirChange(source === 'dialogue' ? null : path);
     },
-    [effectiveDeviceLinkDeviceId, handleWorkingDirChange, t],
+    [effectiveDeviceLinkDeviceId, handleWorkingDirChange, markSendInFlight, t],
   );
 
   // 用户点击 checkbox 是唯一改动路径。本地草稿直接写工作端偏好;
@@ -2877,17 +2894,6 @@ export function NewMakerDraftRoute() {
     setWtName(name);
   }, []);
 
-  // 防止用户在 send 流程中再次按下 send(异步 createSession 期间)。
-  const sendInFlightRef = useRef(false);
-  /**
-   * 与 sendInFlightRef 同步的渲染态。ref 用于同步 guard(重复发送、切设备)——它必须即时可读;
-   * state 只负责让「发送在途」能驱动 UI 禁用(ref 变化不触发渲染)。两者一起改,别只动一个。
-   */
-  const [sendInFlight, setSendInFlight] = useState(false);
-  const markSendInFlight = useCallback((value: boolean) => {
-    sendInFlightRef.current = value;
-    setSendInFlight(value);
-  }, []);
   const wtRef = useRef({
     enabled: wtEnabled,
     name: wtName,

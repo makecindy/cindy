@@ -156,6 +156,33 @@ describe('Shared create project picker', () => {
     expect(sidebarUpperSource).toContain('restoreSelectedHiddenProject({');
   });
 
+  it('holds the existing creation lock until project restoration commits the draft target', () => {
+    const handlerStart = newMakerDraftRouteSource.indexOf(
+      'const handleModePickerSelect = useCallback(',
+    );
+    const handlerEnd = newMakerDraftRouteSource.indexOf(
+      'const handleWtEnabledChange = useCallback(',
+      handlerStart,
+    );
+    const handler = newMakerDraftRouteSource.slice(handlerStart, handlerEnd);
+    const guardAt = handler.indexOf('if (sendInFlightRef.current) return;');
+    const selectionAt = handler.indexOf(
+      'const selectionSeq = ++modePickerSelectionSeqRef.current;',
+    );
+    const lockAt = handler.indexOf('markSendInFlight(true);');
+    const restoreAt = handler.indexOf('await requestSidebarProjectRestore(localProjectKey);');
+    const applyAt = handler.indexOf('handleWorkingDirChange(path);');
+    const unlockAt = handler.indexOf('markSendInFlight(false);');
+
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(selectionAt).toBeGreaterThan(guardAt);
+    expect(lockAt).toBeGreaterThan(selectionAt);
+    expect(restoreAt).toBeGreaterThan(lockAt);
+    expect(applyAt).toBeGreaterThan(restoreAt);
+    expect(unlockAt).toBeGreaterThan(applyAt);
+    expect(handler.slice(lockAt, unlockAt)).toContain('finally {');
+  });
+
   it('keeps dialogue outside of the project group in the picker menu', () => {
     const topHeadingIndex = folderPickerPopoverSource.indexOf(
       "t('newChat.folderPicker.dialogueOrSelectProject')",

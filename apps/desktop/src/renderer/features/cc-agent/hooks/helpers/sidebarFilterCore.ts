@@ -186,7 +186,10 @@ export function nextProjectsAfterToggle(
   if (prev === 'all') {
     return [projectKey];
   }
-  const normalizedPrev = normalizeFilterProjectList(prev);
+  // Persisted filters may contain multiple Windows spellings of the same local path from
+  // pre-comparison-key versions. Collapse them to one logical identity before toggling so a
+  // single click removes the whole selected project rather than one stale spelling at a time.
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
   const idx = findProjectFilterIndex(normalizedPrev, projectKey, localPlatform);
   if (idx >= 0) {
     if (normalizedPrev.length === 1) {
@@ -211,7 +214,7 @@ export function includeProjectInFilter(
   if (prev === 'all') return prev;
   const projectKey = normalizeFilterEntry(workingDir);
   if (!projectKey) return prev;
-  const normalizedPrev = normalizeFilterProjectList(prev);
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
   if (findProjectFilterIndex(normalizedPrev, projectKey, localPlatform) >= 0) {
     return arraysEqual(normalizedPrev, prev) ? prev : normalizedPrev;
   }
@@ -253,7 +256,7 @@ export function removeProjectsFromFilter(
       .filter((projectKey): projectKey is string => projectKey != null),
   );
   if (hiddenComparisonKeys.size === 0) return prev;
-  const normalizedPrev = normalizeFilterProjectList(prev);
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
   const filtered = normalizedPrev.filter((projectKey) => {
     if (projectKey === DIALOGUE_FILTER_KEY) return true;
     const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
@@ -782,7 +785,7 @@ export function gcProjectsAgainstActive(
       .map((projectKey) => projectKeyComparisonKey(projectKey, localPlatform))
       .filter((projectKey): projectKey is string => projectKey != null),
   );
-  const normalizedPrev = normalizeFilterProjectList(prev);
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
   const filtered = normalizedPrev.filter((projectKey) => {
     if (projectKey === DIALOGUE_FILTER_KEY) return true;
     const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
@@ -800,13 +803,20 @@ function normalizeFilterEntry(raw: unknown): string | null {
   return normalizeProjectKey(raw);
 }
 
-function normalizeFilterProjectList(values: readonly unknown[]): string[] {
+function normalizeFilterProjectList(
+  values: readonly unknown[],
+  localPlatform?: string,
+): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = normalizeFilterEntry(value);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const identity = localPlatform == null
+      ? key
+      : (projectFilterEntryIdentity(key, localPlatform) ?? key);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     out.push(key);
   }
   return out;
@@ -829,14 +839,17 @@ function findProjectFilterIndex(
   projectKey: string,
   localPlatform: string,
 ): number {
-  if (projectKey === DIALOGUE_FILTER_KEY) return projectKeys.indexOf(DIALOGUE_FILTER_KEY);
-  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
-  if (comparisonKey == null) return -1;
+  const identity = projectFilterEntryIdentity(projectKey, localPlatform);
+  if (identity == null) return -1;
   return projectKeys.findIndex(
-    (candidate) =>
-      candidate !== DIALOGUE_FILTER_KEY &&
-      projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
+    (candidate) => projectFilterEntryIdentity(candidate, localPlatform) === identity,
   );
+}
+
+/** Logical identity used by every single-project filter operation. */
+function projectFilterEntryIdentity(projectKey: string, localPlatform: string): string | null {
+  if (projectKey === DIALOGUE_FILTER_KEY) return DIALOGUE_FILTER_KEY;
+  return projectKeyComparisonKey(projectKey, localPlatform);
 }
 
 function arraysEqual(a: readonly string[], b: readonly unknown[]): boolean {
