@@ -1,6 +1,6 @@
 /**
  * Regression coverage for installed Plugin card actions (redesigned card:
- * whole-card primary action, kind-specific primary button, manage entry),
+ * whole-card opens detail, kind-specific primary button, manage entry),
  * market card actions, and the legacy recovery notice.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
@@ -160,32 +160,83 @@ describe('GhostPluginCard', () => {
   // 未读是模块级 store,用例间必须互不串味。
   afterEach(() => __resetGhostUnreadForTest());
 
-  it('fires the primary action from the whole card for a command plugin', () => {
+  it('opens plugin details from the whole card for a command plugin', () => {
     const onPrimary = vi.fn();
     const onManage = vi.fn();
     render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Filo Google' }));
-    expect(onPrimary).toHaveBeenCalledTimes(1);
-    expect(onManage).not.toHaveBeenCalled();
-    // 指令型主按钮 = 「对话」。
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+    // 指令型主按钮仍是「对话」,不随整卡改成详情。
     expect(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' })).toBeTruthy();
   });
 
+  it('keeps the conversation pill as the command plugin primary action', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
+  });
+
+  it.each(['Enter', ' '] as const)(
+    'opens plugin details when the card itself is activated with %s',
+    (key) => {
+      const onPrimary = vi.fn();
+      const onManage = vi.fn();
+      render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Filo Google' }), { key });
+      expect(onManage).toHaveBeenCalledTimes(1);
+      expect(onPrimary).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['Enter', ' '] as const)(
+    'does not treat a nested pill %s as a card activation',
+    (key) => {
+      const onPrimary = vi.fn();
+      const onManage = vi.fn();
+      render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+      fireEvent.keyDown(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }), {
+        key,
+      });
+      expect(onManage).not.toHaveBeenCalled();
+    },
+  );
+
   it('labels the primary button 使用 for a tab-panel plugin', () => {
     const onPrimary = vi.fn();
-    render(<GhostPluginCard item={panelPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={panelPlugin} onPrimary={onPrimary} onManage={onManage} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
     expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
+  });
+
+  it('opens plugin details from the whole card for a tab-panel plugin', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={panelPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Signoff Board' }));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
   });
 
   it('offers a conversation entry for a Host capability plugin', () => {
     const onPrimary = vi.fn();
-    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={onManage} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
     expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
     expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
   });
 
@@ -201,13 +252,14 @@ describe('GhostPluginCard', () => {
 
   it('shows the update pill and keeps it from triggering the card action', () => {
     const onPrimary = vi.fn();
+    const onManage = vi.fn();
     const onUpdate = vi.fn();
     render(
       <GhostPluginCard
         item={commandPlugin}
         updateVersion="1.1.0"
         onPrimary={onPrimary}
-        onManage={vi.fn()}
+        onManage={onManage}
         onUpdate={onUpdate}
       />,
     );
@@ -215,6 +267,7 @@ describe('GhostPluginCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.updateAria' }));
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(onPrimary).not.toHaveBeenCalled();
+    expect(onManage).not.toHaveBeenCalled();
     // 有更新时不显示「已是最新」。
     expect(screen.queryByText(/upToDate/)).toBeNull();
   });
@@ -260,6 +313,27 @@ describe('GhostPluginCard', () => {
 
     expect(screen.getByText('settings.ghosts.page.agentInvoked')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Pure Tool' }));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+  });
+
+  it('opens details from the non-interactive agent-invoked hint', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={toolPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+    fireEvent.click(screen.getByText('settings.ghosts.page.agentInvoked'));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+  });
+
+  it('opens details from empty space in the right action rail', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+    const manage = screen.getByRole('button', { name: 'settings.ghosts.page.manageAria' });
+    fireEvent.click(manage.parentElement as HTMLElement);
     expect(onManage).toHaveBeenCalledTimes(1);
     expect(onPrimary).not.toHaveBeenCalled();
   });
