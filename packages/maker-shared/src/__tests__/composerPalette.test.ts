@@ -7,6 +7,7 @@ import {
   insertSlashCommand,
   leadingSlashCommandRange,
   mergeSlashCommands,
+  projectKnownRuntimeSlashCommands,
   projectSlashCommandsInText,
   restoreSlashCommandRuntimeAlias,
   serializeAtResource,
@@ -116,7 +117,21 @@ describe('shared composer palette model', () => {
       restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/git please review'),
     ).toBe('/skill:git please review');
     expect(restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/help')).toBe('/help');
+    expect(
+      restoreSlashCommandRuntimeAlias('> quoted\n\n/skill:git follow-up', '> quoted\n\n/git please'),
+    ).toBe('> quoted\n\n/skill:git please');
     expect(leadingSlashCommandRange('/skill:git please review')).toEqual({ start: 0, end: 10 });
+    const quotedRuntime = '> quoted\n\n/skill:git please';
+    const quotedRuntimeStart = quotedRuntime.indexOf('/skill:git');
+    expect(leadingSlashCommandRange(quotedRuntime)).toEqual({
+      start: quotedRuntimeStart,
+      end: quotedRuntimeStart + 10,
+    });
+    expect(
+      projectKnownRuntimeSlashCommands('/skill:git and /skill:unknown', [
+        { runtimeCommandName: 'skill:git' },
+      ]),
+    ).toBe('/git and /skill:unknown');
     const quoted = [
       '> <!-- cindy-composer-quote -->',
       '> quoted',

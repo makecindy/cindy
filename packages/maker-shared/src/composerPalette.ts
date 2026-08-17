@@ -133,25 +133,51 @@ export function projectSlashCommandsInText(
  * Put a displayed `/git ...` back to the stored `/skill:git ...` when the
  * user is resending an edited Pi skill message. Leave other commands alone.
  */
+export function findSlashCommandToken(
+  text: string,
+): { start: number; end: number; name: string } | undefined {
+  const match = /(?:^|\n)(\/\S+)/.exec(text);
+  if (!match || match.index === undefined) return undefined;
+  const start = match.index + match[0].length - match[1].length;
+  return { start, end: start + match[1].length, name: match[1].slice(1) };
+}
+
 export function restoreSlashCommandRuntimeAlias(
   originalText: string,
   editedText: string,
 ): string {
-  const originalCommand = originalText.match(/^\/(\S+)/)?.[1];
-  const editedCommand = editedText.match(/^\/(\S+)/)?.[1];
-  if (!originalCommand || !editedCommand) return editedText;
-  if (!originalCommand.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return editedText;
-  const humanName = originalCommand.slice(PI_SKILL_RUNTIME_PREFIX.length);
-  if (!humanName || editedCommand.toLowerCase() !== humanName.toLowerCase()) return editedText;
-  return `/${originalCommand}${editedText.slice(editedCommand.length + 1)}`;
+  const original = findSlashCommandToken(originalText);
+  const edited = findSlashCommandToken(editedText);
+  if (!original || !edited) return editedText;
+  if (!original.name.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return editedText;
+  const humanName = original.name.slice(PI_SKILL_RUNTIME_PREFIX.length);
+  if (!humanName || edited.name.toLowerCase() !== humanName.toLowerCase()) return editedText;
+  return `${editedText.slice(0, edited.start)}/${original.name}${editedText.slice(edited.end)}`;
 }
 
-/** Range of a leading `/command` token in already-restored submit text. */
+/** Range of the first `/command` token in already-restored submit text. */
 export function leadingSlashCommandRange(
   text: string,
 ): { start: number; end: number } | undefined {
-  const match = text.match(/^\/\S+/);
-  return match ? { start: 0, end: match[0].length } : undefined;
+  const token = findSlashCommandToken(text);
+  return token ? { start: token.start, end: token.end } : undefined;
+}
+
+/** Clipboard / display projection for roster-known `/skill:name` tokens. */
+export function projectKnownRuntimeSlashCommands(
+  text: string,
+  commands: readonly { runtimeCommandName?: string }[],
+): string {
+  const known = new Set(
+    commands
+      .map((command) => command.runtimeCommandName?.trim().toLowerCase())
+      .filter((name): name is string => Boolean(name?.startsWith(PI_SKILL_RUNTIME_PREFIX))),
+  );
+  if (known.size === 0) return text;
+  return text.replace(/\/skill:\S+/gi, (token) => {
+    const name = token.slice(1).toLowerCase();
+    return known.has(name) ? slashCommandDisplayLabel(token) : token;
+  });
 }
 
 /**
