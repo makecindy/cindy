@@ -264,9 +264,11 @@ import {
   getComposerSendShortcutLabel,
   hasComposerModifier,
   resolveComposerEnterIntent,
+  resolveEffectiveSendMode,
   useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
+import { isMultilineDraftDoc } from './composerDraftMultiline';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
@@ -1113,10 +1115,6 @@ export function ChatInput({
     );
   };
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
-  const composerSendShortcutLabel = getComposerSendShortcutLabel(
-    composerSendShortcutPreference,
-    window.electronAPI?.platform,
-  );
   const steerShortcutLabel = useMemo(
     () => (window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'),
     [],
@@ -2582,6 +2580,7 @@ export function ChatInput({
         const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
           turnRunning: showStopButtonRef.current,
           platform: window.electronAPI?.platform,
+          multilineDraft: isMultilineDraftDoc(view.state.doc),
         });
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -2639,6 +2638,7 @@ export function ChatInput({
       const nextRenderSnapshot = composerRenderSnapshot(
         composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
+        isMultilineDraftDoc(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
         renderSnapshotRef.current = nextRenderSnapshot;
@@ -2709,6 +2709,7 @@ export function ChatInput({
       const nextRenderSnapshot = composerRenderSnapshot(
         composerTriggerSnapshotOf(ed),
         !composerDocIsEmpty(ed.state.doc),
+        isMultilineDraftDoc(ed.state.doc),
       );
       if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
         renderSnapshotRef.current = nextRenderSnapshot;
@@ -3256,9 +3257,11 @@ export function ChatInput({
         }
       }
 
+      const composerDoc = editorRef.current?.view.state.doc;
       const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
         turnRunning: showStopButtonRef.current,
         platform,
+        multilineDraft: composerDoc ? isMultilineDraftDoc(composerDoc) : false,
       });
       const isModifiedEnter = hasComposerModifier(event, platform);
       if (
@@ -7530,8 +7533,19 @@ export function ChatInput({
   );
 
   const hasMessage = !isEditorEmpty(editor);
-  renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
+  const composerDraftMultiline = editor ? isMultilineDraftDoc(editor.state.doc) : false;
+  renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage, composerDraftMultiline);
   const canSend = hasMessage || hasAttachments || browserComments.length > 0;
+  // The tooltip advertises the send key for the draft as it currently stands;
+  // in the multiline mode it flips between Enter and the modifier combo.
+  const composerEffectiveSendMode = resolveEffectiveSendMode(
+    composerSendShortcutPreference,
+    composerDraftMultiline,
+  );
+  const composerSendShortcutLabel = getComposerSendShortcutLabel(
+    composerEffectiveSendMode,
+    window.electronAPI?.platform,
+  );
   const hasVoiceDraftText =
     voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
   // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
@@ -8334,7 +8348,7 @@ export function ChatInput({
                             : voiceInput.isListening && !sendButtonDisabled
                               ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
                               : showStopButton
-                                ? composerSendShortcutPreference === 'modifier-enter'
+                                ? composerEffectiveSendMode === 'modifier-enter'
                                   ? t('newChat.sendButton.queueTooltipSendMode', {
                                       shortcut: composerSendShortcutLabel,
                                     })

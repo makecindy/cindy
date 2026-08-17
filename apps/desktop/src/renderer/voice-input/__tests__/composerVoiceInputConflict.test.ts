@@ -74,4 +74,21 @@ describe('findComposerVoiceInputConflict', () => {
       ),
     ).toBe('composer-voice-input');
   });
+
+  it('treats the multiline mode like the modifier mode (modifier+Enter is its only send key for multiline drafts)', () => {
+    expect(
+      findComposerVoiceInputConflict(
+        'modifier-enter-multiline',
+        shortcut({ modifiers: { meta: true, ctrl: false } }),
+        'darwin',
+      ),
+    ).toBe('composer-voice-input');
+    expect(
+      findComposerVoiceInputConflict(
+        'modifier-enter-multiline',
+        shortcut({ modifiers: { meta: false, ctrl: false } }),
+        'win32',
+      ),
+    ).toBeNull();
+  });
 });

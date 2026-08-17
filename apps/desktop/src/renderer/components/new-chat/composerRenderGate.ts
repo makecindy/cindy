@@ -6,12 +6,14 @@ export type ComposerTriggerSnapshot =
 export interface ComposerRenderSnapshot {
   trigger: ComposerTriggerSnapshot;
   hasMessage: boolean;
+  multilineDraft: boolean;
 }
 
 /**
  * Returns whether a React render is needed after an editor transaction.
  * Ordinary text updates with no active trigger keep the editor mutable outside
- * React; only palette state or the empty/non-empty send state can change.
+ * React; only palette state, the empty/non-empty send state, or the
+ * single/multiline draft shape (it drives the send-shortcut tooltip) can change.
  */
 export function shouldRefreshComposerRender(
   previous: ComposerRenderSnapshot | null,
@@ -19,6 +21,7 @@ export function shouldRefreshComposerRender(
 ): boolean {
   if (!previous) return true;
   if (previous.hasMessage !== next.hasMessage) return true;
+  if (previous.multilineDraft !== next.multilineDraft) return true;
   // Check `next` first so TS narrows `next.trigger` off `'none'` before the
   // single kind comparison below runs — that comparison then narrows
   // `previous.trigger` too, since it's checked against an already-narrowed
@@ -41,8 +44,9 @@ export function shouldRefreshComposerRender(
 export function composerRenderSnapshot(
   trigger: ComposerTriggerSnapshot,
   hasMessage: boolean,
+  multilineDraft: boolean,
 ): ComposerRenderSnapshot {
-  return { trigger, hasMessage };
+  return { trigger, hasMessage, multilineDraft };
 }
 
 export const __composerRenderGateDefaultsForTest = {

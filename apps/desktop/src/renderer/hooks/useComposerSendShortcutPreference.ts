@@ -6,7 +6,10 @@ import { hasComposerModifier } from '@/voice-input/composerShortcut';
 
 export { hasComposerModifier } from '@/voice-input/composerShortcut';
 
-export type ComposerSendShortcutPreference = 'enter' | 'modifier-enter';
+export type ComposerSendShortcutPreference = 'enter' | 'modifier-enter' | 'modifier-enter-multiline';
+
+/** The two concrete key semantics; the multiline preference resolves into one of them per draft. */
+export type ComposerSendMode = 'enter' | 'modifier-enter';
 
 export type ComposerEnterIntent = 'queue' | 'steer' | 'native' | 'ignore' | null;
 
@@ -27,14 +30,33 @@ export function getComposerModifierShortcutLabel(platform: string | undefined): 
 }
 
 export function getComposerSendShortcutLabel(
-  preference: ComposerSendShortcutPreference,
+  mode: ComposerSendMode,
   platform: string | undefined,
 ): string {
-  return preference === 'modifier-enter' ? getComposerModifierShortcutLabel(platform) : 'Enter';
+  return mode === 'modifier-enter' ? getComposerModifierShortcutLabel(platform) : 'Enter';
+}
+
+/** Whether the preference relies on modifier+Enter as the only way to send (some drafts, for the multiline mode). */
+export function usesModifierSendShortcut(preference: ComposerSendShortcutPreference): boolean {
+  return preference !== 'enter';
+}
+
+/**
+ * Collapse the persisted preference into the concrete key semantics for the
+ * current draft. The multiline mode is intentionally not a third branch in the
+ * intent resolver: single-line drafts keep the plain-Enter semantics, multiline
+ * drafts switch to the modifier semantics wholesale.
+ */
+export function resolveEffectiveSendMode(
+  preference: ComposerSendShortcutPreference,
+  multilineDraft: boolean,
+): ComposerSendMode {
+  if (preference === 'modifier-enter-multiline') return multilineDraft ? 'modifier-enter' : 'enter';
+  return preference;
 }
 
 function parsePreference(raw: string | null): ComposerSendShortcutPreference | null {
-  return raw === 'modifier-enter' ? raw : null;
+  return raw === 'modifier-enter' || raw === 'modifier-enter-multiline' ? raw : null;
 }
 
 /**
@@ -47,18 +69,19 @@ function parsePreference(raw: string | null): ComposerSendShortcutPreference | n
 export function resolveComposerEnterIntent(
   event: ComposerEnterEvent,
   preference: ComposerSendShortcutPreference,
-  options: { turnRunning: boolean; platform: string | undefined },
+  options: { turnRunning: boolean; platform: string | undefined; multilineDraft: boolean },
 ): ComposerEnterIntent {
   if (event.key !== 'Enter' || event.shiftKey || event.altKey) return null;
   if (event.isComposing) return 'native';
 
+  const mode = resolveEffectiveSendMode(preference, options.multilineDraft);
   const hasModifier = hasComposerModifier(event, options.platform);
   if (event.repeat) {
-    const isSendShortcut = preference === 'enter' || hasModifier;
+    const isSendShortcut = mode === 'enter' || hasModifier;
     return isSendShortcut ? 'ignore' : 'native';
   }
 
-  if (preference === 'modifier-enter') {
+  if (mode === 'modifier-enter') {
     return hasModifier ? 'queue' : 'native';
   }
 

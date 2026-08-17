@@ -8,6 +8,8 @@ import {
   getComposerSendShortcutPreference,
   getComposerSendShortcutLabel,
   resolveComposerEnterIntent,
+  resolveEffectiveSendMode,
+  usesModifierSendShortcut,
   useComposerSendShortcutPreference,
   type ComposerSendShortcutPreference,
 } from '../useComposerSendShortcutPreference';
@@ -54,9 +56,13 @@ describe('useComposerSendShortcutPreference', () => {
     expect(result.current.isCustomized).toBe(false);
   });
 
-  it('only accepts the modifier-enter override from storage', () => {
+  it('only accepts known non-default overrides from storage', () => {
     localStorage.setItem(KEY, 'modifier-enter');
     expect(getComposerSendShortcutPreference()).toBe('modifier-enter');
+
+    _resetComposerSendShortcutPreferenceForTests();
+    localStorage.setItem(KEY, 'modifier-enter-multiline');
+    expect(getComposerSendShortcutPreference()).toBe('modifier-enter-multiline');
 
     _resetComposerSendShortcutPreferenceForTests();
     localStorage.setItem(KEY, 'enter');
@@ -65,6 +71,17 @@ describe('useComposerSendShortcutPreference', () => {
     _resetComposerSendShortcutPreferenceForTests();
     localStorage.setItem(KEY, 'garbage');
     expect(getComposerSendShortcutPreference()).toBe('enter');
+  });
+
+  it('collapses the multiline mode into the per-draft send semantics', () => {
+    expect(resolveEffectiveSendMode('enter', true)).toBe('enter');
+    expect(resolveEffectiveSendMode('modifier-enter', false)).toBe('modifier-enter');
+    expect(resolveEffectiveSendMode('modifier-enter-multiline', false)).toBe('enter');
+    expect(resolveEffectiveSendMode('modifier-enter-multiline', true)).toBe('modifier-enter');
+
+    expect(usesModifierSendShortcut('enter')).toBe(false);
+    expect(usesModifierSendShortcut('modifier-enter')).toBe(true);
+    expect(usesModifierSendShortcut('modifier-enter-multiline')).toBe(true);
   });
 
   it('persists the non-default override and removes it when reset', () => {
@@ -133,6 +150,7 @@ describe('useComposerSendShortcutPreference', () => {
       preference: ComposerSendShortcutPreference;
       platform: string;
       turnRunning: boolean;
+      multilineDraft?: boolean;
       event: KeyboardEvent;
       expected: 'queue' | 'steer' | 'native' | 'ignore' | null;
     }> = [
@@ -256,12 +274,79 @@ describe('useComposerSendShortcutPreference', () => {
         event: new KeyboardEvent('keydown', { key: 'Escape' }),
         expected: null,
       },
+      {
+        name: 'sends with plain Enter on a single-line draft in multiline mode',
+        preference: 'modifier-enter-multiline',
+        platform: 'darwin',
+        turnRunning: false,
+        multilineDraft: false,
+        event: enterEvent(),
+        expected: 'queue',
+      },
+      {
+        name: 'steers with Cmd+Enter on a single-line draft while running in multiline mode',
+        preference: 'modifier-enter-multiline',
+        platform: 'darwin',
+        turnRunning: true,
+        multilineDraft: false,
+        event: enterEvent({ metaKey: true }),
+        expected: 'steer',
+      },
+      {
+        name: 'uses native Enter for a newline on a multiline draft in multiline mode',
+        preference: 'modifier-enter-multiline',
+        platform: 'darwin',
+        turnRunning: false,
+        multilineDraft: true,
+        event: enterEvent(),
+        expected: 'native',
+      },
+      {
+        name: 'queues with Cmd+Enter on a multiline draft in multiline mode',
+        preference: 'modifier-enter-multiline',
+        platform: 'darwin',
+        turnRunning: true,
+        multilineDraft: true,
+        event: enterEvent({ metaKey: true }),
+        expected: 'queue',
+      },
+      {
+        name: 'keeps a repeated plain Enter native on a multiline draft in multiline mode',
+        preference: 'modifier-enter-multiline',
+        platform: 'darwin',
+        turnRunning: false,
+        multilineDraft: true,
+        event: enterEvent({ repeat: true }),
+        expected: 'native',
+      },
+      {
+        name: 'leaves IME composition native on a multiline draft in multiline mode',
+        preference: 'modifier-enter-multiline',
+        platform: 'darwin',
+        turnRunning: false,
+        multilineDraft: true,
+        event: enterEvent({ isComposing: true }),
+        expected: 'native',
+      },
+      {
+        name: 'ignores Shift+Enter on a multiline draft in multiline mode',
+        preference: 'modifier-enter-multiline',
+        platform: 'darwin',
+        turnRunning: false,
+        multilineDraft: true,
+        event: enterEvent({ shiftKey: true }),
+        expected: null,
+      },
     ];
 
-    it.each(cases)('$name', ({ preference, platform, turnRunning, event, expected }) => {
-      expect(resolveComposerEnterIntent(event, preference, { turnRunning, platform })).toBe(
-        expected,
-      );
+    it.each(cases)('$name', ({ preference, platform, turnRunning, multilineDraft, event, expected }) => {
+      expect(
+        resolveComposerEnterIntent(event, preference, {
+          turnRunning,
+          platform,
+          multilineDraft: multilineDraft ?? false,
+        }),
+      ).toBe(expected);
     });
   });
 });
