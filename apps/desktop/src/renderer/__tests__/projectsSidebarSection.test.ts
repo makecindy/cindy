@@ -154,4 +154,13 @@ describe('Projects sidebar section', () => {
       "deviceGroupingAvailable && filter.groupDevice && filter.sortBy !== 'manual'",
     );
   });
+
+  it('renders pre-grouped automation entries as one flat-list row', () => {
+    expect(projectsSectionSource).toContain(
+      "entry.kind === 'session' || entry.kind === 'automation-group'",
+    );
+    expect(projectsSectionSource).toContain('<SessionEntryRows');
+    expect(projectsSectionSource).toContain('entries={[entry]}');
+    expect(projectsSectionSource).not.toContain('sessions={[entry.session]}');
+  });
 });

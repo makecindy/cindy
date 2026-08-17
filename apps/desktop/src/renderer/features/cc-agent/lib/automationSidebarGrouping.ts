@@ -62,7 +62,12 @@ function fallbackAutomationGroupKey(session: Session): string {
   const workspace = session.workspaceKind ?? 'project';
   const dir = normalizeWorkingDir(session.workingDir) ?? '__no_working_dir__';
   const title = getAutomationSessionDisplayTitle(session).trim() || session.id;
-  return `fallback:${workspace}:${dir}:${title}`;
+  return scopeAutomationGroupKey(`fallback:${workspace}:${dir}:${title}`, session);
+}
+
+function scopeAutomationGroupKey(key: string, session: Session): string {
+  const deviceId = session.deviceLinkDeviceId?.trim();
+  return deviceId ? `${key}:device:${deviceId}` : key;
 }
 
 export function getAutomationSidebarGroupInfo(
@@ -83,7 +88,7 @@ export function getAutomationSidebarGroupInfo(
   const indexed = scheduleSessionIndex?.get(session.id);
   if (indexed) {
     return {
-      key: `schedule:${indexed.scheduleId}`,
+      key: scopeAutomationGroupKey(`schedule:${indexed.scheduleId}`, session),
       scheduleId: indexed.scheduleId,
       scheduleStatus: indexed.scheduleStatus,
       scheduleSource: indexed.scheduleSource,

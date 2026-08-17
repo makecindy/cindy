@@ -27,13 +27,18 @@ import type { Session } from '@/lib/ccAgent.types';
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../../../shared/liveTaskPriority';
 import type { FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
+import {
+  groupAutomationSidebarEntries,
+  type AutomationScheduleSessionInfo,
+  type SidebarSessionEntry,
+} from './automationSidebarGrouping';
 import { sessionActivityMs } from './dateSessionGrouping';
 import type { ProjectNode } from './projectGrouping';
 
 export type MainListEntry =
   | { kind: 'project'; project: ProjectNode }
   | { kind: 'dialogue-group'; sessions: Session[] }
-  | { kind: 'session'; session: Session };
+  | SidebarSessionEntry;
 
 /** 优先级排序的运行时上下文(组装层的运行中 / 需关注集合)。 */
 export interface MainListPriorityContext {
@@ -162,9 +167,15 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
   return Math.max(sessionActivityMs(session), viewedAt);
 }
 
+export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
+  if (entry.kind === 'project') return entry.project.sessions;
+  if (entry.kind === 'dialogue-group') return entry.sessions;
+  if (entry.kind === 'automation-group') return entry.group.sessions;
+  return [entry.session];
+}
+
 function entryActivityMs(entry: MainListEntry): number {
-  if (entry.kind === 'session') return sessionActivityMs(entry.session);
-  const sessions = entry.kind === 'project' ? entry.project.sessions : entry.sessions;
+  const sessions = getMainListEntrySessions(entry);
   let max = 0;
   for (const s of sessions) {
     const ms = sessionActivityMs(s);
@@ -174,8 +185,7 @@ function entryActivityMs(entry: MainListEntry): number {
 }
 
 function entryPriorityRecencyMs(entry: MainListEntry, ctx: MainListPriorityContext): number {
-  if (entry.kind === 'session') return sessionPriorityRecencyMs(entry.session, ctx);
-  const sessions = entry.kind === 'project' ? entry.project.sessions : entry.sessions;
+  const sessions = getMainListEntrySessions(entry);
   let max = 0;
   for (const s of sessions) {
     const ms = sessionPriorityRecencyMs(s, ctx);
@@ -185,8 +195,7 @@ function entryPriorityRecencyMs(entry: MainListEntry, ctx: MainListPriorityConte
 }
 
 function entryPriorityRank(entry: MainListEntry, ctx: MainListPriorityContext): number {
-  if (entry.kind === 'session') return sessionPriorityRank(entry.session, ctx);
-  const sessions = entry.kind === 'project' ? entry.project.sessions : entry.sessions;
+  const sessions = getMainListEntrySessions(entry);
   let min: number = LIVE_TASK_PRIORITY.rest;
   for (const s of sessions) {
     const rank = sessionPriorityRank(s, ctx);
@@ -234,6 +243,24 @@ export interface BuildMainListEntriesInput {
   sortBy: FilterSortBy;
   manualProjectOrder: readonly string[];
   priorityContext?: MainListPriorityContext;
+  notifications?: ReadonlySet<string>;
+  scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>;
+}
+
+const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set<string>();
+
+function appendFlatSessionEntries(
+  entries: MainListEntry[],
+  sessions: readonly Session[],
+  sortBy: FilterSortBy,
+  priorityContext: MainListPriorityContext,
+  notifications: ReadonlySet<string>,
+  scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>,
+): void {
+  const sortedSessions = sortSessionsForMainList(sessions, sortBy, priorityContext);
+  entries.push(
+    ...groupAutomationSidebarEntries(sortedSessions, { notifications, scheduleSessionIndex }),
+  );
 }
 
 /** 产出主列表的有序顶层条目。 */
@@ -246,6 +273,8 @@ export function buildMainListEntries({
   sortBy,
   manualProjectOrder,
   priorityContext = EMPTY_PRIORITY_CONTEXT,
+  notifications = EMPTY_SESSION_ID_SET,
+  scheduleSessionIndex,
 }: BuildMainListEntriesInput): MainListEntry[] {
   const ctx = priorityContext;
   const entries: MainListEntry[] = [];
@@ -258,9 +287,14 @@ export function buildMainListEntries({
       });
     }
   } else {
-    for (const project of projects) {
-      for (const session of project.sessions) entries.push({ kind: 'session', session });
-    }
+    appendFlatSessionEntries(
+      entries,
+      projects.flatMap((project) => project.sessions),
+      sortBy,
+      ctx,
+      notifications,
+      scheduleSessionIndex,
+    );
   }
 
   if (groupDialogue) {
@@ -271,10 +305,10 @@ export function buildMainListEntries({
       });
     }
   } else {
-    for (const session of dialogues) entries.push({ kind: 'session', session });
+    appendFlatSessionEntries(entries, dialogues, sortBy, ctx, notifications, scheduleSessionIndex);
   }
 
-  for (const session of unclassified) entries.push({ kind: 'session', session });
+  appendFlatSessionEntries(entries, unclassified, sortBy, ctx, notifications, scheduleSessionIndex);
 
   return sortMainListEntries(entries, sortBy, manualProjectOrder, ctx);
 }
@@ -338,6 +372,9 @@ export interface MainListDeviceSection {
 function entryDeviceId(entry: MainListEntry): string | null {
   if (entry.kind === 'project') return entry.project.deviceLinkDeviceId ?? null;
   if (entry.kind === 'session') return entry.session.deviceLinkDeviceId ?? null;
+  if (entry.kind === 'automation-group') {
+    return entry.group.sessions[0]?.deviceLinkDeviceId ?? null;
+  }
   // 对话组条目:按组内首条会话归属(散排对话在设备分组下由调用方按设备切分后
   // 再分别成组,这里只是兜底)。
   return entry.sessions[0]?.deviceLinkDeviceId ?? null;

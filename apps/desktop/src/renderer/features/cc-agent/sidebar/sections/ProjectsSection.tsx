@@ -58,6 +58,7 @@ import {
 import {
   advanceViewedPriorityHold,
   buildMainListEntries,
+  getMainListEntrySessions,
   holdViewedPriorityRank,
   splitEntriesByDevice,
   type MainListDeviceSection,
@@ -74,7 +75,7 @@ import {
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { SectionCollapse } from '../SectionCollapse';
-import { SessionEntryList } from '../SessionEntryList';
+import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import type { SessionClickHandler } from '../SessionItem';
 import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
@@ -404,6 +405,8 @@ export function ProjectsSection({
         sortBy: filter.sortBy,
         manualProjectOrder: filter.manualProjectOrder,
         priorityContext,
+        notifications,
+        scheduleSessionIndex,
       }),
     [
       projects,
@@ -416,21 +419,15 @@ export function ProjectsSection({
       filter.sortBy,
       filter.manualProjectOrder,
       priorityContext,
+      notifications,
+      scheduleSessionIndex,
     ],
   );
 
   // 顶层条目折叠:最多显示 N 条,超出收起 + 「显示全部 N 项」。与会话同一套
   // 规则(getSessionListCollapseView):始终保留"有需关注会话"的条目、以及包含当前会话的
   // 条目;任何排序/筛选下都生效。
-  const entrySessions = useCallback(
-    (entry: MainListEntry): readonly Session[] =>
-      entry.kind === 'project'
-        ? entry.project.sessions
-        : entry.kind === 'dialogue-group'
-          ? entry.sessions
-          : [entry.session],
-    [],
-  );
+  const entrySessions = getMainListEntrySessions;
   // 折叠视图共用一份参数:非设备分组 = 全列表一份;设备分组 = 每段各一份(见
   // deviceSections)。attention 豁免用 priorityContext.attentionSessionIds——与
   // 排序同一口径(含远程活动镜像),远程 waiting/unread 的条目不能被折进
@@ -518,7 +515,9 @@ export function ProjectsSection({
   //   双层(设备 + 组层同时存在)→ 循环:收组层 → 收设备层 → 全部展开。
   // 组层 = 项目行 + 「对话」组行(用户裁决:对话组与项目分组同一套批量折叠),
   // 项目侧复用 ProjectNode 折叠状态(collapsed / onCollapseAll / onExpandAll)。
-  const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session');
+  const hasGroupLayer = mixedEntries.some(
+    (entry) => entry.kind === 'project' || entry.kind === 'dialogue-group',
+  );
   // 当前可见的对话组 key:设备分组下 = 各含对话组条目的设备段;否则单一组。
   // 「收起/展开所有分组」只作用于这些可见 key,不动其它模式下的记忆。
   const visibleDialogueGroupKeys = useMemo<string[]>(() => {
@@ -650,8 +649,8 @@ export function ProjectsSection({
     />
   );
 
-  // 散排对话行 / 「对话」组行。散排行带来源标签(hover);对话组行 = 可折叠的
-  // 分组头 + 组内会话(折叠上限与对话段旧口径一致)。dialogueGroupKey 标识
+  // 散排任务行 / 自动任务组 / 「对话」组行。散排行与自动任务组带来源标签(hover);
+  // 对话组行 = 可折叠的分组头 + 组内会话(折叠上限与对话段旧口径一致)。dialogueGroupKey 标识
   // 该组属于哪个段(设备段 key / 单一列表 DIALOGUE_GROUP_ALL_KEY),折叠独立。
   // dialogueDeviceTarget:按设备分组时该段的设备(null = 本机段),组头新建即落在
   // 这台设备上;不分组时传 undefined,由上层按当前机器作用域推断。
@@ -660,16 +659,15 @@ export function ProjectsSection({
     dialogueGroupKey: string,
     dialogueDeviceTarget?: DialogueDeviceTarget | null,
   ): ReactNode => {
-    if (entry.kind === 'session') {
+    if (entry.kind === 'session' || entry.kind === 'automation-group') {
       return (
-        <SessionEntryList
-          key={entry.session.id}
-          sessions={[entry.session]}
+        <SessionEntryRows
+          key={entry.kind === 'session' ? entry.session.id : `automation-group:${entry.group.id}`}
+          entries={[entry]}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}
           attachedSessionIds={attachedSessionIds}
           notifications={notifications}
-          scheduleSessionIndex={scheduleSessionIndex}
           selectedSessionIds={selectedSessionIds}
           onSessionClick={onSessionClick}
           onAction={onAction}
