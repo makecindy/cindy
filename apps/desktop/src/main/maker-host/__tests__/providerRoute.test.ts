@@ -94,7 +94,15 @@ describe('Pi per-model protocol routing', () => {
         baseUrl: 'https://pi.example.com/v1',
         wireProtocol: 'openai-chat',
         models: [
-          { id: 'messages', name: 'Messages', piApi: 'anthropic-messages' },
+          {
+            id: 'messages',
+            name: 'Messages',
+            piApi: 'anthropic-messages',
+            route: {
+              baseUrl: 'https://pi.example.com/anthropic',
+              wireProtocol: 'anthropic-messages',
+            },
+          },
           { id: 'google', name: 'Google', piApi: 'google-generative-ai' },
         ],
       },
@@ -103,7 +111,7 @@ describe('Pi per-model protocol routing', () => {
 
   it('uses the model override before the provider default', () => {
     expect(providerRoutingForModel(provider, 'pi', 'messages')).toMatchObject({
-      upstream: 'https://pi.example.com/v1',
+      upstream: 'https://pi.example.com/anthropic',
       wireProtocol: 'anthropic-messages',
     });
   });

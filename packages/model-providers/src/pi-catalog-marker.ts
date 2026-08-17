@@ -9,7 +9,12 @@ export function effectivePiWireProtocol(
 
 interface PiProtocolModelLike {
   piApi?: PiModelApi;
-  route?: { wireProtocol: ProviderWireProtocol };
+  route?: { baseUrl?: string; wireProtocol: ProviderWireProtocol };
+}
+
+export interface ResolvedPiModelRoute {
+  baseUrl: string;
+  wireProtocol: ProviderWireProtocol;
 }
 
 /**
@@ -33,6 +38,19 @@ export function resolvePiModelWireProtocol(
     default:
       return model?.route?.wireProtocol ?? providerDefault ?? null;
   }
+}
+
+/** Resolve the effective HTTP target as one unit so protocol and endpoint cannot drift apart. */
+export function resolvePiModelRoute(
+  model: PiProtocolModelLike | undefined,
+  providerDefault: { baseUrl: string; wireProtocol: ProviderWireProtocol | undefined },
+): ResolvedPiModelRoute | null {
+  const wireProtocol = resolvePiModelWireProtocol(model, providerDefault.wireProtocol);
+  if (!wireProtocol) return null;
+  return {
+    baseUrl: model?.route?.baseUrl ?? providerDefault.baseUrl,
+    wireProtocol,
+  };
 }
 
 function projectedPiCatalogFields(model: ProviderRuntimeModelConfig): object {

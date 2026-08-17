@@ -102,6 +102,23 @@ describe('providerConnectionTestRequestSignature', () => {
         'apiKey',
       ),
     ).not.toBe(original);
+    expect(
+      providerConnectionTestRequestSignature(
+        {
+          ...connectionFields,
+          models: [
+            {
+              id: 'model-a',
+              route: {
+                baseUrl: 'https://api.example/anthropic',
+                wireProtocol: 'anthropic-messages',
+              },
+            },
+          ],
+        },
+        'apiKey',
+      ),
+    ).not.toBe(original);
   });
 });
 
@@ -334,6 +351,35 @@ describe('connectionTestCanUseSaved', () => {
         'none',
       ),
     ).toBe(true);
+  });
+
+  it('falls back to adhoc when the first model route changed', () => {
+    const modelRoute = {
+      baseUrl: 'https://gw.example/anthropic',
+      wireProtocol: 'anthropic-messages' as const,
+    };
+    expect(
+      connectionTestCanUseSaved(
+        { ...connForm, models: [{ id: 'm-1', route: modelRoute }] },
+        { ...headerAuthBaseline, modelRoute },
+        'none',
+      ),
+    ).toBe(true);
+    expect(
+      connectionTestCanUseSaved(
+        {
+          ...connForm,
+          models: [
+            {
+              id: 'm-1',
+              route: { ...modelRoute, baseUrl: 'https://gw.example/anthropic-v2' },
+            },
+          ],
+        },
+        { ...headerAuthBaseline, modelRoute },
+        'none',
+      ),
+    ).toBe(false);
   });
 
   it('falls back to adhoc when endpoint, protocol or auth mode changed', () => {

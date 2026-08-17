@@ -87,7 +87,7 @@ import {
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
   presetDisplayName,
-  resolvePiModelWireProtocol,
+  resolvePiModelRoute,
   sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
@@ -686,7 +686,10 @@ export function CustomProviderDialog({
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
         ...(agent === 'pi'
-          ? { modelPiApi: rc.models.find((model) => model.id.trim().length > 0)?.piApi }
+          ? {
+              modelPiApi: rc.models.find((model) => model.id.trim().length > 0)?.piApi,
+              modelRoute: rc.models.find((model) => model.id.trim().length > 0)?.route,
+            }
           : {}),
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
@@ -1099,23 +1102,28 @@ export function CustomProviderDialog({
     const agent = activeTab;
     const rf = rt[agent];
     const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
-    const baseUrl = rf.baseUrl.trim();
+    const defaultBaseUrl = rf.baseUrl.trim();
     const firstModelConfig = rf.models.find((model) => model.id.trim().length > 0);
     const firstModel = firstModelConfig?.id.trim();
-    if (!baseUrl || !firstModel) {
+    if (!defaultBaseUrl || !firstModel) {
       toast.error(t('settings.providers.custom.test.needFields'));
+      return;
+    }
+    const piRoute =
+      agent === 'pi'
+        ? resolvePiModelRoute(firstModelConfig, {
+            baseUrl: defaultBaseUrl,
+            wireProtocol: rf.wireProtocol,
+          })
+        : null;
+    const baseUrl = piRoute?.baseUrl.trim() ?? defaultBaseUrl;
+    const probeWireProtocol = agent === 'pi' ? piRoute?.wireProtocol : rf.wireProtocol;
+    if (!probeWireProtocol) {
+      toast.error(t('settings.providers.custom.test.unsupportedProtocol'));
       return;
     }
     if (!areProviderRequestUrlsAllowed(authMode, baseUrl)) {
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
-      return;
-    }
-    const probeWireProtocol =
-      agent === 'pi'
-        ? resolvePiModelWireProtocol(firstModelConfig, rf.wireProtocol)
-        : rf.wireProtocol;
-    if (!probeWireProtocol) {
-      toast.error(t('settings.providers.custom.test.unsupportedProtocol'));
       return;
     }
     const headers: Record<string, string> = {};

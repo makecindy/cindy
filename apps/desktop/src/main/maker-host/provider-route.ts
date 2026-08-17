@@ -21,7 +21,7 @@
 
 import {
   actualSourceIdForModel,
-  resolvePiModelWireProtocol,
+  resolvePiModelRoute,
   runtimeCustomProviderId,
   storedCustomProviderId,
   type AgentKind,
@@ -475,18 +475,28 @@ export function providerRoutingForModel(
     ? provider.models[agent]?.find((candidate) => candidate.id === wireModel)
     : undefined;
   const modelRoute = model?.route;
-  const piWireProtocol =
-    agent === 'pi' ? resolvePiModelWireProtocol(model, routing.wireProtocol) : undefined;
-  if (agent === 'pi' && piWireProtocol === null) return null;
-  if (!modelRoute && (agent !== 'pi' || piWireProtocol === routing.wireProtocol)) return routing;
+  const piRoute =
+    agent === 'pi'
+      ? resolvePiModelRoute(model, {
+          baseUrl: routing.upstream,
+          wireProtocol: routing.wireProtocol,
+        })
+      : undefined;
+  if (agent === 'pi' && piRoute === null) return null;
+  if (
+    !modelRoute &&
+    (agent !== 'pi' ||
+      (piRoute?.baseUrl === routing.upstream && piRoute.wireProtocol === routing.wireProtocol))
+  )
+    return routing;
 
   // 鉴权、固定 headers 与模型 namespace 门继续继承 provider/runtime；请求路径不能在
   // 协议切换后误继承旧 runtime 的路径，只有模型覆盖显式声明时才带回。
   const { requestPath: _runtimeRequestPath, ...inherited } = routing;
   return {
     ...inherited,
-    upstream: modelRoute?.baseUrl ?? routing.upstream,
-    wireProtocol: agent === 'pi' ? piWireProtocol! : modelRoute!.wireProtocol,
+    upstream: agent === 'pi' ? piRoute!.baseUrl : modelRoute!.baseUrl,
+    wireProtocol: agent === 'pi' ? piRoute!.wireProtocol : modelRoute!.wireProtocol,
     ...(modelRoute?.requestPath ? { requestPath: modelRoute.requestPath } : {}),
   };
 }

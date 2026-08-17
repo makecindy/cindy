@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { effectivePiWireProtocol, resolvePiModelWireProtocol } from '../pi-catalog-marker.js';
+import {
+  effectivePiWireProtocol,
+  resolvePiModelRoute,
+  resolvePiModelWireProtocol,
+} from '../pi-catalog-marker.js';
 
 describe('effectivePiWireProtocol', () => {
   it('keeps an omitted Pi protocol distinct from explicit Chat', () => {
@@ -11,6 +15,26 @@ describe('effectivePiWireProtocol', () => {
   it('preserves explicit non-default protocols', () => {
     expect(effectivePiWireProtocol('anthropic-messages')).toBe('anthropic-messages');
     expect(effectivePiWireProtocol('openai-responses')).toBe('openai-responses');
+  });
+});
+
+describe('resolvePiModelRoute', () => {
+  it('keeps a model endpoint paired with its effective protocol', () => {
+    expect(
+      resolvePiModelRoute(
+        {
+          piApi: 'anthropic-messages',
+          route: {
+            baseUrl: 'https://provider.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+          },
+        },
+        { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat' },
+      ),
+    ).toEqual({
+      baseUrl: 'https://provider.example/anthropic',
+      wireProtocol: 'anthropic-messages',
+    });
   });
 });
 
