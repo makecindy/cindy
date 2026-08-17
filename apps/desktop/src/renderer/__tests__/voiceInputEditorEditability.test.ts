@@ -52,5 +52,6 @@ describe('ChatInput voice lifecycle locks', () => {
     expect(shortcutHandlerBlock.indexOf('[data-morph-side]')).toBeLessThan(
       voiceCancelStart,
     );
+    expect(shortcutHandlerBlock).toContain('voiceOwnsCurrentComposer');
   });
 });

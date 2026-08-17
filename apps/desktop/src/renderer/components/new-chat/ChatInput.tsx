@@ -3068,10 +3068,14 @@ export function ChatInput({
       }
       const platform = window.electronAPI?.platform;
       if (event.key === 'Escape' && !event.repeat && !event.isComposing) {
+        const voiceOwnsCurrentComposer =
+          voiceOwnerStorageKeyRef.current === undefined ||
+          voiceOwnerStorageKeyRef.current === storageKeyForDraftRef.current;
         if (
-          currentState === 'listening' ||
-          currentState === 'submitting' ||
-          currentState === 'refining'
+          voiceOwnsCurrentComposer &&
+          (currentState === 'listening' ||
+            currentState === 'submitting' ||
+            currentState === 'refining')
         ) {
           event.preventDefault();
           clearPressTimer();
@@ -4741,7 +4745,7 @@ export function ChatInput({
   );
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
-  const dispatchSendInFlightRef = useRef(false);
+  const dispatchSendInFlightKeysRef = useRef(new Set<string>());
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
@@ -4752,9 +4756,10 @@ export function ChatInput({
       // React 的 disabled 状态可能尚未完成下一帧渲染；同步读协调器兜住点击、快捷键、
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
       if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
-      if (dispatchSendInFlightRef.current) return;
       const sourceSessionId = sessionId;
       const sourceStorageKey = storageKey;
+      const sendInFlightKey = sourceStorageKey ?? sourceSessionId ?? '__draft__';
+      if (dispatchSendInFlightKeysRef.current.has(sendInFlightKey)) return;
       const optimisticallyClearRemoteComposer = Boolean(deviceLinkDeviceId && sourceSessionId);
       // Device-link sends freeze the entire composer at click time. Any remote
       // reference hydration happens against this immutable payload after the
@@ -4780,15 +4785,19 @@ export function ChatInput({
         : () => {};
       if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
-      dispatchSendInFlightRef.current = true;
+      dispatchSendInFlightKeysRef.current.add(sendInFlightKey);
       // 发送新消息时立即递增 turnGen，让任何还未落地的旧 turn 预测结果失效。
       // 必须在所有异步操作（resolveSessionMessageReferencesForSend / effort settle）
       // 之前递增，防止旧预测在 reference 解析等异步等待期间落地到输入框。
       turnGenRef.current += 1;
       // Local/SSH sends keep the live composer while references and runtime
       // settings settle; remote sends must stay editable after their
-      // click-time snapshot is cleared.
-      if (!optimisticallyClearRemoteComposer) {
+      // click-time snapshot is cleared. A background source send after a
+      // session switch must not lock the newly restored composer.
+      const lockCurrentComposer =
+        !optimisticallyClearRemoteComposer &&
+        storageKeyForDraftRef.current === sourceStorageKey;
+      if (lockCurrentComposer) {
         captureSendFocusForRestore();
         setSendDispatchInFlight(true);
       }
@@ -5433,8 +5442,8 @@ export function ChatInput({
         markRecentPluginUsage();
         if (!optimisticallyClearRemoteComposer) clearSentComposer();
       } finally {
-        dispatchSendInFlightRef.current = false;
-        setSendDispatchInFlight(false);
+        dispatchSendInFlightKeysRef.current.delete(sendInFlightKey);
+        if (lockCurrentComposer) setSendDispatchInFlight(false);
         finishAgentSendDispatch();
       }
     },
