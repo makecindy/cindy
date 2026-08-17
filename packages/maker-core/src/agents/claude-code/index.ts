@@ -1413,6 +1413,80 @@ export class ClaudeCodeAgent extends BaseAgent {
       parent_tool_use_id: null;
       uuid?: string;
     };
+    type VendorDispatchLeaseRelease = () => void | Promise<void>;
+    const vendorDispatchLeaseByInput = new WeakMap<SdkUserInput, VendorDispatchLeaseRelease>();
+    const pendingVendorDispatchLeases = new Set<VendorDispatchLeaseRelease>();
+
+    const retainVendorDispatchLease = (
+      input: SdkUserInput,
+      release: VendorDispatchLeaseRelease,
+    ): void => {
+      let released = false;
+      const releaseOnce = async (): Promise<void> => {
+        if (released) return;
+        released = true;
+        vendorDispatchLeaseByInput.delete(input);
+        pendingVendorDispatchLeases.delete(releaseOnce);
+        await release();
+      };
+      vendorDispatchLeaseByInput.set(input, releaseOnce);
+      pendingVendorDispatchLeases.add(releaseOnce);
+    };
+
+    const releaseVendorDispatchLeaseForInput = async (
+      input: SdkUserInput,
+    ): Promise<void> => {
+      const release = vendorDispatchLeaseByInput.get(input);
+      if (release) await release();
+    };
+
+    const releasePendingVendorDispatchLeases = (reason: string): void => {
+      const releases = [...pendingVendorDispatchLeases];
+      if (releases.length > 0) {
+        log.debug('releasing pending Claude vendor dispatch leases', {
+          reason,
+          count: releases.length,
+        });
+      }
+      for (const release of releases) {
+        void Promise.resolve(release()).catch((error: unknown) => {
+          log.warn('Claude vendor dispatch lease release failed', {
+            reason,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    };
+
+    const createInputQueue = (): AsyncQueue<SdkUserInput> => {
+      const queue = createAsyncQueue<SdkUserInput>();
+      return {
+        push: (item) => queue.push(item),
+        clear: () => {
+          queue.clear();
+          releasePendingVendorDispatchLeases('input_queue_cleared');
+        },
+        end: () => {
+          queue.end();
+          releasePendingVendorDispatchLeases('input_queue_ended');
+        },
+        get pending() {
+          return queue.pending;
+        },
+        [Symbol.asyncIterator]: () => queue[Symbol.asyncIterator](),
+      };
+    };
+
+    const localSdkInputStream = async function* (
+      queue: AsyncQueue<SdkUserInput>,
+    ): AsyncGenerator<SdkUserInput> {
+      for await (const input of queue) {
+        // The SDK asking for the next item is the local transport handoff.
+        // Release immediately before resolving that iterator request.
+        await releaseVendorDispatchLeaseForInput(input);
+        yield input;
+      }
+    };
     // mutable 引用 — rewind 重启时整个换一份新的:
     //   - 老 abortController 在 q.close() 时被 SDK 标记为 aborted (虽然我们没显式调
     //     .abort(), 但 close() 内部会让信号变 aborted 状态), 复用它启动新 sdkQuery 会
@@ -1421,7 +1495,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     //     新 sdkQuery 跟老 generator 抢 push 进来的消息 (createAsyncQueue 是
     //     单消费者设计, 多 generator 会分摊事件)。
     // handle.send / abort / close 都通过 closure 引用最新的实例。
-    let inputQueue = createAsyncQueue<SdkUserInput>();
+    let inputQueue = createInputQueue();
     let abortController = new AbortController();
     let interactionResolver: InteractionResolver | null = null;
     // Keep the policy across Claude task_notification auto-continue turns,
@@ -3155,6 +3229,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                 });
               }
               break;
+            } finally {
+              await releaseVendorDispatchLeaseForInput(msg);
             }
           }
         })().catch(() => undefined);
@@ -3243,7 +3319,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
       const query = sdkQuery({
-        prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
+        prompt: localSdkInputStream(inputQueue) as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
           abortController,
           cwd: opts.workingDir,
@@ -4685,7 +4761,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         log.debug('invalid resume recovery aborted: handle closed while old query was closing');
         return true;
       }
-      inputQueue = createAsyncQueue<SdkUserInput>();
+      inputQueue = createInputQueue();
       abortController = new AbortController();
       runtimeState.lastResultUsageAggregate = null;
       // 快照 rebuild 起点档位 — 与 rewind rebuild 同款:await buildQuery 期间到达的
@@ -4898,7 +4974,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         };
         acceptingRebuiltSend = true;
         inputQueue.end();
-        inputQueue = createAsyncQueue<SdkUserInput>();
+        inputQueue = createInputQueue();
         abortController = new AbortController();
         runtimeState.lastResultUsageAggregate = null;
         rewindTransitionQueries.add(staleQuery);
@@ -5155,7 +5231,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 新 sdkQuery 立刻报 aborted 或抢不到新 push 的消息。先 end 老 queue 让老
           // generator 退出, 再整体换新。
           inputQueue.end();
-          inputQueue = createAsyncQueue<SdkUserInput>();
+          inputQueue = createInputQueue();
           abortController = new AbortController();
           // QueryEngine 的 result.usage 是单个 SDK query 内的累计值。rewind 会重建
           // query 并从 0 重新累计, 因此必须清掉旧 query 的 aggregate 基线。
@@ -5313,9 +5389,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           };
           const releaseVendorDispatchLease =
             await sendOpts?.acquireVendorDispatchLease?.();
-          let accepted = false;
+          if (typeof releaseVendorDispatchLease === 'function') {
+            retainVendorDispatchLease(sdkInput, releaseVendorDispatchLease);
+          }
           try {
-            accepted = inputQueue.push(sdkInput);
+            const accepted = inputQueue.push(sdkInput);
             if (!accepted) {
               // close() can win while content conversion is still preparing files or
               // images. Renderer now treats send resolve as "agent accepted"; so a
@@ -5323,10 +5401,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               // get persisted and removed even though Claude never received them.
               throw new Error('Claude input queue is closed');
             }
-          } finally {
-            if (typeof releaseVendorDispatchLease === 'function') {
-              await releaseVendorDispatchLease();
-            }
+          } catch (error) {
+            await releaseVendorDispatchLeaseForInput(sdkInput);
+            throw error;
           }
           userInputAccepted = true;
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);

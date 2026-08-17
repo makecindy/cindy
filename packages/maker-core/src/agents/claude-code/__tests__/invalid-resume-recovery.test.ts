@@ -147,6 +147,7 @@ async function startHarness(args: {
   resumeSessionId?: string;
   transcriptExists: boolean;
   onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'];
+  promptConsumptionGate?: Promise<void>;
 }) {
   const configDir = await makeTempDir();
   const workingDir = await makeTempDir();
@@ -168,6 +169,7 @@ async function startHarness(args: {
     if (prompt) {
       void (async () => {
         try {
+          await args.promptConsumptionGate;
           for await (const input of prompt) consumed.push(input);
         } catch {
           /* query replacement closes the old prompt */
@@ -215,10 +217,15 @@ afterEach(async () => {
 });
 
 describe('Claude invalid-resume recovery', () => {
-  it('releases the host dispatch lease immediately after the SDK input queue accepts the message', async () => {
+  it('holds the host dispatch lease until the local SDK consumes the queued message', async () => {
+    let allowPromptConsumption!: () => void;
+    const promptConsumptionGate = new Promise<void>((resolve) => {
+      allowPromptConsumption = resolve;
+    });
     const h = await startHarness({
       transcriptExists: false,
       onInvalidResumeSession: undefined,
+      promptConsumptionGate,
     });
     const order: string[] = [];
 
@@ -227,16 +234,92 @@ describe('Claude invalid-resume recovery', () => {
       {
         acquireVendorDispatchLease: async () => {
           order.push('acquire');
-          return () => order.push('release');
+          return () => {
+            order.push('release');
+          };
         },
       },
     );
 
-    expect(order).toEqual(['acquire', 'release']);
+    expect(order).toEqual(['acquire']);
+    allowPromptConsumption();
     await vi.waitFor(() => expect(h.consumedInputs[0]).toHaveLength(1));
+    expect(order).toEqual(['acquire', 'release']);
     await h.handle.close();
     h.streams[0].end();
     await h.collected;
+  });
+
+  it('releases a queued host dispatch lease when Claude closes before consumption', async () => {
+    const promptConsumptionGate = new Promise<void>(() => {});
+    const h = await startHarness({
+      transcriptExists: false,
+      onInvalidResumeSession: undefined,
+      promptConsumptionGate,
+    });
+    const release = vi.fn();
+
+    await h.handle.send(
+      { type: 'user', content: 'discard lease boundary' },
+      { acquireVendorDispatchLease: async () => release },
+    );
+    expect(release).not.toHaveBeenCalled();
+
+    await h.handle.close();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    h.streams[0].end();
+    await h.collected;
+  });
+
+  it('holds the host dispatch lease until the remote transport send settles', async () => {
+    const workingDir = await makeTempDir();
+    const stream = createControlledStream();
+    let finishRemoteSend!: () => void;
+    const remoteSendGate = new Promise<void>((resolve) => {
+      finishRemoteSend = resolve;
+    });
+    const remoteQuery = {
+      ...createFakeQuery(stream),
+      send: vi.fn(async () => remoteSendGate),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gateway.example' },
+      remoteCcQueryFactory: vi.fn(async () => remoteQuery as never),
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'remote-lease-session',
+      remoteHostId: 'remote-host',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+    const collected = (async () => {
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      while (!(await iterator.next()).done) {
+        // Drain session events until close.
+      }
+    })();
+    const order: string[] = [];
+
+    await handle.send(
+      { type: 'user', content: 'remote lease boundary' },
+      {
+        acquireVendorDispatchLease: async () => {
+          order.push('acquire');
+          return () => {
+            order.push('release');
+          };
+        },
+      },
+    );
+    await vi.waitFor(() => expect(remoteQuery.send).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(['acquire']);
+
+    finishRemoteSend();
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release']));
+    await handle.close();
+    stream.end();
+    await collected;
   });
 
   it('preflight missing clears the old id and starts fresh before any turn is sent', async () => {
