@@ -166,7 +166,10 @@ import {
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeGeneratedImage } from '../cindy-media/generatedMedia.js';
-import { getDbClient } from '../localDb/client/current.js';
+import {
+  getDbClient,
+  isDbClientNotReadyError,
+} from '../localDb/client/current.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -9952,7 +9955,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const message = err instanceof Error ? err.message : String(err);
         return {
           ok: false,
-          errorCode: /localDb not ready/i.test(message) ? 'HOST_NOT_READY' : 'INTERNAL',
+          errorCode: isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL',
           message,
         };
       }
@@ -9969,7 +9972,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const message = err instanceof Error ? err.message : String(err);
         return {
           ok: false,
-          errorCode: /localDb not ready/i.test(message) ? 'HOST_NOT_READY' : 'INTERNAL',
+          errorCode: isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL',
           message,
         };
       }

@@ -35,7 +35,10 @@ import {
   listSessionsForHistory,
   getMessagesForHistory,
 } from '../localDb/chatHistoryReader.js';
-import { tryGetDbClient } from '../localDb/client/current.js';
+import {
+  isDbClientNotReadyError,
+  tryGetDbClient,
+} from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
 import {
   patchSessionMetaInDb,
@@ -96,10 +99,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       try { return await fn(s, ...args); }
       catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const errorCode =
-          (err as { code?: unknown }).code === 'HOST_NOT_READY' || /localDb not ready/i.test(message)
-            ? 'HOST_NOT_READY'
-            : 'INTERNAL';
+        const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL';
         return { ok: false, errorCode, message } as R;
       }
     };
@@ -419,11 +419,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       history: {
         listWorkdirs: async (args) => {
           try { const page = await listWorkdirsForHistory(args); return { ok: true, page }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         listSessions: async (args) => {
           try { const page = await listSessionsForHistory(args); return { ok: true, page }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         getMessages: async (args) => {
           return readChatHistoryMessages(args, {
@@ -433,7 +433,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
         searchChatHistory: async (args) => {
           try { const result = await searchChatHistoryHybrid(args); return { ok: true, result }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
       },
       // submit_github_issue: 官方反馈提交(确认卡片 → serverApiFetch)。

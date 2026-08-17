@@ -526,7 +526,12 @@ describe('collab send outcome semantics', () => {
 
   it('preserves retryable host-readiness errors at the cindy_helper control boundary', async () => {
     mockState.collabService = createCollabService({
-      stopSessionTurn: vi.fn().mockRejectedValue(new Error('localDb not ready')),
+      listSessionQueue: vi.fn().mockRejectedValue(new Error('DbClient not ready')),
+      listSessionQueuedCounts: vi.fn().mockRejectedValue(new Error('localDb not ready')),
+      stopSessionTurn: vi.fn().mockRejectedValue({
+        code: 'HOST_NOT_READY',
+        message: 'database owner unavailable',
+      }),
       getSessionRuntime: vi.fn().mockRejectedValue(new Error('storage read failed')),
     });
 
@@ -538,12 +543,22 @@ describe('collab send outcome semantics', () => {
       invokeRemote: vi.fn(),
     });
     const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      sessionQueue: {
+        listSessionQueue: (sessionId: string) => Promise<Record<string, unknown>>;
+        listSessionQueuedCounts: (sessionIds: string[]) => Promise<Record<string, unknown>>;
+      };
       sessionControl: {
         stopSessionTurn: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
         getSessionRuntime: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
       };
     };
 
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueue('session-1'),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionQueue.listSessionQueuedCounts(['session-1']),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
     await expect(
       xdtHelper.sessionControl.stopSessionTurn({ targetSessionId: 'session-1' }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
