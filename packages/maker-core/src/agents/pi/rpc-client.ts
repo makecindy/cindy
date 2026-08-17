@@ -31,6 +31,13 @@ export interface PiRpcResponse {
   error?: string;
 }
 
+export interface PiRpcPendingRequest {
+  /** Resolves once the JSONL command has crossed the local/SSH transport write boundary. */
+  submitted: Promise<void>;
+  /** Resolves later when Pi returns the correlated RPC response. */
+  response: Promise<PiRpcResponse>;
+}
+
 /** pi RPC 事件帧(response 之外的一切;具体形状 translator 侧收窄)。 */
 export interface PiRpcEvent {
   type: string;
@@ -126,11 +133,32 @@ export class PiRpcProcess {
     command: Record<string, unknown>,
     { timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS }: { timeoutMs?: number } = {},
   ): Promise<PiRpcResponse> {
-    if (this.isClosed) throw new Error('pi process already exited');
-    const id = `c${this.nextRequestId++}`;
-    const payload = JSON.stringify({ ...command, id });
+    const pending = this.requestWithSubmission(command, { timeoutMs });
+    // Most callers only care about the response, which already rejects on a
+    // write failure. Consume the auxiliary submission rejection as well.
+    void pending.submitted.catch(() => undefined);
+    return pending.response;
+  }
 
-    return new Promise<PiRpcResponse>((resolve, reject) => {
+  requestWithSubmission(
+    command: Record<string, unknown>,
+    { timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS }: { timeoutMs?: number } = {},
+  ): PiRpcPendingRequest {
+    if (this.isClosed) {
+      const failed = Promise.reject(new Error('pi process already exited'));
+      return { submitted: failed, response: failed };
+    }
+    const id = `c${this.nextRequestId++}`;
+    let payload: string;
+    try {
+      payload = JSON.stringify({ ...command, id });
+    } catch (error) {
+      const failed = Promise.reject(error);
+      return { submitted: failed, response: failed };
+    }
+
+    let submitted!: Promise<void>;
+    const response = new Promise<PiRpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`pi rpc timeout after ${timeoutMs}ms: ${String(command.type)}`));
@@ -141,7 +169,12 @@ export class PiRpcProcess {
         timer,
         commandType: typeof command.type === 'string' ? command.type : '',
       });
-      this.transport.writeLine(payload).catch((err) => {
+      try {
+        submitted = this.transport.writeLine(payload);
+      } catch (error) {
+        submitted = Promise.reject(error);
+      }
+      submitted.catch((err: unknown) => {
         const entry = this.pending.get(id);
         if (entry) {
           clearTimeout(entry.timer);
@@ -150,6 +183,7 @@ export class PiRpcProcess {
         }
       });
     });
+    return { submitted, response };
   }
 
   /** fire-and-forget 写入(extension_ui_response 等不产生 response 的帧)。 */

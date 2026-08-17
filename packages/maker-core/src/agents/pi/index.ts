@@ -116,7 +116,7 @@ import {
   buildReviewReadGrants,
 } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
-import { PiRpcProcess, type PiRpcEvent, type PiRpcResponse } from './rpc-client.js';
+import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
@@ -2671,15 +2671,19 @@ export class PiAgent extends BaseAgent {
           rejectIfCancelled(sendOpts, 'send');
           const releaseVendorDispatchLease =
             await sendOpts?.acquireVendorDispatchLease?.();
-          let responsePromise: Promise<PiRpcResponse>;
+          const pendingRequest = proc.requestWithSubmission(command);
+          // A submission failure also rejects response. Attach the response
+          // observer before awaiting submitted so release errors or early
+          // exits cannot leave an unhandled rejection behind.
+          void pendingRequest.response.catch(() => undefined);
           try {
-            responsePromise = proc.request(command);
+            await pendingRequest.submitted;
           } finally {
             if (typeof releaseVendorDispatchLease === 'function') {
               await releaseVendorDispatchLease();
             }
           }
-          const resp = await responsePromise;
+          const resp = await pendingRequest.response;
           if (!resp.success) {
             throw new Error(`pi prompt rejected: ${resp.error ?? 'unknown'}`);
           }

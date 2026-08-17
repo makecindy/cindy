@@ -54,6 +54,26 @@ function makeProc(overrides: Partial<PiRpcSpawnOptions> = {}) {
 }
 
 describe('PiRpcProcess response envelope validation', () => {
+  it('exposes transport submission separately from the later Pi response', async () => {
+    const { transport, emitLine, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const pending = proc.requestWithSubmission({ type: 'prompt', message: 'hello' });
+    const responseSettled = vi.fn();
+    void pending.response.then(responseSettled, responseSettled);
+    expect(responseSettled).not.toHaveBeenCalled();
+
+    drain();
+    await expect(pending.submitted).resolves.toBeUndefined();
+    expect(responseSettled).not.toHaveBeenCalled();
+
+    const sentFrame = JSON.parse(transport.writeLine.mock.calls[0][0] as string) as { id: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'prompt', success: true, data: {},
+    }));
+    await expect(pending.response).resolves.toMatchObject({ success: true });
+  });
+
   it('resolves a well-formed response (success boolean + matching command)', async () => {
     const { transport, emitLine } = makeFakeTransport();
     const { proc } = makeProc({ transport });

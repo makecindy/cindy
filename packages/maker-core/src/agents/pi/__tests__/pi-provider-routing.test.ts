@@ -9,6 +9,7 @@ const captured = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
   closes: 0,
   requestHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown; error?: string }>),
+  submissionHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<void>),
 }));
 
 vi.mock('../transport.js', () => ({
@@ -44,6 +45,11 @@ vi.mock('../rpc-client.js', () => ({
         return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
       }
       return { success: true, data: {} };
+    }
+    requestWithSubmission(command: Record<string, unknown>) {
+      const response = this.request(command);
+      const submitted = captured.submissionHandler?.(command) ?? Promise.resolve();
+      return { submitted, response };
     }
     send(): void {}
     async close(): Promise<void> { this.isClosed = true; captured.closes += 1; }
@@ -90,6 +96,7 @@ describe('Pi provider-aware model routing', () => {
     captured.requests = [];
     captured.closes = 0;
     captured.requestHandler = undefined;
+    captured.submissionHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-provider-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-provider-cwd-'));
   });
@@ -1571,6 +1578,7 @@ describe('Pi provider-aware model routing', () => {
   it('reports the stable Pi user entry id after prompt acceptance', async () => {
     let promptAccepted = false;
     const promptResponse = deferred<void>();
+    const promptSubmitted = deferred<void>();
     const acceptanceOrder: string[] = [];
     captured.requestHandler = async (command) => {
       if (command.type === 'get_state') {
@@ -1597,6 +1605,9 @@ describe('Pi provider-aware model routing', () => {
       }
       return { success: true, data: {} };
     };
+    captured.submissionHandler = async (command) => {
+      if (command.type === 'prompt') await promptSubmitted.promise;
+    };
     const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
     const handle = await agent.startSession({
       sessionId: 'entry-link',
@@ -1614,6 +1625,8 @@ describe('Pi provider-aware model routing', () => {
         onTranscriptUserEntry,
       },
     );
+    await vi.waitFor(() => expect(acceptanceOrder).toEqual(['acquire', 'rpc']));
+    promptSubmitted.resolve(undefined);
     await vi.waitFor(() => expect(acceptanceOrder).toEqual(['acquire', 'rpc', 'release']));
     promptResponse.resolve(undefined);
     await sending;
