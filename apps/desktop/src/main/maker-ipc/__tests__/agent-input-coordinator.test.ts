@@ -3496,6 +3496,7 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'cross-instance-orca-rewind-retry';
     const old = makeOrcaItem('orca-old', 'old accepted report', 'team-old');
 
+    await h.coordinator.ensureQueueRestored(sid);
     h.coordinator.enqueue(sid, old);
     await flush();
     h.setRunning(false);
@@ -3511,7 +3512,14 @@ describe('AgentInputCoordinator send transaction', () => {
       ),
     ).rejects.toThrow('database busy');
 
-    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item: old });
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(h.coordinator.hasKnownClientId(sid, 'orca-old')).toBe(true);
+    expect(latestSnapshotItems(h.persistQueueSnapshot)).toEqual([
+      expect.objectContaining({
+        clientId: 'orca-old',
+        mainSnapshotRecoveryKind: 'active-turn-cleanup',
+      }),
+    ]);
     expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalledWith(
       sid,
       expect.objectContaining({ clientId: 'orca-old' }),
@@ -3593,7 +3601,9 @@ describe('AgentInputCoordinator send transaction', () => {
     const item = makeOrcaItem('orca-old-persisted', 'stale worker report', 'team-old');
 
     await h.coordinator.ensureQueueRestored(sid);
-    h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
+    h.rewindPersistedUserMessageAfterClear
+      .mockRejectedValueOnce(new Error('database busy'))
+      .mockRejectedValueOnce(new Error('database still busy'));
     h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
       await persistQueuedUserMessage(sessionId, sendOpts);
       throw new Error(
@@ -3604,7 +3614,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, item);
     await flush();
 
-    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item });
+    expect(latestProjection(h.projections).recovery).toBeNull();
     expect(latestProjection(h.projections).error).toContain('database busy');
     expect(latestSnapshotItems(h.persistQueueSnapshot)).toEqual([
       expect.objectContaining({
@@ -3616,22 +3626,30 @@ describe('AgentInputCoordinator send transaction', () => {
     h.setOrcaTeamInputActive(false);
     h.coordinator.enqueue(
       sid,
-      makeItem('scheduler-next', 'scheduled follow-up', {
-        origin: {
-          kind: 'scheduler',
-          scheduleId: 'schedule-next',
-          scheduleName: 'Next task',
-        },
-      }),
+      makeItem('user-next', 'user follow-up'),
     );
     await flush();
 
     expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.hasKnownClientId(sid, 'orca-old-persisted')).toBe(true);
     expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(latestProjection(h.projections).pendingQueue.map((queued) => queued.clientId)).toEqual([
+      'user-next',
+    ]);
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([
+      'orca-old-persisted',
+      'user-next',
+    ]);
+
+    h.coordinator.wakeSession(sid, 'retry-cleanup-after-user-enqueue');
+    await flush();
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(3);
+    expect(h.coordinator.hasKnownClientId(sid, 'orca-old-persisted')).toBe(false);
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
       type: 'user',
-      content: 'scheduled follow-up',
+      content: 'user follow-up',
     });
   });
 
@@ -6493,18 +6511,8 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     await flush();
 
     expect(lifecycleCheck).not.toHaveBeenCalled();
-    const restoredRecovery = latestProjection(h.projections).recovery;
-    expect(restoredRecovery?.kind).toBe('active-turn');
-    if (restoredRecovery?.kind !== 'active-turn') {
-      throw new Error('expected an active-turn cleanup recovery');
-    }
-    expect(restoredRecovery.item.clientId).toBe('orca-legacy-cleanup');
-    expect(restoredRecovery.item.origin?.kind).toBe('orca');
-    expect(
-      (restoredRecovery.item as AgentInputQueuedMessage & {
-        mainSnapshotRecoveryKind?: string;
-      }).mainSnapshotRecoveryKind,
-    ).toBeUndefined();
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(h.coordinator.hasKnownClientId(sid, 'orca-legacy-cleanup')).toBe(true);
     expect(h.isOrcaTeamInputActive).toHaveBeenCalledWith('team-legacy');
     expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(1);
     // The loaded durable snapshot already matches the retained cleanup state,
@@ -6516,6 +6524,7 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
 
     expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(2);
     expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(h.coordinator.hasKnownClientId(sid, 'orca-legacy-cleanup')).toBe(false);
     expect(latestSnapshotItems(h.persistQueueSnapshot)).toHaveLength(0);
   });
 

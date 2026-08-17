@@ -181,6 +181,11 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     message: { clientId: string; role: 'user'; content: string },
   ) => Promise<unknown>;
   rewindPersistedUserMessage: (sessionId: string, clientId: string) => Promise<void>;
+  retainPersistedUserMessageCleanup: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    error: unknown,
+  ) => void | Promise<void>;
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
@@ -428,19 +433,26 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         return params.senderLabel;
       }
     };
-    const enqueueQueuedMessage = async (
-      logEvent: string,
-    ): Promise<DispatchOrcaInterAgentMessageAttemptResult> => {
-      const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
-      const queued = buildQueuedOrcaInterAgentMessage({
+    let queuedMessagePromise: Promise<AgentInputQueuedMessage> | null = null;
+    const buildQueuedMessage = (): Promise<AgentInputQueuedMessage> => {
+      queuedMessagePromise ??= Promise.all([
+        deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta),
+        resolveSenderLabel(),
+      ]).then(([createOpts, senderLabel]) => buildQueuedOrcaInterAgentMessage({
         clientId,
         agentMessageText,
         persistedContent,
         rawContent: params.rawContent,
         teamId: params.teamId,
-        senderLabel: await resolveSenderLabel(),
+        senderLabel,
         createOpts,
-      });
+      }));
+      return queuedMessagePromise;
+    };
+    const enqueueQueuedMessage = async (
+      logEvent: string,
+    ): Promise<DispatchOrcaInterAgentMessageAttemptResult> => {
+      const queued = await buildQueuedMessage();
       try {
         deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId);
       } catch (err) {
@@ -481,6 +493,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     try {
       const live = deps.getLiveSession(params.targetSessionId);
       if (live) {
+        // Prebuild the durable cleanup representation before the direct path
+        // can persist a user row. If session configuration cannot be captured,
+        // fail before creating a row that would have no crash recovery shape.
+        const cleanupItem = await buildQueuedMessage();
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
@@ -493,6 +509,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             deps.acquireVendorDispatchLease(params.teamId),
           beforeVendorDispatch: () =>
             deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId),
+          onRewindFailed: (error) =>
+            deps.retainPersistedUserMessageCleanup(
+              params.targetSessionId,
+              cleanupItem,
+              error,
+            ),
         });
         if (result.dispatched) {
           return { ok: true, mode: 'dispatched', clientId, dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };
@@ -631,6 +653,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     onAccepted?: () => void | Promise<void>;
     acquireVendorDispatchLease?: SessionSendOptions['acquireVendorDispatchLease'];
     beforeVendorDispatch?: () => void;
+    onRewindFailed?: (error: unknown) => void | Promise<void>;
   },
 ): Promise<CollabDirectDispatchResult & { terminalTransitionPending?: true }> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, onAccepted } = params;
@@ -677,6 +700,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
         clientId,
         error: err instanceof Error ? err.message : String(err),
       });
+      await params.onRewindFailed?.(err);
       throw err;
     }
   }

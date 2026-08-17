@@ -99,6 +99,7 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     rewindPersistedUserMessage: vi.fn(async () => {
       order.push('rewind-user-row');
     }),
+    retainPersistedUserMessageCleanup: vi.fn(() => {}),
     beginDirectTurnChangeSet: vi.fn(async () => {
       order.push('change-set');
     }),
@@ -605,6 +606,7 @@ describe('Orca lead/worker dispatcher', () => {
       'target-session',
       'client-1',
     );
+    expect(h.deps.retainPersistedUserMessageCleanup).not.toHaveBeenCalled();
     expect(h.order).toEqual([
       'send-called',
       'db',
@@ -655,6 +657,14 @@ describe('Orca lead/worker dispatcher', () => {
     expect(h.deps.rewindPersistedUserMessage).toHaveBeenCalledWith(
       'target-session',
       'client-1',
+    );
+    expect(h.deps.retainPersistedUserMessageCleanup).toHaveBeenCalledWith(
+      'target-session',
+      expect.objectContaining({
+        clientId: 'client-1',
+        origin: expect.objectContaining({ kind: 'orca', teamId: 'team-1' }),
+      }),
+      expect.objectContaining({ message: 'database busy' }),
     );
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(mocks.logger.warn).toHaveBeenCalledWith(

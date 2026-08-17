@@ -9029,6 +9029,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       enqueueDurableWrite(`orca-direct-user-rewind:${sessionId}:${clientId}`, () =>
         rewindPersistedUserMessageAfterClear(sessionId, clientId),
       ),
+    retainPersistedUserMessageCleanup: (sessionId, item, error) =>
+      inputCoordinator.retainPersistedOrcaCleanupRecovery(sessionId, item, error),
     beginDirectTurnChangeSet: async (sessionId, clientId) => {
       const liveSession = maker.getSession(sessionId);
       if (!liveSession) {

@@ -619,8 +619,8 @@ interface SessionInputState {
   /** 最新自动接管 attempt；展示态落库后仍保留到 vendor accepted 或明确失败。 */
   autoResumeAttemptToken: number | null;
   recovery: AgentInputRecovery;
-  /** active-turn recovery 中仅用于完成 DB rewind 的那一条；不会被当作用户 Retry。 */
-  activeTurnCleanupRecoveryClientId: string | null;
+  /** 已落库但从未交给 provider、且仍需完成 DB rewind 的内部清理债务。 */
+  activeTurnCleanupRecoveryItem: AgentInputQueuedMessage | null;
   drainScheduled: boolean;
   drainWakeupGeneration: number;
   /** Codex emits terminal error followed by done; queued work must not drain between the pair. */
@@ -695,7 +695,7 @@ function createInitialInputState(
     autoResumePending: null,
     autoResumeAttemptToken: null,
     recovery: null,
-    activeTurnCleanupRecoveryClientId: null,
+    activeTurnCleanupRecoveryItem: null,
     drainScheduled: false,
     drainWakeupGeneration: 0,
     pendingExternalTerminalDone: false,
@@ -1123,6 +1123,9 @@ export class AgentInputCoordinator {
     if (state.recovery?.kind === 'active-turn') {
       existingIds.add(state.recovery.item.clientId);
     }
+    if (state.activeTurnCleanupRecoveryItem) {
+      existingIds.add(state.activeTurnCleanupRecoveryItem.clientId);
+    }
     const ordinarySnapshotClientIds = items
       .filter((item) => !isActiveTurnCleanupSnapshotItem(item))
       .map((item) => item.clientId);
@@ -1249,8 +1252,7 @@ export class AgentInputCoordinator {
     state.pendingQueue = [...restored, ...state.pendingQueue];
     if (cleanupSnapshotItem) {
       const cleanupItem = stripActiveTurnCleanupSnapshotMarker(cleanupSnapshotItem);
-      state.recovery = { kind: 'active-turn', item: cleanupItem };
-      state.activeTurnCleanupRecoveryClientId = cleanupItem.clientId;
+      state.activeTurnCleanupRecoveryItem = cleanupItem;
     }
     if (restored.length > 0 && wasQuiet) {
       state.queuePaused = true;
@@ -1282,6 +1284,7 @@ export class AgentInputCoordinator {
       state.queueInteractionLocks.length > 0 ||
       state.queueEditLocks.length > 0 ||
       state.recovery !== null ||
+      state.activeTurnCleanupRecoveryItem !== null ||
       this.deps.hasPendingCredentialSwitch?.(sessionId) === true ||
       this.isDispatchBoundaryBusy(sessionId, state)
     );
@@ -1318,7 +1321,10 @@ export class AgentInputCoordinator {
     if (activeItem && predicate(activeItem)) return true;
     if (!opts?.includeRecovery) return false;
     const recovery = state.recovery;
-    return recovery?.kind === 'active-turn' ? predicate(recovery.item) : false;
+    if (recovery?.kind === 'active-turn' && predicate(recovery.item)) return true;
+    return state.activeTurnCleanupRecoveryItem
+      ? predicate(state.activeTurnCleanupRecoveryItem)
+      : false;
   }
 
   /** Includes the recent idempotency window used by remote weak-link retries. */
@@ -1330,12 +1336,42 @@ export class AgentInputCoordinator {
       state.activeTurn?.item?.clientId === clientId ||
       state.steeringQueueClientIds.includes(clientId) ||
       state.recentEnqueuedClientIds.includes(clientId) ||
-      (state.recovery?.kind === 'active-turn' && state.recovery.item.clientId === clientId)
+      (state.recovery?.kind === 'active-turn' && state.recovery.item.clientId === clientId) ||
+      state.activeTurnCleanupRecoveryItem?.clientId === clientId
     );
   }
 
   hasPendingQueueItem(sessionId: string, clientId: string): boolean {
     return this.getState(sessionId).pendingQueue.some((item) => item.clientId === clientId);
+  }
+
+  /**
+   * Adopt a live-direct Orca row whose pre-vendor rewind failed. Direct sends
+   * bypass the coordinator's active turn, so the dispatcher hands the complete
+   * durable item back here before surfacing its failure. This cleanup debt is
+   * deliberately separate from UI Retry recovery and cannot be abandoned by a
+   * later user message.
+   */
+  retainPersistedOrcaCleanupRecovery(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    error: unknown,
+  ): void {
+    if (resolveOrcaQueueItemTeamId(item) === null) {
+      throw new Error('cannot retain cleanup recovery for a non-Orca queue item');
+    }
+    const state = this.getState(sessionId);
+    const existing = state.activeTurnCleanupRecoveryItem;
+    if (existing && existing.clientId !== item.clientId) {
+      throw new Error(
+        `cleanup recovery ${existing.clientId} already owns session ${sessionId}`,
+      );
+    }
+    state.activeTurnCleanupRecoveryItem = item;
+    state.error = errorMessage(error);
+    state.stickyError = null;
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'direct-orca-cleanup-recovery');
   }
 
   /**
@@ -2670,8 +2706,7 @@ export class AgentInputCoordinator {
         // Keep a crash-restorable cleanup intent until the durable rewind lands.
         // Clearing both activeTurn and recovery first would strand a visible DB
         // row forever when the worker/database is temporarily unavailable.
-        state.recovery = { kind: 'active-turn', item: active.item };
-        state.activeTurnCleanupRecoveryClientId = active.item.clientId;
+        state.activeTurnCleanupRecoveryItem = active.item;
       } else {
         this.deps.onDiscardedQueuedMessage?.(sessionId, active.item);
       }
@@ -2700,7 +2735,14 @@ export class AgentInputCoordinator {
       recoveryDiscarded = true;
       persistedItemsToRewind.set(state.recovery.item.clientId, state.recovery.item);
       discardedRecoveryItems.add(state.recovery.item.clientId);
-      state.activeTurnCleanupRecoveryClientId = state.recovery.item.clientId;
+      state.activeTurnCleanupRecoveryItem = state.recovery.item;
+      state.recovery = null;
+    }
+    const cleanupRecovery = state.activeTurnCleanupRecoveryItem;
+    if (cleanupRecovery && predicate(cleanupRecovery)) {
+      recoveryDiscarded = true;
+      persistedItemsToRewind.set(cleanupRecovery.clientId, cleanupRecovery);
+      discardedRecoveryItems.add(cleanupRecovery.clientId);
     }
 
     // Persist the active-turn recovery before attempting the DB tombstone. On
@@ -2718,17 +2760,10 @@ export class AgentInputCoordinator {
         rewindFailure = { error };
         break;
       }
-      const currentRecovery = state.recovery;
-      if (
-        currentRecovery?.kind === 'active-turn' &&
-        currentRecovery.item.clientId === item.clientId
-      ) {
-        state.recovery = null;
+      if (state.activeTurnCleanupRecoveryItem?.clientId === item.clientId) {
+        state.activeTurnCleanupRecoveryItem = null;
         state.error = null;
         state.stickyError = null;
-      }
-      if (state.activeTurnCleanupRecoveryClientId === item.clientId) {
-        state.activeTurnCleanupRecoveryClientId = null;
       }
       if (discardedRecoveryItems.has(item.clientId)) {
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
@@ -3258,10 +3293,9 @@ export class AgentInputCoordinator {
         ? [active.item]
         : [];
     const cleanupRecovery =
-      state.recovery?.kind === 'active-turn' &&
-      state.activeTurnCleanupRecoveryClientId === state.recovery.item.clientId &&
-      resolveOrcaQueueItemTeamId(state.recovery.item) !== null
-        ? [markActiveTurnCleanupSnapshotItem(state.recovery.item)]
+      state.activeTurnCleanupRecoveryItem &&
+      resolveOrcaQueueItemTeamId(state.activeTurnCleanupRecoveryItem) !== null
+        ? [markActiveTurnCleanupSnapshotItem(state.activeTurnCleanupRecoveryItem)]
         : [];
     // scheduler 撞忙排队项不进崩溃快照:runner 的 run 在重启时会被 sweep 标
     // interrupted,恢复出的副本没有等待方;心跳 prompt 每轮 fire 重新生成,
@@ -3834,10 +3868,11 @@ export class AgentInputCoordinator {
     state: SessionInputState,
   ): Promise<boolean> {
     const recovery = state.recovery;
-    if (!recovery || !this.deps.isOrcaTeamInputActive) return false;
-    const item = recovery.kind === 'active-turn'
+    const cleanupRecovery = state.activeTurnCleanupRecoveryItem;
+    if ((!recovery && !cleanupRecovery) || !this.deps.isOrcaTeamInputActive) return false;
+    const item = cleanupRecovery ?? (recovery?.kind === 'active-turn'
       ? recovery.item
-      : state.pendingQueue.find((queued) => queued.clientId === recovery.clientId);
+      : state.pendingQueue.find((queued) => queued.clientId === recovery?.clientId));
     const teamId = item ? resolveOrcaQueueItemTeamId(item) : null;
     if (!teamId) return false;
 
@@ -3856,7 +3891,11 @@ export class AgentInputCoordinator {
     }
     if (active) return false;
     const latest = this.getState(sessionId);
-    if (latest !== state || latest.recovery !== recovery) return false;
+    if (
+      latest !== state ||
+      latest.recovery !== recovery ||
+      latest.activeTurnCleanupRecoveryItem !== cleanupRecovery
+    ) return false;
 
     let discarded: Awaited<ReturnType<AgentInputCoordinator['discardQueuedItemsWhere']>>;
     try {
@@ -3878,7 +3917,7 @@ export class AgentInputCoordinator {
     log.info('discarded inactive cross-instance Orca recovery before queue drain', {
       sessionId,
       teamId,
-      recoveryKind: recovery.kind,
+      recoveryKind: cleanupRecovery ? 'active-turn-cleanup' : recovery?.kind,
       ...discarded,
     });
     return (
@@ -4022,8 +4061,8 @@ export class AgentInputCoordinator {
     latest.activeTurn = null;
     latest.error = null;
     latest.stickyError = null;
-    latest.recovery = active.persisted ? { kind: 'active-turn', item } : null;
-    latest.activeTurnCleanupRecoveryClientId = active.persisted ? item.clientId : null;
+    latest.recovery = null;
+    latest.activeTurnCleanupRecoveryItem = active.persisted ? item : null;
     this.clearCredentialSwitchWait(latest);
     this.removePendingCompactWaitClientId(latest, item.clientId);
     latest.recentEnqueuedClientIds = latest.recentEnqueuedClientIds.filter(
@@ -4050,14 +4089,8 @@ export class AgentInputCoordinator {
         this.deps.onQueueEmptied?.(sessionId);
         return;
       }
-      if (
-        latest.recovery?.kind === 'active-turn' &&
-        latest.recovery.item.clientId === item.clientId
-      ) {
-        latest.recovery = null;
-      }
-      if (latest.activeTurnCleanupRecoveryClientId === item.clientId) {
-        latest.activeTurnCleanupRecoveryClientId = null;
+      if (latest.activeTurnCleanupRecoveryItem?.clientId === item.clientId) {
+        latest.activeTurnCleanupRecoveryItem = null;
       }
     } else {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);
