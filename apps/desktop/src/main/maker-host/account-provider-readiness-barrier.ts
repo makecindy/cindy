@@ -22,6 +22,14 @@ export function isSameOwnerScopeKey(left: string, right: string): boolean {
   return ownerIdentityFromScopeKey(left) === ownerIdentityFromScopeKey(right);
 }
 
+/** Clear the process catalog only after joining a *different owner*, not a generation bump. */
+export function shouldClearCatalogAfterJoiningPreviousScope(opts: {
+  waited: boolean;
+  currentSameOwnerAsNext: boolean;
+}): boolean {
+  return opts.waited && !opts.currentSameOwnerAsNext;
+}
+
 interface ReadinessEntry {
   scopeKey: string;
   promise: Promise<void>;

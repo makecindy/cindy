@@ -4,6 +4,7 @@ import {
   createAccountProviderReadinessBarrier,
   isSameOwnerScopeKey,
   ownerIdentityFromScopeKey,
+  shouldClearCatalogAfterJoiningPreviousScope,
 } from '../account-provider-readiness-barrier.js';
 
 function deferred() {
@@ -123,6 +124,27 @@ describe('createAccountProviderReadinessBarrier', () => {
     barrier.markDiscoveryComplete();
     second.resolve();
     await vi.waitFor(() => expect(scopeBReady).toBe(true));
+  });
+
+  it('clears the process catalog only after joining a different owner', () => {
+    expect(
+      shouldClearCatalogAfterJoiningPreviousScope({
+        waited: true,
+        currentSameOwnerAsNext: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearCatalogAfterJoiningPreviousScope({
+        waited: true,
+        currentSameOwnerAsNext: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldClearCatalogAfterJoiningPreviousScope({
+        waited: false,
+        currentSameOwnerAsNext: false,
+      }),
+    ).toBe(false);
   });
 
   it('parses owner identity from the app-session scope key format', () => {

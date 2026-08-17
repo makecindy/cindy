@@ -541,7 +541,10 @@ import {
   discoverAccountProviderModels,
   resetAccountProviderRuntimes,
 } from './maker-host/account-provider-model-refresh.js';
-import { accountProviderReadinessBarrier } from './maker-host/account-provider-readiness-barrier.js';
+import {
+  accountProviderReadinessBarrier,
+  shouldClearCatalogAfterJoiningPreviousScope,
+} from './maker-host/account-provider-readiness-barrier.js';
 import {
   accountProviderReadinessArm,
   shouldFirePendingReadinessStart,
@@ -6854,12 +6857,22 @@ app.on('ready', async () => {
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.
+      const nextProviderScopeKey = activeOwnerScopeKey();
       const previousProviderTaskSettled =
-        await accountProviderReadinessBarrier.waitForPreviousScope(activeOwnerScopeKey());
+        await accountProviderReadinessBarrier.waitForPreviousScope(nextProviderScopeKey);
       // The old task may have completed its owner-scoped DB read after teardown cleared the
-      // process-global catalog. Clear once more after joining it so a failed next-owner reload
-      // cannot inherit the old endpoint/model snapshot. Same-scope ensure retries skip this.
-      if (previousProviderTaskSettled) setCustomProviders([]);
+      // process-global catalog. Clear once more after joining a *different owner* so a
+      // failed next-owner reload cannot inherit the old snapshot. Same-owner generation
+      // bumps also wait here, but must keep the current account's custom providers.
+      if (
+        shouldClearCatalogAfterJoiningPreviousScope({
+          waited: previousProviderTaskSettled,
+          currentSameOwnerAsNext:
+            accountProviderReadinessBarrier.hasSameOwnerIdentity(nextProviderScopeKey),
+        })
+      ) {
+        setCustomProviders([]);
+      }
       const user = authManager.getAuthState().user;
       if (user == null || user.id !== userId) return;
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
@@ -7032,17 +7045,19 @@ app.on('ready', async () => {
         ) {
           return;
         }
-        const stillThisEntry = () =>
-          handle.isLive() && getActiveAppSession().dataOwnerId === userId;
+        const catalogMayWrite = () =>
+          handle.isLive() &&
+          accountProviderReadinessBarrier.isCurrentAdoptable() &&
+          getActiveAppSession().dataOwnerId === userId;
         await discoverAccountProviderModels(
           {
             loadXaiLkg: loadXaiModelsFromDiskCache,
             refreshProviderModels: requestProviderModelAutoRefresh,
             log: accountSwitchLog,
           },
-          stillThisEntry,
+          catalogMayWrite,
         );
-        handle.markDiscoveryComplete();
+        if (catalogMayWrite()) handle.markDiscoveryComplete();
       };
       const startProviderReadiness = (): void => {
         if (!makerProviderRefreshConfigured) {

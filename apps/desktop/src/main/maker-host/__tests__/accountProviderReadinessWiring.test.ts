@@ -150,6 +150,10 @@ describe('account provider readiness wiring', () => {
     expect(unchangedEnsure).toBeGreaterThan(unchanged);
     expect(unchangedReturn).toBeGreaterThan(unchangedEnsure);
     expect(bootstrapSource).toContain('shouldKeepPendingReadinessStart');
+    expect(bootstrapSource).toContain('shouldClearCatalogAfterJoiningPreviousScope');
+    expect(bootstrapSource).toContain(
+      'handle.isLive() &&\n          accountProviderReadinessBarrier.isCurrentAdoptable()',
+    );
 
     expect(bootstrapSource).toContain(
       'accountProviderReadinessArm.publish(userId, startProviderReadiness, resumeIncompleteDiscovery)',
@@ -197,7 +201,7 @@ describe('account provider readiness wiring', () => {
       makerShutdown,
     );
     const clearAfterJoin = bootstrapSource.indexOf(
-      'if (previousProviderTaskSettled) setCustomProviders([])',
+      'shouldClearCatalogAfterJoiningPreviousScope(',
       joinPrevious,
     );
 
