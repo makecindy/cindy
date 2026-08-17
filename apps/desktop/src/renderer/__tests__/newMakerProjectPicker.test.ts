@@ -23,6 +23,7 @@ const newMakerDraftRouteSource = readSource('features', 'cc-agent', 'NewMakerDra
 const worktreeChipsSource = readSource('components', 'new-chat', 'WorktreeChipsRow.tsx');
 
 const folderPickerPopoverSource = readSource('components', 'new-chat', 'FolderPickerPopover.tsx');
+const mainLayoutSource = readSource('components', 'layout', 'MainLayout.tsx');
 
 const addRemoteProjectDialogSource = readSource(
   'components',
@@ -181,6 +182,33 @@ describe('Shared create project picker', () => {
     expect(applyAt).toBeGreaterThan(restoreAt);
     expect(unlockAt).toBeGreaterThan(applyAt);
     expect(handler.slice(lockAt, unlockAt)).toContain('finally {');
+  });
+
+  it('keeps picker choices disabled until the accepted selection finishes', () => {
+    expect(folderPickerPopoverSource).toContain('if (selectionPendingRef.current) return;');
+    expect(folderPickerPopoverSource).toContain('selectionPendingRef.current = true;');
+    expect((folderPickerPopoverSource.match(/disabled=\{selectionPending\}/g) ?? []).length).toBe(
+      8,
+    );
+
+    const handlerStart = folderPickerPopoverSource.indexOf('const handleSelectPath = async (');
+    const handlerEnd = folderPickerPopoverSource.indexOf(
+      'const handleRemoveProject =',
+      handlerStart,
+    );
+    const handler = folderPickerPopoverSource.slice(handlerStart, handlerEnd);
+    expect(handler.indexOf('selectionPendingRef.current = true;')).toBeLessThan(
+      handler.indexOf('await onSelect(folderPath, source, option);'),
+    );
+    expect(handler.indexOf('await onSelect(folderPath, source, option);')).toBeLessThan(
+      handler.indexOf('onOpenChange(false);'),
+    );
+  });
+
+  it('keeps the sidebar restore owner mounted on the new-task route', () => {
+    expect(mainLayoutSource).toContain(
+      "forceMountFeatureContent={location.pathname === '/cc-agent/new'}",
+    );
   });
 
   it('invalidates an in-flight folder restore before applying a same-route dialogue target', () => {

@@ -6,7 +6,6 @@ import {
   requestSidebarProjectRestore,
   restoreHiddenProjectIfPresent,
   restoreSelectedHiddenProject,
-  restoreSelectedHiddenProjectWithoutMountedSidebar,
 } from '@/features/cc-agent/lib/sidebarProjectRestore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -342,9 +341,7 @@ describe('sidebar project restore coordinator', () => {
     expect(handler).toHaveBeenCalledWith(PROJECT_KEY);
 
     unregister();
-    const fallback = vi.fn().mockResolvedValue(false);
-    await expect(requestSidebarProjectRestore(PROJECT_KEY, fallback)).resolves.toBe(false);
-    expect(fallback).toHaveBeenCalledWith(PROJECT_KEY);
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(false);
   });
 
   it('does not let an older cleanup unregister the current sidebar owner', async () => {
@@ -357,27 +354,5 @@ describe('sidebar project restore coordinator', () => {
     expect(currentHandler).toHaveBeenCalledOnce();
 
     unregisterCurrent();
-  });
-
-  it('restores through persisted sidebar state when no sidebar owner is mounted', async () => {
-    const setProjectHidden = vi.fn().mockResolvedValue(true);
-    const persistFilterProjects = vi.fn();
-
-    await expect(
-      restoreSelectedHiddenProjectWithoutMountedSidebar({
-        projectKey: PROJECT_KEY,
-        hiddenProjectKeys: new Set([PROJECT_KEY]),
-        setProjectHidden,
-        loadFilterProjects: () => ['local:/workspace/other'],
-        persistFilterProjects,
-        localPlatform: 'linux',
-      }),
-    ).resolves.toBe(true);
-
-    expect(setProjectHidden).toHaveBeenCalledWith(PROJECT_KEY, false);
-    expect(persistFilterProjects).toHaveBeenCalledWith([
-      'local:/workspace/other',
-      PROJECT_KEY,
-    ]);
   });
 });
