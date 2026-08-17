@@ -24,19 +24,25 @@
  * createDesktopProviderService.ts,这样依赖本 holder 的纯逻辑模块(及其单测)不被 electron 污染。
  */
 
+import { isDeepStrictEqual } from 'node:util';
+
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
   findModelRegistryRoute,
   type AgentKind,
   type Catalog,
+  type CatalogCapabilityEvidence,
+  type CatalogXdMediaKind,
   type CatalogModel,
   type CustomProviderConfig,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-access-policy.js';
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
@@ -58,6 +64,14 @@ import {
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
 let base: Catalog | null = null;
+/** 当前基础目录是否由本次配置的 Catalog 真源明确证明；fallback 只保兼容元数据。 */
+let baseCapabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+/** XD media fields inherited from bundled rather than proven by the current source. */
+let baseUnverifiedXdMediaKinds: ReadonlySet<CatalogXdMediaKind> = new Set([
+  'image',
+  'video',
+  'embedding',
+]);
 /** Last trusted Registry used only to re-project user configs; it never changes catalog membership. */
 let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.modelRegistry;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
@@ -675,7 +689,15 @@ function withEmptyModels(p: Provider): Provider {
 }
 
 function computeMerged(): Catalog {
-  const b = base ?? BUNDLED_CATALOG;
+  const source = base ?? BUNDLED_CATALOG;
+  const b =
+    baseCapabilityEvidence === 'current'
+      ? projectUnverifiedCatalogFallbackForBuildRegion(
+          source,
+          CURRENT_CINDY_REGION,
+          baseUnverifiedXdMediaKinds,
+        )
+      : projectUnverifiedCatalogFallbackForBuildRegion(source, CURRENT_CINDY_REGION);
   // Dynamic OpenAI/Anthropic roots are rebuilt from discovery/registry below,
   // but the daily OSS catalog may carry sparse PI protocol annotations. Keep
   // only that metadata and apply it after existence has been independently
@@ -712,13 +734,24 @@ function computeMerged(): Catalog {
   // 作者错误隔离进 warnings,由刷新路径读走打日志,不拖垮其余条目。
   const plan = planRegistryRoots(b.modelRegistry);
   lastPlanWarnings = plan.warnings;
-  // XD Provider 使用随客户端发布的固定壳，远端 Catalog 只能管理非 XD Provider。
-  // `/models` 会在下方重建固定壳的全部模型，Catalog 缺失、刷新或异常都不能改变 XD。
-  const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+  // XD 的对话模型成员仍由下方 `/models` 权威重建，但 provider 壳中的媒体清单、
+  // 默认项和显式空值必须服从当前 Catalog。只有目录本身缺少 XD（生产加载经
+  // mergeWithBundled 后通常不会发生）才回落与 evidence 同级安全的 bundled 壳。
+  const fallbackXdCatalog =
+    baseCapabilityEvidence === 'current'
+      ? projectUnverifiedCatalogFallbackForBuildRegion(
+          BUNDLED_CATALOG,
+          CURRENT_CINDY_REGION,
+          baseUnverifiedXdMediaKinds,
+        )
+      : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
+  const catalogXd = b.providers.find((provider) => provider.id === 'xd');
+  const xdShell =
+    catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
   const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
-  if (builtinXd) providerSources.splice(Math.max(0, remoteXdIndex), 0, builtinXd);
+  if (xdShell) providerSources.splice(Math.max(0, remoteXdIndex), 0, xdShell);
   let providers: Provider[] = providerSources;
 
   // 先清零已退役的静态 providers.models 段：无论目录来自 bundled 还是远端，
@@ -1006,18 +1039,75 @@ export function getCatalogModelContextWindow(
 }
 
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
-export function setActiveCatalog(catalog: Catalog): void {
+function installActiveCatalog(
+  catalog: Catalog,
+  capabilityEvidence: CatalogCapabilityEvidence,
+  unverifiedXdMediaKinds: readonly CatalogXdMediaKind[],
+  force: boolean,
+): boolean {
   const previous = base ?? BUNDLED_CATALOG;
+  const nextUnverifiedXdMediaKinds = new Set(unverifiedXdMediaKinds);
+  if (
+    !force &&
+    base !== null &&
+    baseCapabilityEvidence === capabilityEvidence &&
+    isDeepStrictEqual(baseUnverifiedXdMediaKinds, nextUnverifiedXdMediaKinds) &&
+    isDeepStrictEqual(base, catalog)
+  ) {
+    return false;
+  }
   const projectionRegistry =
     catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
   trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
+  baseCapabilityEvidence = capabilityEvidence;
+  baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
       buildUserProvider(config, { modelRegistry: projectionRegistry }),
     );
   }
   markChanged();
+  return true;
+}
+
+export function setActiveCatalog(
+  catalog: Catalog,
+  options: {
+    capabilityEvidence?: CatalogCapabilityEvidence;
+    unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
+  } = {},
+): void {
+  const capabilityEvidence = options.capabilityEvidence ?? 'current';
+  installActiveCatalog(
+    catalog,
+    capabilityEvidence,
+    options.unverifiedXdMediaKinds ??
+      (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
+    true,
+  );
+}
+
+/**
+ * Atomically install one complete source snapshot and its capability evidence. Refresh
+ * callers use this instead of comparing only modelRegistry: media lists, presets and
+ * explicit empty fields are part of the same catalog truth. Exact no-ops stay silent.
+ */
+export function commitActiveCatalogSnapshot(
+  catalog: Catalog,
+  options: {
+    capabilityEvidence?: CatalogCapabilityEvidence;
+    unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
+  } = {},
+): boolean {
+  const capabilityEvidence = options.capabilityEvidence ?? 'current';
+  return installActiveCatalog(
+    catalog,
+    capabilityEvidence,
+    options.unverifiedXdMediaKinds ??
+      (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
+    false,
+  );
 }
 
 /**
@@ -1028,7 +1118,13 @@ export function setActiveCatalog(catalog: Catalog): void {
  * 「xai 新表 + registry 旧表」的可观测混态窗口。
  * 目标不变量:成功且有变化 = 恰 1 revision / 1 broadcast;no-op/拒收 = 0。
  */
-export function commitModelPlaneFromCatalog(catalog: Catalog): void {
+export function commitModelPlaneFromCatalog(
+  catalog: Catalog,
+  options: {
+    capabilityEvidence?: CatalogCapabilityEvidence;
+    unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
+  } = {},
+): void {
   const current = base ?? BUNDLED_CATALOG;
   const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
   const providers =
@@ -1041,6 +1137,12 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
     providers,
     ...(catalog.modelRegistry ? { modelRegistry: catalog.modelRegistry } : {}),
   };
+  baseCapabilityEvidence = options.capabilityEvidence ?? 'current';
+  if (options.unverifiedXdMediaKinds !== undefined) {
+    baseUnverifiedXdMediaKinds = new Set(options.unverifiedXdMediaKinds);
+  } else if (baseCapabilityEvidence === 'fallback') {
+    baseUnverifiedXdMediaKinds = new Set(['image', 'video', 'embedding']);
+  }
   if (customConfigs) {
     custom = customConfigs.map((config) =>
       buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),

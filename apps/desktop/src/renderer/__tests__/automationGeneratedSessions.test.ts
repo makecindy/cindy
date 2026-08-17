@@ -787,7 +787,9 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('runningSessionIds,');
     // 组头右侧的时间文字与普通任务行的信息槽(SessionInfoMeta)同款字体 / 色号,
     // 含 tabular-nums(2026-08-12 用户裁决;C 期给普通行加等宽数字时组头漏跟)。
-    expect(source).toContain("'flex items-center gap-1 text-xs font-medium tabular-nums'");
+    expect(source).toContain(
+      "'col-start-1 row-start-1 flex items-center gap-1 text-xs font-medium tabular-nums'",
+    );
     expect(source).toContain("'text-sidebar-action-icon'");
   });
 

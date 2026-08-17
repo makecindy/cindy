@@ -464,9 +464,24 @@ function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | 
 function providerRoutingForModel(
   provider: Provider,
   agent: AgentKind,
-  _wireModel: string | undefined,
+  wireModel: string | undefined,
 ): RoutingDescriptor | null {
-  return provider.routing[agent] ?? null;
+  const routing = provider.routing[agent];
+  if (!routing) return null;
+  const modelRoute = wireModel
+    ? provider.models[agent]?.find((model) => model.id === wireModel)?.route
+    : undefined;
+  if (!modelRoute) return routing;
+
+  // 鉴权、固定 headers 与模型 namespace 门继续继承 provider/runtime；请求路径不能在
+  // 协议切换后误继承旧 runtime 的路径，只有模型覆盖显式声明时才带回。
+  const { requestPath: _runtimeRequestPath, ...inherited } = routing;
+  return {
+    ...inherited,
+    upstream: modelRoute.baseUrl,
+    wireProtocol: modelRoute.wireProtocol,
+    ...(modelRoute.requestPath ? { requestPath: modelRoute.requestPath } : {}),
+  };
 }
 
 /**

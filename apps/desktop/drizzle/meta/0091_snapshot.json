@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "efcd2828-22e2-496b-8b70-17ae567ec828",
+  "id": "678c1f41-343b-49e0-92d8-20247184dc60",
   "prevId": "9b947440-3e27-474b-93c1-dc62b1bc9c35",
   "tables": {
     "account_usage_snapshots": {
@@ -76,37 +76,6 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "coding_plan_usage_snapshots": {
-      "name": "coding_plan_usage_snapshots",
-      "columns": {
-        "provider_id": {
-          "name": "provider_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "snapshot": {
-          "name": "snapshot",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -214,13 +183,6 @@
         },
         "auth": {
           "name": "auth",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "usage": {
-          "name": "usage",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -2873,6 +2835,13 @@
         "codex_history_has_product_prompt": {
           "name": "codex_history_has_product_prompt",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "codex_plan_json": {
+          "name": "codex_plan_json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

@@ -20,7 +20,11 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
+import {
+  CINDY_BRIDGE_EXTENSION_SOURCE,
+  CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
+  CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
+} from '../cindy-bridge-source.js';
 
 type ReviewSearchHelpers = {
   filterReviewGrepResult: (
@@ -105,6 +109,25 @@ function loadReviewSearchHelpers(
   return context as ReviewSearchHelpers;
 }
 
+function loadBashTimeoutHelpers(): {
+  resolveCindyBashTimeout: (params: unknown) => number;
+  applyCindyBashTimeoutParams: (params: unknown) => Record<string, unknown>;
+} {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS =');
+  const end = source.indexOf('function cindyBashTimeoutDescription');
+  if (start < 0 || end <= start) {
+    throw new Error('bash timeout helpers were not found in the generated bridge');
+  }
+  const factory = new Function(
+    `${source.slice(start, end)}; return { resolveCindyBashTimeout, applyCindyBashTimeoutParams };`,
+  ) as () => {
+    resolveCindyBashTimeout: (params: unknown) => number;
+    applyCindyBashTimeoutParams: (params: unknown) => Record<string, unknown>;
+  };
+  return factory();
+}
+
 describe('cindy-bridge extension source', () => {
   it('is valid standalone TypeScript for the Pi runtime to load', () => {
     const result = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE, {
@@ -151,6 +174,55 @@ describe('cindy-bridge extension source', () => {
   it('keeps generated extension source free of template literals', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('`');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('${');
+  });
+
+  it('normalizes bash timeout at the execute boundary without a host-side timer', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    expect(source).toContain(
+      `const CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS = ${CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS};`,
+    );
+    expect(source).toContain(
+      `const CINDY_PI_BASH_MAX_TIMEOUT_SECONDS = ${CINDY_PI_BASH_MAX_TIMEOUT_SECONDS};`,
+    );
+    expect(source).toContain('const nextParams = applyCindyBashTimeoutParams(params);');
+    expect(source).toContain(
+      'return bashTool.execute(id, nextParams as any, signal, onUpdate as any);',
+    );
+    expect(source).toContain('cindyBashTimeoutDescription()');
+    const executeSlice = source.slice(
+      source.indexOf('applyCindyBashTimeoutParams(params)'),
+      source.indexOf('cindy-branch-switch'),
+    );
+    expect(executeSlice).not.toContain('AbortController');
+    expect(executeSlice).not.toContain('setTimeout');
+
+    const { resolveCindyBashTimeout, applyCindyBashTimeoutParams } = loadBashTimeoutHelpers();
+    expect(resolveCindyBashTimeout(undefined)).toBe(CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS);
+    expect(resolveCindyBashTimeout({})).toBe(CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS);
+    expect(resolveCindyBashTimeout({ timeout: 0 })).toBe(CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS);
+    expect(resolveCindyBashTimeout({ timeout: -1 })).toBe(CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS);
+    expect(resolveCindyBashTimeout({ timeout: 45 })).toBe(45);
+    expect(resolveCindyBashTimeout({ timeout: CINDY_PI_BASH_MAX_TIMEOUT_SECONDS })).toBe(
+      CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
+    );
+    expect(() => resolveCindyBashTimeout({ timeout: CINDY_PI_BASH_MAX_TIMEOUT_SECONDS + 1 })).toThrow(
+      /Invalid timeout: timeout is in seconds; maximum is 1800 seconds \(received 1801\)/,
+    );
+    expect(() => resolveCindyBashTimeout({ timeout: 180000 })).toThrow(
+      /Invalid timeout: timeout is in seconds; maximum is 1800 seconds \(received 180000\)/,
+    );
+    expect(() => resolveCindyBashTimeout({ timeout: Number.NaN })).toThrow(/Invalid timeout/);
+    expect(() => resolveCindyBashTimeout({ timeout: Number.POSITIVE_INFINITY })).toThrow(
+      /Invalid timeout/,
+    );
+    expect(applyCindyBashTimeoutParams({ command: 'ls' })).toEqual({
+      command: 'ls',
+      timeout: CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
+    });
+    expect(applyCindyBashTimeoutParams({ command: 'ls', timeout: 12 })).toEqual({
+      command: 'ls',
+      timeout: 12,
+    });
   });
 
   it('keeps Pi vision bridge tool security invariants (registration, size, magic-byte, redirect, redaction)', () => {

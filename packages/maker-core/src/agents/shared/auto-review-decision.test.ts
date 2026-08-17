@@ -1,15 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
+  AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
   AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
   AUTO_REVIEW_RETRY_ATTEMPTS,
   AUTO_REVIEW_RETRY_BACKOFF_MS,
+  annotatePermissionRequestForUnavailableReview,
   autoReviewRetryBudgetMs,
   getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   classifyLocalAutoReviewTier,
+  createAutoReviewConfirmUndeliveredNotice,
+  isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
+  isSystemPermissionDenialReason,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewUnavailableNotice,
@@ -306,6 +313,91 @@ describe('isAutoReviewUnavailableNotice', () => {
     expect(isAutoReviewUnavailableNotice(undefined)).toBe(false);
     expect(isAutoReviewUnavailableNotice(null)).toBe(false);
     expect(isAutoReviewUnavailableNotice(123)).toBe(false);
+  });
+});
+
+describe('annotatePermissionRequestForUnavailableReview', () => {
+  it('marks the confirmation card as an auto-review handoff without re-reviewing', () => {
+    const annotated = annotatePermissionRequestForUnavailableReview({
+      kind: 'permission',
+      requestId: 'req-1',
+      toolName: 'exec',
+      input: { command: 'npx tsc --noEmit' },
+      description: 'Allow Codex to run this command?',
+      metadata: { reason: 'workspace write' },
+    });
+    expect(annotated.description).toBe(AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT);
+    expect(annotated.metadata).toMatchObject({
+      reason: 'workspace write',
+      [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
+    });
+  });
+});
+
+describe('isSystemPermissionDenialReason', () => {
+  it('treats router and timeout codes as system denials, not user clicks', () => {
+    expect(isSystemPermissionDenialReason('timeout')).toBe(true);
+    expect(isSystemPermissionDenialReason('no_interaction_resolver')).toBe(true);
+    expect(isSystemPermissionDenialReason('no_resolver_attached')).toBe(true);
+    expect(isSystemPermissionDenialReason('resolver_threw')).toBe(true);
+    expect(isSystemPermissionDenialReason('approval_timeout')).toBe(true);
+    expect(isSystemPermissionDenialReason('stale_turn')).toBe(true);
+    expect(isSystemPermissionDenialReason('hook_interaction_timeout')).toBe(true);
+    expect(isSystemPermissionDenialReason('interaction_route_released')).toBe(true);
+    expect(isSystemPermissionDenialReason('hook_turn_terminal')).toBe(true);
+    expect(isSystemPermissionDenialReason('turn_terminal')).toBe(true);
+    expect(isSystemPermissionDenialReason('not_renderable')).toBe(true);
+    expect(isSystemPermissionDenialReason('headless_interaction_unavailable')).toBe(true);
+    expect(isSystemPermissionDenialReason('session_cleanup')).toBe(true);
+    expect(isSystemPermissionDenialReason('session_disposed')).toBe(true);
+    expect(isSystemPermissionDenialReason('session disposed')).toBe(true);
+    expect(isSystemPermissionDenialReason('no_card')).toBe(true);
+    expect(isSystemPermissionDenialReason('rich_output_not_supported')).toBe(true);
+    expect(isSystemPermissionDenialReason('stale_route')).toBe(true);
+    expect(isSystemPermissionDenialReason('wecom_interaction_disconnected')).toBe(true);
+    expect(isSystemPermissionDenialReason('wecom_interaction_timeout')).toBe(true);
+    expect(isSystemPermissionDenialReason('wecom_interaction_send_failed')).toBe(true);
+    expect(isSystemPermissionDenialReason('wecom_interaction_cancelled_by_stop')).toBe(true);
+    expect(isSystemPermissionDenialReason('wechat_interaction_timeout')).toBe(true);
+    expect(isSystemPermissionDenialReason('wechat_interaction_send_failed')).toBe(true);
+    expect(isSystemPermissionDenialReason('wechat_binding_stopped')).toBe(true);
+    expect(isSystemPermissionDenialReason('wechat_user_stopped')).toBe(true);
+    expect(isSystemPermissionDenialReason('replaced_by_new_request')).toBe(true);
+    expect(isSystemPermissionDenialReason('card send failed: slack timeout')).toBe(true);
+    expect(isSystemPermissionDenialReason('pending failed: channel closed')).toBe(true);
+    expect(isSystemPermissionDenialReason('text interaction failed: socket hang up')).toBe(true);
+    expect(isSystemPermissionDenialReason('register failed: duplicate requestId')).toBe(true);
+    expect(isSystemPermissionDenialReason('permission_mode_changed_to_ask')).toBe(true);
+    expect(isSystemPermissionDenialReason('plan_mode_enabled')).toBe(true);
+    expect(isSystemPermissionDenialReason('plan_mode_disabled')).toBe(true);
+    expect(isSystemPermissionDenialReason('turn_idle_reconcile')).toBe(true);
+    expect(isSystemPermissionDenialReason('orca_disable')).toBe(true);
+    expect(isSystemPermissionDenialReason('session_running_race')).toBe(true);
+    expect(isSystemPermissionDenialReason('turn_not_dispatched')).toBe(true);
+    expect(isSystemPermissionDenialReason('Request failed with status code 500')).toBe(false);
+    expect(isSystemPermissionDenialReason('socket hang up')).toBe(false);
+    expect(isSystemPermissionDenialReason('User denied')).toBe(false);
+    expect(isSystemPermissionDenialReason('wechat_user_denied')).toBe(false);
+    expect(isSystemPermissionDenialReason('wecom_user_denied')).toBe(false);
+    expect(isSystemPermissionDenialReason('dingtalk_user_denied')).toBe(false);
+    expect(isSystemPermissionDenialReason('[destructiveGuard] rm -rf /')).toBe(false);
+    expect(isSystemPermissionDenialReason(undefined)).toBe(false);
+  });
+});
+
+describe('createAutoReviewConfirmUndeliveredNotice', () => {
+  it('emits once and is recognized by the shared matcher', () => {
+    const emitted: string[] = [];
+    const notice = createAutoReviewConfirmUndeliveredNotice((message) => emitted.push(message));
+    notice.notify();
+    notice.notify();
+    expect(emitted).toHaveLength(1);
+    expect(isAutoReviewConfirmUndeliveredNotice(emitted[0])).toBe(true);
+    expect(emitted[0]).toContain(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`);
+    expect(emitted[0]).toContain('not a user rejection');
+    notice.reset();
+    notice.notify();
+    expect(emitted).toHaveLength(2);
   });
 });
 

@@ -41,8 +41,28 @@ describe('passive shared-userData instance auth isolation', () => {
     // packaged 恒不设置该 env,但仍保留 isPackaged 双保险,防 ambient env 污染线上语义。
     expect(body).toContain('!app.isPackaged');
     expect(body).toContain("process.env.XDT_PASSIVE_SHARED_USER_DATA === '1'");
-    // 不新增判定通道:isolated 沙箱有独立 userData 与 deviceId,不该出现在这条判定里。
+    // 不新增判定通道:是否共库由启动期 profileKind 落地成这个 env,本函数只读结果。
     expect(body).not.toContain('XDT_ISOLATED');
+  });
+
+  it('DEVICE_MISMATCH 只登出本进程,不删磁盘 refresh token', () => {
+    expect(authSource).toContain("action.kind === 'foreign-device'");
+    expect(authSource).toContain(
+      'cold-start refresh: DEVICE_MISMATCH — this process starts logged out and keeps the persisted refresh token',
+    );
+    expect(authSource).toContain(
+      'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',
+    );
+    const runtimeIdx = authSource.indexOf(
+      'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',
+    );
+    const preserveIdx = authSource.indexOf('preservePersistedRefreshToken: true', runtimeIdx);
+    expect(preserveIdx).toBeGreaterThan(runtimeIdx);
+    expect(authSource).toContain('let foreignDeviceLocalSignOut = false');
+    expect(authSource).toContain("foreignDeviceLocalSignOut = true");
+    expect(authSource).toContain(
+      "if (foreignDeviceLocalSignOut) {",
+    );
   });
 
   it('clearAuth:passive 共享实例不删磁盘 refresh token', () => {

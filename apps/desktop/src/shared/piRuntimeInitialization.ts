@@ -11,6 +11,7 @@ export function savedCustomProviderModelShape(
     id: model.id.trim(),
     name: model.name.trim(),
     ...(includePiCapabilities && model.piApi ? { piApi: model.piApi } : {}),
+    ...(model.route ? { route: { ...model.route } } : {}),
     ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
     ...(includePiCapabilities && model.supportsImageInput === true

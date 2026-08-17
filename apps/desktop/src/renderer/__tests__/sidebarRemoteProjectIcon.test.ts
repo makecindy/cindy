@@ -60,7 +60,7 @@ describe('sidebar remote project icon', () => {
     );
     // C 期起右侧时间槽由 SessionInfoMeta 承担(任务信息复选),仍在同一让位容器内。
     expect(sessionItemSource).toMatch(
-      /<div className="group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end min-w-14">[\s\S]*?<WorktreeBadge[\s\S]*?<SessionInfoMeta/,
+      /<div className="group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">[\s\S]*?<WorktreeBadge[\s\S]*?<SessionInfoMeta/,
     );
     expect(sessionCardSource).toContain('function TimeActionsSlot');
     expect(sessionCardSource).not.toMatch(/function TimeActionsSlot[\s\S]*?remoteIconKind/);

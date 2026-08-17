@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import type { DevProfileKind } from './devCliFlags.js';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -28,7 +29,12 @@ export interface DesktopDevInstanceRecord {
   /** 构建区域；共享 userData 启动器据此拒绝跨区域 passive 预览。 */
   region: CindyRegion;
   passive: boolean;
+  /** 解析后是否真的落在独立纪元沙箱。不是「有 userData 覆写」。 */
   isolated: boolean;
+  /** 启动旗标是否声明了 --isolated / XDT_ISOLATED。 */
+  isolationIntent?: boolean;
+  /** 解析后的实际 profile 归属。 */
+  profileKind?: DevProfileKind;
   userDataDir: string;
   state: DesktopDevInstanceState;
   failure?: {
@@ -46,6 +52,8 @@ export interface BeginDesktopDevInstanceOptions {
   region?: CindyRegion;
   passive: boolean;
   isolated: boolean;
+  isolationIntent?: boolean;
+  profileKind?: DevProfileKind;
   pid?: number;
   startedAtMs?: number;
   instanceId?: string;
@@ -139,6 +147,8 @@ export function beginDesktopDevInstance(
     region: options.region ?? 'global',
     passive: options.passive,
     isolated: options.isolated,
+    ...(options.isolationIntent !== undefined ? { isolationIntent: options.isolationIntent } : {}),
+    ...(options.profileKind !== undefined ? { profileKind: options.profileKind } : {}),
     userDataDir: path.resolve(options.userDataDir),
     state: 'starting',
   };

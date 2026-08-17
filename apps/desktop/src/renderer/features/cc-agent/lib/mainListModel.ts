@@ -13,7 +13,9 @@
  *   - recency:顶层条目按组内最新活动倒序;项目 / 对话组内部同样按最近活动
  *     倒序,不沿用 groupSessions 的 active-first。
  *   - priority:等你处理(waiting)> 完成未读(unread)> 运行中 > 其余;同档内按
- *     recency。四档口径对齐 Codex 侧栏的优先级排序(waiting:0 / unread:1 /
+ *     recency(刚离开的已看过任务用离开时刻,避免掉进其余档后按旧发送时间沉底)。
+ *     正在看的任务用 heldPriorityRanks 钉住打开时的档位,离开后再落到其余档最前
+ *     (2026-08-15 用户裁决)。四档口径对齐 Codex 侧栏(waiting:0 / unread:1 /
  *     active:2 / idle:3,2026-08-13 用户裁决"参考 Codex"):此前三档把「等你
  *     回答」和「跑完没看」混在同一档,完成未读一多就把真正要回应的淹掉。
  *   - manual:项目行按 manualProjectOrder;散排对话与对话组不进手动顺序,
@@ -22,6 +24,7 @@
 
 import type { Session } from '@/lib/ccAgent.types';
 
+import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../../../shared/liveTaskPriority';
 import type { FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import { sessionActivityMs } from './dateSessionGrouping';
@@ -44,6 +47,16 @@ export interface MainListPriorityContext {
    * 少了 waiting 细分(老调用方 / 测试夹具零迁移成本)。
    */
   waitingSessionIds?: ReadonlySet<string>;
+  /**
+   * 正在看的任务打开时的档位。看的过程中 attention 被清掉后,自然档会掉到
+   * 「其余」;这里钉住较差方向,离开后再按 recentlyViewedAtMs 落到其余档最前。
+   */
+  heldPriorityRanks?: ReadonlyMap<string, number>;
+  /**
+   * 任务被切走的时刻(unix ms)。只在自然档为 rest 时参与 priority 同档 recency,
+   * 不改 recency 排序,也不抬 waiting / unread / running。
+   */
+  recentlyViewedAtMs?: ReadonlyMap<string, number>;
 }
 
 const EMPTY_PRIORITY_CONTEXT: MainListPriorityContext = {
@@ -57,12 +70,93 @@ const EMPTY_PRIORITY_CONTEXT: MainListPriorityContext = {
  * 才能继续」比「跑完了等你看」急;unread 压过 running:running 不需要你动手,
  * 而 unread 是已经可以处理的结果。
  */
+export function naturalPriorityRankForId(
+  sessionId: string,
+  ctx: Pick<
+    MainListPriorityContext,
+    'runningSessionIds' | 'attentionSessionIds' | 'waitingSessionIds'
+  >,
+): number {
+  const waiting = ctx.waitingSessionIds?.has(sessionId) === true;
+  const unread = ctx.attentionSessionIds.has(sessionId) && !waiting;
+  return liveTaskPriorityRank({
+    waiting,
+    unread,
+    running: ctx.runningSessionIds.has(sessionId),
+  });
+}
+
+export function sessionNaturalPriorityRank(
+  session: Session,
+  ctx: MainListPriorityContext,
+): number {
+  return naturalPriorityRankForId(session.id, ctx);
+}
+
 export function sessionPriorityRank(session: Session, ctx: MainListPriorityContext): number {
-  if (ctx.attentionSessionIds.has(session.id)) {
-    return ctx.waitingSessionIds?.has(session.id) ? 0 : 1;
+  const natural = sessionNaturalPriorityRank(session, ctx);
+  const held = ctx.heldPriorityRanks?.get(session.id);
+  return held === undefined ? natural : Math.min(natural, held);
+}
+
+export interface ViewedPriorityHoldState {
+  prevViewedId?: string;
+  heldPriorityRanks: Map<string, number>;
+  recentlyViewedAtMs: Map<string, number>;
+}
+
+/**
+ * 看的时候钉住打开时的档位;切走后再落到其余档,并用离开时刻参与 rest 档 recency。
+ * 就地更新传入的 map,方便渲染层跨渲染保留。
+ */
+export function advanceViewedPriorityHold(
+  state: ViewedPriorityHoldState,
+  viewedSessionId: string | undefined,
+  ctx: Pick<
+    MainListPriorityContext,
+    'runningSessionIds' | 'attentionSessionIds' | 'waitingSessionIds'
+  >,
+  nowMs: number,
+): ViewedPriorityHoldState {
+  if (state.prevViewedId && state.prevViewedId !== viewedSessionId) {
+    state.recentlyViewedAtMs.set(state.prevViewedId, nowMs);
+    state.heldPriorityRanks.delete(state.prevViewedId);
   }
-  if (ctx.runningSessionIds.has(session.id)) return 2;
-  return 3;
+  if (viewedSessionId) {
+    const natural = naturalPriorityRankForId(viewedSessionId, ctx);
+    const held = state.heldPriorityRanks.get(viewedSessionId);
+    state.heldPriorityRanks.set(
+      viewedSessionId,
+      held === undefined ? natural : Math.min(held, natural),
+    );
+  }
+  state.prevViewedId = viewedSessionId;
+  return state;
+}
+
+/**
+ * 点击清点会先于路由更新清掉 attention。必须在那之前按当前档位钉住,
+ * 否则首次 hold 只能读到 rest,刚打开的完成未读仍会立刻沉底。
+ */
+export function holdViewedPriorityRank(
+  state: ViewedPriorityHoldState,
+  sessionId: string,
+  ctx: Pick<
+    MainListPriorityContext,
+    'runningSessionIds' | 'attentionSessionIds' | 'waitingSessionIds'
+  >,
+): void {
+  const natural = naturalPriorityRankForId(sessionId, ctx);
+  const held = state.heldPriorityRanks.get(sessionId);
+  state.heldPriorityRanks.set(sessionId, held === undefined ? natural : Math.min(held, natural));
+}
+
+export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriorityContext): number {
+  if (sessionNaturalPriorityRank(session, ctx) !== LIVE_TASK_PRIORITY.rest) {
+    return sessionActivityMs(session);
+  }
+  const viewedAt = ctx.recentlyViewedAtMs?.get(session.id) ?? 0;
+  return Math.max(sessionActivityMs(session), viewedAt);
 }
 
 function entryActivityMs(entry: MainListEntry): number {
@@ -76,14 +170,25 @@ function entryActivityMs(entry: MainListEntry): number {
   return max;
 }
 
+function entryPriorityRecencyMs(entry: MainListEntry, ctx: MainListPriorityContext): number {
+  if (entry.kind === 'session') return sessionPriorityRecencyMs(entry.session, ctx);
+  const sessions = entry.kind === 'project' ? entry.project.sessions : entry.sessions;
+  let max = 0;
+  for (const s of sessions) {
+    const ms = sessionPriorityRecencyMs(s, ctx);
+    if (ms > max) max = ms;
+  }
+  return max;
+}
+
 function entryPriorityRank(entry: MainListEntry, ctx: MainListPriorityContext): number {
   if (entry.kind === 'session') return sessionPriorityRank(entry.session, ctx);
   const sessions = entry.kind === 'project' ? entry.project.sessions : entry.sessions;
-  let min = 3;
+  let min: number = LIVE_TASK_PRIORITY.rest;
   for (const s of sessions) {
     const rank = sessionPriorityRank(s, ctx);
     if (rank < min) min = rank;
-    if (min === 0) break;
+    if (min === LIVE_TASK_PRIORITY.waiting) break;
   }
   return min;
 }
@@ -106,7 +211,7 @@ export function sortSessionsForMainList(
       .sort(
         (a, b) =>
           sessionPriorityRank(a, ctx) - sessionPriorityRank(b, ctx) ||
-          sessionActivityMs(b) - sessionActivityMs(a),
+          sessionPriorityRecencyMs(b, ctx) - sessionPriorityRecencyMs(a, ctx),
       );
   }
   return sessions.slice().sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a));
@@ -211,7 +316,7 @@ function sortMainListEntries(
       .sort(
         (a, b) =>
           entryPriorityRank(a, ctx) - entryPriorityRank(b, ctx) ||
-          entryActivityMs(b) - entryActivityMs(a),
+          entryPriorityRecencyMs(b, ctx) - entryPriorityRecencyMs(a, ctx),
       );
   }
   // recency(默认):最近活动倒序。

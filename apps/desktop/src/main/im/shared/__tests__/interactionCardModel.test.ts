@@ -286,6 +286,21 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     expect(hook.card.body.length).toBeLessThan(800);
     expect(im.body).toContain('command');
     expect(im.body!.length).toBeLessThan(1000);
+    expect(im.body).not.toContain('自动审批没完成');
+  });
+
+  it('自动审批故障时富卡片权限确认写明原因', () => {
+    const im = cards.buildPermissionCard({
+      ...PERMISSION_RICH,
+      requestId: 'req-perm-unavailable',
+      metadata: { autoReviewUnavailable: true },
+    });
+    expect(im.body).toContain('自动审批没完成，请确认要不要允许这次操作。');
+    expect(im.body).toContain('command');
+    expect(im.buttons.map((b) => b.id)).toEqual([
+      'permission:allow:once',
+      'permission:deny',
+    ]);
   });
 
   it('安全默认: IM cancelPending 与 hook defaultDecision 同形(只有 reason 由渠道给)', async () => {

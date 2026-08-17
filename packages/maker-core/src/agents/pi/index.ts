@@ -56,6 +56,8 @@ function validateSdkSessionId(value: string): string {
 import {
   AgentNotAuthenticatedError,
   BaseAgent,
+  TurnDispatchRejectedError,
+  TurnDispatchUnconfirmedError,
   TurnPermissionPolicyUnsupportedError,
   type AgentDeps,
   type AgentSessionHandle,
@@ -77,8 +79,11 @@ import {
 } from './cindy-subagent-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
+  annotatePermissionRequestForUnavailableReview,
+  createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
+  isSystemPermissionDenialReason,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -154,6 +159,8 @@ const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
 /** 远端权限/Extra Dir 快照指纹 —— 档位变则 envHash 变, daemon 重启而非覆盖热读文件。 */
 const PI_PERMISSION_HASH_ENV = 'CINDY_PI_PERMISSION_HASH';
+/** Cindy-owned extension 源码指纹。bridge/subagent 字节变则远端必须 restart，不能 reattach 到旧进程。 */
+const PI_EXTENSION_BUNDLE_HASH_ENV = 'CINDY_PI_EXTENSION_BUNDLE_HASH';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /**
@@ -187,6 +194,15 @@ function isLoopbackOnlyBaseUrl(baseUrl: string): boolean {
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
+/** prompt 接受前可能自动压缩，同样必须覆盖一次完整摘要调用。 */
+const PI_PROMPT_ACCEPTANCE_TIMEOUT_MS = PI_COMPACT_TIMEOUT_MS;
+const PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS = new Set([
+  'compaction_start',
+  'compaction_end',
+  'summarization_retry_scheduled',
+  'summarization_retry_attempt_start',
+  'summarization_retry_finished',
+]);
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
 
@@ -496,13 +512,65 @@ function piExtraDirsPrompt(dirs: readonly string[]): string {
   ].join('\n');
 }
 
+interface FailedPiStartupCleanup {
+  proc: PiRpcProcess;
+  promise: Promise<void> | null;
+  cleanupLocal?: () => void;
+}
+
 export class PiAgent extends BaseAgent {
   readonly kind: AgentKind = 'pi';
   readonly capabilities: Capabilities;
+  private readonly failedStartupCleanups = new Map<string, FailedPiStartupCleanup>();
+  private readonly inFlightStartups = new Set<Promise<AgentSessionHandle>>();
+  private disposeStarted = false;
 
   constructor(deps: AgentDeps) {
     super(deps);
     this.capabilities = this.buildCapabilities(PiAgent.baseCapabilities());
+  }
+
+  private async retryFailedStartupCleanup(
+    sessionId: string,
+    expectedEntry?: FailedPiStartupCleanup,
+  ): Promise<void> {
+    const entry = this.failedStartupCleanups.get(sessionId);
+    if (!entry || (expectedEntry && entry !== expectedEntry)) return;
+    const cleanup = entry.promise ?? entry.proc.close();
+    entry.promise = cleanup;
+    try {
+      await cleanup;
+    } catch (error) {
+      if (this.failedStartupCleanups.get(sessionId) === entry && entry.promise === cleanup) {
+        entry.promise = null;
+      }
+      throw error;
+    }
+    if (this.failedStartupCleanups.get(sessionId) === entry) {
+      this.failedStartupCleanups.delete(sessionId);
+      entry.cleanupLocal?.();
+    }
+  }
+
+  override async dispose(): Promise<void> {
+    this.disposeStarted = true;
+    const startupSnapshot = Array.from(this.inFlightStartups);
+    await Promise.allSettled(startupSnapshot);
+
+    // startSession registers before yielding and new starts are fenced above,
+    // so every failed pre-publication process is now visible in this snapshot.
+    const cleanupSnapshot = Array.from(this.failedStartupCleanups.entries());
+    const results = await Promise.allSettled(
+      cleanupSnapshot.map(([sessionId, entry]) =>
+        this.retryFailedStartupCleanup(sessionId, entry),
+      ),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Pi startup process cleanup remains unconfirmed');
+    }
   }
 
   private static baseCapabilities(): Capabilities {
@@ -856,7 +924,24 @@ export class PiAgent extends BaseAgent {
     };
   }
 
-  async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+  override async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    if (this.disposeStarted) {
+      throw new Error('Pi agent is disposing; refusing to start a new session');
+    }
+    const startup = this.startSessionWhileRunning(opts);
+    this.inFlightStartups.add(startup);
+    try {
+      return await startup;
+    } finally {
+      this.inFlightStartups.delete(startup);
+    }
+  }
+
+  private async startSessionWhileRunning(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    const startupCleanupKey = opts.sessionId ?? '<anonymous>';
+    // A previous pre-publication Pi process for this business session must be
+    // confirmed dead before another spawn can begin.
+    await this.retryFailedStartupCleanup(startupCleanupKey);
     // 轮 22 LOW-6:空串 remoteHostId 规范化 —— Boolean('') 是 false 会让会话
     // 被判定本地但后续仍把 '' 传给 resolvePiNativeProviders 等, 行为分裂。
     if (opts.remoteHostId === '') opts.remoteHostId = undefined;
@@ -1278,6 +1363,8 @@ export class PiAgent extends BaseAgent {
     await mkdirp(sessionDir);
 
     // cindy-bridge extension:每次 startSession 覆写,保证桥代码与本版本一致。
+    // 远端 launch identity 另含 CINDY_PI_EXTENSION_BUNDLE_HASH(源码字节指纹),
+    // 避免路径不变时 daemon 把仍在跑的旧进程当成可 reattach。
     // 与 models.json 同放隔离 configHome(Pi 从 PI_CODING_AGENT_DIR/extensions 扫描)。
     const extensionsDir = joinRemotePosixPath(configHome, 'extensions');
     await mkdirp(extensionsDir);
@@ -1479,7 +1566,7 @@ export class PiAgent extends BaseAgent {
      * 用它当"撤销开关"(上一版就是这么用的,那是个空操作,review 连点两轮)。运行期要收回子代理
      * 能力只有一条可证明有效的路:终止会话。
      */
-    let subagentRoutingEnabled = !reviewMode;
+    const subagentRoutingEnabled = !reviewMode;
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean },
     ): Promise<boolean> => {
@@ -1738,6 +1825,7 @@ export class PiAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
     };
     /**
      * 挂起的权限卡登记表 —— 档位切换 / 会话关闭时必须能把它们强制 settle 并让 UI 收卡,
@@ -1751,6 +1839,8 @@ export class PiAgent extends BaseAgent {
       settle: (resolveAs: 'allow' | 'deny') => void;
       /** 高风险审批(MCP prompt-each-time、灰区 ask、审查中收紧):放宽档位不得批量放行。 */
       forcePrompt: boolean;
+      /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
+      unavailableHandoff?: boolean;
     };
     const pendingPrompts = new Map<string, PendingPrompt>();
     const registerPendingPrompt = (requestId: string, entry: PendingPrompt): (() => void) => {
@@ -1764,6 +1854,9 @@ export class PiAgent extends BaseAgent {
         // (与 CC / Codex 的同名逻辑一致 —— 否则 pending 期间切档能让破坏性调用自动过)。
         const effectiveResolveAs: 'allow' | 'deny' =
           resolveAs === 'allow' && entry.forcePrompt ? 'deny' : resolveAs;
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+          autoReviewConfirmUndeliveredNotice.notify();
+        }
         pendingPrompts.delete(requestId);
         entry.settle(effectiveResolveAs);
         queue.push({
@@ -1782,13 +1875,16 @@ export class PiAgent extends BaseAgent {
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
-    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+    const emitAutoReviewRuntimeNotice = (message: string): void => {
       queue.push({
         type: 'error',
         data: { message, isTerminal: false },
         source: 'pi',
       });
-    });
+    };
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
+    const autoReviewConfirmUndeliveredNotice =
+      createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
       const request = {
         sessionId: opts.sessionId,
@@ -1978,6 +2074,12 @@ export class PiAgent extends BaseAgent {
       if (remote) {
         spawnEnv[PI_MODELS_JSON_HASH_ENV] = modelsJsonHash;
         spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
+        spawnEnv[PI_EXTENSION_BUNDLE_HASH_ENV] = createHash('sha256')
+          .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+          .update('\n')
+          .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+          .digest('hex')
+          .slice(0, 16);
       }
       mergeLoopbackNoProxy(spawnEnv);
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
@@ -2011,6 +2113,7 @@ export class PiAgent extends BaseAgent {
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
               turnPermissionPolicy: activeTurnPermissionPolicy,
@@ -2344,16 +2447,35 @@ export class PiAgent extends BaseAgent {
       } catch {
         /* best-effort:注销失败不掩盖原始启动错误 */
       }
-      // 轮 42 P1(codex-connector fresh evidence):startup 失败路径的 proc.close()
-      // 被 .catch 吞掉 —— 远端 daemon 会话 killRemoteSession 失败时, pi 子进程
-      // 可能仍带着凭证 env 在跑, 这里再删 configHome/permission/subagent 会让
-      // 存活 pi 丢 bridge/permission 状态。与 onExit/close() 同口径: 远端会话
-      // 失败不清理 runtime 文件, 残留交给 daemon idle 回收 / 下次 startSession
-      // 的清陈旧目录兜底(轮 40-w4-t4); 本地 stdio close 后进程必死, 保持清理。
-      await proc.close().catch(() => {});
-      if (!remote) {
+      // startup 失败时必须确认 proc 已关闭。关闭失败的 proc 进入 session-keyed
+      // quarantine；后续同 session startSession 会先重试 cleanup，绝不直接 spawn。
+      // 远端失败时不清 runtime 文件；本地也只有确认进程结束后才清，避免存活
+      // 进程丢 bridge/permission 状态。
+      let closeError: unknown = null;
+      try {
+        await proc.close();
+      } catch (error) {
+        closeError = error;
+        this.failedStartupCleanups.set(startupCleanupKey, {
+          proc,
+          promise: null,
+          ...(!remote
+            ? { cleanupLocal: () => {
+                cleanupConfigHome();
+                cleanupRuntimeFiles();
+              } }
+            : {}),
+        });
+      }
+      if (!remote && !closeError) {
         cleanupConfigHome();
         cleanupRuntimeFiles();
+      }
+      if (closeError) {
+        throw new Error(
+          `pi startup failed and process cleanup remains unconfirmed: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+          { cause: err },
+        );
       }
       throw err;
     }
@@ -2584,6 +2706,7 @@ export class PiAgent extends BaseAgent {
       autoReviewDecisionCache.clear();
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
@@ -2632,6 +2755,7 @@ export class PiAgent extends BaseAgent {
         const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         let providerAccepted = false;
+        let promptRequestStarted = false;
         try {
           if (reviewMode) {
             await assertReviewMessageContentPaths(
@@ -2655,9 +2779,22 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           rejectIfCancelled(sendOpts, 'send');
-          const resp = await proc.request(command);
+          promptRequestStarted = true;
+          const resp = await proc.request(command, {
+            timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
+            // Prompt acceptance may legitimately span multiple compaction
+            // retries. Bound each silent interval, not the whole progressing
+            // preflight, so a healthy long compaction is not killed at 10m.
+            refreshTimeoutOnEvent: (event) =>
+              PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
+          });
           if (!resp.success) {
-            throw new Error(`pi prompt rejected: ${resp.error ?? 'unknown'}`);
+            if (resp.command !== command.type) {
+              throw new Error('pi prompt rejection response missing matching command');
+            }
+            throw new TurnDispatchRejectedError(
+              `pi prompt rejected before acceptance: ${resp.error ?? 'unknown'}`,
+            );
           }
           providerAccepted = true;
           await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
@@ -2665,6 +2802,21 @@ export class PiAgent extends BaseAgent {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
           if (!providerAccepted) activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+          // Before proc.request the turn is known not to have reached Pi. Once
+          // request starts, a transport/write/envelope failure cannot prove
+          // whether Pi accepted the prompt; only success:false is an explicit
+          // rejection. Fence every other unknown result before Goal may resume.
+          if (
+            promptRequestStarted
+            && !providerAccepted
+            && !(err instanceof TurnDispatchRejectedError)
+          ) {
+            const detail = err instanceof Error ? err.message : String(err);
+            throw new TurnDispatchUnconfirmedError(
+              `Pi did not confirm prompt acceptance: ${detail}`,
+              { cause: err },
+            );
+          }
           throw err;
         }
       },
@@ -2731,22 +2883,14 @@ export class PiAgent extends BaseAgent {
             message: err instanceof Error ? err.message : String(err),
           });
         }
-        // 轮 40-w4-t10 MEDIUM(修复的修复):runtime 文件清理必须在 finally ——
-        // proc.close 抛错(如 killRemoteSession 失败)时旧实现会跳过 cleanup,
-        // 权限文件/subagent snapshot 残留在磁盘。清理不受 close 成败影响。
-        // 轮 42 P1(codex-connector 修正):**远端会话不清理** —— killRemoteSession
-        // 失败说明远端 pi 可能仍持有 configHome/permission/subagent runtime
-        // 继续跑(凭证仍在 env), 删文件会让存活 pi 丢 bridge/permission 状态。
-        // 与 onExit 同口径:远端残留交给 daemon idle 回收/下次 startSession 的
-        // 清陈旧目录兜底(轮 40-w4-t4); 本地 stdio 无 daemon, close 后进程必死。
-        try {
-          await proc.close();
-        } finally {
-          if (!remote) {
-            // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
-            cleanupConfigHome();
-            cleanupRuntimeFiles();
-          }
+        // A local close is only complete after proc.close confirms process exit.
+        // Until then the still-live process may continue reading its isolated
+        // config, permission policy, and subagent routing snapshot.
+        await proc.close();
+        if (!remote) {
+          // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
+          cleanupConfigHome();
+          cleanupRuntimeFiles();
         }
       },
 
@@ -2803,6 +2947,7 @@ export class PiAgent extends BaseAgent {
         if (nextMode !== requestedPermissionSnapshot.mode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewConfirmUndeliveredNotice.reset();
         }
         const previousMode = requestedPermissionSnapshot.mode;
         await writePermissionSnapshotOrFailClosed({
@@ -3330,6 +3475,8 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
+      /** 故障确认没送到 / 被系统收口时纠正「用户拒绝」归因。 */
+      notifyAutoReviewConfirmUndelivered: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
       registeredMcpServerNames: ReadonlySet<string>;
       sessionId: string;
@@ -3341,7 +3488,11 @@ export class PiAgent extends BaseAgent {
        */
       registerPendingPrompt: (
         requestId: string,
-        entry: { settle: (resolveAs: 'allow' | 'deny') => void; forcePrompt: boolean },
+        entry: {
+          settle: (resolveAs: 'allow' | 'deny') => void;
+          forcePrompt: boolean;
+          unavailableHandoff?: boolean;
+        },
       ) => () => void;
       /**
        * 本轮 host 权限策略(个人微信 / Telegram 群等);无策略为 null。命中
@@ -3419,6 +3570,7 @@ export class PiAgent extends BaseAgent {
         readRoots,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
+        notifyAutoReviewConfirmUndelivered,
         registeredMcpServerNames,
         registerPendingPrompt,
         turnPermissionPolicy,
@@ -3465,10 +3617,11 @@ export class PiAgent extends BaseAgent {
        * 不能把用户的明确拒绝也一并翻转。
        */
       const requestUserDecision = async (
-        opts: { forcePrompt: boolean },
+        opts: { forcePrompt: boolean; unavailableHandoff?: boolean },
       ): Promise<{ decided: boolean; approved: boolean }> => {
         if (!resolver) {
           this.deps.logger.warn('pi permission request has no interaction resolver', { toolName });
+          if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
           return { decided: false, approved: false };
         }
         // 登记进会话级 pending 表:等卡期间用户切档(或关会话)时由 dismissAllPendingPrompts
@@ -3484,14 +3637,15 @@ export class PiAgent extends BaseAgent {
           };
           unregister = registerPendingPrompt(id, {
             forcePrompt: opts.forcePrompt,
+            ...(opts.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // 切档替用户做的临时决定同样是「已决」—— 调用方不该再按 bypass 语义二次翻转。
             settle: (resolveAs) => finalize({ decided: true, approved: resolveAs === 'allow' }),
           });
           // resolver 是 host 注入的外部回调:可能同步 throw,也可能返回非 Promise。直接
           // `.then` 会让同步异常绕过下面的 finalize —— pending 条目永不注销、这次请求永不
           // settle,调用就此悬挂(copilot 报)。包一层把同步失败也收进 fail-closed 分支。
-          Promise.resolve().then(() => resolver({
-            kind: 'permission',
+          const permissionRequest = {
+            kind: 'permission' as const,
             requestId: id,
             toolName,
             input,
@@ -3501,14 +3655,27 @@ export class PiAgent extends BaseAgent {
             ...(hostApprovalPresentation?.description
               ? { description: hostApprovalPresentation.description }
               : {}),
-          })).then((decision) => {
+          };
+          Promise.resolve().then(() => resolver(
+            opts.unavailableHandoff
+              ? annotatePermissionRequestForUnavailableReview(permissionRequest)
+              : permissionRequest,
+          )).then((decision) => {
             if (decision.kind !== 'permission') {
               this.deps.logger.warn('pi permission got mismatched decision kind', {
                 toolName,
                 decisionKind: decision.kind,
               });
+              if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
               finalize({ decided: false, approved: false });
               return;
+            }
+            if (
+              opts.unavailableHandoff
+              && decision.behavior === 'deny'
+              && isSystemPermissionDenialReason(decision.reason)
+            ) {
+              notifyAutoReviewConfirmUndelivered();
             }
             finalize({ decided: true, approved: decision.behavior === 'allow' });
           }).catch((err) => {
@@ -3516,6 +3683,7 @@ export class PiAgent extends BaseAgent {
               toolName,
               message: err instanceof Error ? err.message : String(err),
             });
+            if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
             finalize({ decided: false, approved: false });
           });
         });
@@ -3532,13 +3700,21 @@ export class PiAgent extends BaseAgent {
        * Codex 的 dismissAllPending 同口径。
        */
       const requestUserConfirmation = async (
-        opts?: { forcePrompt?: boolean },
+        opts?: { forcePrompt?: boolean; unavailableHandoff?: boolean },
       ): Promise<boolean> => {
         // 发起确认前:已切到 Full access 就不该再弹卡。
         // 但 forcePrompt 代表不能被权限放宽追认的安全边界；若 host lease / 预检失效
         // 真的让 policy turn 落进 Full access，宁可拒绝也不能静默放行。
-        if (isFullAccessNow()) return opts?.forcePrompt === true ? false : true;
-        const outcome = await requestUserDecision({ forcePrompt: opts?.forcePrompt === true });
+        if (isFullAccessNow()) {
+          if (opts?.forcePrompt === true && opts.unavailableHandoff) {
+            notifyAutoReviewConfirmUndelivered();
+          }
+          return opts?.forcePrompt === true ? false : true;
+        }
+        const outcome = await requestUserDecision({
+          forcePrompt: opts?.forcePrompt === true,
+          ...(opts?.unavailableHandoff ? { unavailableHandoff: true } : {}),
+        });
         // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
         if (outcome.decided) return outcome.approved;
         // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
@@ -3681,7 +3857,10 @@ export class PiAgent extends BaseAgent {
               type: 'extension_ui_response',
               id,
               confirmed: askNeedsUserDecision
-                ? await requestUserConfirmation({ forcePrompt: true })
+                ? await requestUserConfirmation({
+                    forcePrompt: true,
+                    unavailableHandoff: decision.unavailable === true,
+                  })
                 : false,
             });
             return;

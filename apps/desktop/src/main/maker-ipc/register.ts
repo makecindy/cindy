@@ -663,7 +663,14 @@ import {
 } from './agentHandoff.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
-import { buildPlanReconcileNote, summarizeOpenPlan } from './planReconcile.js';
+import {
+  clearSealedCodexPlanState,
+  readCodexPlanState,
+} from '../localDb/codexPlanState.js';
+import {
+  buildCompletedPlanGuardNote,
+  buildPlanReconcileNote,
+} from './planReconcile.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -3278,8 +3285,8 @@ export function installDesktopInteractionListener(session: {
           dismissRendererInteraction(pending, req.requestId, 'timeout', 'deny');
         }, PERMISSION_INTERACTION_TIMEOUT_MS);
       }
-      // Register before delivery so a fast renderer/device response cannot race
-      // the resolver and be discarded as an unknown request.
+      // 必须先登记 pending,再广播。否则 renderer / device-link 回得太快会打到
+      // 「no pending resolver」,确认卡看起来没反应,Codex 最终却记成用户拒绝。
       pendingInteractionResolvers.set(req.requestId, entry);
       broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId: session.id,
@@ -3695,7 +3702,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 新 turn 启动: 上一轮未配对的失败记账交接 id 已无归属, 丢弃防错配。
           pendingFailedTurnAssistantPersistId.delete(session.id);
           // 记录 turn 开始时刻，供 onTurnErrorEvent 判断 error 是否属于 /clear 之前的旧 turn。
-          noteTurnStarted(session.id);
+          noteTurnStarted(session.id, event.turnAttemptToken);
           noteSubagentObservationTurnStarted(session.id);
           // silent-stop 守卫:新 turn 开始 → 清 pendingResume + 记录时刻(陈旧判定)。
           silentStopAutoResumeGuard.noteTurnStarted(session.id);
@@ -3930,6 +3937,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
           event.backgroundTurnStartedAt,
+          event.turnAttemptToken,
         );
       } else if (event.type === 'tool_result') {
         const r = onToolResultEvent(
@@ -5188,6 +5196,30 @@ export interface RegisterMakerIpcOptions {
   waitForAccountProviderModelsReady(): Promise<void>;
   /** Provider 刷新协调器已可用；紧跟 configure 发出，避免后续 handler 失败造成永久等待。 */
   onProviderModelAutoRefreshConfigured(): void;
+}
+
+/**
+ * Register before the first BrowserWindow: modelVisibilityPrefs mirrors its initial snapshot as
+ * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
+ */
+export function registerModelVisibilitySyncIpc(): void {
+  ipcMain.handle(MAKER_INVOKE.MODEL_VISIBILITY_SYNC, async (
+    event,
+    dataOwnerId: unknown,
+    ownerGeneration: unknown,
+    map: unknown,
+  ) => {
+    assertTrustedAppRendererEvent(event);
+    syncModelVisibilityMirrorForOwner(
+      map,
+      { dataOwnerId, ownerGeneration },
+      getActiveDataOwnerPushStamp(),
+      isAppSessionBoundaryPending(),
+      () => {
+        broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+      },
+    );
+  });
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
@@ -10140,23 +10172,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
-    // 计划对账:未收口的旧计划让 agent 在下一轮顺手交代。读近段历史现算,
-    // 无 pending 状态(清单被更新/清掉后下一轮自然不再注入)。
-    // 窗口 1000 行(交接用 400):计划行被长工具流挤出窗口时 summarize 返回
-    // null → 本轮不注入——降级方向是"少提醒",不会误提醒,可接受;不做全量
-    // 分页回溯,避免每次发送为一个提示扫全历史。
     peekPlanReconcileNote: async (sessionId) => {
-      // 读排在同一条持久化 FIFO 之后:终态章(persistCodexPlanOnDone)与失败印记
-      // 只是 enqueueWrite 入队,不等它们落库就查,会读到未盖章的旧快照 → 给已经
-      // 收口的计划多注入一次对账;反过来,全勾完但失败的计划可能因 turnCompleted:false
-      // 还没写进去而漏掉唯一的收口通道(review P2)。调用方对失败已经 catch 成 null,
-      // 队列被 app-session 边界打断时最多这一轮不注入。
-      const rows = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
-        listMessagesForAgentHandoff(sessionId, 1000),
+      const snapshot = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
+        readCodexPlanState(sessionId),
       );
-      const summary = summarizeOpenPlan(rows);
-      return summary ? buildPlanReconcileNote(summary) : null;
+      if (!snapshot) return null;
+      if (snapshot.state === 'sealed') {
+        return {
+          note: buildCompletedPlanGuardNote(),
+          sealedTurnId: snapshot.turnId,
+        };
+      }
+      const openSteps = snapshot.plan
+        .filter((item) => item.status !== 'completed')
+        .map((item) => item.step);
+      if (openSteps.length === 0 && snapshot.state !== 'interrupted') return null;
+      return {
+        note: buildPlanReconcileNote({ openSteps, totalSteps: snapshot.plan.length }),
+      };
     },
+    consumeSealedPlanReconcileNote: (sessionId, turnId) =>
+      enqueueDurableWrite(`plan-seal-consume:${sessionId}:${turnId}`, () =>
+        clearSealedCodexPlanState(sessionId, turnId),
+      ),
     // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。
@@ -13250,28 +13288,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return;
     }
     await sess.setFastMode(enabled);
-  });
-
-  // renderer → main 单向镜像「模型显示/隐藏」override(整张快照,fire-and-forget,不落盘)。
-  // main 缓存供 IM /model 与 device-link provider:list 复用同一套可见性过滤。值实变时
-  // 复用 PROVIDER_CHANGED 目录失效事件，让已连接控制端驱逐缓存并重拉 override 快照。
-  // 容错存储(非对象 ⇒ 清空),无错误路径,故不需要 throwIpcError。
-  ipcMain.handle(MAKER_INVOKE.MODEL_VISIBILITY_SYNC, async (
-    event,
-    dataOwnerId: unknown,
-    ownerGeneration: unknown,
-    map: unknown,
-  ) => {
-    assertTrustedAppRendererEvent(event);
-    syncModelVisibilityMirrorForOwner(
-      map,
-      { dataOwnerId, ownerGeneration },
-      getActiveDataOwnerPushStamp(),
-      isAppSessionBoundaryPending(),
-      () => {
-        broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
-      },
-    );
   });
 
   // 附加只读引用目录的运行时 closure 推送。DB 持久化由 renderer 同步调

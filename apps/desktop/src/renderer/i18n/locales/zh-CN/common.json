@@ -1759,6 +1759,21 @@
         "toggleFailed": "切换 LSP 开关失败"
       }
     },
+    "betaChannel": {
+      "title": "Beta 测试渠道",
+      "description": "加入 Beta 测试渠道，提前接收即将发布的客户端更新。开启后需重启客户端生效。",
+      "toggleAria": "Beta 测试渠道开关",
+      "restartTitle": "重启客户端",
+      "restartDescription": "Beta 测试渠道需要重启客户端后才能生效，是否立即重启？",
+      "restartNow": "立即重启",
+      "restartLater": "稍后",
+      "restartBusyDescription": "当前有任务正在进行中，重启会打断它们。确定要立即重启吗？",
+      "unavailable": "Beta 测试渠道暂不可用，无法连接到 Beta 更新服务器。",
+      "toast": {
+        "disabled": "Beta 测试渠道已关闭，重启后生效",
+        "toggleFailed": "切换 Beta 测试渠道失败"
+      }
+    },
     "gitSafety": {
       "title": "Git 安全",
       "autoSnapshotTitle": "Git 安全保存点",
@@ -5948,6 +5963,7 @@
       "alwaysAllowScoped": "本任务都允许 {{scope}}",
       "alwaysAllowScopedHint": "作用于整个任务，且只限这里列出的范围。",
       "alwaysAllowSessionHint": "作用于整个任务，不只是这一次请求。",
+      "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
       "ruleSeparator": "、"
     },
     "deviceSwitcher": {
@@ -6735,6 +6751,7 @@
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
+      "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远端任务无法访问本机地址。请改用 Cindy AI 网关，或选择远端主机可达的模型供应商。",
@@ -9092,9 +9109,11 @@
       "title": "创建新 Worker",
       "submit": "创建 Worker",
       "closeAria": "关闭创建 Worker 弹窗",
-      "roleLabel": "角色",
-      "customRolePlaceholder": "+ 自定义角色（可选）",
-      "customRolePredefinedError": "自定义角色不能使用预设角色名",
+      "roleLabel": "角色名",
+      "roleHint": "只是一个名字，方便多个协作者时分辨角色，不改变能力",
+      "roleHintAria": "角色名说明",
+      "customRolePlaceholder": "+ 自定义角色名（可选）",
+      "customRolePredefinedError": "自定义角色名不能使用预设角色名",
       "agentLabel": "Agent",
       "modelLabel": "模型",
       "permissionLabel": "权限模式",

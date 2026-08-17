@@ -11,6 +11,10 @@ vi.mock('electron', () => ({
   },
 }));
 
+vi.mock('../../appCapabilities.js', () => ({
+  getAppCapabilities: vi.fn(() => ({ canUseCindyGateway: true })),
+}));
+
 vi.mock('../UtilityModelSelection.js', () => ({
   getUtilityModelChainProfiles: vi.fn(),
 }));
@@ -70,6 +74,7 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 import type { Maker } from '@cindy/maker-core';
 import { fetch as undiciFetch } from 'undici';
 
+import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth } from '../../maker-host/anthropic-responses-bridge-host.js';
 import { getValidClaudeAiOAuth } from '../../maker-host/claude-oauth-refresh.js';
@@ -80,9 +85,16 @@ import { readModelDisableOverrides } from '../../maker-host/model-disable-store.
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
-import { getUtilityTextCandidates, requestUtilityText, toAnthropicApiModelId } from '../oneShotCandidates.js';
+import {
+  DEDICATED_AUTO_REVIEW_CANDIDATES,
+  getUtilityTextCandidates,
+  requestDedicatedAutoReviewCandidateText,
+  requestUtilityText,
+  toAnthropicApiModelId,
+} from '../oneShotCandidates.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
+const appCapabilities = vi.mocked(getAppCapabilities);
 const readKey = vi.mocked(readClaudeApiKey);
 const readCodexCreds = vi.mocked(getChatgptBridgeAuth);
 const readClaudeOAuth = vi.mocked(getValidClaudeAiOAuth);
@@ -105,6 +117,8 @@ function makerMock(authenticated: boolean): Maker {
 describe('utility one-shot candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fetchMock.mockReset();
+    appCapabilities.mockReturnValue({ canUseCindyGateway: true } as never);
     readKey.mockReturnValue(null);
     readCodexCreds.mockRejectedValue(new Error('not authenticated'));
     readClaudeOAuth.mockResolvedValue(null);
@@ -1619,6 +1633,203 @@ describe('utility one-shot candidates', () => {
     expect(body).not.toHaveProperty('max_output_tokens');
   });
 
+  it('routes the fixed cindy/auto-review alias without requiring a catalog entry', async () => {
+    readKey.mockReturnValue('xd-key');
+    activeCatalog.mockReturnValue({ providers: [] } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: '{"verdict":"allow"}' } }],
+      }),
+    } as never);
+
+    const result = await requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[0],
+      { timeoutMs: 8_000 },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      providerId: 'xd',
+      model: 'cindy/auto-review',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://gateway.test.invalid/v1/chat/completions',
+      expect.anything(),
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      model: 'cindy/auto-review',
+      max_tokens: 384,
+      messages: [{ role: 'user', content: 'classify' }],
+    });
+  });
+
+  it('cancels the Gateway HTTP request through the candidate signal', async () => {
+    readKey.mockReturnValue('xd-key');
+    const controller = new AbortController();
+    fetchMock.mockImplementationOnce((_url, init) =>
+      new Promise((_resolve, reject) => {
+        (init?.signal as AbortSignal | undefined)?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      }));
+
+    const pending = requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[0],
+      { timeoutMs: 12_000, signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not use the Gateway alias outside a Cindy cloud session', async () => {
+    appCapabilities.mockReturnValue({ canUseCindyGateway: false } as never);
+    readKey.mockReturnValue('xd-key');
+
+    const result = await requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[0],
+      { timeoutMs: 8_000 },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [expect.objectContaining({ reason: 'not_authenticated' })],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses a supported ChatGPT subscription model with a tool-free Responses body', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'oauth' },
+        routing: {
+          codex: {
+            upstream: 'https://chatgpt.example/backend-api/codex',
+            authStrategy: 'oauth-passthrough',
+          },
+        },
+        models: {
+          codex: [{ id: 'gpt-5.4-nano', name: 'Nano', contextWindow: 272_000 }],
+        },
+      }],
+    } as never);
+    readCodexCreds.mockResolvedValue({ accessToken: 'codex-token', accountId: 'account-1' });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        'data: {"type":"response.output_text.delta","delta":"{\\"verdict\\":\\"allow\\"}"}\ndata: [DONE]\n',
+    } as never);
+
+    const result = await requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[1],
+      { timeoutMs: 8_000 },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      providerId: 'openai',
+      model: 'gpt-5.4-nano',
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      model: 'gpt-5.4-nano',
+      reasoning: { effort: 'low' },
+    });
+    expect(body).not.toHaveProperty('tools');
+    expect(body).not.toHaveProperty('tool_choice');
+    expect(body).not.toHaveProperty('parallel_tool_calls');
+  });
+
+  it('does not start OpenAI HTTP after credential refresh outlives the candidate', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'openai',
+        name: 'OpenAI',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'oauth' },
+        routing: {
+          codex: {
+            upstream: 'https://chatgpt.example/backend-api/codex',
+            authStrategy: 'oauth-passthrough',
+          },
+        },
+        models: {
+          codex: [{ id: 'gpt-5.4-nano', name: 'Nano', contextWindow: 272_000 }],
+        },
+      }],
+    } as never);
+    let resolveAuth: ((auth: { accessToken: string; accountId: string }) => void) | undefined;
+    readCodexCreds.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAuth = resolve;
+    }));
+    const controller = new AbortController();
+
+    const pending = requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[1],
+      { timeoutMs: 12_000, signal: controller.signal },
+    );
+    await Promise.resolve();
+    controller.abort();
+    resolveAuth?.({ accessToken: 'late-token', accountId: 'late-account' });
+
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start Anthropic HTTP after credential refresh outlives the candidate', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {
+          'claude-code': {
+            upstream: 'https://anthropic.example',
+            authStrategy: 'oauth-passthrough',
+          },
+        },
+        models: {
+          'claude-code': [{ id: 'claude-haiku-4-5', name: 'Haiku', contextWindow: 200_000 }],
+        },
+      }],
+    } as never);
+    let resolveOAuth: ((auth: { accessToken: string }) => void) | undefined;
+    readClaudeOAuth.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOAuth = resolve;
+    }));
+    const controller = new AbortController();
+
+    const pending = requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[3],
+      { timeoutMs: 12_000, signal: controller.signal },
+    );
+    await Promise.resolve();
+    controller.abort();
+    resolveOAuth?.({ accessToken: 'late-token' });
+
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('uses xAI OAuth and the selected xAI Responses route', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -1646,10 +1857,14 @@ describe('utility one-shot candidates', () => {
 
     expect(result).toMatchObject({ ok: true, providerId: 'xai', model: 'xai/grok-4.3' });
     expect(fetchMock).toHaveBeenCalledWith('https://xai.example/v1/responses', expect.anything());
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
       model: 'grok-4.3',
       reasoning: { effort: 'low' },
     });
+    expect(body).not.toHaveProperty('tools');
+    expect(body).not.toHaveProperty('tool_choice');
+    expect(body).not.toHaveProperty('parallel_tool_calls');
   });
 
   it.each(['xai/grok-code-fast', 'xai/grok-build-preview'])(

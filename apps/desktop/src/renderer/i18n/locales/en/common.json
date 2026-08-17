@@ -1760,6 +1760,21 @@
         "toggleFailed": "Failed to toggle LSP"
       }
     },
+    "betaChannel": {
+      "title": "Beta channel",
+      "description": "Join the beta channel to receive upcoming client updates early. Takes effect after restart.",
+      "toggleAria": "Beta channel toggle",
+      "restartTitle": "Restart Cindy",
+      "restartDescription": "The beta channel requires a restart to take effect. Restart now?",
+      "restartNow": "Restart now",
+      "restartLater": "Later",
+      "restartBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart now anyway?",
+      "unavailable": "The beta channel is unavailable — could not reach the beta update server.",
+      "toast": {
+        "disabled": "Beta channel disabled; takes effect after restart",
+        "toggleFailed": "Failed to toggle beta channel"
+      }
+    },
     "gitSafety": {
       "title": "Git Safety",
       "autoSnapshotTitle": "Git safety snapshots",
@@ -5950,6 +5965,7 @@
       "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
+      "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
       "ruleSeparator": ", "
     },
     "deviceSwitcher": {
@@ -6738,6 +6754,7 @@
       "REMOTE_DAEMON_CLOSED": "Remote connection interrupted (the daemon may be upgrading or restarting). The turn has ended — please resend.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision (network or service hiccup), so actions that need review are being handed to you to confirm. Switch this task to Default permissions if you would rather not be interrupted.",
+      "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
@@ -9105,9 +9122,11 @@
       "title": "Create new worker",
       "submit": "Create Worker",
       "closeAria": "Close create worker dialog",
-      "roleLabel": "Role",
-      "customRolePlaceholder": "+ custom role (optional)",
-      "customRolePredefinedError": "Custom role cannot use a predefined role name",
+      "roleLabel": "Role Name",
+      "roleHint": "Just a name to tell collaborators apart. It doesn't change capabilities.",
+      "roleHintAria": "About role name",
+      "customRolePlaceholder": "+ custom role name (optional)",
+      "customRolePredefinedError": "Custom role name cannot use a predefined role name",
       "agentLabel": "Agent",
       "modelLabel": "Model",
       "permissionLabel": "Permission Mode",

@@ -6,12 +6,14 @@
  * 交互 —— 但旧实现只返回 boolean, 卡片地址被丢掉, 于是私聊里那张卡原样留着、按钮
  * 照旧可点。用户点下去不会有任何反应, 群里也不会动。
  */
+import { isSystemPermissionDenialReason } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cancelPending,
   getPendingCount,
   registerPendingExternal,
+  rejectAllPending,
   resolvePending,
 } from '../pendingInteractions';
 
@@ -93,5 +95,27 @@ describe('cancelPending 交还卡片地址', () => {
 
     register('req-perm', 'permission', 'chat|559');
     expect(cancelPending('req-perm', 'turn_terminal')).toEqual({ messageId: 'chat|559' });
+  });
+});
+
+describe('rejectAllPending', () => {
+  it('logout 收口用稳定系统码，迁移确认不会被当成用户拒绝', () => {
+    const resolve = vi.fn();
+    const reject = vi.fn((err: Error) => {
+      // Desktop→IM 迁移卡的 reject-callback：把 Error.message 收成 deny reason。
+      resolve({ kind: 'permission', behavior: 'deny', reason: err.message });
+    });
+    registerPendingExternal('req-perm', 'permission', 'chat|560', resolve, reject);
+
+    rejectAllPending('session_disposed');
+
+    expect(resolve).toHaveBeenCalledWith({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'session_disposed',
+    });
+    expect(isSystemPermissionDenialReason('session_disposed')).toBe(true);
+    expect(isSystemPermissionDenialReason('session disposed')).toBe(true);
+    expect(getPendingCount()).toBe(0);
   });
 });

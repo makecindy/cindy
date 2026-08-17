@@ -268,6 +268,7 @@ export function cloneRuntimeFillDraft(draft: RuntimeFillDraft): RuntimeFillDraft
     ...draft,
     models: draft.models.map((model) => ({
       ...model,
+      ...(model.route ? { route: { ...model.route } } : {}),
       ...(model.reasoningEfforts ? { reasoningEfforts: [...model.reasoningEfforts] } : {}),
     })),
     headers: draft.headers.map((header) => ({ ...header })),

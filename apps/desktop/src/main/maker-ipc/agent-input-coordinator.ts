@@ -31,7 +31,11 @@ import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import type { SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
-import type { HostSendFailureCode, HostSendOutcome } from '../maker-host/send-outcome.js';
+import type {
+  DesktopSessionDispatchFailure,
+  HostSendFailureCode,
+  HostSendOutcome,
+} from '../maker-host/send-outcome.js';
 import type {
   AgentInputCreateOpts,
   AgentInputDelivery,
@@ -235,7 +239,7 @@ export type AgentInputSendResult =
       kind: 'session-dispatch';
       source: string;
       dispatched: false;
-      reason: 'cancelled-before-dispatch';
+      reason: DesktopSessionDispatchFailure['reason'];
       message: string;
       context: string;
     };

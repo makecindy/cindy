@@ -4247,6 +4247,7 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
         reconnectBaseMs: 1,
         reconnectMaxMs: 5,
         reconnectStableResetMs: 20,
+        congestionStableResetMs: 80,
         congestionBackoffBaseMs: 2,
         congestionBackoffMaxMs: 8,
         pingIntervalMs: 60_000,
@@ -4268,8 +4269,12 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     expect(h.client.getStatus()).toBe('online');
     expect(internals.congestionCloseStreak).toBe(1);
 
-    // 稳定在线满 reconnectStableResetMs 后清零
-    await tick(100);
+    // 普通稳定窗过了,拥塞连击仍在:现场 1013 间隔远大于 10s
+    await tick(40);
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    // 稳定在线满 congestionStableResetMs 后才清零
+    await tick(80);
     expect(internals.congestionCloseStreak).toBe(0);
 
     // 普通断线(1006)不计入拥塞连击
@@ -4652,11 +4657,11 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     });
   }, 10_000);
 
-  it('link 重建后的 replay 不受预算限制:可达性刚被对端 link-accept 证明过', async () => {
+  it('同连接代重复 link-open 不再全量 replay', async () => {
     const h = makeHarness({
       timing: {
         pingIntervalMs: 60_000,
-        transportRetryIntervalMs: 60_000, // 定时器不参与,只看 replay 那一趟
+        transportRetryIntervalMs: 60_000,
         transportRetryPassBudget: 2,
         transportMaxRetryAttempts: 50,
       },
@@ -4672,12 +4677,399 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     const ws = h.current();
     expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
 
-    // 对端重新 link-open → 本端 link-accept → replay:一趟把 7 条全部重放
-    await establishInboundReliableLink(h, 'remote-stream-2');
+    await establishInboundReliableLink(h, 'remote-stream');
     await tick();
-    expect(retriedSeqs(sendsBySeq(ws)).length).toBe(7);
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
 
     h.client.stop();
+  }, 10_000);
+
+  it('对端换 stream 视为真正恢复,按探测预算 replay', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+
+    await establishInboundReliableLink(h, 'remote-stream-restarted');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+    h.client.stop();
+  }, 10_000);
+
+  it('真正恢复时 replay 受探测预算约束,ACK 后再继续 drain', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+    expect(seqs).toHaveLength(7);
+
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { linkReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.linkReady = false;
+
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+    h.client.sendInvokeResult('dev-b', 'extra-during-recovery', { ok: true, result: 'x' });
+    expect([...sendsBySeq(ws).keys()]).toHaveLength(7);
+
+    const streamId = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!.meta.streamId;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId, ackSeq: seqs[1] },
+      },
+    });
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([...seqs.slice(0, 2), ...seqs.slice(2, 4)]);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复预算还剩一点时,放不下的大消息先入队不发出', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 3,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'small-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'small-1', { ok: true, result: 1 });
+    const ws = h.current();
+    const before = framesSent(ws);
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { linkReady: boolean }>;
+    };
+    internals.peerTransport.get('dev-b')!.linkReady = false;
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+
+    const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+    h.client.sendInvokeResult('dev-b', 'too-big', { ok: true, result: chunky });
+    expect(framesSent(ws)).toBe(before + 2);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('空队列恢复后新入队流量仍走探测预算', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    const before = framesSent(ws);
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `after-${i}`, { ok: true, result: i });
+    }
+    expect(framesSent(ws)).toBe(before + 2);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复期 hold 时不因共享 ws 缓冲满而 BACKPRESSURE', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendInvokeResult('dev-b', 'probe', { ok: true, result: 0 })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+
+    ws.bufferedAmount = 0;
+    h.client.sendInvokeResult('dev-b', 'probe-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'probe-1', { ok: true, result: 1 });
+    const before = framesSent(ws);
+    ws.bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendInvokeResult('dev-b', 'held', { ok: true, result: 2 })).not.toThrow();
+    expect(framesSent(ws)).toBe(before);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('已发探针被驱逐后恢复期允许再发一帧换 ACK', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'probe-0', { ok: true, result: 0 });
+    h.client.sendInvokeResult('dev-b', 'probe-1', { ok: true, result: 1 });
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, {
+        pending: Map<number, { sent: boolean; bytes: number }>;
+        pendingBytes: number;
+      }>;
+    };
+    const peer = internals.peerTransport.get('dev-b')!;
+    for (const [seq, pending] of [...peer.pending]) {
+      if (!pending.sent) continue;
+      peer.pending.delete(seq);
+      peer.pendingBytes -= pending.bytes;
+    }
+
+    const before = framesSent(ws);
+    h.client.sendInvokeResult('dev-b', 'reprobe', { ok: true, result: 2 });
+    expect(framesSent(ws)).toBe(before + 1);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复期内部分写出的分片也计入探测预算', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportRetryPassBudget: 3,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    h.client.sendInvokeResult('dev-b', 'warmup', { ok: true, result: 0 });
+    const ws = h.current();
+    const warmup = parseTransportPayload(
+      ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+    )!;
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: warmup.meta.streamId, ackSeq: warmup.meta.seq },
+      },
+    });
+    await tick();
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    const before = framesSent(ws);
+    const origSend = ws.send.bind(ws);
+    let reliableFrames = 0;
+    ws.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'invoke-result' && parseTransportPayload(env.payload)) {
+        reliableFrames += 1;
+        if (reliableFrames >= 2) throw new Error('socket raced');
+      }
+      origSend(data);
+    };
+    const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+    h.client.sendInvokeResult('dev-b', 'partial', { ok: true, result: chunky });
+    expect(framesSent(ws)).toBe(before + 1);
+
+    ws.send = origSend;
+    for (let i = 0; i < 5; i += 1) {
+      h.client.sendInvokeResult('dev-b', `after-${i}`, { ok: true, result: i });
+    }
+    expect(framesSent(ws)).toBe(before + 3);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('恢复探测未 ACK 时定时器仍重发已发出的探针,不放行新帧', async () => {
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 7; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const internals = h.client as unknown as {
+        peerTransport: Map<string, { linkReady: boolean }>;
+      };
+      internals.peerTransport.get('dev-b')!.linkReady = false;
+
+      const id = `inbound-link-${++inboundLinkId}`;
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || !env.src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Remote',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities: [
+            DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+            DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+          ],
+          transportStreamId: 'remote-stream-2',
+          transportBaseSeq: 1,
+        },
+      });
+      await advance(1);
+      off();
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+      expect(seqs.slice(0, 2).map((seq) => sendsBySeq(ws).get(seq))).toEqual([3, 3]);
+      expect(seqs.slice(2).every((seq) => sendsBySeq(ws).get(seq) === 1)).toBe(true);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 2,
+      transportMaxRetryAttempts: 50,
+    });
   }, 10_000);
 
   it('多 peer 拓扑:一个 peer 停止 ACK 被限流,另一个 peer 的投递零感知', async () => {

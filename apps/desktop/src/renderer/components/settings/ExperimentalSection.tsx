@@ -19,6 +19,7 @@ import {
   type ExperimentalFeatureMeta,
 } from '@/hooks/useExperimentalFeatures';
 import { LspBetaCell } from './LspBetaCell';
+import { BetaChannelCell } from './BetaChannelCell';
 
 export function ExperimentalSection() {
   const { t } = useTranslation();
@@ -31,6 +32,7 @@ export function ExperimentalSection() {
 
       <div className="flex flex-col gap-3">
         <LspBetaCell />
+        <BetaChannelCell />
         {EXPERIMENTAL_FEATURES.map((feature) => (
           <ExperimentalFeatureRow key={feature.key} feature={feature} />
         ))}
