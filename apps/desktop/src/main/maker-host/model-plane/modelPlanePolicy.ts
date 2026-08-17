@@ -64,12 +64,7 @@ function piRegistryMatch(
 ): { entry: ModelRegistryEntry; rootModelId: string } | null {
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!policy) return null;
-  const rootModelId =
-    providerId === 'openai'
-      ? piModelId.startsWith(CHATGPT_MODEL_PREFIX)
-        ? piModelId.slice(CHATGPT_MODEL_PREFIX.length)
-        : null
-      : piModelId;
+  const rootModelId = canonicalRegistryEntryModelId(providerId, piModelId);
   if (!rootModelId) return null;
 
   const exactEntry = registry.models.find((entry) => entry.id === `${providerId}/${rootModelId}`);
@@ -88,6 +83,15 @@ function piRegistryMatch(
 
   const matched = findModelRegistryRoute(registry, providerId, rootModelId, policy.piRoot);
   return matched ? { entry: matched.entry, rootModelId } : null;
+}
+
+function canonicalRegistryEntryModelId(providerId: string, consumerModelId: string): string | null {
+  const modelId = consumerModelId.trim();
+  if (!modelId) return null;
+  if (providerId !== 'openai') return modelId;
+  if (!modelId.startsWith(CHATGPT_MODEL_PREFIX)) return null;
+  const rootModelId = modelId.slice(CHATGPT_MODEL_PREFIX.length);
+  return rootModelId || null;
 }
 
 /**
@@ -112,6 +116,21 @@ export function isRegistryTombstoneForConsumer(
   const registryAgent =
     policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent) ? agent : null;
   if (!registryAgent) return false;
+
+  // Lifecycle identity is the Registry entry id, not merely route.modelId. Context profiles may
+  // deliberately share one official route, so check the canonical alias first; price lookup keeps
+  // its separate bare-route fallback in modelRegistry.ts.
+  const canonicalModelId = canonicalRegistryEntryModelId(providerId, modelId);
+  if (canonicalModelId) {
+    const exactEntry = registry.models.find(
+      (entry) => entry.id === `${providerId}/${canonicalModelId}`,
+    );
+    const exactRoute = exactEntry?.routes.find(
+      (route) =>
+        route.providerId === providerId && route.agents.includes(registryAgent),
+    );
+    if (exactEntry && exactRoute) return exactEntry.status === 'retired';
+  }
 
   return (
     findModelRegistryRoute(registry, providerId, modelId, registryAgent)?.entry.status === 'retired'

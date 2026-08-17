@@ -521,7 +521,18 @@ describe('retired tombstone 与 discovery 回补', () => {
     expect(
       isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6[1m]', 'pi'),
     ).toBe(true);
+    expect(
+      isRegistryTombstoneForConsumer(
+        withAlias,
+        'openai',
+        'chatgpt/gpt-6[1m]',
+        'claude-code',
+      ),
+    ).toBe(true);
     expect(isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6', 'pi')).toBe(false);
+    expect(
+      isRegistryTombstoneForConsumer(withAlias, 'openai', 'chatgpt/gpt-6', 'claude-code'),
+    ).toBe(false);
   });
 
   it('discovery 回补的 retired 条目被标记,标准派生禁止新选择,keepSelected 豁免', () => {
