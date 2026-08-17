@@ -18,6 +18,7 @@ import {
   configureDefaultImageResizer,
   type McpProvider,
 } from '@cindy/maker-core';
+import type { ProviderView } from '@cindy/model-providers';
 import {
   getActiveCatalog,
   setActiveCatalogChangedListener,
@@ -110,6 +111,7 @@ import { buildPiAgent } from './pi-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
+  getDesktopProviderService,
   reloadActiveCatalogForEndpointChange,
   refreshDiscoveredCodexModels,
   setNativeProviderClaimListener,
@@ -219,6 +221,7 @@ import {
 import {
   buildCodexSubagentSpawnArgs,
   resolveCodexSubagentModelFallback,
+  resolveCodexSubagentRouteSnapshot,
 } from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
@@ -1427,17 +1430,42 @@ export function getMaker(): Maker {
           subagentModelSettings,
           ctx.remoteHostId,
         );
+        let subagentProviderViews: ProviderView[] | undefined;
+        if (
+          !ctx.remoteHostId
+          && subagentModelSettings.codexSubagentsEnabled
+          && subagentModelSettings.codex?.trim()
+          && !subagentModelSettings.codexProviderId?.trim()
+        ) {
+          try {
+            subagentProviderViews = await getDesktopProviderService().listProviders({
+              allowSideEffects: false,
+            });
+          } catch (err) {
+            desktopMakerLogger.warn('Codex implicit subagent Provider resolution failed', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const subagentRoute = resolveCodexSubagentRouteSnapshot(
+          subagentModelSettings,
+          ctx.remoteHostId,
+          subagentProviderViews,
+        );
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
           // model/list 无影响,不加 hostPurpose 分支。
           extraArgs: [
             ...mcpExtraArgs,
-            ...(!isReview ? buildCodexSubagentSpawnArgs(subagentModelSettings) : []),
+            ...(!isReview
+              ? buildCodexSubagentSpawnArgs(subagentModelSettings, subagentRoute)
+              : []),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
+          ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
@@ -1487,8 +1515,13 @@ export function getMaker(): Maker {
       },
       unregisterCodexMcpThreadContext,
       prepareCodexResumeSession: prepareExternalCodexSessionForResume,
-      registerCodexSystemPromptForThread: ({ sessionId, threadId, text }) =>
-        registerCodexProxyComposed(sessionId, threadId, text),
+      registerCodexSystemPromptForThread: ({
+        sessionId,
+        threadId,
+        text,
+        subagentRoute,
+      }) =>
+        registerCodexProxyComposed(sessionId, threadId, text, { subagentRoute }),
       armCodexHttpRecovery,
       registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
         registerCodexProxyChildThread(parentThreadId, childThreadId);

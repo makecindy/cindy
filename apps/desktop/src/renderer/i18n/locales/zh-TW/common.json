@@ -1759,6 +1759,21 @@
         "toggleFailed": "切換 LSP 開關失敗"
       }
     },
+    "betaChannel": {
+      "title": "Beta 測試管道",
+      "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。開啟後需重新啟動客戶端生效。",
+      "toggleAria": "Beta 測試管道開關",
+      "restartTitle": "重新啟動客戶端",
+      "restartDescription": "Beta 測試管道需要重新啟動客戶端後才能生效，是否立即重新啟動？",
+      "restartNow": "立即重新啟動",
+      "restartLater": "稍後",
+      "restartBusyDescription": "目前有任務進行中，重新啟動會中斷它們。確定要立即重新啟動嗎？",
+      "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。",
+      "toast": {
+        "disabled": "Beta 測試管道已關閉，重新啟動後生效",
+        "toggleFailed": "切換 Beta 測試管道失敗"
+      }
+    },
     "gitSafety": {
       "title": "Git 安全",
       "autoSnapshotTitle": "Git 安全儲存點",

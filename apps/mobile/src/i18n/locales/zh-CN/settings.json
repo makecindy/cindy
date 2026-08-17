@@ -37,6 +37,14 @@
     "checkFailedDetail": "检查更新失败：{{detail}}",
     "checkFailed": "检查更新失败，请稍后重试"
   },
+  "betaChannel": {
+    "title": "Beta 测试渠道",
+    "description": "加入 Beta 测试渠道，提前接收即将发布的客户端更新。",
+    "restartHint": "Beta 测试渠道需要重启客户端后才能生效，请重启应用。",
+    "ok": "我知道了",
+    "saveFailed": "保存 Beta 测试渠道设置失败",
+    "unavailable": "Beta 测试渠道暂不可用，无法连接到 Beta 更新服务器。"
+  },
   "notifications": {
     "sectionTitle": "通知",
     "taskDone": "任务完成通知",

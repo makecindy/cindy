@@ -1760,6 +1760,21 @@
         "toggleFailed": "Failed to toggle LSP"
       }
     },
+    "betaChannel": {
+      "title": "Beta channel",
+      "description": "Join the beta channel to receive upcoming client updates early. Takes effect after restart.",
+      "toggleAria": "Beta channel toggle",
+      "restartTitle": "Restart Cindy",
+      "restartDescription": "The beta channel requires a restart to take effect. Restart now?",
+      "restartNow": "Restart now",
+      "restartLater": "Later",
+      "restartBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart now anyway?",
+      "unavailable": "The beta channel is unavailable — could not reach the beta update server.",
+      "toast": {
+        "disabled": "Beta channel disabled; takes effect after restart",
+        "toggleFailed": "Failed to toggle beta channel"
+      }
+    },
     "gitSafety": {
       "title": "Git Safety",
       "autoSnapshotTitle": "Git safety snapshots",
