@@ -7,6 +7,7 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
+const railNavSource = readFileSync(resolve(sidebarDir, 'RailNav.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(
   resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
   'utf8',
@@ -319,6 +320,12 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain(
       "isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon'",
     );
+  });
+
+  it('keeps rail hover backgrounds in the sidebar token family', () => {
+    expect(railNavSource).toContain('group-hover/pin:bg-sidebar-item-hover');
+    expect(railNavSource).toContain('hover:bg-sidebar-item-hover');
+    expect(railNavSource).not.toContain('update-btn-hover');
   });
 
   it('keeps selected sidebar hover actions inside the active color system', () => {

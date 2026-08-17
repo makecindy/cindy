@@ -95,11 +95,26 @@ function luminance(rgb: RGB): number {
   return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2];
 }
 
-function contrast(c1: string | undefined, c2: string | undefined): number {
-  const l1 = luminance(toRgb(c1));
-  const l2 = luminance(toRgb(c2));
+function compositeHslOver(foreground: string | undefined, background: string | undefined): RGB {
+  const match = foreground?.match(
+    /^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%\s*\/\s*(0|1|0?\.\d+)$/,
+  );
+  if (!match) throw new Error(`bad translucent HSL: ${foreground}`);
+  const fg = hslToRgb(parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3]));
+  const bg = toRgb(background);
+  const alpha = parseFloat(match[4]);
+  return fg.map((channel, index) => Math.round(channel * alpha + bg[index] * (1 - alpha))) as RGB;
+}
+
+function rgbContrast(c1: RGB, c2: RGB): number {
+  const l1 = luminance(c1);
+  const l2 = luminance(c2);
   const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
   return (hi + 0.05) / (lo + 0.05);
+}
+
+function contrast(c1: string | undefined, c2: string | undefined): number {
+  return rgbContrast(toRgb(c1), toRgb(c2));
 }
 
 const BRAND_RED_HEX = '#DF0C27';
@@ -437,15 +452,19 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     expect(contrast(cindyDark.colors['sidebar-item-active-foreground']!, cindyDark.colors['sidebar-item-active']!), 'dark 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
   });
 
-  it('CINDY 侧栏草稿铅笔×普通行底色对比度 ≥3:1', () => {
+  it('CINDY 侧栏草稿铅笔×普通/悬停行底色对比度 ≥3:1', () => {
     const draftLight = colorRegistry.resolveDefault('sidebar-draft-indicator', 'light') ?? '';
     const draftDarkAlias = colorRegistry.resolveDefault('sidebar-draft-indicator', 'dark') ?? '';
     const awaitingDark = colorRegistry.resolveDefault('card-status-awaiting', 'dark') ?? '';
+    const lightHover = compositeHslOver(light['sidebar-item-hover'], light['sidebar']);
+    const darkHover = compositeHslOver(dark['sidebar-item-hover'], dark['sidebar']);
 
     expect(draftLight).toBe('#0D8178');
     expect(draftDarkAlias).toBe('var(--card-status-awaiting)');
     expect(contrast(draftLight, light['sidebar']), 'light 草稿铅笔×侧栏').toBeGreaterThanOrEqual(3);
     expect(contrast(awaitingDark, dark['sidebar']), 'dark 草稿铅笔×侧栏').toBeGreaterThanOrEqual(3);
+    expect(rgbContrast(toRgb(draftLight), lightHover), 'light 草稿铅笔×悬停行').toBeGreaterThanOrEqual(3);
+    expect(rgbContrast(toRgb(awaitingDark), darkHover), 'dark 草稿铅笔×悬停行').toBeGreaterThanOrEqual(3);
   });
 });
 
