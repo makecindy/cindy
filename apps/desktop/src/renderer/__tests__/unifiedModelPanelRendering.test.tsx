@@ -403,6 +403,9 @@ describe('统一面板 · 会话内形态', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'claude-code',
       effort: 'medium',
+      // 改的是**模型行**的引擎,与收藏无关 → 显式清锚点(2026-08-17 review K3:三类调用点
+      // 的传值语义各不相同,一律显式给,不靠调用方的缺省)。
+      favoriteUid: null,
     });
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
   });
@@ -499,6 +502,8 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'codex',
       effort: 'high',
+      // 恢复推荐 = 不再跟着任何收藏副本跑 → 清锚点。
+      favoriteUid: null,
     });
     // 事务成功 → override 收掉(行回到跟随推荐)。
     await waitFor(() => {
@@ -665,6 +670,8 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'codex',
       effort: 'high',
+      // 这条收藏马上就没了 → 清锚点(留着会让面板在一条已删的收藏上打勾)。
+      favoriteUid: null,
     });
     await waitFor(() => {
       expect(listModelFavorites()).toHaveLength(0);
@@ -980,11 +987,15 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
     await act(async () => {
       fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
     });
+    // ★ 锚点随事务一起交出去(2026-08-17 review K3):配置切到新引擎了,选中的**还是这一条
+    // 收藏**。缺了它,会话侧把缺省当 null,事务成功后锚点被清掉 —— 面板退回选中模型行,
+    // 之后再删这条仍在用的收藏就走不到「先回落默认配置」那条路。
     expect(onCrossEngineSelect).toHaveBeenCalledWith({
       providerId: 'xd',
       modelId: 'gpt-5.5',
       targetAgent: 'claude-code',
       effort: 'low',
+      favoriteUid: uid,
     });
     await waitFor(() => {
       expect(listModelFavorites()[0]?.agent).toBe('cc');
@@ -1247,6 +1258,91 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
       favoriteUid: uid,
     });
     // 跨引擎不走这个回调:记不记由 ChatInput 在事务返回非 false 之后自己决定(取消不记)。
+    expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+  });
+
+  /**
+   * K3(2026-08-17 review 第四轮):**编辑**选中收藏的引擎也是一次跨引擎事务,但它与
+   * 「选中另一行」「恢复推荐」「删收藏」的锚点语义相反 —— 配置切过去了,选中的**还是这一条
+   * 收藏**。此前这条链路不带 favoriteUid,会话侧把缺省当 null,于是事务成功后锚点被清掉:
+   * 面板退回选中模型行,之后删这条仍在用的收藏也走不到「先回落默认配置」那条路。
+   */
+  it('编辑选中收藏的引擎:锚点随事务交出去且仍是同一条收藏(带事务后的目标值)', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onCrossEngineSelect = vi.fn(() => true);
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+      onSessionFavoriteAnchorChange,
+    });
+    const favoritesGroup = screen.getAllByRole('group')[0];
+    const row = within(favoritesGroup)
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.pointerEnter(row);
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    // 交出去的是**编辑后**的目标值(目标引擎 + 该引擎的 wire id + 仍被支持的旧档),
+    // 锚点仍指向这条收藏 —— 会话侧据此在事务成功后按目标值重记锚点。
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      targetAgent: 'claude-code',
+      effort: 'low',
+      favoriteUid: uid,
+    });
+    // 记不记仍由 ChatInput 按事务真实结果决定,面板不抢这一步。
+    expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+  });
+
+  it('编辑选中收藏的引擎被取消:锚点与收藏副本都一点不动', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onCrossEngineSelect = vi.fn(() => false);
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+      onSessionFavoriteAnchorChange,
+    });
+    const favoritesGroup = screen.getAllByRole('group')[0];
+    const row = within(favoritesGroup)
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.pointerEnter(row);
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    // 入参照样带锚点(取消与否是调用方的事),但副本不落、锚点回调不触发。
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ favoriteUid: uid }),
+    );
+    expect(listModelFavorites()[0]?.agent).toBe('codex');
     expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
   });
 });

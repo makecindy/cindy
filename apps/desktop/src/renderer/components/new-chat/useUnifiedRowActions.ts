@@ -238,6 +238,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     wireModelId: string;
     targetAgent: AgentKind;
     effort: Effort | null;
+    /**
+     * 事务成功后会话该把哪条收藏记成「当前选中」。**必填、不给默认值**(2026-08-17 review
+     * 第四轮 K3):三个调用点的语义正好相反 —— 编辑选中收藏的引擎要**保住**这条锚点
+     * (配置是切过去了,选中的还是这条收藏),恢复推荐 / 删除收藏要**清掉**它。缺省会被
+     * 会话侧当成 null,于是「跨引擎编辑收藏」成功后面板退回选中模型行,之后再删这条仍在用
+     * 的收藏就走不到「先回落默认配置」那条路。
+     */
+    favoriteUid: string | null;
     onApplied: () => void;
   }): void => {
     if (!sessionEngineFilter) return;
@@ -247,6 +255,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         modelId: args.wireModelId,
         targetAgent: args.targetAgent,
         effort: args.effort ?? '',
+        favoriteUid: args.favoriteUid,
       }),
     ).then(
       (applied) => {
@@ -331,6 +340,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         wireModelId,
         targetAgent: args.target.agent,
         effort: args.target.effort,
+        // 编辑不改变「选中的是这一条收藏」:锚点随事务一起交出去,会话侧在**事务真成功后**
+        // 按编辑后的目标值(wire id / 引擎)重记这条锚点。草稿分支下面那条 onSelect 里的
+        // `favoriteUid: args.uid` 是同一个语义,两条链路必须一致(2026-08-17 review K3)。
+        favoriteUid: args.uid,
         onApplied: args.commit,
       });
       return;
@@ -393,6 +406,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           modelId: next?.wireModelId ?? anchor.modelId,
           targetAgent,
           effort: next?.effort ?? '',
+          // 改的是**模型行**的引擎,与任何收藏无关 → 显式清锚点(切过去之后正在跑的是这一行
+          // 的配置,不再是某条收藏那份副本)。
+          favoriteUid: null,
         });
         return;
       }
@@ -559,6 +575,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         wireModelId: recommendedWireId,
         targetAgent: recommendedAgent,
         effort: defaultEffort,
+        // 恢复推荐 = 回到「这一行的默认配置」,不再跟着任何收藏副本跑 → 清锚点
+        // (与草稿分支 applyDefaultsToDraft 里的 `favoriteUid: null` 同一语义)。
+        favoriteUid: null,
         onApplied: resetStoredConfig,
       });
       return;
@@ -642,6 +661,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       wireModelId,
       targetAgent: fallback.agent,
       effort: fallback.effort,
+      // 这条收藏马上就没了 → 清锚点(留着会让面板在一条已删的收藏上打勾)。
+      favoriteUid: null,
       onApplied: commit,
     });
   };

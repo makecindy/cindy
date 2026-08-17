@@ -41,12 +41,16 @@
  * 监听 storage 事件后**重读 localStorage**(而不是信事件里的 newValue)——迟到的事件带的
  * 是旧值,直接采信会把本窗口刚写的新值回滚(newMakerDraft 的 rebase 先例)。
  *
- * 并发写(2026-08-17 review H1)—— 与 modelFavorites **同一套机制**(共用
- * `storageOpReplay`,细节见那两个文件的头注):写入表达成可重放且幂等的 op
- * (set / clear),同步乐观写保持不变,随后在 `navigator.locks` 里串行重放到最新状态上。
+ * 并发写(2026-08-17 review H1 / K1 / K2)—— 与 modelFavorites **同一套机制**(共用
+ * `storageOpReplay`,机制正文在那个文件的头注):写入表达成可重放且幂等的 op(set / clear),
+ * 同步乐观写保持不变,op 同时记进**该 storage key 的会话 op-log**;随后在 `navigator.locks`
+ * 里把**整条 log** 重放到该 key 此刻的真相上,并且**storage 事件也会再触发调和** —— 别窗用
+ * 旧基底做的迟到覆盖抹掉本窗的 op 时,本窗收到事件后把它重新断言回去(K2),owner 被切走
+ * 也照常按捕获的 key 调和(K1)。
  * 少了这一层,两个 renderer 同时改不同模型的引擎时,后写者会拿旧快照整表覆盖先写者
  * (对方那条 override 静默消失);「A 改引擎 + B 恢复推荐」交错时,A 的整表写还会把 B 已经
- * 删掉的那条 override 复活。锁不可用时跳过重放,行为退回改动前。
+ * 删掉的那条 override 复活。锁不可用时跳过调和,行为退回改动前;op 的退休条件(TTL / 断言
+ * 次数上界)与残余边界见 storageOpReplay.ts 文件头。
  *
  * 账号分区:key 带 dataOwnerId 后缀(setModelEnginePrefsOwner,与 newMakerDraft 同形),
  * 吸取 providerModelMemory 不分账号导致多账号串号的教训。
@@ -57,7 +61,7 @@ import { useSyncExternalStore } from 'react';
 import { isSelectableVendor, type SelectableVendor } from '@/lib/agentVendors';
 
 import { MODEL_PRESET_SLOT_ID } from './providerModelMemory';
-import { replayWriteUnderLock } from './storageOpReplay';
+import { createStorageReconciler } from './storageOpReplay';
 
 const STORAGE_KEY = 'xdt:modelEnginePrefs:v1';
 
@@ -123,14 +127,22 @@ function sanitize(raw: unknown): EnginePrefsMap {
 // 进程内缓存(惰性加载)。读多写少,避免每次读都 parse localStorage。
 let cache: EnginePrefsMap | null = null;
 
-function loadFromStorage(): EnginePrefsMap {
+/**
+ * 按**给定 key** 读原始 localStorage(不碰缓存)。key 可能不是当前 active 分区 ——
+ * 登出 / 切号之后旧分区的调和仍要按它自己的 key 读写(见文件头「并发写」)。
+ */
+function loadFromKey(key: string): EnginePrefsMap {
   if (typeof window === 'undefined') return {};
   try {
-    const raw = window.localStorage.getItem(storageKey());
+    const raw = window.localStorage.getItem(key);
     return raw ? sanitize(JSON.parse(raw)) : {};
   } catch {
     return {};
   }
+}
+
+function loadFromStorage(): EnginePrefsMap {
+  return loadFromKey(storageKey());
 }
 
 function load(): EnginePrefsMap {
@@ -196,28 +208,46 @@ function applyOp(map: EnginePrefsMap, op: EnginePrefsOp): EnginePrefsMap {
 }
 
 /**
- * 一次写入 = **同步乐观写**(热更强退不丢)+ **锁内权威重放**(跨 renderer 串行,把自己
- * 这一个 op 叠在对方已落盘的最新表上)。与 modelFavorites.commitOp 逐字同形。
+ * 会话 op-log 的归并:同一条 key 上**只留最后一次显式选择**(set 或 clear)。
+ * 这张表的每条 key 是各自独立的一维,历史 op 对它没有增量意义;不归并的话,重放会把用户
+ * 在本会话里先后做的两次相反选择(改引擎 → 又恢复推荐)按顺序全断言一遍,结果虽仍是最后
+ * 那次,却白写了一轮,也让 log 无谓膨胀。
+ */
+function compactEnginePrefsOps(
+  log: readonly EnginePrefsOp[],
+  op: EnginePrefsOp,
+): readonly EnginePrefsOp[] {
+  return [...log.filter((entry) => entry.key !== op.key), op];
+}
+
+const reconciler = createStorageReconciler<EnginePrefsMap, EnginePrefsOp>({
+  // active 分区走 freshMap(带着「读不出来就退回内存缓存」的既有兜底);其它分区按 key 直读。
+  read: (key) => (key === storageKey() ? freshMap() : loadFromKey(key)),
+  apply: applyOp,
+  persist: (key, state) => persistTo(key, state),
+  adopt: (key, state) => {
+    if (key !== storageKey()) return;
+    if (sameMap(cache ?? {}, state)) return;
+    cache = state;
+    emit();
+  },
+  compact: compactEnginePrefsOps,
+  // 「恢复推荐」(删 override)比 set 活得久:并发窗口内两窗做相反动作时让删除胜出
+  // (见 storageOpReplay 文件头 —— 复活一条已被清掉的 override 是静默错误)。
+  tombstone: (op) => op.kind === 'clear',
+});
+
+/**
+ * 一次写入 = **同步乐观写**(热更强退不丢)+ 把 op 记进**当时那个 key** 的会话 op-log 并
+ * 调度一次锁内调和。与 modelFavorites.commitOp 逐字同形(K1 / K2 的修复也同形)。
  */
 function commitOp(op: EnginePrefsOp): void {
   const base = freshMap();
   const next = applyOp(base, op);
   if (next !== base) persist(next);
   const key = storageKey();
-  replayWriteUnderLock(key, () => {
-    // owner 在重放前被切走 → 放弃:同步写落在旧分区里,重放不该去动新分区。
-    if (storageKey() !== key) return;
-    const latest = freshMap();
-    const merged = applyOp(latest, op);
-    if (merged !== latest) {
-      persist(merged);
-      return;
-    }
-    if (!sameMap(cache ?? {}, latest)) {
-      cache = latest;
-      emit();
-    }
-  });
+  reconciler.record(key, op);
+  reconciler.schedule(key);
 }
 
 // ── 订阅 / 版本(供 useSyncExternalStore)──────────────────────────────────
@@ -229,17 +259,26 @@ function emit(): void {
   for (const l of listeners) l();
 }
 
-function persist(next: EnginePrefsMap): void {
-  cache = next;
+/**
+ * 落盘到**指定 key**。缓存与通知只在该 key 恰是当前 active 分区时才做 —— 调和可能发生在
+ * 登出 / 切号之后的旧分区上,那时本窗口的内存态属于新分区,绝不能被旧分区的内容覆盖。
+ */
+function persistTo(key: string, next: EnginePrefsMap): void {
   if (typeof window !== 'undefined') {
     try {
       // 同步写:见文件头(热更 relaunch 走 app.exit(),异步写会丢最近一次改动)。
-      window.localStorage.setItem(storageKey(), JSON.stringify(next));
+      window.localStorage.setItem(key, JSON.stringify(next));
     } catch {
       // localStorage 满 / 私密窗口禁写 —— 静默吞,内存态仍生效。
     }
   }
+  if (key !== storageKey()) return;
+  cache = next;
   emit();
+}
+
+function persist(next: EnginePrefsMap): void {
+  persistTo(storageKey(), next);
 }
 
 function subscribe(cb: () => void): () => void {
@@ -255,16 +294,31 @@ function getVersion(): number {
 
 const removeStorageListener = (() => {
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return null;
-  const onStorage = (event: StorageEvent): void => {
-    // key === null 表示 storage.clear();其余只认本 owner 分区的 key。
-    if (event.key !== null && event.key !== storageKey()) return;
-    if (event.storageArea && event.storageArea !== window.localStorage) return;
-    // 重读共享真相而不是采信 event.newValue:迟到的事件带旧值,直接写进内存会把本窗口
-    // 刚保存的 override 回滚(newMakerDraft 同款 rebase)。
+  /** 本 owner 分区的内存态跟外来写入对齐(重读真相,不采信 event.newValue)。 */
+  const refreshActive = (): void => {
+    // 迟到的事件带旧值,直接写进内存会把本窗口刚保存的 override 回滚(newMakerDraft 同款 rebase)。
     const next = loadFromStorage();
     if (sameMap(cache ?? {}, next)) return;
     cache = next;
     emit();
+  };
+  const onStorage = (event: StorageEvent): void => {
+    if (event.storageArea && event.storageArea !== window.localStorage) return;
+    // key === null 表示 storage.clear():本分区刷新,并让**所有**还有 op-log 的分区各自调和。
+    if (event.key === null) {
+      refreshActive();
+      for (const key of reconciler.loggedKeys()) reconciler.schedule(key);
+      return;
+    }
+    if (event.key === storageKey()) {
+      refreshActive();
+      // 外来写入可能正是「别窗用旧基底做的迟到覆盖」,抹掉了本窗刚提交的 op(K2):
+      // 在锁内把本分区的整条 op-log 重新断言一遍,无差异即终止。
+      reconciler.schedule(event.key);
+      return;
+    }
+    // 非 active 分区:只要 op-log 里还有它的记录就照样调和(K1),但不动本窗口的内存态。
+    if (reconciler.hasOps(event.key)) reconciler.schedule(event.key);
   };
   window.addEventListener('storage', onStorage);
   return () => window.removeEventListener('storage', onStorage);
@@ -347,12 +401,13 @@ export function setModelEnginePrefsOwner(ownerId: string | null): void {
   emit();
 }
 
-/** 测试用 —— 重置缓存 / owner / 订阅者 + 清 localStorage(其它代码不应调用)。 */
+/** 测试用 —— 重置缓存 / owner / 订阅者 / op-log + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
   const keyBeforeReset = storageKey();
   cache = null;
   version = 0;
   listeners.clear();
+  reconciler.__resetForTest();
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.removeItem(keyBeforeReset);

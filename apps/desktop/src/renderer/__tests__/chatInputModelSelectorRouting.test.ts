@@ -140,6 +140,27 @@ describe('ChatInput model source switching wiring', () => {
   });
 
   /**
+   * 会话收藏锚点的记录口径(2026-08-17 review 第三轮 G4 + 第四轮 K3)。
+   * 两条都得锁住:**真成功才记**(取消 / 事务失败时这次选择根本没发生),以及**记的是入参
+   * 里的 uid + 事务后的目标值** —— 跨引擎编辑一条收藏会连带换引擎与 wire id,拿旧值记会让
+   * 派生校验永远对不上,锚点等于白记。
+   */
+  it('records the session favorite anchor from the transaction payload, only on success', () => {
+    const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
+    expect(start).toBeGreaterThan(-1);
+    const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
+    // 入参里带锚点,缺省 null(选普通模型行 / 恢复推荐 / 删收藏都显式传 null)。
+    expect(block).toContain('favoriteUid = null,');
+    // 只在事务真成功后才记。
+    expect(block).toContain('if (applied) {');
+    expect(block).toContain('setSessionFavoriteAnchor(');
+    // 快照取事务后的目标值(targetAgent / modelId 都是这次切过去的那一份)。
+    expect(block).toContain(
+      '{ uid: favoriteUid, wireModelId: modelId, engine: agentKindToVendor(targetAgent) }',
+    );
+  });
+
+  /**
    * 合并行之后的 **id 口径锁**(数据层把同一模型的多引擎条目合并成一行,行 id 是归一化 id,
    * 每个引擎真正能发的是各自的 wireModelId)。
    *

@@ -17,15 +17,21 @@
  * 全部走「锁不可用 → 跳过重放」的退化路径 —— 整份用例同时也是那条退化路径的回归。
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
 class MemLocalStorage {
   private store = new Map<string, string>();
+  /**
+   * 落盘广播钩子(只有事件驱动调和那几个用例会装):把 setItem 变成一条送达所有窗口的
+   * storage 事件。默认不装 = 与改动前的用例行为一致。
+   */
+  onWrite: ((key: string) => void) | null = null;
   getItem(k: string): string | null {
     return this.store.has(k) ? (this.store.get(k) as string) : null;
   }
   setItem(k: string, v: string): void {
     this.store.set(k, v);
+    this.onWrite?.(k);
   }
   removeItem(k: string): void {
     this.store.delete(k);
@@ -73,6 +79,30 @@ beforeEach(() => {
 
 async function loadModule() {
   return await import('@/state/modelEnginePrefs');
+}
+
+/**
+ * 「两个 renderer + 真实 storage 事件」的最小总线:一个 window stub 收下**所有**模块实例
+ * 注册的监听器,每次落盘后异步广播一条事件给全部监听器。广播刻意也送回写入方自己(真实
+ * 浏览器不回送)——本窗收到自己的写入后只会多跑一轮「无差异 → 不写」的调和,顺带把
+ * 「调和不会自激成写风暴」锁进用例里。
+ */
+function installStorageBus(): void {
+  const handlers: Array<(event: StorageEvent) => void> = [];
+  vi.stubGlobal('window', {
+    localStorage: memStorage,
+    addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+      if (type === 'storage' && typeof listener === 'function') {
+        handlers.push(listener as (event: StorageEvent) => void);
+      }
+    },
+    removeEventListener: vi.fn(),
+  });
+  memStorage.onWrite = (key: string) => {
+    queueMicrotask(() => {
+      for (const handler of handlers) handler({ key } as StorageEvent);
+    });
+  };
 }
 
 describe('modelEnginePrefs store', () => {
@@ -395,11 +425,39 @@ describe('modelEnginePrefs store', () => {
  */
 describe('modelEnginePrefs store · 跨 renderer 并发写', () => {
   let locks: MemLockManager;
+  let clockOffset = 0;
+  let nowSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
     locks = new MemLockManager();
     vi.stubGlobal('navigator', { locks });
+    clockOffset = 0;
+    const realNow = Date.now.bind(Date);
+    nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + clockOffset);
   });
+
+  afterEach(() => {
+    nowSpy?.mockRestore();
+    nowSpy = null;
+    memStorage.onWrite = null;
+  });
+
+  /**
+   * 把上一步的动作推出 op-log 的**并发窗口**(细节同 modelFavorites.test 的同名说明):
+   * 调和只对毫秒级的并发交错负责,「用户在另一个窗口里看见再动手」那类相反动作按用户的新
+   * 动作对待,本窗不再把旧 op 断言回去。
+   */
+  function afterConcurrencyWindow(): void {
+    clockOffset += 30_000;
+  }
+
+  /** 反复排空锁队列 + 微任务,直到事件驱动的调和自己收敛。 */
+  async function settleAll(): Promise<void> {
+    for (let i = 0; i < 20; i += 1) {
+      await locks.settle();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
 
   /** 两份模块实例(= 两个 renderer),共享同一个 localStorage stub。 */
   async function loadTwoWindows() {
@@ -452,6 +510,9 @@ describe('modelEnginePrefs store · 跨 renderer 并发写', () => {
     a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     await locks.settle();
     const before = memStorage.getItem(key) ?? '{}';
+    // 这条 override 是「上一段时间里写的」——B 的恢复推荐是用户看到它之后做的新动作,
+    // 不是并发交错;A 只有这次新写的那条该被断言。
+    afterConcurrencyWindow();
 
     // B 点了「恢复推荐」(删这条 override)。
     b.clearModelEngineOverride('xd', 'gpt-5.5');
@@ -516,5 +577,84 @@ describe('modelEnginePrefs store · 跨 renderer 并发写', () => {
     expect(m.getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
     m.clearModelEngineOverride('xd', 'gpt-5.5');
     expect(m.getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+
+  /**
+   * K1(2026-08-17 review 第四轮):调和跑起来之前用户登出 / 切号时,上一版会因为
+   * 「当前 storageKey ≠ 捕获的 key」整个放弃,旧分区的并发丢写永远没人合并。
+   */
+  it('K1 owner 切走不放弃调和:旧分区的并发丢写照样合并', async () => {
+    const { a, b } = await loadTwoWindows();
+    a.setModelEnginePrefsOwner('owner-a');
+    b.setModelEnginePrefsOwner('owner-a');
+    const key = `${a.__STORAGE_KEY}:owner-a`;
+
+    a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    withStaleRead('{}', () => b.setModelEngineOverride('anthropic', 'claude-opus-5', 'pi'));
+    // 调和还在锁队列里排着,用户就登出了。
+    a.setModelEnginePrefsOwner(null);
+    await settleAll();
+
+    expect(persisted(key)).toEqual({
+      'xd:gpt-5.5': { agent: 'cc' },
+      'anthropic:claude-opus-5': { agent: 'pi' },
+    });
+    // 旧分区的内容不会被灌进当前(未登录)分区的内存态。
+    expect(a.getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+
+  /**
+   * K2(2026-08-17 review 第四轮):B 在**申请锁之前**就拿旧基底 persist 了,它的调和只看到
+   * 自己刚覆盖出来的状态 —— 一次性重放救不回 A 的 op。现在 B 的落盘会以 storage 事件到达 A,
+   * A 随即把整条 op-log 重新断言。
+   */
+  it('K2 锁前旧基底的迟到覆盖:事件调和把被抹掉的 override 补回,随后静默', async () => {
+    installStorageBus();
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    // ① B 先读旧基底(空表);② A 走完同步写 + 锁内调和。
+    a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    await settleAll();
+    // ③ B 这才 persist(基底是 ① 的旧快照)→ A 那条被整表覆盖掉。
+    withStaleRead('{}', () => b.setModelEngineOverride('anthropic', 'claude-opus-5', 'pi'));
+    expect(persisted(key)).toEqual({ 'anthropic:claude-opus-5': { agent: 'pi' } });
+
+    // ④ 事件驱动的调和补回。
+    await settleAll();
+    expect(persisted(key)).toEqual({
+      'xd:gpt-5.5': { agent: 'cc' },
+      'anthropic:claude-opus-5': { agent: 'pi' },
+    });
+    expect(a.getModelEngineOverride('anthropic', 'claude-opus-5')).toBe('pi');
+    expect(b.getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+
+    // ⑤ 收敛:静默之后不再互相触发。
+    const setItem = vi.spyOn(memStorage, 'setItem');
+    await settleAll();
+    expect(setItem).not.toHaveBeenCalled();
+    setItem.mockRestore();
+  });
+
+  it('K2 同款:恢复推荐被别窗的迟到脏写复活后,事件调和再次删掉它', async () => {
+    installStorageBus();
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    await settleAll();
+    const staleBase = memStorage.getItem(key) ?? '{}';
+
+    a.clearModelEngineOverride('xd', 'gpt-5.5');
+    expect(persisted(key)).toEqual({});
+
+    // B 拿删除之前的旧基底写另一条 → 整表写回把已删的 override 复活。
+    withStaleRead(staleBase, () => b.setModelEngineOverride('openai', 'gpt-5.6', 'codex'));
+    expect(persisted(key)['xd:gpt-5.5']).toEqual({ agent: 'cc' });
+
+    await settleAll();
+    expect(persisted(key)).toEqual({ 'openai:gpt-5.6': { agent: 'codex' } });
+    expect(a.getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    expect(b.getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
   });
 });

@@ -38,21 +38,26 @@
  * 值,采信会把本窗口刚加的收藏回滚)。账号分区:key 带 dataOwnerId 后缀,与 newMakerDraft
  * 同形(setModelFavoritesOwner)。
  *
- * 并发写(2026-08-17 review H1)—— **同步乐观写 + 串行权威重放**:
+ * 并发写(2026-08-17 review H1 / K1 / K2)—— **同步乐观写 + 会话 op-log + 事件驱动的持续调和**
+ * (机制正文在 storageOpReplay.ts 的文件头,那里是唯一权威;这里只记本 store 的落地方式):
  *   整表写回 + 「写前重读基底」只能修「另一窗口先写完、事件还没到」那一路。两个 renderer
  *   若**都在对方写回之前**读了同一份旧快照,后写者仍然整表覆盖先写者:新增丢失、编辑丢失;
  *   删除与编辑交错时(B 删了一条、A 拿旧快照 update 同一条)已删条目还会**复活**。
- *   localStorage 没有 CAS,所以这里改成:
+ *   localStorage 没有 CAS,所以这里是:
  *     1. 每个写入都表达成一个可重放的 **op**(add / seed / update / remove),核心是
  *        `applyOp(state, op) → state`(无变化时**返回原对象**,调用方按引用判等短路);
  *     2. 同步路径保持不变:freshState → applyOp → setItem(app.exit 场景不丢写);
- *     3. 随后在 `navigator.locks`(同源下所有 renderer 互斥,见 storageOpReplay)里重放
- *        同一个 op:重读最新 → 施加自己那一个 op → 有差异才写回。两个窗口的重放互相排队,
- *        各自把自己的改动叠在对方已落盘的结果上 → 无丢写;窗口 B 删除后窗口 A 的 update
- *        重放在「已删」状态上是 no-op → 已删条目不复活。
- *     4. 每个 op 都是幂等的(add 按配置身份去重、update 未命中 no-op、remove 幂等、seed 有
- *        seeded 门),所以「同步写 + 重放各应用一次」不会做出第二份效果。
- *   `navigator.locks` 不可用(旧环境 / node 单测)时跳过重放,行为退回改动前。
+ *     3. op 同时记进**该 storage key 的会话 op-log**,并在 `navigator.locks` 的锁内把**整条
+ *        log** 重放到该 key 此刻的真相上,有差异才写回。owner 切走也照常调和(按捕获的 key
+ *        自洽运行),旧分区的并发丢写不会被丢下;
+ *     4. 除了提交后,**storage 事件**也触发调和 —— 别的窗口用旧基底做的迟到覆盖会以事件形式
+ *        到达本窗,本窗随即把自己的 op 重新断言回去(删除同理),无差异即终止;
+ *     5. 每个 op 都是幂等的(add 按配置身份去重、update 未命中 no-op、remove 幂等、seed 有
+ *        seeded 门),所以「同步写 + 若干次重放」不会做出第二份效果。整条 log 的重放要保持
+ *        幂等还需要归并(compactFavoriteOps:同一条收藏的 update 折进它的 add;remove 顶掉
+ *        同 uid 的历史 op),否则重放会在已经是新配置的状态上再插一条旧配置的副本。
+ *   `navigator.locks` 不可用(旧环境 / node 单测)时跳过调和,行为退回「重读基底 + 整表写回」。
+ *   op 的退休条件(TTL / 断言次数上界)与残余边界见 storageOpReplay.ts 文件头。
  *   已知残余:两个窗口**同时新建**收藏且抢到同一个 `fav-N` 时,后重放的那条会改分到下一个
  *   序号,先前同步返回给调用方的 uid 会指到对方那条 —— 条目本身两条都在(不丢数据),
  *   只是那一瞬的选中锚点可能指错。修它要改 uid 格式(现在是 `fav-<单调序号>`,sanitize /
@@ -68,7 +73,7 @@ import type { Effort } from '@/lib/userPreferences.types';
 
 import type { ModelEngine } from './modelEnginePrefs';
 import { MODEL_PRESET_SLOT_ID } from './providerModelMemory';
-import { replayWriteUnderLock } from './storageOpReplay';
+import { createStorageReconciler } from './storageOpReplay';
 
 const STORAGE_KEY = 'xdt:modelFavorites:v1';
 
@@ -231,14 +236,22 @@ function sanitize(raw: unknown): FavoritesState {
 // 进程内缓存(惰性加载)。读多写少,避免每次读都 parse localStorage。
 let cache: FavoritesState | null = null;
 
-function loadFromStorage(): FavoritesState {
+/**
+ * 按**给定 key** 读原始 localStorage(不碰缓存)。key 可能不是当前 active 分区 ——
+ * 登出 / 切号之后旧分区的调和仍要按它自己的 key 读写(见文件头「并发写」第 3 条)。
+ */
+function loadFromKey(key: string): FavoritesState {
   if (typeof window === 'undefined') return emptyState();
   try {
-    const raw = window.localStorage.getItem(storageKey());
+    const raw = window.localStorage.getItem(key);
     return raw ? sanitize(JSON.parse(raw)) : emptyState();
   } catch {
     return emptyState();
   }
+}
+
+function loadFromStorage(): FavoritesState {
+  return loadFromKey(storageKey());
 }
 
 function load(): FavoritesState {
@@ -342,6 +355,47 @@ function appendFavorite(
   };
 }
 
+/** 从条目里剥出纯配置(不含锚点)。 */
+function configOf(item: ModelFavoriteItem): ModelFavoriteConfig {
+  return {
+    providerId: item.providerId,
+    modelId: item.modelId,
+    agent: item.agent,
+    // 缺省字段保持缺省(effort 缺省 = 跟随推荐档,fast 缺省 = 关):补一个 undefined 键会让
+    // `'effort' in config` 之类的存在性判断错位,也会把 undefined 写进 JSON 之外的比较里。
+    ...(item.effort ? { effort: item.effort } : {}),
+    ...(item.fast ? { fast: true as const } : {}),
+  };
+}
+
+/**
+ * 把一次 patch 施加到一份配置上,返回新配置;`null` = **整个 patch 放弃**。
+ * 单点存放 patch 语义 —— applyOp(重放) 与 compactFavoriteOps(把 update 折进 add)共用同一份,
+ * 各写一遍必然漂移成「重放出来的副本和折叠出来的副本不是同一份配置」。
+ */
+function patchConfig(
+  config: ModelFavoriteConfig,
+  patch: ModelFavoritePatch,
+): ModelFavoriteConfig | null {
+  const next: ModelFavoriteConfig = { ...config };
+  if (patch.agent !== undefined) {
+    // 引擎非法 → **整个 patch 放弃**(不是只忽略这一维):引擎是配置副本的骨架,
+    // 只应用剩下的深度 / Fast 会得到一份用户没要过的混合配置。
+    if (!isSelectableVendor(patch.agent)) return null;
+    next.agent = patch.agent;
+  }
+  if ('effort' in patch) {
+    // null = 显式清除(回落推荐档);非法值同样按清除处理(不写脏档名)。
+    if (isCanonicalEffort(patch.effort)) next.effort = patch.effort;
+    else delete next.effort;
+  }
+  if (patch.fast !== undefined) {
+    if (patch.fast === true) next.fast = true;
+    else delete next.fast;
+  }
+  return next;
+}
+
 /**
  * 把一个 op 施加到某份状态上。**无实际变化时返回入参对象本身** —— 调用方用引用判等就能
  * 判断「要不要落盘 / 要不要通知」,不必再做一次深比。
@@ -364,22 +418,9 @@ function applyOp(state: FavoritesState, op: FavoritesOp): FavoritesState {
       // 拿旧快照编辑再整表写,会把已删条目原地复活。
       if (index < 0) return state;
       const current = state.items[index] as ModelFavoriteItem;
-      const next: ModelFavoriteItem = { ...current };
-      if (op.patch.agent !== undefined) {
-        // 引擎非法 → **整个 patch 放弃**(不是只忽略这一维):引擎是配置副本的骨架,
-        // 只应用剩下的深度 / Fast 会得到一份用户没要过的混合配置。
-        if (!isSelectableVendor(op.patch.agent)) return state;
-        next.agent = op.patch.agent;
-      }
-      if ('effort' in op.patch) {
-        // null = 显式清除(回落推荐档);非法值同样按清除处理(不写脏档名)。
-        if (isCanonicalEffort(op.patch.effort)) next.effort = op.patch.effort;
-        else delete next.effort;
-      }
-      if (op.patch.fast !== undefined) {
-        if (op.patch.fast === true) next.fast = true;
-        else delete next.fast;
-      }
+      const patched = patchConfig(configOf(current), op.patch);
+      if (!patched) return state;
+      const next: ModelFavoriteItem = { uid: current.uid, ...patched };
       if (identityOf(next) === identityOf(current)) return state;
       const items = [...state.items];
       items[index] = next;
@@ -393,9 +434,72 @@ function applyOp(state: FavoritesState, op: FavoritesOp): FavoritesState {
   }
 }
 
+/** 一个 op 指向的锚点(add / seed 是它想占的首选锚点)。 */
+function uidTargetOf(op: FavoritesOp): string {
+  return op.kind === 'add' || op.kind === 'seed' ? op.preferredUid : op.uid;
+}
+
 /**
- * 一次写入 = **同步乐观写**(见文件头:热更强退不丢)+ **锁内权威重放**(跨 renderer 串行,
- * 把自己这一个 op 叠在对方已落盘的最新状态上)。
+ * 会话 op-log 的归并 —— 让**整条 log 的重放**保持幂等(见 storageOpReplay 文件头的 `compact`)。
+ *
+ * 不归并会出什么事:log = [add X@fav-1, update fav-1 → 深度 low]。重放到「已经是 low」的状态上
+ * 时,`add` 看到的身份是**旧配置 X**(不在表里)→ 又插一条,用户看到同一份收藏出现两遍。
+ * 归并规则:
+ *   · `update` 命中本会话内创建该条的 `add` / `seed` → 折进它的 config(那条 op 从此描述的是
+ *     「这条收藏最终长什么样」);patch 非法(引擎不认识)则整条 patch 放弃,与 applyOp 同判据;
+ *   · `update` 命中同一 uid 的历史 `update` → 后者接着前者叠(逐字段后写胜),仍是一条 op;
+ *   · `remove` **顶掉**同一 uid 的全部历史 op 并保留自己:删除要能被重新断言(别窗的脏写可能
+ *     把它复活),而它前面的 add / update 再断言就是把已删条目请回来。uid 单调不复用,所以
+ *     这条 remove 将来不会误伤别的条目。
+ */
+function compactFavoriteOps(log: readonly FavoritesOp[], op: FavoritesOp): readonly FavoritesOp[] {
+  if (op.kind === 'remove') {
+    return [...log.filter((entry) => uidTargetOf(entry) !== op.uid), op];
+  }
+  if (op.kind === 'update') {
+    const index = log.findIndex((entry) => uidTargetOf(entry) === op.uid);
+    const target = index >= 0 ? log[index] : undefined;
+    if (target && (target.kind === 'add' || target.kind === 'seed')) {
+      const merged = patchConfig(target.config, op.patch);
+      if (!merged) return log;
+      const next = [...log];
+      next[index] = { ...target, config: merged };
+      return next;
+    }
+    if (target && target.kind === 'update') {
+      const next = [...log];
+      next[index] = { kind: 'update', uid: op.uid, patch: { ...target.patch, ...op.patch } };
+      return next;
+    }
+    return [...log, op];
+  }
+  return [...log, op];
+}
+
+const reconciler = createStorageReconciler<FavoritesState, FavoritesOp>({
+  // active 分区走 freshState(它带着「读不出来就退回内存缓存」的既有兜底,私密窗口 / 写满时
+  // 不能拿空表当真相);其它分区(登出 / 切号后的旧 key)按 key 直读。
+  read: (key) => (key === storageKey() ? freshState() : loadFromKey(key)),
+  apply: applyOp,
+  persist: (key, state) => persistTo(key, state),
+  adopt: (key, state) => {
+    // 调和无差异:落盘已是权威结果 —— 只把它收进本窗口缓存(storage 事件迟到时这一步顺带
+    // 把缓存拉齐)。非 active 分区没有缓存可言,不动。
+    if (key !== storageKey()) return;
+    if (sameState(cache ?? emptyState(), state)) return;
+    cache = state;
+    emit();
+  },
+  compact: compactFavoriteOps,
+  // 删除比新增 / 编辑活得久:并发窗口内两个窗口做相反动作时让删除胜出(见 storageOpReplay
+  // 文件头 —— 「已删条目复活」是用户不会去复查的静默错误,「删早了」当场看得见)。
+  tombstone: (op) => op.kind === 'remove',
+});
+
+/**
+ * 一次写入 = **同步乐观写**(见文件头:热更强退不丢)+ 把 op 记进**当时那个 key** 的会话
+ * op-log 并调度一次锁内调和。owner 随后被切走也不放弃调和 —— 调和按捕获的 key 自洽运行
+ * (K1);别窗的迟到覆盖由 storage 事件再触发一次调和补回(K2)。
  */
 function commitOp(op: FavoritesOp, knownBase?: FavoritesState): void {
   // 调用方已经为别的目的重读过一次(如 add 要先在这份基底上定锚点)时复用那一份,
@@ -403,24 +507,10 @@ function commitOp(op: FavoritesOp, knownBase?: FavoritesState): void {
   const base = knownBase ?? freshState();
   const next = applyOp(base, op);
   if (next !== base) persist(next);
-  // 锁名 = 本分区的 storage key:不同账号各排各的队。owner 在重放前被切走时直接放弃 ——
-  // 同步写已经落在旧分区里,重放不该去动新分区。
+  // 锁名 = 本分区的 storage key:不同账号各排各的队。
   const key = storageKey();
-  replayWriteUnderLock(key, () => {
-    if (storageKey() !== key) return;
-    const latest = freshState();
-    const merged = applyOp(latest, op);
-    if (merged !== latest) {
-      persist(merged);
-      return;
-    }
-    // 落盘已经是权威结果(别人写的版本里本 op 无事可做)→ 只把它收进本窗口缓存,
-    // 不重复落盘;storage 事件迟到时这一步也顺带把缓存拉齐。
-    if (!sameState(cache ?? emptyState(), latest)) {
-      cache = latest;
-      emit();
-    }
-  });
+  reconciler.record(key, op);
+  reconciler.schedule(key);
 }
 
 // ── 订阅(供 useSyncExternalStore)──────────────────────────────────────────
@@ -430,17 +520,27 @@ function emit(): void {
   for (const l of listeners) l();
 }
 
-function persist(next: FavoritesState): void {
-  cache = next;
+/**
+ * 落盘到**指定 key**。缓存与通知只在该 key 恰是当前 active 分区时才做 —— 调和可能发生在
+ * 登出 / 切号之后的旧分区上(见文件头「并发写」),那时本窗口的内存态属于新分区,绝不能被
+ * 旧分区的内容覆盖。
+ */
+function persistTo(key: string, next: FavoritesState): void {
   if (typeof window !== 'undefined') {
     try {
       // 同步写:见文件头(热更 relaunch 走 app.exit(),异步写会丢最近一次改动)。
-      window.localStorage.setItem(storageKey(), JSON.stringify(next));
+      window.localStorage.setItem(key, JSON.stringify(next));
     } catch {
       // localStorage 满 / 私密窗口禁写 —— 静默吞,内存态仍生效。
     }
   }
+  if (key !== storageKey()) return;
+  cache = next;
   emit();
+}
+
+function persist(next: FavoritesState): void {
+  persistTo(storageKey(), next);
 }
 
 function subscribe(cb: () => void): () => void {
@@ -456,17 +556,33 @@ function getItemsSnapshot(): readonly ModelFavoriteItem[] {
 
 const removeStorageListener = (() => {
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return null;
-  const onStorage = (event: StorageEvent): void => {
-    // key === null 表示 storage.clear();其余只认本 owner 分区的 key。
-    if (event.key !== null && event.key !== storageKey()) return;
-    if (event.storageArea && event.storageArea !== window.localStorage) return;
-    // 重读共享真相而不是采信 event.newValue:迟到事件带旧值,直接写进内存会把本窗口刚加
-    // 的收藏回滚(newMakerDraft 同款 rebase)。
+  /** 本 owner 分区的内存态跟外来写入对齐(重读真相,不采信 event.newValue)。 */
+  const refreshActive = (): void => {
+    // 迟到事件带旧值,直接写进内存会把本窗口刚加的收藏回滚(newMakerDraft 同款 rebase)。
     const next = loadFromStorage();
     const prev = cache ?? emptyState();
     if (sameState(prev, next)) return;
     cache = next;
     emit();
+  };
+  const onStorage = (event: StorageEvent): void => {
+    if (event.storageArea && event.storageArea !== window.localStorage) return;
+    // key === null 表示 storage.clear():本分区刷新,并让**所有**还有 op-log 的分区各自调和。
+    if (event.key === null) {
+      refreshActive();
+      for (const key of reconciler.loggedKeys()) reconciler.schedule(key);
+      return;
+    }
+    if (event.key === storageKey()) {
+      refreshActive();
+      // 外来写入可能正是「别窗用旧基底做的迟到覆盖」,抹掉了本窗刚提交的 op(K2):
+      // 在锁内把本分区的整条 op-log 重新断言一遍,无差异即终止。
+      reconciler.schedule(event.key);
+      return;
+    }
+    // 非 active 分区:只要 op-log 里还有它的记录就照样调和(K1 —— 登出 / 切号之后旧分区
+    // 的并发丢写仍要合并;它不影响本窗口当前的内存态,故不刷新缓存)。
+    if (reconciler.hasOps(event.key)) reconciler.schedule(event.key);
   };
   window.addEventListener('storage', onStorage);
   return () => window.removeEventListener('storage', onStorage);
@@ -584,11 +700,12 @@ export function setModelFavoritesOwner(ownerId: string | null): void {
   emit();
 }
 
-/** 测试用 —— 重置缓存 / owner / 订阅者 + 清 localStorage(其它代码不应调用)。 */
+/** 测试用 —— 重置缓存 / owner / 订阅者 / op-log + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
   const keyBeforeReset = storageKey();
   cache = null;
   listeners.clear();
+  reconciler.__resetForTest();
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.removeItem(keyBeforeReset);

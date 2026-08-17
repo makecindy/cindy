@@ -18,15 +18,21 @@
  * 的退化路径 —— 整份用例同时也是那条退化路径的回归。
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
 class MemLocalStorage {
   private store = new Map<string, string>();
+  /**
+   * 落盘广播钩子(只有事件驱动调和那几个用例会装):把 setItem 变成一条送达所有窗口的
+   * storage 事件。默认不装 = 与改动前的用例行为一致。
+   */
+  onWrite: ((key: string) => void) | null = null;
   getItem(k: string): string | null {
     return this.store.has(k) ? (this.store.get(k) as string) : null;
   }
   setItem(k: string, v: string): void {
     this.store.set(k, v);
+    this.onWrite?.(k);
   }
   removeItem(k: string): void {
     this.store.delete(k);
@@ -74,6 +80,31 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', memStorage);
   vi.resetModules();
 });
+
+/**
+ * 「两个 renderer + 真实 storage 事件」的最小总线:一个 window stub 收下**所有**模块实例
+ * 注册的监听器,每次落盘后异步广播一条事件给全部监听器。
+ *
+ * 广播刻意也送回写入方自己(真实浏览器不回送):本窗收到自己的写入后只会多跑一轮
+ * 「无差异 → 不写」的调和,顺带把「调和不会自激成写风暴」也锁进用例里。
+ */
+function installStorageBus(): void {
+  const handlers: Array<(event: StorageEvent) => void> = [];
+  vi.stubGlobal('window', {
+    localStorage: memStorage,
+    addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+      if (type === 'storage' && typeof listener === 'function') {
+        handlers.push(listener as (event: StorageEvent) => void);
+      }
+    },
+    removeEventListener: vi.fn(),
+  });
+  memStorage.onWrite = (key: string) => {
+    queueMicrotask(() => {
+      for (const handler of handlers) handler({ key } as StorageEvent);
+    });
+  };
+}
 
 async function loadModule() {
   return await import('@/state/modelFavorites');
@@ -605,23 +636,55 @@ describe('modelFavorites store', () => {
 });
 
 /**
- * 跨 renderer **并发**写(2026-08-17 review H1)。
+ * 跨 renderer **并发**写(2026-08-17 review H1 / K1 / K2)。
  *
- * 上一轮只把写路径的基底换成「写前重读 localStorage」,那只修得了「另一窗口先写完、
- * storage 事件还没到」那一路。这里锁的是真正的交错:两个窗口**都在对方写回之前**读了同一份
- * 旧快照 —— 此时后写者的整表写回必然覆盖先写者(丢新增 / 丢编辑),删除与编辑交错时已删
- * 条目还会复活。修法是同步乐观写之后,在同源 Web Locks 里**串行重放同一个 op**。
+ * 「写前重读 localStorage」只修得了「另一窗口先写完、storage 事件还没到」那一路。这里锁的是
+ * 真正的交错:两个窗口**都在对方写回之前**读了同一份旧快照 —— 此时后写者的整表写回必然
+ * 覆盖先写者(丢新增 / 丢编辑),删除与编辑交错时已删条目还会复活。修法是同步乐观写之后,
+ * 把 op 记进会话 op-log,并在同源 Web Locks 里**把整条 log 重放**到该 key 的最新状态上;
+ * storage 事件也会再次触发调和,于是「别窗用锁前旧基底做的迟到覆盖」也能被补回(K2)。
  *
  * 两个「窗口」= 同一 localStorage 上的两份模块实例(Electron 每个 renderer 有独立模块实例)。
  * 交错用「让某一次 getItem 返回旧快照」精确复现,不靠时序碰运气。
  */
 describe('modelFavorites store · 跨 renderer 并发写', () => {
   let locks: MemLockManager;
+  let clockOffset = 0;
+  let nowSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
     locks = new MemLockManager();
     vi.stubGlobal('navigator', { locks });
+    clockOffset = 0;
+    const realNow = Date.now.bind(Date);
+    nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + clockOffset);
   });
+
+  afterEach(() => {
+    nowSpy?.mockRestore();
+    nowSpy = null;
+    memStorage.onWrite = null;
+  });
+
+  /**
+   * 把上一步的动作推出 op-log 的**并发窗口**。
+   *
+   * 调和只对「并发交错」负责:别窗用旧基底做的迟到覆盖是毫秒级就落地的(那笔 setItem 早在
+   * 路上)。而「用户在另一个窗口里看见这条收藏、然后把它删掉」要等事件往返 + 人的反应,
+   * 量级是秒 —— 那是用户的新动作,本窗不该再把自己的旧 op 断言回去。下面几个用例演的正是
+   * 后者(先在 A 里加,过一会儿在 B 里删),所以显式把时钟推过窗口。
+   */
+  function afterConcurrencyWindow(): void {
+    clockOffset += 30_000;
+  }
+
+  /** 反复排空锁队列 + 微任务,直到事件驱动的调和自己收敛。 */
+  async function settleAll(): Promise<void> {
+    for (let i = 0; i < 20; i += 1) {
+      await locks.settle();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
 
   /** 两份模块实例(= 两个 renderer),共享同一个 localStorage stub。 */
   async function loadTwoWindows() {
@@ -694,6 +757,8 @@ describe('modelFavorites store · 跨 renderer 并发写', () => {
     a.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }); // fav-2
     await locks.settle();
     const before = memStorage.getItem(key);
+    // 这两条是「上一段时间里加的」——B 的删除是用户看到它们之后做的新动作,不是并发交错。
+    afterConcurrencyWindow();
 
     // B 删掉 fav-1。
     b.removeModelFavorite('fav-1');
@@ -714,6 +779,9 @@ describe('modelFavorites store · 跨 renderer 并发写', () => {
     a.addModelFavorite({ ...OPUS, effort: 'high' }); // fav-1
     await locks.settle();
     const before = memStorage.getItem(key);
+    // 同上:B 的删除是用户随后做的新动作(A 那条 add 早已离开并发窗口),
+    // A 只有这次新增该被断言 —— 它不该顺手把 B 删掉的那条也一起断言回来。
+    afterConcurrencyWindow();
 
     b.removeModelFavorite('fav-1');
     withStaleRead(before!, () =>
@@ -795,5 +863,158 @@ describe('modelFavorites store · 跨 renderer 并发写', () => {
     expect(m.listModelFavorites()).toHaveLength(1);
     expect(() => m.removeModelFavorite(uid)).not.toThrow();
     expect(m.listModelFavorites()).toEqual([]);
+  });
+
+  /**
+   * K1(2026-08-17 review 第四轮):调和回调执行**前**用户登出 / 切号时,上一版会因为
+   * 「当前 storageKey ≠ 捕获的 key」整个放弃 —— 旧分区的并发丢写永远没人再合并。
+   * 现在调和按**捕获的 key** 自洽运行,与当前 active owner 无关。
+   */
+  it('K1 owner 切走不放弃调和:旧分区的并发丢写照样合并', async () => {
+    const { a, b } = await loadTwoWindows();
+    a.setModelFavoritesOwner('owner-a');
+    b.setModelFavoritesOwner('owner-a');
+    const key = `${a.__STORAGE_KEY}:owner-a`;
+
+    a.addModelFavorite({ ...OPUS, effort: 'high' });
+    // B 在 A 写回之前读了空表 → 整表写回把 A 那条抹掉。
+    withStaleRead(EMPTY_RAW, () =>
+      b.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    // 调和还在锁队列里排着,用户就登出了(A 的 active 分区变成裸 key)。
+    a.setModelFavoritesOwner(null);
+    await settleAll();
+
+    // 旧分区里两条都在 —— A 的收藏没有因为「它登出了」而永久丢失。
+    const items = persisted(key).items;
+    expect(items.map((i) => i.modelId).sort()).toEqual(['claude-opus-4-8', 'gpt-5.5']);
+    // 而且调和绝不把旧分区的内容灌进当前(未登录)分区的内存态。
+    expect(a.listModelFavorites()).toEqual([]);
+  });
+
+  /**
+   * K2(2026-08-17 review 第四轮):B 在**申请锁之前**就拿旧基底 persist 了 ——
+   * 顺序是「B 读旧基底 → A 同步写 + 锁内调和跑完 → B 才 persist 并申请锁」,于是 B 的调和
+   * 只看到自己刚覆盖出来的状态,A 的 op 一次性重放无从恢复。现在 B 的落盘会以 storage 事件
+   * 到达 A,A 随即把自己的整条 op-log 重新断言到最新状态上。
+   */
+  it('K2 锁前旧基底的迟到覆盖:事件调和把被抹掉的 op 补回,随后静默', async () => {
+    installStorageBus();
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    // ① B 先读旧基底(空表)——用一个只在**这一刻**生效的旧快照精确复现。
+    const staleBase = EMPTY_RAW;
+    // ② A 走完整条链路:同步写 + 锁内调和。
+    a.addModelFavorite({ ...OPUS, effort: 'high' });
+    await settleAll();
+    expect(persisted(key).items).toHaveLength(1);
+
+    // ③ B 这才 persist(基底是 ① 的旧快照)→ A 那条被整表覆盖掉。
+    withStaleRead(staleBase, () =>
+      b.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    expect(persisted(key).items.map((i) => i.modelId)).toEqual(['gpt-5.5']);
+
+    // ④ 事件驱动的调和:A 收到 B 的落盘事件 → 在锁里把自己的 op 重新断言。
+    await settleAll();
+    const items = persisted(key).items;
+    expect(items.map((i) => i.modelId).sort()).toEqual(['claude-opus-4-8', 'gpt-5.5']);
+    expect(a.listModelFavorites()).toHaveLength(2);
+    expect(b.listModelFavorites()).toHaveLength(2);
+
+    // ⑤ 收敛:静默之后不再互相触发(无差异即不写,不会自激成写风暴)。
+    const setItem = vi.spyOn(memStorage, 'setItem');
+    await settleAll();
+    expect(setItem).not.toHaveBeenCalled();
+    setItem.mockRestore();
+  });
+
+  it('K2 同款:删除被别窗的迟到脏写复活后,事件调和再次断言删除', async () => {
+    installStorageBus();
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    a.addModelFavorite({ ...OPUS, effort: 'high' }); // fav-1
+    await settleAll();
+    const staleBase = memStorage.getItem(key)!;
+
+    // A 删掉它,并且**让提交后的那一轮调和先跑完** —— 这样后面 B 的脏写就落在「A 已经无事
+    // 可做」之后,只能靠事件驱动的那一轮把删除重新断言(否则用例会被提交调和顺手做掉,
+    // 测不到 K2 的闭环)。
+    a.removeModelFavorite('fav-1');
+    await settleAll();
+    expect(persisted(key).items).toEqual([]);
+
+    // B 拿删除**之前**的旧基底写自己的新增 → 整表写回把已删的 fav-1 复活。
+    withStaleRead(staleBase, () =>
+      b.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    expect(persisted(key).items.map((i) => i.uid)).toContain('fav-1');
+
+    await settleAll();
+    // 删除也是 op:事件调和把它重新断言,复活的条目再次消失;B 的新增照样保留。
+    expect(persisted(key).items.map((i) => i.modelId)).toEqual(['gpt-5.5']);
+    expect(a.getModelFavorite('fav-1')).toBeUndefined();
+    expect(b.getModelFavorite('fav-1')).toBeUndefined();
+  });
+
+  /**
+   * 整条 op-log 的重放必须**幂等**:同一条收藏的 add + 后续 update 要折成一条「最终配置的
+   * add」。不折的话,重放会在已经是新配置的状态上按旧身份再插一条 —— 用户看到同一份收藏
+   * 出现两遍。
+   */
+  it('add + update 折叠:调和不会插出第二份副本', async () => {
+    installStorageBus();
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    const uid = a.addModelFavorite({ ...OPUS, effort: 'high' });
+    a.updateModelFavorite(uid, { effort: 'low', fast: true });
+    await settleAll();
+
+    // B 拿空表基底整表写回 → A 的这条被抹掉。
+    withStaleRead(EMPTY_RAW, () =>
+      b.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    await settleAll();
+
+    const items = persisted(key).items;
+    expect(items).toHaveLength(2);
+    const restored = items.find((i) => i.modelId === OPUS.modelId);
+    // 补回来的是**编辑之后**那一份,而且只有一份。
+    expect(restored).toMatchObject({ effort: 'low', fast: true });
+  });
+
+  /**
+   * op-log 容量上限(FIFO 丢最老)。丢掉的那些 op 退回改动前的行为(不再被断言)——
+   * 一次会话里对同一分区写上百次才会碰到,留下的是最近的、并发窗口还没过去的那些。
+   */
+  it('op-log 容量上限:超出上限后只有最近的 100 条参与调和', async () => {
+    installStorageBus();
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    const total = 120;
+    for (let i = 0; i < total; i += 1) {
+      a.addModelFavorite({ providerId: 'xd', modelId: `m-${i}`, agent: 'codex' });
+    }
+    await settleAll();
+    expect(persisted(key).items).toHaveLength(total);
+
+    // 别的窗口拿空表整表写回,把 A 的全部条目抹掉。
+    withStaleRead(EMPTY_RAW, () =>
+      b.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    await settleAll();
+
+    const restored = persisted(key)
+      .items.map((i) => i.modelId)
+      .filter((id) => id.startsWith('m-'));
+    expect(restored).toHaveLength(100);
+    expect(restored).toContain(`m-${total - 1}`);
+    expect(restored).not.toContain('m-0');
+    expect(restored).not.toContain('m-19');
+    expect(restored).toContain('m-20');
   });
 });
