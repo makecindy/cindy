@@ -38,6 +38,7 @@ function item(origin?: AgentInputQueuedMessage['origin']): AgentInputQueuedMessa
 
 function setup(opts?: {
   exists?: boolean;
+  live?: boolean;
   running?: boolean;
   steerSupported?: boolean;
   steerAccepted?: boolean;
@@ -74,7 +75,9 @@ function setup(opts?: {
     })),
     getTurnControlSnapshot: vi.fn(() => control),
   };
-  const getLiveSession = vi.fn<() => typeof live | null>(() => live);
+  const getLiveSession = vi.fn<() => typeof live | null>(() =>
+    opts?.live === false ? null : live,
+  );
   const queueItem =
     opts?.queueItem ??
     item({
@@ -304,8 +307,29 @@ describe('session control domain service', () => {
     );
   });
 
+  it('prefers an in-memory live session when persisted metadata is unavailable', async () => {
+    const { deps, live, service } = setup();
+    deps.sessionExists.mockRejectedValue(new Error('localDb not ready'));
+
+    await expect(service.stopSessionTurn({ targetSessionId: 'target' })).resolves.toEqual({
+      ok: true,
+      status: 'waiting-for-safe-point',
+      turnGeneration: 3,
+    });
+    expect(live.requestGracefulStop).toHaveBeenCalledOnce();
+    expect(deps.sessionExists).not.toHaveBeenCalled();
+  });
+
+  it('preserves metadata read failures when no live session can prove the target exists', async () => {
+    const { deps, service } = setup({ live: false });
+    const storageError = new Error('storage unavailable');
+    deps.sessionExists.mockRejectedValue(storageError);
+
+    await expect(service.stopSessionTurn({ targetSessionId: 'target' })).rejects.toBe(storageError);
+  });
+
   it('returns NOT_FOUND before reading mutable target state', async () => {
-    const { deps, service } = setup({ exists: false });
+    const { deps, service } = setup({ exists: false, live: false });
     await expect(
       service.cancelQueuedMessage({
         callerSessionId: 'caller',
@@ -318,6 +342,6 @@ describe('session control domain service', () => {
       errorCode: 'NOT_FOUND',
     });
     expect(deps.getQueueSnapshot).not.toHaveBeenCalled();
-    expect(deps.getLiveSession).not.toHaveBeenCalled();
+    expect(deps.getLiveSession).toHaveBeenCalled();
   });
 });

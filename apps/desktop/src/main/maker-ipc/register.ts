@@ -9876,12 +9876,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const sessionControlService = createSessionControlService({
     sessionExists: async (sessionId) =>
-      (await maker.getSessionMeta(sessionId).catch(() => null)) !== null,
+      (await maker.getSessionMeta(sessionId)) !== null,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     getSessionActivitySnapshot: readCanonicalSessionActivity,
     assertExternalInputAllowed: assertReviewExternalInputAllowed,
     createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
-      const meta = await maker.getSessionMeta(targetSessionId).catch(() => null);
+      const meta = await maker.getSessionMeta(targetSessionId);
       if (!meta) throw new Error(`session ${targetSessionId} not found`);
       return buildSessionControlInputItem({
         targetSessionId,

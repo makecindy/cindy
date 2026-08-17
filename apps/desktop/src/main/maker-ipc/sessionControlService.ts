@@ -86,6 +86,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
   });
 
   async function ensureTarget(sessionId: string): Promise<Failure<'NOT_FOUND'> | null> {
+    // A live Session is authoritative even when its persisted metadata is temporarily
+    // unavailable. Only a successful metadata lookup may classify the target as absent.
+    if (deps.getLiveSession(sessionId)) return null;
     return (await deps.sessionExists(sessionId))
       ? null
       : { ok: false, errorCode: 'NOT_FOUND', message: `session ${sessionId} not found` };

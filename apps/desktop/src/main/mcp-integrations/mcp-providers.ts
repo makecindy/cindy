@@ -94,7 +94,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       const s = tryGetOrcaCollabService();
       if (!s) return { ok: false, errorCode: 'HOST_NOT_READY' as const, message: 'orca collab service not initialized' } as R;
       try { return await fn(s, ...args); }
-      catch (err) { return { ok: false, errorCode: 'INTERNAL' as const, message: err instanceof Error ? err.message : String(err) } as R; }
+      catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const errorCode =
+          (err as { code?: unknown }).code === 'HOST_NOT_READY' || /localDb not ready/i.test(message)
+            ? 'HOST_NOT_READY'
+            : 'INTERNAL';
+        return { ok: false, errorCode, message } as R;
+      }
     };
   }
 

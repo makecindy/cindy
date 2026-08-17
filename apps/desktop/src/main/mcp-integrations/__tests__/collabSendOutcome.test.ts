@@ -139,6 +139,11 @@ function createCollabService(overrides: Record<string, ReturnType<typeof vi.fn>>
     readWorker: vi.fn(),
     listSessionQueue: vi.fn(),
     listSessionQueuedCounts: vi.fn(),
+    updateSessionQueuedMessage: vi.fn(),
+    cancelSessionQueuedMessage: vi.fn(),
+    steerSession: vi.fn(),
+    stopSessionTurn: vi.fn(),
+    getSessionRuntime: vi.fn(),
     ...overrides,
   };
 }
@@ -517,5 +522,33 @@ describe('collab send outcome semantics', () => {
     ).resolves.toEqual({ ok: true, counts: { 'session-1': 1 } });
     expect(mockState.collabService.listSessionQueue).toHaveBeenCalledWith('session-1');
     expect(mockState.collabService.listSessionQueuedCounts).toHaveBeenCalledWith(['session-1']);
+  });
+
+  it('preserves retryable host-readiness errors at the cindy_helper control boundary', async () => {
+    mockState.collabService = createCollabService({
+      stopSessionTurn: vi.fn().mockRejectedValue(new Error('localDb not ready')),
+      getSessionRuntime: vi.fn().mockRejectedValue(new Error('storage read failed')),
+    });
+
+    createDesktopMcpProviders({
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      sessionControl: {
+        stopSessionTurn: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
+        getSessionRuntime: (params: { targetSessionId: string }) => Promise<Record<string, unknown>>;
+      };
+    };
+
+    await expect(
+      xdtHelper.sessionControl.stopSessionTurn({ targetSessionId: 'session-1' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await expect(
+      xdtHelper.sessionControl.getSessionRuntime({ targetSessionId: 'session-1' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
   });
 });
