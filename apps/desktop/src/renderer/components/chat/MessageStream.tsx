@@ -283,6 +283,7 @@ import {
   resolveNearBottomOnScroll,
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
+  resolveSendWindowHandoff,
   selectTailUserMessageId,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
@@ -4354,45 +4355,41 @@ export function MessageStream({
             ? visibleLastItem.message
             : null;
 
-    // 锚定窗口外检测到真实的新发送：当前 effect 的 visibleRenderItems 仍是旧切片，
-    // 不能同帧 pinToBottom。先清锚并恢复 near-bottom，下一次 render 切回默认尾窗
-    // 后再自然 pin；提前同步 lastUserMsgIdRef，防下一帧重复判成新发送。
-    let windowAnchorClearedOnSend = false;
-    const realTailUserSendOutsideWindow =
-      !restoringRef.current &&
-      firstVisibleItemKey !== null &&
-      !windowCoversEnd &&
-      lastUserMsg !== null &&
-      lastUserMsg.clientId !== lastUserMsgIdRef.current;
-    if (realTailUserSendOutsideWindow) {
-      setFirstVisibleItemKey(null);
-      isNearBottomRef.current = true;
-      setIsNearBottom(true);
-      setUnreadCount(0);
-      lastUserMsgIdRef.current = lastUserMsg.clientId;
-      windowAnchorClearedOnSend = true;
-    }
+    // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
+    // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
+    // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
+    const sentFromThisRenderer = lastUserMsg
+      ? isLocalUserSend
+        ? isLocalUserSend(lastUserMsg.clientId) === true
+        : true
+      : false;
     const userMessageObservation = resolveLastUserMessageObservation({
       restoring: restoringRef.current,
       tailUserMessageId: lastUserMsg?.clientId ?? null,
       previousTailUserMessageId: lastUserMsgIdRef.current,
     });
-    if (!windowAnchorClearedOnSend) {
-      lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
-    }
+    lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
       newUserSend: userMessageObservation.isNewUserSend,
-      // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
-      // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
-      // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
-      sentFromThisRenderer: lastUserMsg
-        ? isLocalUserSend
-          ? isLocalUserSend(lastUserMsg.clientId) === true
-          : true
-        : false,
+      sentFromThisRenderer,
       nearBottom: isNearBottomRef.current,
     });
+    // 本端发送必须离开锚定历史窗，回到默认尾窗。只清「未覆盖末尾」的锚会漏掉
+    // 「发送时窗口仍盖住末尾、随后 assistant/工具卡把尾部顶出窗口」——视口已经
+    // 钉到最新，下一轮新消息却不再跟随。
+    const windowHandoff = resolveSendWindowHandoff({
+      isNewUserSend: userMessageObservation.isNewUserSend,
+      sentFromThisRenderer,
+      hasWindowAnchor: firstVisibleItemKey !== null,
+      windowCoversEnd,
+    });
+    if (windowHandoff.clearWindowAnchor) {
+      setFirstVisibleItemKey(null);
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+    }
 
     if (userMessageObservation.isNewUserSend && lastUserMsg) {
       lastUserMsgIdRef.current = lastUserMsg.clientId;
@@ -4401,7 +4398,7 @@ export function MessageStream({
       restoringRef.current = false;
       isNearBottomRef.current = true;
     }
-    if (decision.pinToBottom && !windowAnchorClearedOnSend) pinToBottom();
+    if (decision.pinToBottom && !windowHandoff.deferPinToNextRender) pinToBottom();
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
@@ -4762,7 +4759,8 @@ export function MessageStream({
   // 与 pinToBottom 高频竞态(小幅上滚永远越不过距离阈值就被钉回,且
   // programmaticScrollRef 窗口会吞掉部分用户 scroll 事件),距离判定对
   // 「上滚一行就停」不可靠。本 handler 只负责:
-  //   - 离底 >= threshold → 解除(滚动条拖拽等无 wheel 事件路径的兜底);
+  //   - 离底 >= threshold 且明确上滚 → 解除(滚动条拖拽等无 wheel 路径的兜底);
+  //     已在跟时内容在下方长高不得解除,否则发送后第一块新内容会把跟随掐死;
   //   - 已解除 + 明确向下滚回阈值带内 → 恢复跟随。
   // 迁移规则收敛在 resolveNearBottomOnScroll(纯函数,见 autoFollowIntent.ts)。
   // `isNearBottomRef`(auto-follow gate)与 `isNearBottom` state(指示器显隐)
