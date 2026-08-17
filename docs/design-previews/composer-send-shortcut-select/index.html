@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>发送快捷键三挡 Select — PR #2887 设计预览</title>
+<style>
+  /* token 值逐一取自 apps/desktop/src/renderer/themes/colors.ts(默认主题),
+     结构与类名对齐 ComposerSendShortcutSection.tsx / LanguageSection.tsx 的实现。 */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #ddd; padding: 24px;
+  }
+  h1 { font-size: 18px; margin-bottom: 4px; color: #222; }
+  .meta { font-size: 12px; color: #555; margin-bottom: 20px; line-height: 1.6; }
+  .columns { display: flex; gap: 20px; flex-wrap: wrap; }
+
+  .theme {
+    flex: 1; min-width: 560px; border-radius: 16px; padding: 24px;
+    background: var(--surface);
+  }
+  .theme h2 { font-size: 13px; margin-bottom: 16px; color: var(--text-secondary); font-weight: 500; }
+
+  .light {
+    --surface: #f8f8f6;
+    --card-bg: #faf9f5;            /* --settings-theme-card-bg → surface-card-ivory */
+    --card-border: #d7d7d4;        /* --settings-theme-card-border → border-default */
+    --text-primary: #262626;
+    --text-secondary: #737373;
+    --input-bg: #faf9f5;           /* --settings-input-bg */
+    --input-border: #d7d7d4;       /* --settings-input-border */
+    --input-text: #262626;
+    --eye-icon: #737373;           /* --settings-eye-icon → text-tertiary-stone */
+    --menu-bg-hover: #ececea;      /* --settings-menu-bg-hover */
+    --menu-bg-selected: #e8e8e6;   /* --settings-menu-bg-selected */
+    --menu-text-selected: #262626;
+    --icon-active: #262626;        /* --settings-theme-icon-active → accent-emphasis */
+    --chip: #e5e5e5;               /* --surface-chip(已自定义徽章) */
+    --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.15);
+    --section-desc: #525252;       /* --settings-section-desc → text-tertiary-mid */
+  }
+  .dark {
+    --surface: #1f1f1e;
+    --card-bg: #2c2c2a;
+    --card-border: #3c3c3a;
+    --text-primary: #d4d4d4;
+    --text-secondary: #a3a3a3;
+    --input-bg: #2c2c2a;
+    --input-border: #3c3c3a;
+    --input-text: #d4d4d4;
+    --eye-icon: #737373;
+    --menu-bg-hover: #2c2c2a;
+    --menu-bg-selected: #2c2c2a;
+    --menu-text-selected: #d4d4d4;
+    --icon-active: #d4d4d4;
+    --chip: #3c3c3a;
+    --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --section-desc: #737373;
+  }
+
+  .state-label { font-size: 11px; color: var(--text-secondary); margin: 20px 0 8px; }
+  .state-label:first-of-type { margin-top: 0; }
+
+  .section-title { font-size: 16px; font-weight: 500; line-height: 1.2; color: var(--text-primary); margin-bottom: 14px; }
+
+  .card {
+    display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px;
+    border-radius: 12px; border: 1px solid var(--card-border); background: var(--card-bg); padding: 16px;
+  }
+  .card .label { font-size: 14px; font-weight: 500; line-height: 1.3; color: var(--text-primary); }
+  .card .hint { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+  .card .text-col { min-width: 0; flex: 1; }
+  .controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+  .badge {
+    white-space: nowrap; border-radius: 9999px; background: var(--chip);
+    padding: 4px 8px; font-size: 11px; font-weight: 500; line-height: 1; color: var(--text-secondary);
+  }
+  .reset-btn {
+    display: flex; height: 30px; width: 30px; align-items: center; justify-content: center;
+    border-radius: 8px; border: none; background: transparent; color: var(--section-desc); cursor: pointer;
+  }
+
+  .select-trigger {
+    display: flex; height: 36px; width: 280px; max-width: 100%; align-items: center;
+    justify-content: space-between; gap: 12px; border-radius: 9999px;
+    border: 1px solid var(--input-border); background: var(--input-bg);
+    padding: 0 14px; font-size: 13px; color: var(--input-text); cursor: pointer;
+  }
+  .select-trigger .chev { color: var(--eye-icon); flex-shrink: 0; }
+
+  .popover-anchor { position: relative; }
+  .select-panel {
+    position: absolute; top: 42px; right: 0; z-index: 10;
+    width: 280px; border-radius: 12px; border: 1px solid var(--input-border);
+    background: var(--card-bg); box-shadow: var(--shadow-menu); padding: 8px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .option {
+    display: flex; height: 36px; width: 100%; align-items: center; justify-content: space-between;
+    gap: 12px; border-radius: 8px; padding: 0 12px; font-size: 13px; color: var(--input-text);
+  }
+  .option.selected { background: var(--menu-bg-selected); font-weight: 500; color: var(--menu-text-selected); }
+  .option.hovered { background: var(--menu-bg-hover); }
+  .option .check { color: var(--icon-active); }
+  .spacer-for-panel { height: 150px; }
+
+  svg { display: block; }
+
+  table.behavior { margin-top: 24px; border-collapse: collapse; font-size: 12px; background: #fff; border-radius: 8px; overflow: hidden; }
+  table.behavior th, table.behavior td { border: 1px solid #ccc; padding: 6px 12px; text-align: left; color: #333; }
+  table.behavior th { background: #eee; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>发送快捷键三挡 Select(PR #2887)</h1>
+  <p class="meta">
+    设置 → 常规 → 消息输入。原「使用 ⌘+Enter 发送」Switch 替换为三选一 Select,结构与 token 逐一对齐
+    <code>LanguageSection.tsx</code> 既有下拉(DESIGN.md §4 Select &amp; Dropdown:药丸 trigger、
+    12px 圆角 popper 面板、面板宽度绑定 trigger、选项行 8px 内层圆角、选中态 check + font-medium)。
+    色值全部取自 <code>themes/colors.ts</code> 默认主题的对应 token,Light / Dark 双列。
+  </p>
+
+  <div class="columns">
+    <!-- ============ Light ============ -->
+    <div class="theme light">
+      <h2>Light</h2>
+
+      <div class="state-label">① 默认态(未自定义,选中 Enter)</div>
+      <div class="section-title">消息输入</div>
+      <div class="card">
+        <div class="text-col">
+          <div class="label">发送快捷键</div>
+          <div class="hint">选择 Enter 何时发送消息、何时换行。按 Shift+Enter 始终换行。</div>
+        </div>
+        <div class="controls">
+          <div class="select-trigger">
+            <span>Enter</span>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="state-label">② 展开态(hover 在第二项)</div>
+      <div class="card popover-anchor">
+        <div class="text-col">
+          <div class="label">发送快捷键</div>
+          <div class="hint">选择 Enter 何时发送消息、何时换行。按 Shift+Enter 始终换行。</div>
+        </div>
+        <div class="controls popover-anchor">
+          <div class="select-trigger">
+            <span>Enter</span>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <div class="select-panel">
+            <div class="option selected">
+              <span>Enter</span>
+              <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+            <div class="option hovered"><span>多行消息用 ⌘+Enter</span></div>
+            <div class="option"><span>始终用 ⌘+Enter</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="spacer-for-panel"></div>
+
+      <div class="state-label">③ 已自定义态(选中多行挡,出现「已自定义」徽章 + 恢复默认)</div>
+      <div class="card">
+        <div class="text-col">
+          <div class="label">发送快捷键</div>
+          <div class="hint">选择 Enter 何时发送消息、何时换行。按 Shift+Enter 始终换行。</div>
+        </div>
+        <div class="controls">
+          <span class="badge">已自定义</span>
+          <button class="reset-btn" aria-label="恢复默认">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+          <div class="select-trigger">
+            <span>多行消息用 ⌘+Enter</span>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Dark ============ -->
+    <div class="theme dark">
+      <h2>Dark</h2>
+
+      <div class="state-label">① 默认态(未自定义,选中 Enter)</div>
+      <div class="section-title">消息输入</div>
+      <div class="card">
+        <div class="text-col">
+          <div class="label">发送快捷键</div>
+          <div class="hint">选择 Enter 何时发送消息、何时换行。按 Shift+Enter 始终换行。</div>
+        </div>
+        <div class="controls">
+          <div class="select-trigger">
+            <span>Enter</span>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="state-label">② 展开态(hover 在第二项;dark 下行高亮与面板同 token,靠 check + 字重区分选中,同语言下拉现状)</div>
+      <div class="card popover-anchor">
+        <div class="text-col">
+          <div class="label">发送快捷键</div>
+          <div class="hint">选择 Enter 何时发送消息、何时换行。按 Shift+Enter 始终换行。</div>
+        </div>
+        <div class="controls popover-anchor">
+          <div class="select-trigger">
+            <span>Enter</span>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <div class="select-panel">
+            <div class="option selected">
+              <span>Enter</span>
+              <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+            <div class="option hovered"><span>多行消息用 ⌘+Enter</span></div>
+            <div class="option"><span>始终用 ⌘+Enter</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="spacer-for-panel"></div>
+
+      <div class="state-label">③ 已自定义态</div>
+      <div class="card">
+        <div class="text-col">
+          <div class="label">发送快捷键</div>
+          <div class="hint">选择 Enter 何时发送消息、何时换行。按 Shift+Enter 始终换行。</div>
+        </div>
+        <div class="controls">
+          <span class="badge">已自定义</span>
+          <button class="reset-btn" aria-label="恢复默认">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+          <div class="select-trigger">
+            <span>多行消息用 ⌘+Enter</span>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <table class="behavior">
+    <tr><th>挡位</th><th>单行草稿 Enter</th><th>多行草稿 Enter</th><th>⌘/Ctrl+Enter</th><th>Shift/Option+Enter</th></tr>
+    <tr><td>Enter(默认,不变)</td><td>发送</td><td>发送</td><td>空闲发送 / 运行中插话</td><td>换行</td></tr>
+    <tr><td>多行消息用 ⌘+Enter(新增)</td><td>发送</td><td>换行</td><td>单行:同默认;多行:发送</td><td>换行</td></tr>
+    <tr><td>始终用 ⌘+Enter(原开关开启态)</td><td>换行</td><td>换行</td><td>发送</td><td>换行</td></tr>
+  </table>
+
+  <p class="meta" style="margin-top:12px">
+    Windows / Linux 上修饰键显示为 Ctrl+Enter(<code>getComposerModifierShortcutLabel</code>)。
+    发送按钮 tooltip 在多行挡下随草稿单行/多行实时切换显示 Enter 或 ⌘/Ctrl+Enter。
+  </p>
+</body>
+</html>
