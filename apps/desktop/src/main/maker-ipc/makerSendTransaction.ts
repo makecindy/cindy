@@ -614,7 +614,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ? (requestedOrigin as Record<string, unknown>).teamId
         : undefined;
       const legacyWorkflowId =
-        createOpts && typeof createOpts === 'object'
+        isOrcaInput && createOpts && typeof createOpts === 'object'
           ? (createOpts as { vendorOptions?: Record<string, unknown> }).vendorOptions
               ?.orcaWorkflowId
           : undefined;

@@ -339,6 +339,51 @@ describe('maker SEND transaction', () => {
     );
   });
 
+  it('does not lease ordinary or scheduler inputs from ambient Orca vendor options', async () => {
+    const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
+    const session = createSession({
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        const release = await opts?.acquireVendorDispatchLease?.();
+        try {
+          opts?.onDispatching?.();
+        } finally {
+          await release?.();
+        }
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      acquireVendorDispatchLease,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      vendorOptions: {
+        orcaRole: 'lead',
+        orcaWorkflowId: 'team-old',
+        orcaLeadSessionId: 'session-1',
+      },
+    };
+
+    await transaction.sendToAgentAccepted('session-1', 'ordinary prompt', createOpts, {
+      persistUserMessage: { clientId: 'ordinary', content: 'ordinary prompt' },
+    });
+    await transaction.sendToAgentAccepted('session-1', 'scheduler prompt', createOpts, {
+      origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'heartbeat' },
+      persistUserMessage: { clientId: 'scheduler', content: 'scheduler prompt' },
+    });
+
+    expect(acquireVendorDispatchLease).not.toHaveBeenCalled();
+    for (const [, opts] of vi.mocked(session.send).mock.calls) {
+      expect(opts?.acquireVendorDispatchLease).toBeUndefined();
+    }
+  });
+
   it('persists Orca queue origin without sending the unsupported origin to maker-core', async () => {
     const { deps, session } = createDeps();
     const transaction = createMakerSendTransaction(deps);
@@ -1665,7 +1710,7 @@ describe('session-agent-switch handoff injection', () => {
 
   it('计划对账覆盖仅附件轮次(正文空,带图片/文件)', async () => {
     const peekPlanReconcileNote = vi.fn(async () => ({ note: 'RECONCILE-NOTE' }));
-    const { deps, session } = createDeps({ peekPlanReconcileNote });
+    const { deps } = createDeps({ peekPlanReconcileNote });
     const transaction = createMakerSendTransaction(deps);
 
     await transaction.sendToAgentAccepted(
