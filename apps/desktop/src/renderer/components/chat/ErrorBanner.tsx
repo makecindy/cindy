@@ -266,12 +266,16 @@ export function ErrorBanner({
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
     agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
-  const usageLimitResetAt =
+  const usageLimitResetDate =
     usageLimitRecovery?.resetAtMs && Number.isFinite(usageLimitRecovery.resetAtMs)
+      ? new Date(usageLimitRecovery.resetAtMs)
+      : null;
+  const usageLimitResetAt =
+    usageLimitResetDate && Number.isFinite(usageLimitResetDate.getTime())
       ? new Intl.DateTimeFormat(i18n?.resolvedLanguage ?? i18n?.language, {
           dateStyle: 'medium',
           timeStyle: 'short',
-        }).format(new Date(usageLimitRecovery.resetAtMs))
+        }).format(usageLimitResetDate)
       : null;
   const isOrganizationCodexPlan = ['business', 'enterprise', 'team'].includes(
     usageLimitRecovery?.planType?.toLowerCase() ?? '',
