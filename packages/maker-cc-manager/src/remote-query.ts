@@ -28,7 +28,7 @@ import type {
   SessionAttachResult,
   SessionClosedNotification,
 } from './protocol.js';
-import type { RpcClient } from './client.js';
+import type { RpcClient, RpcPendingRequest } from './client.js';
 
 export interface RemoteQueryOptions {
   /** Connected + hello'd RpcClient. Caller owns lifecycle. */
@@ -67,6 +67,8 @@ export interface RemoteQuery extends AsyncIterable<unknown> {
   readonly sessionId: string;
   /** Push a user message into the session's input queue (transports to query/send RPC). */
   send(message: unknown): Promise<void>;
+  /** Split local transport submission from the later query/send RPC response. */
+  sendWithSubmission(message: unknown): RpcPendingRequest<void>;
   /** Forward to query/setModel. */
   setModel(model?: string): Promise<void>;
   /** Forward to query/setPermissionMode. */
@@ -186,12 +188,23 @@ export async function createRemoteQuery(opts: CreateRemoteQueryOptions): Promise
     }
   }
 
-  async function send(message: unknown): Promise<void> {
-    if (closed) throw new Error(`RemoteQuery(${opts.sessionId}) is closed`);
-    await opts.client.request(METHODS.QUERY_SEND, {
+  function sendWithSubmission(message: unknown): RpcPendingRequest<void> {
+    if (closed) {
+      const failed: Promise<never> = Promise.reject(
+        new Error(`RemoteQuery(${opts.sessionId}) is closed`),
+      );
+      return { submitted: failed, response: failed };
+    }
+    return opts.client.requestWithSubmission<void>(METHODS.QUERY_SEND, {
       sessionId: opts.sessionId,
       message,
     }, rpcOpts);
+  }
+
+  async function send(message: unknown): Promise<void> {
+    const pending = sendWithSubmission(message);
+    void pending.submitted.catch(() => undefined);
+    await pending.response;
   }
 
   async function setModel(model?: string): Promise<void> {
@@ -266,6 +279,7 @@ export async function createRemoteQuery(opts: CreateRemoteQueryOptions): Promise
   return {
     sessionId: opts.sessionId,
     send,
+    sendWithSubmission,
     setModel,
     setPermissionMode,
     applyFlagSettings,

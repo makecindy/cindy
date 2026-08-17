@@ -3247,9 +3247,26 @@ export class ClaudeCodeAgent extends BaseAgent {
         (async (): Promise<void> => {
           for await (const msg of inputQueue) {
             try {
-              await (remoteQuery as unknown as {
+              const remoteTransport = remoteQuery as unknown as {
                 send: (m: unknown) => Promise<void>;
-              }).send(msg);
+                sendWithSubmission?: (m: unknown) => {
+                  submitted: Promise<void>;
+                  response: Promise<void>;
+                };
+              };
+              const pending = remoteTransport.sendWithSubmission?.(msg);
+              if (pending) {
+                // The response can reject before a backpressured write settles.
+                // Observe it immediately, then release the SQLite writer after
+                // local transport submission and keep response handling intact.
+                void pending.response.catch(() => undefined);
+                await pending.submitted;
+                await releaseVendorDispatchLeaseForInput(msg);
+                await pending.response;
+              } else {
+                // Compatibility fallback for injected legacy test/host queries.
+                await remoteTransport.send(msg);
+              }
             } catch (e) {
               log.warn('cc remote: forwarding inputQueue → remoteQuery.send failed; closing remote query to surface aborted-turn', {
                 error: String((e as Error)?.message ?? e),

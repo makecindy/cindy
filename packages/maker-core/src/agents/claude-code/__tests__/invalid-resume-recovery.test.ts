@@ -279,13 +279,21 @@ describe('Claude invalid-resume recovery', () => {
   it('holds the host dispatch lease until the remote transport send settles', async () => {
     const workingDir = await makeTempDir();
     const stream = createControlledStream();
-    let finishRemoteSend!: () => void;
-    const remoteSendGate = new Promise<void>((resolve) => {
-      finishRemoteSend = resolve;
+    let finishRemoteSubmission!: () => void;
+    const remoteSubmissionGate = new Promise<void>((resolve) => {
+      finishRemoteSubmission = resolve;
+    });
+    let finishRemoteResponse!: () => void;
+    const remoteResponseGate = new Promise<void>((resolve) => {
+      finishRemoteResponse = resolve;
     });
     const remoteQuery = {
       ...createFakeQuery(stream),
-      send: vi.fn(async () => remoteSendGate),
+      send: vi.fn(async () => remoteResponseGate),
+      sendWithSubmission: vi.fn(() => ({
+        submitted: remoteSubmissionGate,
+        response: remoteResponseGate,
+      })),
     };
     const agent = new ClaudeCodeAgent(createDeps({
       runtimeConfig: { remoteEndpoint: 'https://gateway.example' },
@@ -317,13 +325,14 @@ describe('Claude invalid-resume recovery', () => {
         },
       },
     );
-    await vi.waitFor(() => expect(remoteQuery.send).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(remoteQuery.sendWithSubmission).toHaveBeenCalledTimes(1));
     expect(order).toEqual(['acquire']);
 
     await handle.close();
     expect(order).toEqual(['acquire']);
-    finishRemoteSend();
+    finishRemoteSubmission();
     await vi.waitFor(() => expect(order).toEqual(['acquire', 'release']));
+    finishRemoteResponse();
     stream.end();
     await collected;
   });
