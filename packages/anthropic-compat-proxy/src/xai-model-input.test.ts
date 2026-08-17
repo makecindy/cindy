@@ -177,6 +177,42 @@ describe("sanitizeXaiModelInputBody", () => {
     ]);
   });
 
+  it("keeps host-allowed xAI server tool replay items", () => {
+    const shellCall = {
+      type: "shell_call",
+      id: "sh_1",
+      status: "completed",
+    };
+    const shellOut = {
+      type: "shell_call_output",
+      call_id: "sh_1",
+      output: "ok",
+    };
+    const execCall = { type: "code_execution_call", id: "ce_1" };
+    const collections = { type: "collections_search_call", id: "cs_1" };
+    const out = sanitizeXaiModelInputBody({
+      model: "x-ai/grok-4.6",
+      input: [
+        { type: "agent_message", author: "bot", content: "ok" },
+        shellCall,
+        shellOut,
+        execCall,
+        collections,
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "[collab bot]\nok" }],
+      },
+      shellCall,
+      shellOut,
+      execCall,
+      collections,
+    ]);
+  });
+
   it("flattens Chat-compat {image_url:{url,detail}} into Responses string + detail", () => {
     const out = sanitizeXaiModelInputBody({
       model: "x-ai/grok-4.6",
