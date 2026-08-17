@@ -85,6 +85,10 @@ test("root unit and all scripts run runner self-tests before workspace sweep", (
 		scripts["test:unit"],
 		/^pnpm test:runner && node scripts\/test-workspaces\.mjs --tier unit$/,
 	);
+	assert.equal(
+		scripts["test:unit:related"],
+		"node scripts/test-workspaces.mjs --tier unit --related",
+	);
 	assert.match(
 		scripts["test:all"],
 		/^pnpm test:runner && node scripts\/test-workspaces\.mjs --all$/,
@@ -117,58 +121,12 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	);
 });
 
-test("client CI builds model-access protocol before consumer checks", () => {
+test("client CI no longer builds model-access protocol for consumers", () => {
 	const workflow = fs.readFileSync(
 		path.join(ROOT, ".github", "workflows", "ci.yml"),
 		"utf8",
 	).replace(/\r\n/g, "\n");
-	const jobs = [
-		{
-			name: "verify-checks",
-			body: workflow.match(/\n  verify-checks:\n([\s\S]*?)\n  linux-unit-shards:/)?.[1],
-			consumerCommand: "run: pnpm --filter desktop typecheck",
-		},
-		{
-			name: "linux-unit-shards",
-			body: workflow.match(/\n  linux-unit-shards:\n([\s\S]*?)\n  verify:/)?.[1],
-			consumerCommand: "run: pnpm exec node scripts/test-workspaces.mjs --tier unit",
-		},
-		{
-			name: "windows-unit-shards",
-			body: workflow.match(/\n  windows-unit-shards:\n([\s\S]*?)\n  windows-unit:/)?.[1],
-			consumerCommand: "run: pnpm test:unit",
-		},
-	];
-
-	for (const { name, body, consumerCommand } of jobs) {
-		assert.ok(body, `client CI must define the ${name} job`);
-		const installIndex = body.indexOf("run: pnpm install --frozen-lockfile");
-		const buildIndex = body.indexOf(
-			"run: pnpm --filter @cindy/model-access-protocol build",
-		);
-		const consumerIndex = body.indexOf(consumerCommand);
-		assert.ok(installIndex >= 0, `${name} must install dependencies`);
-		assert.ok(buildIndex > installIndex, `${name} must build protocol after install`);
-		assert.ok(
-			consumerIndex > buildIndex,
-			`${name} must build protocol before consumer checks`,
-		);
-	}
-});
-
-test("Linux unit shards reject unsafe protocol gitlinks before installing dependencies", () => {
-	const workflow = fs.readFileSync(
-		path.join(ROOT, ".github", "workflows", "ci.yml"),
-		"utf8",
-	).replace(/\r\n/g, "\n");
-	const body = workflow.match(/\n  linux-unit-shards:\n([\s\S]*?)\n  verify:/)?.[1];
-	assert.ok(body, "client CI must define Linux unit shards");
-	const fetchIndex = body.indexOf("git submodule update --init --force --recursive -- cindy-protocol");
-	const guardIndex = body.indexOf("run: node scripts/check-submodule-forward.mjs");
-	const installIndex = body.indexOf("run: pnpm install --frozen-lockfile");
-	assert.ok(fetchIndex >= 0, "Linux unit shards must fetch cindy-protocol");
-	assert.ok(guardIndex > fetchIndex, "Linux unit shards must validate the fetched protocol gitlink");
-	assert.ok(installIndex > guardIndex, "Linux unit shards must reject unsafe gitlinks before install");
+	assert.doesNotMatch(workflow, /pnpm --filter @cindy\/model-access-protocol build/);
 });
 
 test("help groups copyable desktop, binary, and Mobile workflows", async () => {
@@ -805,14 +763,14 @@ test("filterRunsByWorkspace selects by manifest name or cwd and supports exclude
 	);
 });
 
-test("expandWorkspacePatterns supports nested submodule package roots", () => {
+test("expandWorkspacePatterns supports nested workspace package roots", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-patterns-"));
 	try {
-		const pkg = path.join(root, "cindy-protocol", "packages", "protocol-a");
+		const pkg = path.join(root, "vendor", "protocols", "protocol-a");
 		fs.mkdirSync(pkg, { recursive: true });
 		fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"protocol-a"}\n');
-		assert.deepEqual(expandWorkspacePatterns(root, ["cindy-protocol/packages/*"]), [
-			"cindy-protocol/packages/protocol-a",
+		assert.deepEqual(expandWorkspacePatterns(root, ["vendor/protocols/*"]), [
+			"vendor/protocols/protocol-a",
 		]);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
@@ -831,6 +789,7 @@ test("parseCliOptions rejects --tier without a value", () => {
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
 		noLock: false,
+		related: false,
 	});
 });
 
@@ -853,6 +812,7 @@ test("parseCliOptions supports workspace include and exclude selectors", () => {
 			excludeWorkspaces: ["packages/orca-workflow"],
 			workspaceConcurrency: undefined,
 			noLock: false,
+			related: false,
 		},
 	);
 	assert.deepEqual(parseWorkspaceSelectorValue(" desktop, apps/server "), [
@@ -890,6 +850,11 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 		/requires a positive integer/,
 	);
 	assert.equal(parseCliOptions(["--no-lock"]).noLock, true);
+	assert.equal(parseCliOptions(["--related"]).related, true);
+	assert.throws(
+		() => parseCliOptions(["--related", "--all"]),
+		/--related cannot be combined with --all/,
+	);
 });
 
 test("unit CI shard arguments cover valid halves and reject malformed input", () => {
@@ -1879,15 +1844,24 @@ test("runPlannedTests passes selected include files to packageBin commands", asy
 		allFiles: ["packages/orca-workflow/src/__tests__/orca-bridge-mcp.test.ts"],
 		manifest,
 		tier: "unit",
-		runCommandImpl: async (command, args) => {
-			calls.push({ command, args });
+		runCommandImpl: async (command, args, options) => {
+			calls.push({ command, args, options });
 			return { exitCode: 0, output: "PASS" };
 		},
 	});
-	assert.deepEqual(calls[0].args.slice(-1), [
+	// Windows 上 resolvePnpmInvocation 会通过 cmd.exe 包装，实际 pnpm 参数
+	// 放在 env 的 CINDY_PNPM_CMD_ARG_N 里。其他平台参数直接在 args 里。
+	const call = calls[0];
+	const pnpmArgs = call.options?.env
+		? Object.keys(call.options.env)
+				.filter((k) => k.startsWith("CINDY_PNPM_CMD_ARG_"))
+				.sort()
+				.map((k) => call.options.env[k])
+		: call.args;
+	assert.deepEqual(pnpmArgs.slice(-1), [
 		"src/__tests__/orca-bridge-mcp.test.ts",
 	]);
-	assert.equal(calls[0].args.includes("src/__tests__/**/*.test.ts"), false);
+	assert.equal(pnpmArgs.includes("src/__tests__/**/*.test.ts"), false);
 });
 
 test("buildPnpmArgs rejects selected files outside the workspace", () => {
@@ -1902,6 +1876,32 @@ test("buildPnpmArgs rejects selected files outside the workspace", () => {
 			),
 		/Selected test file is outside workspace packages\/orca-workflow: packages\/other\/src\/foo\.test\.ts/,
 	);
+});
+
+test("buildPnpmArgs switches vitest to related mode when related files are provided", () => {
+	const args = buildPnpmArgs(
+		"F:/repo",
+		{ cwd: "apps/desktop" },
+		{
+			type: "packageBin",
+			bin: "vitest",
+			args: ["run", "--pool=threads", "--maxWorkers=1"],
+		},
+		{ exclude: ["**/*.bench.ts"] },
+		["apps/desktop/src/main/foo.test.ts"],
+		["apps/desktop/src/main/foo.ts"],
+	);
+	assert.equal(args[3], "vitest");
+	assert.deepEqual(args.slice(4, 9), [
+		"related",
+		"--run",
+		"--pool=threads",
+		"--maxWorkers=1",
+		"--passWithNoTests",
+	]);
+	assert.equal(args.includes("src/main/foo.ts"), true);
+	assert.equal(args.includes("src/main/foo.test.ts"), false);
+	assert.deepEqual(args.slice(-2), ["--exclude", "**/*.bench.ts"]);
 });
 
 test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () => {

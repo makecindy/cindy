@@ -39,7 +39,6 @@
 | [`apps/desktop/native/sqlite-vec/LICENSE`](../../apps/desktop/native/sqlite-vec/LICENSE) | 上游 sqlite-vec | vendored 原生组件的上游许可证，随组件源码保留。 |
 | [`apps/desktop/src/renderer/vendor/drawio/LICENSE`](../../apps/desktop/src/renderer/vendor/drawio/LICENSE)、[`tapdb/LICENSE`](../../apps/desktop/src/renderer/vendor/tapdb/LICENSE) | 各自上游项目 | vendored 前端资源的上游许可证，随资源分发。 |
 | [`packages/browser-control-runtime/src/_generated/vendor/fs-safe/LICENSE`](../../packages/browser-control-runtime/src/_generated/vendor/fs-safe/LICENSE) | 上游 fs-safe | 生成或 vendored 代码旁的上游许可证，不能与代码拆开。 |
-| [`cindy-protocol/LICENSE`](../../cindy-protocol/LICENSE)、[`cindy-protocol/NOTICE`](../../cindy-protocol/NOTICE) | `cindy-protocol` submodule | 协议是独立仓库，由协议仓库维护；本仓只锁定 submodule commit，不复制真源。 |
 
 固定路径文件如有变化，应在对应的 `docs/legal/` 说明或生成器中同步登记，而不是
 再创建一份容易漂移的手工副本。
@@ -55,5 +54,3 @@
 4. [`CONTRIBUTING.md`](../../CONTRIBUTING.md) 与 [`SECURITY.md`](../../SECURITY.md) 是
    GitHub 识别的社区流程入口，不属于法务真源，因此继续保留在仓库根目录；它们
    分别负责贡献流程和漏洞披露，并从这里作为相关入口查找。
-5. `cindy-protocol/` 的法律文件不在本仓库重排；需要修改时应在协议仓库单独提交，
-   再更新本仓库的 submodule 指针。

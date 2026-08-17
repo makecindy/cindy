@@ -1,6 +1,6 @@
 /**
  * Settings -> Personalization 的 Subagent 设置:默认模型(Claude Code / Codex)+
- * Codex 子代理护栏(总开关 / 并发上限 / 嵌套开关)。
+ * Codex 子代理护栏(总开关 / Cindy 策略 / 并发上限 / 嵌套开关)。
  *
  * main 进程 JSON store 是事实源;renderer 只展示并通过 IPC 提交覆盖值。
  * codex spawn 注入键的变更可能延迟生效(返回体 codexRestartDeferred=true 时
@@ -438,7 +438,7 @@ export function SubagentModelSection() {
             <div className="min-w-0 flex-1">
               {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择
                   面板,处处同行为):供应商分段、订阅来源全开,(model, providerId) 原子
-                  落库。仅 effort/Fast 配置列保持关闭(configurationEnabled=false)——
+                  落库。仅 effort/Fast 配置列与行内摘要保持关闭(configurationEnabled=false)——
                   子代理派发通道 CLAUDE_CODE_SUBAGENT_MODEL 只有模型 id,没有 effort/Fast
                   维度,展示可调项会承诺一个不存在的能力(功能特殊化理由,见 PR 说明)。 */}
               <ModelSelector
@@ -606,6 +606,32 @@ export function SubagentModelSection() {
         <p className="-mt-3 px-4 pb-3 text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
           {t('settings.subagentModels.guardrails.enableHint')}
         </p>
+
+        <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
+
+        <div
+          className={`flex items-center justify-between gap-3 px-4 py-4 ${subagentsEnabled ? '' : 'pointer-events-none opacity-50'}`}
+        >
+          <div className="flex min-w-0 flex-col gap-1">
+            <p
+              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.subagentModels.guardrails.cindyPolicyLabel')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.subagentModels.guardrails.cindyPolicyHint')}
+            </p>
+          </div>
+          <Switch
+            checked={settings.codexUseCindySubagentPolicy}
+            disabled={pending || !subagentsEnabled}
+            onCheckedChange={(next) => {
+              void persistPatch({ codexUseCindySubagentPolicy: next });
+            }}
+            aria-label={t('settings.subagentModels.guardrails.cindyPolicyAria')}
+          />
+        </div>
 
         <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
 

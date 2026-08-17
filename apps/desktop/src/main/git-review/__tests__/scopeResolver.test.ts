@@ -2,8 +2,13 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { resolveReviewScope, type ScopeResolverDeps } from '../scopeResolver';
-import type { GitRunResult } from '../gitRunner';
+import {
+  defaultScopeResolverDeps,
+  resolveReviewScope,
+  type ScopeResolverDeps,
+  withSessionReviewRowSnapshot,
+} from '../scopeResolver';
+import { GitRunError, type GitRunResult } from '../gitRunner';
 
 function deps(patch: Partial<ScopeResolverDeps> = {}): ScopeResolverDeps {
   return {
@@ -47,20 +52,110 @@ describe('git-review scopeResolver', () => {
     });
   });
 
-  it('returns a remote-session disabled scope before probing local paths', async () => {
+  it('resolves an SSH session with remote POSIX paths without probing local paths', async () => {
     const d = deps({
       getSessionRow: vi.fn().mockResolvedValue({
         id: 's1',
-        workingDir: '/remote/repo',
+        workingDir: '/remote/project/subdir',
         worktreePath: null,
         remoteHostId: 'host-1',
+      }),
+      git: vi.fn().mockImplementation(async (args: readonly string[]): Promise<GitRunResult> => {
+        if (args.includes('--show-toplevel')) return { stdout: '/remote/project\n', stderr: '', exitCode: 0 };
+        if (args.includes('--verify')) return { stdout: '0123456789abcdef\n', stderr: '', exitCode: 0 };
+        if (args[0] === 'symbolic-ref') return { stdout: 'feature/ssh-review\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: '', exitCode: 0 };
       }),
     });
 
     const scope = await resolveReviewScope('s1', d);
 
-    expect(scope.disabledReason).toBe('remote-session');
+    expect(scope).toMatchObject({
+      workdir: '/remote/project/subdir',
+      repoRoot: '/remote/project',
+      source: 'remote',
+      branch: 'feature/ssh-review',
+      headOid: '0123456789abcdef',
+      isDetached: false,
+      disabledReason: null,
+    });
     expect(d.resolveSessionDir).not.toHaveBeenCalled();
+  });
+
+  it('marks a remote HEAD without a symbolic branch as detached', async () => {
+    const d = deps({
+      getSessionRow: vi.fn().mockResolvedValue({
+        id: 's1',
+        workingDir: '/remote/project',
+        worktreePath: null,
+        remoteHostId: 'host-1',
+      }),
+      git: vi.fn().mockImplementation(async (args: readonly string[]): Promise<GitRunResult> => {
+        if (args.includes('--show-toplevel')) return { stdout: '/remote/project\n', stderr: '', exitCode: 0 };
+        if (args.includes('--verify')) return { stdout: '0123456789abcdef\n', stderr: '', exitCode: 0 };
+        throw new GitRunError({ args, cwd: '/remote/project', exitCode: 1, stdout: '', stderr: '' });
+      }),
+    });
+
+    await expect(resolveReviewScope('s1', d)).resolves.toMatchObject({
+      branch: null,
+      headOid: '0123456789abcdef',
+      isDetached: true,
+    });
+  });
+
+  it('reuses the request session-row snapshot instead of querying a second routing identity', async () => {
+    const snapshot = {
+      id: 's1',
+      workingDir: '/remote/project',
+      worktreePath: null,
+      remoteHostId: 'host-1',
+    };
+
+    const row = await withSessionReviewRowSnapshot(
+      snapshot,
+      () => defaultScopeResolverDeps().getSessionRow('s1'),
+    );
+
+    expect(row).toEqual(snapshot);
+  });
+
+  it('distinguishes missing Git on the SSH host from a non-Git directory', async () => {
+    const d = deps({
+      getSessionRow: vi.fn().mockResolvedValue({
+        id: 's1',
+        workingDir: '/remote/project',
+        worktreePath: null,
+        remoteHostId: 'host-1',
+      }),
+      git: vi.fn().mockRejectedValue(new GitRunError({
+        args: ['rev-parse'],
+        cwd: '/remote/project',
+        exitCode: 127,
+        stdout: '',
+        stderr: 'git: command not found',
+      })),
+    });
+
+    const scope = await resolveReviewScope('s1', d);
+
+    expect(scope.disabledReason).toBe('git-unavailable');
+    expect(scope.disabledMessage).toBe('Git is not available on the SSH host');
+  });
+
+  it('propagates SSH transport failures during the remote repository probe', async () => {
+    const failure = new Error('SSH channel closed while probing Git');
+    const d = deps({
+      getSessionRow: vi.fn().mockResolvedValue({
+        id: 's1',
+        workingDir: '/remote/project',
+        worktreePath: null,
+        remoteHostId: 'host-1',
+      }),
+      git: vi.fn().mockRejectedValue(failure),
+    });
+
+    await expect(resolveReviewScope('s1', d)).rejects.toBe(failure);
   });
 
   it('falls back to non-git disabled scope when no workdir resolves', async () => {

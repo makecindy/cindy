@@ -2,11 +2,11 @@
  * ConversationSearchContext —— 展开侧栏「内联会话搜索」的共享状态。
  * ---------------------------------------------------------------------------
  * 搜索输入行现在是 SidebarTopNav 顶部导航列表的第 4 行(新建 / 自动任务 / 技能 / 搜索),
- * 而搜索结果 overlay 渲染在其下方的功能槽(CCAgentSidebarUpper.ExpandedView)里——两者
+ * 结果由下方功能槽(CCAgentSidebarUpper.ExpandedView)替换列表渲染——两者
  * 是 Sidebar 外壳下的兄弟子树,不在同一组件内。这里用一个 Provider 在两者的共同祖先
  * (Sidebar 外壳)处**只实例化一次** useConversationSearch,经 context 同时供:
  *   - SidebarTopNav 的搜索行(输入 / 排序 / 筛选 / hover 展开);
- *   - ExpandedView 的结果 overlay(读 query / status / results)。
+ *   - ExpandedView 的结果列表(读 query / status / results)。
  *
  * allKnownProjects 在此就地计算(与 CCAgentSidebarUpper 的 projectUniverse 同口径:全量
  * 会话、排除 Orca worker),供筛选面板列举项目与项目内搜索会话集解析。rail 态的搜索是

@@ -31,13 +31,18 @@ import type { Logger } from '../../../interfaces/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const PI_BINARY = path.join(
-  REPO_ROOT,
-  'apps',
-  'pi-bin',
-  `${process.platform}-${process.arch}`,
-  process.platform === 'win32' ? 'pi.exe' : 'pi',
-);
+// Local installs keep the same versioned binary outside the worktree. The
+// override lets a lightweight harness smoke use that binary without copying it
+// into apps/pi-bin or starting Desktop; CI keeps the repository-managed path.
+const PI_BINARY =
+  process.env.CINDY_TEST_PI_BINARY ||
+  path.join(
+    REPO_ROOT,
+    'apps',
+    'pi-bin',
+    `${process.platform}-${process.arch}`,
+    process.platform === 'win32' ? 'pi.exe' : 'pi',
+  );
 const RIPGREP_DIR = path.join(
   REPO_ROOT,
   'apps',
@@ -255,6 +260,35 @@ function responsesStreamBody(text: string, model: string): string {
   ]);
 }
 
+/** 最小 OpenAI Chat Completions SSE 流：验证 PI 内置模型表的 completions 分配。 */
+function chatCompletionsStreamBody(text: string, model: string): string {
+  return [
+    `data: ${JSON.stringify({
+      id: 'chatcmpl_pi_native_1',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      id: 'chatcmpl_pi_native_1',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model,
+      choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      id: 'chatcmpl_pi_native_1',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })}\n\n`,
+    'data: [DONE]\n\n',
+  ].join('');
+}
+
 /** 让"模型"发起一次工具调用的 SSE 流(stop_reason=tool_use)。 */
 function anthropicToolUseBody(toolName: string, input: Record<string, unknown>): string {
   return sse([
@@ -302,6 +336,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     url: string;
     auth: string | undefined;
     sessionId: string | undefined;
+    providerId: string | undefined;
     body: string;
   }> = [];
   // 权限测试用的脚本化响应队列:非空时按序出队,空了回落默认 pong 文本。
@@ -317,6 +352,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           url: req.url ?? '',
           auth: (req.headers['x-api-key'] as string | undefined) ?? (req.headers.authorization as string | undefined),
           sessionId: req.headers['x-cindy-pi-session-id'] as string | undefined,
+          providerId: req.headers['x-cindy-pi-provider-id'] as string | undefined,
           body,
         });
         res.writeHead(200, {
@@ -362,6 +398,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
 
@@ -419,6 +456,303 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
       }
+    },
+  );
+
+  it(
+    'keeps provider cindy and sends a gateway Responses model to /v1/responses',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'pi-responses-model',
+            displayName: 'Pi Responses Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      };
+      deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+        modelId === 'pi-responses-model' ? 'openai-responses' : 'anthropic-messages';
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-responses-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(responsesStreamBody('pong from responses gateway', 'pi-responses-model'));
+      try {
+        handle = await agent.startSession({
+          sessionId: 'itest-responses-session',
+          workingDir,
+          model: 'pi-responses-model',
+          providerId: 'xd',
+        });
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping responses' });
+        await collected;
+
+        expect(seenRequests.slice(requestsBefore).some((request) => request.url === '/v1/responses'))
+          .toBe(true);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string }).text?.includes('pong from responses gateway'),
+        )).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'uses the bundled openai-codex adapter for a host subscription model',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'chatgpt/gpt-cindy-daily-test',
+            displayName: 'GPT Daily Catalog Test',
+            contextWindow: 272_000,
+            efforts: ['low', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      };
+      const encode = (value: unknown): string =>
+        Buffer.from(JSON.stringify(value)).toString('base64url');
+      const placeholderJwt = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
+        'https://api.openai.com/auth': { chatgpt_account_id: 'cindy-pi-proxy' },
+      })}.`;
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [{
+          id: 'openai-codex',
+          sourceProviderId: 'openai',
+          name: 'OpenAI (ChatGPT)',
+          baseUrl: endpoint,
+          inheritModels: true,
+          apiKeyEnvVar: 'CINDY_PI_OPENAI_PROXY_KEY',
+          headers: {
+            'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+            'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+            'x-cindy-pi-provider-id': 'openai',
+          },
+          models: [{
+            id: 'chatgpt/gpt-cindy-daily-test',
+            wireId: 'gpt-cindy-daily-test',
+            catalogAddition: true,
+            contextWindow: 272_000,
+            maxTokens: 32_000,
+          }],
+        }],
+        env: { CINDY_PI_OPENAI_PROXY_KEY: placeholderJwt },
+      });
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-native-codex-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(responsesStreamBody('pong from native codex', 'gpt-cindy-daily-test'));
+      try {
+        handle = await agent.startSession({
+          sessionId: 'itest-native-codex-session',
+          workingDir,
+          model: 'chatgpt/gpt-cindy-daily-test',
+          providerId: 'openai',
+          effort: 'high',
+        });
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping native codex' });
+        await collected;
+
+        const nativeRequests = seenRequests.slice(requestsBefore);
+        expect(nativeRequests.some((request) => request.url === '/codex/responses')).toBe(true);
+        expect(nativeRequests.some((request) => request.url === '/v1/messages')).toBe(false);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string }).text?.includes('pong from native codex'),
+        )).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'uses PI native Anthropic Messages for a host Claude subscription model',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'claude-opus-5',
+            displayName: 'Claude Opus 5',
+            contextWindow: 1_000_000,
+            efforts: ['high'],
+            defaultEffort: 'high',
+          },
+        ],
+      };
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [{
+          id: 'anthropic',
+          sourceProviderId: 'anthropic',
+          name: 'Anthropic',
+          baseUrl: endpoint,
+          inheritModels: true,
+          headers: {
+            'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+            'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+            'x-cindy-pi-provider-id': 'anthropic',
+          },
+          models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5' }],
+        }],
+        env: {},
+      });
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-native-anthropic-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(anthropicStreamBody('pong from native anthropic'));
+      try {
+        handle = await new PiAgent(deps).startSession({
+          sessionId: 'itest-native-anthropic-session',
+          workingDir,
+          model: 'claude-opus-5',
+          providerId: 'anthropic',
+          effort: 'high',
+        });
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping native anthropic' });
+        await collected;
+
+        expect(seenRequests.slice(requestsBefore)).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            url: '/v1/messages',
+            providerId: 'anthropic',
+          }),
+        ]));
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'uses PI bundled xAI APIs as the baseline for Responses and Chat Completions models',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'xai/grok-4.5', displayName: 'Grok 4.5', contextWindow: 1_000_000,
+            efforts: ['high'], defaultEffort: 'high',
+          },
+          {
+            id: 'xai/grok-build-0.1', displayName: 'Grok Build', contextWindow: 256_000,
+            efforts: [], defaultEffort: null,
+          },
+        ],
+      };
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [{
+          id: 'xai',
+          sourceProviderId: 'xai',
+          name: 'xAI (SuperGrok)',
+          baseUrl: `${endpoint}/v1`,
+          inheritModels: true,
+          headers: {
+            'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+            'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+            'x-cindy-pi-provider-id': 'xai',
+          },
+          models: [
+            { id: 'xai/grok-4.5', wireId: 'grok-4.5' },
+            { id: 'xai/grok-build-0.1', wireId: 'grok-build-0.1' },
+          ],
+        }],
+        env: {},
+      });
+      const agent = new PiAgent(deps);
+
+      const run = async (
+        sessionId: string,
+        model: string,
+        response: string,
+        expectedPath: string,
+      ): Promise<void> => {
+        const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-native-xai-cwd-'));
+        let handle: AgentSessionHandle | null = null;
+        const requestsBefore = seenRequests.length;
+        scriptedResponses.push(response);
+        try {
+          handle = await agent.startSession({
+            sessionId,
+            workingDir,
+            model,
+            providerId: 'xai',
+            ...(model.endsWith('grok-4.5') ? { effort: 'high' as const } : {}),
+          });
+          const collected = (async () => {
+            for await (const event of handle!.events()) {
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'ping native xai' });
+          await collected;
+          const requests = seenRequests.slice(requestsBefore);
+          expect(requests.some((request) => request.url === expectedPath)).toBe(true);
+          expect(requests.some((request) => request.url === '/v1/messages')).toBe(false);
+        } finally {
+          await handle?.close();
+          rmSync(workingDir, { recursive: true, force: true });
+        }
+      };
+
+      await run(
+        'itest-native-xai-responses',
+        'xai/grok-4.5',
+        responsesStreamBody('pong from xai responses', 'grok-4.5'),
+        '/v1/responses',
+      );
+      await run(
+        'itest-native-xai-completions',
+        'xai/grok-build-0.1',
+        chatCompletionsStreamBody('pong from xai completions', 'grok-build-0.1'),
+        '/v1/chat/completions',
+      );
     },
   );
 
@@ -585,13 +919,18 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(handle.id).toBeTruthy();
         await handle.close();
         handle = null;
-        await expect(agent.startSession({
+        // 轮 25 CRITICAL:CAS 返回值不再作为 fallback 门禁 —— session 文件缺失
+        // 时 fresh 是唯一合理选择(文件都没了, 不存在覆盖并发新值的风险)。
+        // CAS=false 也允许 fresh(CAS 仅清 DB 残留, 结果不阻断)。
+        const freshHandle = await agent.startSession({
           sessionId: 'invalid-resume-rejected',
           workingDir,
           model: 'pi-test-model',
           resumeSessionId: path.join(workingDir, 'still-missing.jsonl'),
           onInvalidResumeSession: async () => false,
-        })).rejects.toThrow('fallback rejected');
+        });
+        expect(freshHandle.id).toBeTruthy();
+        await freshHandle.close();
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -720,6 +1059,60 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         // pi 应把图片 base64 转发进网关请求(Anthropic image content block)。
         const sawImage = seenRequests.some((r) => r.body.includes(PNG_1x1_B64));
         expect(sawImage).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'forwards one review turn with Markdown/PDF excerpts and image bytes',
+    { timeout: 60_000 },
+    async () => {
+      const pngBase64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+      const agent = new PiAgent(buildDeps());
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-formats-'));
+      const markdownPath = path.join(workingDir, 'launch.md');
+      const pdfPath = path.join(workingDir, 'contract.pdf');
+      const imagePath = path.join(workingDir, 'poster.png');
+      writeFileSync(markdownPath, '# Launch\nBudget: 100 vs 80 + 50');
+      writeFileSync(pdfPath, '%PDF-1.4\n% transport fixture');
+      writeFileSync(imagePath, Buffer.from(pngBase64, 'base64'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'review-format-session',
+          workingDir,
+          model: 'pi-test-model',
+          reviewMode: true,
+          reviewReadPaths: [markdownPath, pdfPath, imagePath],
+        });
+        const before = seenRequests.length;
+        const done = (async () => {
+          for await (const event of handle!.events()) if (event.type === 'done') break;
+        })();
+        await handle.send({
+          type: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Markdown budget: 100 vs 80 + 50. PDF payment: 30 days vs 60 days.',
+            },
+            { type: 'file', path: markdownPath, mimeType: 'text/markdown' },
+            { type: 'file', path: pdfPath, mimeType: 'application/pdf' },
+            { type: 'image', path: imagePath, mimeType: 'image/png' },
+          ],
+        });
+        await done;
+
+        const bodies = seenRequests.slice(before).map((request) => request.body).join('\n');
+        expect(bodies).toContain('Markdown budget: 100 vs 80 + 50');
+        expect(bodies).toContain('PDF payment: 30 days vs 60 days');
+        expect(bodies).toContain(jsonStringContent(markdownPath));
+        expect(bodies).toContain(jsonStringContent(pdfPath));
+        expect(bodies).toContain(pngBase64);
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -1130,6 +1523,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     permissionMode: 'ask' | 'auto' | 'bypassPermissions';
     resolverBehavior: 'allow' | 'deny';
     deps?: AgentDeps;
+    reviewMode?: boolean;
+    reviewReadPaths?: string[];
   }): Promise<{ resolverTools: string[]; finalText: string }> {
     const agent = new PiAgent(opts.deps ?? buildDeps());
     const resolverTools: string[] = [];
@@ -1140,6 +1535,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         workingDir: opts.workingDir,
         model: 'pi-test-model',
         permissionMode: opts.permissionMode,
+        ...(opts.reviewMode ? { reviewMode: true } : {}),
+        ...(opts.reviewReadPaths ? { reviewReadPaths: opts.reviewReadPaths } : {}),
       });
       handle.setInteractionResolver?.(async (req) => {
         resolverTools.push((req as { toolName?: string }).toolName ?? '?');
@@ -1190,6 +1587,41 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
         expect(followUp.some((body) => body.includes('tool-target.ts:1: needle-line'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'Review directory grep returns safe matches without credential-file contents',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-safe-grep-'));
+      writeFileSync(path.join(workingDir, 'source.ts'), 'needle-safe\n');
+      writeFileSync(path.join(workingDir, 'credentials.json'), 'needle-credentials-secret\n');
+      writeFileSync(path.join(workingDir, 'cert.pem'), 'needle-private-key-secret\n');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('grep', { pattern: 'needle', path: '.', literal: true }),
+          anthropicStreamBody('review grep finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-review-safe-grep',
+          workingDir,
+          permissionMode: 'ask',
+          resolverBehavior: 'deny',
+          reviewMode: true,
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body).join('\n');
+        expect(followUp).toContain('source.ts:1: needle-safe');
+        expect(followUp).not.toContain('credentials.json');
+        expect(followUp).not.toContain('needle-credentials-secret');
+        expect(followUp).not.toContain('cert.pem');
+        expect(followUp).not.toContain('needle-private-key-secret');
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -1277,6 +1709,40 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
         expect(followUp.some((b) => b.includes('marker-safe-ls.txt'))).toBe(true);
         expect(finalText).toContain('safe turn finished');
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'explicit bash timeout returns Pi native timeout error and continues the turn',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-bash-timeout-'));
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('bash', {
+            command: 'node -e "setTimeout(() => {}, 10000)"',
+            timeout: 1,
+          }),
+          anthropicStreamBody('timeout turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        const { resolverTools, finalText } = await runPermissionTurn({
+          sessionId: 'perm-bash-timeout',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        expect(resolverTools).toEqual([]);
+        const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
+        expect(followUp.some((body) => body.includes('Command timed out after 1 seconds'))).toBe(
+          true,
+        );
+        expect(finalText).toContain('timeout turn finished');
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;

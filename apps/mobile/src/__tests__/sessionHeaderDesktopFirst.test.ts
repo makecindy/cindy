@@ -49,7 +49,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("function TranslucentBackdrop()");
     expect(source).toContain("<TranslucentBackdrop />");
     expect(source).toContain('return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;');
-    expect(source).toContain('<View onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
+    expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>');
     expect(source).toContain("sessionChrome: {\n    left: 0,\n    overflow: 'hidden',\n    position: 'absolute',");
     expect(source).toContain('sessionChromeContent: {');
@@ -212,7 +212,10 @@ describe('mobile session header desktop-first surface', () => {
     expect(hydration).toContain('if (cancelled || appliedRouteDraftRef.current !== key) return;');
     expect(hydration).toContain('if (!composerDocumentsEqual(composerDocumentRef.current, immediateDocumentSnapshot)) {');
     const queueCleanupStart = source.indexOf('// 切会话 / 卸载时收尾上一个会话的排队编辑态');
-    const queueCleanupEnd = source.indexOf('useEffect(() => {\n    if (canUseComposer)', queueCleanupStart);
+    const queueCleanupEnd = source.indexOf(
+      'useEffect(() => {\n    if (canUseRemoteSessionControls)',
+      queueCleanupStart,
+    );
     const queueCleanup = source.slice(queueCleanupStart, queueCleanupEnd);
     expect(queueCleanup).toContain('attachmentsRef.current = [];\n      setAttachments([]);');
     expect(queueCleanup).not.toContain('setAttachments([...editing.stashedAttachments])');

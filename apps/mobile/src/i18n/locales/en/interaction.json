@@ -19,7 +19,8 @@
     "allowOnce": "Allow once",
     "allowOnceAccessibility": "Allow permission request once",
     "allowOnceConfirm": "Confirm allow once",
-    "highRisk": "High risk"
+    "highRisk": "High risk",
+    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action."
   },
   "planMode": {
     "label": "Plan mode",

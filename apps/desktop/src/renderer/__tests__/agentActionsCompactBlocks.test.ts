@@ -182,8 +182,8 @@ describe('F12 — non-file tools → inline details', () => {
 describe('MessageStream cleanup', () => {
   it('renders persisted Orca communication messages as collapsible cards', () => {
     expect(userMessageSrc).toMatch(/parseOrcaCommunicationContent/);
-    expect(userMessageSrc).toMatch(/Orca Lead: dispatched task/);
-    expect(userMessageSrc).toMatch(/Orca Worker: reported result/);
+    expect(userMessageSrc).toMatch(/chat\.userMessage\.orcaFromLead/);
+    expect(userMessageSrc).toMatch(/chat\.userMessage\.orcaFromWorker/);
     expect(userMessageSrc).toMatch(/aria-expanded=\{orcaExpanded\}/);
   });
 

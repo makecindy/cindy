@@ -10,11 +10,16 @@ export const SESSION_SOURCES = [
   'wecom',
   'scheduler',
   'learn',
+  'review',
   'shared',
   'plugin',
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
+
+export function isReviewSessionSource(source: unknown): source is 'review' {
+  return source === 'review';
+}
 
 // desktop sidebar 展示的会话 source 白名单。
 // slack: IM 渠道自动建的会话——用户在 Slack 发消息后 desktop 同步可见。
@@ -26,6 +31,7 @@ export type SessionSource = (typeof SESSION_SOURCES)[number];
 // (2026-07-06 曾加入后按 Lizi 要求回退;2026-07-16 按 Lizi 要求重新加入,
 //  这次带 dialogue 归组,不再以 im-working-dir 聚成假项目组。)
 // scheduler / learn: 本机自动化会话,可见可点开看过程。
+// review: /review 创建的本机只读独立审查任务,可从来源卡片或侧边栏打开。
 // shared: .xdtshare 导入的分享会话,按 workingDir 归组。
 // plugin: 插件经 workspace 槽创建的工作区会话入口(空 draft,用户确认后建;
 //         projectGrouping 对零消息的 plugin 会话豁免草稿判定,直接落项目分组)。
@@ -41,6 +47,7 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'wecom',
   'scheduler',
   'learn',
+  'review',
   'shared',
   'plugin',
 ];
@@ -56,6 +63,7 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     source === 'wecom' ||
     source === 'scheduler' ||
     source === 'learn' ||
+    source === 'review' ||
     source === 'shared' ||
     source === 'plugin'
     ? source

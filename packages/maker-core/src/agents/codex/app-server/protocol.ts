@@ -756,7 +756,8 @@ export interface ServerRequestResolvedNotification {
 }
 
 export interface DynamicToolSpec {
-  namespace?: string;
+  /** Current canonical app-server format for top-level dynamic tools. */
+  type: 'function';
   name: string;
   description: string;
   inputSchema: unknown;

@@ -96,6 +96,50 @@ describe('createTurnPresenter — finalized-segments 策略(官方 bot 现有行
     expect(p.progressBody()).toBe('第二段。');
   });
 
+  it('progressBodyMode=whole 时进度发射器展示整轮累计正文', () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const p = createTurnPresenter({
+        mode: 'finalized-segments',
+        progressBodyMode: 'whole',
+        onProgress: (frame) => void frames.push(frame),
+      });
+      p.applyText(text('第一段。', true, { source: 'codex' }));
+      p.scheduleProgress();
+      vi.advanceTimersByTime(0);
+      p.applyText(text('第二段。', true, { source: 'codex' }));
+      p.flushProgress();
+
+      expect(frames.at(-1)).toContain('第一段。\n\n第二段。');
+      p.stopProgress();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('whole 累计视图超过单帧上限时退回当前消息，不把最新答案截在末尾', () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const p = createTurnPresenter({
+        mode: 'finalized-segments',
+        progressBodyMode: 'whole',
+        onProgress: (frame) => void frames.push(frame),
+        policy: { ...DEFAULT_PRESENTER_POLICY, intermediateMaxRenderedChars: 12 },
+      });
+      p.applyText(text('很长的第一段内容。', true, { source: 'codex' }));
+      p.applyText(text('最新答案。', true, { source: 'codex' }));
+      p.flushProgress();
+
+      expect(frames.at(-1)).toContain('最新答案。');
+      expect(frames.at(-1)).not.toContain('很长的第一段内容。');
+      p.stopProgress();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('claude 同一条消息(同 uuid)的相邻文本块连拼, 不同消息空行分隔', () => {
     const p = createTurnPresenter({ mode: 'finalized-segments' });
     p.applyText(text('前半', true, { source: 'claude-code', agentMeta: { uuid: 'm1' } }));
@@ -188,6 +232,31 @@ describe('createProgressEmitter — trailing-edge 1.5s 节流骨架', () => {
       emitter.schedule();
       vi.advanceTimersByTime(1500);
       expect(frames).toEqual([]);
+      emitter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flush 跳过剩余节流窗口并取消原 trailing timer', () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      let body = '第一帧';
+      const emitter = createProgressEmitter((t) => void frames.push(t), () => body);
+      emitter.schedule();
+      vi.advanceTimersByTime(0);
+      expect(frames).toEqual(['第一帧']);
+
+      body = '最后一帧';
+      emitter.schedule();
+      vi.advanceTimersByTime(100);
+      expect(frames).toEqual(['第一帧']);
+      emitter.flush();
+      expect(frames).toEqual(['第一帧', '最后一帧']);
+
+      vi.advanceTimersByTime(PROGRESS_THROTTLE_MS);
+      expect(frames).toEqual(['第一帧', '最后一帧']);
       emitter.stop();
     } finally {
       vi.useRealTimers();

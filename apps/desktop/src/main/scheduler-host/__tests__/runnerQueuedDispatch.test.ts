@@ -20,6 +20,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallbackRunner.js';
 
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
+import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
@@ -101,6 +102,8 @@ interface FakeSessionHarness {
   send: ReturnType<typeof vi.fn<SendImpl>>;
   setModel: ReturnType<typeof vi.fn>;
   setEffort: ReturnType<typeof vi.fn>;
+  setVendorOptions: ReturnType<typeof vi.fn>;
+  vendorOptions: Record<string, unknown>;
   emit(event: AgentEvent): void;
   listenerCount(): number;
 }
@@ -112,6 +115,10 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     async (_model: string, _opts?: { providerId?: string | null }) => undefined,
   );
   const setEffort = vi.fn(async () => undefined);
+  const vendorOptions: Record<string, unknown> = {};
+  const setVendorOptions = vi.fn(async (patch: Record<string, unknown>) => {
+    Object.assign(vendorOptions, patch);
+  });
   const session = {
     id: SESSION_ID,
     agentKind: 'claude-code',
@@ -120,6 +127,7 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     codexProxyActive: undefined,
     setModel,
     setEffort,
+    setVendorOptions,
     send,
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
@@ -137,6 +145,8 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     send,
     setModel,
     setEffort,
+    setVendorOptions,
+    vendorOptions,
     emit(event: AgentEvent) {
       // 生产 Session 会给当前 schedule turn 的每个事件补 turnOrigin；fake 默认
       // 复刻该边界，个别归属测试可在 event 上显式覆盖为 user / 其它 run。
@@ -380,6 +390,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
 
     // drain 派发 → runner 挂 turn 监听 → done 收尾。
     await queue.accept();
+    expect(harness.setVendorOptions).toHaveBeenCalledWith({
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-q1',
+    });
     await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
     expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
     harness.emit({
@@ -395,6 +408,10 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     // listener 已摘干净,不泄漏。
     expect(harness.listenerCount()).toBe(0);
     expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
+    expect(harness.setVendorOptions).toHaveBeenLastCalledWith({
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
+    });
+    expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
     // 收尾通知照常(未静默场景)。
     expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
   });
@@ -476,6 +493,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
     await Promise.resolve();
     expect(harness.listenerCount()).toBe(1);
+    // autoResume 尚未结束时，权威 run context 必须继续留在 session 上。
+    expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-q1');
 
     autoResumePending = false;
     harness.emit({ type: 'text', data: { text: 'continued result', isFinal: true }, source: 'claude-code' });
@@ -485,6 +504,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       sessionId: SESSION_ID,
       resultText: 'continued result',
     });
+    expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
   });
 
   it('ignores a delayed done while the same run still owns the auto-resume claim', async () => {

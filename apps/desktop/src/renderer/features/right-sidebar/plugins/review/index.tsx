@@ -1,8 +1,8 @@
 /**
- * review plugin —— RSB 内显示"本次会话改动了哪些文件"的常驻 tab。
+ * review plugin —— RSB 内统一显示当前 Git 状态与消息级历史变更的常驻 tab。
  *
- * 数据从 git-review IPC 派生;makerChatStore 只提供 Last turn 过滤集合。plugin
- * 自身持久化用户收起过哪些 diff id(`collapsedPaths`)、diff 模式、文件树显隐、
+ * 数据源由可持久化 descriptor 选择；Git 来源走 git-review IPC，历史来源读取
+ * 已记录的 turn change sets。plugin 自身持久化全部 diff 的默认展开状态、diff 模式、文件树显隐、
  * diff 自动换行偏好、文字差异偏好、隐藏空白变更偏好、Markdown 富文本预览偏好与分支来源的基准分支。
  *
  * 单例语义 —— 由 RightSidebarShell + AddTabDropdown 在调用层用
@@ -12,54 +12,61 @@
  * 注册:模块顶层 import-side-effect。plugins/index.ts 把它 import 进来。
  */
 
+import { lazy } from 'react';
 import { FileDiff } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
+import {
+  migrateLegacyTurnTarget,
+  parseReviewJumpTarget,
+  parseReviewSourceDescriptor,
+  type ReviewJumpTarget,
+  type ReviewSourceDescriptor,
+} from '../../../../../shared/reviewSource';
 import { isSafeBranchBaseRef } from '../../../../../shared/reviewBranchRef';
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { ReviewTabBody } from './ReviewTabBody';
 import type { DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
+import { seedReviewDiffsExpanded } from './diffExpansionPreference';
+
+const ReviewTabBody = lazy(() =>
+  import('./ReviewTabBody').then((module) => ({ default: module.ReviewTabBody })),
+);
 
 export interface ReviewState {
-  /** Programmatic exact-turn review target. Null keeps the normal Git-backed review surface. */
-  turnTarget: {
-    changeSetIds: string[];
-    selectedDiffId: string | null;
-    selectedPath: string | null;
-    requestNonce: number;
-    /**
-     * 变更集所属会话。null(旧数据)= 与 tab 桶同会话;与桶会话不同(协同面板
-     * 里审查 worker 的轮次)时按它取数,且不提供 git 来源切换(git 视图跟随桶
-     * 会话的 workdir,对 worker 语义错误)。
-     */
-    targetSessionId: string | null;
-  } | null;
-  /** 用户收起过哪些 diff id。空数组表示所有当前 diff 默认展开。 */
-  collapsedPaths: string[];
+  /** 当前选中的审查来源。 */
+  descriptor: ReviewSourceDescriptor;
+  /** 最近一次从消息变更卡片进入时的精确快照，切换 Git 来源后仍可返回。 */
+  messageSnapshot: Extract<ReviewSourceDescriptor, { kind: 'turn-set' }> | null;
+  /** Optional one-shot positioning request supplied by a review entry point. */
+  jumpTarget: ReviewJumpTarget | null;
+  /** 所有 diff 的持久化默认展开状态；单文件覆盖只保留在当前组件生命周期。 */
+  diffsExpanded: boolean;
   /** diff 展示模式。写操作仍回到原始 unified DiffLine.index。 */
   diffViewMode: DiffViewMode;
   /** 右侧已修改文件树显隐。默认收起,用户选择通过 tab state 记住。 */
   fileTreeVisible: boolean;
   /** diff 行是否自动换行。默认关闭,保留横向滚动。 */
   wordWrap: boolean;
-  /** 是否显示行内文字差异强调。对齐 Codex,默认开启。 */
+  /** 是否显示行内文字差异强调。默认关闭,避免大文件审查时增加渲染开销。 */
   wordDiff: boolean;
   /** 是否用忽略空白模式读取 diff。默认关闭,避免影响 patch 类操作。 */
   hideWhitespace: boolean;
   /** Markdown 文件是否默认用富文本预览替换 diff 主体。对齐 Codex,默认开启。 */
   richMarkdownPreview: boolean;
-  /** Branch source 的用户选择基准。首版按 tab/session 记住,不做 per-repo。 */
+  /** 最近选择的分支比较基线；切到其它来源或消息快照后仍保留。 */
   branchBaseRef: string | null;
 }
 
 const DEFAULT_STATE: ReviewState = {
-  turnTarget: null,
-  collapsedPaths: [],
+  descriptor: { kind: 'unstaged' },
+  messageSnapshot: null,
+  jumpTarget: null,
+  diffsExpanded: true,
   diffViewMode: 'unified',
   fileTreeVisible: false,
   wordWrap: false,
-  wordDiff: true,
+  wordDiff: false,
   hideWhitespace: false,
   richMarkdownPreview: true,
   branchBaseRef: null,
@@ -88,55 +95,64 @@ const plugin: TabKindPlugin<ReviewState> = {
   TabPillTitle: ReviewTabPillTitle,
   TabPillIcon: ReviewTabPillIcon,
   TabBody: ReviewTabBody,
-  defaultState: () => ({ ...DEFAULT_STATE, collapsedPaths: [] }),
+  defaultState: () => ({ ...DEFAULT_STATE }),
   hydrateState: (raw): ReviewState => {
-    if (!raw || typeof raw !== 'object') return { ...DEFAULT_STATE, collapsedPaths: [] };
+    if (!raw || typeof raw !== 'object') return { ...DEFAULT_STATE };
     const obj = raw as Record<string, unknown>;
-    const collapsedPaths = Array.isArray(obj.collapsedPaths)
-      ? obj.collapsedPaths.filter((s): s is string => typeof s === 'string')
-      : [];
+    const diffsExpanded =
+      typeof obj.diffsExpanded === 'boolean' ? obj.diffsExpanded : DEFAULT_STATE.diffsExpanded;
     const diffViewMode = obj.diffViewMode === 'split' ? 'split' : 'unified';
-    const fileTreeVisible = typeof obj.fileTreeVisible === 'boolean'
-      ? obj.fileTreeVisible
-      : DEFAULT_STATE.fileTreeVisible;
-    const wordWrap = typeof obj.wordWrap === 'boolean'
-      ? obj.wordWrap
-      : DEFAULT_STATE.wordWrap;
-    const wordDiff = typeof obj.wordDiff === 'boolean'
-      ? obj.wordDiff
-      : DEFAULT_STATE.wordDiff;
-    const hideWhitespace = typeof obj.hideWhitespace === 'boolean'
-      ? obj.hideWhitespace
-      : DEFAULT_STATE.hideWhitespace;
-    const richMarkdownPreview = typeof obj.richMarkdownPreview === 'boolean'
-      ? obj.richMarkdownPreview
-      : DEFAULT_STATE.richMarkdownPreview;
-    const branchBaseRef = typeof obj.branchBaseRef === 'string' && isSafeBranchBaseRef(obj.branchBaseRef.trim())
-      ? obj.branchBaseRef.trim()
-      : null;
-    const rawTurnTarget = obj.turnTarget;
-    const turnTarget = rawTurnTarget && typeof rawTurnTarget === 'object'
-      && Array.isArray((rawTurnTarget as { changeSetIds?: unknown }).changeSetIds)
-      && (rawTurnTarget as { changeSetIds: unknown[] }).changeSetIds.length > 0
-      && (rawTurnTarget as { changeSetIds: unknown[] }).changeSetIds.length <= 16
-      && (rawTurnTarget as { changeSetIds: unknown[] }).changeSetIds.every((id) => typeof id === 'string')
-      ? {
-          changeSetIds: (rawTurnTarget as { changeSetIds: string[] }).changeSetIds,
-          selectedDiffId: typeof (rawTurnTarget as { selectedDiffId?: unknown }).selectedDiffId === 'string'
-            ? (rawTurnTarget as { selectedDiffId: string }).selectedDiffId
-            : null,
-          selectedPath: typeof (rawTurnTarget as { selectedPath?: unknown }).selectedPath === 'string'
-            ? (rawTurnTarget as { selectedPath: string }).selectedPath
-            : null,
-          requestNonce: typeof (rawTurnTarget as { requestNonce?: unknown }).requestNonce === 'number'
-            ? (rawTurnTarget as { requestNonce: number }).requestNonce
-            : 0,
-          targetSessionId: typeof (rawTurnTarget as { targetSessionId?: unknown }).targetSessionId === 'string'
-            ? (rawTurnTarget as { targetSessionId: string }).targetSessionId
-            : null,
-        }
-      : null;
-    return { turnTarget, collapsedPaths, diffViewMode, fileTreeVisible, wordWrap, wordDiff, hideWhitespace, richMarkdownPreview, branchBaseRef };
+    const fileTreeVisible =
+      typeof obj.fileTreeVisible === 'boolean'
+        ? obj.fileTreeVisible
+        : DEFAULT_STATE.fileTreeVisible;
+    const wordWrap = typeof obj.wordWrap === 'boolean' ? obj.wordWrap : DEFAULT_STATE.wordWrap;
+    const wordDiff = typeof obj.wordDiff === 'boolean' ? obj.wordDiff : DEFAULT_STATE.wordDiff;
+    const hideWhitespace =
+      typeof obj.hideWhitespace === 'boolean' ? obj.hideWhitespace : DEFAULT_STATE.hideWhitespace;
+    const richMarkdownPreview =
+      typeof obj.richMarkdownPreview === 'boolean'
+        ? obj.richMarkdownPreview
+        : DEFAULT_STATE.richMarkdownPreview;
+    const legacyTurnTarget = migrateLegacyTurnTarget(obj.turnTarget);
+    const persistedDescriptor = parseReviewSourceDescriptor(obj.descriptor);
+    const descriptor = persistedDescriptor ?? legacyTurnTarget?.descriptor ?? { kind: 'unstaged' };
+    const rawBranchBaseRef =
+      typeof obj.branchBaseRef === 'string' ? obj.branchBaseRef.trim() : null;
+    const branchBaseRef =
+      rawBranchBaseRef && isSafeBranchBaseRef(rawBranchBaseRef)
+        ? rawBranchBaseRef
+        : descriptor.kind === 'branch'
+          ? descriptor.baseRef
+          : null;
+    const persistedMessageSnapshot = parseReviewSourceDescriptor(obj.messageSnapshot);
+    const messageSnapshot =
+      persistedMessageSnapshot?.kind === 'turn-set'
+        ? persistedMessageSnapshot
+        : descriptor.kind === 'turn-set'
+          ? descriptor
+          : null;
+    const jumpTarget =
+      parseReviewJumpTarget(obj.jumpTarget) ??
+      (!persistedDescriptor && descriptor.kind === 'turn-set'
+        ? (legacyTurnTarget?.jumpTarget ?? null)
+        : null);
+    return {
+      descriptor,
+      messageSnapshot,
+      jumpTarget,
+      diffsExpanded,
+      diffViewMode,
+      fileTreeVisible,
+      wordWrap,
+      wordDiff,
+      hideWhitespace,
+      richMarkdownPreview,
+      branchBaseRef,
+    };
+  },
+  onBeforeClose: (state, { sessionId }) => {
+    seedReviewDiffsExpanded(sessionId, state?.diffsExpanded ?? DEFAULT_STATE.diffsExpanded);
   },
 };
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 
+import { useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { LocalDbFatalScreen } from '@/components/error/LocalDbFatalScreen';
 import { createLogger } from '@/lib/logger';
@@ -36,6 +37,7 @@ const DECISION_RETRY_DELAY_MS = 1_000;
 
 export function LocalDbGate() {
   const { dataOwnerId, mode, logout, exitLocalMode } = useAuth();
+  const { reportLocalDbGate } = useAppShellCover();
   const navigate = useNavigate();
   const [decision, setDecision] = useState<GateDecision>({ phase: 'checking' });
   const [retryNonce, setRetryNonce] = useState(0);
@@ -115,8 +117,22 @@ export function LocalDbGate() {
     // retryNonce 驱动失败后的有限重试重跑。
   }, [dataOwnerId, retryNonce]);
 
+  useEffect(() => {
+    if (!dataOwnerId || decision.phase === 'checking') {
+      reportLocalDbGate('pending');
+    } else if (decision.phase === 'fatal') {
+      reportLocalDbGate('fatal');
+    } else {
+      reportLocalDbGate('ready');
+    }
+    return () => {
+      reportLocalDbGate('pending');
+    };
+  }, [dataOwnerId, decision, reportLocalDbGate]);
+
   if (!dataOwnerId || decision.phase === 'checking') {
-    // 短暂检查窗口（通常 < 100ms）；返回 null 即可，App 已有 splash 兜底视觉
+    // 主界面还不能画。视觉盖由 AppShellCover + Splash / 品牌层承接
+    // (DESIGN.md §10),这里返回 null 避免先露出空壳再盖上。
     return null;
   }
 

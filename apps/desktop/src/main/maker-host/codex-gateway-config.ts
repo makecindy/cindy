@@ -80,6 +80,8 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
     ? `model_providers.${p}.requires_openai_auth=true`
     : `model_providers.${p}.env_key="${CODEX_GATEWAY_ENV_KEY}"`;
   const args = [
+    // 统一使用 CodeModeOnly，解决 Codex namespace tools 发现不及时的问题。
+    '-c', 'features.code_mode_only=true',
     '-c', `model_provider="${p}"`,
     '-c', `model_providers.${p}.name="Cindy Gateway"`,
     '-c', `model_providers.${p}.base_url="${baseUrl}"`,

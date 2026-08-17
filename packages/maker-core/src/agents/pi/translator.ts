@@ -16,8 +16,23 @@
  */
 
 import type { Logger } from '../../interfaces/logger.js';
-import type { AgentEvent, UsageSnapshot } from '../../types/index.js';
+import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
+import {
+  extractNonSecretErrorSignals,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
+import {
+  holdStandaloneStopTokenDelta,
+  stripInternalWebCitations,
+  type StandaloneStopTokenHold,
+} from '@cindy/maker-shared/internal-citation';
+import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import {
+  UPSTREAM_OVERLOAD_REASON,
+  formatOverloadRetryMessage,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
@@ -39,6 +54,14 @@ interface PiAssistantMessage {
   timestamp?: number;
   model?: string;
   stopReason?: string;
+  errorMessage?: string;
+}
+
+interface PiPendingAssistantError {
+  message: string;
+  sdkError: string;
+  errorStatus?: 401 | 429 | 529;
+  usageLimit?: true;
 }
 
 interface PiThinkingBlock {
@@ -69,12 +92,22 @@ export interface PiTranslateContext {
   /** contentIndex → 当前消息内的 thinking block 状态。 */
   thinkingBlocks: Map<number, PiThinkingBlock>;
   /**
+   * contentIndex → 独立停止符暂存。text_delta 可能把 `<|eos|>` 拆开，
+   * 必须按本块判定，不能和别的 text block 共用。
+   */
+  streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
+  /**
    * 本 turn 最后一条 assistant 消息的全文(每次非空 message_end 覆盖;agent_start 重置)。
    * 用于 agent_settled 的 done.data.result —— 与 CC/Codex 对齐:register.ts 的
    * will-assistant-message 出口钩子与 Orca worker 终态 finalText 都读 done.data.result,
    * 不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
    */
   finalAssistantText: string;
+  /**
+   * Pi 会先用 message_end(stopReason=error) 报 provider 错误，之后仍可能自动重试。
+   * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
+   */
+  pendingAssistantError: PiPendingAssistantError | null;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
@@ -88,6 +121,14 @@ export interface PiTranslateContext {
    * 用来算增量,避免同一批用量被反复加进 turn 记账。与其它 turn 计数器同点(agent_start)清空。
    */
   delegatedUsage: Map<string, PiSubagentUsage>;
+  /**
+   * Tool calls explicitly identified as Cindy's PI Subagent extension.
+   *
+   * Preserve the display title across the start/update/end event split so the
+   * terminal update remains self-describing even for consumers that do not
+   * reduce it into the preceding live-card state.
+   */
+  subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -104,6 +145,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     isStreaming: false,
     thinkingSeq: 0,
     thinkingBlocks: new Map(),
+    streamStopTokenByIndex: new Map(),
     finalAssistantText: '',
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
@@ -112,6 +154,8 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     generationHeartbeatTimer: null,
     generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
+    subagentToolCalls: new Map(),
+    pendingAssistantError: null,
   };
 }
 
@@ -128,6 +172,8 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
 export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.isStreaming = false;
+  ctx.pendingAssistantError = null;
+  ctx.subagentToolCalls.clear();
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -227,9 +273,41 @@ function applyDelegatedUsage(
 function assistantTextOf(message: PiAssistantMessage): string {
   const parts: string[] = [];
   for (const block of message.content ?? []) {
-    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const visible = stripInternalWebCitations(block.text);
+      if (visible.length > 0) parts.push(visible);
+    }
   }
   return parts.join('\n\n');
+}
+
+function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
+  const signals = extractNonSecretErrorSignals(rawError);
+  const redactedError = redactSensitiveText(rawError);
+  return {
+    message: redactedError,
+    sdkError: redactedError,
+    ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
+    ...(signals.usageLimit ? { usageLimit: true } : {}),
+  };
+}
+
+function parsePiAutoRetryProgress(
+  event: PiRpcEvent,
+): { attempt: number; maxAttempts: number } | null {
+  const attempt = event.attempt;
+  const maxAttempts = event.maxAttempts;
+  if (
+    typeof attempt !== 'number'
+    || typeof maxAttempts !== 'number'
+    || !Number.isSafeInteger(attempt)
+    || !Number.isSafeInteger(maxAttempts)
+    || attempt < 1
+    || maxAttempts < attempt
+  ) {
+    return null;
+  }
+  return { attempt, maxAttempts };
 }
 
 function toolResultFullText(result: unknown): string {
@@ -286,6 +364,7 @@ export function translatePiEvent(
       ctx.turnCacheRead = 0;
       ctx.turnCacheWrite = 0;
       ctx.finalAssistantText = '';
+      ctx.pendingAssistantError = null;
       ctx.turnWallClockStartedAt = Date.now();
       ctx.generationDurationMs = 0;
       ctx.generationTimingReliable = true;
@@ -293,6 +372,8 @@ export function translatePiEvent(
       // 与其它 turn 计数器同点清:新 turn 的委派用量不该跟上一 turn 的累计值作差,
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
+      ctx.subagentToolCalls.clear();
+      ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -302,6 +383,7 @@ export function translatePiEvent(
 
     case 'message_start': {
       ctx.thinkingBlocks.clear();
+      ctx.streamStopTokenByIndex.clear();
       startPiGenerationHeartbeat(ctx);
       return;
     }
@@ -340,7 +422,14 @@ export function translatePiEvent(
         ctx.generationTimingReliable = false;
       }
       const fullText = assistantTextOf(message);
-      if (fullText.length > 0) {
+      if (message.stopReason === 'error') {
+        const rawError = message.errorMessage?.trim() || fullText.trim() || 'Pi agent request failed';
+        ctx.pendingAssistantError = piAssistantErrorOf(rawError);
+      } else {
+        // A normal assistant message proves an earlier provider failure recovered.
+        ctx.pendingAssistantError = null;
+      }
+      if (message.stopReason !== 'error' && fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。
         ctx.finalAssistantText = fullText;
         queue.push({
@@ -359,16 +448,39 @@ export function translatePiEvent(
     }
 
     case 'tool_execution_start': {
+      const toolUseId = String(event.toolCallId ?? '');
+      const toolName = String(event.toolName ?? 'tool');
+      const toolArgs = (event.args as Record<string, unknown>) ?? {};
       queue.push({
         type: 'tool_use',
         data: {
-          toolUseId: String(event.toolCallId ?? ''),
-          toolName: String(event.toolName ?? 'tool'),
-          input: (event.args as Record<string, unknown>) ?? {},
+          toolUseId,
+          toolName,
+          input: toolArgs,
         },
         source: 'pi',
       });
-      pushStatus(queue, ctx, `Running ${String(event.toolName ?? 'tool')}…`, true);
+      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId) {
+        const rawTitle = toolArgs.agent;
+        const title = typeof rawTitle === 'string' && rawTitle.trim()
+          ? rawTitle.trim().slice(0, 96)
+          : undefined;
+        const update: AgentTaskUpdateEventData = {
+          provider: 'pi',
+          taskId: toolUseId,
+          parentToolUseId: toolUseId,
+          status: 'running',
+          ...(title ? { title } : {}),
+          subagentObservation: {
+            kind: 'spawn',
+            logicalSubagentId: toolUseId,
+            parentToolUseId: toolUseId,
+          },
+        };
+        ctx.subagentToolCalls.set(toolUseId, update);
+        queue.push({ type: 'agent_task_update', data: update, source: 'pi' });
+      }
+      pushStatus(queue, ctx, `Running ${toolName}…`, true);
       return;
     }
 
@@ -378,6 +490,13 @@ export function translatePiEvent(
       // 其它工具的流式中间结果照旧忽略 —— 载荷不带标记时 parse 返回 null。
       const progress = parsePiSubagentProgress(event.partialResult);
       if (progress) {
+        const previousUpdate = ctx.subagentToolCalls.get(progress.update.taskId);
+        if (previousUpdate) {
+          ctx.subagentToolCalls.set(progress.update.taskId, {
+            ...previousUpdate,
+            ...progress.update,
+          });
+        }
         // 委派用量并进本 turn 的记账。子代理是独立 pi 进程,它的请求不走父进程的 usage 流,
         // 不在这里显式并进来,done.data.usage 与 register.ts 持久化的 session token/cost
         // 就会漏掉全部子代理花费(review)。
@@ -390,9 +509,10 @@ export function translatePiEvent(
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');
       const isError = event.isError === true;
+      const fullText = toolResultFullText(event.result);
       queue.push({
         type: 'tool_result_full',
-        data: { toolUseId, fullText: toolResultFullText(event.result), isError },
+        data: { toolUseId, fullText, isError },
         source: 'pi',
       });
       queue.push({
@@ -400,6 +520,33 @@ export function translatePiEvent(
         data: { summary: isError ? 'failed' : 'done', toolUseIds: [toolUseId] },
         source: 'pi',
       });
+      const subagentToolCall = ctx.subagentToolCalls.get(toolUseId);
+      if (subagentToolCall) {
+        ctx.subagentToolCalls.delete(toolUseId);
+        // Progress is the authoritative child lifecycle. A successful batch
+        // tool result can still contain failed children, while cancellation
+        // may finish the wrapper with isError=true after the child stopped.
+        // Only a still-running child is completed/failed by the wrapper frame.
+        const status = subagentToolCall.status === 'running'
+          ? (isError ? 'failed' : 'completed')
+          : subagentToolCall.status;
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            ...subagentToolCall,
+            provider: 'pi',
+            taskId: toolUseId,
+            parentToolUseId: toolUseId,
+            status,
+            subagentObservation: {
+              kind: 'terminal',
+              logicalSubagentId: toolUseId,
+              parentToolUseId: toolUseId,
+            },
+          },
+          source: 'pi',
+        });
+      }
       return;
     }
 
@@ -416,6 +563,18 @@ export function translatePiEvent(
     case 'agent_settled': {
       ctx.isStreaming = false;
       stopPiGenerationHeartbeat(ctx);
+      const pendingAssistantError = ctx.pendingAssistantError;
+      ctx.pendingAssistantError = null;
+      if (pendingAssistantError) {
+        queue.push({
+          type: 'error',
+          data: {
+            ...pendingAssistantError,
+            isTerminal: true,
+          },
+          source: 'pi',
+        });
+      }
       queue.push({
         type: 'done',
         data: {
@@ -451,13 +610,33 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_start': {
+      // 走 CC/Codex 同一套 `(auto-retry N/M)` 跨 agent 协议。这个后缀在 mobile /
+      // Telegram 投影里**只表示过载**，不能拿去编码未分类 5xx —— 否则手机会把普通
+      // 供应商故障显示成「模型服务繁忙」。
+      //
+      // 第 1 次不透出：单次抖动 pi 一次重试就过，提示只会闪一下徒增噪音
+      // （与 claude-code translator 的 api_retry 防噪口径一致）。
+      // 未分类错误同样静默：渠道 / 手机没有对应本地化契约，CC 也只透过载类。
+      const progress = parsePiAutoRetryProgress(event);
+      if (!progress || progress.attempt < 2) return;
+      const sdkError = typeof event.errorMessage === 'string'
+        ? redactSensitiveText(event.errorMessage)
+        : undefined;
+      const rawMessage = (sdkError && sdkError.trim())
+        || ctx.pendingAssistantError?.message
+        || '';
+      const signals = extractNonSecretErrorSignals(rawMessage);
+      const errorStatus = ctx.pendingAssistantError?.errorStatus ?? signals.errorStatus;
+      if (parseOverloadError(rawMessage, errorStatus) === null) return;
       queue.push({
         type: 'error',
         data: {
-          message: `Transient provider error, retrying (${String(event.attempt)}/${String(event.maxAttempts)})…`,
+          message: formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
           isTerminal: false,
           willRetry: true,
-          sdkError: typeof event.errorMessage === 'string' ? event.errorMessage : undefined,
+          reason: UPSTREAM_OVERLOAD_REASON,
+          ...(sdkError ? { sdkError } : {}),
+          ...(errorStatus !== undefined ? { errorStatus } : {}),
         },
         source: 'pi',
       });
@@ -465,11 +644,21 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_end': {
-      if (event.success === true) return;
+      if (event.success === true) {
+        ctx.pendingAssistantError = null;
+        return;
+      }
+      const rawFinalError = typeof event.finalError === 'string' && event.finalError.trim()
+        ? event.finalError.trim()
+        : null;
+      const finalError = rawFinalError
+        ? piAssistantErrorOf(rawFinalError)
+        : ctx.pendingAssistantError ?? piAssistantErrorOf('pi auto-retry failed');
+      ctx.pendingAssistantError = null;
       queue.push({
         type: 'error',
         data: {
-          message: typeof event.finalError === 'string' ? event.finalError : 'pi auto-retry failed',
+          ...finalError,
           isTerminal: true,
         },
         source: 'pi',
@@ -495,6 +684,13 @@ export function translatePiEvent(
       });
       if (result && typeof result.estimatedTokensAfter === 'number') {
         ctx.contextTokens = result.estimatedTokensAfter;
+      }
+      // #1933 review:手动压缩事件必须闭环。compaction_start 已把 isRunning 置 true,
+      // 若不收口,renderer 圆环会永久卡 running、新 contextTokens 也送不回去。
+      // 仅 manual 收口:auto 压缩发生在活跃 turn 内(turn 结束经 agent_settled 自然收口),
+      // 且若压缩期间用户已开始新 turn(ctx.isStreaming)也不能收口,否则会误杀新 turn。
+      if (event.reason === 'manual' && !ctx.isStreaming) {
+        pushStatus(queue, ctx, 'Done', false);
       }
       return;
     }
@@ -531,7 +727,13 @@ function handleAssistantDelta(
   switch (delta.type) {
     case 'text_delta': {
       if (typeof delta.delta === 'string' && delta.delta.length > 0) {
-        queue.push({ type: 'text', data: { text: delta.delta, isFinal: false }, source: 'pi' });
+        const buffer = ctx.streamStopTokenByIndex.get(contentIndex)
+          ?? { pending: '', emitted: false };
+        const visible = holdStandaloneStopTokenDelta(buffer, delta.delta);
+        ctx.streamStopTokenByIndex.set(contentIndex, buffer);
+        if (visible && visible.length > 0) {
+          queue.push({ type: 'text', data: { text: visible, isFinal: false }, source: 'pi' });
+        }
       }
       return;
     }

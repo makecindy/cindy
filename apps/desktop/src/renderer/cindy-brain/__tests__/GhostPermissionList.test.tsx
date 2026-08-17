@@ -12,6 +12,7 @@ import type { GhostManifest } from '../../../shared/ghost';
 import { diffGhostPermissionItems, ghostPermissionItems } from '../../../shared/ghost';
 import {
   GhostInstallReview,
+  GhostManualSummary,
   GhostPermissionDiffView,
   GhostPermissionList,
   GhostUpdateReview,
@@ -42,6 +43,13 @@ const chip = (): GhostManifest => ({
 });
 
 describe('GhostPermissionList(装入全量清单)', () => {
+  it('随包手册是独立信息行，正数显示，零篇不占位', () => {
+    const { rerender } = render(<GhostManualSummary count={2} />);
+    expect(screen.getByText(/installConfirm\.manualCount:.*"count":2/)).toBeTruthy();
+    rerender(<GhostManualSummary count={0} />);
+    expect(screen.queryByText(/installConfirm\.manualCount/)).toBeNull();
+  });
+
   it('常规权限直接展示,工具长说明默认折叠并可按需展开', () => {
     render(<GhostPermissionList items={ghostPermissionItems(chip())} />);
     expect(screen.getByText('settings.ghosts.perm.grantsTitle')).toBeTruthy();
@@ -93,6 +101,16 @@ describe('GhostPermissionList(装入全量清单)', () => {
   it('空清单渲染为空(不出孤零零的标题)', () => {
     const { container } = render(<GhostPermissionList items={[]} />);
     expect(container.innerHTML).toBe('');
+  });
+
+  it('ios-simulator 槽如实披露 Host-owned 控制边界', () => {
+    const simulator: GhostManifest = {
+      ...chip(),
+      slots: [...chip().slots, 'ios-simulator'],
+    };
+    render(<GhostPermissionList items={ghostPermissionItems(simulator)} />);
+    expect(screen.getByText('settings.ghosts.perm.iosSimulator')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.iosSimulatorDetail')).toBeTruthy();
   });
 
   it('network 槽:域名/凭证逐条渲染,code 沙箱说明切分档版', () => {
@@ -249,11 +267,13 @@ describe('GhostUpdateReview(更新确认内容区,两个入口共用)', () => {
           reviewed: false,
         }}
         diff={diffGhostPermissionItems(chip(), next())}
+        manualCount={2}
       />,
     );
     expect(screen.getByText(/trust\.unsigned:/)).toBeTruthy(); // 带 publisher 参数的标题行
     expect(screen.getByText('settings.ghosts.trust.unsignedDetail')).toBeTruthy();
     expect(screen.getByText(/perm\.networkHost:.*api\.example\.com/)).toBeTruthy();
+    expect(screen.getByText(/installConfirm\.manualCount:.*"count":2/)).toBeTruthy();
   });
 
   it('没有可展示的来源事实时不渲染来源卡,也不拿假数据占位', () => {
@@ -263,8 +283,18 @@ describe('GhostUpdateReview(更新确认内容区,两个入口共用)', () => {
     expect(screen.getByText(/perm\.networkHost:.*api\.example\.com/)).toBeTruthy();
   });
 
+  it('内置 OAuth clientId 变化时提示更新后需要重新连接', () => {
+    const diff = diffGhostPermissionItems(chip(), next());
+    render(<GhostUpdateReview diff={{ ...diff, builtinOauthClientChanged: true }} />);
+    expect(screen.getByRole('alert').textContent).toBe(
+      'settings.ghosts.updateConfirm.oauthClientChanged',
+    );
+  });
+
   it('不自套限高滚动区(高度归共享 ConfirmDialog)', () => {
-    const { container } = render(<GhostUpdateReview diff={diffGhostPermissionItems(chip(), next())} />);
+    const { container } = render(
+      <GhostUpdateReview diff={diffGhostPermissionItems(chip(), next())} />,
+    );
     const scrollers = container.querySelectorAll('.overflow-y-auto');
     expect(scrollers.length).toBe(0);
   });

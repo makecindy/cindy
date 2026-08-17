@@ -32,17 +32,21 @@ const DESKTOP_DIR = path.join(REPO_ROOT, "apps", "desktop");
 const MOBILE_DIR = path.join(REPO_ROOT, "apps", "mobile");
 const NOTICES_DIR = path.join(REPO_ROOT, "docs", "legal", "notices");
 const SBOM_DIR = path.join(NOTICES_DIR, "sbom");
-const CARGO_MANIFEST = path.join(
-  DESKTOP_DIR,
-  "cindy-updater",
-  "src-tauri",
-  "Cargo.toml",
-);
+const CARGO_MANIFESTS = [
+  path.join(DESKTOP_DIR, "cindy-updater", "src-tauri", "Cargo.toml"),
+  path.join(
+    DESKTOP_DIR,
+    "native",
+    "voice-input",
+    "windows-function-key-listener",
+    "Cargo.toml",
+  ),
+];
 
 /** 与 pnpm-workspace.yaml 的客户端 workspace 范围保持一致。 */
 function discoverWorkspaceDirs() {
   const dirs = [];
-  for (const parentName of ["apps", "packages", "cindy-protocol/packages"]) {
+  for (const parentName of ["apps", "packages"]) {
     const parentDir = path.join(REPO_ROOT, parentName);
     for (const entry of fs.readdirSync(parentDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -461,8 +465,8 @@ function cargoExecutable() {
   return candidate && fs.existsSync(candidate) ? candidate : "cargo";
 }
 
-/** 收集 Windows updater 的运行时依赖闭包,跳过根包的 build/dev dependency。 */
-function collectCargoClosure() {
+/** 收集单个 Windows Rust 二进制的运行时依赖闭包,跳过根包的 build/dev dependency。 */
+function collectCargoClosure(manifest) {
   const raw = execFileSync(
     cargoExecutable(),
     [
@@ -473,7 +477,7 @@ function collectCargoClosure() {
       "--filter-platform",
       "x86_64-pc-windows-msvc",
       "--manifest-path",
-      CARGO_MANIFEST,
+      manifest,
     ],
     { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   ).replace(/^\uFEFF/, "");
@@ -1097,7 +1101,9 @@ function stableCreationTime() {
         "--format=%cI",
         "--",
         "pnpm-lock.yaml",
-        path.relative(REPO_ROOT, CARGO_MANIFEST),
+        ...CARGO_MANIFESTS.map((manifest) =>
+          path.relative(REPO_ROOT, manifest),
+        ),
       ],
       { cwd: REPO_ROOT, encoding: "utf8" },
     ).trim();
@@ -1347,10 +1353,12 @@ function assertTrackedBinariesRegistered() {
 assertNativeDeclarations();
 assertProjectPodspecLicenses();
 assertTrackedBinariesRegistered();
-if (!fs.existsSync(path.join(path.dirname(CARGO_MANIFEST), "Cargo.lock"))) {
-  throw new Error(
-    "cindy-updater Cargo.lock is required for deterministic license generation",
-  );
+for (const manifest of CARGO_MANIFESTS) {
+  if (!fs.existsSync(path.join(path.dirname(manifest), "Cargo.lock"))) {
+    throw new Error(
+      `${path.relative(REPO_ROOT, manifest)} requires Cargo.lock for deterministic license generation`,
+    );
+  }
 }
 
 const projectNpm = collectClosureForSupportedTargets([
@@ -1381,7 +1389,9 @@ const mobileAndroidNpm = collectClosure([MOBILE_DIR], {
   os: "android",
   cpu: "arm64",
 });
-const cargoClosure = collectCargoClosure();
+const cargoClosure = mergeClosures(
+  ...CARGO_MANIFESTS.map((manifest) => collectCargoClosure(manifest)),
+);
 
 const apacheText =
   projectNpm.packages.find(
@@ -1401,7 +1411,7 @@ const artifactDefinitions = {
     productName: "Cindy desktop application — Windows x64",
     description: ["Windows x64 桌面安装包的第三方开源组件声明。"],
     notes: [
-      "包含 Rust/Tauri updater 运行时 crate 闭包和随包 Android Platform-Tools。",
+      "包含 Rust/Tauri updater、Windows 功能键监听器的运行时 crate 闭包和随包 Android Platform-Tools。",
     ],
   },
   "desktop-macos": {

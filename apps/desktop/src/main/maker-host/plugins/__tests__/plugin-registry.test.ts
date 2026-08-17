@@ -60,6 +60,7 @@ function knownProviderNames(): KnownProviderName[] {
 function realBuiltinProviderNames(): KnownProviderName[] {
   const providers = createLiziMcpProviders({
     android: {} as never,
+    iosSimulator: {} as never,
     browser: {} as never,
     computer: {} as never,
     feishuBot: {} as never,
@@ -86,7 +87,11 @@ describe('PluginRegistry — scoped priority', () => {
   });
 
   afterEach(() => {
-    try { fs.rmSync(workingDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try {
+      fs.rmSync(workingDir, { recursive: true, force: true });
+    } catch {
+      /* 忽略 */
+    }
   });
 
   // ── 第 3 层：内置默认值 ────────────────────────────────────────────────
@@ -112,6 +117,27 @@ describe('PluginRegistry — scoped priority', () => {
     const state = await registry.getEnableState('android', workingDir);
     expect(state.effectiveEnabled).toBe(false);
     expect(state.projectOverride).toBeNull();
+  });
+
+  it('enables the embedded iOS Simulator by default but respects an explicit project disable', async () => {
+    expect(registry.isEnabled('ios-simulator')).toBe(true);
+    expect(registry.isEnabled('ios-simulator', workingDir)).toBe(true);
+    await expect(registry.getEnableState('ios-simulator', workingDir)).resolves.toMatchObject({
+      effectiveEnabled: true,
+      productDefaultEnabled: true,
+      projectOverride: null,
+      userOverride: null,
+    });
+
+    writeProjectSettings(workingDir, { 'ios-simulator': false });
+    registry = createRegistry();
+
+    expect(registry.isEnabled('ios-simulator', workingDir)).toBe(false);
+    await expect(registry.getEnableState('ios-simulator', workingDir)).resolves.toMatchObject({
+      effectiveEnabled: false,
+      productDefaultEnabled: true,
+      projectOverride: { enabled: false, workingDir },
+    });
   });
 
   it('returns true by default with workingDir', () => {
@@ -222,6 +248,7 @@ describe('PluginRegistry — scoped priority', () => {
     expect(disabled).not.toContain('collab');
     expect(disabled).not.toContain('ssh');
     expect(disabled).not.toContain('computer');
+    expect(disabled).not.toContain('ios-simulator');
     for (const essentialId of ESSENTIAL_PLUGIN_IDS) {
       expect(disabled).not.toContain(essentialId);
     }
@@ -463,7 +490,11 @@ describe('isEnabled wrap integration (provider → registry gate)', () => {
   });
 
   afterEach(() => {
-    try { fs.rmSync(workingDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try {
+      fs.rmSync(workingDir, { recursive: true, force: true });
+    } catch {
+      /* 忽略 */
+    }
   });
 
   function wrapIsEnabled(providerName: string, workingDir?: string): boolean {

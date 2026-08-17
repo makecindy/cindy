@@ -18,9 +18,15 @@
  * 所有函数接受可注入 db(规则 14),生产默认走 DbClient 的 drizzle 代理。
  */
 
+import { randomUUID } from 'node:crypto';
+
 import * as blobStore from './blobStore';
 import * as ledger from './ledger';
 import type { LedgerDb, MediaRefKind, MediaOriginKind } from './ledger';
+import { withMediaRefCompensation, type MediaRefCompensationScope } from './refCompensationJournal';
+import { createLogger } from '../logger';
+
+const log = createLogger('cindy-media-ingest');
 
 /** 一条待挂的引用(字段语义见 ledger.AddRefParams / schema.ts mediaRefs)。 */
 export interface IngestRef {
@@ -50,6 +56,12 @@ export interface IngestMediaParams {
    * 启用时必须同时显式传入在稳定作用域下捕获的 db，禁止每次记账现取新作用域。
    */
   assertStillValid?: () => void;
+  /**
+   * Stable owner-scoped durable journal captured with the explicit db. Guarded
+   * ingests that create refs require it so a committed INSERT can still be
+   * compensated after the DbClient worker disappears before its ACK.
+   */
+  refCompensationScope?: MediaRefCompensationScope;
 }
 
 export interface IngestedMedia {
@@ -78,6 +90,9 @@ export async function ingestMedia(
   if (params.assertStillValid && !db) {
     throw new Error('cindy-media: guarded ingest requires an explicit database');
   }
+  if (params.assertStillValid && params.refs.length > 0 && !params.refCompensationScope) {
+    throw new Error('cindy-media: guarded ingest requires a reference compensation scope');
+  }
   params.assertStillValid?.();
   const written = await blobStore.writeBlob({
     buffer: params.buffer,
@@ -95,10 +110,43 @@ export async function ingestMedia(
     db,
   );
   params.assertStillValid?.();
-  const refIds: string[] = [];
-  for (const ref of params.refs) {
-    refIds.push(await ledger.addRef({ hash: written.hash, ...ref }, db));
-    params.assertStillValid?.();
+  // Reserve every id before the first INSERT. A committed INSERT whose worker
+  // acknowledgement is lost can then be deleted by exact id without touching
+  // refs from another concurrent ingest.
+  const refIds = params.refs.map(() => randomUUID());
+  const addRefs = async (): Promise<void> => {
+    for (const [index, ref] of params.refs.entries()) {
+      await ledger.addRef({ id: refIds[index], hash: written.hash, ...ref }, db);
+      params.assertStillValid?.();
+    }
+  };
+
+  if (refIds.length > 0 && params.refCompensationScope) {
+    await withMediaRefCompensation({
+      scope: params.refCompensationScope,
+      refIds,
+      perform: addRefs,
+      compensate: (id) => ledger.removeRefById(id, db),
+    });
+  } else {
+    try {
+      await addRefs();
+    } catch (error) {
+      // Unguarded legacy callers still get best-effort in-process rollback.
+      // Guarded owner/session writers take the durable journal path above.
+      const rollbackResults = await Promise.allSettled(
+        refIds.map((id) => ledger.removeRefById(id, db)),
+      );
+      rollbackResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          log.warn('Failed to roll back a staged media reference', {
+            refId: refIds[index],
+            error: String(result.reason),
+          });
+        }
+      });
+      throw error;
+    }
   }
   return { ...written, refIds };
 }

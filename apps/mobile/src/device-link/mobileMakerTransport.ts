@@ -568,6 +568,12 @@ export interface MobileMakerTransport {
   projectAutomation: {
     removeSchedule(input: { workingDir: string; id: string }): Promise<unknown>;
   };
+  /** 手动压缩会话上下文(pi 原生 compact,capability-aware 的 maker:compact-session;
+   *  input.compact 是 Claude Code 专用的 maker:input:compact,两者不混)。 */
+  compactSession(
+    sessionId: string,
+    instructions?: string,
+  ): Promise<{ tokensBefore?: number; estimatedTokensAfter?: number; noop?: boolean } | null>;
   input: {
     getProjection(sessionId: string): Promise<InputProjection>;
     enqueue(sessionId: string, item: QueuedRemoteMessage, opts?: { sendAtMs?: number }): Promise<InputProjection>;
@@ -769,6 +775,11 @@ export function createMobileMakerTransport({
     projectAutomation: {
       removeSchedule: (input) => call('maker:project-automation:remove-schedule', [input]),
     },
+    compactSession: (sessionId, instructions) =>
+      call(
+        'maker:compact-session',
+        instructions === undefined ? [sessionId] : [sessionId, instructions],
+      ),
     input: {
       getProjection: (sessionId) => call('maker:input:get-projection', [sessionId]),
       enqueue: (sessionId, item, opts) => call('maker:input:enqueue', [sessionId, item, opts]),

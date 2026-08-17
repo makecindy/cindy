@@ -64,8 +64,11 @@ import {
   type InteractionRouteLease,
   type TurnOrigin as RoutedTurnOrigin,
 } from '../maker-ipc/interactionRouter.js';
-import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
+import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
+import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
+import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
@@ -803,10 +806,14 @@ export function createMakerHookSessionRunner(deps: {
       // 就会让"续跑接回渠道"那条路径静默落后于本路径。
       // tool_result 旁路收集的出站图片 absPath(收口时随 turn.end 附件外发)
       const extraImageAbsPaths: string[] = [];
+      const useTelegramProgressParity = req.source?.im === 'telegram';
       const observer = observeHookTurn(session, {
-        // 进度快照不按渠道/聊天类型分叉: 过程区时间线在上正文在下,
-        // Telegram DM / 群 / topic 与 Slack 一致。
+        // Telegram 对齐个人 bot：过程消息累积展示整轮正文，done 先冲刷最后一帧。
+        // Slack / X 保留只展示当前消息的旧行为，避免顺带改变其它车道。
         ...(req.onProgress ? { onProgress: req.onProgress } : {}),
+        ...(useTelegramProgressParity
+          ? { progressBodyMode: 'whole' as const, flushProgressOnDone: true }
+          : {}),
         onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
         onSilentStopSettled,
         log,
@@ -964,12 +971,26 @@ export function createMakerHookSessionRunner(deps: {
       let turnChangeSetStarted = false;
       try {
         const pendingHandoff = await agentHandoffPending.peek(session.id);
-        const outgoingMessage: UserMessage = pendingHandoff
+        const withHandoff: UserMessage = pendingHandoff
           ? (prependHandoffToUserMessage(
               { type: 'user', content: sendContent },
               pendingHandoff,
             ) as UserMessage)
           : { type: 'user', content: sendContent };
+        const planReconcileNote = req.source?.im ? await (async () => {
+          try {
+            const rows = await enqueueDurableWrite(`plan-reconcile-read:${session.id}`, () =>
+              listMessagesForAgentHandoff(session.id, 1000),
+            );
+            const summary = summarizeOpenPlan(rows);
+            return summary ? buildPlanReconcileNote(summary) : null;
+          } catch {
+            return null;
+          }
+        })() : null;
+        const outgoingMessage: UserMessage = planReconcileNote
+          ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
+          : withHandoff;
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
@@ -1157,12 +1178,16 @@ function beginContinuationWatch(
   const extraImageAbsPaths: string[] = [];
   let claimed = false;
   let settled = false;
+  const useTelegramProgressParity = req.source?.im === 'telegram';
   const observer = observeHookTurn(session, {
-    // 与 run() 同一呈现: 过程区时间线在上正文在下, 不按聊天类型分叉。
+    // 与 run() 同一呈现；Telegram 续跑同样累计正文并在 done 冲刷最后一帧。
     onProgress: (text) => {
       // 认领之前不发进度: 那时 server 还没把这条消息挂到新 requestId 上。
       if (claimed) req.onProgress(text);
     },
+    ...(useTelegramProgressParity
+      ? { progressBodyMode: 'whole' as const, flushProgressOnDone: true }
+      : {}),
     onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
     onSilentStopSettled,
     log,

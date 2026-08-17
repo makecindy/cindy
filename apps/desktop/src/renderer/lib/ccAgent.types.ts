@@ -3,6 +3,7 @@ import type { SessionSource } from '../../shared/sessionSource';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
+import type { ReviewRunMeta } from '../../shared/reviewRun';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -164,6 +165,9 @@ export interface CcMeta {
    * 不进 prompt。
    */
   goalNotice?: 'usage-resumed' | 'capacity-resumed';
+
+  /** /review 创建的独立只读审查任务及其来源卡状态。 */
+  reviewRun?: ReviewRunMeta;
 
   /**
    * Host-side marker:这条 user 消息是一个 /goal 目标的设定 / 更新(goal-host 在新建或

@@ -28,6 +28,7 @@ import {
 } from '@cindy/maker-shared/error-redaction';
 import {
   stableInternalWebCitationBoundary,
+  stableStandaloneModelStopTokenBoundary,
   stripInternalWebCitations,
 } from '@cindy/maker-shared/internal-citation';
 
@@ -1017,17 +1018,18 @@ export function finalizeCodexCitationText(text: string): string {
 }
 
 export function stableCitationBoundary(text: string): number {
+  const stopTokenEnd = stableStandaloneModelStopTokenBoundary(text);
   const open = findUnfinishedCitationOpen(text);
   if (open !== -1) {
-    return Math.min(open, stableInternalWebCitationBoundary(text));
+    return Math.min(open, stableInternalWebCitationBoundary(text), stopTokenEnd);
   }
   const maxProbe = Math.min(text.length, CODEX_FILE_CITATION_OPEN.length - 1);
   for (let k = maxProbe; k > 0; k -= 1) {
     if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) {
-      return Math.min(text.length - k, stableInternalWebCitationBoundary(text));
+      return Math.min(text.length - k, stableInternalWebCitationBoundary(text), stopTokenEnd);
     }
   }
-  return stableInternalWebCitationBoundary(text);
+  return Math.min(stableInternalWebCitationBoundary(text), stopTokenEnd);
 }
 
 function emitAgentMessageProgress(
@@ -1865,7 +1867,12 @@ function handleCollabAgentToolCall(
   });
   queue.push({
     type: 'agent_task_update',
-    data: toCodexTaskUpdate(item, isError ? 'failed' : 'completed', fullText),
+    data: toCodexTaskUpdate(
+      item,
+      isError ? 'failed' : 'completed',
+      fullText,
+      !hadToolUse,
+    ),
     source: 'codex',
   });
 }
@@ -1998,6 +2005,13 @@ function handleSubAgentActivity(
       taskId: item.id,
       parentToolUseId: item.id,
       status: 'running',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: item.id,
+        parentToolUseId: item.id,
+        ...(item.agentThreadId ? { providerRunIds: [item.agentThreadId] } : {}),
+      },
+      ...(item.agentThreadId ? { receiverThreadIds: [item.agentThreadId] } : {}),
       ...(agentPath ? { title: agentPath } : {}),
       ...(model ? { model } : {}),
     },
@@ -2009,7 +2023,19 @@ function toCodexTaskUpdate(
   item: CollabAgentToolCallItem,
   status: AgentTaskStatus,
   summary?: string,
+  completedOnly = false,
 ): AgentTaskUpdateEventData {
+  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const subagentObservation = isSpawn && (status !== 'completed' || completedOnly)
+    ? {
+        kind: status === 'running' || completedOnly ? 'spawn' as const : 'terminal' as const,
+        logicalSubagentId: item.id,
+        parentToolUseId: item.id,
+        ...(status === 'running' || completedOnly
+          ? { providerRunIds: item.receiverThreadIds }
+          : {}),
+      }
+    : undefined;
   return {
     provider: 'codex',
     taskId: item.id,
@@ -2021,6 +2047,7 @@ function toCodexTaskUpdate(
     ...(item.model ? { model: item.model } : {}),
     ...(item.reasoningEffort ? { reasoningEffort: item.reasoningEffort } : {}),
     receiverThreadIds: item.receiverThreadIds,
+    ...(subagentObservation ? { subagentObservation } : {}),
     raw: { tool: item.tool, agentsStates: item.agentsStates },
   };
 }

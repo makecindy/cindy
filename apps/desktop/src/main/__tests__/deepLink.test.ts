@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { BrowserWindow } from 'electron';
+import { app, type BrowserWindow } from 'electron';
 
 // vitest 跑测试时不会真的初始化 Electron app, 单 import 需要 mock electron。
 // deepLink.ts 只在 registerDeepLinkProtocol / dispatchDeepLink 用到 app /
@@ -39,9 +39,32 @@ import {
   DEEP_LINK_PROTOCOL,
   OPEN_FOLDER_FLAG,
   OPEN_SHARE_FILE_FLAG,
+  focusMainWindow,
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
 } from '../deepLink';
+
+describe('user-initiated main-window focus', () => {
+  it('activates and raises the target window before focusing on Windows', () => {
+    const calls: string[] = [];
+    const mainWindow = {
+      isDestroyed: () => false,
+      isVisible: () => false,
+      isMinimized: () => true,
+      show: vi.fn(() => calls.push('show')),
+      restore: vi.fn(() => calls.push('restore')),
+      moveTop: vi.fn(() => calls.push('moveTop')),
+      focus: vi.fn(() => calls.push('window.focus')),
+    };
+    vi.mocked(app.focus).mockImplementation(() => calls.push('app.focus'));
+    setDeepLinkMainWindow(mainWindow as unknown as BrowserWindow);
+
+    expect(focusMainWindow('win32')).toBe(true);
+
+    expect(calls).toEqual(['show', 'restore', 'app.focus', 'moveTop', 'window.focus']);
+    setDeepLinkMainWindow(null);
+  });
+});
 
 describe('internal main-window navigation', () => {
   it('focuses the main window and routes voice settings to the requested tab', () => {

@@ -60,6 +60,7 @@ import {
   runDbValidate,
   verifyPackagedDrizzle,
   runSmokeTest,
+  runIOSSimulatorReleaseGate,
   fetchExistingManifestIfAvailable,
   findInstallerArtifact,
   ensureLinuxRuntimeAssets,
@@ -202,6 +203,16 @@ function isPhysicalArm64Mac() {
   } catch {
     return false;
   }
+}
+
+/**
+ * 宿主能否原生执行该 arch 的 packaged app。双架构连打时其中一趟必是跨 arch:
+ * arm64 机打 x64(Rosetta 起 x64 Electron 会挂/超时,x64 agent 二进制甚至因缺
+ * AVX 死循环),Intel 机打 arm64(根本起不来)。这类 app 不能拿来跑需要"启动
+ * 打包产物"的检查(smoke / iOS Simulator release gate)。
+ */
+function hostCanExecArch(arch) {
+  return arch === 'arm64' ? isPhysicalArm64Mac() : !isPhysicalArm64Mac();
 }
 
 /** 跳过 smoke 启动前,用 lipo 确认 packaged 主二进制确实是目标架构。 */
@@ -365,6 +376,7 @@ async function finishDarwin({
 
   const applePassword = noSign ? undefined : process.env.APPLE_APP_PASSWORD;
   const wantsRealSigning = !versionless && !noSign;
+  const requireNativeReleaseGate = process.env.CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE === '1';
   let signingMode = 'adhoc';
 
   if (wantsRealSigning && !applePassword && !allowUnsigned) {
@@ -393,12 +405,49 @@ async function finishDarwin({
       });
     }
     console.log('==> Signing (Developer ID)...');
-    signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity, {
-      keychainAccessGroup,
-    });
+    const iosSimulatorHelperSigned = signMacAppWithIdentity(
+      appPath,
+      helperEntitlementsPath,
+      mainEntitlementsPath,
+      identity,
+      { keychainAccessGroup, arch },
+    );
+    if (requireNativeReleaseGate && !iosSimulatorHelperSigned) {
+      throw new Error(
+        'CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE=1 requires a packaged Native Helper',
+      );
+    }
     console.log('==> Notarizing...');
     notarizeMacApp(appPath, identity);
     signingMode = 'developer-id+notarized';
+    if (hostCanExecArch(arch)) {
+      runIOSSimulatorReleaseGate(
+        appPath,
+        arch,
+        iosSimulatorHelperSigned ? 'verified' : 'untrusted',
+        requireNativeReleaseGate,
+      );
+    } else if (requireNativeReleaseGate) {
+      // 显式要求的 native smoke 必须在能原生运行目标 arch 的受控发布机上跑
+      // (要 boot 模拟器 + 起 native sidecar)。此处跳过会把它悄悄降级成"无门禁",
+      // 违背 docs/ios-simulator-integration-plan.md 的发布约束——宁可失败,逼操作者
+      // 换到匹配的宿主机。
+      throw new Error(
+        `CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE=1 requires a host that can natively run the ${arch} package`,
+      );
+    } else {
+      // 跨 arch 连打:该产物在本机跑不起来(如 arm64 机上的 x64 app),launch-based
+      // gate 无法 exec 它。沿用 ios-simulator-integration-plan.md 的 cross-architecture
+      // 例外(原仅覆盖 Intel 机 + arm64 ad-hoc,现扩至 arm64 机 + x64 Developer-ID 的
+      // static gate):x64 从不含 native helper、运行期必然回退 WDA/MJPEG,static gate
+      // 验的是构造上已保证的行为。跳过 launch,但仍用 lipo 证明公证后的包确是目标 arch。
+      verifyMacBinaryArch(appName, arch);
+      console.log(
+        `==> Skipping iOS Simulator release gate: ${arch} app is not runnable on this ${
+          isPhysicalArm64Mac() ? 'arm64' : 'Intel'
+        } host (Mach-O arch verified)`,
+      );
+    }
 
     const dmgPath = path.join(artifactDir, `${baseName}-${arch}.dmg`);
     console.log('==> Creating DMG...');
@@ -417,7 +466,23 @@ async function finishDarwin({
     // 版本无关(或显式放行)→ ad-hoc 签名,产出 .app 的 zip 供本机/内部试用。
     writeMacEntitlements(helperEntitlementsPath);
     writeMacEntitlements(mainEntitlementsPath, { appleEvents: true });
-    adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath);
+    adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch);
+    if (requireNativeReleaseGate) {
+      throw new Error(
+        'CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE=1 requires a Developer ID signed and notarized package',
+      );
+    }
+    if (hostCanExecArch(arch)) {
+      runIOSSimulatorReleaseGate(appPath, arch, 'untrusted');
+    } else {
+      // cross-architecture 例外:跳过 launch-based gate,仍做 Mach-O arch 门禁。
+      verifyMacBinaryArch(appName, arch);
+      console.log(
+        `==> Skipping iOS Simulator release gate: ${arch} app is not runnable on this ${
+          isPhysicalArm64Mac() ? 'arm64' : 'Intel'
+        } host (Mach-O arch verified)`,
+      );
+    }
     const appZipPath = path.join(artifactDir, `${baseName}-${arch}.zip`);
     console.log('==> Creating app ZIP (ad-hoc signed)...');
     if (fs.existsSync(appZipPath)) fs.unlinkSync(appZipPath);

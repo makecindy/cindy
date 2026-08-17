@@ -57,8 +57,12 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toMatch(/TASK_TIMEOUT_MS\s*=/);
     // 子代理不写会话文件,不污染 Cindy 的会话 JSONL。
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("'--no-session'");
-    // 必须**不**传 --no-extensions:否则子进程不加载 cindy-bridge,权限门对子代理失效。
-    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('--no-extensions');
+    // 子 Pi 与父 Pi 使用同一条 project hard gate；权限门只经显式 bridge 回装。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("'--no-approve'");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("'--no-extensions'");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "'--extension', join(configHome, 'extensions', 'cindy-bridge.ts')",
+    );
   });
 
   it('reads model and provider from the runtime snapshot file, not from spawn-time env', () => {

@@ -167,7 +167,12 @@ function createFakeQuery(
 type CanUseToolFn = (
   toolName: string,
   input: Record<string, unknown>,
-  options: { toolUseID: string; suggestions?: unknown[] },
+  options: {
+    toolUseID: string;
+    title?: string;
+    description?: string;
+    suggestions?: unknown[];
+  },
 ) => Promise<{
   behavior: 'allow' | 'deny';
   updatedInput?: Record<string, unknown>;
@@ -200,6 +205,7 @@ async function startSession(
       scope?: string;
     }>;
     turnChangeCapture?: AgentDeps['turnChangeCapture'];
+    getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
   },
 ) {
   const configDir = await makeTempDir();
@@ -216,6 +222,7 @@ async function startSession(
   const deps = createDeps(policy, options?.mcpServerNames);
   deps.capabilityRouting = options?.capabilityRouting;
   deps.turnChangeCapture = options?.turnChangeCapture;
+  deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
   const agent = new ClaudeCodeAgent(deps);
   const handle = await agent.startSession({
     sessionId: 'session-mcp-policy',
@@ -632,6 +639,38 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     await handle.close();
   });
 
+  it('uses the host security disclosure for a progressive MCP action', async () => {
+    const disclosure = {
+      title: 'Allow Xcode to build this project?',
+      description:
+        'Build scripts may access files outside the project, and output is returned to the Agent.',
+    };
+    const { handle, canUseTool, seen } = await startSession(() => 'prompt-each-time', {
+      mcpServerNames: ['cindy_ios_simulator'],
+      getMcpToolApprovalPresentation: () => disclosure,
+    });
+
+    await canUseTool(
+      'mcp__cindy_ios_simulator__call_tool',
+      { name: 'build_app', args: {} },
+      {
+        toolUseID: 't-build',
+        title: 'Generic MCP approval',
+        description: 'Generic MCP description',
+        suggestions: SESSION_SUGGESTION,
+      },
+    );
+
+    expect(permissionRequests(seen)).toEqual([
+      expect.objectContaining({
+        title: disclosure.title,
+        description: disclosure.description,
+        suggestions: undefined,
+      }),
+    ]);
+    await handle.close();
+  });
+
   it('falls back to prompt-each-time when the policy throws or returns garbage', async () => {
     const thrower = await startSession(() => {
       throw new Error('policy exploded');
@@ -996,6 +1035,7 @@ describe('remote sessions share the same permission semantics', () => {
       initMcpServerNames?: readonly string[];
       failedInitMcpServerNames?: readonly string[];
       getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+      getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
     },
   ) {
     const configDir = await makeTempDir();
@@ -1005,6 +1045,7 @@ describe('remote sessions share the same permission semantics', () => {
     let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
     const deps = createDeps(policy);
     deps.getGhostRosterPrompt = options?.getGhostRosterPrompt;
+    deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
     deps.capabilityRouting = options?.capabilityRouting;
     // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
     deps.mcpProviders = (
@@ -1165,6 +1206,42 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(result.behavior).toBe('allow');
     expect(result.permissionUpdates).toBeUndefined();
+    await handle.close();
+  });
+
+  it('uses the host security disclosure for remote progressive MCP actions', async () => {
+    const disclosure = {
+      title: 'Allow Xcode to build this project?',
+      description:
+        'Build scripts may access files outside the project, and output is returned to the Agent.',
+    };
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(
+      () => 'prompt-each-time',
+      {
+        mcpServerNames: ['cindy_ios_simulator'],
+        getMcpToolApprovalPresentation: () => disclosure,
+        attachResolver: () => ({ kind: 'permission', behavior: 'deny' }),
+      },
+    );
+
+    const result = await onApprovalRequest({
+      requestId: 'r-build',
+      kind: 'permission',
+      toolName: 'mcp__cindy_ios_simulator__call_tool',
+      input: { name: 'build_app', args: {} },
+      title: 'Generic MCP approval',
+      description: 'Generic MCP description',
+      suggestions: SESSION_SUGGESTION,
+    });
+
+    expect(result.behavior).toBe('deny');
+    expect(permissionRequests(seen)).toEqual([
+      expect.objectContaining({
+        title: disclosure.title,
+        description: disclosure.description,
+        suggestions: undefined,
+      }),
+    ]);
     await handle.close();
   });
 

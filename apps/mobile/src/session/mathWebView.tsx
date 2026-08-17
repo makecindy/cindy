@@ -33,7 +33,7 @@ function rememberMeasuredHeight(source: string, height: number): void {
 }
 
 /**
- * display LaTeX 公式块 —— WebView + KaTeX 渲染(双 CDN failover,离线/非法
+ * display LaTeX 公式块 —— WebView + KaTeX 渲染(固定本地资源,离线/非法
  * 公式在 WebView 内降级为源码文本)。高度由页面内脚本 postMessage 上报,
  * 组件按内容自适应;高度经滞回过滤 + 按公式源码缓存,保证消息列表布局稳定
  * (稳定性约束见上方常量注释,改动前先理解闪动循环的成因)。

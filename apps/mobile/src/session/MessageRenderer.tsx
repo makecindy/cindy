@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowLeftRight,
@@ -72,6 +72,8 @@ import { motionDuration, motionEasing } from '@/theme/tokens';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
+import { isShareableMessage } from '@/session/shareSelectionStore';
+import { ShareMessageCheckbox } from '@/session/ShareMessageCheckbox';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   composerDocumentFromSerializedMessage,
@@ -318,6 +320,9 @@ import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeCo
 import { i18n } from '@/i18n';
 
 const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
+const MESSAGE_CONTROL_TOUCH_SIZE = 44;
+const MESSAGE_LIST_VISIBLE_PERCENT_THRESHOLD = 5;
+const SCREENSHOT_SHARE_VISIBLE_PERCENT_THRESHOLD = 10;
 // LegendList 变高 item 的初始估高(仅影响首帧布局定位,LegendList 挂载后按实测尺寸修正)。
 /**
  * 冷开落底的 settle 窗口(ms):rAF 落底 + 初窗测量 + 贴底补滚在此窗口内基本结算,
@@ -452,6 +457,11 @@ export interface MobileMessageDraft {
 
 export type MobileMessageActionBusyKind = 'fork' | 'rewind' | 'delete';
 
+export interface ShareableMessageViewport {
+  visibleBottom: number;
+  visibleTop: number;
+}
+
 interface MessageActions {
   /** 长按/操作条「复制消息链接」:复制该消息的会话深链(带 ?message= 锚点)。 */
   onCopyMessageLink?: (clientId: string) => void;
@@ -468,9 +478,15 @@ interface MessageActions {
   onLoadEarlier?: () => void | Promise<void>;
   onOpenForkOrigin?: () => void;
   onOpenPayload?: (payload: MessagePayload) => void;
+  onBlockingOverlayChange?: (blocked: boolean) => void;
+  onMessageActionSheetOpenChange?: (clientId: string, open: boolean) => void;
   /** 正文里会话深链 chip(xdt-maker://session/…)点击回调,app 内跳转。 */
   onOpenSessionLink?: (url: string) => void;
   onPreviewRewind?: (clientId: string, draft: MobileMessageDraft) => void;
+  onEnterShareSelection?: (clientId: string) => void;
+  onShareableMessageViewChange?: (clientId: string, view: View | null) => void;
+  shareSelectionActive?: boolean;
+  shareSelectionBusy?: boolean;
   /** 待发送气泡(pending_send 项)的展开态与队列操作回调。 */
   pendingSend?: PendingSendBubbleActions;
   onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
@@ -504,8 +520,13 @@ export function MessageRenderer({
   onDeleteMessage,
   onLoadEarlier,
   onOpenForkOrigin,
+  onBlockingOverlayChange,
   onOpenSessionLink,
   onPreviewRewind,
+  onEnterShareSelection,
+  onVisibleShareableMessageIdsReaderChange,
+  shareSelectionActive,
+  shareSelectionBusy,
   onQuoteSelection,
   pendingSend,
   onReadTextFilePreview,
@@ -554,6 +575,12 @@ export function MessageRenderer({
   ) => void | Promise<void>;
   /** 全屏图片查看器的圈点标注配置(画笔 → 发送到对话;由会话屏接线附件管线)。 */
   imageAnnotation?: ImageLightboxAnnotationConfig;
+  onEnterShareSelection?: (clientId: string) => void;
+  onVisibleShareableMessageIdsReaderChange?: (
+    reader: ((viewport: ShareableMessageViewport) => Promise<readonly string[]>) | null,
+  ) => void;
+  shareSelectionActive?: boolean;
+  shareSelectionBusy?: boolean;
   /** DEV-only:把内部列表控制器暴露给性能 harness 驱动自动滚动(临时,profiling/回归测量用)。 */
   devExposeList?: (api: {
     scrollTo: (y: number) => void;
@@ -568,6 +595,7 @@ export function MessageRenderer({
   const focusedItemKeyRef = useRef(focusedItemKey);
   focusedItemKeyRef.current = focusedItemKey;
   const listRef = useRef<LegendListRef>(null);
+  const shareableMessageViewsRef = useRef(new Map<string, View>());
   const windowDimensions = useWindowDimensions();
   const viewportLayout = useMemo(() => buildMobileReadableViewportLayout({
     screenHeight: windowDimensions.height,
@@ -667,6 +695,22 @@ export function MessageRenderer({
   const [isAwayFromBottom, setIsAwayFromBottom] = useState(false);
   const [firstVisibleIndex, setFirstVisibleIndex] = useState(0);
   const [payload, setPayload] = useState<MessagePayload | null>(null);
+  const payloadRef = useRef(payload);
+  payloadRef.current = payload;
+  const openMessageActionSheetsRef = useRef(new Set<string>());
+  const handleMessageActionSheetOpenChange = useCallback((clientId: string, open: boolean) => {
+    if (open) openMessageActionSheetsRef.current.add(clientId);
+    else openMessageActionSheetsRef.current.delete(clientId);
+    onBlockingOverlayChange?.(
+      payloadRef.current !== null || openMessageActionSheetsRef.current.size > 0,
+    );
+  }, [onBlockingOverlayChange]);
+  useEffect(() => {
+    onBlockingOverlayChange?.(
+      payload !== null || openMessageActionSheetsRef.current.size > 0,
+    );
+    return () => onBlockingOverlayChange?.(false);
+  }, [onBlockingOverlayChange, payload]);
   // 关闭回调必须引用稳定:内联闭包每次渲染换新,会经 ImageLightbox 透传成
   // LightboxPage 手势 useMemo 的依赖,流式回复期间每 token 重建手势图,
   // 可能打断进行中的捏合/拖动手势(rule 7)。
@@ -802,6 +846,13 @@ export function MessageRenderer({
     loading: loadingEarlier === true,
     visibleMessageCount: listData.length,
   });
+  const handleShareableMessageViewChange = useCallback((clientId: string, view: View | null) => {
+    if (view) {
+      shareableMessageViewsRef.current.set(clientId, view);
+      return;
+    }
+    shareableMessageViewsRef.current.delete(clientId);
+  }, []);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     onAddMessageToComposer,
     onCopyMessageLink,
@@ -810,11 +861,16 @@ export function MessageRenderer({
     onOpenForkOrigin,
     onOpenSessionLink,
     onPreviewRewind,
+    onEnterShareSelection,
+    onShareableMessageViewChange: handleShareableMessageViewChange,
     onOpenPayload: setPayload,
+    onMessageActionSheetOpenChange: handleMessageActionSheetOpenChange,
     onResolveRemoteMedia,
     // 待发送气泡(pending_send 项)的展开态与队列操作:漏了这一项 actions.pendingSend 就是
     // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
     pendingSend,
+    shareSelectionActive,
+    shareSelectionBusy,
     busyClientId,
     busyAction,
     firstUserMessageClientId,
@@ -840,8 +896,13 @@ export function MessageRenderer({
     onOpenForkOrigin,
     onOpenSessionLink,
     onPreviewRewind,
+    onEnterShareSelection,
+    handleShareableMessageViewChange,
+    handleMessageActionSheetOpenChange,
     onResolveRemoteMedia,
     pendingSend,
+    shareSelectionActive,
+    shareSelectionBusy,
     viewportLayout.contentWidth,
   ]);
   // chat-text-quote:选区采集 context。仅「会话页传了采集回调 + iOS」时启用
@@ -867,7 +928,9 @@ export function MessageRenderer({
   const focusRunKey = focusedItemKey
     ? `${focusedRequestKey ?? 'default'}:${focusedItemKey}`
     : null;
-  const viewabilityConfigRef = useRef({ itemVisiblePercentThreshold: 5 });
+  const viewabilityConfigRef = useRef({
+    itemVisiblePercentThreshold: MESSAGE_LIST_VISIBLE_PERCENT_THRESHOLD,
+  });
   const handleViewableItemsChangedRef = useRef((info: {
     viewableItems: ViewToken<MobileMessageRenderItem>[];
   }) => {
@@ -878,6 +941,43 @@ export function MessageRenderer({
     }
     if (nextIndex !== null) setFirstVisibleIndex(nextIndex);
   });
+  const readActuallyVisibleShareableMessageIds = useCallback(async (
+    viewport: ShareableMessageViewport,
+  ): Promise<readonly string[]> => {
+    const list = listRef.current;
+    if (!list) return [];
+    const listFrame = await measureInWindow(list.getNativeScrollRef());
+    if (!listFrame || listFrame.height <= 0) return [];
+    const visibleTop = Math.max(listFrame.y, viewport.visibleTop);
+    const visibleBottom = Math.min(
+      listFrame.y + listFrame.height,
+      viewport.visibleBottom,
+    );
+    if (visibleBottom <= visibleTop) return [];
+    const measuredItems = await Promise.all(
+      Array.from(shareableMessageViewsRef.current.entries()).map(async ([clientId, view]) => {
+        const frame = await measureInWindow(view);
+        if (!frame || frame.height <= 0) return null;
+        const visibleHeight = Math.max(
+          0,
+          Math.min(frame.y + frame.height, visibleBottom) - Math.max(frame.y, visibleTop),
+        );
+        if (
+          visibleHeight / frame.height
+          < SCREENSHOT_SHARE_VISIBLE_PERCENT_THRESHOLD / 100
+        ) return null;
+        return { clientId, y: frame.y };
+      }),
+    );
+    return measuredItems
+      .filter((item): item is { clientId: string; y: number } => item !== null)
+      .sort((left, right) => left.y - right.y)
+      .map((item) => item.clientId);
+  }, []);
+  useEffect(() => {
+    onVisibleShareableMessageIdsReaderChange?.(readActuallyVisibleShareableMessageIds);
+    return () => onVisibleShareableMessageIdsReaderChange?.(null);
+  }, [onVisibleShareableMessageIdsReaderChange, readActuallyVisibleShareableMessageIds]);
 
   // 贴底跟随由 handleContentSize 的手动补滚承担(nearBottomRef 是跟随意图的唯一真相);
   // 跳底直接命令式 scrollToEnd。
@@ -1293,6 +1393,7 @@ export function MessageRenderer({
         // (替代手搓的隐藏+rAF 落底 + open-settle)。
         key={scrollResetKey}
         data={listData}
+        extraData={shareSelectionActive}
         keyExtractor={(item) => item.key}
         renderItem={renderMessageItem}
         recycleItems={false}
@@ -1716,14 +1817,26 @@ function MessageBubble({
   const isUser = presentation.isUserAligned;
   const isStreamingAssistant = item.message.kind === 'assistant' && item.message.isStreaming === true;
   const clientId = messageClientId(item);
+  useEffect(() => {
+    if (!actionSheetOpen) return undefined;
+    actions.onMessageActionSheetOpenChange?.(clientId, true);
+    return () => actions.onMessageActionSheetOpenChange?.(clientId, false);
+  }, [actionSheetOpen, actions.onMessageActionSheetOpenChange, clientId]);
+  const shareableMessage = isShareableMessage(item.message);
+  const handleShareableMessageViewChange = useCallback((view: View | null) => {
+    actions.onShareableMessageViewChange?.(clientId, view);
+  }, [actions.onShareableMessageViewChange, clientId]);
+  const shareSelectionActive = actions.shareSelectionActive === true
+    && shareableMessage;
   const isFirstUserMessage = item.message.kind === 'user' && clientId === actions.firstUserMessageClientId;
   const copyText = buildMobileMessageCopyText(item.message);
   const canUseCompletedActions = !isStreamingAssistant;
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
-  // 不挂。user 消息、流式「生成中」状态与正文的文本选择(canSelectVisibleText)
+  // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
+  // user 消息、流式「生成中」状态与正文的文本选择(canSelectVisibleText)
   // 不受影响。
-  const showCompletedActionBar = mobileMessageShowsActionBar({
+  const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
     isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,
@@ -1762,6 +1875,14 @@ function MessageBubble({
   );
   const canCopyLink = !!(showCompletedActionBar && clientId && actions.onCopyMessageLink);
   const canAddToChat = !!(showCompletedActionBar && clientId && actions.onAddMessageToComposer);
+  const canShare = !!(
+    showCompletedActionBar
+    && clientId
+    && shareableMessage
+    && actions.onEnterShareSelection
+    && !actions.shareSelectionActive
+    && !actions.busyClientId
+  );
   const contentLayout = useMemo(() => buildMessageContentLayout({
     screenWidth: actions.screenWidth,
   }), [actions.screenWidth]);
@@ -1792,7 +1913,10 @@ function MessageBubble({
   // 实测行数与被测 body 绑定存储:FlatList 复用组件实例时 body 可能原地变化
   // (服务端同步补丁等),旧实测值若不随内容失效,会在下一次 onTextLayout 到达
   // 前产生"过期行数"的错误收起判定;body 不匹配时视为未测量,回落估算兜底。
-  const [measuredBody, setMeasuredBody] = useState<{ body: string; lines: number } | null>(null);
+  const [measuredBody, setMeasuredBody] = useState<{
+    body: string;
+    lines: number;
+  } | null>(null);
   const measuredBodyLines =
     measuredBody && measuredBody.body === displayBubbleBody ? measuredBody.lines : null;
   const [longMessageExpanded, setLongMessageExpanded] = useState(false);
@@ -1830,7 +1954,7 @@ function MessageBubble({
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
   }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
-  const hasActions = actionBar.items.length > 0;
+  const hasActions = actionBar.items.length > 0 || canShare;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
   const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
@@ -2098,8 +2222,9 @@ function MessageBubble({
     </View>
   );
 
-  return (
+  const messageNode = (
     <View
+      ref={shareableMessage ? handleShareableMessageViewChange : undefined}
       style={[
         styles.messageItem,
         isUser ? styles.userMessageItem : styles.agentMessageItem,
@@ -2160,20 +2285,35 @@ function MessageBubble({
             }
             if (isMessageControlActionId(id)) {
               return (
-                <MessageControlButton
-                  buttonSize={actionBar.buttonSize}
-                  busy={id === 'fork' && forkBusy}
-                  copyState={copyState}
-                  disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
-                  id={id}
-                  key={id}
-                  iconSize={actionBar.iconSize}
-                  onPress={() => selectControlAction(id)}
-                />
+                <Fragment key={id}>
+                  <MessageControlButton
+                    buttonSize={actionBar.buttonSize}
+                    busy={id === 'fork' && forkBusy}
+                    copyState={copyState}
+                    disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
+                    id={id}
+                    iconSize={actionBar.iconSize}
+                    onPress={() => selectControlAction(id)}
+                  />
+                  {id === 'copy' && canShare ? (
+                    <MessageShareButton
+                      buttonSize={actionBar.buttonSize}
+                      iconSize={actionBar.iconSize}
+                      onPress={() => actions.onEnterShareSelection?.(clientId)}
+                    />
+                  ) : null}
+                </Fragment>
               );
             }
             return null;
           })}
+          {canShare && !actionBar.items.includes('copy') ? (
+            <MessageShareButton
+              buttonSize={actionBar.buttonSize}
+              iconSize={actionBar.iconSize}
+              onPress={() => actions.onEnterShareSelection?.(clientId)}
+            />
+          ) : null}
         </View>
       ) : null}
       <MessageActionSheet
@@ -2183,6 +2323,16 @@ function MessageBubble({
         onClose={() => setActionSheetOpen(false)}
         visible={actionSheetOpen}
       />
+    </View>
+  );
+
+  if (!shareSelectionActive) return messageNode;
+  return (
+    <View style={styles.shareSelectionRow}>
+      <View style={styles.shareSelectionGutter}>
+        <ShareMessageCheckbox clientId={clientId} disabled={actions.shareSelectionBusy === true} />
+      </View>
+      <View style={styles.shareSelectionContent}>{messageNode}</View>
     </View>
   );
 }
@@ -5844,6 +5994,7 @@ function MessageControlButton({
       style={({ pressed }) => [
         styles.messageIconAction,
         { height: buttonSize, width: buttonSize },
+        styles.messageIconActionTouchTarget,
         pressed && styles.pressed,
         disabled && styles.disabled,
       ]}
@@ -5878,12 +6029,44 @@ function MessageMoreButton({
       style={({ pressed }) => [
         styles.messageIconAction,
         { height: buttonSize, width: buttonSize },
+        styles.messageIconActionTouchTarget,
         pressed && styles.pressed,
         disabled && styles.disabled,
       ]}
       testID="message.moreButton"
     >
       <Ellipsis color={colors.textSecondary} size={size} strokeWidth={iconStroke.regular} />
+    </Pressable>
+  );
+}
+
+function MessageShareButton({
+  buttonSize,
+  iconSize: size,
+  onPress,
+}: {
+  buttonSize: number;
+  iconSize: number;
+  onPress(): void;
+}) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
+  return (
+    <Pressable
+      accessibilityLabel={t('session.shareImage.shareMessage')}
+      accessibilityRole="button"
+      hitSlop={MESSAGE_CONTROL_HIT_SLOP}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.messageIconAction,
+        { height: buttonSize, width: buttonSize },
+        styles.messageIconActionTouchTarget,
+        pressed && styles.pressed,
+      ]}
+      testID="message.shareButton"
+    >
+      <ShareIcon color={colors.textSecondary} size={size} strokeWidth={iconStroke.regular} />
     </Pressable>
   );
 }
@@ -5942,6 +6125,36 @@ function findFirstUserMessageClientId(items: readonly MobileMessageRenderItem[])
     if (found) return found;
   }
   return undefined;
+}
+
+interface WindowFrame {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+}
+
+function measureInWindow(
+  target: unknown,
+): Promise<WindowFrame | null> {
+  return new Promise((resolve) => {
+    const measurable = target as {
+      measureInWindow?: (
+        callback: (x: number, y: number, width: number, height: number) => void,
+      ) => void;
+    } | null | undefined;
+    if (!measurable?.measureInWindow) {
+      resolve(null);
+      return;
+    }
+    measurable.measureInWindow((x, y, width, height) => {
+      if (![x, y, width, height].every(Number.isFinite)) {
+        resolve(null);
+        return;
+      }
+      resolve({ height, width, x, y });
+    });
+  });
 }
 
 function findFirstUserMessageClientIdInItem(
@@ -6109,6 +6322,22 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageItem: {
     gap: 2,
     width: '100%',
+  },
+  shareSelectionRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minWidth: 0,
+    width: '100%',
+  },
+  shareSelectionGutter: {
+    alignItems: 'center',
+    paddingTop: spacing.sm,
+    width: spacing.xl * 2,
+  },
+  shareSelectionContent: {
+    flex: 1,
+    minWidth: 0,
   },
   sentInlineTextChunk: {
     flexBasis: '100%',
@@ -6683,6 +6912,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 24,
     justifyContent: 'center',
     width: 24,
+  },
+  messageIconActionTouchTarget: {
+    minHeight: MESSAGE_CONTROL_TOUCH_SIZE,
+    minWidth: MESSAGE_CONTROL_TOUCH_SIZE,
   },
   messageActionMeta: {
     alignSelf: 'center',

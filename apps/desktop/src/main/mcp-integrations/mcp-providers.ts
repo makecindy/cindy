@@ -3,6 +3,7 @@ import { join as pathJoin } from 'node:path';
 import {
   createLiziMcpProviders,
   resolveLiziMcpSessionContext,
+  type IOSSimulatorMcpAccessDecision,
   type LiziMcpProvider,
   type LiziMcpSessionContext,
   type LspServerPool,
@@ -10,9 +11,14 @@ import {
 import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
-import { getCindyGhostsMcpDeps, type GhostGrantLiveSessionState } from './ghost.js';
+import {
+  getCindyGhostsMcpDeps,
+  type GhostGrantLiveSessionState,
+  type ToolResultImageDescription,
+} from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { getAndroidMcpDeps } from './android.js';
+import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
 import { feishuIm, wechatIm } from '../im';
@@ -54,6 +60,10 @@ export interface DesktopMcpProvidersDeps {
   lspPool: LspServerPool;
   /** 按会话控制启用状态的 plugin registry。 */
   pluginRegistry: PluginRegistry;
+  /** Live installed/enabled plugin gate; evaluated again for every tool call. */
+  resolveIOSSimulatorAccess: (
+    context?: { workingDir?: string },
+  ) => IOSSimulatorMcpAccessDecision;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: ChatHistoryReaderDeps['invokeRemote'];
   /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
@@ -61,6 +71,17 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
+   *  返回结构区分「有意跳过」(skipped:true, 视觉桥未开/模型不命中, 不告警)与
+   *  「真正尝试但失败」(skipped:false + null, 计入 attemptedCount 供告警)。 */
+  describeToolResultImage?: (input: {
+    imageUrl: string;
+    sessionId: string | null;
+    sessionInstanceId: string | null;
+    signal?: AbortSignal;
+  }) => Promise<ToolResultImageDescription>;
+  /** 工具结果图片全部描述失败时回调（视觉桥不可用告警）。缺失 = 不告警。 */
+  onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
@@ -86,6 +107,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Keep that snapshot for a busy turn when a disable refresh is deferred;
         // a successfully rebuilt bridge omits this provider via the outer gate.
         context?.agentKind === 'codex' || pluginRegistry.isEnabled('android'),
+    }),
+    iosSimulator: getIOSSimulatorMcpDeps({
+      resolveAccess: deps.resolveIOSSimulatorAccess,
     }),
     browser: getBrowserMcpDeps(),
     computer: getComputerMcpDeps({
@@ -287,7 +311,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           if (isIpcError(err) && err.code === 'NOT_FOUND') {
-            return { ok: false, errorCode: 'NOT_FOUND', message };
+            return { ok: false, errorCode: err.code, message };
           }
           return { ok: false, errorCode: 'INTERNAL', message };
         }
@@ -321,8 +345,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: true, changed };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          if (isIpcError(err) && err.code === 'NOT_FOUND') {
-            return { ok: false, errorCode: 'NOT_FOUND', message };
+          if (isIpcError(err)) {
+            if (err.code === 'NOT_FOUND' || err.code === 'PRECONDITION_FAILED') {
+              return { ok: false, errorCode: err.code, message };
+            }
           }
           return { ok: false, errorCode: 'INTERNAL', message };
         }
@@ -438,9 +464,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
         // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
         const keepOrcaProviderStable = pluginId === 'collab';
+        // Keep the lightweight gateway visible even before the public plugin
+        // is installed. Its live call gate returns an actionable install/enable
+        // result, while every runtime mutation remains blocked in Main.
+        const keepIOSSimulatorGatewayStable = pluginId === 'ios-simulator';
         // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
         if (
           !keepOrcaProviderStable &&
+          !keepIOSSimulatorGatewayStable &&
           !deferOrdinaryGate &&
           !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
         ) {
@@ -482,6 +513,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       instance: createCindyGhostsMcpServer(
         getCindyGhostsMcpDeps(ctx, {
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          describeToolResultImage: deps.describeToolResultImage,
+          onToolResultImagesFailed: deps.onToolResultImagesFailed,
         }),
       ),
     }),

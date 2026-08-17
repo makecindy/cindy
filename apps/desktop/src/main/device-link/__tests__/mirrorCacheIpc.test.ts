@@ -31,6 +31,7 @@ vi.mock('../mirrorCachePurgeQueue', () => ({
 }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: (): string => `cloud:${ownerKey}:${ownerGeneration}`,
+  isAppSessionBoundaryPending: (): boolean => false,
   ownerScopedUserDataPath: (...parts: string[]): string =>
     ['/data/owners', ownerKey, ...parts].join('/'),
 }));

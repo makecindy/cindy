@@ -21,8 +21,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  Bot,
   FolderTree,
   Globe,
+  Smartphone,
   Terminal,
   GitPullRequestArrow,
   UsersRound,
@@ -38,6 +40,8 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
@@ -69,6 +73,10 @@ interface TabBarProps {
   onMaximize?: () => void;
   /** 关闭整个 RSB 的 toggle(仅 showWindowControls=true 时使用)。 */
   onCloseSidebar?: () => void;
+  /** 固定显示 / 聚焦入口；与关闭按钮分离，点击已展开侧栏时为 no-op。 */
+  onShowSidebar?: () => void;
+  /** 当前面板所在侧，用于固定入口图标方向。 */
+  panelSide?: 'left' | 'right';
   /** maximize 当前态(Phase 6)— 用来切换按钮图标 Maximize2 ↔ Minimize2,
    *  让用户视觉上知道按一下是"退出最大化"。 */
   isMaximized?: boolean;
@@ -85,6 +93,8 @@ interface TabBarProps {
    *  "拖面板"手势面(窗口拖拽区收不到鼠标事件,二者物理互斥;拖窗走左栏顶行);
    *  detached 子窗口等其它宿主不传,默认 true 维持经典拖窗行为。 */
   chromeWindowDrag?: boolean;
+  /** Whether the installed product plugin currently exposes the Host viewer. */
+  iosSimulatorAvailable?: boolean;
 }
 
 interface TabStripProps {
@@ -114,14 +124,18 @@ interface TabStripProps {
    */
   addButtonWrapperClassName?: string;
   addButtonClassName?: string;
+  /** Whether the installed product plugin currently exposes the Host viewer. */
+  iosSimulatorAvailable?: boolean;
 }
 
 const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'file-browser': FolderTree,
   'web-browser': Globe,
+  'ios-simulator': Smartphone,
   terminal: Terminal,
   review: GitPullRequestArrow,
   'orca-workers': UsersRound,
+  subagents: Bot,
   'background-tasks': ListTodo,
   'resource-usage': Activity,
 };
@@ -129,9 +143,11 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'file-browser': 'rightSidebar.tabs.kinds.fileBrowser',
   'web-browser': 'rightSidebar.tabs.kinds.browser',
+  'ios-simulator': 'rightSidebar.tabs.kinds.iosSimulator',
   terminal: 'rightSidebar.tabs.kinds.terminal',
   review: 'rightSidebar.tabs.kinds.review',
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
+  subagents: 'rightSidebar.tabs.kinds.subagents',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
 };
@@ -153,8 +169,7 @@ function labelKeyForTabKind(kind: TabKindId): string {
   // 而非「未知标签页」——kind 前缀本身就能识别它是谁的地盘。
   if (kind.startsWith('ghost:')) return 'rightSidebar.tabs.kinds.ghostPanel';
   return (
-    (KIND_LABEL_KEY as Partial<Record<string, string>>)[kind] ??
-    'rightSidebar.tabs.kinds.unknown'
+    (KIND_LABEL_KEY as Partial<Record<string, string>>)[kind] ?? 'rightSidebar.tabs.kinds.unknown'
   );
 }
 
@@ -190,11 +205,14 @@ export function TabBar({
   showWindowControls,
   onMaximize,
   onCloseSidebar,
+  onShowSidebar,
+  panelSide = 'right',
   isMaximized,
   onCloseOthers,
   onCloseAll,
   onDetach,
   chromeWindowDrag = true,
+  iosSimulatorAvailable = false,
 }: TabBarProps) {
   const { t } = useTranslation();
 
@@ -219,6 +237,7 @@ export function TabBar({
         onCloseAll={onCloseAll}
         addButtonWrapperClassName="h-[36px]"
         addButtonClassName="mt-[3px]"
+        iosSimulatorAvailable={iosSimulatorAvailable}
       />
 
       {/* Right: window controls. 仅 showWindowControls=true(Win 端)时渲染;
@@ -258,6 +277,14 @@ export function TabBar({
               <PanelRightClose size={15} />
             </ChromeIconButton>
           )}
+          {onShowSidebar && (
+            <RightSidebarToggle
+              action="show"
+              collapsed={false}
+              onToggle={onShowSidebar}
+              side={panelSide}
+            />
+          )}
         </div>
       )}
     </div>
@@ -278,6 +305,7 @@ export function TabStrip({
   pillVariant = 'flush',
   addButtonWrapperClassName,
   addButtonClassName,
+  iosSimulatorAvailable = false,
 }: TabStripProps) {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
@@ -433,6 +461,7 @@ export function TabStrip({
               setDropdownOpen(false);
             }}
             existingKinds={existingKinds}
+            iosSimulatorAvailable={iosSimulatorAvailable}
           />
         )}
       </div>
@@ -625,17 +654,5 @@ function TabPill({
         <X size={10} />
       </button>
     </div>
-  );
-}
-
-function ChromeIconButton({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      type="button"
-      {...rest}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-    >
-      {children}
-    </button>
   );
 }

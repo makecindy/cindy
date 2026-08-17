@@ -876,7 +876,7 @@ export function AgentActionRow({
   };
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" data-message-client-id={message.clientId}>
       <button
         type="button"
         onClick={(e) => void onActivate(e.currentTarget)}

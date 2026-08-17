@@ -25,6 +25,7 @@ import {
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   REMOTE_INVOKE_ALLOWLIST,
+  REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS,
   topicForPush,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -214,11 +215,20 @@ type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult;
 /** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */
 let workingDirGuard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null = null;
 
+type RemoteReviewInputGuard = (sessionId: string) => void | Promise<void>;
+
+/** Main injects the DB-backed sessions.source authorization check once ready. */
+let remoteReviewInputGuard: RemoteReviewInputGuard | null = null;
+
 /** 注入远程 create-session/worktree:create 的本地目录校验器(register.ts 在 maker 就绪后接入)。 */
 export function setRemoteWorkingDirGuard(
   guard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null,
 ): void {
   workingDirGuard = guard;
+}
+
+export function setRemoteReviewInputGuard(guard: RemoteReviewInputGuard | null): void {
+  remoteReviewInputGuard = guard;
 }
 
 /** 从 args[0] 里取待收敛的路径字段(见 PATH_GUARDED_CHANNELS);取不到返回 null。 */
@@ -473,8 +483,10 @@ const REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS = 500;
  * subscribe 定向 flush(已有)。
  */
 const REMOTE_INVOKE_RESULT_OUTBOX_OFFLINE_SWEEP_MS = 5_000;
+/** 默认远程调用客户端等待预算(缺省 30s;无超时覆盖的 channel 用此值,与 allowlist 注释一致)。 */
+const DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS = 30_000;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
-  30_000,
+  DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS,
   ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
 );
 /** 再保留一轮同等重连窗口后才放弃无人等待的回包(全局上限;逐条按 channel 收窄)。 */
@@ -482,13 +494,14 @@ const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS 
 
 /**
  * outbox 条目的逐 channel 保留时长:控制端对该 channel 的等待预算(两端共享
- * INVOKE_TIMEOUT_OVERRIDES_MS,缺省 30s)× 2(再留一轮重连窗口),封顶全局上限。
+ * INVOKE_TIMEOUT_OVERRIDES_MS,缺省默认预算)× 2(再留一轮重连窗口),封顶全局上限。
  * 控制端超时后不会再认领旧 requestId 的回包(重发用新 id),listing 类回包在
  * 弱网时段最多占 outbox 两分钟纯属浪费配额;长任务 channel(60s 预算)自动保留
  * 更久。控制端可能配置更短的超时(mobile 15s),推断值只偏保守、不早丢。
  */
 function outboxEntryMaxAgeMs(channel: string | undefined): number {
-  const budgetMs = (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || 30_000;
+  const budgetMs =
+    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
   return Math.min(budgetMs * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
 }
 /**
@@ -496,6 +509,18 @@ function outboxEntryMaxAgeMs(channel: string | undefined): number {
  * 这里只在远超控制端等待窗后回收本地 bookkeeping；底层 Promise 仍带 catch 并允许自行收尾。
  */
 const REMOTE_INVOKE_ORPHAN_TIMEOUT_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
+/**
+ * 逐 channel 收窄(codex P2):orphan 截止时间按「该 channel 的控制端等待预算 × 2」取,
+ * 被全局上限(REMOTE_INVOKE_ORPHAN_TIMEOUT_MS)封顶,与 outboxEntryMaxAgeMs 同款。
+ * 否则 maker:compact-session 的 11min 覆盖会把全局 orphan 拉高到 22min——任何挂起的
+ * 默认 30s handler 都会占满 controller 的 in-flight 配额整整 22 分钟,后续远程控制
+ * 动作看起来卡住(BACKPRESSURE)。
+ */
+function remoteInvokeOrphanTimeoutMs(channel: string | undefined): number {
+  const budgetMs =
+    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
+  return Math.min(budgetMs * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+}
 interface CachedRemoteInvokeResult {
   result: InvokeResultPayload;
   bytes: number;
@@ -530,6 +555,14 @@ const remoteInvokeLinkEpoch = new Map<string, number>();
 const topicSubscriptionControllers = new Set<string>();
 /** 已成功 accept、尚未显式 close 的控制端；可无 active topic(现代重连等待 subscribe)。 */
 const acceptedLinkControllers = new Set<string>();
+/**
+ * relay presence 按 server 盖章的 deviceId 提供设备数据库展示名。它比控制端在
+ * link-open / subscribe 里自报的主机名更权威，用于让被控提示与设备列表一致。
+ * 仅作展示，不参与任何授权判断；账号 / 链路边界由 host 显式清空。
+ */
+const controllerDisplayNameByDevice = new Map<string, string>();
+/** 控制帧自报名称仅作数据库展示名缺失时的兼容回退。 */
+const reportedControllerNameByDevice = new Map<string, string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -547,6 +580,66 @@ export function setRemoteInvokeBusyChangedListener(
 
 export function setSessionsSubscribedListener(cb: SessionsSubscribedListener | null): void {
   onSessionsSubscribed = cb;
+}
+
+function normalizeControllerName(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim()
+    ? value.trim().slice(0, MAX_CONTROLLER_NAME_LEN)
+    : undefined;
+}
+
+function resolveControllerName(deviceId: string, reportedName: unknown): string | undefined {
+  const normalizedReportedName = normalizeControllerName(reportedName);
+  if (normalizedReportedName) {
+    reportedControllerNameByDevice.set(deviceId, normalizedReportedName);
+  }
+  return controllerDisplayNameByDevice.get(deviceId)
+    ?? normalizedReportedName
+    ?? reportedControllerNameByDevice.get(deviceId);
+}
+
+function clearReportedControllerName(deviceId: string): void {
+  reportedControllerNameByDevice.delete(deviceId);
+}
+
+/**
+ * presence 设备名变化(含设置页重命名)时更新展示真相；已有活跃订阅立即重发
+ * controlled-state，让横幅不用等下一次 subscribe / 重连才改名。
+ */
+export function setControllerDisplayName(deviceId: string, name: string): void {
+  const normalized = normalizeControllerName(name);
+  if (normalized) {
+    if (controllerDisplayNameByDevice.get(deviceId) === normalized) return;
+    controllerDisplayNameByDevice.set(deviceId, normalized);
+  } else {
+    controllerDisplayNameByDevice.delete(deviceId);
+  }
+  const displayName = normalized
+    ?? reportedControllerNameByDevice.get(deviceId)
+    ?? deviceId.slice(0, 8);
+  if (subscriptions.updateControllerMetadata(deviceId, displayName)) syncForwarding();
+}
+
+/**
+ * 旧 relay presence 的主机名只刷新当前横幅，不进入数据库名或控制帧自报名缓存。
+ * 已有权威名或链路自报名时保持原优先级；断链后 metadata 随订阅一起失效。
+ */
+export function setControllerFallbackDisplayName(deviceId: string, name: string): void {
+  const normalized = normalizeControllerName(name);
+  if (
+    !normalized
+    || controllerDisplayNameByDevice.has(deviceId)
+    || reportedControllerNameByDevice.has(deviceId)
+  ) {
+    return;
+  }
+  if (subscriptions.updateControllerMetadata(deviceId, normalized)) syncForwarding();
+}
+
+/** 账号切换 / 链路 teardown 时清空 presence 展示名，避免串到下一段身份。 */
+export function clearControllerDisplayNames(): void {
+  controllerDisplayNameByDevice.clear();
+  reportedControllerNameByDevice.clear();
 }
 
 export function getActiveControllers(): ActiveController[] {
@@ -1407,6 +1500,7 @@ export function dropAllControllers(
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
     ...acceptedLinkControllers,
+    ...reportedControllerNameByDevice.keys(),
   ]);
   for (const dst of controllerIds) {
     try {
@@ -1415,11 +1509,13 @@ export function dropAllControllers(
       // 本地授权/订阅清理不能依赖弱网下 link-close 真正写进 socket。
       log.warn(`closeLink to ${shortId(dst)} failed during ${reason}: ${String(err)}`);
     }
+    clearReportedControllerName(dst);
   }
   clearAllRemoteInvokeState();
   subscriptions.clearAll();
   topicSubscriptionControllers.clear();
   acceptedLinkControllers.clear();
+  reportedControllerNameByDevice.clear();
   offlinePushQueue.clear();
   clearAllSessionActivityStages();
   clearAllMakerEventBatchStages();
@@ -1435,6 +1531,7 @@ export function dropAllControllers(
  */
 export function handleControllerOffline(deviceId: string): void {
   acceptedLinkControllers.delete(deviceId);
+  clearReportedControllerName(deviceId);
   clearSessionActivityStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
@@ -1450,6 +1547,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 
 /** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
 export function purgeRevokedController(deviceId: string): void {
+  clearReportedControllerName(deviceId);
   offlinePushQueue.clear(deviceId);
   clearSessionActivityStage(deviceId);
   clearMakerEventBatchStage(deviceId);
@@ -1502,6 +1600,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       clearMakerEventBatchStage(src);
       cancelLinkAcceptRetry(src);
       acceptedLinkControllers.delete(src);
+      clearReportedControllerName(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
       // A modern controller must reconnect and explicitly subscribe; restoring the
       // legacy wildcard here would silently re-enable broad delivery.
@@ -1537,6 +1636,9 @@ function isControllerRevoked(deviceId: string): boolean {
  */
 const LINK_ACCEPT_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
 const linkAcceptRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 已撤权控制端反复 open 时，closeLink 与 warn 的最小间隔。 */
+const REVOKED_LINK_OPEN_REJECT_INTERVAL_MS = 30_000;
+const revokedLinkOpenRejectAt = new Map<string, number>();
 
 function cancelLinkAcceptRetry(src: string): void {
   const timer = linkAcceptRetryTimers.get(src);
@@ -1593,15 +1695,19 @@ function handleLinkOpen(
   // 逐设备黑名单:已撤销访问权限的控制端,发 link-close('revoked') 给明确信号
   // (legacy openLink 仍会超时,但控制端据此 link-close 标记「已撤销」),不接受其 link-open。
   if (isControllerRevoked(src)) {
-    log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
+    // 清理必须每次都做:限频只挡 closeLink/日志,不能把 purge 也吞掉。
+    // 否则短暂解禁再撤权时,restore 窗口里装上的订阅会在 throttle 内继续收 push。
     purgeRevokedController(src);
-    client.closeLink(src, 'revoked', 'inbound');
+    const now = Date.now();
+    const last = revokedLinkOpenRejectAt.get(src) ?? 0;
+    if (now - last >= REVOKED_LINK_OPEN_REJECT_INTERVAL_MS) {
+      log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
+      revokedLinkOpenRejectAt.set(src, now);
+      client.closeLink(src, 'revoked', 'inbound');
+    }
     return;
   }
-  const name =
-    typeof payload?.controllerName === 'string' && payload.controllerName.trim()
-      ? payload.controllerName.trim().slice(0, MAX_CONTROLLER_NAME_LEN)
-      : src.slice(0, 8);
+  const name = resolveControllerName(src, payload?.controllerName) ?? src.slice(0, 8);
   // 老控制端无 subscribe 能力:link-open 视作订阅 legacy '*'(全量转发 + 横幅),向后兼容。
   // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
   const capabilities = sanitizeControllerCapabilities(payload?.capabilities);
@@ -1839,6 +1945,7 @@ function settleRemoteInvokeWithOrphanDeadline(
   channel: string | undefined,
 ): Promise<InvokeResultPayload> {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const orphanMs = remoteInvokeOrphanTimeoutMs(channel);
   const timeout = new Promise<InvokeResultPayload>((resolve) => {
     timer = setTimeout(() => {
       timer = null;
@@ -1851,11 +1958,11 @@ function settleRemoteInvokeWithOrphanDeadline(
         error: {
           code: 'IPC_ERROR',
           message:
-            `[TIMEOUT] remote invoke exceeded ${REMOTE_INVOKE_ORPHAN_TIMEOUT_MS}ms; ` +
+            `[TIMEOUT] remote invoke exceeded ${orphanMs}ms; ` +
             'the underlying operation may still be running',
         },
       });
-    }, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+    }, orphanMs);
     (timer as unknown as { unref?: () => void }).unref?.();
   });
   return Promise.race([execution, timeout]).finally(() => {
@@ -2552,10 +2659,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     : [];
   // legacy `'*'`(全量 firehose + 点亮被控横幅)只允许走 link-open 路径,不接受 subscribe 帧
   // 携带 —— 上面 filter 已剔除,防控制端一帧订全部会话流。
-  const name =
-    typeof o.controllerName === 'string' && o.controllerName.trim()
-      ? o.controllerName.trim().slice(0, MAX_CONTROLLER_NAME_LEN)
-      : undefined;
+  const name = resolveControllerName(src, o.controllerName);
   const isSub = payload.channel === DL_SUBSCRIBE_CHANNEL;
   if (isSub) {
     // link-open provisionally installs legacy '*' for old clients. A non-empty modern subscribe
@@ -2617,6 +2721,27 @@ export async function runInvoke(
       ok: false,
       error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed remotely` },
     };
+  }
+
+  // Review sessions may be mirrored to controllers for visibility, but their
+  // only input is the host's direct reviewer.send() call. Reject before the
+  // synthetic ipcMain event is dispatched, then let the handler repeat the
+  // same DB-backed check as defense in depth for local Renderer calls.
+  if (REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS.has(payload.channel) && remoteReviewInputGuard) {
+    const sessionId = payload.args?.[0];
+    if (typeof sessionId === 'string') {
+      try {
+        await remoteReviewInputGuard(sessionId);
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: 'IPC_ERROR',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
   }
 
   // device-link:media:fetch 不是 ipcMain handler(同 subscribe),在此拦截:解析本机媒体 →
@@ -2854,14 +2979,18 @@ export const __testing = {
     remoteInvokeLinkEpoch.clear();
     topicSubscriptionControllers.clear();
     acceptedLinkControllers.clear();
+    controllerDisplayNameByDevice.clear();
+    reportedControllerNameByDevice.clear();
     onSessionsSubscribed = null;
     activeClient = null;
     offlinePushQueue.clear();
     clearAllSessionActivityStages();
     clearAllMakerEventBatchStages();
     cancelAllLinkAcceptRetries();
+    revokedLinkOpenRejectAt.clear();
     setBroadcastTapListener(null);
     presenceOfflineCheck = null;
+    remoteReviewInputGuard = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,
@@ -2873,6 +3002,7 @@ export const __testing = {
   remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
   remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,
+  remoteInvokeOrphanTimeoutForChannelMs: remoteInvokeOrphanTimeoutMs,
   remoteInvokeResultOutboxLimit: REMOTE_INVOKE_RESULT_OUTBOX_LIMIT,
   remoteInvokeResultOutboxPerControllerLimit: REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT,
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,

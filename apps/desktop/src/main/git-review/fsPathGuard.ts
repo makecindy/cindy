@@ -31,12 +31,14 @@ const defaultDeps: RepoContainedPathDeps = {
 };
 
 export function repoRelativeFsPath(repoRoot: string, gitPath: string): string {
-  return path.join(repoRoot, ...gitPath.split('/'));
+  const pathApi = path.posix.isAbsolute(repoRoot) ? path.posix : path;
+  return pathApi.join(repoRoot, ...gitPath.split('/'));
 }
 
 export function isPathInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  const pathApi = path.posix.isAbsolute(parent) ? path.posix : path;
+  const relative = pathApi.relative(parent, child);
+  return relative === '' || (!relative.startsWith('..') && !pathApi.isAbsolute(relative));
 }
 
 export async function resolveRepoContainedRealPath(

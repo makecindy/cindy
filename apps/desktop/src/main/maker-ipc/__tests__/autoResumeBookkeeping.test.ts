@@ -371,9 +371,15 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
       h.book.finalizeSuppressedError('s1', 7, { surfaceBanner: false });
     });
 
+    expect(h.book.hasWaitingSchedule('s1', 7)).toBe(true);
+    expect(h.book.hasWaitingSchedule('s1', 8)).toBe(false);
     vi.advanceTimersByTime(1_000);
     await Promise.resolve();
     expect(h.book.hasSchedule('s1')).toBe(true);
+    expect(
+      h.book.hasWaitingSchedule('s1', 7),
+      'timer 已触发、async callback 在跑时不再属于 provider rebuild 交棒窗口',
+    ).toBe(false);
     expect(callbackAttempt.isCurrent()).toBe(true);
 
     release();

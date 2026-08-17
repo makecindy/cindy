@@ -22,9 +22,9 @@ interface InlineDiffOptions {
 }
 
 export const INLINE_DIFF_MIN_COMMON_RATIO = 0.3;
-// Guard the pre-virtualization hot path: 400 paired changed lines at 500 chars
-// each is already enough useful signal, while larger diffs can block rendering.
-export const INLINE_DIFF_MAX_PAIR_COUNT = 400;
+// Inline word diffing is synchronous. Keep it away from medium whole-file
+// rewrites even when an existing task has the legacy word-diff default enabled.
+export const INLINE_DIFF_MAX_PAIR_COUNT = 150;
 export const INLINE_DIFF_MAX_TOTAL_CHARS = 200_000;
 
 const inlineDiffCache = new LruCache<string, InlineDiffPair | null>(2000);

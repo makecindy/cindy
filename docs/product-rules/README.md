@@ -13,6 +13,8 @@
 
 - [`core-product-principles.md`](core-product-principles.md)：Cindy 的目的、连接本质、
   Core 边界，以及 Agent、Skill、插件的产品分工。
+- [`review-product-direction.md`](review-product-direction.md)：Cindy Review 的北极星、
+  通用成果复核定义、运行与证据原则、当前边界、后续路线和待确认事项。
 - [`region-and-editions.md`](region-and-editions.md)：Global 与中国大陆版的关系、
   身份命名与默认值方向、区域相关 UI 标注与对外口径。
 - [`task-and-conversation-naming.md`](task-and-conversation-naming.md)：`session` 的中文

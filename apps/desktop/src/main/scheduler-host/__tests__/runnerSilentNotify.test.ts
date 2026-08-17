@@ -7,6 +7,7 @@ import type {
   SessionSendResult,
 } from '@cindy/maker-core';
 import type { Scheduler } from '@cindy/maker-scheduler';
+import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type {
   FireContext,
   Logger,
@@ -61,15 +62,20 @@ type SendImpl = (
 
 interface FakeSessionHarness {
   session: Session;
+  vendorOptions: Record<string, unknown>;
   emit(event: AgentEvent): void;
 }
 
 function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
+  const vendorOptions: Record<string, unknown> = {};
   const session = {
     id: 'scheduler-session',
     agentKind: 'codex',
     send: vi.fn<SendImpl>(sendImpl),
+    setVendorOptions: vi.fn(async (patch: Record<string, unknown>) => {
+      Object.assign(vendorOptions, patch);
+    }),
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
       return vi.fn(() => {
@@ -82,6 +88,7 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
 
   return {
     session,
+    vendorOptions,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -112,9 +119,9 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   };
 }
 
-function createFireContext(): FireContext {
+function createFireContext(runId = 'run-1'): FireContext {
   return {
-    runId: 'run-1',
+    runId,
     firedAt: 1_700_000_000_100,
     signal: new AbortController().signal,
     onSessionBound: vi.fn(async () => undefined),
@@ -123,10 +130,14 @@ function createFireContext(): FireContext {
 
 function createRunnerHarness(
   session: Session,
-  opts: { silenced: boolean; abandoned?: boolean },
+  opts: {
+    silenced: boolean;
+    abandoned?: boolean;
+    notifyImpl?: Notifier['notify'];
+  },
 ) {
   const notifier: Notifier & { notify: ReturnType<typeof vi.fn> } = {
-    notify: vi.fn(async () => undefined),
+    notify: vi.fn(opts.notifyImpl ?? (async () => undefined)),
   };
   const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const maker = {
@@ -193,6 +204,153 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     await fireToCompletion(runner, h);
 
     expect(notifier.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('scheduler turn 绑定 host-owned runId,收尾后清理', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: false });
+
+    await fireToCompletion(runner, h);
+
+    expect(h.session.setVendorOptions).toHaveBeenNthCalledWith(1, {
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-1',
+    });
+    expect(h.session.setVendorOptions).toHaveBeenLastCalledWith({
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
+    });
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
+  });
+
+  it('context 写入失败时只回滚当前 owner generation', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const setVendorOptions = h.session.setVendorOptions as ReturnType<typeof vi.fn>;
+    setVendorOptions.mockImplementation(async (patch: Record<string, unknown>) => {
+      Object.assign(h.vendorOptions, patch);
+      if (patch[SCHEDULER_RUN_ID_VENDOR_OPTION] === 'run-1') {
+        throw new Error('context write failed');
+      }
+    });
+    const { runner } = createRunnerHarness(h.session, { silenced: false });
+
+    await fireToCompletion(runner, h);
+
+    expect(setVendorOptions).toHaveBeenNthCalledWith(1, {
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-1',
+    });
+    expect(setVendorOptions).toHaveBeenNthCalledWith(2, {
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
+    });
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
+  });
+
+  it('旧 fire 收尾不能清掉同一 session 上较新的 run context', async () => {
+    let resolveA!: () => void;
+    let resolveB!: () => void;
+    const notifyA = new Promise<void>((resolve) => {
+      resolveA = resolve;
+    });
+    const notifyB = new Promise<void>((resolve) => {
+      resolveB = resolve;
+    });
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: false,
+      notifyImpl: async (_schedule, run) => (run.id === 'run-a' ? notifyA : notifyB),
+    });
+
+    const fireA = runner.fire(
+      baseSchedule({ id: 'schedule-a' }),
+      createFireContext('run-a'),
+    );
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() =>
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: 'run-a' }),
+      ),
+    );
+
+    // A's turn is done, but its fire is still finalizing notification work.
+    // B is accepted on the same session before A's finally runs.
+    const fireB = runner.fire(
+      baseSchedule({ id: 'schedule-b' }),
+      createFireContext('run-b'),
+    );
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() =>
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: 'run-b' }),
+      ),
+    );
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-b');
+
+    resolveA();
+    await fireA;
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-b');
+
+    resolveB();
+    await fireB;
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
+  });
+
+  it('新 fire 的 context 写入仍在 await 时,旧 fire 收尾也不能清掉它', async () => {
+    let resolveNotifyA!: () => void;
+    let releaseBindB!: () => void;
+    const notifyA = new Promise<void>((resolve) => {
+      resolveNotifyA = resolve;
+    });
+    const bindB = new Promise<void>((resolve) => {
+      releaseBindB = resolve;
+    });
+    const h = createSessionHarness(acceptingSend());
+    const setVendorOptions = h.session.setVendorOptions as ReturnType<typeof vi.fn>;
+    setVendorOptions.mockImplementation(async (patch: Record<string, unknown>) => {
+      Object.assign(h.vendorOptions, patch);
+      if (patch[SCHEDULER_RUN_ID_VENDOR_OPTION] === 'run-b') await bindB;
+    });
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: false,
+      notifyImpl: async (_schedule, run) => (run.id === 'run-a' ? notifyA : undefined),
+    });
+
+    const fireA = runner.fire(
+      baseSchedule({ id: 'schedule-a' }),
+      createFireContext('run-a'),
+    );
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() =>
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: 'run-a' }),
+      ),
+    );
+
+    const fireB = runner.fire(
+      baseSchedule({ id: 'schedule-b' }),
+      createFireContext('run-b'),
+    );
+    await vi.waitFor(() =>
+      expect(setVendorOptions).toHaveBeenCalledWith({
+        [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-b',
+      }),
+    );
+
+    // B already mutated the shared option but its async bind has not settled.
+    // A's late finally must see B's owner generation and leave the value alone.
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-b');
+    resolveNotifyA();
+    await fireA;
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-b');
+
+    releaseBindB();
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
+    h.emit({ type: 'done', data: {} });
+    await fireB;
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
   });
 
   it('silentWhenIdle=true → 发送隐藏主动上报协议,落库仍保留原始 prompt', async () => {

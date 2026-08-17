@@ -1,0 +1,75 @@
+name: ios-simulator-compatibility
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-simulator-compatibility
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: ${{ matrix.runner }} iOS Simulator compatibility smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-14
+          - macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      XDT_SKIP_AGENT_BIN_INSTALL: "1"
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      CINDY_IOS_SIMULATOR_COMPAT_RECOVERY: "1"
+      CINDY_IOS_SIMULATOR_COMPAT_NATIVE: "1"
+      CINDY_IOS_SIMULATOR_COMPAT_NATIVE_HID: "1"
+      CINDY_IOS_SIMULATOR_COMPAT_NATIVE_REQUIRED: "1"
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install native smoke tooling
+        run: brew install xcodegen
+
+      - name: Collect compatibility report
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          pnpm --silent --filter @cindy/ios-simulator-runtime compatibility:report | tee ios-simulator-compatibility-report.json
+
+      - name: Run runtime smoke matrix
+        run: pnpm --silent --filter @cindy/ios-simulator-runtime compatibility:smoke | tee ios-simulator-compatibility-smoke.json
+
+      - name: Upload compatibility artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-compatibility-${{ matrix.runner }}-${{ github.run_id }}
+          path: |
+            ios-simulator-compatibility-report.json
+            ios-simulator-compatibility-smoke.json
+          if-no-files-found: warn

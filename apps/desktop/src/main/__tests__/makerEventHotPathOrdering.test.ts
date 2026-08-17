@@ -412,10 +412,9 @@ describe('maker:event hot path ordering', () => {
     expect(epochCaptureIndex).toBeGreaterThanOrEqual(0);
     expect(currentEpochCheckIndex).toBeGreaterThan(epochCaptureIndex);
     expect(flushIndex).toBeGreaterThan(currentEpochCheckIndex);
-    expect(broadcastIndex).toBeGreaterThan(flushIndex);
-    expect(broadcastIndex).toBeGreaterThanOrEqual(0);
-    expect(pendingIndex).toBeGreaterThan(broadcastIndex);
-    expect(islandIndex).toBeGreaterThan(pendingIndex);
+    expect(pendingIndex).toBeGreaterThan(flushIndex);
+    expect(broadcastIndex).toBeGreaterThan(pendingIndex);
+    expect(islandIndex).toBeGreaterThan(broadcastIndex);
     expect(interactionListenerSource.slice(0, broadcastIndex)).not.toContain('handleInteractionRequest(');
     expect(source).toContain('Agent Island interaction update failed after maker interaction broadcast');
   });
@@ -451,6 +450,29 @@ describe('maker:event hot path ordering', () => {
       'agentInputCoordinatorHolder?.onSessionClosed(session.id, {',
       'gitSnapshotCoordinator?.onSessionClosed(session.id);',
     );
+  });
+
+  it('preserves only a waiting Codex reconnect-stall retry across its exact provider rebuild', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+
+    expect(source).toContain('const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();');
+    expect(source).toContain("if (signals.reason === 'codex_reconnect_stalled') {");
+    expect(source).toContain(
+      'pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);',
+    );
+    expect(source).toContain("if (closeReason !== 'unexpected') return false;");
+    expect(source).toContain(
+      'interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)',
+    );
+    expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
+    expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
+    expect(closedBlock).toContain(
+      'const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(',
+    );
+    expect(closedBlock).toContain('if (preserveAutoResumeIntent) {');
+    expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
+    expect(closedBlock).toContain('preserveAutoResumeIntent,');
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {

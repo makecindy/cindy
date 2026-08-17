@@ -73,6 +73,12 @@ describe('git-review statusReader', () => {
     expect(status.writeDisabledReasons).toContain('unmerged');
   });
 
+  it('marks SSH workspace status as view-only', () => {
+    const status = parsePorcelainV2Status('# branch.head main\0', { ...scope, source: 'remote' });
+
+    expect(status.writeDisabledReasons).toContain('remote-ssh');
+  });
+
   it('guards git status stdout collection with the large diff stdout limit', async () => {
     runGitMock.mockImplementation(async (args: readonly string[]) => {
       if (args[0] === 'status') {

@@ -69,6 +69,9 @@ describe('native e2e environment', () => {
     expect(visualOfflineFlow).toContain('- inputText: "Offline visual draft"');
     expect(visualOfflineFlow).toContain('- hideKeyboard');
     expect(visualOfflineFlow).toContain('id: "session.sendButton"');
+    expect(visualOfflineFlow).toContain('id: "pendingSend.badge.uploading"');
+    expect(visualOfflineFlow).toContain('- assertNotVisible:');
+    expect(visualOfflineFlow).toContain('id: "connection.syncButton"');
     expect(visualOfflineFlow).not.toContain('session.collaborationReadOnlyComposer');
   });
 

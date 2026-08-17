@@ -6,9 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Effort } from '@/lib/userPreferences.types';
 
+const modelSelectorI18nRef = vi.hoisted(() => ({
+  language: 'zh-CN',
+  resolvedLanguage: 'zh-CN',
+}));
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
+    i18n: modelSelectorI18nRef,
     t: (
       key: string,
       options?: {
@@ -32,6 +38,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
+        'newChat.modelSelector.modelListAria': '模型列表',
         'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
@@ -419,6 +426,7 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 import {
   ModelSelector,
   ModelSelectorContent,
+  modelCompactEffortLabel,
   modelEffortLabel,
   modelListMaxHeightForRows,
   modelTagDensityForWidth,
@@ -430,6 +438,8 @@ import { makerChatStore } from '@/lib/makerChatStore';
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
 beforeEach(() => {
+  modelSelectorI18nRef.language = 'zh-CN';
+  modelSelectorI18nRef.resolvedLanguage = 'zh-CN';
   requestProviderModelsAutoRefresh.mockClear();
   modelVisibilityRef.isEnabled = () => true;
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
@@ -1151,7 +1161,7 @@ describe('ModelSelector trigger variants', () => {
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: /Current: Subscription Model 1/ }));
       });
-      const list = screen.getByRole('listbox', { name: 'Model list' });
+      const list = screen.getByRole('listbox', { name: '模型列表' });
 
       expect(list.className).toContain('max-h-[300px]');
       expect(list.className).toContain('overflow-y-auto');
@@ -1202,7 +1212,7 @@ describe('ModelSelector trigger variants', () => {
           vendorKey: 'cc',
         }),
       );
-      const list = screen.getByRole('listbox', { name: 'Model list' });
+      const list = screen.getByRole('listbox', { name: '模型列表' });
       Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 80 });
 
       view.rerender(
@@ -1428,6 +1438,35 @@ describe('ModelSelector trigger variants', () => {
     ).toBe('超高');
     expect(modelEffortLabel(t, { effortDisplayNames: { xhigh: 'Extra High' } }, 'max', 'Max')).toBe(
       'Max',
+    );
+  });
+
+  it('uses stable English effort ids for compact row and trigger labels', () => {
+    const t = (key: string, options?: { defaultValue?: string }) =>
+      key === 'effortLevels.xhigh' ? '超高' : (options?.defaultValue ?? key);
+
+    expect(
+      modelCompactEffortLabel(
+        'en-US',
+        t,
+        { effortDisplayNames: { xhigh: 'Extra High' } },
+        'xhigh',
+        '特高',
+      ),
+    ).toBe('XHi');
+    expect(modelCompactEffortLabel('en-US', t, null, 'medium', '中')).toBe('Mid');
+    expect(modelCompactEffortLabel('zh-CN', t, null, 'xhigh', 'Extra High')).toBe('超高');
+    expect(
+      modelCompactEffortLabel(
+        'en-US',
+        t,
+        { effortDisplayNames: { 'adaptive-fast': 'Adaptive Fast' } },
+        'adaptive-fast',
+        'Capability Fast',
+      ),
+    ).toBe('Adaptive Fast');
+    expect(modelCompactEffortLabel('en-US', t, null, 'adaptive-safe', 'Adaptive Safe')).toBe(
+      'Adaptive Safe',
     );
   });
 
@@ -1856,7 +1895,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByRole('group', { name: /Opus 4\.8/ })).toBeTruthy();
 
     // 列表滚动不派发 pointerleave,浮层会跟着滚出视口的锚点行跑到菜单外 → 用户滚动必须立即收起。
-    fireEvent.scroll(screen.getByRole('listbox', { name: 'Model list' }));
+    fireEvent.scroll(screen.getByRole('listbox', { name: '模型列表' }));
     expect(screen.queryByRole('group', { name: /Opus 4\.8/ })).toBeNull();
     vi.useRealTimers();
   });
@@ -1926,9 +1965,9 @@ describe('ModelSelector trigger variants', () => {
       const subscription = within(tags as HTMLElement).getByText(
         'settings.providers.models.subscription',
       );
-      expect(
-        hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
       expect(row.querySelector('[data-model-hidden-label]')).toBe(hidden);
       expect(screen.queryByRole('option', { name: /Sonnet 4\.6/ })).toBeNull();
     } finally {
@@ -2191,7 +2230,7 @@ describe('ModelSelector trigger variants', () => {
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
       expect(row.className).toContain('min-h-9');
       expect(within(row).getByText('Qwen 3.7').className).toContain('leading-5');
-      expect(screen.getByRole('listbox', { name: 'Model list' }).style.maxHeight).toBe('226px');
+      expect(screen.getByRole('listbox', { name: '模型列表' }).style.maxHeight).toBe('226px');
       expect(row.textContent).not.toContain('¥6 / ¥18');
       expect(row.textContent).not.toContain('¥12 / ¥36');
       const rowBadge = within(row).getByText('立省 50%');

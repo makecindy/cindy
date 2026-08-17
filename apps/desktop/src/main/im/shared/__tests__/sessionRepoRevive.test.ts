@@ -8,7 +8,11 @@
  *   - createSession 的 INSERT 带 onConflictDoUpdate 兜并发竞态,冲突时只翻
  *     status 不碰上下文列。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import type { SessionRouteLock } from '../../../localDb/sessionRouteLock';
+
+type SessionRouteLockMock = SessionRouteLock &
+  MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
 
 const mocks = vi.hoisted(() => {
   const updateWhere = vi.fn(async (_where: unknown) => {});
@@ -89,7 +93,22 @@ vi.mock('../../defaultSessionSettings', () => ({
 }));
 
 import { createImSessionRepo, type ImSessionRow } from '../sessionRepo';
+import { setSessionRouteLockImplementation } from '../../../localDb/sessionRouteLock';
 import type { ImOrchestratorConfig, ImSessionNamespace } from '../types';
+
+const routeLock = vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
+  task(),
+) as SessionRouteLockMock;
+
+beforeEach(() => {
+  routeLock.mockClear();
+  routeLock.mockImplementation(async (_sessionId, task) => task());
+  setSessionRouteLockImplementation(routeLock);
+});
+
+afterEach(() => {
+  setSessionRouteLockImplementation(null);
+});
 
 const ns: ImSessionNamespace = {
   source: 'feishu',
@@ -163,6 +182,7 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:created', {
         sessionId: 'feishu_bot_user',
       });
+      expect(routeLock).toHaveBeenCalledWith('feishu_bot_user', expect.any(Function));
     },
   );
 
@@ -207,6 +227,7 @@ describe('sessionRepo.createSession upsert 兜竞态(#748)', () => {
     await makeRepo().createSession('bot', 'user', undefined, preparedDefaults);
 
     expect(mocks.insertValues).toHaveBeenCalledTimes(1);
+    expect(routeLock).toHaveBeenCalledWith('feishu_bot_user', expect.any(Function));
     expect(mocks.insertConflict).toHaveBeenCalledTimes(1);
     const conflictArg = mocks.insertConflict.mock.calls[0][0] as {
       target: unknown;
@@ -328,5 +349,37 @@ describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
       set: Record<string, unknown>;
     };
     expect(conflictArg.set).not.toHaveProperty('workspaceKind');
+  });
+});
+
+/**
+ * 渠道按 userId 覆写新会话权限档的接线(飞书群 lane → 渠道设置「群聊新建任务
+ * 权限档」; telegram guest lane → 只读探索)。钩子返回值必须真的落到新建行上,
+ * 否则设置项形同虚设 —— 建会话的两条路径(turnRunner 建行、`/new` 重置)都从
+ * prepareNewSession 取这份 row。
+ */
+describe('sessionRepo.prepareNewSession 权限档覆写钩子', () => {
+  function makeRepoWithPermissionHook(mode: string | null) {
+    const hookNs = {
+      ...ns,
+      permissionModeFor: () => mode,
+    } as unknown as ImSessionNamespace;
+    return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, hookNs);
+  }
+
+  it('钩子返回权限档时覆写 resolveImSessionDefaults 的默认档(可宽可紧)', async () => {
+    const row = await makeRepoWithPermissionHook('bypassPermissions').prepareNewSession(
+      'bot',
+      'g/oc_chat1/omt_t1',
+    );
+
+    // 默认档是 auto(见 defaultSessionSettings mock), 群 lane 的显式设置压过它。
+    expect(row.permissionMode).toBe('bypassPermissions');
+  });
+
+  it('钩子返回 null(私聊)时保持渠道默认档', async () => {
+    const row = await makeRepoWithPermissionHook(null).prepareNewSession('bot', 'ou_owner');
+
+    expect(row.permissionMode).toBe('auto');
   });
 });

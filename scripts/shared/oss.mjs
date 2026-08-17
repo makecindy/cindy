@@ -6,8 +6,8 @@
 // 不含任何 manifest 业务逻辑(desktop 的 CDN manifest 拼装仍留在 ci/lib.mjs,
 // mobile 的 Expo 协议 manifest 由其自身脚本负责)。
 //
-// ali-oss 已 hoist 到仓库根 node_modules,故本文件(位于仓库根 scripts/shared/)
-// 可经 createRequire 直接解析;createOSSClient() 保持无参签名,与原 ci/lib.mjs 一致。
+// ali-oss 是 heavy dependency,仅在 createOSSClient() 内惰性 require,避免 import
+// 本模块就触发 node_modules 解析(script tests 等场景不需要 OSS client)。
 // =============================================================================
 
 import fs from 'node:fs';
@@ -15,9 +15,6 @@ import crypto from 'node:crypto';
 import { createGzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-const OSS = require('ali-oss');
 
 // CDN / OSS 发布目标只接受显式环境变量：XDT_CDN_BASE_URL / XDT_OSS_BUCKET /
 // XDT_OSS_PREFIX / XDT_OSS_REGION。客户端运行期端点与发布落点是两类配置，不能再
@@ -161,6 +158,8 @@ export function resolveOssCredentials(releaseRegion = 'cn') {
 export function createOSSClient(releaseRegion = ACTIVE_RELEASE_REGION) {
   const { accessKeyId, accessKeySecret } = resolveOssCredentials(releaseRegion);
   const { region, bucket } = resolveOssConfig(releaseRegion);
+  const require = createRequire(import.meta.url);
+  const OSS = require('ali-oss');
   return new OSS({
     region,
     accessKeyId,

@@ -1,11 +1,11 @@
 /**
  * removeWorktreeForSession / discardPrecreatedWorktree 删除守卫回归:
- *   - live-ref 守卫:其它未删除会话仍引用路径 → 保留
- *   - 排除自身:owning session(可能已归档,status 仍非 deleted)不算引用
+ *   - live-ref 守卫:其它 live 会话仍引用路径 → 保留;终态引用需确认 runtime 已关闭
+ *   - 排除自身:owning session 自己的路径不算引用
  *   - dirty → stash 失败保留 / 成功后继续删
  *   - clean 无引用 → git remove + store.del
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import os from 'node:os';
@@ -24,6 +24,7 @@ const storeSetMock = vi.fn();
 const storeMap = new Map<string, WorktreeMeta>();
 const liveSessionRows: Array<{
   id: string;
+  status: string | null;
   workingDir: string | null;
   worktreePath: string | null;
 }> = [];
@@ -91,8 +92,15 @@ describe('removeWorktreeForSession', () => {
   let manager: typeof import('../worktree/WorktreeManager');
 
   beforeEach(async () => {
+    vi.clearAllMocks();
     storeMap.clear();
     liveSessionRows.length = 0;
+    liveSessionRows.push({
+      id: '__unrelated_active_session__',
+      status: 'active',
+      workingDir: path.join(BASE_REPO, 'unrelated'),
+      worktreePath: null,
+    });
     liveSessionLookupError = null;
     gitExecMock.mockReset().mockImplementation(async (args: string[], cwd?: string) => {
       if (args[0] === 'symbolic-ref') {
@@ -115,13 +123,23 @@ describe('removeWorktreeForSession', () => {
     manager = await import('../worktree/WorktreeManager');
   });
 
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
   it('no store entry → no-op', async () => {
     await manager.removeWorktreeForSession('nope');
     expect(gitExecMock).not.toHaveBeenCalled();
+  });
+
+  it('reads and recycles a historical auto-* worktree without renaming it', async () => {
+    const meta = makeMeta('legacy-auto', 'auto-abc123');
+    storeMap.set(meta.sessionId, meta);
+
+    expect(manager.getForSession(meta.sessionId)).toEqual(meta);
+    await manager.removeWorktreeForSession(meta.sessionId);
+
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has(meta.sessionId)).toBe(false);
   });
 
   it('suggestName reserves current and legacy names from local and origin branches', async () => {
@@ -222,7 +240,101 @@ describe('removeWorktreeForSession', () => {
   it('preserves worktree still referenced by another live session', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
-    liveSessionRows.push({ id: 'other', workingDir: meta.path, worktreePath: null });
+    liveSessionRows.push({
+      id: 'other',
+      status: 'active',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).not.toHaveBeenCalled();
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it('archived session references block recycle without runtime observer', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).not.toHaveBeenCalled();
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it('deleted session references do not block recycle without runtime observer', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'deleted',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('s1')).toBe(false);
+  });
+
+  it('terminal session reference still blocks when its runtime is alive', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1', {
+      isSessionRuntimeAlive: (sessionId) => sessionId === 'other',
+    });
+
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it.each(['archived', 'deleted'])(
+    '%s session reference stops blocking after its runtime is closed',
+    async (status) => {
+      const meta = makeMeta('s1');
+      storeMap.set('s1', meta);
+      liveSessionRows.push({ id: 'other', status, workingDir: meta.path, worktreePath: null });
+
+      await manager.removeWorktreeForSession('s1', {
+        isSessionRuntimeAlive: () => false,
+      });
+
+      expect(gitExecMock).toHaveBeenCalledWith(
+        ['worktree', 'remove', '--force', meta.path],
+        BASE_REPO,
+      );
+      expect(storeMap.has('s1')).toBe(false);
+    },
+  );
+
+  it.each([
+    ['NULL', null],
+    ['unknown', 'paused'],
+  ])('%s session status conservatively keeps its reference live', async (_label, status) => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({ id: 'other', status, workingDir: meta.path, worktreePath: null });
 
     await manager.removeWorktreeForSession('s1');
 
@@ -299,8 +411,13 @@ describe('removeWorktreeForSession', () => {
   it('owning session row does not block its own recycle (archived owner)', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
-    // 归档会话 status 仍非 deleted,自己的行必须被排除,否则永远删不掉
-    liveSessionRows.push({ id: 's1', workingDir: null, worktreePath: meta.path });
+    // owning session 自己的路径必须被排除,否则其终态回收永远无法推进
+    liveSessionRows.push({
+      id: 's1',
+      status: 'archived',
+      workingDir: null,
+      worktreePath: meta.path,
+    });
 
     await manager.removeWorktreeForSession('s1');
 
@@ -391,6 +508,62 @@ describe('removeWorktreeForSession', () => {
     expect(storeSetMock).toHaveBeenCalledWith('s1', meta);
   });
 
+  it('rechecks borrower references before removing a clean owner worktree', async () => {
+    const meta = makeMeta('owner');
+    storeMap.set('owner', meta);
+    const borrower = {
+      id: 'borrower',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: meta.path,
+    };
+    liveSessionRows.push(borrower);
+    const isSessionRuntimeAlive = vi.fn(() => false);
+    const canRemove = vi.fn().mockImplementation(async () => {
+      if (canRemove.mock.calls.length === 2) borrower.status = 'active';
+      return true;
+    });
+
+    await manager.removeWorktreeForSession('owner', { canRemove, isSessionRuntimeAlive });
+
+    expect(canRemove).toHaveBeenCalledTimes(2);
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('owner')).toBe(true);
+  });
+
+  it('restores a dirty owner snapshot when a borrower becomes active before removal', async () => {
+    const meta = makeMeta('owner');
+    storeMap.set('owner', meta);
+    isWorktreeDirtyMock.mockResolvedValue(true);
+    const borrower = {
+      id: 'borrower',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: meta.path,
+    };
+    liveSessionRows.push(borrower);
+    const isSessionRuntimeAlive = vi.fn(() => false);
+    const canRemove = vi.fn().mockImplementation(async () => {
+      if (canRemove.mock.calls.length === 2) borrower.status = 'active';
+      return true;
+    });
+
+    await manager.removeWorktreeForSession('owner', { canRemove, isSessionRuntimeAlive });
+
+    expect(canRemove).toHaveBeenCalledTimes(2);
+    expect(autoStashMock).toHaveBeenCalledWith(meta.path, 'owner');
+    expect(restoreAutoStashMock).toHaveBeenCalledWith(meta.path, 'owner');
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('owner')).toBe(true);
+    expect(storeSetMock).toHaveBeenCalledWith('owner', meta);
+  });
+
   it('keeps a preserved worktree unregistered when cancelled snapshot reapply fails', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
@@ -465,6 +638,7 @@ describe('removeWorktreeForSession', () => {
     storeMap.set('s1', meta);
     liveSessionRows.push({
       id: 'other',
+      status: 'active',
       workingDir: path.join(meta.path, 'packages', 'app'),
       worktreePath: null,
     });
@@ -508,7 +682,12 @@ describe('removeWorktreeForSession', () => {
   it('clean + unreferenced → removed and store entry dropped', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
-    liveSessionRows.push({ id: 'other', workingDir: '/somewhere/else', worktreePath: null });
+    liveSessionRows.push({
+      id: 'other',
+      status: 'active',
+      workingDir: '/somewhere/else',
+      worktreePath: null,
+    });
 
     await manager.removeWorktreeForSession('s1');
 

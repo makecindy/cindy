@@ -22,6 +22,27 @@ describe('dingtalk text interactions', () => {
     });
   });
 
+  it('自动审批故障时在钉钉确认提示里写明原因', () => {
+    const ordinary = __testing.formatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'request-1',
+      toolName: 'shell_command',
+      input: {},
+    });
+    expect(ordinary).toBe('需要确认操作：shell_command\n回复“允许”继续，或回复“拒绝”取消。');
+
+    const unavailable = __testing.formatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'request-1',
+      toolName: 'shell_command',
+      input: {},
+      metadata: { autoReviewUnavailable: true },
+    });
+    expect(unavailable).toContain('自动审批没完成，请确认要不要允许这次操作。');
+    expect(unavailable).toContain('需要确认操作：shell_command');
+    expect(unavailable).toContain('回复“允许”继续');
+  });
+
   it('maps a numbered answer to the matching option label', () => {
     const request = {
       kind: 'ask_user_question' as const,

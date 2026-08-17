@@ -80,10 +80,12 @@ describe('batch transitions', () => {
     expect(next[1].status).toBe('pending');
   });
 
-  it('settles when nothing auto-advances, finishes only after confirms resolve', () => {
+  it('finishes only after every row reaches a terminal state, including needs-confirm', () => {
     let next = updateRow(rows, 'p1', { status: 'done' });
+    next = updateRow(next, 'p2', { status: 'installing' });
+    expect(isBatchFinished(next)).toBe(false);
+
     next = updateRow(next, 'p2', { status: 'needs-confirm' });
-    // needs-confirm 不再自动推进,但用户还没处理 → settled 而未 finished。
     expect(isBatchSettled(next)).toBe(true);
     expect(isBatchFinished(next)).toBe(false);
 

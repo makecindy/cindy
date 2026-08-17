@@ -234,6 +234,8 @@ import {
 } from '@/session/composerVoiceHold';
 import { COMPOSER_TEXT_HORIZONTAL_PADDING } from '@/session/composerTextMetrics';
 import {
+  COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+  COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   COMPOSER_TEXT_PADDING_BOTTOM,
   COMPOSER_TEXT_PADDING_TOP,
 } from '@/session/composerTextPlatformMetrics';
@@ -419,6 +421,7 @@ export default function NewRemoteSessionScreen() {
   const router = useRouter();
   const auth = useAuth();
   const {
+    getPresenceAvailability,
     invoke,
     openLink,
     subscribe,
@@ -1076,11 +1079,12 @@ export default function NewRemoteSessionScreen() {
   );
   const WorkspaceIcon = draft.workspaceKind === 'dialogue' ? MessageCircle : Folder;
   const agentLabel = mobileAgentLabel(draft.agentKind);
-  // effect 在 commit 后才会把旧探测结果重置为 probing；render 期先按设备 + cwd 同步
-  // 对齐 target，切项目/设备后立即创建也拿不到上一仓库的 baseRepo/sourceBranch。
+  // effect 在 commit 后才会把旧探测结果重置为 probing；render 期先按设备 + cwd +
+  // 连接代次同步对齐 target，切项目/设备或同目标重连后立即创建也拿不到旧结果。
   const worktreeTarget = {
     deviceId: selectedDeviceId ?? '',
     workingDir: draft.workspaceKind === 'project' ? draft.workingDir.trim() : '',
+    probeGeneration: `${connectionEpoch}\u0000${presenceVersion}`,
   };
   worktreeBranchTargetRef.current = worktreeTarget;
   const worktreeEligibility = worktreeEligibilityForTarget(worktreeProbe, worktreeTarget);
@@ -1142,12 +1146,16 @@ export default function NewRemoteSessionScreen() {
     && worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId);
   const worktreeApplicable = draft.workspaceKind === 'project'
     && draft.workingDir.trim().length > 0;
+  // ineligible(2026-08-07 裁决):确认目录不合格时无需等偏好就绪——反正不会
+  // 创建 worktree,GET 在途不应卡住普通会话创建。
   const worktreePreferenceCreateBlocked = worktreeApplicable
-    && selectedDeviceId != null && (
-    worktreePreferenceSaving
-    || worktreePreferenceAuthorityUnknown
-    || !worktreePreferenceReady
-  );
+    && selectedDeviceId != null
+    && worktreeEligibility.status !== 'ineligible'
+    && (
+      worktreePreferenceSaving
+      || worktreePreferenceAuthorityUnknown
+      || !worktreePreferenceReady
+    );
   // host preference 虽然持久化，连接代次仍属于权威读取 identity：桌面重启/重连后
   // 即使 deviceId/repo 没变，也重新 GET，不能只相信手机内存里的旧快照。
   const worktreeBranchPreferenceSyncKey = worktreeBranchPreferenceKey
@@ -1320,6 +1328,14 @@ export default function NewRemoteSessionScreen() {
       || currentTarget.deviceId !== intent.target.deviceId
       || currentTarget.workingDir.trim() !== intent.target.workingDir.trim()
     ) return false;
+    // ineligible 目标不创建 worktree,无需等偏好同步/就绪——提前返回,
+    // 避免偏好 GET 在途时被下方偏好守卫拦截;与 enabled 无关(2026-08-07 裁决)。
+    // 但快照不能替代实时状态:await 期间同目标可能被重探回 probing/eligible/
+    // detect-failed,旧 ineligible 快照必须复核 live ref 仍为 ineligible 才放行,
+    // 否则回到 fail closed(探测未定不等于确认不合格)。
+    if (intent.eligibility.status === 'ineligible') {
+      return worktreeEligibilityRef.current.status === 'ineligible';
+    }
     if (
       worktreePreferenceSyncKeyRef.current !== intent.preferenceSyncKey
       || worktreePreferenceReadyKeyRef.current !== intent.preferenceSyncKey
@@ -1330,7 +1346,10 @@ export default function NewRemoteSessionScreen() {
       .getNewMakerWorktreePreference(intent.target.deviceId).enabled;
     if (currentEnabled !== intent.enabled) return false;
     if (!intent.enabled) return true;
+    // ineligible 已在前面提前返回,此处只可能是 eligible(2026-08-07 裁决)。
     if (intent.eligibility.status !== 'eligible') return false;
+    // 与 ineligible 快照同理:eligible 快照也必须复核 live 资格仍是同一 repo 的
+    // eligible,await 期间被重探成别的状态或换了 repo 都不能继续建 worktree。
     const currentEligibility = worktreeEligibilityRef.current;
     if (
       currentEligibility.status !== 'eligible'
@@ -2159,7 +2178,11 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     const cwd = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
     const seq = ++worktreeDetectSeqRef.current;
-    const target = { deviceId: selectedDeviceId ?? '', workingDir: cwd };
+    const target = {
+      deviceId: selectedDeviceId ?? '',
+      workingDir: cwd,
+      probeGeneration: `${connectionEpoch}\u0000${presenceVersion}`,
+    };
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const probingEligibility: NewSessionWorktreeEligibility = { status: 'probing' };
@@ -3387,7 +3410,10 @@ export default function NewRemoteSessionScreen() {
   const renderComposerInputOverlay = () => voiceIsListening ? (
     <ScrollView
       ref={voiceDraftScrollRef}
-      contentContainerStyle={styles.voiceDraftOverlayContent}
+      contentContainerStyle={[
+        styles.voiceDraftOverlayContent,
+        !composerCardActive && styles.voiceDraftOverlayContentGeometric,
+      ]}
       onContentSizeChange={() => {
         requestAnimationFrame(() => {
           voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
@@ -3755,6 +3781,46 @@ export default function NewRemoteSessionScreen() {
       testID="newSession.attachmentCollapsedBadge"
     />
   ) : null);
+
+  // 收起态把附件 + 号放在输入框左侧，避免用户必须先聚焦才能打开附件面板；
+  // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
+  const renderComposerCompactLeading = () => (
+    <View style={styles.composerCompactLeading}>
+      <Pressable
+        accessibilityLabel={t('session.common.openContextPanel')}
+        accessibilityRole="button"
+        disabled={creating}
+        onPress={() => {
+          setModelSheetOpen(false);
+          setAgentPickerOpen(false);
+          setPermissionSheetOpen(false);
+          setWorktreeBranchSheetOpen(false);
+          setContextSheetView('main');
+          setContextSheetOpen(true);
+        }}
+        style={({ pressed }) => [
+          styles.composerCompactAttachmentHit,
+          pressed && styles.pressed,
+        ]}
+        testID="newSession.attachmentToggleButton"
+      >
+        <View
+          pointerEvents="none"
+          style={[
+            styles.composerIconButton,
+            contextSheetOpen && styles.composerIconButtonActive,
+          ]}
+        >
+          <Plus
+            color={contextSheetOpen ? colors.textPrimary : colors.textSecondary}
+            size={iconSize.sm}
+            strokeWidth={iconStroke.regular}
+          />
+        </View>
+      </Pressable>
+      {renderComposerCollapsedAttachmentBadge()}
+    </View>
+  );
   // 面板关闭即丢弃未提交的待选(不产生任何上传副作用)。
   useEffect(() => {
     if (!contextSheetOpen) setPendingMediaAssets([]);
@@ -3801,8 +3867,22 @@ export default function NewRemoteSessionScreen() {
       setError(t('session.new.selectDeviceError'));
       return;
     }
+    // 旧协议 Plan 依赖会话级 permissionMode，不能安全进入断线创建 / 离线 FIFO。
+    // 保留草稿与 Plan 选择，等 relay 和目标电脑恢复后再走原有在线兼容路径。
+    if (
+      !planModeCapability
+      && draft.permissionMode === 'plan'
+      && (
+        deviceLinkStatus !== 'online'
+        || getPresenceAvailability(selectedDeviceId) === false
+      )
+    ) {
+      setError(t('session.menu.aiRenameOffline'));
+      return;
+    }
     if (
       worktreeApplicable
+      && worktreeEligibility.status !== 'ineligible'
       && (
         worktreePreferenceWriteTargetRef.current === selectedDeviceId
         || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
@@ -4321,10 +4401,12 @@ export default function NewRemoteSessionScreen() {
     agentAuthVerdict,
     auth.user?.id,
     confirmAgentUnauthenticated,
+    deviceLinkStatus,
     selectedDeviceId,
     selectedDeviceName,
     draft,
     finishVoiceRecording,
+    getPresenceAvailability,
     maker,
     openLink,
     planModeCapability,
@@ -4367,6 +4449,7 @@ export default function NewRemoteSessionScreen() {
     }
     if (
       worktreeApplicable
+      && worktreeEligibility.status !== 'ineligible'
       && (
         worktreePreferenceWriteTargetRef.current === selectedDeviceId
         || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
@@ -5593,7 +5676,7 @@ export default function NewRemoteSessionScreen() {
                   caretHidden={voiceIsListening}
                   cursorColor={colors.inputCaret}
                   inputRef={firstMessageInputRef}
-                  leading={renderComposerCollapsedAttachmentBadge()}
+                  leading={renderComposerCompactLeading()}
                   inputFrameHeight={composerResize.frameHeight}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
@@ -6479,6 +6562,22 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: MOBILE_COMPOSER_CONTROL_SIZE,
   },
+  composerCompactLeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    marginRight: spacing.xs,
+    minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+  },
+  // 热区流内就是 44×44,祖先链不再靠负 margin / 溢出子节点。
+  // 可见加号仍是 34pt,与文字 / 麦克风共中线。
+  composerCompactAttachmentHit: {
+    alignItems: 'center',
+    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    justifyContent: 'center',
+    width: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+  },
   composerIconButtonActive: {
     backgroundColor: colors.surfaceChip,
     borderColor: colors.borderStrong,
@@ -6511,6 +6610,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM,
     paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
+  },
+  voiceDraftOverlayContentGeometric: {
+    paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+    paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   },
   voiceDraftMeasuredBlock: {
     minHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,

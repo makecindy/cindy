@@ -747,6 +747,10 @@ describe('getMessageDeletionTarget', () => {
       id: 'progress',
       role: 'assistant',
       deletedClientIds: ['progress', 'thinking', 'auto-resume', 'tool', 'final', 'error'],
+      subagentTurnWindow: {
+        startedAtInclusive: 1_000,
+        startedAtExclusive: 1_800,
+      },
     });
   });
 
@@ -801,6 +805,10 @@ describe('getMessageDeletionTarget', () => {
         'trigger-legacy-raw',
         'final',
       ],
+      subagentTurnWindow: {
+        startedAtInclusive: 1_000,
+        startedAtExclusive: 1_800,
+      },
     });
   });
 
@@ -860,6 +868,10 @@ describe('getMessageDeletionTarget', () => {
       'target',
       ...Array.from({ length: 40 }, (_, index) => `next-trigger-${index}`),
     ]);
+    expect(target?.subagentTurnWindow).toEqual({
+      startedAtInclusive: 1_000,
+      startedAtExclusive: 3_000,
+    });
   });
 
   it('keeps a blank real user message as a deletion boundary', async () => {
@@ -883,6 +895,9 @@ describe('getMessageDeletionTarget', () => {
       id: 'target',
       role: 'assistant',
       deletedClientIds: ['target'],
+      subagentTurnWindow: {
+        startedAtInclusive: 1_200,
+      },
     });
   });
 

@@ -6,15 +6,22 @@
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import type { SessionRouteLock } from '../../sessionRouteLock';
+
+type SessionRouteLockMock = SessionRouteLock &
+  MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   tapWindowBroadcast: vi.fn(),
+  routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
+    task(),
+  ) as SessionRouteLockMock,
 }));
 
 vi.mock('electron', () => ({
@@ -46,6 +53,7 @@ vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary:
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 
 import { registerSessionIpc } from '../sessions';
+import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 
 type ExpectedIdentity = {
   workingDir: string | null;
@@ -146,9 +154,15 @@ function readStatus(): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.handlers.clear();
   createDb();
+  setSessionRouteLockImplementation(h.routeLock);
   registerSessionIpc();
+});
+
+afterEach(() => {
+  setSessionRouteLockImplementation(null);
 });
 
 describe('local-db:sessions:restore-if-archived', () => {
@@ -161,6 +175,30 @@ describe('local-db:sessions:restore-if-archived', () => {
       sessionId: 'target',
       patch: { status: 'active' },
     });
+  });
+
+  it('waits for the shared task route lock before restoring', async () => {
+    let markWaiting!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      markWaiting = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      markWaiting();
+      await gate;
+      return task();
+    });
+
+    const restoring = restore();
+    await waiting;
+    expect(readStatus()).toBe('archived');
+    release();
+
+    await expect(restoring).resolves.toMatchObject({ status: 'active' });
+    expect(h.routeLock).toHaveBeenCalledWith('target', expect.any(Function));
   });
 
   it.each(['active', 'deleted'])('does not overwrite a newer %s status', async (status) => {

@@ -25,7 +25,7 @@
 | [cindy-updater.md](./dev-rules/cindy-updater.md) | 更新器规则 | authoritative | 客户端自动更新链路（`cindy-updater` + Electron 更新服务）的 owner 确认门禁 | — |
 | [engineering-conventions.md](./dev-rules/engineering-conventions.md) | 通用工程规范 | authoritative | Desktop 日志、IPC 错误协议、main 侧测试、跨平台双端兼容与 UI 文案 i18n | — |
 | [log-upload-and-redaction.md](./dev-rules/log-upload-and-redaction.md) | 日志上报规则 | authoritative | 客户端日志采集/脱敏/上报：记录边界不变量、来源白名单方向、标记代次与原子清除、区域绑定与崩溃时序 | — |
-| [protocol-and-submodules.md](./dev-rules/protocol-and-submodules.md) | 协议/submodule 规则 | authoritative | `cindy-protocol` 权威源、device-link relay 层、内建插件来源与 wire protocol 兼容 | — |
+| [protocol-compatibility.md](./dev-rules/protocol-compatibility.md) | 跨端协议规则 | authoritative | 两仓本地协议包、device-link relay 层与 wire protocol 兼容 | — |
 | [architecture-invariants.md](./dev-rules/architecture-invariants.md) | 架构不变量 | authoritative | package 解耦、main 静态依赖、主界面布局树（`layoutTree`/`LayoutStore`/panel registry） | — |
 | [configuration-and-overrides.md](./dev-rules/configuration-and-overrides.md) | 配置契约 | authoritative | 配置可见性分层、默认值+override 分离、迁移与恢复默认语义 | — |
 | [remote-and-mobile-adaptation.md](./dev-rules/remote-and-mobile-adaptation.md) | 远程/手机版门禁 | authoritative | SSH 远程工作区、device-link allowlist、`apps/mobile` 入口与功能类 PR 三选一门禁 | — |

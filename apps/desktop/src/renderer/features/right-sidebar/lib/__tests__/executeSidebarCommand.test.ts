@@ -12,6 +12,9 @@ vi.mock('../openInSidebarFileBrowser', () => ({
   openExternalFileInSidebarFileBrowser: vi.fn(async () => undefined),
   openFileInSidebarFileBrowser: vi.fn(async () => undefined),
 }));
+vi.mock('../openSubagentsTab', () => ({
+  openSubagentsTab: vi.fn(async () => undefined),
+}));
 vi.mock('../../plugins/orca-workers/actions', () => ({
   ensureOrcaWorkersTab: vi.fn(async () => undefined),
   closeOrcaWorkersTabAfterTeamEnd: vi.fn(async () => undefined),
@@ -29,6 +32,7 @@ import {
   openFileInSidebarFileBrowser,
 } from '../openInSidebarFileBrowser';
 import { openUrlInSidebarBrowser } from '../openInSidebarBrowser';
+import { openSubagentsTab } from '../openSubagentsTab';
 
 describe('executeSidebarCommand', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -72,6 +76,14 @@ describe('executeSidebarCommand', () => {
       focusTab: false,
     });
     await executeSidebarCommand({ type: 'close-orca-workers-tab', sessionId: 's1' });
+    await executeSidebarCommand({
+      type: 'open-subagents-tab',
+      sessionId: 's1',
+      focusRunId: 'shared-native-id',
+      focusProvider: 'codex',
+      focusTab: true,
+      revealSidebar: true,
+    });
 
     expect(ensureHydrated).toHaveBeenCalledWith('s1');
     expect(addOrFocusSingletonTab).toHaveBeenCalledWith('s1', 'terminal');
@@ -85,5 +97,12 @@ describe('executeSidebarCommand', () => {
       focusTab: false,
     });
     expect(closeOrcaWorkersTabAfterTeamEnd).toHaveBeenCalledWith('s1');
+    expect(openSubagentsTab).toHaveBeenCalledWith('s1', {
+      focusRunId: 'shared-native-id',
+      focusProvider: 'codex',
+      focusTab: true,
+      revealSidebar: true,
+      userInitiated: false,
+    });
   });
 });

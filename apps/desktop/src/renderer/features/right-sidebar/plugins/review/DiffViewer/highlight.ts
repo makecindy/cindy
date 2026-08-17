@@ -2,7 +2,9 @@ import type { DiffRenderRow } from './diffRows';
 
 export const HIGHLIGHT_MAX_LINE_LENGTH = 1000;
 export const HIGHLIGHT_MAX_DIFF_CHARS = 200_000;
-export const HIGHLIGHT_MAX_DIFF_LINES = 1200;
+// The highlighter sends one worker request per line. Virtualized medium diffs
+// stay responsive by rendering plain text instead of queueing hundreds at once.
+export const HIGHLIGHT_MAX_DIFF_LINES = 400;
 
 type HighlightRequest = { id: string; code: string; lang: string };
 type HighlightResponse =

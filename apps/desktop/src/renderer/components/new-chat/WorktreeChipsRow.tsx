@@ -8,9 +8,17 @@
  *
  * 状态不变量:**勾选状态只属于用户**——
  *   - 系统/环境因素(切项目、探测结果、播种)永远不改 checkbox;资格不满足只是
- *     在 OFF 时禁用开启；若已 ON 则保留可见的关闭入口,发送仍由上层 fail closed;
+ *     在 OFF 时禁用开启;
  *   - 唯一改动路径 = 用户点击 checkbox 本体,并写入工作端勾选记忆;
  *   - 分支选择始终只修改 worktree 源分支,永远不联动 checkbox。
+ *
+ * 2026-08-07 用户裁决(取代 2026-07-29「已 ON 保留关闭入口 + fail-closed」形态):
+ * 勾选记忆**只对具备 worktree 资格的目录生效**——
+ *   - 探测成功且确认不合格(非 git 仓库 / git 未安装 / 已在 worktree 内)时整条控件
+ *     隐藏,发送侧按普通会话放行;记忆本身保留不动,回到合格目录自动恢复;
+ *   - 探测进行中 / 探测失败(断线、老端通道缺失等)时**不算**确认不合格:已 ON 则
+ *     照旧显示并由上层 fail closed 拦截——一次弱网不能把用户要求的隔离静默降级。
+ * 两种状态的区分经 onConfirmedIneligibleChange 上报(null = 尚未确认)。
  *
  * 分支区语义:始终选择新 worktree 的源分支;checkbox 只决定本次新 session 是否
  * 真正创建 worktree。两者是独立控制,允许用户先选分支、再决定是否隔离。
@@ -69,6 +77,12 @@ export interface WorktreeChipsRowProps {
    * 上层发送侧必须把非 true 视为不具备该能力。
    */
   onRecoveryKeyDiscardSupportChange?: (supported: boolean | null) => void;
+  /**
+   * 探测**成功**且确认目录不具备 worktree 资格(非 git 仓库 / git 未安装 / 已在
+   * worktree 内)时为 true;null = 探测中或探测失败(未确认,上层必须维持 fail
+   * closed)。true 时上层发送门放行普通会话——勾选记忆只对合格目录生效。
+   */
+  onConfirmedIneligibleChange?: (confirmed: boolean | null) => void;
   onSuggestedNameChange?: (name: string) => void;
   worktreeDisabled?: boolean;
   /** Shared creation/environment gate for both halves of the joined control. */
@@ -112,6 +126,7 @@ export function WorktreeChipsRow({
   onSourceBranchChange,
   onBaseRepoChange,
   onRecoveryKeyDiscardSupportChange,
+  onConfirmedIneligibleChange,
   onSuggestedNameChange,
   worktreeDisabled,
   disabled,
@@ -131,32 +146,51 @@ export function WorktreeChipsRow({
     deviceLinkDeviceId,
     deviceLinkReconnectEpoch,
   );
-  const baseRepo =
-    detect.data?.gitInstalled === true &&
-    detect.data.isGitRepo &&
-    !detect.data.isInsideWorktree
-      ? (detect.data.repoRoot ?? null)
-      : null;
+  // 探测成功且三种资格(已装 git / 是 git 仓库 / 未嵌套)同时满足为 true;
+  // detect.data 未到达(探测中/失败)时为 null——与「确认不合格」不同,后者必须
+  // fail closed。baseRepo 与 confirmedIneligible 皆从此派生,保证两处使用同一条件。
+  const gitEligible: boolean | null = detect.data
+    ? detect.data.gitInstalled && detect.data.isGitRepo && !detect.data.isInsideWorktree
+    : null;
+  const baseRepo = gitEligible ? (detect.data!.repoRoot ?? null) : null;
+  const confirmedIneligible: boolean | null = detect.data ? !gitEligible : null;
 
-  // 只有明确具备 worktree 资格的仓库才向发送侧提供 repoRoot；linked worktree、非 Git
-  // 目录或探测失败都传 null。发送 / Goal 的 ON 门会据此 fail closed，不能静默降级。
-  // useDetectCwd 同时按 {cwd, deviceId} 做 render 阶段 fence，切目标时这里先写 null。
+  // 只有明确具备 worktree 资格的仓库才向发送侧提供 repoRoot。发送 / Goal 的 ON 门
+  // 据此 fail closed，不能静默降级。useDetectCwd 同时按 {cwd, deviceId} 做 render
+  // 阶段 fence，切目标时这里先写 null。
   useLayoutEffect(() => {
     onBaseRepoChange?.(baseRepo);
     onRecoveryKeyDiscardSupportChange?.(
       detect.data ? detect.data.supportsRecoveryKeyDiscard === true : null,
     );
-  }, [baseRepo, detect.data, onBaseRepoChange, onRecoveryKeyDiscardSupportChange]);
+    onConfirmedIneligibleChange?.(confirmedIneligible);
+  }, [
+    baseRepo,
+    detect.data,
+    // confirmedIneligible 从 detect.data 纯派生，同一 render 下与 detect.data 同步变化；
+    // 保留仅满足 exhaustive-deps lint，运行时不会独立触发此 effect。
+    confirmedIneligible,
+    onBaseRepoChange,
+    onRecoveryKeyDiscardSupportChange,
+    onConfirmedIneligibleChange,
+  ]);
 
   const cantUseReason = useMemo<string | null>(() => {
     if (detect.loading) return t('newChat.worktree.detecting');
-    if (!detect.data) return null;
+    if (!detect.data) {
+      // 探测失败(非 loading 且无回包):与「确认非 git」不同,这里维持 fail closed,
+      // 控件保留、给出失败原因,不能让一次断线看起来像"目录不合格被隐藏"。
+      // worktreeDisabled 时根本没发起探测(hook 收到 null),不属于失败。
+      return cwd && !worktreeDisabled ? t('newChat.worktree.detectFailed') : null;
+    }
     const d = detect.data;
     if (!d.gitInstalled) return t('newChat.worktree.gitMissing');
     if (!d.isGitRepo) return t('newChat.worktree.notGitRepo');
+    // 2026-08-07 裁决:isInsideWorktree 时 confirmedIneligible=true → 整条控件隐藏,
+    // 此分支的 tooltip 当前不可达,但保留以解耦 cantUseReason 与控件显隐逻辑。
     if (d.isInsideWorktree) return t('newChat.worktree.alreadyInWorktree');
     return null;
-  }, [detect.data, detect.loading, t]);
+  }, [cwd, detect.data, detect.loading, t, worktreeDisabled]);
 
   const environmentDisabled =
     worktreeDisabled || !!cantUseReason || detect.loading || !cwd || baseRepo === null;
@@ -207,7 +241,12 @@ export function WorktreeChipsRow({
   // 分支与 checkbox 独立:未勾时也要回显用户刚选的源分支,否则菜单虽然可点、
   // 选择后却仍显示当前 HEAD,看起来像没有生效。首次未选择时回退当前 checkout。
   const branchLabel = sourceBranch || branches.current || currentBranch || 'HEAD';
-  const showBranchChip = !advancedHidden && (enabled || !!detect.data?.isGitRepo);
+  // 确认不合格(2026-08-07 裁决)→ 整条控件隐藏,勾选记忆保留、发送侧放行普通会话;
+  // 探测中/失败(confirmedIneligible === null)时已 ON 仍显示,由上层 fail closed。
+  const showBranchChip =
+    !advancedHidden
+    && confirmedIneligible !== true
+    && (enabled || !!detect.data?.isGitRepo);
   // 分支选择与 checkbox 是两条独立轴；仅环境不具备 worktree 资格或创建在途时禁用。
   const branchInteractive =
     !(disabled || branchDisabled || environmentDisabled) && baseRepo !== null;

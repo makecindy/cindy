@@ -6,12 +6,16 @@
  * 才能停止自动滚动。修复后解除跟随走事件意图(wheel / touch / 键盘),恢复
  * 跟随走「距离 + 向下方向」。三个纯函数的规则见 autoFollowIntent.ts 模块注释。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   resolveLastUserMessageObservation,
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
+  resolveSendWindowHandoff,
+  selectTailUserMessageId,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
   UNPIN_MIN_SCROLLABLE_PX,
@@ -80,7 +84,7 @@ describe('shouldUnpinOnUpIntent', () => {
 describe('resolveNearBottomOnScroll', () => {
   const BASE = { thresholdPx: 100, directionDeadZonePx: 1 };
 
-  it('距底超过阈值 → 一律 false(滚动条拖拽等无 wheel 路径的解除兜底)', () => {
+  it('距底超过阈值 + 明确上滚 / 已解除 → false(滚动条拖拽等无 wheel 路径的解除兜底)', () => {
     expect(
       resolveNearBottomOnScroll({
         ...BASE,
@@ -97,6 +101,33 @@ describe('resolveNearBottomOnScroll', () => {
         scrollDelta: 40,
       }),
     ).toBe(false);
+  });
+
+  it('已在跟 + 距底越线但未上滚 → 保持跟随(发送后内容长高 / 迟到 pin 的 scroll 不得解除)', () => {
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: true,
+        distanceFromBottom: 400,
+        scrollDelta: 0,
+      }),
+    ).toBe(true);
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: true,
+        distanceFromBottom: 400,
+        scrollDelta: 80,
+      }),
+    ).toBe(true);
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: true,
+        distanceFromBottom: 400,
+        scrollDelta: -1,
+      }),
+    ).toBe(true);
   });
 
   it('阈值带内 + 原本在跟 → 保持跟随(布局钳位 / 滚动条微拖的被动上移不解除)', () => {
@@ -173,6 +204,7 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: true,
       newUserSend: true,
+      sentFromThisRenderer: true,
       nearBottom: false,
     })).toEqual({ clearRestoring: true, pinToBottom: true });
   });
@@ -181,6 +213,7 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: true,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: false,
     })).toEqual({ clearRestoring: false, pinToBottom: false });
   });
@@ -189,13 +222,131 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: false,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: true,
     })).toEqual({ clearRestoring: false, pinToBottom: true });
     expect(resolveRenderPinDecision({
       restoring: false,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: false,
     })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+
+  // #2194: IM 渠道 / 手机端 / 定时任务注入的 user 消息没有本端发送意图，
+  // 不应夺走视口——按普通新内容处理（贴底才跟随）。
+  it('externally injected user message does not steal a scrolled-up viewport', () => {
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+
+  it('externally injected user message still follows while near the bottom', () => {
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: true,
+    })).toEqual({ clearRestoring: false, pinToBottom: true });
+  });
+
+  it('externally injected user message does not take ownership from a restored anchor', () => {
+    expect(resolveRenderPinDecision({
+      restoring: true,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+});
+
+describe('selectTailUserMessageId', () => {
+  type Item = { type: 'message'; id: string; role: 'user' | 'assistant' };
+  const userMessageId = (item: Item | undefined) =>
+    item?.role === 'user' ? item.id : null;
+
+  it('uses the real tail when a bounded window does not cover the end', () => {
+    expect(
+      selectTailUserMessageId({
+        windowCoversEnd: false,
+        visibleLastItem: { type: 'message', id: 'old-user', role: 'user' },
+        realLastItem: { type: 'message', id: 'new-user', role: 'user' },
+        userMessageId,
+      }),
+    ).toBe('new-user');
+  });
+
+  it('ignores an older visible-tail user when the real tail is assistant', () => {
+    expect(
+      selectTailUserMessageId({
+        windowCoversEnd: false,
+        visibleLastItem: { type: 'message', id: 'old-user', role: 'user' },
+        realLastItem: { type: 'message', id: 'assistant-tail', role: 'assistant' },
+        userMessageId,
+      }),
+    ).toBeNull();
+  });
+
+  it('uses the visible tail when the window covers the end', () => {
+    expect(
+      selectTailUserMessageId({
+        windowCoversEnd: true,
+        visibleLastItem: { type: 'message', id: 'visible-user', role: 'user' },
+        realLastItem: { type: 'message', id: 'visible-user', role: 'user' },
+        userMessageId,
+      }),
+    ).toBe('visible-user');
+  });
+});
+
+describe('resolveSendWindowHandoff', () => {
+  it('local send leaves any anchored window so later tail items keep following', () => {
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: true,
+        windowCoversEnd: true,
+      }),
+    ).toEqual({ clearWindowAnchor: true, deferPinToNextRender: false });
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: true,
+        windowCoversEnd: false,
+      }),
+    ).toEqual({ clearWindowAnchor: true, deferPinToNextRender: true });
+  });
+
+  it('does not touch the default tail window or an external injection', () => {
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: false,
+        windowCoversEnd: true,
+      }),
+    ).toEqual({ clearWindowAnchor: false, deferPinToNextRender: false });
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: false,
+        hasWindowAnchor: true,
+        windowCoversEnd: false,
+      }),
+    ).toEqual({ clearWindowAnchor: false, deferPinToNextRender: false });
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: false,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: true,
+        windowCoversEnd: true,
+      }),
+    ).toEqual({ clearWindowAnchor: false, deferPinToNextRender: false });
   });
 });
 
@@ -224,5 +375,18 @@ describe('resolveLastUserMessageObservation', () => {
       baselineUserMessageId: 'historical-user',
       isNewUserSend: true,
     });
+  });
+});
+
+describe('MessageStream send-window handoff wiring', () => {
+  it('clears any anchored window on a local send and only defers pin for stale slices', () => {
+    const source = readFileSync(
+      resolve(__dirname, '../components/chat/MessageStream.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('resolveSendWindowHandoff({');
+    expect(source).toContain('if (windowHandoff.clearWindowAnchor)');
+    expect(source).toContain('if (decision.pinToBottom && !windowHandoff.deferPinToNextRender)');
+    expect(source).not.toContain('realTailUserSendOutsideWindow');
   });
 });

@@ -15,6 +15,14 @@
   ],
   "patches": [
     {
+      "file": "extension/src/browser/chrome.executables.ts",
+      "desc": "detect macOS Google Chrome Beta after stable Chromium-family browsers"
+    },
+    {
+      "file": "extension/src/browser/chrome.executables.ts",
+      "desc": "classify macOS Google Chrome Beta within the Chrome-only fallback"
+    },
+    {
       "file": "extension/src/browser/config.ts",
       "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
     },
@@ -24,7 +32,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "1bc2c6ddddf76824846b6e14ce5bf27e3b222b3283c9fbf2beda1d4283d3040a",
+  "contentHash": "ec71c1f65b7239df32b0e861d8ac55a1dc55747487dae4fcf1ea4d16002c02ec",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

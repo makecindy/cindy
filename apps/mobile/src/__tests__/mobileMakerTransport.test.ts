@@ -96,6 +96,7 @@ describe('mobile maker transport', () => {
       'maker:input:get-projection',
       'maker:input:enqueue',
       'maker:input:compact',
+      'maker:compact-session',
       'maker:input:steer',
       'maker:input:stop',
       'maker:input:resume',
@@ -295,6 +296,9 @@ describe('mobile maker transport', () => {
     await maker.getVoiceDictionary();
     await maker.input.stop('s1', { pauseQueue: true });
     await maker.input.compact('s1');
+    await maker.compactSession('s1');
+    await maker.compactSession('s1', '');
+    await maker.compactSession('s1', 'focus on API design');
     await maker.input.retryLastError('s1');
     await maker.input.clearError('s1');
     await maker.input.updateText('s1', 'queued-1', 'updated');
@@ -337,6 +341,9 @@ describe('mobile maker transport', () => {
       ['device-link:voice:dictionary:get', []],
       ['maker:input:stop', ['s1', { pauseQueue: true }]],
       ['maker:input:compact', ['s1']],
+      ['maker:compact-session', ['s1']],
+      ['maker:compact-session', ['s1', '']],
+      ['maker:compact-session', ['s1', 'focus on API design']],
       ['maker:input:retry-last-error', ['s1']],
       ['maker:input:clear-error', ['s1']],
       ['maker:input:update-text', ['s1', 'queued-1', 'updated']],

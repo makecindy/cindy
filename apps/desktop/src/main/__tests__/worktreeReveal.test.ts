@@ -11,6 +11,7 @@ import path from 'node:path';
 
 // ── mock electron 的 ipcMain + shell ──────────────────────────────────────
 const showItemInFolderMock = vi.fn();
+const suggestNameMock = vi.fn();
 type Handler = (event: unknown, req: unknown) => unknown | Promise<unknown>;
 const handlers = new Map<string, Handler>();
 const ipcMainMock = {
@@ -42,7 +43,7 @@ vi.mock('../worktree/WorktreeManager', () => ({
   detectCwd: vi.fn(),
   getForSession: vi.fn(),
   listAll: vi.fn(),
-  suggestName: vi.fn(),
+  suggestName: (...args: unknown[]) => suggestNameMock(...args),
   listBranches: vi.fn(),
 }));
 
@@ -50,6 +51,7 @@ let registerWorktreeIpc: typeof import('../worktree/index').registerWorktreeIpc;
 
 beforeEach(async () => {
   showItemInFolderMock.mockReset();
+  suggestNameMock.mockReset();
   getAllPathsMock.mockReset();
   handlers.clear();
   if (!registerWorktreeIpc) {
@@ -64,6 +66,23 @@ function callReveal(req: unknown): Promise<unknown> {
   if (!handler) throw new Error('worktree:reveal handler not registered');
   return Promise.resolve(handler({}, req));
 }
+
+function callSuggestName(req: unknown): Promise<unknown> {
+  const handler = handlers.get('worktree:suggest-name');
+  if (!handler) throw new Error('worktree:suggest-name handler not registered');
+  return Promise.resolve(handler({}, req));
+}
+
+describe('worktree:suggest-name IPC contract', () => {
+  it('wraps the generated name in the declared response shape', async () => {
+    suggestNameMock.mockResolvedValue('pensive-lederberg');
+
+    await expect(callSuggestName({ baseRepo: '/repo' })).resolves.toEqual({
+      name: 'pensive-lederberg',
+    });
+    expect(suggestNameMock).toHaveBeenCalledWith('/repo');
+  });
+});
 
 describe('worktree:reveal whitelist (I-3 fix)', () => {
   it('rejects requests for paths NOT in worktreeStore.getAllPaths()', async () => {

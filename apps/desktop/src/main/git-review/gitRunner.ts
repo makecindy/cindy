@@ -5,6 +5,7 @@
  * non-zero exit codes, and explicit stdout guards for large diff reads.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 
 export interface GitRunResult {
@@ -64,6 +65,23 @@ export interface GitRunOptions {
 
 export interface GitRunBufferOptions extends GitRunOptions {
   maxStdoutBytes?: number;
+}
+
+/**
+ * Request-scoped Git execution surface. SSH review installs one of these for
+ * the lifetime of an IPC request, while local review keeps using spawn below.
+ * AsyncLocalStorage prevents concurrent local/remote review panes from sharing
+ * a host or working directory.
+ */
+export interface GitExecutionBackend {
+  run(args: readonly string[], opts?: GitRunOptions): Promise<GitRunResult>;
+  runBuffer(args: readonly string[], opts?: GitRunBufferOptions): Promise<GitRunBufferResult>;
+}
+
+const executionBackend = new AsyncLocalStorage<GitExecutionBackend>();
+
+export function withGitExecutionBackend<T>(backend: GitExecutionBackend, task: () => Promise<T>): Promise<T> {
+  return executionBackend.run(backend, task);
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -340,9 +358,11 @@ async function runGitBufferOnce(args: readonly string[], opts: GitRunBufferOptio
 }
 
 export async function runGit(args: readonly string[], opts: GitRunOptions = {}): Promise<GitRunResult> {
-  return runGitOnce(args, opts);
+  const backend = executionBackend.getStore();
+  return backend ? backend.run(args, opts) : runGitOnce(args, opts);
 }
 
 export async function runGitBuffer(args: readonly string[], opts: GitRunBufferOptions = {}): Promise<GitRunBufferResult> {
-  return runGitBufferOnce(args, opts);
+  const backend = executionBackend.getStore();
+  return backend ? backend.runBuffer(args, opts) : runGitBufferOnce(args, opts);
 }

@@ -48,6 +48,7 @@ import {
   usesBoundSessionModel,
 } from '../lib/scheduleFormLogic';
 import type { SessionReference } from '../../../../shared/sessionReference';
+import { isReviewSessionSource } from '../../../../shared/sessionSource';
 
 export type Destination = 'local' | 'worktree' | 'thread';
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
@@ -1278,7 +1279,7 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
       .list(50, 'active')
       .then((list) => {
         if (!alive) return;
-        setSessions(list);
+        setSessions(list.filter((session) => !isReviewSessionSource(session.source)));
         setError(null);
       })
       .catch((e: unknown) => {

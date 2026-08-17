@@ -6,22 +6,38 @@
  * 必须做 sender 断言 + 运行期结构/长度/枚举校验(TS 类型不等于运行期校验)。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TitleOneShotResult } from '../../maker-host/title-one-shot.js';
 
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
-  run: vi.fn(async (_request: unknown) => ({ applied: true, done: true })),
+  run: vi.fn(async (_request: unknown) => {
+    void _request;
+    return { applied: true, done: true };
+  }),
   regenerateMaterial: vi.fn(
     async (
       _sessionId: string,
       _limit: number,
       _latestTurnIsInFlight: boolean | (() => boolean),
-    ) => ({
-      opening: { text: '原始需求', createdAt: 1, rowid: 1 },
-      recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
-    }),
+    ) => {
+      void _sessionId;
+      void _limit;
+      void _latestTurnIsInFlight;
+      return {
+        opening: { text: '原始需求', createdAt: 1, rowid: 1 },
+        recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
+      };
+    },
   ),
-  generateTitle: vi.fn(async (_request: unknown) => '任务标题'),
+  generateTitle: vi.fn(async (_request: unknown) => {
+    void _request;
+    return '任务标题';
+  }),
+  generateTitleResult: vi.fn(async (_request: unknown): Promise<TitleOneShotResult> => {
+    void _request;
+    return { status: 'ok', title: '任务标题' };
+  }),
   drainPersistQueue: vi.fn<() => Promise<void>>(async () => undefined),
 }));
 
@@ -46,6 +62,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../maker-host/title-one-shot.js', () => ({
   generateTitleViaProvider: h.generateTitle,
+  generateTitleViaProviderResult: h.generateTitleResult,
 }));
 vi.mock('../../messagePersistBroadcaster.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
@@ -102,6 +119,8 @@ beforeEach(() => {
   h.run.mockResolvedValue({ applied: true, done: true });
   h.regenerateMaterial.mockClear();
   h.generateTitle.mockClear();
+  h.generateTitleResult.mockReset();
+  h.generateTitleResult.mockResolvedValue({ status: 'ok', title: '任务标题' });
   h.drainPersistQueue.mockReset();
   h.drainPersistQueue.mockResolvedValue(undefined);
   vi.mocked(getDbClient).mockReturnValue({
@@ -242,6 +261,7 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     await expect(invokeRegenerate('s1')).rejects.toThrow(/PERMISSION_DENIED/);
 
     expect(h.generateTitle).not.toHaveBeenCalled();
+    expect(h.generateTitleResult).not.toHaveBeenCalled();
     expect(h.drainPersistQueue).not.toHaveBeenCalled();
   });
 
@@ -257,8 +277,40 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
       invokeFromDeviceLink('maker:regenerate-title', () => invokeRegenerate('s1')),
     ).resolves.toEqual({ title: '任务标题' });
 
-    expect(h.generateTitle).toHaveBeenCalledTimes(2);
+    expect(h.generateTitle).toHaveBeenCalledOnce();
+    expect(h.generateTitleResult).toHaveBeenCalledOnce();
     expect(h.drainPersistQueue).toHaveBeenCalledOnce();
+  });
+
+  it('软删除任务按 NOT_FOUND 处理且不调用标题模型', async () => {
+    vi.mocked(getDbClient).mockReturnValue({
+      drizzle: {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: async () => [{ agentKind: 'codex', status: 'deleted' }],
+            }),
+          }),
+        }),
+      },
+    } as unknown as ReturnType<typeof getDbClient>);
+
+    await expect(invokeRegenerate('deleted')).rejects.toThrow(/\[NOT_FOUND\]/);
+    expect(h.generateTitleResult).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unsupported-provider', 'TITLE_PROVIDER_UNSUPPORTED'],
+    ['failed', 'INTERNAL'],
+  ] as const)('regenerate %s 在本机与 device-link 上都透传 %s', async (status, code) => {
+    h.generateTitleResult.mockResolvedValue({ status });
+
+    await expect(invokeRegenerate('s1')).rejects.toThrow(new RegExp(`\\[${code}\\]`));
+
+    h.trusted = false;
+    await expect(
+      invokeFromDeviceLink('maker:regenerate-title', () => invokeRegenerate('s1')),
+    ).rejects.toThrow(new RegExp(`\\[${code}\\]`));
   });
 
   it('auto-title 不因 device-link 上下文放宽本机专属 sender 边界', async () => {
@@ -297,6 +349,7 @@ describe('maker title IPC — payload 运行期校验', () => {
     await expect(invokeRegenerateRequest(payload)).rejects.toThrow(/INVALID_PARAMS/);
     expect(h.drainPersistQueue).not.toHaveBeenCalled();
     expect(h.regenerateMaterial).not.toHaveBeenCalled();
+    expect(h.generateTitleResult).not.toHaveBeenCalled();
   });
 
   it('generate-title 截断超长正文，保留正常的空消息回落语义', async () => {

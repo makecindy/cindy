@@ -1,5 +1,6 @@
 import type { GhostManifest, GhostPermissionDiff, InstalledGhost } from './ghost';
 import type { PluginIconMetadata } from '@cindy/plugin-protocol';
+import type { DataOwnerPushStamp } from './dataOwnerPush';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -44,6 +45,8 @@ export interface PluginMarketSnapshot {
   unavailableReason: string | null;
   /** 已添加的自定义市场名（按添加顺序）；驱动"自定义"筛选 tab 的可见性。 */
   customSourceNames: string[];
+  /** 本轮发现失败的自定义市场名；失败来源不影响其它来源和官方市场。 */
+  unavailableCustomSourceNames: string[];
 }
 
 /** 服务端清理的一次性汇总提示：按 owner 缓存，consume 前跨多轮对账累加，consume 后即清。 */
@@ -111,29 +114,43 @@ export type PluginMarketLocalIconResult =
 export interface PluginMarketPackageReviewFacts {
   /** 已按当前界面语言本地化，仅用于展示；安全指纹由 Main 基于原始清单计算。 */
   manifest: GhostManifest;
-  /** Main 基于当前已装原始清单与真实包原始清单算出的权限差异；首装为 null。 */
+  /** Main 基于当前已装原始清单与真实包原始清单算出的权限差异；无可靠基线时为 null。 */
   permissionDiff: GhostPermissionDiff | null;
+  /** Main 根据安装锁内的实际落位状态判定；不从 permissionDiff 间接推断。 */
+  isUpdate: boolean;
   packageSha256: string;
-  /** 产生复核结果时的已装权限基线；null 表示当时尚未安装。 */
+  /** 产生复核结果时的可靠已装权限基线；null 也可能是旧安装基线不可读。 */
   installedBaseline: string | null;
+  /** 只用于让确认卡如实说明包来自官方还是用户添加的市场。 */
+  sourceType: PluginMarketItemSource;
 }
 
 /** Main 在安装事务内请求当前窗口立即确认真实包权限；不暴露内部批准绑定。 */
 export interface PluginMarketPackageReviewRequest {
   requestId: string;
+  /** Main 投递这份私有包事实时的账号代际；Renderer 必须匹配后才可展示。 */
+  ownerStamp: DataOwnerPushStamp;
   manifest: GhostManifest;
   permissionDiff: GhostPermissionDiff | null;
+  isUpdate: boolean;
+  sourceType: PluginMarketItemSource;
 }
 
 export interface PluginMarketInstallOptions {
-  /** 用户审阅时看到的目标 release；Main 会在下载前重新核对。 */
+  /** 用户点击时看到的目标 release；Main 会在下载前重新核对。 */
   expectedReleaseId: string;
   /** 安装前展示给用户的完整清单；Main 会与当前来源事实重新核对。 */
-  expectedManifest: GhostManifest;
+  expectedManifest?: GhostManifest;
   /** 仅用于自定义市场确认其本地真实 manifest 的扩权。 */
   allowPermissionExpansion?: boolean;
   /** 用户审阅目标权限时的已装权限基线。 */
   reviewedBaseline?: string;
+  /**
+   * receipt 模型的并发护栏：receipt 派生 token。确认与落位之间批准状态若变化即拒绝。
+   */
+  expectedInstalledApproval?: string;
+  /** 仅详情页上用户明确点击“替换”时为 true；更新和批量更新不得切换来源。 */
+  allowSourceReplacement?: boolean;
 }
 
 /** 安装成功，或用户在事务内取消真实包权限确认。 */

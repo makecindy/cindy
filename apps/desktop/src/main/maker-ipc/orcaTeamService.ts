@@ -186,6 +186,8 @@ export interface OrcaTeamServiceDeps {
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
+  /** Stop Host-owned work (for example iOS builds) before archiving this worker task. */
+  cancelWorkerSessionOperations(sessionId: string): Promise<void>;
   closeWorkerSession(sessionId: string): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
   closeWorkerSessionIfIdle(sessionId: string): Promise<boolean>;
@@ -807,8 +809,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
+    await deps.cancelWorkerSessionOperations(worker.sessionId);
     await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
     await deps.archiveWorkerSession(worker.sessionId);
+    // The archived status is the admission barrier for new Host work. Cancel
+    // once more after publishing it to catch a build that registered between
+    // the pre-close cancellation and the status transition.
+    await deps.cancelWorkerSessionOperations(worker.sessionId);
     await deps.updateWorkerStatus(worker.id, 'done');
     deps.broadcastOrcaWorkerChanged(link.leadSessionId);
     return { ok: true, workerId: worker.id };

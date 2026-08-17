@@ -49,7 +49,7 @@ function modelRow(
   id: string,
   efforts: readonly string[] = [],
   defaultEffort: string | null = null,
-  newSessionDefault?: readonly ('claude-code' | 'codex')[],
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[],
 ): ProviderModelRow {
   return {
     provider: { id: `prov-${id}`, name: id } as ProviderModelRow['provider'],
@@ -522,10 +522,11 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: 'prov-gpt-5.4' });
   });
 
-  it('uses the regional default before the top row, with Pi sharing the claude-code marker', () => {
+  it('uses the regional default before the top row, including the explicit Pi v3 marker', () => {
     const rows = [
       modelRow('top', ['low'], 'low'),
-      modelRow('regional', ['medium'], 'medium', ['claude-code']),
+      modelRow('cc-regional', ['medium'], 'medium', ['claude-code']),
+      modelRow('pi-regional', ['high'], 'high', ['pi']),
     ];
     // 区域默认来自 provider 行 → 携带该行 provider(#1898 语义,merge main 后适配)
     expect(pickAgentDefaultRuntime({
@@ -534,14 +535,32 @@ describe('pickAgentDefaultRuntime', () => {
       modelRows: rows,
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'claude-code', model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+    })).toEqual({ agentKind: 'claude-code', model: 'cc-regional', effort: 'medium', providerId: 'prov-cc-regional' });
     expect(pickAgentDefaultRuntime({
       agentKind: 'pi',
       sessions: [],
       modelRows: rows,
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'pi', model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+    })).toEqual({ agentKind: 'pi', model: 'pi-regional', effort: 'high', providerId: 'prov-pi-regional' });
+  });
+
+  it('uses only the explicit Pi regional default marker', () => {
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'pi',
+      sessions: [],
+      modelRows: [
+        modelRow('top', ['low'], 'low'),
+        modelRow('pi-regional', ['high'], 'high', ['pi']),
+      ],
+      currentEffort: 'medium',
+      catalogReady: true,
+    })).toEqual({
+      agentKind: 'pi',
+      model: 'pi-regional',
+      effort: 'high',
+      providerId: 'prov-pi-regional',
+    });
   });
 
   it('keeps the marked provider row when another provider offers the same modelId earlier (codex P2)', () => {
@@ -1511,7 +1530,7 @@ describe('new session composer surface', () => {
     const createButtonEnd = newSource.indexOf('// 聚焦卡片形态的底部工具排', createButtonStart);
     const createButtonSource = newSource.slice(createButtonStart, createButtonEnd);
     const composerIconButtonStart = newSource.indexOf('composerIconButton: {');
-    const composerIconButtonEnd = newSource.indexOf('composerIconButtonActive:', composerIconButtonStart);
+    const composerIconButtonEnd = newSource.indexOf('composerCompactLeading:', composerIconButtonStart);
     const composerIconButtonStyle = newSource.slice(composerIconButtonStart, composerIconButtonEnd);
     const modelPillStart = newSource.indexOf('modelPill: {');
     const modelPillEnd = newSource.indexOf('modelPillText:', modelPillStart);
@@ -1576,6 +1595,19 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
     expect(newComposerSource).toContain('scrollEnabled={composerInputScrollEnabled}');
     expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
+    expect(newComposerSource).toContain('leading={renderComposerCompactLeading()}');
+    expect(newSource).toContain('const renderComposerCompactLeading = () => (');
+    expect(newSource).not.toContain('styles.composerCompactAttachmentSlot');
+    expect(newSource).toContain('styles.composerCompactAttachmentHit');
+    expect(newSource).not.toContain('styles.composerCompactAttachmentHitArea');
+    expect(newSource).toContain('pointerEvents="none"');
+    expect(newSource).toContain('testID="newSession.attachmentToggleButton"');
+    expect(newSource).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).toContain('minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).not.toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
     expect(newSource).toContain('PaperPlaneIcon');
     expect(newSource).not.toContain('ArrowUp');
@@ -1827,7 +1859,8 @@ describe('new session worktree wiring (source locks)', () => {
       'applicable: worktreeApplicable,',
     );
     const createEntry = newSource.indexOf('const create = useCallback(async () => {');
-    const createBody = newSource.slice(createEntry, createEntry + 1_200);
+    // ineligible 豁免守卫使 create 函数体略长,窗口扩至 1600 确保覆盖 worktreeCreateBlocked。
+    const createBody = newSource.slice(createEntry, createEntry + 1_600);
     expect(createBody).not.toContain('|| worktreePreferenceSaving');
     expect(createBody).toContain('if (worktreeCreateBlocked) {');
     expect(newSource).toContain('worktreeBranchPreferenceSaving');
@@ -1941,6 +1974,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(newSource).toContain('const worktreeTarget = {');
     expect(newSource).toContain('deviceId: selectedDeviceId ??');
     expect(newSource).toContain('worktreeEligibilityForTarget(worktreeProbe, worktreeTarget)');
+    expect(newSource).toContain('probeGeneration: `${connectionEpoch}\\u0000${presenceVersion}`');
     expect(newSource).toContain('worktreeSourceBranchFromPreference(');
     expect(newSource).toContain('shouldAcceptWorktreeBranchListResult({');
     expect(newSource).toContain('sourceBranch: worktreeIntent.sourceBranch,');

@@ -1376,7 +1376,7 @@ function acceptStateBackedWinnerAfterRecovery(
   return winner;
 }
 
-/** 当前区域的全部历史品牌 Codex HOME;不包含当前 Cindy/CindyGlobal HOME。 */
+/** 当前区域的全部历史品牌 Codex HOME;不包含当前区域正在使用的 HOME。 */
 function legacyBrandedCodexHomes(targetHome: string): string[] {
   const userDataParent = path.dirname(path.dirname(targetHome));
   return allUserDataDirNames(CURRENT_CINDY_REGION)
@@ -3674,7 +3674,7 @@ function getDesktopCodexHome(): string {
     /* fallback for non-Electron test runners */
   }
 
-  // 兜底路径按区域取目录名(global 构建的 userData 是 CindyGlobal,同机双装分库)。
+  // 兜底路径按现有区域目录映射取值(global=CindyGlobal,cn=Cindy，同机双装分库)。
   const dirName = brandUserDataDirName(CURRENT_CINDY_REGION);
   if (process.platform === 'darwin') {
     return path.join(os.homedir(), 'Library', 'Application Support', dirName, 'codex-home');

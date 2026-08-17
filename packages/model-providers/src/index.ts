@@ -23,8 +23,11 @@ export type {
   Catalog,
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
+  ProviderModelDiscoverySource,
+  ProviderModelRouteConfig,
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
+  PiModelApi,
   ProviderPreset,
   ProviderPresetRuntime,
   PresetSortRegion,
@@ -33,13 +36,21 @@ export type {
   OAuthProviderDescriptor,
 } from './types.js';
 
-export { PI_REASONING_EFFORTS } from './types.js';
+export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+
+export { effectivePiWireProtocol, preservesPiCatalogModels } from './pi-catalog-marker.js';
 
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
 
-export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
+export {
+  buildUserProvider,
+  DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  runtimeCustomProviderId,
+  storedCustomProviderId,
+} from './user-provider.js';
 export {
   appendProviderRequestPath,
   isLoopbackProviderUrl,
@@ -64,23 +75,24 @@ export {
   findModelRegistryRoute,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
-export { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
+export { modelRegistryCanonicalJson } from './modelRegistryCanonical.js';
+export {
+  isModelCurrency,
+  parseListModelsResponse,
+  parseModelRegistry,
+} from './modelAccessValidator.js';
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
   ModelRegistryRevisionRelation,
   ModelRegistrySnapshotDecision,
 } from './modelRegistry.js';
-export type {
-  ModelReferencePrice,
-  ModelReferencePriceSource,
-  ModelRegistry,
-  ModelRegistryEntry,
-  ModelRegistryRoute,
-} from '@cindy/model-access-protocol';
+export * from './modelAccessBean.js';
 export type {
   CatalogSourceConfig,
   CatalogIO,
+  CatalogCapabilityEvidence,
+  CatalogXdMediaKind,
   CatalogLoadResult,
   CatalogLoadSource,
 } from './source.js';
@@ -169,3 +181,11 @@ export type {
   InvocationCatalogContext,
   ResolvedInvocation,
 } from './invocation.js';
+
+export {
+  classifyVisionCapability,
+  isKnownNoVisionModel,
+  isKnownVisionModel,
+  normalizeVisionModelId,
+} from './visionCapability.js';
+export type { VisionCapability } from './visionCapability.js';

@@ -6,8 +6,8 @@
  *   maker-core 'codex'       ⇄ db 'codex'
  *
  * 注意：本轮 (stage-1) 是新链路独立写入，不会影响老链路 ('local-db:sessions:*' IPC) 的查询/读取。
- * 两边读同一张表，新链路默认 source='desktop'；自动化 runner 会在创建后把
- * source backfill 为 'scheduler'，两者都属于 desktop-visible session。
+ * 两边读同一张表，新链路默认 source='desktop'；host-owned Review 在同一 INSERT
+ * 原子写 source='review'，自动化 runner 仍会在创建后 backfill 为 'scheduler'。
  */
 
 import { and, eq, inArray } from 'drizzle-orm';
@@ -57,6 +57,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
     effort: row.effort,
     permissionMode: row.permissionMode,
     fastMode: row.fastMode,
+    ...(row.source === 'review' ? { reviewMode: true as const } : {}),
     sdkSessionId: row.sdkSessionId ?? undefined,
     parentSessionId: row.parentSessionId ?? undefined,
     remoteHostId: row.remoteHostId ?? undefined,
@@ -88,7 +89,7 @@ export class DesktopSessionStorage implements SessionStorage {
       // 避免 maker.createSession (maker:create-session / scheduler / Feishu / Orca 等入口)
       // 把空白 host 原样入库,导致 renderer 按 local 分组、maker 按 remote-like 处理的分裂。
       remoteHostId: normalizeRemoteHostId(meta.remoteHostId),
-      source: 'desktop',
+      source: meta.reviewMode === true ? 'review' : 'desktop',
       createdAt: now,
       updatedAt: now,
     });
@@ -99,6 +100,18 @@ export class DesktopSessionStorage implements SessionStorage {
     const db = getDbClient().drizzle;
     const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
     return rows[0] ? rowToMeta(rows[0]) : null;
+  }
+
+  /** Read the product lifecycle status without widening maker-core SessionMeta. */
+  async getStatus(id: string): Promise<'active' | 'archived' | 'deleted' | null> {
+    const db = getDbClient().drizzle;
+    const rows = await db
+      .select({ status: sessions.status })
+      .from(sessions)
+      .where(eq(sessions.id, id))
+      .limit(1);
+    const status = rows[0]?.status;
+    return status === 'active' || status === 'archived' || status === 'deleted' ? status : null;
   }
 
   async list(): Promise<SessionMeta[]> {

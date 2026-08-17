@@ -91,6 +91,43 @@ describe('isNonAnchorHistoryRow — 历史初始页 backfill 判定', () => {
     expect(isNonAnchor(synthetic('帮我查一下'))).toBe(false);
     expect(isNonAnchor(synthetic({ text: '帮我查一下' }))).toBe(false);
   });
+
+  it('子代理内部行算无锚点(buildRenderItems 整体剔除,漏登记会渲染 0 项)', () => {
+    // 子代理密集的会话最新一页可能全部是这类行(实测本机库单会话上万条)。
+    const subagentRow = (parentUuid: string, role = 'assistant'): Message =>
+      ({
+        id: 'r',
+        clientId: 'c',
+        sessionId: SESSION_ID,
+        role,
+        content: '子代理正文',
+        agentMeta: { parentUuid },
+        createdAt: '2026-07-02T00:00:00.000Z',
+      } as unknown as Message);
+
+    expect(isNonAnchor(subagentRow('toolu_01KzTJBHuSyQfTXT74MKLjgp'))).toBe(true);
+    expect(isNonAnchor(subagentRow('call_abc123'))).toBe(true);
+    expect(isNonAnchor(subagentRow('Task_1'))).toBe(true);
+    expect(isNonAnchor(subagentRow('toolu_ABC', 'thinking'))).toBe(true);
+  });
+
+  it('legacy transcript 链边不算子代理,仍是可见锚点', () => {
+    // 旧 Claude 导入把普通 transcript 链边存在同一个 agentMeta.parentUuid 上。
+    // 误判会让父会话自己的正文被当成无锚点行,触发无谓的整页回填。
+    const legacyRow = (parentUuid: string): Message =>
+      ({
+        id: 'r',
+        clientId: 'c',
+        sessionId: SESSION_ID,
+        role: 'assistant',
+        content: '父会话正文',
+        agentMeta: { parentUuid },
+        createdAt: '2026-07-02T00:00:00.000Z',
+      } as unknown as Message);
+
+    expect(isNonAnchor(legacyRow('preceding-user-uuid'))).toBe(false);
+    expect(isNonAnchor(legacyRow('3d2ac20f-509c-4aff-ac12-842c75f56c6f'))).toBe(false);
+  });
 });
 
 describe('handleStreamEvent — omitted thinking placeholder (live)', () => {

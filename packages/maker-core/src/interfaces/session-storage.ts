@@ -17,6 +17,8 @@ export interface SessionMeta {
   effort?: Effort;
   permissionMode?: PermissionMode;
   fastMode?: boolean;
+  /** Persist the host-owned Review purpose atomically with session creation. */
+  reviewMode?: true;
   createdAt: number;
   updatedAt: number;
   /** SDK 内部生成的 sessionId（与本地 id 不同），用于 resume */

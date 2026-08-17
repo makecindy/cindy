@@ -19,7 +19,8 @@
 - [`desktop-development.md`](desktop-development.md)：Desktop 的 Agent 安全启动入口与
   分层验证命令。
 - [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)：
-  Electron 进程职责、Renderer 信任模型、BrowserWindow、preload、IPC 与远程内容安全边界。
+  Electron 进程职责、Renderer 信任模型、BrowserWindow、独立辅助窗口统一生命周期、
+  preload、IPC 与远程内容安全边界。
 - [`credentials-and-local-storage.md`](credentials-and-local-storage.md)：凭证不入仓、
   用户持久数据、临时文件与测试目录的安全边界。
 - [`media-storage-and-protocols.md`](media-storage-and-protocols.md)：Desktop 媒体总仓、
@@ -43,8 +44,8 @@
 - [`log-upload-and-redaction.md`](log-upload-and-redaction.md)：客户端日志采集／脱敏／上报的
   三条不变量（记录边界、白名单方向 deny-by-default、标记代次 + 原子清除）、四层收窄管道、
   授权闸、区域绑定与崩溃时序。
-- [`protocol-and-submodules.md`](protocol-and-submodules.md)：`cindy-protocol` 协议权威源、
-  device-link relay 层、内建插件来源与 wire protocol 兼容。
+- [`protocol-compatibility.md`](protocol-compatibility.md)：两仓本地协议实现、device-link
+  relay 层、插件来源与 wire protocol 兼容。
 - [`architecture-invariants.md`](architecture-invariants.md)：package 与 render／main 解耦、
   main 进程静态依赖，以及主界面布局树不变量。
 - [`configuration-and-overrides.md`](configuration-and-overrides.md)：配置可见性分层、默认值

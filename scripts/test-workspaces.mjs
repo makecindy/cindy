@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import {
 	acquireTestGateLock,
 	shouldUseTestGateLock,
 } from "./test-gate-lock.mjs";
+import { createRelatedUnitPlan } from "./test-related.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const IGNORED_PARTS = new Set([
@@ -52,6 +53,7 @@ export function parseCliOptions(args) {
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
 		noLock: false,
+		related: false,
 	};
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
@@ -62,6 +64,10 @@ export function parseCliOptions(args) {
 		}
 		if (arg === "--no-lock") {
 			options.noLock = true;
+			continue;
+		}
+		if (arg === "--related") {
+			options.related = true;
 			continue;
 		}
 		if (arg === "--tier") {
@@ -98,6 +104,9 @@ export function parseCliOptions(args) {
 			continue;
 		}
 		throw new Error(`Unknown option: ${arg}`);
+	}
+	if (options.related && options.all) {
+		throw new Error("--related cannot be combined with --all");
 	}
 	return options;
 }
@@ -465,36 +474,52 @@ function undersizedVitestShardArgs(commandSpec, selectedFiles) {
 	return selectedFiles.length < count ? ["--passWithNoTests"] : [];
 }
 
+function toWorkspaceRelativeFile(workspace, file) {
+	const workspacePrefix = `${normalizeRelPath(workspace.cwd)}/`;
+	const normalized = normalizeRelPath(file);
+	if (!normalized.startsWith(workspacePrefix)) {
+		throw new Error(
+			`Selected test file is outside workspace ${workspace.cwd}: ${file}`,
+		);
+	}
+	return normalized.slice(workspacePrefix.length);
+}
+
+function vitestRelatedArgs(commandSpec) {
+	const rest = (commandSpec.args ?? []).filter((arg) => arg !== "run");
+	return ["related", "--run", ...rest];
+}
+
 export function buildPnpmArgs(
 	root,
 	workspace,
 	commandSpec,
 	tierConfig = {},
 	selectedFiles = [],
+	relatedFiles,
 ) {
 	const workspaceAbs = path.join(root, workspace.cwd);
 	if (commandSpec.type === "packageScript")
 		return ["--dir", workspaceAbs, "run", commandSpec.script];
 	if (commandSpec.type === "packageBin") {
-		const workspacePrefix = `${normalizeRelPath(workspace.cwd)}/`;
-		const selectedArgs = tierConfig.include?.length
-			? selectedFiles.map((file) => {
-					const normalized = normalizeRelPath(file);
-					if (!normalized.startsWith(workspacePrefix)) {
-						throw new Error(
-							`Selected test file is outside workspace ${workspace.cwd}: ${file}`,
-						);
-					}
-					return normalized.slice(workspacePrefix.length);
-				})
-			: [];
+		const useRelated =
+			commandSpec.bin === "vitest" && Array.isArray(relatedFiles);
+		const selectedArgs = useRelated
+			? relatedFiles.map((file) => toWorkspaceRelativeFile(workspace, file))
+			: tierConfig.include?.length
+				? selectedFiles.map((file) => toWorkspaceRelativeFile(workspace, file))
+				: [];
+		const binArgs = useRelated
+			? vitestRelatedArgs(commandSpec)
+			: (commandSpec.args ?? []);
 		const args = [
 			"--dir",
 			workspaceAbs,
 			"exec",
 			commandSpec.bin,
-			...(commandSpec.args ?? []),
+			...binArgs,
 			...undersizedVitestShardArgs(commandSpec, selectedFiles),
+			...(useRelated ? ["--passWithNoTests"] : []),
 			...selectedArgs,
 		];
 		for (const pattern of tierConfig.exclude ?? []) {
@@ -758,6 +783,7 @@ export async function runPlannedTests({
 	allFiles,
 	runCommandImpl = runCommand,
 	workspaceConcurrency,
+	relatedFilesByWorkspace,
 	reporter,
 	now = Date.now,
 }) {
@@ -855,12 +881,15 @@ export async function runPlannedTests({
 					return result;
 				}
 			}
+			const relatedFiles =
+				relatedFilesByWorkspace?.[normalizeRelPath(run.workspace.cwd)];
 			const pnpmArgs = buildPnpmArgs(
 				root,
 				run.workspace,
 				run.tierConfig.command,
 				run.tierConfig,
 				fileCheck.selected,
+				Array.isArray(relatedFiles) ? relatedFiles : undefined,
 			);
 			const invocation = resolvePnpmInvocation(pnpmArgs);
 			const commandResult = await runCommandImpl(
@@ -927,15 +956,98 @@ export function printSummary(results, manifest) {
 	}
 }
 
+export function createRepoGitRunner(root = ROOT) {
+	return (args) =>
+		execFileSync("git", args, {
+			cwd: root,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+}
+
+export async function runRootTestRunner({
+	root = ROOT,
+	runCommandImpl = runCommand,
+	now = Date.now,
+} = {}) {
+	console.log("START test:runner");
+	const startedAt = now();
+	const invocation = resolvePnpmInvocation(["run", "test:runner"]);
+	const commandResult = await runCommandImpl(
+		invocation.command,
+		invocation.args,
+		{
+			cwd: root,
+			env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
+			shell: invocation.shell,
+			windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+		},
+	);
+	const status = commandResult.exitCode === 0 ? "PASS" : "FAIL";
+	console.log(
+		`${status} test:runner (${formatElapsed(Math.max(0, now() - startedAt))})`,
+	);
+	return commandResult;
+}
+
+function intersectRelatedRuns(runs, requested, manifestWorkspaces) {
+	if (requested.length === 0) return runs;
+	return runs.filter((run) => {
+		const workspace = manifestWorkspaces.find(
+			(item) => normalizeRelPath(item.cwd) === normalizeRelPath(run.cwd),
+		);
+		return (
+			workspace &&
+			requested.some((selector) => workspaceMatchesSelector(workspace, selector))
+		);
+	});
+}
+
 async function main() {
+	const options = parseCliOptions(process.argv.slice(2));
 	const {
 		all,
 		tier,
-		workspaces,
 		excludeWorkspaces,
 		workspaceConcurrency,
 		noLock,
-	} = parseCliOptions(process.argv.slice(2));
+		related,
+	} = options;
+	let workspaces = options.workspaces;
+	let relatedFilesByWorkspace;
+	let relatedPlan;
+
+	if (related) {
+		const manifest = (await import("./test-workspaces.config.mjs")).default;
+		relatedPlan = createRelatedUnitPlan({
+			root: ROOT,
+			manifest,
+			runGit: createRepoGitRunner(ROOT),
+		});
+		console.log(`RELATED ${relatedPlan.mode}: ${relatedPlan.reason}`);
+		if (relatedPlan.mode === "skip") return;
+		if (relatedPlan.mode === "related") {
+			const selectedRuns = intersectRelatedRuns(
+				relatedPlan.runs,
+				workspaces,
+				manifest.workspaces,
+			);
+			workspaces = selectedRuns.map((run) => run.cwd);
+			relatedFilesByWorkspace = Object.fromEntries(
+				selectedRuns.map((run) => [run.cwd, run.relatedFiles]),
+			);
+		}
+	}
+
+	const willRunWorkspaces =
+		!related ||
+		relatedPlan?.mode === "full" ||
+		workspaces.length > 0;
+	const willRunTestRunner =
+		related &&
+		(relatedPlan?.mode === "full" || relatedPlan?.runTestRunner);
+	if (related && !willRunWorkspaces && !willRunTestRunner) return;
+
 	const lock = shouldUseTestGateLock({ all, tier, noLock })
 		? await acquireTestGateLock({
 				repoRoot: ROOT,
@@ -948,6 +1060,15 @@ async function main() {
 			})
 		: null;
 	try {
+		if (willRunTestRunner) {
+			const runnerResult = await runRootTestRunner();
+			if (runnerResult.exitCode !== 0) {
+				process.exitCode = 1;
+				return;
+			}
+		}
+		if (!willRunWorkspaces) return;
+
 		const manifest = (await import("./test-workspaces.config.mjs")).default;
 		const results = await runPlannedTests({
 			root: ROOT,
@@ -957,6 +1078,7 @@ async function main() {
 			workspaces,
 			excludeWorkspaces,
 			workspaceConcurrency,
+			relatedFilesByWorkspace,
 			reporter: createWorkspaceRunReporter(),
 		});
 		printSummary(results, manifest);

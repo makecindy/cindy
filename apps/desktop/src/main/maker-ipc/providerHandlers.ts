@@ -17,6 +17,7 @@
 import {
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  runtimeCustomProviderId,
   type AgentKind,
   type CustomProviderConfig,
   type ProviderModelDiscoveryFailure,
@@ -184,7 +185,8 @@ function withoutProviderHeaderCredentials(provider: ProviderView): ProviderView 
   const routing = Object.fromEntries(
     Object.entries(provider.routing).map(([agent, descriptor]) => {
       if (!descriptor) return [agent, descriptor];
-      const { headerOverride: _secretHeaders, ...safeDescriptor } = descriptor;
+      const safeDescriptor = { ...descriptor };
+      delete safeDescriptor.headerOverride;
       return [agent, safeDescriptor];
     }),
   ) as ProviderView['routing'];
@@ -397,7 +399,8 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
         modelId: spec.modelId,
         authMethod: spec.authMethod as ProviderProbeSpec['authMethod'],
         wireProtocol: spec.wireProtocol as ProviderProbeSpec['wireProtocol'],
-        requestPath: spec.requestPath as string | undefined,
+        requestPath:
+          spec.agent === 'pi' ? undefined : (spec.requestPath as string | undefined),
         apiKey: (spec.apiKey as string | null | undefined) ?? null,
         headers: spec.headers as Record<string, string> | undefined,
       },
@@ -608,6 +611,22 @@ export function registerProviderHandlers(
   };
   type KeySnapshot = { agent: AgentKind; previous: string | null };
   type KeyMutation = { agent: AgentKind; replacement: string | null };
+  // Stored API keys and main-only credential headers are endpoint-bound. If a runtime moves to a
+  // different base/models URL without an explicit replacement, clear the old secret atomically.
+  const endpointChangedForAgent = (
+    config: CustomProviderConfig,
+    previous: CustomProviderConfig | null | undefined,
+    agent: AgentKind,
+  ): boolean => {
+    const prevRt = previous?.runtimes[agent];
+    const nextRt = config.runtimes[agent];
+    if (!prevRt || !nextRt) return false;
+    const norm = (value: string | null | undefined): string => (value ?? '').trim();
+    return (
+      norm(prevRt.baseUrl) !== norm(nextRt.baseUrl) ||
+      norm(prevRt.modelsUrl) !== norm(nextRt.modelsUrl)
+    );
+  };
   const restoreProviderKeys = (
     providerId: string,
     snapshots: readonly KeySnapshot[],
@@ -626,6 +645,7 @@ export function registerProviderHandlers(
     config: CustomProviderConfig,
     keys: RuntimeKeys,
     mode: 'create' | 'update',
+    previous?: CustomProviderConfig | null,
   ): KeyMutation[] => {
     const mutations: KeyMutation[] = [];
     const usesApiKey = !config.auth || config.auth.method === 'apiKey';
@@ -640,6 +660,9 @@ export function registerProviderHandlers(
       const shouldRemove = !usesApiKey || !config.runtimes[agent];
       if (shouldRemove) mutations.push({ agent, replacement: null });
       else if (replacement) mutations.push({ agent, replacement });
+      else if (endpointChangedForAgent(config, previous, agent)) {
+        mutations.push({ agent, replacement: null });
+      }
     }
     return mutations;
   };
@@ -693,21 +716,6 @@ export function registerProviderHandlers(
       }
     }
     return restored;
-  };
-  // update 时:runtime 仍在、apiKey 鉴权、未带 headers 的“保留”分支只在**端点未变**时成立。
-  // 若 baseUrl/modelsUrl 改到了另一端点,旧密文头绑定的是原端点,保留会把长期凭证 hydrate 到
-  // 新主机(codex review P1)。用**权威的 previous 配置**逐 agent 比对端点,变了就清除、要求重填。
-  const endpointChangedForAgent = (
-    config: CustomProviderConfig,
-    previous: CustomProviderConfig | null | undefined,
-    agent: AgentKind,
-  ): boolean => {
-    const prevRt = previous?.runtimes[agent];
-    const nextRt = config.runtimes[agent];
-    if (!prevRt || !nextRt) return false; // 新增 runtime 无旧端点/旧头可漏;runtime 移除已单独清
-    const norm = (u: string | null | undefined): string => (u ?? '').trim();
-    return norm(prevRt.baseUrl) !== norm(nextRt.baseUrl)
-      || norm(prevRt.modelsUrl) !== norm(nextRt.modelsUrl);
   };
   const planProviderHeaderMutations = (
     config: CustomProviderConfig,
@@ -1307,7 +1315,7 @@ export function registerProviderHandlers(
 
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, async (event, input: unknown, keyInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
-    const v = validateCustomProviderConfig(input);
+    const v = validateCustomProviderConfig(input, { allowLegacyXai: true });
     if (!v.ok) throwIpcError(v.code, v.message);
     const keys = parseRuntimeKeys(keyInput);
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
@@ -1334,7 +1342,7 @@ export function registerProviderHandlers(
         assertProviderMutationOwner(ownerAtIngress);
         const credentialSnapshots = stageProviderCredentials(
           config.id,
-          planProviderKeyMutations(config, keys, 'update'),
+          planProviderKeyMutations(config, keys, 'update', previous),
           planProviderHeaderMutations(config, separated.headers, 'update', previous),
         );
         // 先阻止在途 flow 写回，再改描述符；否则旧 flow 可能在 clear 后迟到落一枚旧 token。
@@ -1394,6 +1402,7 @@ export function registerProviderHandlers(
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
+    const runtimeProviderId = runtimeCustomProviderId(providerId);
     const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(providerId, async () => {
       // 同类 delete 也会在 per-provider 队列后写 owner-scoped 凭证。
@@ -1432,9 +1441,9 @@ export function registerProviderHandlers(
             // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
             // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
             restoreDisableOverrides =
-              deps.stageClearProviderDisableOverrides?.(providerId) ?? null;
+              deps.stageClearProviderDisableOverrides?.(runtimeProviderId) ?? null;
             restorePriceOverrides =
-              deps.stageClearProviderModelPriceOverrides?.(providerId) ?? null;
+              deps.stageClearProviderModelPriceOverrides?.(runtimeProviderId) ?? null;
             assertProviderMutationOwner(ownerAtIngress);
             restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
             if (!restoreOAuthCredentials) {

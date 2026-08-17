@@ -99,6 +99,7 @@ import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palett
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
+import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import {
@@ -117,10 +118,14 @@ import {
 } from './capability-routing.js';
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
+  annotatePermissionRequestForUnavailableReview,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
+  createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
+  isAutoReviewUnavailableMetadata,
+  isSystemPermissionDenialReason,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -155,6 +160,16 @@ import type {
 } from '../../types/memory.js';
 import type { McpProviderContext } from '../../interfaces/mcp-provider.js';
 import { scanClaudeCustomizations } from './customization-scanner.js';
+import {
+  REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS,
+  isReviewSensitiveCredentialSelector,
+} from '../shared/sensitive-credential-paths.js';
+import {
+  assertReviewMessageContentPaths,
+  buildReviewReadGrants,
+  resolveReviewReadPath,
+  type ReviewReadGrant,
+} from '../shared/review-read-scope.js';
 
 type ClaudeSdkEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -222,18 +237,28 @@ function legacyToSdkModelString(model: string): string {
   return model;
 }
 
-/**
- * ToolLoopGuard 必须基于 maker-core 对外暴露的 model id 判断。
- * SDK 字符串会被 toSdkModelString 改写(例如 Sonnet 5 变成 claude-sonnet-5[1m]),
- * 容易把 provider 细节和公开模型选择混在一起; host 注入的 DeepSeek id
- * 当前为 deepseek/deepseek-v4-pro 与 deepseek/deepseek-v4-flash。
- */
-function isDeepSeekModel(model: string): boolean {
-  return model.startsWith('deepseek/');
-}
-
 function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
+}
+
+/**
+ * 结果感知的硬中断目前覆盖 DeepSeek、原生 Claude 与 xai Grok 系列
+ * (Grok 为 2026-08 维护者确认新增:单 turn 在 4 个不同 Grep 里轮转上千次调用的实锤)。
+ * 其他 provider-routed 模型需要独立确认产品口径,不能因共用 Claude Code harness
+ * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…、xai/…);
+ * sidechain 的判断来自 SDK 流内的原始 id(可能是裸 deepseek-… / grok-… 形态,
+ * 同 toSdkModelString 的双形态),因此按家族前缀匹配,不带 [1m] 的 SDK 改写。
+ * grok 家族按 model-providers classification 口径同时认三种形态:xai/(订阅直连)、
+ * x-ai/(网关命名空间,toSdkModelString 原样透传)与裸 grok-(sidechain 原始 id)。
+ */
+function shouldUseToolLoopGuard(model: string): boolean {
+  return (
+    model.startsWith('deepseek')
+    || model.startsWith('claude-')
+    || model.startsWith('xai/')
+    || model.startsWith('x-ai/')
+    || model.startsWith('grok-')
+  );
 }
 
 /** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
@@ -269,6 +294,63 @@ const READ_ONLY_CLAUDE_TOOLS: ReadonlySet<string> = new Set([
 /** canUseTool fail-closed 分支用: 判断工具是否属于已知只读工具(见上方白名单注释)。 */
 function isReadOnlyClaudeTool(toolName: string): boolean {
   return READ_ONLY_CLAUDE_TOOLS.has(toolName);
+}
+
+function reviewGlobPatternEscapesScope(pattern: string): boolean {
+  const value = pattern.trim();
+  if (!value) return false;
+  if (path.isAbsolute(value) || path.win32.isAbsolute(value)) return true;
+  // Backslash escapes and character classes can spell a parent segment without
+  // a literal "..". Reject those ambiguous forms, then inspect brace/extglob
+  // branches for rooted paths while keeping common {ts,tsx} patterns usable.
+  if (/[\\[\]]/.test(value) || value.includes('..')) return true;
+  return /(^|[{(,|])(?:\/|[a-zA-Z]:\/)/.test(value);
+}
+
+function reviewFileSelectorIsAllowed(selector: unknown): selector is string {
+  return (
+    typeof selector === 'string' &&
+    !reviewGlobPatternEscapesScope(selector) &&
+    !isReviewSensitiveCredentialSelector(selector)
+  );
+}
+
+async function resolveReviewReadToolInput(params: {
+  toolName: string;
+  toolInput: Record<string, unknown> | undefined;
+  workingDir: string;
+  grants: readonly ReviewReadGrant[];
+}): Promise<Record<string, unknown> | null> {
+  if (params.toolName === 'Glob') {
+    if (!reviewFileSelectorIsAllowed(params.toolInput?.pattern)) return null;
+  }
+  if (
+    params.toolName === 'Grep' &&
+    params.toolInput?.glob !== undefined &&
+    !reviewFileSelectorIsAllowed(params.toolInput.glob)
+  ) {
+    return null;
+  }
+  const keyByTool: Partial<Record<string, string>> = {
+    Read: 'file_path',
+    Glob: 'path',
+    Grep: 'path',
+    LS: 'path',
+    NotebookRead: 'notebook_path',
+  };
+  const key = keyByTool[params.toolName];
+  if (!key) return null;
+  const raw = params.toolInput?.[key];
+  const candidate =
+    typeof raw === 'string' && raw.trim()
+      ? path.resolve(params.workingDir, raw)
+      : params.workingDir;
+  const resolved = await resolveReviewReadPath(candidate, params.workingDir, params.grants);
+  if (!resolved) return null;
+  // The permission decision and the SDK tool execution must address the same
+  // filesystem object. In particular, never hand a validated symlink back to
+  // Read/Glob/Grep: it could be retargeted after this hook returns.
+  return { ...(params.toolInput ?? {}), [key]: resolved };
 }
 
 /**
@@ -336,19 +418,102 @@ function hasMentionText(existingText: string, block: { path: string; kind?: 'fil
   return existingText.includes(rawMentionText(block)) || existingText.includes(quotedMentionText(block));
 }
 
+type ClaudeImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
+type ClaudeSdkContentBlock =
+  | {
+      type: 'image';
+      source: {
+        type: 'base64';
+        media_type: ClaudeImageMediaType;
+        data: string;
+      };
+    }
+  | { type: 'text'; text: string };
+
+interface ClaudeInputImageResizer {
+  process(absPath: string): Promise<string>;
+  validateBuffer(data: Buffer): Promise<boolean>;
+}
+
+const CLAUDE_INLINE_IMAGE_MAX_ENCODED_BYTES = 5 * 1024 * 1024;
+
+function base64EncodedByteLength(rawByteLength: number): number {
+  return Math.ceil(rawByteLength / 3) * 4;
+}
+
+function detectClaudeImageMediaType(data: Buffer): ClaudeImageMediaType | null {
+  if (
+    data.length >= 8
+    && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return 'image/png';
+  }
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (data.length >= 6) {
+    const signature = data.toString('ascii', 0, 6);
+    if (signature === 'GIF87a' || signature === 'GIF89a') return 'image/gif';
+  }
+  if (
+    data.length >= 12
+    && data.toString('ascii', 0, 4) === 'RIFF'
+    && data.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
+async function toClaudeImageBlock(
+  imagePath: string,
+  validateBuffer: (data: Buffer) => Promise<boolean>,
+): Promise<ClaudeSdkContentBlock | null> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(imagePath, 'r');
+    const stat = await handle.stat();
+    if (
+      !stat.isFile()
+      || stat.size <= 0
+      || base64EncodedByteLength(stat.size) > CLAUDE_INLINE_IMAGE_MAX_ENCODED_BYTES
+    ) {
+      return null;
+    }
+    const data = await handle.readFile();
+    if (
+      data.length === 0
+      || base64EncodedByteLength(data.length) > CLAUDE_INLINE_IMAGE_MAX_ENCODED_BYTES
+    ) return null;
+    const mediaType = detectClaudeImageMediaType(data);
+    if (!mediaType) return null;
+    if (!(await validateBuffer(data))) return null;
+    const encodedData = data.toString('base64');
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mediaType,
+        data: encodedData,
+      },
+    };
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 /**
  * 把 maker-core 的 UserMessage content 装配成 Claude SDK 接受的形式。
- *
- * Async 而非 sync —— image block 的 absPath 会先经过 image-resizer 透明替换为
- * 缩好的缓存副本路径(命中走缓存近乎 0ms, miss 后台 sharp 处理 ~200-500ms),
- * 再以 @"resizedAbsPath" 形态注入到 prefix。Claude SDK 后续读 mention 引用的
- * 就是缩好的文件, 显著节省 vision token。
- *
- * 失败 (sharp 不可用 / 文件不存在 / GIF / 超时) 安全降级回原 path, 不阻塞 send。
+ * 图片按需压缩后统一发送为原生 image block；无法安全内联时回退为原有路径引用。
  */
 export async function toClaudeSdkContent(
   content: UserMessage['content'],
-): Promise<string | Array<{ type: string; [k: string]: unknown }>> {
+  imageResizer: ClaudeInputImageResizer = getDefaultImageResizer(),
+  readImagePathsLocally = true,
+): Promise<string | ClaudeSdkContentBlock[]> {
   if (typeof content === 'string') return content;
 
   const textParts = content
@@ -357,18 +522,32 @@ export async function toClaudeSdkContent(
   const existingText = textParts.join('\n');
   const refs: string[] = [];
 
-  // 先把所有 image block 的 path 收集出来批量 resize (并发由 resizer 内部 semaphore 控)。
-  // 同 turn 多张图能并发处理, 不需要在这里串行 await。
-  const resizer = getDefaultImageResizer();
-  const imagePathPromises = new Map<number, Promise<string>>();
+  const imageBlockPromises = new Map<
+    number,
+    Promise<{ block: ClaudeSdkContentBlock | null; finalPath: string }>
+  >();
   content.forEach((block, idx) => {
-    if (block.type === 'image') {
-      imagePathPromises.set(idx, resizer.process(block.path));
+    if (block.type === 'image' && readImagePathsLocally) {
+      imageBlockPromises.set(
+        idx,
+        imageResizer.process(block.path).then(async (finalPath) => {
+          return {
+            block: await toClaudeImageBlock(
+              finalPath,
+              (data) => imageResizer.validateBuffer(data),
+            ),
+            finalPath,
+          };
+        }),
+      );
     }
   });
-  const resizedPaths = new Map<number, string>();
-  for (const [idx, p] of imagePathPromises) {
-    resizedPaths.set(idx, await p);
+  const resolvedImages = new Map<
+    number,
+    { block: ClaudeSdkContentBlock | null; finalPath: string }
+  >();
+  for (const [idx, promise] of imageBlockPromises) {
+    resolvedImages.set(idx, await promise);
   }
 
   content.forEach((block, idx) => {
@@ -377,7 +556,9 @@ export async function toClaudeSdkContent(
     if (block.type === 'mention') {
       mentionBlock = { path: block.path, kind: block.kind };
     } else if (block.type === 'image') {
-      mentionBlock = { path: resizedPaths.get(idx) ?? block.path, kind: 'file' as const };
+      const resolvedImage = resolvedImages.get(idx);
+      if (resolvedImage?.block) return;
+      mentionBlock = { path: resolvedImage?.finalPath ?? block.path, kind: 'file' as const };
     } else {
       mentionBlock = { path: block.path, kind: 'file' as const };
     }
@@ -387,8 +568,14 @@ export async function toClaudeSdkContent(
   });
 
   const prefix = refs.length > 0 ? `${refs.join(' ')} ` : '';
-  const text = `${prefix}${textParts.join('\n')}`.trim();
-  return text || prefix.trim();
+  const managedImageReferences = formatManagedImageReferences(content);
+  const textBody = managedImageReferences
+    ? [...textParts, managedImageReferences].join('\n')
+    : textParts.join('\n');
+  const text = `${prefix}${textBody}`.trim();
+  const imageBlocks = [...resolvedImages.values()].flatMap(({ block }) => (block ? [block] : []));
+  if (imageBlocks.length === 0) return text || prefix.trim();
+  return text ? [...imageBlocks, { type: 'text', text }] : imageBlocks;
 }
 
 function userMessageTextForCapabilityRouting(content: UserMessage['content']): string {
@@ -830,6 +1017,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
+    const reviewMode = opts.reviewMode === true;
+    if (reviewMode && opts.remoteHostId) {
+      throw new Error('Cindy Review currently supports local Claude Code sessions only');
+    }
+    const reviewReadGrants = reviewMode
+      ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? [])
+      : [];
     // 开 debug 时让每个 session 的 cc 子进程写到各自 session 目录的 raw 文件 (host 注入
     // resolveCcDebugFile 拼路径 + mkdir); 没注入则回退全局 XDT_CC_DEBUG_FILE。
     const ccDebugFile = process.env.XDT_CC_DEBUG_NET === '1'
@@ -1003,7 +1197,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
     }
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;
-    const ghostRosterPrompt = opts.remoteHostId
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode
       ? ''
       : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
 
@@ -1052,8 +1246,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。
-    const makerMemoryFlag =
-      opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
+    const makerMemoryFlag = reviewMode
+      ? false
+      : opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
     // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
@@ -1081,12 +1276,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
     }
 
-    const mcpProviders = this.deps.mcpProviders ?? [];
+    const mcpProviders = reviewMode ? [] : this.deps.mcpProviders ?? [];
     // host-owned 只读白名单在 session 启动时快照; 与 hooks / MCP 注册同样保持整条
     // 会话稳定, 避免中途改数组导致 CLI 权限规则与 prompt cache 前缀漂移。
-    const claudeAllowedTools = this.deps.claudeAllowedTools?.length
-      ? [...this.deps.claudeAllowedTools]
-      : undefined;
+    const claudeAllowedTools = reviewMode
+      ? [...READ_ONLY_CLAUDE_TOOLS]
+      : this.deps.claudeAllowedTools?.length
+        ? [...this.deps.claudeAllowedTools]
+        : undefined;
     /**
      * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
      * canUseTool 用它把 `mcp__<server>__<tool>` 归属到唯一 server; 空集合时
@@ -1226,7 +1423,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // checkpoint snapshot 的 messageId (cli.js:7086382), rewind preview 反查同款 uuid。
     type SdkUserInput = {
       type: 'user';
-      message: { role: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
+      message: { role: 'user'; content: string | ClaudeSdkContentBlock[] };
       parent_tool_use_id: null;
       uuid?: string;
     };
@@ -1289,30 +1486,64 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       return { continue: true };
     };
-    const localClaudeHooks = mergeClaudeHookSets(
-      buildClaudeLocalToolGuardHooks(
-        this.deps.capabilityRouting,
-        () => activeCapabilitySelectionText,
-        (toolName, route) => {
-          log.warn('downstream MCP source denied by host PreToolUse route', {
-            toolName,
-            capabilityId: route.capabilityId,
-            replacement: route.replacement?.id,
-          });
+    const reviewReadOnlyHook: HookCallback = async (input) => {
+      if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+      const pre = input as PreToolUseHookInput;
+      const toolName = pre.tool_name;
+      const updatedInput = isReadOnlyClaudeTool(toolName)
+        ? await resolveReviewReadToolInput({
+          toolName,
+          toolInput: pre.tool_input as Record<string, unknown> | undefined,
+          workingDir: opts.workingDir,
+          grants: reviewReadGrants,
+        })
+        : null;
+      if (updatedInput) {
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            updatedInput,
+          },
+        };
+      }
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            'Cindy Review only permits read-only access to this task and its explicit artifacts.',
         },
-        () => nonHarnessMcpServerNames,
-      ),
-      {
-        PreToolUse: [{ hooks: [turnChangeCaptureHook] }],
-        PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
-        PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
-      },
-      // Keep the existing local routing/capture hooks first: callers and tests
-      // rely on their observable order. The exact-match Orca provenance guard
-      // still runs for send_to_lead after those hooks and denies descendants.
-      buildClaudeOrcaCallerProvenanceHooks(),
-      this.deps.claudeHooks,
-    );
+      };
+    };
+    const localClaudeHooks = reviewMode
+      ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
+      : mergeClaudeHookSets(
+          buildClaudeLocalToolGuardHooks(
+            this.deps.capabilityRouting,
+            () => activeCapabilitySelectionText,
+            (toolName, route) => {
+              log.warn('downstream MCP source denied by host PreToolUse route', {
+                toolName,
+                capabilityId: route.capabilityId,
+                replacement: route.replacement?.id,
+              });
+            },
+            () => nonHarnessMcpServerNames,
+          ),
+          {
+            PreToolUse: [{ hooks: [turnChangeCaptureHook] }],
+            PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
+            PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
+          },
+          // Keep the existing local routing/capture hooks first: callers and tests
+          // rely on their observable order. The exact-match Orca provenance guard
+          // still runs for send_to_lead after those hooks and denies descendants.
+          buildClaudeOrcaCallerProvenanceHooks(),
+          this.deps.claudeHooks,
+        );
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
         this.deps.capabilityRouting,
@@ -1356,6 +1587,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       settled: boolean;
       /** prompt-each-time 高风险审批: 切到宽松模式时也不接受 dismissAllPending('allow')。 */
       forcePrompt?: boolean;
+      /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
+      unavailableHandoff?: boolean;
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
@@ -1383,6 +1616,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           resolve,
           settled: false,
           ...(opts?.forcePrompt ? { forcePrompt: true } : {}),
+          ...(req.kind === 'permission' && isAutoReviewUnavailableMetadata(req.metadata)
+            ? { unavailableHandoff: true }
+            : {}),
         };
         pendingInteractions.set(req.requestId, entry);
         const finalize = (d: InteractionDecision) => {
@@ -1420,6 +1656,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         const decision = effectiveResolveAs === 'allow' && entry.kind !== 'ask_user_question'
           ? ({ kind: entry.kind, behavior: 'allow' } as InteractionDecision)
           : safeDefaultDecision(entry.kind, reason);
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+          autoReviewConfirmUndeliveredNotice.notify();
+        }
         entry.settled = true;
         pendingInteractions.delete(requestId);
         entry.resolve(decision);
@@ -1435,6 +1674,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     function dismissSinglePending(requestId: string, reason: string): void {
       const entry = pendingInteractions.get(requestId);
       if (!entry || entry.settled) return;
+      if (entry.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
       entry.settled = true;
       pendingInteractions.delete(requestId);
       entry.resolve(safeDefaultDecision(entry.kind, reason));
@@ -1507,6 +1747,29 @@ export class ClaudeCodeAgent extends BaseAgent {
         });
       }
       return 'prompt-each-time';
+    };
+
+    const mcpApprovalPresentation = (
+      toolName: string,
+      input: unknown,
+    ) => {
+      const presenter = this.deps.getMcpToolApprovalPresentation;
+      if (!presenter) return undefined;
+      const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      if (!target) return undefined;
+      try {
+        return presenter({
+          serverName: target.serverName,
+          toolName: target.toolName,
+          toolParams: input,
+        });
+      } catch (error) {
+        log.error('MCP approval presentation threw -> vendor copy', {
+          serverName: target.serverName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      }
     };
 
     // canUseTool dispatcher —— 三路分支(参考 agentManager.ts:1054-1162):
@@ -1657,7 +1920,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
       const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
+      const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = turnPolicyForcePrompt;
+      let unavailableHandoff = false;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
@@ -1682,15 +1947,20 @@ export class ClaudeCodeAgent extends BaseAgent {
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
           return { behavior: 'allow', updatedInput: input };
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
-          // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,用户有权知道并接管,
-          // 后者按 Auto 本意保持静默(只把 reason 喂给模型)。动作两种都仍然 deny。
-          if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+          // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默,只把 reason 喂给模型。
+          // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这条分支。)
           return {
             behavior: 'deny',
             message: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
           };
         } else {
           // AI `ask` and deterministic red-line verdicts are never persisted.
+          // 审阅器故障降级来的 ask 额外发一条会话级提示:用户需要知道自己为什么
+          // 突然开始被问,否则 Auto 档看起来像坏了。
+          if (autoDecision.unavailable) {
+            autoReviewUnavailableNotice.notify();
+            unavailableHandoff = true;
+          }
           forcePrompt = true;
         }
       } else {
@@ -1699,14 +1969,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         forcePrompt = forcePrompt || mcpApprovalPolicy === 'prompt-each-time';
       }
-      const decision = await dispatchInteraction({
-        kind: 'permission',
+      const permissionRequest = {
+        kind: 'permission' as const,
         requestId: options.toolUseID,
         toolName,
         input: input as Record<string, unknown>,
-        title: options.title,
+        title: hostApprovalPresentation?.title ?? options.title,
         displayName: options.displayName,
-        description: options.description,
+        description: hostApprovalPresentation?.description ?? options.description,
         // prompt-each-time 的语义是"每次都要人过目", 因此不把会话级 suggestion 交给
         // UI —— 否则用户点一次"总是允许"就把逐次确认的高风险 action 永久放行了。
         suggestions: forcePrompt
@@ -1717,7 +1987,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),
           ...(options.agentID ? { agentID: options.agentID } : {}),
         },
-      }, { forcePrompt });
+      };
+      const decision = await dispatchInteraction(
+        unavailableHandoff
+          ? annotatePermissionRequestForUnavailableReview(permissionRequest)
+          : permissionRequest,
+        { forcePrompt },
+      );
+      notifyIfAutoReviewConfirmUndelivered(unavailableHandoff, decision);
       if (decision.kind !== 'permission') {
         log.warn('permission got mismatched decision', { tool: toolName, decKind: decision.kind });
         return { behavior: 'deny', message: 'resolver kind mismatch' };
@@ -1759,37 +2036,66 @@ export class ClaudeCodeAgent extends BaseAgent {
       : {};
     const showThinkingSummaries = opts.displayReasoning === 'summarized';
 
+    // Claude Code 把 availableModels 当成组织白名单。目录 + 当前/目标模型都走同一
+    // 个 catalog-id → wire-string 映射,启动与热切共用,后加载的网关模型(如
+    // x-ai/grok-4.6)也能进名单。
+    const currentAvailableSdkModels = (selectedModel: string): string[] => [
+      ...new Set([
+        ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
+        sdkModelFor(selectedModel),
+      ]),
+    ];
+    const resolveModelContextWindow = (model: string): number | undefined => {
+      // 核实窗口按会话实际来源取。host 注入了 resolver 时,null = 不要收敛
+      // (同 id 多来源 / 未核实兜底),采信 SDK 上报,不能再拿扁平目录首见值覆盖。
+      // 只有未注入 resolver 的路径(测试 / 无 host)才退回扁平目录。
+      const resolveVerified = this.deps.resolveVerifiedContextWindow;
+      if (resolveVerified) {
+        const verified = resolveVerified(mutableProviderId, model);
+        return typeof verified === 'number' && verified > 0 ? verified : undefined;
+      }
+      const descriptor = this.capabilities.availableModels.find((item) => item.id === model);
+      return descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
+        ? descriptor.contextWindow
+        : undefined;
+    };
+
     // SDK settings 对象 (优先级最高, 覆盖 user/project/local 文件层) — 本地分支
     // 和远端分支必须**保持一致** , 否则同 session setting 跨本地 / 远端表现不同
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
     // mutableFastMode 读最新值 (setMemory / setFastMode 运行时改) 而不是 buildQuery
     // 时快照。装配逻辑(含 apiKeyHelper 恒置空的鉴权防线)在 flag-settings.ts。
-    const buildSettings = (): Settings =>
-      buildClaudeFlagSettings({
+    const buildSettings = (): Settings => {
+      const settings = buildClaudeFlagSettings({
         showThinkingSummaries,
-        // availableModels is the SDK's highest-priority allowlist. Convert the
-        // whole current catalog and the selected model through the one
-        // catalog-id → wire-string mapper so startup and live switches share
-        // the same [1m] and legacy conversion rules. Keep the selected model
-        // even when it is temporarily outside the catalog.
-        availableModels: [
-          ...new Set([
-            ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
-            sdkModelFor(mutableModel),
-          ]),
-        ],
+        availableModels: currentAvailableSdkModels(mutableModel),
         // Do not carry the local manager's native-memory suppression across the
         // SSH boundary: the remote host retains its own Claude memory
         // configuration. Maker Memory on remote sessions is injected via the
         // host bridge (prompt + http MCP), which coexists with — but does not
         // rewrite — the remote machine's native memory settings.
-        memoryOverride: opts.remoteHostId ? undefined : this.memoryOverride,
+        memoryOverride: reviewMode ? false : opts.remoteHostId ? undefined : this.memoryOverride,
         // Fast 模式:进 flag settings 层(= --settings),解锁 cc 二进制在 Agent SDK 通道下的
         // fast(否则二进制按 "Agent SDK 不可用" 拒绝)。是否 Opus/官方/firstParty 由二进制把关,
         // agent 层不重复硬判(规则 9:确定性逻辑就近,但 fast 的最终门槛是二进制 + 配置门控)。
         fastMode: mutableFastMode,
-        capabilityRouting: this.deps.capabilityRouting,
+        capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
       });
+      if (!reviewMode) return settings;
+      return {
+        ...settings,
+        permissions: {
+          ...(settings.permissions ?? {}),
+          // Claude's built-in Grep/Glob implementation translates Read deny
+          // rules into trailing negative rg globs. Keep this execution-layer
+          // filter in addition to the PreToolUse path/scope gate: a granted
+          // directory with no explicit glob must not expose credential files.
+          deny: REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.map(
+            (pattern) => `Read(${pattern})`,
+          ),
+        },
+      };
+    };
 
     // file checkpointing 与 capability 强绑定 —— 声明 rewind 能力时必须开此开关,
     // 否则 SDK rewindFiles() 报 "no checkpoint"。
@@ -1829,16 +2135,33 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574)。走既有的非终止 error 事件 +
     // `[CODE]` 约定,不新增事件类型;逐条提示会把 Auto 退化成比 Ask 更烦的东西,所以去重。
-    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+    const emitAutoReviewRuntimeNotice = (message: string): void => {
       eventQueue.push({
         type: 'error',
         data: { message, isTerminal: false },
         source: 'claude-code',
       });
-    });
+    };
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
+    const autoReviewConfirmUndeliveredNotice =
+      createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
+    const notifyIfAutoReviewConfirmUndelivered = (
+      unavailableHandoff: boolean,
+      decision: InteractionDecision,
+    ): void => {
+      if (!unavailableHandoff) return;
+      if (decision.kind !== 'permission') {
+        autoReviewConfirmUndeliveredNotice.notify();
+        return;
+      }
+      if (decision.behavior === 'deny' && isSystemPermissionDenialReason(decision.reason)) {
+        autoReviewConfirmUndeliveredNotice.notify();
+      }
+    };
     const reviewAutoAction = (
       action: ReviewableAction,
       workspaceRoots: string[],
@@ -1864,16 +2187,45 @@ export class ClaudeCodeAgent extends BaseAgent {
       autoReviewDecisionCache.set(key, pending);
       return pending;
     };
-    let toolLoopGuard: ToolLoopGuard | null = isDeepSeekModel(mutableModel)
-      ? new ToolLoopGuard()
-      : null;
+    // guard 桶常驻(每 turn 清空):适用性不再是会话级一票制,而是每个 scope 单独判。
+    const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
+    /**
+     * guard 适用性判定用的模型:sidechain 用该 subagent 的实际模型
+     * (Agent 异步回执的 resolvedModel 优先,其次 sidechain 流内消息的 model),
+     * 两者都未知时回落会话模型(维持旧行为);顶层恒用会话模型。
+     * 否则 claude 会话下的 provider-routed subagent 会被越权硬中断,
+     * provider-routed 会话下的 claude subagent 反而失去保护(PR #2779 review 指出)。
+     * runtimeState 声明在后,仅在 forward loop 回调期调用,无 TDZ 风险。
+     */
+    const toolLoopGuardModelForScope = (parentToolUseId?: string): string => {
+      if (parentToolUseId) {
+        const sidechainModel =
+          runtimeState.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
+          ?? runtimeState.streamModelByParentToolUseId.get(parentToolUseId);
+        if (sidechainModel) return sidechainModel;
+      }
+      return mutableModel;
+    };
+    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard | null => {
+      if (!shouldUseToolLoopGuard(toolLoopGuardModelForScope(parentToolUseId))) return null;
+      const scopeKey = parentToolUseId ?? null;
+      let guard = toolLoopGuards.get(scopeKey);
+      if (!guard) {
+        guard = new ToolLoopGuard();
+        toolLoopGuards.set(scopeKey, guard);
+      }
+      return guard;
+    };
+    const resetToolLoopGuards = (): void => {
+      toolLoopGuards.clear();
+    };
     let mutableEffort: Effort = opts.effort ?? 'high';
-    let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'default';
+    let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'default';
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮 plan turn 由 planTurnActive 承载(SDK 保持 plan 档): ExitPlanMode 批准
     // 提前切回底层档, 否则(取消 / 模型没提交计划)在 turn 结束时收尾。
-    let mutablePlanMode = opts.planMode === true;
+    let mutablePlanMode = !reviewMode && opts.planMode === true;
     let planTurnActive = false;
     // SDK 当前是否处于 plan 档(跟踪我们最后一次 push / buildQuery 的档位)。
     // setPlanMode 在 turn 流式中递延 push(避免改写 in-flight turn 的工具权限),
@@ -1914,16 +2266,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖, buildQuery
     // 每 turn 读最新值传给 SDK options.additionalDirectories — 即时生效。
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
-    const modelContextWindows = new Map(
-      this.capabilities.availableModels.map((model) => [model.id, model.contextWindow] as const),
-    );
 
     // ── Usage tracker (Stage 2 B') ──────────────────────────────────────────
     // 单 session 共享的 mutable usage state. translator 通过 ctx 注入访问.
     // handle.getUsageSnapshot 也读它, 形成"SDK 原始 usage → tracker → status event / handle snapshot"
-    // 单一可信源.
+    // 单一可信源. 窗口跟白名单同一份实时目录,不冻启动快照。
     const usageTracker = new UsageTracker();
-    usageTracker.setContextWindow(modelContextWindows.get(mutableModel) ?? 0);
+    usageTracker.setContextWindow(resolveModelContextWindow(mutableModel) ?? 0);
 
     // ── 跨 turn 共享状态 ───────────────────────────────────────────────────
     let configuredResumeSessionId: string | undefined = opts.resumeSessionId;
@@ -1972,6 +2321,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.sawCompactBoundary = false;
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
+      runtimeState.streamStopTokenByKey.clear();
       turnState.pendingApiError = null;
       turnState.lastAssistantRequestId = undefined;
       turnState.lastAssistantMsgHadSubstance = true;
@@ -2239,7 +2589,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkSessionId,
       });
       beginNewTurn();
-      toolLoopGuard?.resetTurn();
+      resetToolLoopGuards();
       turnInFlight = true;
       inputQueue.push({
         type: 'user',
@@ -2476,7 +2826,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               ghostRosterPrompt,
               hostSystemPrompt,
               makerMemoryIndex,
-              opts.userPrompt,
+              reviewMode ? undefined : opts.userPrompt,
             ]
               .filter((s): s is string => !!s && s.trim().length > 0)
               .join('\n\n');
@@ -2513,7 +2863,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 上的 ~/.claude / 项目 .claude / cwd-local 三层 settings 文件 (slash
             // commands / output styles / hooks / per-project model 等)。不透传
             // SDK 默认不读, 远端会丢用户配置, 跟本地行为分歧。
-            settingSources: ['user', 'project', 'local'],
+            settingSources: reviewMode ? [] : ['user', 'project', 'local'],
           },
         };
 
@@ -2676,7 +3026,12 @@ export class ClaudeCodeAgent extends BaseAgent {
               params.input ?? {},
             );
             const remoteMcpPolicy = classifyMcpApprovalPolicy(remoteToolName, params.input ?? {});
+            const remoteHostApprovalPresentation = mcpApprovalPresentation(
+              remoteToolName,
+              params.input ?? {},
+            );
             let remoteForcePrompt = remoteTurnPolicyForcePrompt;
+            let remoteUnavailableHandoff = false;
             if (
               mutablePermissionMode === 'auto'
               && remoteToolName
@@ -2693,13 +3048,17 @@ export class ClaudeCodeAgent extends BaseAgent {
                 return { kind: 'permission', behavior: 'allow' };
               }
               if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
-                // 与本地分支同口径:审阅器故障要提示一次,模型判定保持静默。
-                if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+                // 与本地分支同口径:模型判定保持静默(审阅器故障已降级成 ask)。
                 return {
                   kind: 'permission',
                   behavior: 'deny',
                   reason: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
                 };
+              }
+              // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
+              if (autoDecision.unavailable) {
+                autoReviewUnavailableNotice.notify();
+                remoteUnavailableHandoff = true;
               }
               remoteForcePrompt = true;
             } else {
@@ -2708,19 +3067,32 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';
             }
-            const decision = await dispatchWithTimeout({
-              kind: 'permission',
+            const remotePermissionRequest = {
+              kind: 'permission' as const,
               requestId: params.requestId,
               toolName: params.toolName ?? 'unknown',
               input: params.input ?? {},
-              title: params.title,
+              title: remoteHostApprovalPresentation?.title ?? params.title,
               displayName: params.displayName,
-              description: params.description,
+              description: remoteHostApprovalPresentation?.description ?? params.description,
               suggestions: remoteForcePrompt
                 ? undefined
                 : this.normalizeSessionPermissionSuggestions(params.suggestions),
               metadata: params.metadata ?? {},
-            }, { forcePrompt: remoteForcePrompt });
+            };
+            let decision: InteractionDecision;
+            try {
+              decision = await dispatchWithTimeout(
+                remoteUnavailableHandoff
+                  ? annotatePermissionRequestForUnavailableReview(remotePermissionRequest)
+                  : remotePermissionRequest,
+                { forcePrompt: remoteForcePrompt },
+              );
+            } catch {
+              if (remoteUnavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
+              return { kind: 'permission', behavior: 'deny', reason: 'approval_timeout' };
+            }
+            notifyIfAutoReviewConfirmUndelivered(remoteUnavailableHandoff, decision);
             if (decision.kind !== 'permission') {
               return { kind: 'permission', behavior: 'deny', reason: 'resolver kind mismatch' };
             }
@@ -2920,7 +3292,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               ghostRosterPrompt,
               hostSystemPrompt,
               makerMemoryIndex,
-              opts.userPrompt,
+              reviewMode ? undefined : opts.userPrompt,
             ]
               .filter((s): s is string => !!s && s.trim().length > 0)
               .join('\n\n');
@@ -2973,14 +3345,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           // permissionMode=auto 时再调用远程安全分类器。动态聚合入口不在列表中。
           ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
           canUseTool,
-          settingSources: ['user', 'project', 'local'],
+          settingSources: reviewMode ? [] : ['user', 'project', 'local'],
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
           //    BaseAgent.setMemory 控制; this.memoryOverride === undefined 时不传, 让 SDK 走默认)
           // **同一对象远端分支也透传 (extraOptions.settings)**, 别在两边漂移。
           settings: buildSettings(),
-          allowDangerouslySkipPermissions: true,
+          allowDangerouslySkipPermissions: !reviewMode,
           stderr: vo.onStderrLine as ((line: string) => void) | undefined,
           // SDK debug 等同 --debug CLI flag, 让 cc 子进程吐 verbose 日志。
           // - debug: true 触发 verbose 模式
@@ -3882,7 +4254,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 消息"(assistant / stream_event)为证据补登记；若 provider 已给上一
             // done 锁存 continuation claim，result-only 也能证明自动续 turn 已开始。
             // 随后镜像 send 入口的
-            // per-turn 状态重置(beginNewTurn + toolLoopGuard.resetTurn),否则 guard
+            // per-turn 状态重置(beginNewTurn + resetToolLoopGuards),否则 guard
             // 会带着上一轮的陈旧计数误判。
             // 排除两种非新 turn 场景:
             //  - interruptRequested:watchdog / tool-loop 已 q.interrupt(),SDK 残留
@@ -3925,7 +4297,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 sdkSessionId,
               });
               beginNewTurn();
-              toolLoopGuard?.resetTurn();
+              resetToolLoopGuards();
               turnInFlight = true;
             }
             noteUpstreamResponseActivity(typeof rawType === 'string' ? rawType : 'unknown');
@@ -3939,7 +4311,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               turn: turnState,
               log,
               getModel: () => mutableModel,
-              getModelContextWindow: () => modelContextWindows.get(mutableModel),
+              getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
               getSdkSessionId: () => sdkSessionId,
@@ -3965,19 +4337,26 @@ export class ClaudeCodeAgent extends BaseAgent {
                 }
                 completeTranslatedTurnEnd();
               },
-              onToolUseStart: (id: string, toolName?: unknown, input?: unknown) => {
+              onToolUseStart: (
+                id: string,
+                toolName?: unknown,
+                input?: unknown,
+                parentToolUseId?: string,
+              ) => {
                 pendingToolIds.add(id);
-                toolLoopGuard?.onToolUse(id, toolName, input);
+                getToolLoopGuard(parentToolUseId)?.onToolUse(id, toolName, input);
                 clearUpstreamResponseIdle();
               },
-              onToolResultDone: (id: string, output: string) => {
+              onToolResultDone: (id: string, output: string, parentToolUseId?: string) => {
                 pendingToolIds.delete(id);
                 if (turnInFlight) {
-                  const verdict = toolLoopGuard?.onToolResult(id, output);
+                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(id, output);
                   if (verdict?.kind === 'hard') {
                     const loopHint = verdict.reason === 'consecutive'
                       ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
                       : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
+                    // 报错归属:sidechain 命中时报 subagent 实际模型,不冤枉会话模型。
+                    const loopModel = toolLoopGuardModelForScope(parentToolUseId);
                     // 与 upstream-idle watchdog 同款兜底: tool-loop 中断 = "整个 turn 序列已死",
                     // bridge counter 归零避免 filter 吞掉本条 error / counter 永久停在 >0。
                     // 实践上 bridge /compact turn 不用 tool, 该分支难以触发, 归零是防御性一致。
@@ -3998,14 +4377,14 @@ export class ClaudeCodeAgent extends BaseAgent {
                       type: 'error',
                       data: {
                         message:
-                          `上游模型 ${mutableModel} ${loopHint},疑似陷入死循环,` +
+                          `上游模型 ${loopModel} ${loopHint},疑似陷入死循环,` +
                           `已自动中断当前 turn。可以直接发下一条消息继续,` +
                           `已完成的 tool result 都保留。`,
                         isTerminal: true,
                         reason: 'tool_use_loop_detected',
                         loopKind: verdict.reason,
                         loopCount: verdict.count,
-                        model: mutableModel,
+                        model: loopModel,
                       },
                       source: 'claude-code',
                     });
@@ -4339,7 +4718,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 全新 query + startForwardLoop 等价于 startSession 首次起 q 的空闲态。
       if (replayInput) {
         beginNewTurn();
-        toolLoopGuard?.resetTurn();
+        resetToolLoopGuards();
         turnInFlight = true;
       }
       try {
@@ -4449,6 +4828,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           replayed = true;
           const targetModel = mutableModel;
           try {
+            // 与 live setModel 同序:先扩白名单再切。buildQuery await 期间切到的
+            // 目录外模型,新 Query 的启动名单还是旧快照,直接 setModel 会撞组织限制。
+            await q.applyFlagSettings({
+              availableModels: currentAvailableSdkModels(targetModel),
+            });
             await q.setModel(sdkModelFor(targetModel));
             snapshot.model = targetModel;
             log.debug(`${label}: replayed setModel`, { model: targetModel });
@@ -4590,6 +4974,27 @@ export class ClaudeCodeAgent extends BaseAgent {
         releaseCancellationRebuildGate?.();
       }
     }
+    const warnIfRemoteDesktopAttachment = (content: UserMessage['content']): void => {
+      if (!opts.remoteHostId || !Array.isArray(content)) return;
+      const hasDesktopLocalAttachment = content.some(
+        (block) => block.type === 'file'
+          || block.type === 'mention'
+          || (block.type === 'image' && block.pathOrigin === 'desktop-host'),
+      );
+      if (!hasDesktopLocalAttachment) return;
+      log.warn('cc remote: local attachment not accessible on remote session', {
+        sessionId: opts.sessionId,
+        hostId: opts.remoteHostId,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: '[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] Local file attachments are not accessible on remote sessions. Paste content directly instead.',
+          isTerminal: false,
+        },
+        source: 'claude-code',
+      });
+    };
     const handle: AgentSessionHandle = {
       get id() { return sdkSessionId ?? '<pending>'; },
       agentKind: 'claude-code',
@@ -4850,7 +5255,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
         beginNewTurn();
-        toolLoopGuard?.resetTurn();
+        resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
         sendInAcceptPhase = true;
@@ -4890,34 +5295,28 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         let userInputAccepted = false;
         try {
-          const content = await toClaudeSdkContent(message.content);
+          if (reviewMode) {
+            await assertReviewMessageContentPaths(
+              message.content,
+              opts.workingDir,
+              reviewReadGrants,
+            );
+          }
+          // SSH 图片路径属于远端主机，不能在桌面端压缩或读取；保留路径引用交给远端 SDK。
+          const content = await toClaudeSdkContent(
+            message.content,
+            undefined,
+            !opts.remoteHostId,
+          );
           if (sendOpts?.signal?.aborted) {
             throw new Error('Claude send cancelled before acceptance');
           }
           // **Remote attachment guard (MVP)**: 远端 session 走 cc 进程在 SSH host 上跑,
-          // 本地图片/文件附件转出来的 `@"<desktop-local-path>"` 引用在远端找不到文件,
+          // 本地文件附件转出来的 `@"<desktop-local-path>"` 引用在远端找不到文件,
           // 模型看不见 → silent context loss。完整修法是 upload 文件到远端 (follow-up),
           // 这里 MVP 检测到附件就 emit warn event 让用户知道,实际请求里把附件 ref 留着
           // (daemon 端 SDK 读不到就跳过, 不会 crash)。
-          if (opts.remoteHostId && Array.isArray(message.content)) {
-            const hasAttachment = message.content.some(
-              (b) => b.type === 'image' || b.type === 'file' || b.type === 'mention',
-            );
-            if (hasAttachment) {
-              log.warn('cc remote: local file/image attachment not accessible on remote session', {
-                sessionId: opts.sessionId,
-                hostId: opts.remoteHostId,
-              });
-              eventQueue.push({
-                type: 'error',
-                data: {
-                  message: '[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] Local file/image attachments are not accessible on remote sessions. Paste content directly instead.',
-                  isTerminal: false,
-                },
-                source: 'claude-code',
-              });
-            }
-          }
+          warnIfRemoteDesktopAttachment(message.content);
           // Claude Code streaming-input 协议要求 message 包装层,漏掉会 exit code 1。
           // sendOpts.messageUuid 注入到 SDK input.uuid — SDK 透传当作 file checkpoint
           // snapshot 的 messageId, rewind preview 拿同款 uuid 调 rewindFiles dryRun。
@@ -4980,7 +5379,19 @@ export class ClaudeCodeAgent extends BaseAgent {
           logTitle: lastSendTitle,
         });
 
-        const content = await toClaudeSdkContent(message.content);
+        if (reviewMode) {
+          await assertReviewMessageContentPaths(
+            message.content,
+            opts.workingDir,
+            reviewReadGrants,
+          );
+        }
+        // steer 与 send 保持同一来源边界：SSH 图片路径只由远端 SDK 读取。
+        const content = await toClaudeSdkContent(
+          message.content,
+          undefined,
+          !opts.remoteHostId,
+        );
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude steer cancelled before acceptance');
         }
@@ -4990,6 +5401,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // keeps the original queue/composer content and lets the user retry.
           throw new Error('No active Claude turn to steer');
         }
+        warnIfRemoteDesktopAttachment(message.content);
         // Same-turn steering deliberately does NOT call beginTurn(), reset the
         // tool-loop guard, or emit a new running status. Those are turn-start
         // side effects; doing them here would corrupt usage attribution and make
@@ -5396,6 +5808,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // effectiveSdkPermissionMode() 的最新值, 新设置会自然带上。
 
       async setModel(newModel: string, setModelOpts?: { providerId?: string | null }) {
+        if (reviewMode) return;
         const targetProviderId = setModelOpts?.providerId !== undefined
           ? setModelOpts.providerId
           : mutableProviderId;
@@ -5487,6 +5900,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setModel', { from: mutableModel, to: newModel, sdk: sdkModel, controlRequestsBlocked: isControlBlocked });
         if (!isControlBlocked) {
+          // flag settings 只在 Query 创建时写入。热切若只调 setModel,Claude Code
+          // 仍按启动时的组织白名单校验,后加载的网关模型会报
+          // "restricted by your organization's settings"(2026-08-13)。applyFlagSettings
+          // 是 merge,先把当前目录 + 目标模型并进去再切。
+          await q.applyFlagSettings({
+            availableModels: currentAvailableSdkModels(newModel),
+          });
           await q.setModel(sdkModel);
         }
         const usedNativeAutoReview = usesNativeClaudeAutoReview();
@@ -5504,6 +5924,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因(目录解析失败、provider 被停用
         // 等);若换完又不可用,值得再提醒一次。
         autoReviewUnavailableNotice.reset();
+        autoReviewConfirmUndeliveredNotice.reset();
         if (
           !isControlBlocked
           && mutablePermissionMode === 'auto'
@@ -5522,7 +5943,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             });
           });
         }
-        const newContextWindow = modelContextWindows.get(mutableModel);
+        const newContextWindow = resolveModelContextWindow(mutableModel);
         if (newContextWindow === undefined) {
           // setContextWindow(0) 是 no-op —— tracker 会静默沿用旧模型窗口直到下一个
           // result 的 modelUsage 修正。UI 环 / auto-compact 期间按旧窗口算(偏乐观),
@@ -5543,10 +5964,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             triggerAutoCompactIfNeeded();
           }
         }
-        toolLoopGuard = isDeepSeekModel(mutableModel) ? new ToolLoopGuard() : null;
+        // 适用性在 getToolLoopGuard 里按已更新的 mutableModel 逐 scope 判,这里只清状态。
+        resetToolLoopGuards();
       },
 
       async setEffort(newEffort: Effort) {
+        if (reviewMode) return;
         // maker 的 minimal / ultra 先归一成 Claude 的 low / max；2.1.219 起
         // applyFlagSettings 可原样接收 max，不能再静默降成 xhigh。
         const sdkEffort = getSdkEffortForModel(mutableModel, newEffort);
@@ -5574,6 +5997,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setFastMode(enabled: boolean) {
+        if (reviewMode) return;
         // 与 setEffort 同款:走 SDK applyFlagSettings 改 flag settings 层 `fastMode`。
         // cc 二进制的 sticky-on latch 负责缓存安全(header 一旦发出整 session 保持,中途 toggle
         // 不破 server 端 cache key)—— 所以这里直接切、不做缓存兜底。是否 Opus/官方/firstParty
@@ -5591,6 +6015,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setPermissionMode(newMode) {
+        if (reviewMode) {
+          log.debug('setPermissionMode ignored for hard read-only Review session', {
+            requested: newMode,
+          });
+          return;
+        }
         // 用户自己动过权限档之后,「自动审核不可用」这条一次性提示重新武装:再回到 Auto
         // 又不可用时,他有权再看到一次(否则一个会话里只提示一次会显得像偶发)。
         // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
@@ -5600,6 +6030,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (newMode !== mutablePermissionMode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewConfirmUndeliveredNotice.reset();
         }
         // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
         // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。
@@ -5646,6 +6077,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setPlanMode(enabled: boolean) {
+        if (reviewMode) return;
         if (mutablePlanMode === enabled) return;
         mutablePlanMode = enabled;
         // turn 流式中(含 plan turn 本身)只记账武装态、递延 SDK 切档:立即 push 会
@@ -5676,6 +6108,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setExtraDirs(newDirs: string[]) {
+        if (reviewMode) return;
         // 只覆盖 closure。SDK 没有运行时 setAdditionalDirectories 入口, 但 buildQuery
         // 是 turn-by-turn 装配的 (rewind 重启 / fork 都走 buildQuery), 改完下一 turn
         // 自动用新值。当前 in-flight turn 不会变 (允许的 — 用户在 turn 中加目录

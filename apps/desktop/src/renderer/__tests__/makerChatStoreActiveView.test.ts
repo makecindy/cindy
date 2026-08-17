@@ -47,6 +47,10 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
+import {
+  markSessionAutomaticHistoryLoadCompleted,
+  restoreSessionAutomaticHistoryLoadAttempts,
+} from '@/lib/sessionScrollStore';
 
 const BASE_TIME = new Date('2026-05-20T00:00:00.000Z');
 
@@ -970,10 +974,11 @@ describe('makerChatStore active view tracking', () => {
         .mockResolvedValueOnce(fullPage(sessionId, 999))
         .mockRejectedValueOnce(new Error('tunnel dropped'));
 
-      makerChatStore.loadOlderMessages(sessionId);
-      await flushPagingLoop();
+      const didAdvanceWindow = await makerChatStore.loadOlderMessages(sessionId, true);
 
       const snapshot = makerChatStore.getSnapshot(sessionId);
+      expect(didAdvanceWindow).toBe(true);
+      expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(5);
       expect(snapshot.isLoadingMore).toBe(false);
       // 第 1 页已进 UI(游标推进、内容不丢),失败只终止追页,保持可重试。
       expect(snapshot.hasMoreMessages).toBe(true);
@@ -988,13 +993,27 @@ describe('makerChatStore active view tracking', () => {
 
       vi.mocked(messageService.list).mockRejectedValueOnce(new Error('tunnel dropped'));
 
-      makerChatStore.loadOlderMessages(sessionId);
-      await flushPagingLoop();
+      const didAdvanceWindow = await makerChatStore.loadOlderMessages(sessionId, true);
 
       const snapshot = makerChatStore.getSnapshot(sessionId);
+      expect(didAdvanceWindow).toBe(false);
+      expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
       expect(snapshot.isLoadingMore).toBe(false);
       expect(snapshot.hasMoreMessages).toBe(true);
       expect(snapshot.oldestMessageId).toBe('current');
+    });
+
+    it('reports an empty authoritative page as no cached-window advance', async () => {
+      const sessionId = sid('older-backfill-empty');
+      await seedSession(sessionId);
+
+      vi.mocked(messageService.list).mockResolvedValueOnce([]);
+
+      const didAdvanceWindow = await makerChatStore.loadOlderMessages(sessionId, true);
+
+      expect(didAdvanceWindow).toBe(false);
+      expect(makerChatStore.getSnapshot(sessionId).hasMoreMessages).toBe(false);
+      expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
     });
 
     // rewind 竞态守卫:追页 in-flight 期间 reloadMessages(rewind commit 后的强制
@@ -1035,17 +1054,20 @@ describe('makerChatStore active view tracking', () => {
         .mockReturnValueOnce(olderPagePromise) // loadOlderMessages 第 1 页(挂起中)
         .mockResolvedValueOnce([]); // reloadMessages → ensureInitialMessages(重载后空历史)
 
-      makerChatStore.loadOlderMessages(sessionId);
+      markSessionAutomaticHistoryLoadCompleted(sessionId);
+      const loadResult = makerChatStore.loadOlderMessages(sessionId, true);
       expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(true);
 
       makerChatStore.reloadMessages(sessionId);
       await Promise.resolve();
+      expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
 
       // 翻页此刻才返回(短页 → 循环立即收口进入提交),但代际已变 → 作废。
       resolveOlderPage(fullPage(sessionId, 999).slice(0, 10));
       await flushPagingLoop();
 
       const snapshot = makerChatStore.getSnapshot(sessionId);
+      await expect(loadResult).resolves.toBe(false);
       expect(snapshot.isLoadingMore).toBe(false);
       expect(snapshot.messages).toHaveLength(0); // 旧窗口没有被 merge 回清空后的切片
       expect(snapshot.oldestMessageId).toBeNull();
@@ -1055,6 +1077,7 @@ describe('makerChatStore active view tracking', () => {
     it('keeps legacy single-row removal compatible with an in-flight paging window', async () => {
       const sessionId = sid('older-backfill-single-delete-compat');
       await seedSession(sessionId);
+      markSessionAutomaticHistoryLoadCompleted(sessionId);
 
       let resolveOlderPage!: (rows: Message[]) => void;
       vi.mocked(messageService.list).mockReturnValueOnce(
@@ -1072,11 +1095,13 @@ describe('makerChatStore active view tracking', () => {
       expect(snapshot.messages).toHaveLength(10);
       expect(snapshot.messages.some((message) => message.clientId === 'client-current')).toBe(false);
       expect(snapshot.isLoadingMore).toBe(false);
+      expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(5);
     });
 
     it('discards an in-flight paging window after grouped deletion', async () => {
       const sessionId = sid('older-backfill-group-delete-race');
       await seedSession(sessionId);
+      markSessionAutomaticHistoryLoadCompleted(sessionId);
 
       let resolveOlderPage!: (rows: Message[]) => void;
       vi.mocked(messageService.list).mockReturnValueOnce(
@@ -1093,6 +1118,7 @@ describe('makerChatStore active view tracking', () => {
       const snapshot = makerChatStore.getSnapshot(sessionId);
       expect(snapshot.messages).toHaveLength(0);
       expect(snapshot.isLoadingMore).toBe(false);
+      expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
     });
   });
 
@@ -1102,7 +1128,9 @@ describe('makerChatStore active view tracking', () => {
     const sessionId = sid('demote');
     const dispose = enter(sessionId);
     addMessage(sessionId);
+    markSessionAutomaticHistoryLoadCompleted(sessionId);
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
+    expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(5);
 
     dispose(); // 写 lastViewedAt = BASE_TIME
     // 4:59 仍保留，5:00 的 demote timer 才清空（检查间隔 30s）。
@@ -1113,6 +1141,7 @@ describe('makerChatStore active view tracking', () => {
 
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
+    expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
   });
 
   it('demotes a prefetched session that never enters a mounted view', async () => {

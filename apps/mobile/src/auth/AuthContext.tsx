@@ -1,4 +1,5 @@
 import * as WebBrowser from 'expo-web-browser';
+import { requireNativeModule } from 'expo-modules-core';
 import {
   createContext,
   useCallback,
@@ -18,6 +19,8 @@ import {
   parseAuthSessionRecord,
   reduceAuthFlow,
   serializeAccountDeletionReceiptRecord,
+  soleAutoStartSsoMethod,
+  soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
   type AuthFlowState,
@@ -814,8 +817,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 账号标识 —— initialized 变 true 时迁移必然已经落盘。
   useEffect(() => {
     if (!initialized) return;
-    if (user?.id) void setTapdbUser(user.id);
-    else void clearTapdbUser();
+    if (user?.id) {
+      void setTapdbUser(user.id);
+      // THEMIS 安全 SDK 上报绑定用户 ID(构建期注入原生模块,缺模块时静默降级)。
+      // 用 requireNativeModule 而非 require('xdt-themis'):前者是 expo-modules-core
+      // 的运行时查找(不受 Metro 静态解析影响),模块缺失时抛出可捕获的错误。
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-member-access
+        requireNativeModule('XdtThemis').addCustomField('playerinfo', String(user.id));
+      } catch {
+        // xdt-themis is build-time injected; absent in dev / unconfigured regions.
+      }
+    } else {
+      void clearTapdbUser();
+      // 登出时清除 THEMIS 用户绑定,避免崩溃/强杀上报误归于上一个账号。
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-member-access
+        requireNativeModule('XdtThemis').addCustomField('playerinfo', '');
+      } catch {
+        // xdt-themis is build-time injected; absent in dev / unconfigured regions.
+      }
+    }
   }, [initialized, user?.id]);
 
   // 词典缓存的落盘键按账号分区。登出清理是尽力而为的(索引可能读不出来),分区让
@@ -1006,6 +1028,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ) {
               throw authCodeError('INVALID_AUTH_ACTION');
             }
+            const sole = soleAutoStartSsoMethod(confirmation.methods);
+            if (sole) {
+              return startBrowserAuthorization({
+                previousState: confirmation,
+                kind: 'sso',
+                providerOrConnectionId: sole.connectionId,
+                label: sole.connectionName || sole.orgName,
+              });
+            }
             updateLoginState(
               reduceAuthFlow(confirmation, {
                 type: 'discovery-loaded',
@@ -1036,8 +1067,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               did,
               BUILD_AUTH_REGION,
             ).discover(email);
+            const currentState = loginStateRef.current;
+            const sole = soleLoginMethod(methods);
+            if (sole?.type === 'sso' && currentState) {
+              return startBrowserAuthorization({
+                previousState: currentState,
+                kind: 'sso',
+                providerOrConnectionId: sole.connectionId,
+                label: sole.connectionName || sole.orgName,
+              });
+            }
+            if (sole?.type === 'email_code') {
+              await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+                'email',
+                email,
+              );
+              updateLoginState(
+                reduceAuthFlow(currentState, {
+                  type: 'code-requested',
+                  kind: 'email',
+                  identifier: email,
+                }),
+              );
+              return true;
+            }
             updateLoginState(
-              reduceAuthFlow(loginStateRef.current, {
+              reduceAuthFlow(currentState, {
                 type: 'discovery-loaded',
                 email,
                 methods,
@@ -1045,8 +1100,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
             return true;
           }
-          // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
-          // 复用连接选择 UI 与 start-sso 流程。
+          // 企业 SSO 入口（按组织 ID/slug/已验证域名）：唯一连接直接进浏览器；
+          // 多连接才映射进 method-choice，复用连接选择 UI 与 start-sso 流程。
           if (action.type === 'discover-sso-org') {
             const org = action.org.trim().toLowerCase();
             // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后
@@ -1098,6 +1153,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 }),
               );
             } else {
+              const sole = soleAutoStartSsoMethod(methods);
+              if (sole && currentState) {
+                return startBrowserAuthorization({
+                  previousState: currentState,
+                  kind: 'sso',
+                  providerOrConnectionId: sole.connectionId,
+                  label: sole.connectionName || sole.orgName,
+                });
+              }
               updateLoginState(
                 reduceAuthFlow(currentState, {
                   type: 'discovery-loaded',

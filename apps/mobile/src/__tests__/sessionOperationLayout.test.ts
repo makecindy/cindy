@@ -83,16 +83,16 @@ describe("session operation layout", () => {
     });
   });
 
-  it("keeps a cached remote session editable while sync is failing but prevents send actions", () => {
+  it("keeps deterministic remote failures visible and prevents send actions", () => {
     expect(
       buildSessionOperationLayout({
         hasCurrentSession: true,
         hasActivePendingInteraction: true,
-        remoteUnavailableReason: "网络或被控端暂时不可用，可以稍后重新同步。",
+        remoteUnavailableReason: "这台电脑已撤销手机访问权限。",
       }),
     ).toEqual({
       canUseComposer: false,
-      composerDisabledReason: "网络或被控端暂时不可用，可以稍后重新同步。",
+      composerDisabledReason: "这台电脑已撤销手机访问权限。",
       composerDisabledReasonSource: "caller-provided",
       composerSlot: "editable",
       messageHistoryMode: "visible",

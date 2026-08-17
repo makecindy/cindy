@@ -22,6 +22,8 @@
 
 import { BrowserWindow } from 'electron';
 
+import { isTrustedAppRendererWindow } from './security/trustedAppRenderer.js';
+
 import { incrementDailySpend, getTodaySpend, localDayKey } from './localDb/dailySpend';
 import { getGatewayModelPricing } from './usage/modelPricing';
 import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
@@ -32,6 +34,7 @@ import {
   mergeClaudeSubscriptionUsageSnapshot,
   type ClaudeSubscriptionUsageSnapshot,
 } from '../shared/claudeSubscriptionUsage';
+import type { XaiSubscriptionUsageSnapshot } from '../shared/xaiSubscriptionUsage';
 import type { AgentKind } from '@cindy/maker-core';
 
 import {
@@ -55,6 +58,8 @@ export const USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed';
 export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
 /** IPC channel: main → renderer 推 Claude 订阅账号余量变化 (端点刷新 / headers 旁路)。 */
 export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-changed';
+/** IPC channel: main → renderer 推 SuperGrok 账号周用量快照。 */
+export const USAGE_XAI_SUBSCRIPTION_CHANGED = 'usage:xai-subscription-changed';
 
 export interface TodaySpendPayload {
   /** 本地时区 YYYY-MM-DD。 */
@@ -328,7 +333,22 @@ export interface CodexAccountUsagePayload extends RateLimitSnapshot {
 }
 
 let codexAccountUsageOwner: string | null = null;
-let codexAccountUsageLoaded = false;
+/**
+ * 冷缓存 hydration 是否**成功读到过库**(读到空行也算)。
+ *
+ * 落库守卫的判据 —— merge 的底子可信才允许写回。读库失败 / owner 未初始化被跳过时
+ * 内存是空的, 此时任何 merge 结果都不代表账号真实状态, 写回会抹掉库里的有效数据。
+ * 不能改用「payload 内容看起来是否有用」判断: 合法的空(限额解除、credits 清零)与
+ * 事故的空形状完全一致, 按内容判会把前者一并拦下。
+ *
+ * 它同时充当「无需再读库」的判据 —— 读失败时保持 false, 下一次 record / read 会重试。
+ * 若另设一个「已加载」标志并在失败时也置位, 一次瞬时 db busy 就会让本进程之后
+ * 所有落库被永久跳过。
+ */
+let codexAccountUsageHydrated = false;
+// 并发 record 必须等同一次 SQLite 读完成后再按到达顺序 merge(与 claude 侧同款) ——
+// 否则第二笔会在 loaded 已被置位、内存却仍为空时 merge 出全 null payload。
+let codexAccountUsageLoadPromise: Promise<void> | null = null;
 /** app-server 桶表: limitId → 该桶最近快照(同桶 merge, 跨桶隔离)。 */
 let codexAppServerBuckets: Record<string, RateLimitSnapshot> = {};
 /** 最近更新的 app-server 桶键 —— 顶层兼容位取它。 */
@@ -369,7 +389,7 @@ function resetCodexAccountUsageCacheIfOwnerChanged(): void {
   const owner = currentAccountUsageOwner();
   if (owner === codexAccountUsageOwner) return;
   codexAccountUsageOwner = owner;
-  codexAccountUsageLoaded = false;
+  codexAccountUsageHydrated = false;
   codexAppServerBuckets = {};
   codexAppServerLatestBucketKey = null;
   codexWebAccountUsageSnapshot = null;
@@ -543,28 +563,59 @@ function isCodexWindowlessFallback(snapshot: RateLimitSnapshot): boolean {
 
 async function ensureCodexAccountUsageLoaded(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
-  if (codexAccountUsageLoaded) return;
-  codexAccountUsageLoaded = true;
-  if (!codexAccountUsageOwner) return;
-
+  if (codexAccountUsageHydrated) return;
+  if (!codexAccountUsageLoadPromise) {
+    // 句柄的清理必须放在 await 之后, 不能放进下面 IIFE 的 finally —— owner 缺失时
+    // IIFE 会在首个 await 之前同步走完, 它 finally 里清掉的句柄随即被本行的赋值写回,
+    // 之后 ensure 永远复用这个已 resolve 的 Promise, 再也不查库(hydrated 也就永远
+    // 是 false, 本进程之后所有落库都被守卫跳过)。
+    codexAccountUsageLoadPromise = (async () => {
+      try {
+        if (!codexAccountUsageOwner) return;
+        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
+          'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
+          ['codex'],
+        );
+        // 读到库就算 hydrated(无行 = 确认库里本来就没有), 之后允许落库。置位放在
+        // JSON.parse 之前: 损坏行解析失败仍应允许被新快照覆盖, 否则一条坏行会永久
+        // 堵死写入。
+        codexAccountUsageHydrated = true;
+        if (!row?.snapshot) return;
+        const parsed = JSON.parse(row.snapshot);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
+          // hydration 不覆盖内存 —— 首次读失败后重试期间, 内存里可能已经装着那段时间
+          // 收到的**更新**观测(它们因守卫未能落库)。库里的行比它们旧, 直接赋值会让 UI
+          // 回退到旧额度, 且那些观测永远等不到落库时机。
+          //
+          // 但也不能按桶键整体覆盖: 那段时间收到的可能是 windowless 稀疏事件, 留下的是
+          // 一个非空、却全 null 的同名桶 —— 整桶覆盖会抹掉持久化桶里的窗口, 正好复现
+          // 本次要防的损坏。逐桶走常规 merge(持久化桶作 previous), 稀疏事件即按既有
+          // 语义保住旧窗口。
+          const persistedBuckets = slots.appServerBuckets;
+          const mergedBuckets: Record<string, RateLimitSnapshot> = { ...persistedBuckets };
+          for (const [key, pending] of Object.entries(codexAppServerBuckets)) {
+            mergedBuckets[key] = mergeCodexAccountUsageSnapshot(persistedBuckets[key] ?? null, pending);
+          }
+          codexAppServerBuckets = mergedBuckets;
+          codexAppServerLatestBucketKey = codexAppServerLatestBucketKey ?? slots.latestBucketKey;
+          codexWebAccountUsageSnapshot = codexWebAccountUsageSnapshot
+            ? mergeCodexAccountUsageSnapshot(slots.web, codexWebAccountUsageSnapshot)
+            : slots.web;
+        }
+      } catch (err) {
+        log.warn(
+          'readCodexAccountUsageSnapshot failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+  }
   try {
-    const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
-      'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
-      ['codex'],
-    );
-    if (!row?.snapshot) return;
-    const parsed = JSON.parse(row.snapshot);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
-      codexAppServerBuckets = slots.appServerBuckets;
-      codexAppServerLatestBucketKey = slots.latestBucketKey;
-      codexWebAccountUsageSnapshot = slots.web;
-    }
-  } catch (err) {
-    log.warn(
-      'readCodexAccountUsageSnapshot failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+    await codexAccountUsageLoadPromise;
+  } finally {
+    // hydrated 仅在读成功时置位 —— 读失败清掉句柄即留下重试机会。
+    codexAccountUsageLoadPromise = null;
   }
 }
 
@@ -607,6 +658,12 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
   const payload = buildCodexAccountUsagePayload();
   broadcastCodexAccountUsage(payload);
 
+  // merge 的底子不可信时不写回, 见 codexAccountUsageHydrated。
+  if (!codexAccountUsageHydrated) {
+    log.warn('skip persisting codex account usage snapshot: hydration unavailable');
+    return;
+  }
+
   try {
     await getDbClient().exec(
       `INSERT INTO account_usage_snapshots (agent_kind, snapshot, updated_at)
@@ -626,7 +683,8 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
 
 export async function clearCodexAccountUsageSnapshot(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
-  codexAccountUsageLoaded = true;
+  // clear 后库里的状态是已知的(行被删掉): 既不必再读库, 之后到达的快照也可正常落库。
+  codexAccountUsageHydrated = true;
   codexAppServerBuckets = {};
   codexAppServerLatestBucketKey = null;
   codexWebAccountUsageSnapshot = null;
@@ -692,7 +750,8 @@ export function clearXaiRateLimitSnapshot(): void {
 // 误丢(headers 单笔 + 端点 180s 节流时, chip 要空到下一次刷新)。
 let claudeSubscriptionUsageOwnerInitialized = false;
 let claudeSubscriptionUsageOwner: string | null = null;
-let claudeSubscriptionUsageLoaded = false;
+/** 与 codex 侧 codexAccountUsageHydrated 同义: 落库守卫 + 「无需再读库」的判据。 */
+let claudeSubscriptionUsageHydrated = false;
 let claudeSubscriptionUsageSnapshot: ClaudeSubscriptionUsageSnapshot | null = null;
 // 冷缓存 hydration 的 in-flight promise —— 并发 record 必须等同一次 SQLite 读完成后
 // 再按到达顺序 merge, 否则后到的新快照会先写、再被读回的旧持久化行覆盖。
@@ -708,14 +767,14 @@ function resetClaudeSubscriptionUsageCacheIfOwnerChanged(): void {
   claudeSubscriptionUsageOwner = owner;
   // 首次初始化: loaded / snapshot 本就是初值, 世代不 bump(见上方注释)。
   if (isFirstInit) return;
-  claudeSubscriptionUsageLoaded = false;
+  claudeSubscriptionUsageHydrated = false;
   claudeSubscriptionUsageSnapshot = null;
   claudeSubscriptionUsageGeneration += 1;
 }
 
 async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
   resetClaudeSubscriptionUsageCacheIfOwnerChanged();
-  if (claudeSubscriptionUsageLoaded) return;
+  if (claudeSubscriptionUsageHydrated) return;
   if (!claudeSubscriptionUsageLoadPromise) {
     const generation = claudeSubscriptionUsageGeneration;
     claudeSubscriptionUsageLoadPromise = (async () => {
@@ -727,25 +786,33 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
         );
         // clear / owner 变化抢先发生 → 本次读结果作废, 不覆盖更新的内存状态。
         if (generation !== claudeSubscriptionUsageGeneration) return;
+        // 读到库就算 hydrated(理由同 codex 侧, 含损坏行仍允许被覆盖)。
+        claudeSubscriptionUsageHydrated = true;
         if (!row?.snapshot) return;
         const parsed = JSON.parse(row.snapshot);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          claudeSubscriptionUsageSnapshot = parsed as ClaudeSubscriptionUsageSnapshot;
+          // 理由同 codex 侧: 内存里可能是重试期间收到的更新快照, 库里的行是旧的 ——
+          // 以持久化行为底、内存增量在上做一次常规 merge, 而不是直接赋值。
+          const persisted = parsed as ClaudeSubscriptionUsageSnapshot;
+          claudeSubscriptionUsageSnapshot = claudeSubscriptionUsageSnapshot
+            ? mergeClaudeSubscriptionUsageSnapshot(persisted, claudeSubscriptionUsageSnapshot)
+            : persisted;
         }
       } catch (err) {
         log.warn(
           'readClaudeSubscriptionUsageSnapshot failed:',
           err instanceof Error ? err.message : String(err),
         );
-      } finally {
-        if (generation === claudeSubscriptionUsageGeneration) {
-          claudeSubscriptionUsageLoaded = true;
-        }
-        claudeSubscriptionUsageLoadPromise = null;
       }
     })();
   }
-  await claudeSubscriptionUsageLoadPromise;
+  try {
+    await claudeSubscriptionUsageLoadPromise;
+  } finally {
+    // 清理放在 await 之后, 理由同 codex 侧: owner 缺失时 IIFE 同步走完, 放进它的
+    // finally 会被外层赋值写回, 之后永远复用这个已 resolve 的 Promise。
+    claudeSubscriptionUsageLoadPromise = null;
+  }
 }
 
 export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): Promise<void> {
@@ -764,6 +831,12 @@ export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): 
   );
   claudeSubscriptionUsageSnapshot = next;
   broadcastClaudeSubscriptionUsage(next);
+
+  // 与 codex 侧同一条保护: merge 的底子不可信时不写回。
+  if (!claudeSubscriptionUsageHydrated) {
+    log.warn('skip persisting claude subscription usage snapshot: hydration unavailable');
+    return;
+  }
 
   try {
     await getDbClient().exec(
@@ -792,7 +865,8 @@ export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): 
 
 export async function clearClaudeSubscriptionUsageSnapshot(): Promise<void> {
   resetClaudeSubscriptionUsageCacheIfOwnerChanged();
-  claudeSubscriptionUsageLoaded = true;
+  // clear 后库里的状态是已知的(行被删掉): 既不必再读库, 之后到达的快照也可正常落库。
+  claudeSubscriptionUsageHydrated = true;
   claudeSubscriptionUsageSnapshot = null;
   // 仍在飞的冷缓存 hydration 必须作废 —— 否则它读回的旧持久化行会复活刚清掉的数据。
   claudeSubscriptionUsageGeneration += 1;
@@ -814,6 +888,169 @@ export async function clearClaudeSubscriptionUsageSnapshot(): Promise<void> {
 export async function readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null> {
   await ensureClaudeSubscriptionUsageLoaded();
   return claudeSubscriptionUsageSnapshot;
+}
+
+// ── xAI / SuperGrok subscription usage (persisted latest snapshot) ──────────
+// agent_kind='xai'。单源全量替换,没有 headers 增量 merge。
+
+const XAI_SUBSCRIPTION_USAGE_KIND = 'xai';
+
+let xaiSubscriptionUsageOwnerInitialized = false;
+let xaiSubscriptionUsageOwner: string | null = null;
+let xaiSubscriptionUsageHydrated = false;
+let xaiSubscriptionUsageSnapshot: XaiSubscriptionUsageSnapshot | null = null;
+let xaiSubscriptionUsageLoadPromise: Promise<void> | null = null;
+let xaiSubscriptionUsageGeneration = 0;
+/**
+ * 磁盘 hydrate 不能直接给 Renderer。换号后若 DELETE 没落盘就退出,
+ * 冷启动只按 agent_kind='xai' 读会把账号 A 的套餐/周用量交给账号 B。
+ * 只有本进程成功 record 过一次当前凭证的快照,才允许读出。
+ */
+let xaiSubscriptionUsageServable = false;
+
+function resetXaiSubscriptionUsageCacheIfOwnerChanged(): void {
+  const owner = currentAccountUsageOwner();
+  if (xaiSubscriptionUsageOwnerInitialized && owner === xaiSubscriptionUsageOwner) return;
+  const isFirstInit = !xaiSubscriptionUsageOwnerInitialized;
+  xaiSubscriptionUsageOwnerInitialized = true;
+  xaiSubscriptionUsageOwner = owner;
+  if (isFirstInit) return;
+  xaiSubscriptionUsageHydrated = false;
+  xaiSubscriptionUsageSnapshot = null;
+  xaiSubscriptionUsageServable = false;
+  xaiSubscriptionUsageGeneration += 1;
+}
+
+async function ensureXaiSubscriptionUsageLoaded(): Promise<void> {
+  resetXaiSubscriptionUsageCacheIfOwnerChanged();
+  if (xaiSubscriptionUsageHydrated) return;
+  if (!xaiSubscriptionUsageLoadPromise) {
+    const generation = xaiSubscriptionUsageGeneration;
+    xaiSubscriptionUsageLoadPromise = (async () => {
+      try {
+        if (!xaiSubscriptionUsageOwner) return;
+        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
+          'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
+          [XAI_SUBSCRIPTION_USAGE_KIND],
+        );
+        if (generation !== xaiSubscriptionUsageGeneration) return;
+        xaiSubscriptionUsageHydrated = true;
+        if (!row?.snapshot) return;
+        const parsed = JSON.parse(row.snapshot);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const persisted = parsed as XaiSubscriptionUsageSnapshot;
+          // record() 可能在 hydration 失败期间已经把更新的快照放进内存;
+          // 迟到的磁盘行只能补空,不能盖掉更新的内存值。
+          if (!xaiSubscriptionUsageSnapshot) {
+            xaiSubscriptionUsageSnapshot = persisted;
+          } else {
+            const memoryAt = xaiSubscriptionUsageSnapshot.updatedAt ?? 0;
+            const diskAt = persisted.updatedAt ?? 0;
+            if (diskAt > memoryAt) xaiSubscriptionUsageSnapshot = persisted;
+          }
+        }
+      } catch (err) {
+        log.warn(
+          'readXaiSubscriptionUsageSnapshot failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+  }
+  try {
+    await xaiSubscriptionUsageLoadPromise;
+  } finally {
+    xaiSubscriptionUsageLoadPromise = null;
+  }
+}
+
+export async function recordXaiSubscriptionUsageSnapshot(snapshot: unknown): Promise<void> {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
+
+  const generation = xaiSubscriptionUsageGeneration;
+  await ensureXaiSubscriptionUsageLoaded();
+  if (generation !== xaiSubscriptionUsageGeneration) return;
+
+  const incoming = snapshot as XaiSubscriptionUsageSnapshot;
+  const current = xaiSubscriptionUsageSnapshot;
+  // 磁盘 hydrate 在本进程 record 之前不可信。无指纹的首次写入不得并入旧账号字段。
+  if (!xaiSubscriptionUsageServable || !current) {
+    xaiSubscriptionUsageSnapshot = incoming;
+  } else if (
+    current.accountFingerprint
+    && incoming.accountFingerprint
+    && current.accountFingerprint !== incoming.accountFingerprint
+  ) {
+    xaiSubscriptionUsageSnapshot = incoming;
+  } else {
+    // 已核验的同账号:只覆盖解析到的字段。incoming 里的 null 不能把套餐/周百分比抹掉。
+    xaiSubscriptionUsageSnapshot = {
+      planLabel: incoming.planLabel ?? current.planLabel ?? null,
+      creditUsagePercent: incoming.creditUsagePercent ?? current.creditUsagePercent ?? null,
+      resetsAt: incoming.resetsAt ?? current.resetsAt ?? null,
+      productUsage: incoming.productUsage ?? current.productUsage ?? [],
+      prepaidBalance: incoming.prepaidBalance ?? current.prepaidBalance ?? null,
+      source: incoming.source ?? current.source ?? null,
+      updatedAt: incoming.updatedAt ?? current.updatedAt ?? null,
+      accountFingerprint: incoming.accountFingerprint ?? current.accountFingerprint ?? null,
+    };
+  }
+  const next = xaiSubscriptionUsageSnapshot;
+  xaiSubscriptionUsageServable = true;
+  broadcastXaiSubscriptionUsage(next);
+
+  if (!xaiSubscriptionUsageHydrated) {
+    log.warn('skip persisting xai subscription usage snapshot: hydration unavailable');
+    return;
+  }
+
+  try {
+    await getDbClient().exec(
+      `INSERT INTO account_usage_snapshots (agent_kind, snapshot, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(agent_kind) DO UPDATE SET
+         snapshot = excluded.snapshot,
+         updated_at = excluded.updated_at`,
+      [XAI_SUBSCRIPTION_USAGE_KIND, JSON.stringify(next), Date.now()],
+    );
+    if (generation !== xaiSubscriptionUsageGeneration) {
+      await getDbClient().exec(
+        'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
+        [XAI_SUBSCRIPTION_USAGE_KIND],
+      );
+    }
+  } catch (err) {
+    log.warn(
+      'recordXaiSubscriptionUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function clearXaiSubscriptionUsageSnapshot(): Promise<void> {
+  resetXaiSubscriptionUsageCacheIfOwnerChanged();
+  xaiSubscriptionUsageHydrated = true;
+  xaiSubscriptionUsageSnapshot = null;
+  xaiSubscriptionUsageServable = false;
+  xaiSubscriptionUsageGeneration += 1;
+  broadcastXaiSubscriptionUsage(null);
+
+  try {
+    await getDbClient().exec(
+      'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
+      [XAI_SUBSCRIPTION_USAGE_KIND],
+    );
+  } catch (err) {
+    log.warn(
+      'clearXaiSubscriptionUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null> {
+  await ensureXaiSubscriptionUsageLoaded();
+  return xaiSubscriptionUsageServable ? xaiSubscriptionUsageSnapshot : null;
 }
 
 // ── 内部广播 ─────────────────────────────────────────────────────────────────
@@ -847,5 +1084,12 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
     }
+  }
+}
+
+function broadcastXaiSubscriptionUsage(payload: XaiSubscriptionUsageSnapshot | null): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppRendererWindow(win)) continue;
+    win.webContents.send(USAGE_XAI_SUBSCRIPTION_CHANGED, payload);
   }
 }

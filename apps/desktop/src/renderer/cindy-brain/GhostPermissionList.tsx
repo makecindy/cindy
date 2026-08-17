@@ -12,6 +12,7 @@ import {
   BellDot,
   BadgeCheck,
   Bot,
+  BookOpen,
   ChevronDown,
   Cpu,
   FileCode2,
@@ -29,6 +30,7 @@ import {
   PanelRight,
   Sparkles,
   ShieldAlert,
+  Smartphone,
   Terminal,
   Wrench,
   type LucideIcon,
@@ -37,11 +39,7 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import type {
-  GhostPermissionDiff,
-  GhostPermissionItem,
-  GhostTrustInfo,
-} from '../../shared/ghost';
+import type { GhostPermissionDiff, GhostPermissionItem, GhostTrustInfo } from '../../shared/ghost';
 
 const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   cindy: Sparkles, // 与详情页「Cindy 能力」区同款图标
@@ -62,6 +60,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   preview: AppWindow,
   skill: GraduationCap,
   workspace: FolderPlus,
+  'ios-simulator': Smartphone,
 };
 
 function itemIcon(item: GhostPermissionItem): LucideIcon {
@@ -268,6 +267,17 @@ export function GhostTrustSummary({ trust }: { trust: GhostTrustInfo }) {
   );
 }
 
+export function GhostManualSummary({ count }: { count: number }) {
+  const { t } = useTranslation();
+  if (count <= 0) return null;
+  return (
+    <div className="mt-3 flex items-center gap-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+      <BookOpen size={14} className="shrink-0" aria-hidden="true" />
+      <span>{t('settings.ghosts.installConfirm.manualCount', { count })}</span>
+    </div>
+  );
+}
+
 /**
  * 安装确认的紧凑内容区:简介可折叠,作者/版本单列。
  * 安全相关权限不做总折叠,避免为了短而牺牲知情确认。
@@ -282,11 +292,13 @@ export function GhostInstallReview({
   meta,
   trust,
   items,
+  manualCount = 0,
 }: {
   description?: string;
   meta: string;
   trust: GhostTrustInfo;
   items: GhostPermissionItem[];
+  manualCount?: number;
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -326,6 +338,7 @@ export function GhostInstallReview({
         {meta}
       </p>
       <GhostTrustSummary trust={trust} />
+      <GhostManualSummary count={manualCount} />
       <div className="mt-3 border-t border-[var(--border-default)] pt-3">
         <GhostPermissionList items={items} />
       </div>
@@ -415,14 +428,38 @@ export function GhostPermissionDiffView({ diff }: { diff: GhostPermissionDiff })
 export function GhostUpdateReview({
   trust,
   diff,
+  manualCount = 0,
 }: {
   trust?: GhostTrustInfo;
   diff: GhostPermissionDiff;
+  manualCount?: number;
 }) {
+  const { t } = useTranslation();
   return (
     <div>
       {trust && <GhostTrustSummary trust={trust} />}
-      <div className={cn(trust && 'mt-3')}>
+      {diff.builtinOauthClientChanged ? (
+        <div
+          role="alert"
+          className={cn(
+            trust && 'mt-3',
+            'flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2 text-13 leading-5 text-[var(--text-secondary)]',
+          )}
+        >
+          <ShieldAlert
+            size={16}
+            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+            aria-hidden="true"
+          />
+          <span>{t('settings.ghosts.updateConfirm.oauthClientChanged')}</span>
+        </div>
+      ) : null}
+      <GhostManualSummary count={manualCount} />
+      <div
+        className={cn(
+          (trust || diff.builtinOauthClientChanged || manualCount > 0) && 'mt-3',
+        )}
+      >
         <GhostPermissionDiffView diff={diff} />
       </div>
     </div>

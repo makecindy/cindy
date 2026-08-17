@@ -11,7 +11,9 @@
  *   注入并产生差 1 的双重语义;两个配置 struct 都 deny_unknown_fields。
  * - 例外:`multi_agent_mode_hint_text` 与 `expose_spawn_agent_model_overrides` 只
  *   存在于 features 段(resolve_multi_agent_v2_config 仅从该段读取,无 agents 段
- *   等价键),按需委托策略只能经此注入,见 CODEX_ON_DEMAND_DELEGATION_HINT。
+ *   等价键)。前者仅在用户启用 Cindy 自定义策略时注入,见
+ *   CODEX_ON_DEMAND_DELEGATION_HINT;后者保持开启,让模型可显式选择子代理模型,
+ *   不改变上游何时委托的调度策略。
  * - `agents.max_depth` 仅旧版多代理(V1)生效,V2 忽略(UI hint 已注明)。
  * - `agents.default_subagent_model` 是兜底默认,模型仍可在 spawn 参数里显式覆盖。
  *   注入 Cindy 存储的 model id 原文:codex vendor 候选只有原生 slug 与 `codex/`
@@ -34,8 +36,8 @@ import type { SubagentModelSettings } from '../../shared/subagentModelSettings.j
  * 的提示词,改动前须按 docs/dev-rules/maker-core-and-agent-behavior.md 取得维护者
  * 确认。
  *
- * 内部常量而非设置项:委托策略与子代理总开关(codexSubagentsEnabled)一体,总开关
- * 关闭时本段不注入;不单独暴露配置面。
+ * 文案本身仍是内部常量;是否注入由 codexUseCindySubagentPolicy 单独控制。
+ * 总开关 codexSubagentsEnabled 关闭时本段与其它子代理配置都不注入。
  */
 const CODEX_ON_DEMAND_DELEGATION_HINT =
   'Delegate on demand: for exploration whose intermediate output does not need to stay in ' +
@@ -58,12 +60,14 @@ export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): st
     args.push('-c', 'agents.enabled=false');
     return args;
   }
-  // 子代理默认开启时恒注入:按需委托策略 + 允许 spawn 参数显式指定子代理模型
-  // (后者让模型能给轻探索自选低档模型,也让 UI 的模型徽标有显式值可显示)。
-  args.push(
-    '-c',
-    `features.multi_agent_v2.multi_agent_mode_hint_text=${tomlString(CODEX_ON_DEMAND_DELEGATION_HINT)}`,
-  );
+  // 自定义策略关闭时不设置 multi_agent_mode_hint_text,由上游按 effort 选择原生
+  // multi-agent 模式。模型覆盖能力与调度策略正交,仍保持暴露。
+  if (settings.codexUseCindySubagentPolicy) {
+    args.push(
+      '-c',
+      `features.multi_agent_v2.multi_agent_mode_hint_text=${tomlString(CODEX_ON_DEMAND_DELEGATION_HINT)}`,
+    );
+  }
   args.push('-c', 'features.multi_agent_v2.expose_spawn_agent_model_overrides=true');
   if (settings.codex) {
     args.push('-c', `agents.default_subagent_model=${tomlString(settings.codex)}`);

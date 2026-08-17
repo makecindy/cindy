@@ -41,6 +41,34 @@ export function buildMobileClientPromptNote(): string {
   );
 }
 
+function singleTextContent(message: unknown): string | null {
+  if (typeof message === 'string') return message;
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return null;
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content) || content.length !== 1) return null;
+  const part = content[0];
+  if (!part || typeof part !== 'object' || Array.isArray(part)) return null;
+  const { type, text } = part as { type?: unknown; text?: unknown };
+  return (
+    (type === 'text' || type === 'input_text' || type === 'output_text')
+    && typeof text === 'string'
+  ) ? text : null;
+}
+
+/**
+ * Claude Code 内置命令必须位于消息开头；手机客户端说明不能抢占这个位置。
+ * 只放行已由 palette 明确暴露的 `/compact`，其它 slash 文本继续保留来源说明。
+ */
+export function shouldPrependMobileClientPromptNote(
+  message: unknown,
+  agentKind: string,
+): boolean {
+  if (agentKind !== 'claude-code') return true;
+  const text = singleTextContent(message);
+  return text === null || !/^\/compact(?:\s|$)/.test(text);
+}
+
 /**
  * 在 IPC 边界给队列项盖上手机来源(返回新对象,不原地改入参)。
  *

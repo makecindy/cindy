@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { useEnvCheck } from '@/contexts/EnvCheckContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
@@ -98,6 +99,7 @@ export function useSplash() {
     checkEnvironment,
   } = useEnvCheck();
   const { isInitializing: authInitializing } = useAuth();
+  const { coverHeld } = useAppShellCover();
   const { errorCode: updateErrorCode } = useUpdateStatus();
 
   const [phase, setPhase] = useState<SplashPhase>('init');
@@ -158,11 +160,13 @@ export function useSplash() {
   }, [updateErrorCode, phase]);
 
   // ── Effect 3: fade-out trigger ──
+  // coverHeld:已登录但 LocalDbGate 还不能画主界面。splash 必须继续盖住
+  // (DESIGN.md §10),否则 3s 地板一过会露出默认白底。
   useEffect(() => {
-    if (phase === 'splash_passed' && minTimeElapsed && !authInitializing) {
+    if (phase === 'splash_passed' && minTimeElapsed && !authInitializing && !coverHeld) {
       setPhase('fading_out');
     }
-  }, [phase, minTimeElapsed, authInitializing]);
+  }, [phase, minTimeElapsed, authInitializing, coverHeld]);
 
   // ── Effect 4: fading_out fallback ──
   useEffect(() => {

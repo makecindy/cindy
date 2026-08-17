@@ -7,11 +7,13 @@ import {
   connectionIssueHint,
   connectionIssueTitle,
   describeRemoteError,
+  isAutoRecoveringRemoteError,
   relayStatusHint,
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
 import { MainWindowActionButton, StatusDot } from '@/components/MobilePrimitives';
 import {
+  resolveConnectionBannerSyncActionVisibility,
   resolveConnectionBannerVisibility,
   resolveEffectiveConnectionError,
 } from '@/components/connectionBannerVisibility';
@@ -93,6 +95,13 @@ export function ConnectionBanner({
   // useShowConnectionBanner 同一判定,否则会出现可见但无内容的空壳 banner)。
   const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
   const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
+  const showSyncAction = resolveConnectionBannerSyncActionVisibility({
+    online: status === 'online',
+    hasActiveIssue: activeIssue !== null,
+    deviceUnresponsive: showUnresponsive,
+    hasRequestError: friendlyError !== null,
+    requestErrorAutoRecovering: isAutoRecoveringRemoteError(effectiveError),
+  });
   const tone = activeIssue
     ? 'off'
     : showUnresponsive
@@ -144,12 +153,14 @@ export function ConnectionBanner({
           </Text>
         ) : null}
       </View>
-      <ConnectionSyncButton
-        compact={compact}
-        loading={loading}
-        onPress={onSync}
-        testID="connection.syncButton"
-      />
+      {showSyncAction ? (
+        <ConnectionSyncButton
+          compact={compact}
+          loading={loading}
+          onPress={onSync}
+          testID="connection.syncButton"
+        />
+      ) : null}
     </View>
   );
 }

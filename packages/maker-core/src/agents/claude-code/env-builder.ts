@@ -307,7 +307,17 @@ export async function buildClaudeEnv(
   const authOptions = options.credentialMode
     ? { credentialMode: options.credentialMode }
     : undefined;
-  Object.assign(env, await auth.getAuthEnv(authOptions));
+  const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
+  if (mode === 'remote') {
+    // CLAUDE_CONFIG_DIR is a host-local path. Desktop dev sandboxes inject a
+    // Windows/macOS userData path through the auth adapter; forwarding that
+    // literal path to a different POSIX host makes Claude resolve it relative
+    // to the remote cwd and write configuration data into the repository.
+    // The remote cc-manager owns this path and replaces it with its isolated
+    // ~/.xdt-server/v1/claude-home directory at the RPC boundary.
+    delete authEnv.CLAUDE_CONFIG_DIR;
+  }
+  Object.assign(env, authEnv);
 
   // Claude Code's documented child-agent model override.
   //

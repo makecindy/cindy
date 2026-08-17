@@ -26,6 +26,28 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
+type IOSSimulatorSessionStatus = import('../shared/iosSimulatorIpc').IOSSimulatorSessionStatus;
+type IOSSimulatorAccessRequest = import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequest;
+type IOSSimulatorAccessRequestResult =
+  import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequestResult;
+type IOSSimulatorStatusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorStatusRequest;
+type IOSSimulatorToolRequest = import('../shared/iosSimulatorIpc').IOSSimulatorToolRequest;
+type IOSSimulatorToolResponse = import('../shared/iosSimulatorIpc').IOSSimulatorToolResponse;
+type IOSSimulatorAgentControlRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorAgentControlRequest;
+type IOSSimulatorFocusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorFocusRequest;
+type IOSSimulatorH264FramePush = import('../shared/iosSimulatorIpc').IOSSimulatorH264FramePush;
+type IOSSimulatorRouteStatusPush = import('../shared/iosSimulatorIpc').IOSSimulatorRouteStatusPush;
+type IOSSimulatorLiveTouchRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorLiveTouchRequest;
+type IOSSimulatorMutationControlRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorMutationControlRequest;
+type IOSSimulatorViewerRouteRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorViewerRouteRequest;
+type IOSSimulatorViewerVisibilityRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorViewerVisibilityRequest;
+type IOSSimulatorStreamProfileRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorStreamProfileRequest;
 type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing'];
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
@@ -172,13 +194,14 @@ interface RemoteAgentSilentInstallStatusPush {
   message?: string;
 }
 
-/** cc-mgr 版本升级 push payload。available=null 表示该 host 的 pending 已清空。 */
+/** cc-mgr / pi-manager 版本升级 push payload。available=null 表示该 host 的 pending 已清空。 */
 interface RemoteAgentCcMgrUpgradeAvailablePush {
   hostId: string;
   available: {
     currentVersion: string;
     availableVersion: string;
   } | null;
+  agent: 'cc' | 'pi';
 }
 
 interface RemoteAgentExecResult {
@@ -273,6 +296,10 @@ type SubagentModelSettingsState =
   import('../shared/subagentModelSettings').SubagentModelSettingsState;
 type SubagentModelSettingsWriteResult =
   import('../shared/subagentModelSettings').SubagentModelSettingsWriteResult;
+type VisionBridgeSettingsPatch =
+  import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
+type VisionBridgeSettingsState =
+  import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -661,7 +688,7 @@ interface CCAgentStreamEvent {
     | 'thinking'
     | 'compact_boundary';
   data: unknown;
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
   /**
    * agent-meta: SDK 元信息（按 session.agentKind 解析）。当事件来自一条 SDK
    * message（assistant / tool_use / thinking final / done 等）时由 main 透传过来。
@@ -718,6 +745,7 @@ interface CCAgentPermissionRequestPayload {
   displayName?: string;
   description?: string;
   suggestions?: unknown[];
+  autoReviewUnavailable?: boolean;
 }
 
 interface CCAgentPermissionResult {
@@ -1054,6 +1082,7 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
+  onLocaleChanged?: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
@@ -1182,7 +1211,10 @@ interface ElectronAPI {
     /** 原位更新(同 id 换版):唤醒状态与面板位置延续,沙箱熄灯待重拉。 */
     update: (
       lizFilePath: string,
-      opts: { expectedPackageSha256: string },
+      opts: {
+        expectedPackageSha256: string;
+        expectedInstalledApproval: string;
+      },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /**
      * cindy 槽后端覆盖:首帧同步读(规则 7);overrides 键为 "image.generate"
@@ -1253,6 +1285,32 @@ interface ElectronAPI {
       packageSha256: string;
       iconDataUrl?: string;
     }>;
+    /** 本地包第三条恢复路径第一步:从已装目录读确认卡事实,零副作用。 */
+    reapproveInspect: (
+      id: string,
+    ) => Promise<{
+      manifest: import('../shared/ghost').GhostManifest;
+      trust: import('../shared/ghost').GhostTrustInfo;
+      /** 确认卡展示时的清单字节指纹;确认时回传,防确认间隙清单被换。 */
+      manifestSha256: string;
+      /** 确认卡展示时的完整批准投影指纹;覆盖技能、locale、icon、trust。 */
+      approvalProjectionSha256: string;
+      /** 升级前的启停偏好(.disabled 镜像读数):确认卡勾选默认值。 */
+      previouslyEnabled: boolean;
+      /** 一次性票据(Host 进程内钉住 inspect 时点的 owner 与事实,confirm 原子消费)。 */
+      inspectTicket: string;
+    }>;
+    /** 第三条恢复路径第二步:用户点过确认卡后开 receipt。 */
+    reapproveInstalled: (
+      id: string,
+      opts: {
+        enable: boolean;
+        expectedManifestSha256: string;
+        expectedApprovalProjectionSha256: string;
+        expectedInstalledApproval: string;
+        inspectTicket: string;
+      },
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
     /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
     export: (
@@ -1754,6 +1812,7 @@ interface ElectronAPI {
     /** 写偏好;true 附带开窗,false 附带关窗。返回新 state。 */
     setDetached: (
       detached: boolean,
+      handoff?: import('../shared/rightSidebarWindow').RsbWindowTabHandoff,
     ) => Promise<{ detached: boolean; lastOpen: boolean; open: boolean }>;
     /** 子窗口 mount 时拉主窗上报的渲染上下文(main 缓存的最后一份)。 */
     getContext: () => Promise<{
@@ -1765,6 +1824,10 @@ interface ElectronAPI {
     } | null>;
     /** 子窗口根组件挂载握手。 */
     ready: () => Promise<void>;
+    rendererReady: () => Promise<void>;
+    presentationReady: () => Promise<void>;
+    refreshContext: () => Promise<void>;
+    onVisibilityChanged: (cb: (payload: { visible: boolean }) => void) => () => void;
     /** 主窗把命令转发给子窗口(必要时 main 先开窗)。 */
     /** main 原子裁决 attached / routed / queued / stale-context。 */
     sendCommand: (
@@ -1788,7 +1851,20 @@ interface ElectronAPI {
         available: boolean;
       }) => void,
     ) => () => void;
+    onTabHandoff: (
+      callback: (handoff: import('../shared/rightSidebarWindow').RsbWindowTabHandoff) => void,
+    ) => () => void;
     onCommand: (cb: (cmd: RsbWindowCommand) => void) => () => void;
+  };
+
+  /** 资源用量独立子窗口(单实例;入口在顶部菜单)。 */
+  resourceUsageWindow: {
+    open: () => Promise<void>;
+    close: () => Promise<void>;
+    rendererReady: () => Promise<void>;
+    presentationReady: () => Promise<void>;
+    onSamplingActiveChanged: (cb: (active: boolean) => void) => () => void;
+    onLocaleChanged: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
   };
 
   /** 插件停靠面板独立窗口(每 ghostId 一扇窗;状态机在 main)。 */
@@ -1806,6 +1882,12 @@ interface ElectronAPI {
     onStateChanged: (
       cb: (state: import('../shared/ghostPanelWindow').GhostPanelWindowsState) => void,
     ) => () => void;
+    rendererReady: () => Promise<void>;
+    presentationReady: () => Promise<void>;
+    onVisibilityChanged: (cb: (payload: { visible: boolean }) => void) => () => void;
+    onCloseRequested: (cb: () => void) => () => void;
+    onMinimizeRequested: (cb: () => void) => () => void;
+    resolveCloseRequest: (approved: boolean) => Promise<void>;
   };
 
   agentIsland: {
@@ -1913,9 +1995,7 @@ interface ElectronAPI {
    * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
    */
   uploadLogsNow: () => Promise<LogUploadResult>;
-  onLogUploadSettingsChange: (
-    callback: (payload: LogUploadSettingsPayload) => void,
-  ) => () => void;
+  onLogUploadSettingsChange: (callback: (payload: LogUploadSettingsPayload) => void) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: () => Promise<{
@@ -2126,6 +2206,7 @@ interface ElectronAPI {
     effort: string;
     permissionMode: string;
     fastMode: boolean;
+    providerId: string | null;
   }) => void;
 
   syncNewMakerDraft: (snapshot: {
@@ -3335,6 +3416,25 @@ interface ElectronAPI {
     autoRelaunchOnIdle: boolean;
   }) => Promise<AutoUpdateSettingsPayload>;
   resetAutoUpdateSettings: () => Promise<AutoUpdateSettingsPayload>;
+  /** beta 测试渠道(设备级)开关的读/写/恢复默认。 */
+  getUpdateChannelSettings: () => Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }>;
+  setUpdateChannelSettings: (settings: {
+    enableBeta: boolean;
+  }) => Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }>;
+  resetUpdateChannelSettings: () => Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }>;
+  /** 用户主动重启,让 beta 通道切换在下次冷启动前生效。 */
+  relaunchForChannelChange: () => Promise<void>;
+  /** 打开 beta 前预检:探测 beta manifest 是否可达(HTTP 200)。 */
+  probeBetaChannel: () => Promise<{ available: boolean }>;
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: { applyVibrancy: (familyId: string, isDark: boolean) => void };
@@ -3598,11 +3698,12 @@ interface ElectronAPI {
     ccMgrForceUpgrade: (
       hostId: string,
       sessionId?: string,
+      agent?: 'cc' | 'pi',
     ) => Promise<{ ok: true; daemonReady: boolean }>;
     ccMgrListPendingUpgrades: () => Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string }>;
+      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
     }>;
-    ccMgrDismissPendingUpgrade: (hostId: string) => Promise<{ ok: true }>;
+    ccMgrDismissPendingUpgrade: (hostId: string, agent?: 'cc' | 'pi') => Promise<{ ok: true }>;
     // Codex credential sync
     checkCodexAuth: (id: string) => Promise<{
       localExists: boolean;
@@ -3913,14 +4014,30 @@ interface ElectronAPI {
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
-  // sidebar 偏好(置顶手动顺序)跨 dev / installed 共享;读 sendSync,写 invoke。
-  sidebarSettingsLoadPinnedOrderSync: () => string[];
-  sidebarSettingsSavePinnedOrder: (order: readonly string[]) => Promise<void>;
-  sidebarSettingsOnPinnedOrderChanged: (cb: (order: string[]) => void) => () => void;
   sidebarSettings: {
-    loadHiddenProjectKeys: () => string[];
-    setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
-    onHiddenProjectKeysChanged: (cb: (projectKeys: string[]) => void) => () => void;
+    claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;
+    loadSnapshot: () => import('../shared/sidebarSettings').SidebarSettingsSnapshot;
+    mutatePinnedOrder: (
+      mutation: import('../shared/sidebarSettings').SidebarPinnedOrderMutation,
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<string[]>;
+    onPinnedOrderChanged: (
+      cb: (
+        order: string[],
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    setProjectHidden: (
+      projectKey: string,
+      hidden: boolean,
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<boolean>;
+    onHiddenProjectKeysChanged: (
+      cb: (
+        projectKeys: string[],
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
   };
 
   remotePrecreatedWorktreeLedger: {
@@ -4101,6 +4218,20 @@ interface ElectronAPI {
         }>;
         activeTabId: string | null;
       }>;
+      ensureSingleton: (input: { sessionId: string; kind: string; state?: unknown }) => Promise<{
+        tab: {
+          id: string;
+          sessionId: string;
+          kind: string;
+          position: number;
+          state: unknown;
+          isActive: boolean;
+          createdAt: number;
+          updatedAt: number;
+        } | null;
+        created: boolean;
+        persistable: boolean;
+      }>;
       /** 新增 / 更新单个 tab;超 20 抛 RIGHT_SIDEBAR_TOO_MANY_TABS;state >16KB 抛 RIGHT_SIDEBAR_STATE_TOO_LARGE。 */
       upsert: (input: {
         id: string;
@@ -4112,6 +4243,20 @@ interface ElectronAPI {
       close: (input: { id: string }) => Promise<{ ok: true }>;
       setActive: (input: { sessionId: string; id: string | null }) => Promise<{ ok: true }>;
       reorder: (input: { sessionId: string; orderedIds: string[] }) => Promise<{ ok: true }>;
+    };
+    subagentRuns: {
+      list: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentRunsListRequest,
+      ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunsListResponse>;
+      detail: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
+      ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailResponse>;
+      onChanged: (
+        callback: (
+          payload: import('@cindy/maker-shared/subagent-workspace').SubagentRunsChangedPayload,
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
     };
     projectAliases: {
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
@@ -4593,6 +4738,8 @@ interface ElectronAPI {
         retryable: boolean;
         status: number;
         detail?: string;
+        errorType?: string;
+        reqId?: number;
       }) => void,
     ) => () => void;
     /** Claude Auto classifier 失败后降级到 ask 的会话级通知。 */
@@ -4623,9 +4770,16 @@ interface ElectronAPI {
     }>;
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
-     * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。fire-and-forget。
+     * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致；owner stamp
+     * 用于拒绝账号切换期间的迟到快照。fire-and-forget。
      */
-    syncModelVisibility: (map: Record<string, boolean>) => Promise<void>;
+    syncModelVisibility: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      map: Record<string, boolean>,
+    ) => Promise<void>;
+    /** Resolve the stable local/cloud owner allowed to import the pre-account preference key. */
+    claimLegacyModelVisibilityOwner: () => import('../shared/modelVisibility').ModelVisibilityLegacyOwnerClaim;
     /**
      * 「模型 / 供应商停用」override 写入(main 侧 model-disable-store);成功后 main 广播
      * PROVIDER_CHANGED,useProviders 快照刷新后 UI 拿到新的 suspended / disabled 标志。
@@ -4655,7 +4809,18 @@ interface ElectronAPI {
     ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
 
     // 「在新窗口打开」会话多开
-    openSessionInNewWindow: (sessionId: string) => Promise<void>;
+    openSessionInNewWindow: (sessionId: string, deviceId?: string | null) => Promise<void>;
+    openSessionInNewWindowIfDroppedOutside: (
+      sessionId: string,
+      deviceId?: string | null,
+    ) => Promise<boolean>;
+    beginSessionDragPreview: (
+      label: string,
+      sessionId: string,
+      deviceId: string | null | undefined,
+      palette: import('../shared/sessionDragPreview').SessionDragPreviewPalette,
+    ) => Promise<void>;
+    endSessionDragPreview: (dragEndAtMs?: number) => void;
 
     // ── Palette `/` 命令三源 (palette refactor) ───────────────────────
     listDesktopCommands: () => Promise<{
@@ -4668,6 +4833,12 @@ interface ElectronAPI {
       name: string,
       ctx: { sessionId?: string; workingDir?: string; args?: string; deviceId?: string },
     ) => Promise<{ success: boolean; error?: string }>;
+
+    startReview: (input: {
+      sourceSessionId: string;
+      focus?: string;
+      attachments?: import('./lib/fileTypes').SerializedAttachedFile[];
+    }) => Promise<{ ok: true; runId: string; reviewerSessionId: string }>;
 
     listAgentCommands: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
       success: boolean;
@@ -4835,13 +5006,25 @@ interface ElectronAPI {
         providerId?: string | null;
         /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
         workerPermissionMode?: 'auto' | 'bypassPermissions';
+        /** 新建 Lead 专用：等首条输入 accepted 且可查询后再派任务。 */
+        deferDelegateTask?: boolean;
       },
     ) => Promise<{
       teamId: string;
       workerSessionId: string;
       workerId: string;
+      dispatched: boolean;
       workerPermissionMode: 'auto' | 'bypassPermissions';
+      uiAssignmentSnapshotBeforeMs: number;
     }>;
+
+    dispatchOrcaUiAssignment: (
+      leadSessionId: string,
+      workerSessionId: string,
+      initialTask: string,
+      snapshotBeforeMs: number,
+      waitForLeadHistory: boolean,
+    ) => Promise<unknown>;
 
     /**
      * F-COLLAB: 关闭 lead session 当前的协同 workflow。
@@ -5215,6 +5398,11 @@ interface ElectronAPI {
     ) => Promise<SubagentModelSettingsWriteResult>;
     subagentModelSettingsReset: () => Promise<SubagentModelSettingsWriteResult>;
 
+    /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
+    visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
+    visionBridgeSettingsSet: (patch: VisionBridgeSettingsPatch) => Promise<VisionBridgeSettingsState>;
+    visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
+
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;
     agentResourceSettingsSet: (
@@ -5380,9 +5568,7 @@ interface ElectronAPI {
       id: string,
       action: import('../shared/turnChangeSet').TurnChangeAction,
     ) => Promise<import('../shared/turnChangeSet').TurnChangeActionResult>;
-    onTurnChangeSetUpdated: (
-      cb: (data: unknown, ownerStamp?: unknown) => void,
-    ) => () => void;
+    onTurnChangeSetUpdated: (cb: (data: unknown, ownerStamp?: unknown) => void) => () => void;
     onEvent: (cb: (data: unknown) => void) => () => void;
     onStatusChanged: (cb: (data: unknown) => void) => () => void;
     onInteractionRequest: (cb: (data: unknown) => void) => () => void;
@@ -5410,6 +5596,14 @@ interface ElectronAPI {
       agentKind: 'claude-code' | 'codex' | 'pi';
       isUserText?: boolean;
     }) => Promise<{ applied: boolean; done: boolean }>;
+    /** 输入框推荐提示词:turn 结束后预测用户下一步输入。 */
+    predictNextPrompt: (request: {
+      sessionId: string;
+      agentKind: 'claude-code' | 'codex' | 'pi';
+      messages: Array<{ role: string; content: string }>;
+      workingDir?: string;
+      turnGen: number;
+    }) => Promise<{ prompt: string | null }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ) => Promise<import('../shared/helpTypes').HelpAnswerResult>;
@@ -5608,6 +5802,8 @@ interface ElectronAPI {
           } | null,
         ) => void,
       ) => () => void;
+      getXaiSubscription: () => Promise<unknown | null>;
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void) => () => void;
     };
 
     /* ── 跨 Agent 工作区互转（双向，5 项独立判断；进度 step 通过 push 流转）── */
@@ -5769,6 +5965,30 @@ interface ElectronAPI {
       ) => Promise<AndroidAutomationConfigState>;
       setAdbPath: (adbPathOverride: string | null) => Promise<AndroidAutomationConfigState>;
       prepareAdb: () => Promise<AndroidAdbPreparationState>;
+    };
+    iosSimulator: {
+      requestAccess: (
+        request: IOSSimulatorAccessRequest,
+      ) => Promise<IOSSimulatorAccessRequestResult>;
+      status: (request: IOSSimulatorStatusRequest) => Promise<IOSSimulatorSessionStatus>;
+      call: (request: IOSSimulatorToolRequest) => Promise<IOSSimulatorToolResponse>;
+      setAgentControl: (
+        request: IOSSimulatorAgentControlRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      setMutationControl: (
+        request: IOSSimulatorMutationControlRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      setViewerVisibility: (
+        request: IOSSimulatorViewerVisibilityRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      latestFrame: (request: IOSSimulatorViewerRouteRequest) => Promise<IOSSimulatorToolResponse>;
+      setStreamProfile: (
+        request: IOSSimulatorStreamProfileRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      liveTouch: (request: IOSSimulatorLiveTouchRequest) => Promise<IOSSimulatorToolResponse>;
+      onH264Frame: (callback: (payload: IOSSimulatorH264FramePush) => void) => () => void;
+      onRouteStatus: (callback: (payload: IOSSimulatorRouteStatusPush) => void) => () => void;
+      onFocusRequest: (callback: (request: IOSSimulatorFocusRequest) => void) => () => void;
     };
     computer: {
       status: (options?: ComputerDriverStatusOptions) => Promise<ComputerDriverStatus>;

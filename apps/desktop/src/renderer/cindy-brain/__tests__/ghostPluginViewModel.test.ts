@@ -11,6 +11,7 @@ import {
   filterGhostPluginItems,
   ghostFallbackIconKind,
   ghostPanelOwnerKey,
+  ghostPrimaryAction,
   marketPresentationForInstalledGhost,
   nextOpenPanelIdForOwner,
   sortGhostPluginItemsByRecentUse,
@@ -58,6 +59,7 @@ function installed(overrides: Partial<InstalledGhost> = {}): InstalledGhost {
     manifest: manifest(),
     dir: '/tmp/cindy-brain/xd-mivo',
     enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     ...overrides,
   };
 }
@@ -107,7 +109,10 @@ describe('ghostPluginViewModel', () => {
         version: '1',
         enabled: true,
         canUse: true,
+        approvalState: 'approved',
+        builtin: false,
         tabPanel: false,
+        hostCapability: null,
       },
       {
         id: 'lizi-mivo',
@@ -116,7 +121,10 @@ describe('ghostPluginViewModel', () => {
         version: '1',
         enabled: true,
         canUse: true,
+        approvalState: 'approved',
+        builtin: false,
         tabPanel: false,
+        hostCapability: null,
       },
       {
         id: 'slack',
@@ -125,7 +133,10 @@ describe('ghostPluginViewModel', () => {
         version: '1',
         enabled: true,
         canUse: true,
+        approvalState: 'approved',
+        builtin: false,
         tabPanel: false,
+        hostCapability: null,
       },
     ] satisfies GhostPluginListItem[];
 
@@ -216,8 +227,25 @@ describe('ghostPluginViewModel', () => {
       name: 'XD Mivo',
       enabled: true,
       canUse: true,
+      hostCapability: null,
       version: '1.5.10',
     });
+  });
+
+  it('projects the iOS Simulator slot as an explicit Host capability action', () => {
+    const item = toGhostPluginListItem(
+      installed({
+        manifest: manifest({
+          command: undefined,
+          slots: ['skill', 'ios-simulator'],
+          tools: undefined,
+          network: undefined,
+        }),
+      }),
+    );
+
+    expect(item.hostCapability).toBe('ios-simulator');
+    expect(ghostPrimaryAction(item)).toBe('capability');
   });
 
   it('overlays exact installed market presentation without changing runtime facts', () => {
@@ -306,6 +334,16 @@ describe('ghostPluginViewModel', () => {
     expect(item).not.toHaveProperty('whenToUse');
   });
 
+  it('carries the Host approval state so the list can explain an unrunnable install', () => {
+    expect(toGhostPluginListItem(installed()).approvalState).toBe('approved');
+    expect(
+      toGhostPluginListItem(installed({ approval: { state: 'legacy-unapproved' } })).approvalState,
+    ).toBe('legacy-unapproved');
+    expect(
+      toGhostPluginDetail(installed({ approval: { state: 'invalid' } })).approvalState,
+    ).toBe('invalid');
+  });
+
   it('derives detail permissions and runtime declarations from the manifest', () => {
     const detail = toGhostPluginDetail(installed());
 
@@ -383,7 +421,9 @@ describe('plugin panel owner isolation', () => {
     // A 打开着面板 → 切到 B:必须关掉,不许因为 B 也装了同 id 的插件就留着。
     expect(nextOpenPanelIdForOwner(a, b, 'ghost-shared')).toBeNull();
     // 云 → 本地同样算换身份。
-    expect(nextOpenPanelIdForOwner(a, ghostPanelOwnerKey('local', null), 'ghost-shared')).toBeNull();
+    expect(
+      nextOpenPanelIdForOwner(a, ghostPanelOwnerKey('local', null), 'ghost-shared'),
+    ).toBeNull();
     // 身份没变则原样保留(别把用户正在用的面板关掉)。
     expect(nextOpenPanelIdForOwner(a, a, 'ghost-shared')).toBe('ghost-shared');
     expect(nextOpenPanelIdForOwner(a, a, null)).toBeNull();

@@ -11,6 +11,7 @@ import {
   mayExceedVisualLineThreshold,
   resolveUserMessageCollapse,
   shouldAutoCollapseUserMessageContent,
+  truncateTextToVisualLines,
 } from '@/session/userMessageCollapse';
 
 describe('shouldAutoCollapseUserMessageContent (首帧估算)', () => {
@@ -123,6 +124,12 @@ describe('resolveUserMessageCollapse (实测优先,估算兜底)', () => {
       LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD + 1,
       LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
     )).toBe(true);
+  });
+});
+
+describe('truncateTextToVisualLines', () => {
+  it('keeps only the visible line budget and drops later paragraphs', () => {
+    expect(truncateTextToVisualLines('第一行\n第二行\n隐藏内容', 2)).toBe('第一行\n第二行');
   });
 });
 

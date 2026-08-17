@@ -31,6 +31,7 @@ import type { CodexErrorInfo } from './app-server/protocol.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { AgentEvent } from '../../types/events.js';
+import { makeGhostManual64KiBFixture } from '../shared/ghost-manual-fixture.js';
 
 function noopLog(): {
   info: () => void;
@@ -249,6 +250,36 @@ describe('Codex assistant text streaming contract', () => {
         source: 'codex',
       },
     ]);
+  });
+});
+
+describe('translateItemNotification ghost_manual boundary', () => {
+  it('preserves a 64KB high-escape MCP envelope without truncation', async () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const q = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-manual',
+        turnId: 'turn-manual',
+        item: {
+          type: 'mcpToolCall',
+          id: 'manual-call',
+          server: 'cindy',
+          tool: 'ghost_manual',
+          status: 'completed',
+          result: { content: [{ type: 'text', text: wire }] },
+        },
+      },
+      q,
+      makeCtx(newCodexRuntimeState()),
+    );
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: wire }, source: 'codex' });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
   });
 });
 
@@ -1485,6 +1516,12 @@ describe('translateItemNotification collabAgentToolCall', () => {
       title: 'spawnAgent',
       description: 'Review the auth flow',
       receiverThreadIds: ['thread-2'],
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        providerRunIds: ['thread-2'],
+      },
     });
     expect(events[2].data).toMatchObject({
       toolUseId: 'collab-1',
@@ -1495,6 +1532,77 @@ describe('translateItemNotification collabAgentToolCall', () => {
       status: 'completed',
       summary: 'thread-2: done',
     });
+    expect(events[4].data).not.toHaveProperty('subagentObservation');
+  });
+
+  it('marks a completed-only spawn as a creation-capable Subagent observation', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'completed-only-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'thread-1',
+          receiverThreadIds: ['thread-2'],
+          prompt: 'Finish without a started notification',
+          agentsStates: { 'thread-2': { status: 'done' } },
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+      'agent_task_update',
+    ]);
+    expect(events[3].data).toMatchObject({
+      provider: 'codex',
+      taskId: 'completed-only-spawn',
+      status: 'completed',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'completed-only-spawn',
+        parentToolUseId: 'completed-only-spawn',
+        providerRunIds: ['thread-2'],
+      },
+    });
+  });
+
+  it('keeps wait/send/resume control updates live-only', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const params = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'wait-1',
+        tool: 'wait',
+        status: 'inProgress',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: ['child-a', 'child-b'],
+        agentsStates: {},
+      },
+    };
+
+    translateItemNotification('started', params, q, ctx);
+
+    const update = (await collect(q)).find((event) => event.type === 'agent_task_update');
+    expect(update?.data).toMatchObject({
+      taskId: 'wait-1',
+      receiverThreadIds: ['child-a', 'child-b'],
+    });
+    expect(update?.data).not.toHaveProperty('subagentObservation');
   });
 });
 
@@ -1548,6 +1656,13 @@ describe('translateItemNotification subAgentActivity', () => {
       status: 'running',
       title: '/root/survey_startup',
       model: 'gpt-5.6-terra',
+      receiverThreadIds: ['thread-2'],
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'spawn-1',
+        parentToolUseId: 'spawn-1',
+        providerRunIds: ['thread-2'],
+      },
     });
   });
 
@@ -1850,6 +1965,49 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(stableCitationBoundary(braceInQuote)).toBe(4);
     const braceComplete = 'abc :codex-file-citation{path="/tmp/a{b}.md"}';
     expect(stableCitationBoundary(braceComplete)).toBe(braceComplete.length);
+    expect(stableCitationBoundary('<|eo')).toBe(0);
+    expect(stableCitationBoundary('<')).toBe(0);
+    expect(stableCitationBoundary('  <|eos|>')).toBe(0);
+    expect(stableCitationBoundary('The token is <|eos|>')).toBe('The token is <|eos|>'.length);
+  });
+
+  it('agentMessage 流式按住独立停止符前缀,completed 后不留下可见泄漏', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const push = (phase: 'started' | 'updated' | 'completed', text: string): void => {
+      translateItemNotification(
+        phase,
+        {
+          threadId: 'thread-stop-token',
+          turnId: 'turn-stop-token',
+          item: { type: 'agentMessage', id: 'msg-stop-token', text },
+        },
+        q,
+        makeCtx(rt),
+      );
+    };
+
+    push('started', '<|eo');
+    push('updated', '<|eos|>');
+    push('completed', '<|eos|>');
+
+    const events = await collect(q);
+    const deltas = events
+      .filter((event) => event.type === 'text' && !(event.data as { isFinal: boolean }).isFinal)
+      .map((event) => (event.data as { text: string }).text);
+    expect(deltas.join('')).toBe('');
+    const final = events.find(
+      (event) => event.type === 'text' && (event.data as { isFinal: boolean }).isFinal,
+    );
+    expect((final?.data as { text: string } | undefined)?.text).toBe('');
+  });
+
+  it('finalizeCodexCitationText keeps a completed incomplete prefix as real text', async () => {
+    const { finalizeCodexCitationText } = await import('./translator.js');
+    expect(finalizeCodexCitationText('<')).toBe('<');
+    expect(finalizeCodexCitationText('<|eo')).toBe('<|eo');
+    expect(finalizeCodexCitationText('<|eos|>')).toBe('');
   });
 
   it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {

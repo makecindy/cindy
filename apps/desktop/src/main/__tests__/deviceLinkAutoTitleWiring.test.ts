@@ -203,12 +203,12 @@ describe('user rename notification ordering', () => {
       // local-db:sessions:update(本机重命名框)
       [
         "if (typeof p.title === 'string') noteUserTitleWritten(sid);",
-        'await db.update(sessions).set(setObj).where(eq(sessions.id, sid));',
+        'await withStatusWriteLock(sid, p.status, () => writeSessionPatch(db, sid, setObj, p.status));',
       ],
       // patchSessionMetaInDb(device-link 远程改名)
       [
         'if (patch.title !== undefined) noteUserTitleWritten(sessionId);',
-        'await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));',
+        'await withStatusWriteLock(sessionId, patch.status, async () => {',
       ],
       // renameSessionTitlesInDb(MCP 批量改名)
       [

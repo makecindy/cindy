@@ -24,7 +24,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-import { Scheduler } from '@cindy/maker-scheduler';
+import { SCHEDULER_RUN_ID_VENDOR_OPTION, Scheduler } from '@cindy/maker-scheduler';
 import type {
   CreateScheduleInput,
   ListFilter,
@@ -778,13 +778,16 @@ describe('schedule_silence_current_run — runId resolution branches', () => {
   function setup(opts: {
     sessionId?: string;
     inflightRunForSession?: string | undefined;
-    silenceReturns?: boolean;
+    silenceReturns?: boolean | ((runId: string) => boolean);
+    vendorRunId?: string;
   }) {
     const fake: FakeScheduler = {
       resolveInflightRunForSession: () => opts.inflightRunForSession,
       silenceRun: (runId: string) => {
         fake.silencedArg = runId;
-        return opts.silenceReturns ?? true;
+        return typeof opts.silenceReturns === 'function'
+          ? opts.silenceReturns(runId)
+          : (opts.silenceReturns ?? true);
       },
     };
     const registry = new SchedulerToolRegistry();
@@ -792,6 +795,9 @@ describe('schedule_silence_current_run — runId resolution branches', () => {
       agentKind: 'claude-code',
       workingDir: '/x',
       sessionId: opts.sessionId,
+      vendorOptions: opts.vendorRunId
+        ? { [SCHEDULER_RUN_ID_VENDOR_OPTION]: opts.vendorRunId }
+        : undefined,
     };
     registerScheduleSilenceCurrentRunTool(
       registry,
@@ -834,6 +840,31 @@ describe('schedule_silence_current_run — runId resolution branches', () => {
     expect(fake.silencedArg).toBeUndefined(); // 未尝试静默任何 run
   });
 
+  it('session map 丢失 + host-owned runId 存在 → 静默权威 run', async () => {
+    const { fake, registry } = setup({
+      sessionId: 'sess-1',
+      inflightRunForSession: undefined,
+      vendorRunId: 'run-after-auto-resume',
+    });
+    const env = await callSilence(registry, { runId: 'run-incorrect' });
+    expect(env.ok).toBe(true);
+    expect(env.data).toMatchObject({ silenced: true, runId: 'run-after-auto-resume' });
+    expect(fake.silencedArg).toBe('run-after-auto-resume');
+  });
+
+  it('host-owned runId 已过期 + session map 已恢复 → 回退到当前 run', async () => {
+    const { fake, registry } = setup({
+      sessionId: 'sess-1',
+      inflightRunForSession: 'run-current',
+      vendorRunId: 'run-stale',
+      silenceReturns: (runId) => runId === 'run-current',
+    });
+    const env = await callSilence(registry, {});
+    expect(env.ok).toBe(true);
+    expect(env.data).toMatchObject({ silenced: true, runId: 'run-current' });
+    expect(fake.silencedArg).toBe('run-current');
+  });
+
   it('sessionId 未知 + 传了 runId → 回退用该 runId 静默', async () => {
     const { fake, registry } = setup({ sessionId: undefined });
     const env = await callSilence(registry, { runId: 'run-fallback' });
@@ -860,13 +891,16 @@ describe('schedule_notify_current_run — runId resolution branches', () => {
   function setup(opts: {
     sessionId?: string;
     inflightRunForSession?: string | undefined;
-    notifyReturns?: boolean;
+    notifyReturns?: boolean | ((runId: string) => boolean);
+    vendorRunId?: string;
   }) {
     const fake: FakeScheduler = {
       resolveInflightRunForSession: () => opts.inflightRunForSession,
       notifyRun: (runId: string) => {
         fake.notifiedArg = runId;
-        return opts.notifyReturns ?? true;
+        return typeof opts.notifyReturns === 'function'
+          ? opts.notifyReturns(runId)
+          : (opts.notifyReturns ?? true);
       },
     };
     const registry = new SchedulerToolRegistry();
@@ -874,6 +908,9 @@ describe('schedule_notify_current_run — runId resolution branches', () => {
       agentKind: 'claude-code',
       workingDir: '/x',
       sessionId: opts.sessionId,
+      vendorOptions: opts.vendorRunId
+        ? { [SCHEDULER_RUN_ID_VENDOR_OPTION]: opts.vendorRunId }
+        : undefined,
     };
     registerScheduleNotifyCurrentRunTool(
       registry,
@@ -912,6 +949,31 @@ describe('schedule_notify_current_run — runId resolution branches', () => {
     expect(env.ok).toBe(false);
     expect(env.code).toBe('NOT_FOUND');
     expect(fake.notifiedArg).toBeUndefined();
+  });
+
+  it('session map 丢失 + host-owned runId 存在 → 主动上报权威 run', async () => {
+    const { fake, registry } = setup({
+      sessionId: 'sess-1',
+      inflightRunForSession: undefined,
+      vendorRunId: 'run-after-auto-resume',
+    });
+    const env = await callNotify(registry, { runId: 'run-incorrect' });
+    expect(env.ok).toBe(true);
+    expect(env.data).toMatchObject({ notified: true, runId: 'run-after-auto-resume' });
+    expect(fake.notifiedArg).toBe('run-after-auto-resume');
+  });
+
+  it('host-owned runId 已过期 + session map 已恢复 → 回退到当前 run', async () => {
+    const { fake, registry } = setup({
+      sessionId: 'sess-1',
+      inflightRunForSession: 'run-current',
+      vendorRunId: 'run-stale',
+      notifyReturns: (runId) => runId === 'run-current',
+    });
+    const env = await callNotify(registry, {});
+    expect(env.ok).toBe(true);
+    expect(env.data).toMatchObject({ notified: true, runId: 'run-current' });
+    expect(fake.notifiedArg).toBe('run-current');
   });
 
   it('sessionId 未知 + 传了 runId → 回退用该 runId 主动上报', async () => {

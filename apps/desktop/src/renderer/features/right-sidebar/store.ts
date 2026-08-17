@@ -18,12 +18,16 @@
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { normalizePersistableFavicon } from '../../../shared/faviconPersistence';
+import { createIpcError } from '../../../shared/ipc-errors';
+import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
 import { browserWebviewPool } from './lib/browserWebviewPool';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
 import { closeNativePopupForTab } from './lib/nativePopupTabs';
 import type { TabKindId, TabState } from './types';
+import type { RsbWindowTabSnapshot } from '../../../shared/rightSidebarWindow';
 
 const log = createLogger('rightSidebar.store');
 
@@ -39,11 +43,17 @@ type Listener = (sessionId: string) => void;
 export type TabCloseInterceptor = () => Promise<boolean | void> | boolean | void;
 
 const MAX_TABS_PER_SESSION = 20;
-const MAX_STATE_JSON_BYTES = 16 * 1024;
 const cache = new Map<string, TabBucket>();
 const inflight = new Map<string, Promise<void>>();
+const singletonInflight = new Map<string, Promise<TabState>>();
 const listeners = new Set<Listener>();
 const memoryOnlySessions = new Set<string>();
+/**
+ * Handoff snapshots survive the attached renderer's cache invalidation that
+ * accompanies a detached → attached transition. They are renderer-local and
+ * never persisted; a newer handoff for the same session replaces the old one.
+ */
+const pendingHandoffBuckets = new Map<string, TabBucket>();
 const closeInterceptors = new Map<string, TabCloseInterceptor>();
 const patchRevisions = new Map<string, number>();
 /**
@@ -116,12 +126,24 @@ const pendingStateWriteOrder: string[] = [];
 const activeStateWrites = new Map<string, PendingTabStateWrite>();
 let stateWritePumpRunning = false;
 let storeGeneration = 0;
+let cacheGeneration = 0;
 
 interface RightSidebarTabsListResult {
   tabs: Array<{ id: string; kind: string; state: unknown }>;
   activeTabId: string | null;
   /** false = session is not present in this device's local sessions table. */
   persistable?: boolean;
+}
+
+interface EnsureSingletonTabResult {
+  tab: {
+    id: string;
+    kind: string;
+    position: number;
+    state: unknown;
+  } | null;
+  created: boolean;
+  persistable: boolean;
 }
 
 /**
@@ -141,9 +163,7 @@ function notify(sessionId: string): void {
 }
 
 function ipcApi() {
-  return typeof window !== 'undefined'
-    ? window.electronAPI?.localDb?.rightSidebarTabs
-    : undefined;
+  return typeof window !== 'undefined' ? window.electronAPI?.localDb?.rightSidebarTabs : undefined;
 }
 
 function makeTabId(): string {
@@ -341,8 +361,10 @@ async function settleTabStateWrites(sessionId: string, tabId: string): Promise<v
   // tab 后只会 noop,所以不会再有新写进入这个 key。等待 active 与 pending
   // 两代写全部落定后再 DELETE,避免队列中的 UPSERT 在 close 之后把 tab 行复活。
   while (true) {
-    const writes = [activeStateWrites.get(key)?.promise, pendingStateWrites.get(key)?.promise]
-      .filter((promise): promise is Promise<void> => promise != null);
+    const writes = [
+      activeStateWrites.get(key)?.promise,
+      pendingStateWrites.get(key)?.promise,
+    ].filter((promise): promise is Promise<void> => promise != null);
     if (writes.length === 0) return;
     await Promise.allSettled(writes);
   }
@@ -404,15 +426,49 @@ function markMemoryOnlySession(sessionId: string): void {
   memoryOnlySessions.add(sessionId);
 }
 
-function validateMemoryOnlyStateSize(state: unknown): void {
-  const json = state === undefined ? '{}' : JSON.stringify(state);
+/**
+ * Renderer-side preflight matching the main-process 16KB persistence guard.
+ *
+ * This must run before optimistic cache updates for both persisted and
+ * memory-only sessions. If main rejects an oversized optimistic patch and the
+ * plugin derives that patch from an unchanged external source (for example a
+ * WebView favicon), rollback would notify React and immediately retrigger the
+ * same patch forever.
+ */
+function validateTabStateSize(state: unknown): void {
+  let json: string | undefined;
+  try {
+    json = state === undefined ? '{}' : JSON.stringify(state);
+  } catch {
+    throw createIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
+  }
+  // JSON.stringify 顶层 function / symbol 时不抛错而返回 undefined,同样不能持久化。
   if (typeof json !== 'string') {
-    throw new Error('tab state JSON must be serializable');
+    throw createIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
   }
   const bytes = new TextEncoder().encode(json).byteLength;
   if (bytes > MAX_STATE_JSON_BYTES) {
-    throw new Error(`tab state JSON too large: ${bytes} bytes (limit ${MAX_STATE_JSON_BYTES})`);
+    throw createIpcError(
+      'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+      `tab state JSON too large: ${bytes} bytes (limit ${MAX_STATE_JSON_BYTES})`,
+    );
   }
+}
+
+/**
+ * hydrate 路径消毒:发布前已把超大 / blob: / 非白名单 favicon 持久化进 DB 的
+ * 存量 tab,读回缓存时直接清洗。否则任何后续 patchState(哪怕只是 title 变更)
+ * 都会把坏 favicon 重新并进 16KB 预检而持续被拒,复发更新循环。
+ * web-browser 以外的 kind 没有 favicon 字段,原样透传。
+ */
+function sanitizeHydratedTabState(kind: string, raw: unknown): unknown {
+  if (kind !== 'web-browser' || !raw || typeof raw !== 'object') return raw;
+  const state = raw as Record<string, unknown>;
+  if (typeof state.favicon !== 'string') return raw;
+  const normalized = normalizePersistableFavicon(state.favicon);
+  if (normalized === state.favicon) return raw;
+  // normalized 为 null(不可持久化)时清成"无图标";为安全 URL 时做归一化。
+  return { ...state, favicon: normalized };
 }
 
 /**
@@ -425,6 +481,52 @@ function validateMemoryOnlyStateSize(state: unknown): void {
 export function getBucket(sessionId: string | null | undefined): TabBucket {
   if (!sessionId) return EMPTY_BUCKET;
   return cache.get(sessionId) ?? EMPTY_BUCKET;
+}
+
+/** Export the current renderer-owned tab bucket for a merge-back handoff. */
+export function getTabSnapshot(sessionId: string | null | undefined): RsbWindowTabSnapshot | null {
+  if (!sessionId) return null;
+  const bucket = cache.get(sessionId);
+  if (!bucket?.hydrated || shouldPersist(sessionId)) return null;
+  return {
+    sessionId,
+    tabs: bucket.tabs.map(({ id, kind, state }) => ({ id, kind, state })),
+    activeTabId: bucket.activeTabId,
+    persistable: false,
+  };
+}
+
+/** Import a non-persistable tab bucket received before the previous host is destroyed. */
+export function importTabSnapshot(snapshot: RsbWindowTabSnapshot): void {
+  if (snapshot.persistable || !snapshot.sessionId) return;
+  const seen = new Set<string>();
+  const tabs: TabState[] = snapshot.tabs.filter((tab) => {
+    if (!tab.id || !tab.kind || seen.has(tab.id)) return false;
+    seen.add(tab.id);
+    return true;
+  }).map((tab) => ({ ...tab, kind: tab.kind as TabKindId }));
+  const activeTabId = snapshot.activeTabId && seen.has(snapshot.activeTabId)
+    ? snapshot.activeTabId
+    : null;
+  const bucket: TabBucket = { hydrated: true, tabs, activeTabId };
+  memoryOnlySessions.add(snapshot.sessionId);
+  pendingHandoffBuckets.set(snapshot.sessionId, bucket);
+  setBucket(snapshot.sessionId, bucket);
+}
+
+/**
+ * 宿主切换时清掉旧 renderer cache，并同步恢复 main 已转发到本 renderer 的快照。
+ *
+ * React 的父 effect(MainLayout)晚于子 effect(RightSidebarShell)执行；若只 clear cache
+ * 再期待子组件重新触发 ensureHydrated，已挂载 Shell 不一定会再跑 hydration effect。
+ * 这里在同一个同步步骤里消费 pending handoff，避免合并后永久停在 EMPTY_BUCKET。
+ */
+export function resetCachesForHostTransition(): void {
+  invalidateSessionCaches();
+  for (const [sessionId, bucket] of pendingHandoffBuckets) {
+    pendingHandoffBuckets.delete(sessionId);
+    setBucket(sessionId, bucket);
+  }
 }
 
 /**
@@ -445,6 +547,11 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
   if (!sessionId) return;
   const current = cache.get(sessionId);
   if (current?.hydrated) return;
+  const pending = pendingHandoffBuckets.get(sessionId);
+  if (pending) {
+    setBucket(sessionId, pending);
+    return;
+  }
   const existing = inflight.get(sessionId);
   if (existing) return existing;
   const ipc = ipcApi();
@@ -454,9 +561,13 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
     setBucket(sessionId, { hydrated: true, tabs: [], activeTabId: null });
     return;
   }
+  const generation = cacheGeneration;
   const promise = (async () => {
     try {
-      const result = await ipc.list({ sessionId }) as RightSidebarTabsListResult;
+      const result = (await ipc.list({ sessionId })) as RightSidebarTabsListResult;
+      // 宿主迁移或 handoff 在 list IPC 期间发生时，本次结果属于旧宿主视图。
+      // 特别是 persistable:false 返回的空列表，不能覆盖 main 已转发的内存快照。
+      if (generation !== cacheGeneration || pendingHandoffBuckets.has(sessionId)) return;
       if (result.persistable === false) {
         markMemoryOnlySession(sessionId);
       } else {
@@ -465,7 +576,7 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
       const tabs: TabState[] = result.tabs.map((row) => ({
         id: row.id,
         kind: row.kind as TabKindId,
-        state: row.state,
+        state: sanitizeHydratedTabState(row.kind, row.state),
       }));
       setBucket(sessionId, { hydrated: true, tabs, activeTabId: result.activeTabId });
     } finally {
@@ -502,11 +613,11 @@ export async function addTab(
   const activate = opts?.activate !== false;
   const prev = getBucket(sessionId);
   if (prev.tabs.length >= MAX_TABS_PER_SESSION) {
-    throw new Error(`session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`);
+    throw new Error(
+      `session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`,
+    );
   }
-  if (!shouldPersist(sessionId)) {
-    validateMemoryOnlyStateSize(initialState);
-  }
+  validateTabStateSize(initialState);
   const id = makeTabId();
   const position = prev.tabs.length;
   const newTab: TabState = { id, kind, state: initialState };
@@ -596,6 +707,76 @@ export async function addOrFocusSingletonTab(
   return addTab(sessionId, kind, initialState);
 }
 
+/**
+ * DB-authoritative singleton creation for kinds backed by a partial unique
+ * index. Unlike addOrFocusSingletonTab this is safe across the attached and
+ * detached renderer stores. It does not activate or patch the tab; the host
+ * that wins main's routing decision performs those user-visible mutations.
+ */
+export async function ensureSingletonTab(
+  sessionId: string,
+  kind: TabKindId,
+  initialState: unknown = null,
+): Promise<TabState> {
+  await ensureHydrated(sessionId);
+  const current = getBucket(sessionId);
+  const local = current.tabs.find((tab) => tab.kind === kind);
+  const ipc = ipcApi();
+  if (!ipc?.ensureSingleton || !shouldPersist(sessionId)) {
+    return local ?? addTab(sessionId, kind, initialState, { activate: false });
+  }
+
+  const key = `${sessionId}\0${kind}`;
+  const pending = singletonInflight.get(key);
+  if (pending) return pending;
+  const generation = cacheGeneration;
+  const ensure = (async (): Promise<TabState> => {
+    const result = (await ipc.ensureSingleton({
+      sessionId,
+      kind,
+      state: initialState,
+    })) as EnsureSingletonTabResult;
+    if (!result.persistable || !result.tab) {
+      markMemoryOnlySession(sessionId);
+      return local ?? addTab(sessionId, kind, initialState, { activate: false });
+    }
+    const existing = getBucket(sessionId).tabs.find((tab) => tab.id === result.tab?.id);
+    const canonical: TabState = {
+      id: result.tab.id,
+      kind: result.tab.kind as TabKindId,
+      state: existing?.state ?? result.tab.state,
+    };
+    if (generation !== cacheGeneration) return canonical;
+
+    const bucket = getBucket(sessionId);
+    const withoutSingleton = bucket.tabs.filter(
+      (tab) => tab.id !== canonical.id && tab.kind !== kind,
+    );
+    const insertAt = Math.min(result.tab.position, withoutSingleton.length);
+    const tabs = [...withoutSingleton];
+    tabs.splice(insertAt, 0, canonical);
+    setBucket(sessionId, {
+      hydrated: true,
+      tabs,
+      activeTabId:
+        bucket.activeTabId && tabs.some((tab) => tab.id === bucket.activeTabId)
+          ? bucket.activeTabId
+          : null,
+    });
+    return canonical;
+  })();
+  singletonInflight.set(key, ensure);
+  void ensure.then(
+    () => {
+      if (singletonInflight.get(key) === ensure) singletonInflight.delete(key);
+    },
+    () => {
+      if (singletonInflight.get(key) === ensure) singletonInflight.delete(key);
+    },
+  );
+  return ensure;
+}
+
 export function setTabCloseInterceptor(
   tabId: string,
   interceptor: TabCloseInterceptor | null,
@@ -666,7 +847,12 @@ export async function closeTab(
         const shouldContinue = await interceptor();
         if (shouldContinue === false) return;
       } catch (err) {
-        log.warn('tab close interceptor failed (vetoed)', { sessionId, tabId, kind: tab.kind, err });
+        log.warn('tab close interceptor failed (vetoed)', {
+          sessionId,
+          tabId,
+          kind: tab.kind,
+          err,
+        });
         return;
       }
     }
@@ -675,7 +861,12 @@ export async function closeTab(
         const shouldContinue = await plugin.onBeforeClose(tab.state, { tabId, sessionId });
         if (shouldContinue === false) return;
       } catch (err) {
-        log.warn('plugin onBeforeClose failed (ignored)', { sessionId, tabId, kind: tab.kind, err });
+        log.warn('plugin onBeforeClose failed (ignored)', {
+          sessionId,
+          tabId,
+          kind: tab.kind,
+          err,
+        });
       }
     }
   }
@@ -766,11 +957,14 @@ export async function closeTab(
           // 但只有 cache 仍指向我们尝试设置的 active 时才清,否则用户已切到
           // 别的 tab 且该 tab 已成功落库,强清会让 setActiveTab 对那个 tab
           // 多发一次 IPC,结果虽等价但语义上是"回退到无 active"的短暂漂移。
-          log.warn('closeTab: post-close setActive failed; clearing cache activeTabId for recovery', {
-            sessionId,
-            tabId,
-            err: activeErr,
-          });
+          log.warn(
+            'closeTab: post-close setActive failed; clearing cache activeTabId for recovery',
+            {
+              sessionId,
+              tabId,
+              err: activeErr,
+            },
+          );
           const current = getBucket(sessionId);
           if (
             current.hydrated &&
@@ -807,9 +1001,7 @@ export async function closeTab(
         // activeTabId:只有"原 active 就是被关的 tab,且当前 active 仍是关闭时选出
         // 的替代者"才恢复回被关 tab;并发操作已把 active 指向别处时尊重现值。
         const activeTabId =
-          prev.activeTabId === tabId && now.activeTabId === nextActiveId
-            ? tabId
-            : now.activeTabId;
+          prev.activeTabId === tabId && now.activeTabId === nextActiveId ? tabId : now.activeTabId;
         setBucket(sessionId, { tabs: restored, activeTabId });
       }
       throw err;
@@ -827,10 +1019,7 @@ export async function closeAllTabs(sessionId: string): Promise<void> {
 }
 
 /** 切换激活 tab —— 同 id 即 noop。失败回滚。 */
-export async function setActiveTab(
-  sessionId: string,
-  tabId: string | null,
-): Promise<void> {
+export async function setActiveTab(sessionId: string, tabId: string | null): Promise<void> {
   const prev = getBucket(sessionId);
   if (tabId === prev.activeTabId) return;
   // closeTab 已把关闭中的 tab 从 bucket 乐观移除:若此时用户点击该 tab(或
@@ -864,12 +1053,13 @@ export function patchTabState(
   if (idx < 0) return Promise.resolve();
   const oldTab = prev.tabs[idx];
   const newState = patch(oldTab.state);
-  if (!shouldPersist(sessionId)) {
-    try {
-      validateMemoryOnlyStateSize(newState);
-    } catch (err) {
-      return Promise.reject(err);
-    }
+  try {
+    validateTabStateSize(newState);
+  } catch (err) {
+    // patchTabState is intentionally promise-shaped. Keep validation failures
+    // asynchronous so effect callers can handle them with the existing catch
+    // path instead of throwing through React's commit phase.
+    return Promise.reject(err);
   }
   const nextTabs = [...prev.tabs];
   nextTabs[idx] = { ...oldTab, state: newState };
@@ -895,10 +1085,7 @@ export function patchTabState(
 }
 
 /** 重排序 tab,orderedIds 必须包含 same session 当前**全部** tab id。失败回滚。 */
-export async function reorderTabs(
-  sessionId: string,
-  orderedIds: string[],
-): Promise<void> {
+export async function reorderTabs(sessionId: string, orderedIds: string[]): Promise<void> {
   const prev = getBucket(sessionId);
   if (orderedIds.length !== prev.tabs.length) return;
   const map = new Map(prev.tabs.map((t) => [t.id, t]));
@@ -933,8 +1120,10 @@ export async function reorderTabs(
  */
 export function invalidateSessionCaches(): void {
   const sessionIds = [...cache.keys()];
+  cacheGeneration += 1;
   cache.clear();
   inflight.clear();
+  singletonInflight.clear();
   // 宿主迁移不等于登出:已入队写仍应继续落库。这里不能像 _resetStore 一样
   // resolve 后丢弃,否则新 renderer 会 hydrate 到旧 URL / title / reveal state。
   for (const sessionId of sessionIds) notify(sessionId);
@@ -950,9 +1139,12 @@ export function subscribe(listener: Listener): () => void {
 
 /** 测试 / 登出清理。 */
 export function _resetStore(): void {
+  cacheGeneration += 1;
   cache.clear();
   inflight.clear();
+  singletonInflight.clear();
   memoryOnlySessions.clear();
+  pendingHandoffBuckets.clear();
   closeInterceptors.clear();
   pendingTabCreates.clear();
   closeMutationQueues.clear();

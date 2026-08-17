@@ -6,7 +6,8 @@
  *   2. buildTitleTarget:据 catalog titleModel 组装目标(模型 / 最低 effort / wire / upstream)
  *      —— 同时锁定 providers.json 里三家 titleModel 的配置(haiku / gpt-5.4-mini / gpt-5.4-mini)。
  *   3. generateTitleViaProvider:三家 wire 各发一次 fetch,断言 URL/headers/body 形状 + 响应解析;
- *      凭证缺失 / 非 2xx → 返回 null(不抛、不试别家)。
+ *      凭证缺失 / 非 2xx → 返回 null(不抛;有标题 wire 的供应商不试别家)。
+ *      无标题 wire 的会话供应商在官方 `xd` 已连接时回落官方通道。
  *
  * electron 在此 mock(stub app.getPath)纯粹是为了让 import 链(auth-adapters 顶层单例)能在
  * 无 electron 的 vitest 里加载;真正的凭证 / fetch / 会话 provider 全部经 deps 注入,不碰真实实现。
@@ -56,10 +57,34 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 import {
   buildTitleTarget,
   generateTitleViaProvider,
+  generateTitleViaProviderResult,
   parseResponsesSse,
   type TitleOneShotDeps,
 } from '../title-one-shot.js';
-import { setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import {
+  setActiveCatalog,
+  setDiscoveredCodexModels,
+  setXdGatewayModels,
+  type XdGatewayModelInfo,
+} from '../active-catalog.js';
+
+function xdGatewayModel(
+  id: string,
+  mode: NonNullable<XdGatewayModelInfo['mode']>,
+  overrides: Partial<XdGatewayModelInfo> = {},
+): XdGatewayModelInfo {
+  return {
+    id,
+    name: id,
+    mode,
+    contextWindow: 200_000,
+    efforts: ['low', 'medium', 'high'],
+    defaultEffort: 'high',
+    agents: ['claude-code'],
+    perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
+    ...overrides,
+  };
+}
 
 /** openai 是动态清单供应商(2026-07-19 统一重构):注入 codex 注册表快照模拟运行时形态。 */
 async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -246,7 +271,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
   });
 
   it('DB 无显式 + xd 已连接 → 走 xd(cc 默认)', async () => {
-    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
     try {
       const fetchImpl = fakeFetch(() => ({
         json: { choices: [{ message: { content: '网关标题' } }] },
@@ -316,6 +341,154 @@ describe('generateTitleViaProvider — provider 解析', () => {
   });
 });
 
+describe('generateTitleViaProviderResult — 手动重命名失败语义', () => {
+  it('无标题 wire 的会话供应商且官方未连接 → unsupported-provider', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { choices: [{ message: { content: '不应出现' } }] },
+    }));
+
+    await expect(
+      generateTitleViaProviderResult(
+        { sessionId: 's-deepseek', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      ),
+    ).resolves.toEqual({ status: 'unsupported-provider' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // 自动起名的旧入口仍折叠为 null，保持启发式 fallback 契约。
+    await expect(
+      generateTitleViaProvider(
+        { sessionId: 's-deepseek', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('无标题 wire 的会话供应商 + 官方已连接 → 走 xd 网关', async () => {
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: '官方标题' } }] },
+      }));
+
+      await expect(
+        generateTitleViaProviderResult(
+          { sessionId: 's-deepseek-official', agentKind: 'claude-code', prompt: 'x' },
+          {
+            fetchImpl,
+            readSessionProviderId: async () => 'deepseek',
+            listConnectedProviders: async () => [providerStub('deepseek'), providerStub('xd')],
+            readGatewayKey: () => 'gk',
+          },
+        ),
+      ).resolves.toEqual({ status: 'ok', title: '官方标题' });
+      expect(String(vi.mocked(fetchImpl).mock.calls[0][0])).toContain('/v1/chat/completions');
+
+      // 自动起名同样走官方,不再折叠为启发式。
+      await expect(
+        generateTitleViaProvider(
+          { sessionId: 's-deepseek-official', agentKind: 'claude-code', prompt: 'x' },
+          {
+            fetchImpl,
+            readSessionProviderId: async () => 'deepseek',
+            listConnectedProviders: async () => [providerStub('deepseek'), providerStub('xd')],
+            readGatewayKey: () => 'gk',
+          },
+        ),
+      ).resolves.toBe('官方标题');
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+
+  it('XD 结构上受支持但实时目录暂无聊天模型 → failed', async () => {
+    setXdGatewayModels([]);
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-xd-empty', agentKind: 'claude-code', prompt: 'x' },
+      {
+        readSessionProviderId: async () => 'xd',
+        listConnectedProviders: async () => [providerStub('xd')],
+        readGatewayKey: () => 'gk',
+      },
+    );
+
+    expect(result).toEqual({ status: 'failed' });
+  });
+
+});
+
+describe('generateTitleViaProviderResult — beforeDispatch 派发紧前复查', () => {
+  it('beforeDispatch 返回 true → 照常派发,并收到 (sessionId, agentKind)', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '标题' }] },
+    }));
+    const beforeDispatch = vi.fn(async () => true);
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-bd', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+        beforeDispatch,
+      },
+    );
+
+    expect(result).toEqual({ status: 'ok', title: '标题' });
+    // 复查发生在凭证到手、请求发出的紧前,并收到本次 one-shot 的解析口径。
+    expect(beforeDispatch).toHaveBeenCalledWith({ sessionId: 's-bd', agentKind: 'claude-code', providerId: 'anthropic' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('beforeDispatch 返回 false → 派发紧前中止,不发付费请求', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-bd-fail', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+        beforeDispatch: async () => false,
+      },
+    );
+
+    expect(result).toEqual({ status: 'failed' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('未注入 beforeDispatch(标题场景)→ 不复查,行为不变', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '标题' }] },
+    }));
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-no-bd', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+      },
+    );
+
+    expect(result).toEqual({ status: 'ok', title: '标题' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────
 
 describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
@@ -363,8 +536,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     // xd 模型以网关实时清单为准(2026-08-06 #1891 修复:不再读静态 titleModel):
     // 注入清单含聊天模型与图像模型,标题应选聊天模型(最经济)。
     setXdGatewayModels([
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
-      { id: 'gpt-image-2', mode: 'image' },
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
+      xdGatewayModel('gpt-image-2', 'image'),
     ]);
     try {
       expect(buildTitleTarget('xd')).toEqual({
@@ -380,8 +553,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('xd 清单只有非聊天模型(图像/向量)→ null,不发送无效请求', () => {
     setXdGatewayModels([
-      { id: 'gpt-image-2', mode: 'image' },
-      { id: 'voyage/voyage-4', mode: 'embedding' },
+      xdGatewayModel('gpt-image-2', 'image'),
+      xdGatewayModel('voyage/voyage-4', 'embedding'),
     ]);
     try {
       expect(buildTitleTarget('xd')).toBeNull();
@@ -395,9 +568,9 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('xd 清单只有 chat + 图像混合 → 只选 chat,模式权威过滤', () => {
     setXdGatewayModels([
-      { id: 'gpt-image-2', mode: 'image' },
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
-      { id: 'moonshotai/kimi-k3', mode: 'chat' },
+      xdGatewayModel('gpt-image-2', 'image'),
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
+      xdGatewayModel('moonshotai/kimi-k3', 'chat'),
     ]);
     try {
       const target = buildTitleTarget('xd');
@@ -412,8 +585,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     // responses 模型需要 Codex Responses wire,标题通道固定 gateway-chat——
     // 选中会被网关拒收,必须排除。
     setXdGatewayModels([
-      { id: 'qwen/qwen3.8-max', mode: 'responses' },
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+      xdGatewayModel('qwen/qwen3.8-max', 'responses'),
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
     ]);
     try {
       const target = buildTitleTarget('xd');
@@ -423,7 +596,7 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     }
   });
   it('xd 清单只有 responses 模型 → null(无可用 chat 模型,不发请求)', () => {
-    setXdGatewayModels([{ id: 'qwen/qwen3.8-max', mode: 'responses' }]);
+    setXdGatewayModels([xdGatewayModel('qwen/qwen3.8-max', 'responses')]);
     try {
       expect(buildTitleTarget('xd')).toBeNull();
     } finally {
@@ -432,8 +605,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('用户停用清单中最便宜的模型 → 选次便宜可用模型(Codex round 2)', () => {
     setXdGatewayModels([
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat', inputCostPerToken: 0.1, outputCostPerToken: 0.2 },
-      { id: 'moonshotai/kimi-k3', mode: 'chat', inputCostPerToken: 1, outputCostPerToken: 2 },
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat', { inputCostPerToken: 0.1, outputCostPerToken: 0.2 }),
+      xdGatewayModel('moonshotai/kimi-k3', 'chat', { inputCostPerToken: 1, outputCostPerToken: 2 }),
     ]);
     mockReadModelDisableOverrides.mockReturnValueOnce({
       disabledModels: { 'xd:deepseek/deepseek-v4-flash': true },
@@ -447,8 +620,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('清单中全部 chat 模型都被用户停用 → null', () => {
     setXdGatewayModels([
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
-      { id: 'moonshotai/kimi-k3', mode: 'chat' },
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
+      xdGatewayModel('moonshotai/kimi-k3', 'chat'),
     ]);
     mockReadModelDisableOverrides.mockReturnValueOnce({
       disabledModels: {
@@ -639,7 +812,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
 
 describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
   it('200 → 解析 choices[].message.content;请求形状正确(模型取自网关清单)', async () => {
-    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
     try {
       const fetchImpl = fakeFetch(() => ({
         json: { choices: [{ message: { content: '网关标题' } }] },
@@ -660,13 +833,17 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       ];
       expect(url).toBe(`${XD_GATEWAY_BASE_URL}/v1/chat/completions`);
       expect(init.headers.authorization).toBe('Bearer gk-1');
-      expect(JSON.parse(init.body).model).toBe('deepseek/deepseek-v4-flash');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'deepseek/deepseek-v4-flash',
+        max_tokens: 32,
+        thinking: { type: 'disabled' },
+      });
     } finally {
       setXdGatewayModels([]);
     }
   });
   it('网关清单无聊天模型 → 不发送请求、回落 null', async () => {
-    setXdGatewayModels([{ id: 'gpt-image-2', mode: 'image' }]);
+    setXdGatewayModels([xdGatewayModel('gpt-image-2', 'image')]);
     try {
       const fetchImpl = fakeFetch(() => ({ json: {} }));
       const title = await generateTitleViaProvider(
@@ -685,7 +862,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
     }
   });
   it('无网关 key → null', async () => {
-    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
     try {
       const fetchImpl = fakeFetch(() => ({ json: {} }));
       const title = await generateTitleViaProvider(

@@ -147,6 +147,9 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       busy: false,
       lastSeenAt: NOW,
     },
+    getPresenceAvailability: (candidateDeviceId: string) => (
+      candidateDeviceId === deviceId ? true : null
+    ),
     openLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',

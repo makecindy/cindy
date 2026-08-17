@@ -160,6 +160,10 @@ interface Harness {
 function makeHarness(opts?: {
   runnerImpl?: (s: Schedule, ctx: FireContext) => Promise<FireResult>;
   isManagedWorkspaceDir?: (dir: string) => boolean;
+  validateTargetSession?: (
+    targetSessionId: string,
+    operation: 'create' | 'update' | 'fire',
+  ) => Promise<void>;
   /** 传入共享 storage / clock 模拟"两个 app 实例共用同一 DB"的双开场景。 */
   storage?: InMemoryStorage;
   clock?: FakeClock;
@@ -191,6 +195,7 @@ function makeHarness(opts?: {
     generateId: opts?.generateId ?? makeIdGen(),
     tickIntervalMs: 60_000_000, // effectively disabled; tests call tick() manually
     isManagedWorkspaceDir: opts?.isManagedWorkspaceDir,
+    validateTargetSession: opts?.validateTargetSession,
     passive: opts?.passive,
     maxConcurrentRuns: opts?.maxConcurrentRuns,
     runStallMs: opts?.runStallMs,
@@ -258,6 +263,75 @@ describe('Scheduler', () => {
     // 空白串 workingDir 等同未传 → dialogue
     const blankDir = await h.scheduler.create({ ...baseInput, workingDir: '  ' });
     expect(blankDir.workspaceKind).toBe('dialogue');
+  });
+
+  it('rejects persisted Review targets at create, update, automatic fire, and runNow after restart', async () => {
+    const sourceBySessionId = new Map<string, string>([
+      ['session-normal', 'desktop'],
+      ['session-review', 'review'],
+    ]);
+    const operations: Array<{ targetSessionId: string; operation: string }> = [];
+    const validateTargetSession = async (
+      targetSessionId: string,
+      operation: 'create' | 'update' | 'fire',
+    ): Promise<void> => {
+      operations.push({ targetSessionId, operation });
+      if (sourceBySessionId.get(targetSessionId) === 'review') {
+        throw new Error('Review tasks cannot be targets of scheduled automations');
+      }
+    };
+    const local = makeHarness({ validateTargetSession });
+
+    await expect(
+      local.scheduler.create({ ...baseInput, targetSessionId: 'session-review' }),
+    ).rejects.toThrow('Review tasks cannot be targets');
+    expect(local.storage.schedules.size).toBe(0);
+
+    const schedule = await local.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'session-normal',
+    });
+    await expect(
+      local.scheduler.update(schedule.id, { targetSessionId: 'session-review' }),
+    ).rejects.toThrow('Review tasks cannot be targets');
+    expect((await local.storage.get(schedule.id))?.targetSessionId).toBe('session-normal');
+
+    // The source is durable session state, so a target that becomes a Review
+    // task after scheduling must still be rejected by a restarted host.
+    sourceBySessionId.set('session-normal', 'review');
+    const restarted = makeHarness({
+      storage: local.storage,
+      clock: local.clock,
+      validateTargetSession,
+    });
+    await restarted.scheduler.start();
+    try {
+      local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 0));
+      await restarted.scheduler.tick();
+      expect(restarted.runner.fire).not.toHaveBeenCalled();
+      expect(await restarted.scheduler.listRuns(schedule.id)).toMatchObject([
+        {
+          status: 'failed',
+          errorMsg: 'Review tasks cannot be targets of scheduled automations',
+        },
+      ]);
+
+      await restarted.scheduler.runNow(schedule.id);
+      expect(restarted.runner.fire).not.toHaveBeenCalled();
+      const runs = await restarted.scheduler.listRuns(schedule.id);
+      expect(runs).toHaveLength(2);
+      expect(runs.every((run) => run.status === 'failed')).toBe(true);
+    } finally {
+      await restarted.scheduler.stop();
+    }
+
+    expect(operations.map((entry) => entry.operation)).toEqual([
+      'create',
+      'create',
+      'update',
+      'fire',
+      'fire',
+    ]);
   });
 
   it('create()/update() 把 app 管理工作区目录归一成对话任务(host 注入谓词)', async () => {

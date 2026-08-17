@@ -1,3 +1,5 @@
+import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../../shared/iosSimulatorIpc.js';
+
 /**
  * maker:* IPC channel 名常量。统一收口，禁止 hardcode 字符串。
  *
@@ -7,6 +9,7 @@
 
 export const MAKER_INVOKE = {
   CREATE_SESSION: 'maker:create-session',
+  START_REVIEW: 'maker:review:start',
   TURN_CHANGE_SETS_LIST: 'maker:turn-change-sets:list',
   TURN_CHANGE_SETS_GET: 'maker:turn-change-sets:get',
   TURN_CHANGE_SET_APPLY: 'maker:turn-change-set:apply',
@@ -219,9 +222,12 @@ export const MAKER_INVOKE = {
   /**
    * renderer → main 单向镜像「模型显示/隐藏」override(modelVisibilityPrefs)。
    * override 真源仍在 renderer localStorage;main 只缓存一份内存副本,供 IM `/model`
-   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。fire-and-forget,不落盘。
+   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。入参带 dataOwnerId +
+   * ownerGeneration，Main 拒绝账号切换期间的迟到快照。fire-and-forget,不落盘。
    */
   MODEL_VISIBILITY_SYNC: 'maker:model-visibility:sync',
+  /** Sync read: which stable local/cloud owner may import the pre-account Renderer preference key. */
+  MODEL_VISIBILITY_LEGACY_OWNER_CLAIM_SYNC: 'maker:model-visibility:legacy-owner-claim-sync',
   /**
    * 「模型 / 供应商停用」override 写入(model-disable-store,main 侧持久化真源)。
    * 入参 = { kind:'model', providerId, modelIds: string[], disabled: boolean }
@@ -254,6 +260,8 @@ export const MAKER_INVOKE = {
   AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
+  /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
+  PREDICT_PROMPT: 'maker:predict-prompt',
   HELP_ASK: 'maker:help:ask',
   /**
    * Help-assistant 反馈草稿 (Phase 1):用户对某条回答不满时,点 👎 → 弹小表单 →
@@ -303,6 +311,8 @@ export const MAKER_INVOKE = {
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
+  // SuperGrok 账号周用量 (cli-chat-proxy settings + billing?format=credits)
+  USAGE_XAI_SUBSCRIPTION: 'maker:usage:xai-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
   // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
@@ -342,6 +352,10 @@ export const MAKER_INVOKE = {
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
+  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
+  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
+  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
+  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
@@ -577,6 +591,8 @@ export const MAKER_INVOKE = {
   PROJECT_AUTOMATION_REMOVE_SCHEDULE: 'maker:project-automation:remove-schedule',
   // multi-worker Phase 1
   WORKER_CREATE: 'maker:worker:create',
+  /** 新建 Lead 的首条输入 accepted 后，派发此前延后的 UI initial_task。 */
+  WORKER_DISPATCH_UI_ASSIGNMENT: 'maker:worker:dispatch-ui-assignment',
   WORKER_LIST: 'maker:worker:list',
   WORKER_SWITCH_FOCUS: 'maker:worker:switch-focus',
   WORKER_IDLE: 'maker:worker:idle',
@@ -610,6 +626,16 @@ export const MAKER_INVOKE = {
   ANDROID_SET_DEFAULT_DEVICE: 'maker:android:set-default-device',
   ANDROID_SET_ADB_PATH: 'maker:android:set-adb-path',
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
+  // iOS Simulator pane and Agent discovery. Session id is required and checked in main.
+  IOS_SIMULATOR_REQUEST_ACCESS: 'maker:ios-simulator:request-access',
+  IOS_SIMULATOR_STATUS: 'maker:ios-simulator:status',
+  IOS_SIMULATOR_CALL: 'maker:ios-simulator:call',
+  IOS_SIMULATOR_SET_AGENT_CONTROL: 'maker:ios-simulator:set-agent-control',
+  IOS_SIMULATOR_SET_MUTATION_CONTROL: 'maker:ios-simulator:set-mutation-control',
+  IOS_SIMULATOR_SET_VIEWER_VISIBILITY: 'maker:ios-simulator:set-viewer-visibility',
+  IOS_SIMULATOR_LATEST_FRAME: 'maker:ios-simulator:latest-frame',
+  IOS_SIMULATOR_SET_STREAM_PROFILE: 'maker:ios-simulator:set-stream-profile',
+  IOS_SIMULATOR_LIVE_TOUCH: 'maker:ios-simulator:live-touch',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
   // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
@@ -637,6 +663,11 @@ export const MAKER_INVOKE = {
    * 自动同步。窗口生命周期见 main/secondary-windows.ts。
    */
   OPEN_SESSION_IN_NEW_WINDOW: 'maker:open-session-in-new-window',
+  /** Native task drag released outside every Cindy app window. */
+  OPEN_SESSION_IN_NEW_WINDOW_IF_DROPPED_OUTSIDE:
+    'maker:open-session-in-new-window-if-dropped-outside',
+  /** Start the transient task drag preview shown outside Cindy windows. */
+  SESSION_DRAG_PREVIEW_START: 'maker:session-drag-preview:start',
   /**
    * 右侧栏独立子窗口(RSB window)——「侧边栏在新窗口中显示」全局偏好 + 窗口生命周期。
    * 状态机 / 窗口管理见 main/right-sidebar-window/controller.ts。
@@ -689,6 +720,11 @@ export const MAKER_INVOKE = {
  * (typically localStorage 镜像) 推给 main, main 只更新内存缓存供后续工具调用读。
  */
 export const MAKER_SEND = {
+  /**
+   * Stop the transient task drag preview. Release feedback is latency-sensitive
+   * and has no response payload, so it must not pay an invoke/ack round trip.
+   */
+  SESSION_DRAG_PREVIEW_END: 'maker:session-drag-preview:end',
   /**
    * macOS permission coach: begin a native drag of the real Computer Use app
    * bundle into System Settings. Main validates that the sender is the
@@ -764,9 +800,9 @@ export const MAKER_PUSH = {
   MCP_CHANGED: 'maker:mcp:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
-   * { agent, providerId, code, retryable, status, detail? })。仅「会话显式路由到
-   * user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId,code) 节流。
-   * renderer 据 code 显示 providerError.* i18n toast + 修复引导。
+   * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。
+   * 仅「会话显式路由到 user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId, code) 节流。
+   * renderer 据 code 显示 providerError.* i18n toast + 修复引导;errorType / reqId 供诊断详情。
    */
   PROVIDER_UPSTREAM_ERROR: 'maker:provider:upstream-error',
   /**
@@ -862,6 +898,12 @@ export const MAKER_PUSH = {
   RSB_WINDOW_CONTEXT_CHANGED: 'maker:rsb-window:context-changed',
   /** main → 子窗口命令(如 open-terminal),只发子窗口。payload = RsbWindowCommand。 */
   RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
+  /** 子窗口合并回主窗口前交接不可持久化 session 的 tab 快照，只发主窗口。 */
+  RSB_WINDOW_TAB_HANDOFF: 'maker:rsb-window:tab-handoff',
+  /** Main-owned H.264 access unit pushed without Renderer polling. */
+  IOS_SIMULATOR_H264_FRAME: 'maker:ios-simulator:h264-frame',
+  /** Main-owned public route selection/status for the iOS Simulator viewer. */
+  IOS_SIMULATOR_ROUTE_STATUS: IOS_SIMULATOR_ROUTE_STATUS_CHANNEL,
   /**
    * 插件面板独立窗口状态广播(全量 GhostPanelWindowsState)——发所有窗口
    * (主窗布局过滤 + 各子窗口自身都消费)。

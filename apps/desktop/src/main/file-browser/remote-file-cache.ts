@@ -134,20 +134,27 @@ export interface StartupStagedChatAttachmentSweepResult {
  * created by an earlier process and not referenced by persisted messages is
  * unreachable after restart. Files created by this process are left alone to
  * avoid racing a draft that is still being assembled.
+ *
+ * Filesystem is the source of work: persisted-path lookup only runs when the
+ * owner cache already has stale `.bin` / `.bin.part` files. A LIKE + json_tree
+ * scan over a multi-GB message table otherwise blocks startup for tens of
+ * seconds even when the cache directory does not exist.
  */
 export async function sweepStagedChatAttachmentsOnStartup(params: {
   ownerId: string;
-  protectedPaths: readonly string[];
   createdBeforeMs: number;
+  protectedPaths?: readonly string[];
+  loadProtectedPaths?: () => Promise<readonly string[]>;
+  canContinue?: () => boolean;
 }): Promise<StartupStagedChatAttachmentSweepResult> {
   const result: StartupStagedChatAttachmentSweepResult = {
     inspected: 0,
     removed: 0,
     protected: 0,
   };
-  const protectedPaths = new Set(params.protectedPaths.map(normalizePathForComparison));
   const ownerDir = chatAttachmentOwnerCacheDir(params.ownerId);
   const entries = await fs.readdir(ownerDir, { withFileTypes: true }).catch(() => []);
+  const stalePaths: string[] = [];
   for (const entry of entries) {
     if (!entry.isFile() && !entry.isSymbolicLink()) continue;
     if (!entry.name.endsWith('.bin') && !entry.name.endsWith('.bin.part')) continue;
@@ -157,10 +164,33 @@ export async function sweepStagedChatAttachmentsOnStartup(params: {
     try {
       const stat = await fs.lstat(filePath);
       if (stat.mtimeMs >= params.createdBeforeMs) continue;
-      if (protectedPaths.has(normalizePathForComparison(filePath))) {
-        result.protected += 1;
-        continue;
+      stalePaths.push(filePath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      if (code !== 'ENOENT') {
+        log.warn('startup staged chat attachment sweep failed for file', {
+          filePath,
+          error: String(err),
+        });
       }
+    }
+  }
+  if (stalePaths.length === 0) return result;
+  if (params.canContinue && !params.canContinue()) return result;
+
+  const protectedList =
+    params.protectedPaths ??
+    (params.loadProtectedPaths ? await params.loadProtectedPaths() : []);
+  if (params.canContinue && !params.canContinue()) return result;
+  const protectedPaths = new Set(protectedList.map(normalizePathForComparison));
+
+  for (const filePath of stalePaths) {
+    if (protectedPaths.has(normalizePathForComparison(filePath))) {
+      result.protected += 1;
+      continue;
+    }
+    try {
+      if (params.canContinue && !params.canContinue()) return result;
       await fs.unlink(filePath);
       result.removed += 1;
     } catch (err) {
