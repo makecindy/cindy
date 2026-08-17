@@ -217,8 +217,8 @@ export interface DeviceLinkTiming {
   /** 单个连接世代内的最大发送次数；耗尽后主动重连并在新世代继续。 */
   transportMaxRetryAttempts: number;
   /**
-   * **定时器驱动**的单趟重发条数上限（理由与线上证据见
-   * TRANSPORT_RETRY_PASS_BUDGET）。link 重建后的 replay 不受此限。
+   * 单趟恢复/重发帧预算（理由与线上证据见 TRANSPORT_RETRY_PASS_BUDGET）。
+   * 定时重发、link 重建 replay、恢复期内的首发共用；不再给 replay 无限额度。
    */
   transportRetryPassBudget: number;
   /** presence fire-and-forget 帧命中 WebSocket 背压后的合并重试间隔。 */
@@ -240,10 +240,16 @@ export interface DeviceLinkTiming {
    * 断连恰恰常发生在「在线很久 → 出站洪峰 → 被踢」之后——若冷却随稳定期
    * 归零,客户端会以 1s 级节奏反复「重连 → 全量重放洪峰 → 再被踢」
    * (2026-08-08 线上:两次 1013 间隔仅 15s,第二条连接只活了 7s)。
-   * 连续拥塞计数同样只在稳定在线一个 reconnectStableResetMs 后清零。
+   * 连续拥塞计数只在稳定在线满 congestionStableResetMs 后清零——现场 1013
+   * 间隔常是数分钟，若与 10s 的普通稳定窗共用，streak 永远回 1。
    */
   congestionBackoffBaseMs: number;
   congestionBackoffMaxMs: number;
+  /**
+   * 拥塞连击清零所需的稳定在线时长。与 reconnectStableResetMs 刻意分开：
+   * 普通退避 10s 即可恢复快速重连；拥塞冷却必须跨过现场 3–8 分钟一踢的间隔。
+   */
+  congestionStableResetMs: number;
 }
 
 const DEFAULT_TIMING: DeviceLinkTiming = {
@@ -262,6 +268,7 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   stalledLinkPendingMaxAgeMs: 60_000,
   congestionBackoffBaseMs: 5_000,
   congestionBackoffMaxMs: 30_000,
+  congestionStableResetMs: 15 * 60_000,
 };
 
 /**
@@ -274,6 +281,14 @@ function normalizeRetryPassBudget(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return TRANSPORT_RETRY_PASS_BUDGET;
   const floored = Math.floor(value);
   return floored >= 1 ? floored : TRANSPORT_RETRY_PASS_BUDGET;
+}
+
+function normalizeCongestionStableResetMs(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_TIMING.congestionStableResetMs;
+  }
+  const floored = Math.floor(value);
+  return floored >= 1 ? floored : DEFAULT_TIMING.congestionStableResetMs;
 }
 
 /**
@@ -433,6 +448,15 @@ interface PeerTransportState {
   receive: Map<string, ReceiveStreamState>;
   highestAckSeq: number;
   lastReplayEpoch: number;
+  /** 上次真正 replay 时对端的 stream。对端重启换 stream 时不能当重复 open。 */
+  lastReplayRemoteStreamId: string | null;
+  /**
+   * 恢复探测：link 刚恢复或刚被 DEVICE_OFFLINE 刹停后为 true。
+   * 此间出站不超过 transportRetryPassBudget，直到收到可靠 ACK。
+   */
+  recoveryNeedsAck: boolean;
+  /** 本轮恢复探测已写出的帧数（含 replay 与恢复期内首发）。 */
+  recoveryFramesSent: number;
   /** latest-wins 腾位驱逐的聚合计数(自上次告警起),仅服务日志聚合。 */
   pushAdmissionDropCount: number;
   /** 上次输出 latest-wins 驱逐告警的单调时刻;0 表示从未输出。 */
@@ -483,14 +507,15 @@ export class DeviceLinkClient {
   /**
    * 连续 relay 拥塞断连(1013)计数,驱动重连冷却下限(computeReconnectDelayMs)。
    * 与 reconnectAttempt 生命周期刻意不同:attempt 在稳定在线后归零以恢复快速
-   * 重连,本计数只在稳定在线满 reconnectStableResetMs 后清零——拥塞信号不因
-   * 「重连握手成功」而失效,否则回到「重连 → 重放洪峰 → 再被踢」的紧循环。
+   * 重连,本计数只在稳定在线满 congestionStableResetMs 后清零——拥塞信号不因
+   * 「重连握手成功」或短稳定窗而失效,否则现场数分钟一踢时 streak 永远是 1。
    * connectNow / restartConnection(用户显式等待的前台恢复/唤醒)清 attempt
    * 但不清本计数:立即重连可以,但若再被踢,冷却按更深一档生效。
    */
   private congestionCloseStreak = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStableTimer: ReturnType<typeof setTimeout> | null = null;
+  private congestionStableTimer: ReturnType<typeof setTimeout> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   /** 连续握手超时次数;任一次 hello-ack 上线即复位(驱动握手窗口自适应放宽)。 */
   private handshakeTimeoutStreak = 0;
@@ -1016,14 +1041,7 @@ export class DeviceLinkClient {
     // 对端已重开链路:若仍有待重发的 transport-timeout 通知,不再需要。
     this.cancelTimeoutCloseNotify(dst);
     if (peerSupportsReliable) {
-      const resumedLink = !peer.linkReady;
-      peer.linkReady = true;
-      // link 恢复即清 before-link 通知节流:节流只该覆盖「同一次尚未恢复的中断」,
-      // 否则恢复后 30s 内再次丢 link-accept 时新帧全被节流掉,host 的唯一恢复出口
-      // 不再入队,第二次自愈最坏被推迟整个窗口(review P2)。
-      this.staleLinkNotifiedAt.delete(dst);
-      this.resumeReceiveStreams(dst, peer);
-      this.replayPending(dst, resumedLink);
+      this.completeReliableLinkResume(dst, peer);
     }
   }
 
@@ -1340,6 +1358,8 @@ export class DeviceLinkClient {
     this.clearPendingPresence();
     for (const peer of this.peerTransport.values()) {
       peer.linkReady = false;
+      peer.recoveryNeedsAck = true;
+      peer.recoveryFramesSent = 0;
       if (peer.retryTimer) {
         clearInterval(peer.retryTimer);
         peer.retryTimer = null;
@@ -1486,6 +1506,10 @@ export class DeviceLinkClient {
     if (this.reconnectStableTimer) {
       clearTimeout(this.reconnectStableTimer);
       this.reconnectStableTimer = null;
+    }
+    if (this.congestionStableTimer) {
+      clearTimeout(this.congestionStableTimer);
+      this.congestionStableTimer = null;
     }
     if (this.handshakeTimer) {
       clearTimeout(this.handshakeTimer);
@@ -1688,6 +1712,7 @@ export class DeviceLinkClient {
         this.setStatus('online');
         if (!wasOnline) this.onlineSinceAt = Date.now();
         this.armReconnectStableReset();
+        this.armCongestionStableReset();
         this.startHeartbeat();
         // 重复 hello-ack(已在线还收到 ack)单独判别:这不是新连接,而是 relay 在同一条
         // socket 上重发(relay 侧恢复 / 迁移)。若与真实重连共用同一条 online 日志,
@@ -1729,17 +1754,12 @@ export class DeviceLinkClient {
               'outbound-accept',
             );
             const peer = this.getPeerTransport(env.src);
-            const resumedLink = !peer.linkReady;
-            peer.linkReady = true;
             peer.outboundExplicitlyClosed = false;
-            // 见 sendLinkAccept 同处注释:link 恢复即清 before-link 通知节流。
-            this.staleLinkNotifiedAt.delete(env.src);
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
             // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向
             // 的重试耗尽误拆整条共享 relay(字段注释有完整语义)。
-            this.resumeReceiveStreams(env.src, peer);
-            this.replayPending(env.src, resumedLink);
+            this.completeReliableLinkResume(env.src, peer);
           }
           this.pending.delete(env.id!);
           p.resolve(env);
@@ -1777,6 +1797,8 @@ export class DeviceLinkClient {
         if (payload.dst && terminalRouteFailure) {
           const peer = this.getPeerTransport(payload.dst);
           peer.linkReady = false;
+          peer.recoveryNeedsAck = true;
+          peer.recoveryFramesSent = 0;
           if (peer.retryTimer) {
             clearInterval(peer.retryTimer);
             peer.retryTimer = null;
@@ -1804,7 +1826,10 @@ export class DeviceLinkClient {
             at: Date.now(),
           });
         }
-        this.log.warn(`relay-error: [${payload.code}] ${payload.message}`);
+        this.log.warn(
+          `relay-error: [${payload.code}] ${payload.message}`
+          + (payload.dst ? ` dst=${payload.dst.slice(0, 8)}` : ''),
+        );
         return this.emitFrame(env);
       }
       default:
@@ -2259,11 +2284,12 @@ export class DeviceLinkClient {
       peer.pending.size < MAX_TRANSPORT_PENDING_MESSAGES
       && peer.pendingBytes + reservedBytes <= MAX_TRANSPORT_PENDING_BYTES
     );
-    // link 已 ready 时,native send buffer 满就在**任何驱逐/腾位之前**拒绝:
-    // 该帧本轮注定入不了队,先驱逐再拒绝会在连续调用下逐步清空本可重试的
-    // 镜像历史,却一帧未纳(review P1)。link 未恢复时不检——帧只进有界
-    // pending 等重放,不触碰 socket。
-    if (peer.linkReady) {
+    // socket 容量预检只服务「本轮会写出」的帧。恢复期被 hold 的消息只进
+    // pending,不碰共享 ws;其它 peer 占满 send buffer 不得让它 BACKPRESSURE。
+    // 真会发送时仍在驱逐/腾位之前预检(旧 P1:先驱逐再拒会清空镜像历史)。
+    const additionalFrames = Math.max(1, frames.length);
+    const willSendNow = peer.linkReady && !this.shouldHoldRecoverySend(peer, additionalFrames);
+    if (willSendNow) {
       this.assertWebSocketCapacity(this.measureReliableFrames(frames));
     }
     if (!hasPendingCapacity()) {
@@ -2309,9 +2335,10 @@ export class DeviceLinkClient {
     peer.pending.set(seq, pending);
     peer.pendingBytes += reservedBytes;
     peer.nextSeq = seq + 1;
-    if (peer.linkReady) {
+    if (willSendNow) {
       try {
-        this.sendReliableFrames(peer, pending);
+        const sentFrames = this.sendReliableFrames(peer, pending);
+        this.noteRecoveryFrames(peer, sentFrames);
       } catch (err) {
         // 容量预检后的 ws.send 仍可能因 socket 竞态失败。完全未写入时安全回滚；
         // 已部分写入则保留同 seq 等待重放，调用方继续等待，不制造重复请求。
@@ -2328,7 +2355,10 @@ export class DeviceLinkClient {
     return true;
   }
 
-  /** @returns 实际写进 ws 的**帧**数(一条逻辑消息可能分多帧);抛错时为已写出的帧数。 */
+  /**
+   * 实际写进 ws 的**帧**数(一条逻辑消息可能分多帧)。
+   * 一分片都没写出才抛;中途竞态只返回已上网的帧数,让恢复预算能结算部分突发。
+   */
   private sendReliableFrames(peer: PeerTransportState, pending: PendingReliableMessage): number {
     const frames = encodeReliableFrames(
       pending.envelope,
@@ -2344,6 +2374,12 @@ export class DeviceLinkClient {
         pending.sent = true;
         sent += 1;
       }
+    } catch (err) {
+      if (sent === 0) throw err;
+      this.log.debug(
+        `reliable transport send interrupted after ${sent} frame(s) for seq=${pending.seq}`,
+        err,
+      );
     } finally {
       if (sent > 0) {
         pending.sent = true;
@@ -2430,6 +2466,9 @@ export class DeviceLinkClient {
         receive: new Map(),
         highestAckSeq: 0,
         lastReplayEpoch: this.connEpoch,
+        lastReplayRemoteStreamId: null,
+        recoveryNeedsAck: false,
+        recoveryFramesSent: 0,
         pushAdmissionDropCount: 0,
         pushAdmissionDropLogAt: 0,
       };
@@ -2613,6 +2652,11 @@ export class DeviceLinkClient {
       peer.pending.delete(seq);
       peer.pendingBytes -= pending.bytes;
     }
+    if (peer.recoveryNeedsAck) {
+      peer.recoveryNeedsAck = false;
+      peer.recoveryFramesSent = 0;
+      this.retryPending(src, { ignoreInterval: true });
+    }
     if (peer.pending.size === 0 && peer.retryTimer) {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
@@ -2775,23 +2819,20 @@ export class DeviceLinkClient {
     const peer = this.getPeerTransport(dst);
     if (peer.retryTimer) return;
     peer.retryTimer = setInterval(
-      () => this.retryPending(dst, { ignoreInterval: false, unlimited: false }),
+      () => this.retryPending(dst, { ignoreInterval: false }),
       this.timing.transportRetryIntervalMs,
     );
   }
 
   /**
-   * 一趟重发。两个开关**刻意分开**——它们是两个独立的量,合成一个 `force` 会让「生成
-   * skip 占位」这类既不证明可达性、又需要立刻发出的路径顺带拿到无限预算(codex P2):
+   * 一趟重发。
    *
    * @param opts.ignoreInterval 忽略 transportRetryIntervalMs 的最小间隔,本趟立刻发。
-   * @param opts.unlimited 不受单趟帧预算约束。**只有可达性刚被证明的路径才配**:收到
-   *   对端 link-accept 后的 replayPending。其余一切(定时器、skip 占位替换)都必须
-   *   受预算约束(理由与线上证据见 TRANSPORT_RETRY_PASS_BUDGET)。
+   * 单趟额度一律走 remainingRecoveryBudget,不再接受无限额度。
    */
   private retryPending(
     dst: string,
-    opts: { ignoreInterval: boolean; unlimited: boolean },
+    opts: { ignoreInterval: boolean },
   ): void {
     const peer = this.peerTransport.get(dst);
     if (
@@ -2823,9 +2864,7 @@ export class DeviceLinkClient {
     // peer 是净损失。量级上也不是主要矛盾:线上那 449 条的形状是几 KB 级 maker:event 塞满
     // 64 槽窗口(最大簇 213),本上限已把它压到 ≤8;「队头恰好 4MB」时溢出是 ≤32,仍低于
     // 引发事故的量级。真出现这种负载时日志会给出真实形状,届时按证据设计,不先建机制。
-    const budget = opts.unlimited
-      ? Number.POSITIVE_INFINITY
-      : normalizeRetryPassBudget(this.timing.transportRetryPassBudget);
+    const budget = this.recoveryPassBudget();
     let framesSpent = 0;
     for (const pending of peer.pending.values()) {
       if (!opts.ignoreInterval && now - pending.lastSentAt < this.timing.transportRetryIntervalMs) {
@@ -2835,6 +2874,8 @@ export class DeviceLinkClient {
         this.handleReliableRetryExhausted(dst, pending.seq);
         return;
       }
+      const admittingNew = !pending.sent;
+      if (admittingNew && this.shouldHoldRecoverySend(peer, this.estimateReliableFrameCount(pending))) break;
       // 发送前先按预估分片数结算:已经发过东西、且这一条会超预算时,把它留到下一趟。
       // 用预估而非真实编码结果是刻意的 —— 这是流控决策,不需要精确,重新编码一条 4MB
       // 消息只为数分片数不划算;发送后再用真实帧数扣减。
@@ -2847,6 +2888,12 @@ export class DeviceLinkClient {
         break;
       }
       framesSpent += Math.max(1, sentFrames);
+      // 首趟恢复 replay(ignoreInterval)要把已在途的探针也记进预算,
+      // 否则 sent===true 的重放不占额度,新入队帧还能再灌一整批。
+      // 后续定时重发只给新帧记账,同一批探针可继续重传。
+      if (admittingNew || (peer.recoveryNeedsAck && opts.ignoreInterval)) {
+        this.noteRecoveryFrames(peer, sentFrames);
+      }
       if (framesSpent >= budget) break;
     }
   }
@@ -2857,6 +2904,82 @@ export class DeviceLinkClient {
    */
   private estimateReliableFrameCount(pending: PendingReliableMessage): number {
     return Math.max(1, Math.ceil(pending.bytes / MAX_TRANSPORT_CHUNK_BYTES));
+  }
+
+  private recoveryPassBudget(): number {
+    return normalizeRetryPassBudget(this.timing.transportRetryPassBudget);
+  }
+
+  private remainingRecoveryBudget(peer: PeerTransportState): number {
+    const budget = this.recoveryPassBudget();
+    if (!peer.recoveryNeedsAck) return budget;
+    return Math.max(0, budget - peer.recoveryFramesSent);
+  }
+
+  private hasOutstandingRecoveryProbe(peer: PeerTransportState): boolean {
+    for (const pending of peer.pending.values()) {
+      if (pending.sent) return true;
+    }
+    return false;
+  }
+
+  private shouldHoldRecoverySend(peer: PeerTransportState, additionalFrames = 1): boolean {
+    if (!peer.recoveryNeedsAck) return false;
+    // hold 的前提是已有在途探针能换来 ACK。latest-wins / TTL 清掉全部已发探针后,
+    // 若仍按 recoveryFramesSent 卡住,队列只剩未发帧,恢复态永远解不开。
+    if (!this.hasOutstandingRecoveryProbe(peer)) return false;
+    const remaining = this.remainingRecoveryBudget(peer);
+    if (remaining <= 0) return true;
+    return additionalFrames > remaining;
+  }
+
+  private noteRecoveryFrames(peer: PeerTransportState, frames: number): void {
+    if (!peer.recoveryNeedsAck || frames <= 0) return;
+    peer.recoveryFramesSent += frames;
+  }
+
+  /**
+   * 同连接代、同对端 stream、链路已 ready 的重复 link-open 只重发 accept。
+   * 对端重启会换 transportStreamId，必须当真正恢复。
+   */
+  private completeReliableLinkResume(dst: string, peer: PeerTransportState): void {
+    const wasReady = peer.linkReady;
+    const streamChanged = peer.lastReplayRemoteStreamId !== peer.remoteStreamId;
+    const duplicateOpen = wasReady && !streamChanged && peer.lastReplayEpoch === this.connEpoch;
+    peer.linkReady = true;
+    this.staleLinkNotifiedAt.delete(dst);
+    this.resumeReceiveStreams(dst, peer);
+    if (duplicateOpen) {
+      this.logRecoverySend(dst, peer, 'link-replay', true);
+      return;
+    }
+    const hadPriorResume = peer.lastReplayRemoteStreamId !== null;
+    peer.lastReplayEpoch = this.connEpoch;
+    peer.lastReplayRemoteStreamId = peer.remoteStreamId;
+    // 真正恢复不依赖当时队列是否有积压:abandon / transport-timeout 可能已清空
+    // pending。首次建链(还没 resume 过)保持原语义,空队列不进探测。
+    const enterRecovery = (!wasReady || streamChanged)
+      && (hadPriorResume || peer.pending.size > 0 || peer.recoveryNeedsAck);
+    if (enterRecovery) {
+      peer.recoveryNeedsAck = true;
+      peer.recoveryFramesSent = 0;
+    }
+    this.replayPending(dst, !wasReady || streamChanged);
+  }
+
+  private logRecoverySend(
+    dst: string,
+    peer: PeerTransportState,
+    trigger: 'link-replay',
+    duplicateOpen: boolean,
+  ): void {
+    this.log.info(
+      `device-link recovery dst=${dst.slice(0, 8)} trigger=${trigger}`
+      + ` pending=${peer.pending.size}/${peer.pendingBytes}`
+      + ` recoveryFrames=${peer.recoveryFramesSent}/${this.recoveryPassBudget()}`
+      + ` needsAck=${peer.recoveryNeedsAck} duplicateOpen=${duplicateOpen}`
+      + ` stream=${peer.streamId.slice(0, 8)} conn=${this.connEpoch}`,
+    );
   }
 
   private replayPending(dst: string, resumedLink = false): void {
@@ -2875,9 +2998,9 @@ export class DeviceLinkClient {
         pending.lastSentAt = 0;
       }
     }
-    // 可达性刚被对端 link-accept 证明过:本趟不限预算,尽快把积压交付出去。
-    this.retryPending(dst, { ignoreInterval: true, unlimited: true });
+    this.retryPending(dst, { ignoreInterval: true });
     this.ensureRetryTimer(dst);
+    this.logRecoverySend(dst, peer, 'link-replay', false);
   }
 
   /**
@@ -3114,11 +3237,21 @@ export class DeviceLinkClient {
       if (this.stopped || this.status !== 'online') return;
       this.reconnectAttempt = 0;
       this.shortLivedStreak = 0;
-      // 拥塞冷却与普通退避在同一稳定判据下清零:稳定在线一个窗口说明出站
-      // 速率已被 relay 接受,下一次普通断线不再背负拥塞冷却。
-      this.congestionCloseStreak = 0;
       if (this.connectionIssue?.kind === 'unstable') this.setConnectionIssue(null);
     }, this.timing.reconnectStableResetMs);
+  }
+
+  private armCongestionStableReset(): void {
+    if (this.congestionStableTimer) clearTimeout(this.congestionStableTimer);
+    if (this.congestionCloseStreak <= 0) {
+      this.congestionStableTimer = null;
+      return;
+    }
+    this.congestionStableTimer = setTimeout(() => {
+      this.congestionStableTimer = null;
+      if (this.stopped || this.status !== 'online') return;
+      this.congestionCloseStreak = 0;
+    }, normalizeCongestionStableResetMs(this.timing.congestionStableResetMs));
   }
 }
 

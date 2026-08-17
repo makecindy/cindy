@@ -317,12 +317,6 @@ export interface CodexExtraSpawnConfig {
   extraEnv: Record<string, string>;
   /** Cindy-side display fallback for Codex subagent cards. */
   subagentModelFallback?: string;
-  /** Provider route frozen alongside the default subagent model for this app-server. */
-  subagentRoute?: {
-    providerId: string;
-    catalogModel: string;
-    runtimeModel: string;
-  };
   /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
   codexBrowserUseAvailable?: boolean;
   /** Exact verified Chrome plugin version provisioned into this app-server. */
@@ -929,11 +923,6 @@ export interface AgentDeps {
     sessionId: string;
     threadId: string;
     text: string;
-    subagentRoute?: {
-      providerId: string;
-      catalogModel: string;
-      runtimeModel: string;
-    };
   }) => void;
 
   /**
@@ -1179,6 +1168,32 @@ export class AgentNotAuthenticatedError extends Error {
   constructor(public readonly agentKind: string, msg?: string) {
     super(msg ?? `agent-not-authenticated:${agentKind}`);
     this.name = 'AgentNotAuthenticatedError';
+  }
+}
+
+/**
+ * The adapter dispatched a turn request but could not determine whether the
+ * provider accepted it. The Session wrapper must fence the ambiguous handle
+ * before surfacing this error. Fencing prevents further execution but does not
+ * roll back completed side effects, so orchestrators must not blindly replay
+ * the same turn.
+ */
+export class TurnDispatchUnconfirmedError extends Error {
+  readonly code = 'TURN_DISPATCH_UNCONFIRMED';
+
+  constructor(msg: string, options?: ErrorOptions) {
+    super(msg, options);
+    this.name = 'TurnDispatchUnconfirmedError';
+  }
+}
+
+/** The provider explicitly rejected the turn before accepting any work. */
+export class TurnDispatchRejectedError extends Error {
+  readonly code = 'TURN_DISPATCH_REJECTED';
+
+  constructor(msg: string, options?: ErrorOptions) {
+    super(msg, options);
+    this.name = 'TurnDispatchRejectedError';
   }
 }
 

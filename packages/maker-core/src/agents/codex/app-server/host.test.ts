@@ -289,7 +289,9 @@ describe('AppServerHost.request startup timeout', () => {
     const request = host.request('turn/start', {}, {
       acquireSubmissionLease: async () => {
         order.push('acquire');
-        return () => order.push('release');
+        return () => {
+          order.push('release');
+        };
       },
     });
     const settled = vi.fn();

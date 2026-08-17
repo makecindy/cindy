@@ -10,6 +10,7 @@
  *   6. 同值写入短路(不抛)
  *   7. 旧全局 key 只由 Main 仲裁出的首个 owner 认领,新账号默认隔离
  *   8. schema 损坏 / 脏数据 → 静默回退,跟随目录默认
+ *   9. main 镜像同步异步失败时不产生未处理 rejection
  *
  * 项目 vitest env=node,无 window。沿用 providerModelMemory.test.ts 的最小 localStorage stub。
  */
@@ -251,6 +252,15 @@ describe('modelVisibilityPrefs store', () => {
 
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(true);
     expect(syncModelVisibility).toHaveBeenLastCalledWith(null, 2, {});
+  });
+
+  it('main 镜像同步异步失败时静默降级', async () => {
+    syncModelVisibility.mockRejectedValueOnce(new Error('handler not registered'));
+
+    await loadModuleForOwner();
+    await Promise.resolve();
+
+    expect(syncModelVisibility).toHaveBeenCalledWith('owner-a', 1, {});
   });
 
   it('本地 profile 认领历史全局 key 并迁移到自己的 namespace', async () => {

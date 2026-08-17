@@ -30,8 +30,9 @@ import type { ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleS
 
 const CONTENT_SURFACE_CLASS = cn(
   'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
-  // base Tooltip.Content 有 dark:border-transparent,tailwind-merge 不会被无 variant
-  // 的 border-[...] 覆盖,需要显式 dark: override 才能让 dark 模式下浮层边框可见。
+  // base Tooltip.Content 默认 border-transparent（深底气泡不要浅描边）。
+  // tailwind-merge 不会被无 variant 的 border-[...] 单独覆盖 dark 态，需要显式
+  // dark: override 才能让这个浅色浮层在两模式下都看得到边框。
   'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
 );
 

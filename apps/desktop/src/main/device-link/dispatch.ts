@@ -1636,6 +1636,9 @@ function isControllerRevoked(deviceId: string): boolean {
  */
 const LINK_ACCEPT_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
 const linkAcceptRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 已撤权控制端反复 open 时，closeLink 与 warn 的最小间隔。 */
+const REVOKED_LINK_OPEN_REJECT_INTERVAL_MS = 30_000;
+const revokedLinkOpenRejectAt = new Map<string, number>();
 
 function cancelLinkAcceptRetry(src: string): void {
   const timer = linkAcceptRetryTimers.get(src);
@@ -1692,9 +1695,16 @@ function handleLinkOpen(
   // 逐设备黑名单:已撤销访问权限的控制端,发 link-close('revoked') 给明确信号
   // (legacy openLink 仍会超时,但控制端据此 link-close 标记「已撤销」),不接受其 link-open。
   if (isControllerRevoked(src)) {
-    log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
+    // 清理必须每次都做:限频只挡 closeLink/日志,不能把 purge 也吞掉。
+    // 否则短暂解禁再撤权时,restore 窗口里装上的订阅会在 throttle 内继续收 push。
     purgeRevokedController(src);
-    client.closeLink(src, 'revoked', 'inbound');
+    const now = Date.now();
+    const last = revokedLinkOpenRejectAt.get(src) ?? 0;
+    if (now - last >= REVOKED_LINK_OPEN_REJECT_INTERVAL_MS) {
+      log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
+      revokedLinkOpenRejectAt.set(src, now);
+      client.closeLink(src, 'revoked', 'inbound');
+    }
     return;
   }
   const name = resolveControllerName(src, payload?.controllerName) ?? src.slice(0, 8);
@@ -2977,6 +2987,7 @@ export const __testing = {
     clearAllSessionActivityStages();
     clearAllMakerEventBatchStages();
     cancelAllLinkAcceptRetries();
+    revokedLinkOpenRejectAt.clear();
     setBroadcastTapListener(null);
     presenceOfflineCheck = null;
     remoteReviewInputGuard = null;
