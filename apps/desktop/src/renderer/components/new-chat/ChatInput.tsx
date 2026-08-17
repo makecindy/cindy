@@ -2881,6 +2881,57 @@ export function ChatInput({
     [handleVoiceInputPermissionRequired],
   );
 
+  const voiceInputBusyRef = useRef(false);
+  const voiceDraftTextRef = useRef('');
+  const voiceInputStopAndSendPromiseRef = useRef<Promise<void> | null>(null);
+
+  // Declared before useVoiceInput so React 19 runs this cleanup first
+  // (declaration order). Arm must be visible before the voice hook decides
+  // whether to cancel or settle; otherwise the run is cancelled and a later
+  // unmount can skip microphone teardown.
+  useEffect(() => {
+    if (!editor) return;
+    const dataOwnerAtEffect = editorDataOwnerRef.current;
+    return () => {
+      if (!isDataOwnerGenerationCurrent(dataOwnerAtEffect)) {
+        draftSaveSchedulerRef.current?.cancel();
+        return;
+      }
+      draftSaveSchedulerRef.current?.flush();
+      const editorStorageKey = storageKeyForDraftRef.current;
+      if (!editorStorageKey) return;
+      const existing = getComposerDraft(editorStorageKey);
+      const hasText = !isEditorEmpty(editor);
+      if (hasText || existing) {
+        saveComposerDraft(
+          editorStorageKey,
+          {
+            text: editor.getJSON(),
+            attachments: existing?.attachments ?? [],
+            quotes: existing?.quotes ?? [],
+            browserComments: existing?.browserComments ?? [],
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
+          },
+          { silent: true },
+        );
+      }
+      if (
+        voiceInputBusyRef.current &&
+        !voiceInputStopAndSendPromiseRef.current &&
+        editorStorageKey
+      ) {
+        armDetachedVoiceDraftPersist(
+          editorStorageKey,
+          voiceDraftTextRef.current.trim(),
+        );
+      }
+    };
+  }, [editor]);
+
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
   if (voiceInput.isBusy) {
     if (voiceOwnerStorageKeyRef.current === undefined) {
@@ -2974,15 +3025,12 @@ export function ChatInput({
   const voiceShortcutRef = useRef(voiceInputSettings.shortcut);
   const voiceInputStateRef = useRef(voiceInput.state);
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
-  const voiceInputBusyRef = useRef(voiceInput.isBusy);
   voiceInputBusyRef.current = voiceInput.isBusy;
-  const voiceDraftTextRef = useRef(voiceInput.draftText);
   voiceDraftTextRef.current = voiceInput.draftText;
   const voiceInputCancelRef = useRef(voiceInput.cancel);
   const voiceInputStopAndSendRef = useRef<
     (deliveryMode?: MessageDeliveryMode) => void | Promise<void>
   >(() => {});
-  const voiceInputStopAndSendPromiseRef = useRef<Promise<void> | null>(null);
   const voiceInputCanStopAndSendRef = useRef(false);
   const composerCanSubmitRef = useRef(false);
   const handleVoiceInputStartRef = useRef(handleVoiceInputStart);
@@ -3378,53 +3426,8 @@ export function ChatInput({
   ]);
 
   // Route changes such as Chat -> Settings unmount the composer immediately.
-  // `onUpdate` is still the primary "instant save" path, but this cleanup
-  // snapshots the final editor state before React tears the instance down.
-  useEffect(() => {
-    if (!editor) return;
-    const dataOwnerAtEffect = editorDataOwnerRef.current;
-    return () => {
-      if (!isDataOwnerGenerationCurrent(dataOwnerAtEffect)) {
-        draftSaveSchedulerRef.current?.cancel();
-        return;
-      }
-      draftSaveSchedulerRef.current?.flush();
-      const editorStorageKey = storageKeyForDraftRef.current;
-      if (!editorStorageKey) return;
-      const existing = getComposerDraft(editorStorageKey);
-      const hasText = !isEditorEmpty(editor);
-      if (hasText || existing) {
-        saveComposerDraft(
-          editorStorageKey,
-          {
-            text: editor.getJSON(),
-            attachments: existing?.attachments ?? [],
-            quotes: existing?.quotes ?? [],
-            browserComments: existing?.browserComments ?? [],
-            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
-            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
-          },
-          { silent: true },
-        );
-      }
-      // /cc-agent/new unmounts this ChatInput instead of changing storageKey.
-      // Keep the in-flight transcript on that draft key so coming back still
-      // sees the voice text after stop/refine.
-      if (
-        voiceInputBusyRef.current &&
-        !voiceInputStopAndSendPromiseRef.current &&
-        editorStorageKey
-      ) {
-        armDetachedVoiceDraftPersist(
-          editorStorageKey,
-          voiceDraftTextRef.current.trim(),
-        );
-      }
-    };
-  }, [editor]);
+  // Draft snapshot + detached-voice arm run in the earlier effect declared
+  // before useVoiceInput, so React 19 cleanup arms persist first.
 
   // ── composer-draft-per-session: restore on storageKey change ────────
   // Whenever the parent switches `storageKey` (= `draftKey ?? sessionId`),
