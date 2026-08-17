@@ -211,6 +211,48 @@ describe("sanitizeXaiModelInputBody", () => {
     ]);
   });
 
+  it("rewrites compaction blobs into a readable context note instead of dropping them", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "my-custom-alias",
+      input: [
+        { type: "compaction", encrypted_content: "OPENAI-BLOB" },
+        { type: "message", role: "user", content: "continue" },
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: expect.stringContaining(
+              "not readable on the current model provider",
+            ),
+          },
+        ],
+      },
+      { type: "message", role: "user", content: "continue" },
+    ]);
+  });
+
+  it("maps Anthropic tool_result.tool_use_id and drops outputs with no id", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "x-ai/grok-4.6",
+      input: [
+        {
+          type: "tool_result",
+          tool_use_id: "t1",
+          content: "ok",
+        },
+        { type: "tool_result", content: "orphan" },
+      ],
+    });
+    expect(out?.input).toEqual([
+      { type: "function_call_output", call_id: "t1", output: "ok" },
+    ]);
+  });
+
   it("drops empty reasoning shells and image generation items", () => {
     const out = sanitizeXaiModelInputBody({
       model: "grok-4.5",

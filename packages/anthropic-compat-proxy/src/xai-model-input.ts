@@ -143,13 +143,37 @@ function argumentsFromCustomToolInput(value: unknown): string {
   }
 }
 
+const COMPACTION_UNAVAILABLE_NOTE =
+  "[context note] Earlier conversation history was compacted into an encrypted snapshot by the " +
+  "OpenAI subscription backend and is not readable on the current model provider. Treat the " +
+  "conversation from this point on as the available context; ask the user if earlier details are needed.";
+
 function callIdFrom(item: Record<string, unknown>, fallback = ""): string {
   if (typeof item.call_id === "string" && item.call_id.length > 0)
     return item.call_id;
+  if (typeof item.tool_use_id === "string" && item.tool_use_id.length > 0)
+    return item.tool_use_id;
   if (typeof item.tool_call_id === "string" && item.tool_call_id.length > 0)
     return item.tool_call_id;
   if (typeof item.id === "string" && item.id.length > 0) return item.id;
   return fallback;
+}
+
+function functionCallOutputFrom(
+  item: Record<string, unknown>,
+  output: unknown,
+): { item: unknown; changed: boolean } {
+  const callId = callIdFrom(item);
+  if (!callId) return { item: null, changed: true };
+  return {
+    item: {
+      type: "function_call_output",
+      call_id: callId,
+      output:
+        typeof output === "string" ? output : textFromResponsesContent(output),
+    },
+    changed: true,
+  };
 }
 
 function normalizeXaiInputItem(item: unknown): {
@@ -178,6 +202,17 @@ function normalizeXaiInputItem(item: unknown): {
     return { item: base, changed: typedFromEasy };
   }
 
+  if (type === "compaction" || type === "context_compaction") {
+    return {
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: COMPACTION_UNAVAILABLE_NOTE }],
+      },
+      changed: true,
+    };
+  }
+
   if (type === "custom_tool_call") {
     const name = typeof base.name === "string" ? base.name : "";
     const next: Record<string, unknown> = {
@@ -191,14 +226,7 @@ function normalizeXaiInputItem(item: unknown): {
   }
 
   if (type === "custom_tool_call_output" || type === "tool_result") {
-    return {
-      item: {
-        type: "function_call_output",
-        call_id: callIdFrom(base),
-        output: textFromResponsesContent(base.output ?? base.content),
-      },
-      changed: true,
-    };
+    return functionCallOutputFrom(base, base.output ?? base.content);
   }
 
   // LiteLLM / Chat Completions 回放: `{type:"function"|"tool_call", function:{name,arguments}}`
@@ -270,9 +298,11 @@ function normalizeXaiInputItem(item: unknown): {
   }
 
   if (type === "function_call_output") {
+    const callId = callIdFrom(base);
+    if (!callId) return { item: null, changed: true };
     const next: Record<string, unknown> = {
       type: "function_call_output",
-      call_id: typeof base.call_id === "string" ? base.call_id : "",
+      call_id: callId,
       output:
         typeof base.output === "string"
           ? base.output
@@ -321,14 +351,7 @@ function normalizeXaiInputItem(item: unknown): {
     // LiteLLM / Chat Completions 把 tool 结果写成 role=tool 的 message。
     // xAI message 变体不认这个 role，转成 function_call_output。
     if (base.role === "tool" || base.role === "function") {
-      return {
-        item: {
-          type: "function_call_output",
-          call_id: callIdFrom(base),
-          output: textFromResponsesContent(base.content),
-        },
-        changed: true,
-      };
+      return functionCallOutputFrom(base, base.content);
     }
 
     let changed = typedFromEasy;
@@ -562,5 +585,6 @@ export function createXaiModelInputRecoveryRule(
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
     applyOnUnmatchedRetry: false,
+    allowExtraRules: false,
   };
 }

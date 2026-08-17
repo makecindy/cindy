@@ -2294,11 +2294,7 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
-    createActiveStripTransform({
-      controller: xaiModelInputStripController,
-      enabled: () => true,
-      strip: sanitizeXaiModelInputFromBody,
-    }),
+
     // Guardian uses an isolated child thread. Resolve its parent business
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.
@@ -2312,6 +2308,13 @@ function createTransformRequestChain(
     // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
     // 后续针对具体供应商的 input 归一化才能稳定处理。
     createCrossProviderCompactionCompatTransform(),
+    // 必须在 compaction 降级之后:自定义 LiteLLM 别名首次 422 会激活本 strip,
+    // 若先于降级跑,会把 compaction 当未知 type 丢掉,明文「早期上下文不可用」提示就没了。
+    createActiveStripTransform({
+      controller: xaiModelInputStripController,
+      enabled: () => true,
+      strip: sanitizeXaiModelInputFromBody,
+    }),
     createStrictGatewayHistoryCompatTransform(),
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。

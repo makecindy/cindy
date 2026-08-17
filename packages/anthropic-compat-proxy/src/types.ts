@@ -181,6 +181,11 @@ export interface RecoveryRule {
    * invalid_encrypted_content 重试里改写 OpenAI 历史。
    */
   applyOnUnmatchedRetry?: boolean;
+  /**
+   * 本规则作为主匹配时,是否还叠其它 extra strip。默认 true。
+   * xAI ModelInput 必须 false:叠 encrypted-content 会删掉本来可回放的 reasoning blob。
+   */
+  allowExtraRules?: boolean;
 }
 
 /**
