@@ -583,6 +583,7 @@ export function NewMakerDraftRoute() {
     [location.state],
   );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
+  const modePickerSelectionSeqRef = useRef(0);
   // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
   // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
   // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
@@ -2096,6 +2097,9 @@ export function NewMakerDraftRoute() {
       return;
     }
     handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;
+    // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
+    // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
+    modePickerSelectionSeqRef.current += 1;
     patchCollab({ enabled: false });
     applyDraftTarget({
       deviceId: dialogueTargetRequest.deviceId,
@@ -2543,7 +2547,6 @@ export function NewMakerDraftRoute() {
     setDevicePickerOpen(open);
     if (open) setFolderPickerOpen(false);
   }, []);
-  const modePickerSelectionSeqRef = useRef(0);
   useEffect(
     () => () => {
       modePickerSelectionSeqRef.current += 1;

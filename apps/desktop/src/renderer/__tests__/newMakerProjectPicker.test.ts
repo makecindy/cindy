@@ -183,6 +183,22 @@ describe('Shared create project picker', () => {
     expect(handler.slice(lockAt, unlockAt)).toContain('finally {');
   });
 
+  it('invalidates an in-flight folder restore before applying a same-route dialogue target', () => {
+    const effectStart = newMakerDraftRouteSource.indexOf(
+      '// “对话”分组可能在 /cc-agent/new 已经打开时再次导航到同一路由',
+    );
+    const effectEnd = newMakerDraftRouteSource.indexOf(
+      '// 弹窗确认添加后的落点',
+      effectStart,
+    );
+    const effect = newMakerDraftRouteSource.slice(effectStart, effectEnd);
+    const invalidateAt = effect.indexOf('modePickerSelectionSeqRef.current += 1;');
+    const applyAt = effect.indexOf('applyDraftTarget({');
+
+    expect(invalidateAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(invalidateAt);
+  });
+
   it('keeps dialogue outside of the project group in the picker menu', () => {
     const topHeadingIndex = folderPickerPopoverSource.indexOf(
       "t('newChat.folderPicker.dialogueOrSelectProject')",
