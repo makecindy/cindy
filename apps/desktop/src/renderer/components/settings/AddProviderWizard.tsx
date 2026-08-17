@@ -24,6 +24,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
 import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
@@ -86,9 +87,7 @@ function presetRuntimeBaseUrl(
 ): string {
   const runtime = preset.runtimes[agent];
   if (!runtime) return '';
-  return runtime.baseUrlEditable
-    ? (edited[agent] ?? runtime.baseUrl).trim()
-    : runtime.baseUrl;
+  return runtime.baseUrlEditable ? (edited[agent] ?? runtime.baseUrl).trim() : runtime.baseUrl;
 }
 
 function isValidEditablePresetBaseUrl(value: string): boolean {
@@ -98,11 +97,8 @@ function isValidEditablePresetBaseUrl(value: string): boolean {
 function parseSafePresetHttpUrl(value: string): URL | null {
   try {
     const url = new URL(value);
-    if (
-      (url.protocol !== 'http:' && url.protocol !== 'https:')
-      || url.username
-      || url.password
-    ) return null;
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password)
+      return null;
     return url;
   } catch {
     return null;
@@ -114,9 +110,7 @@ function isAllowedDiscoveryWireProtocol(
   value: unknown,
 ): value is ProviderModelRouteConfig['wireProtocol'] {
   const supported =
-    value === 'anthropic-messages'
-    || value === 'openai-responses'
-    || value === 'openai-chat';
+    value === 'anthropic-messages' || value === 'openai-responses' || value === 'openai-chat';
   return supported && (agent !== 'claude-code' || value === 'anthropic-messages');
 }
 
@@ -128,11 +122,12 @@ function isDiscoverySourceValidForRuntime(
   const runtimeUrl = parseSafePresetHttpUrl(runtimeBaseUrl);
   const sourceUrl = parseSafePresetHttpUrl(source.baseUrl);
   if (
-    !runtimeUrl
-    || !sourceUrl
-    || sourceUrl.origin !== runtimeUrl.origin
-    || !isAllowedDiscoveryWireProtocol(agent, source.wireProtocol)
-  ) return false;
+    !runtimeUrl ||
+    !sourceUrl ||
+    sourceUrl.origin !== runtimeUrl.origin ||
+    !isAllowedDiscoveryWireProtocol(agent, source.wireProtocol)
+  )
+    return false;
   if (source.modelsUrl !== undefined) {
     const modelsUrl = parseSafePresetHttpUrl(source.modelsUrl);
     if (!modelsUrl || modelsUrl.origin !== sourceUrl.origin) return false;
@@ -458,7 +453,7 @@ export function AddProviderWizard({
       setApiKey('');
       setPresetBaseUrls(
         Object.fromEntries(
-          (Object.keys(preset.runtimes) as AgentKind[]).map((agent) => [
+          configuredPresetAgents(preset).map((agent) => [
             agent,
             preset.runtimes[agent]?.baseUrl ?? '',
           ]),
@@ -602,10 +597,13 @@ export function AddProviderWizard({
   const startFetch = useCallback(async () => {
     if (!sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
-    const editableBaseUrlsValid = (Object.keys(preset.runtimes) as AgentKind[]).every((agent) => {
+    const agents = configuredPresetAgents(preset);
+    const editableBaseUrlsValid = agents.every((agent) => {
       const rt = preset.runtimes[agent];
-      return !rt?.baseUrlEditable
-        || isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls));
+      return (
+        !rt?.baseUrlEditable ||
+        isValidEditablePresetBaseUrl(presetRuntimeBaseUrl(preset, agent, presetBaseUrls))
+      );
     });
     if (!editableBaseUrlsValid) return;
     // 预设推荐模型先入清单(预勾);归属 = 预设里列出该模型的全部 runtime。
@@ -620,7 +618,7 @@ export function AddProviderWizard({
         routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
       }
     >();
-    for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
+    for (const agent of agents) {
       for (const m of preset.runtimes[agent]?.models ?? []) {
         const existing = initial.get(m.id);
         if (existing) {
@@ -645,7 +643,6 @@ export function AddProviderWizard({
     const seq = ++fetchSeqRef.current;
     // 并行拉取**每个已配置 runtime** 的列模型端点:双 runtime 预设两端各自发现,
     // 返回结果按「实际返回它的端点」归属合并——某模型两端都返回则归属两端。
-    const agents = Object.keys(preset.runtimes) as AgentKind[];
     // 同一个 modelsUrl 被多个 runtime 共用、但预设模型集合不同，说明该端点返回的是
     // 跨协议总目录（OpenCode Go 即如此），响应本身无法判定模型属于 Messages 还是 Chat。
     // 这类端点只能用于确认预设已有模型，不能扩大其 agent 归属或加入无法分类的新模型。
@@ -892,7 +889,7 @@ export function AddProviderWizard({
       );
       const runtimes: CustomProviderConfig['runtimes'] = {};
       const keys: RuntimeKeys = {};
-      for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
+      for (const agent of configuredPresetAgents(preset)) {
         const rt = preset.runtimes[agent];
         if (!rt) continue;
         // 只写归属该 runtime 的勾选模型;一个模型都没选中的 runtime 整个跳过
@@ -908,7 +905,7 @@ export function AddProviderWizard({
               id: m.id,
               name: m.name,
               ...(agent === 'pi' && presetModel?.piApi ? { piApi: presetModel.piApi } : {}),
-              ...(presetModel?.route ?? m.routes?.[agent]
+              ...((presetModel?.route ?? m.routes?.[agent])
                 ? { route: presetModel?.route ?? m.routes?.[agent] }
                 : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
@@ -977,8 +974,7 @@ export function AddProviderWizard({
   ];
 
   // 预设单 runtime 时的「仅支持 X」说明(数据驱动的静态灰,见文件头注释)。
-  const presetAgents =
-    sel?.kind === 'preset' ? (Object.keys(sel.preset.runtimes) as AgentKind[]) : [];
+  const presetAgents = sel?.kind === 'preset' ? configuredPresetAgents(sel.preset) : [];
   const presetSingleAgentNote =
     sel?.kind === 'preset' && presetAgents.length === 1
       ? t('settings.providers.wizard.onlyAgentNote', { agent: AGENT_LABEL[presetAgents[0]] })
@@ -1018,8 +1014,8 @@ export function AddProviderWizard({
       const value = presetRuntimeBaseUrl(sel.preset, agent, presetBaseUrls);
       if (sel.preset.authMethod === 'none') {
         return (
-          isLoopbackProviderUrl(value)
-          && (!runtime.modelsUrl?.trim() || isLoopbackProviderUrl(runtime.modelsUrl.trim()))
+          isLoopbackProviderUrl(value) &&
+          (!runtime.modelsUrl?.trim() || isLoopbackProviderUrl(runtime.modelsUrl.trim()))
         );
       }
       return !runtime.baseUrlEditable || isValidEditablePresetBaseUrl(value);
@@ -1109,7 +1105,9 @@ export function AddProviderWizard({
         <div
           className={cn(
             'min-h-[320px] flex-1',
-            step === 1 ? 'flex min-h-0 flex-col overflow-hidden' : 'overflow-y-auto border-y px-4 py-4',
+            step === 1
+              ? 'flex min-h-0 flex-col overflow-hidden'
+              : 'overflow-y-auto border-y px-4 py-4',
           )}
           style={{ borderColor: 'var(--border-default)' }}
         >

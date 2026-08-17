@@ -1,10 +1,38 @@
-import type { ProviderRuntimeModelConfig, ProviderWireProtocol } from './types.js';
+import type { PiModelApi, ProviderRuntimeModelConfig, ProviderWireProtocol } from './types.js';
 
 /** Preserve omission as a distinct state: Pi has no implicit protocol default. */
 export function effectivePiWireProtocol(
   value: ProviderWireProtocol | undefined,
 ): ProviderWireProtocol | undefined {
   return value;
+}
+
+interface PiProtocolModelLike {
+  piApi?: PiModelApi;
+  route?: { wireProtocol: ProviderWireProtocol };
+}
+
+/**
+ * Resolve the portable Pi model API to the provider wire protocol used by host-side probes and
+ * visual requests. A model override is authoritative over a route/provider default. Google uses
+ * a native Pi SDK surface that these HTTP bridges do not implement, so it fails closed here.
+ */
+export function resolvePiModelWireProtocol(
+  model: PiProtocolModelLike | undefined,
+  providerDefault: ProviderWireProtocol | undefined,
+): ProviderWireProtocol | null {
+  switch (model?.piApi) {
+    case 'anthropic-messages':
+      return 'anthropic-messages';
+    case 'openai-responses':
+      return 'openai-responses';
+    case 'openai-completions':
+      return 'openai-chat';
+    case 'google-generative-ai':
+      return null;
+    default:
+      return model?.route?.wireProtocol ?? providerDefault ?? null;
+  }
 }
 
 function projectedPiCatalogFields(model: ProviderRuntimeModelConfig): object {

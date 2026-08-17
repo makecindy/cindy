@@ -174,6 +174,7 @@ const piReasoningPreset = {
   runtimes: {
     pi: {
       baseUrl: 'https://pi.example/v1',
+      wireProtocol: 'openai-chat' as const,
       models: [
         {
           id: 'reasoning-model',
@@ -533,8 +534,9 @@ describe('AddProviderWizard — preset 直达', () => {
         },
       },
     };
-    vi.mocked(window.electronAPI.maker.listProviderPresets)
-      .mockResolvedValueOnce({ presets: [editablePreset] });
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({
+      presets: [editablePreset],
+    });
     renderWizard('local-gateway');
 
     const baseUrl = await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
@@ -608,7 +610,8 @@ describe('AddProviderWizard — preset 直达', () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue('Unsafe no-auth discovery')).not.toBeNull(),
     );
-    const next = screen.getByText('settings.providers.wizard.next')
+    const next = screen
+      .getByText('settings.providers.wizard.next')
       .closest('button') as HTMLButtonElement;
     expect(next.disabled).toBe(true);
     expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
@@ -861,7 +864,8 @@ describe('AddProviderWizard — preset 直达', () => {
     const endpoint = await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
     fireEvent.change(endpoint, { target: { value: '   ' } });
 
-    const next = screen.getByText('settings.providers.wizard.next')
+    const next = screen
+      .getByText('settings.providers.wizard.next')
       .closest('button') as HTMLButtonElement;
     expect(next.disabled).toBe(true);
     expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();

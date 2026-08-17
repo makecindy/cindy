@@ -87,6 +87,7 @@ import {
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
   presetDisplayName,
+  resolvePiModelWireProtocol,
   sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
@@ -99,6 +100,10 @@ import type {
 } from '@cindy/model-providers';
 import { SettingsTextInput } from './SettingsTextInput';
 import { CURRENT_CINDY_REGION } from '@/../shared/brandRegion';
+import {
+  configuredPresetAgents,
+  isConfiguredPresetRuntime,
+} from '@/../shared/piRuntimeInitialization';
 
 /**
  * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
@@ -414,7 +419,7 @@ export function PiModelProtocolDropdown({
           if (event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         className={cn(
-          'z-[10001] w-[var(--radix-popover-trigger-width)] rounded-xl p-2',
+          'z-[10001] w-max min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-16px)] rounded-xl p-2',
           'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)]',
         )}
       >
@@ -680,6 +685,9 @@ export function CustomProviderDialog({
         wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
+        ...(agent === 'pi'
+          ? { modelPiApi: rc.models.find((model) => model.id.trim().length > 0)?.piApi }
+          : {}),
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
@@ -749,7 +757,7 @@ export function CustomProviderDialog({
         const next = { ...prev };
         for (const a of AGENTS) {
           const rc = p.runtimes[a];
-          if (!rc) {
+          if (!isConfiguredPresetRuntime(a, rc)) {
             next[a] = emptyRuntime(a);
             continue;
           }
@@ -775,7 +783,7 @@ export function CustomProviderDialog({
       // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
       // 卡死报错却找不到对应输入框(review P1)。
       setWindowDrafts({});
-      const first = AGENTS.find((a) => p.runtimes[a]);
+      const first = configuredPresetAgents(p)[0];
       if (first) setActiveTab(first);
     },
     [i18n.language, setRtSynced],
@@ -1092,13 +1100,22 @@ export function CustomProviderDialog({
     const rf = rt[agent];
     const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
     const baseUrl = rf.baseUrl.trim();
-    const firstModel = rf.models.map((m) => m.id.trim()).find((id) => id.length > 0);
+    const firstModelConfig = rf.models.find((model) => model.id.trim().length > 0);
+    const firstModel = firstModelConfig?.id.trim();
     if (!baseUrl || !firstModel) {
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
     }
     if (!areProviderRequestUrlsAllowed(authMode, baseUrl)) {
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
+      return;
+    }
+    const probeWireProtocol =
+      agent === 'pi'
+        ? resolvePiModelWireProtocol(firstModelConfig, rf.wireProtocol)
+        : rf.wireProtocol;
+    if (!probeWireProtocol) {
+      toast.error(t('settings.providers.custom.test.unsupportedProtocol'));
       return;
     }
     const headers: Record<string, string> = {};
@@ -1138,7 +1155,7 @@ export function CustomProviderDialog({
                 baseUrl,
                 modelId: firstModel,
                 authMethod: authMode,
-                wireProtocol: rf.wireProtocol,
+                wireProtocol: probeWireProtocol,
                 ...(agent !== 'pi' && rf.requestPath.trim()
                   ? { requestPath: rf.requestPath.trim() }
                   : {}),

@@ -1447,7 +1447,8 @@
           "button": "接続テスト",
           "testing": "テスト中…",
           "ok": "接続に成功しました（{{ms}}ms）",
-          "needFields": "先にベース URL と少なくとも 1 つのモデル ID を入力してください"
+          "needFields": "先にベース URL と少なくとも 1 つのモデル ID を入力してください",
+          "unsupportedProtocol": "接続テストはこのモデルプロトコルに対応していません"
         },
         "fetch": {
           "button": "モデル一覧を取得",

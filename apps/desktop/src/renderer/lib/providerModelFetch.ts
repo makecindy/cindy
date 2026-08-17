@@ -12,7 +12,7 @@ export interface ProviderModelFetchSignatureFields {
 
 export interface ProviderConnectionTestSignatureFields extends ProviderModelFetchSignatureFields {
   wireProtocol: string;
-  models: ReadonlyArray<{ id: string }>;
+  models: ReadonlyArray<{ id: string; piApi?: string }>;
 }
 
 export function stripCredentialHeaders(headers: Record<string, string>): Record<string, string> {
@@ -77,6 +77,7 @@ export interface SavedProviderProbeBaseline {
   authMode: CustomProviderAuthMode;
   apiKey: string;
   headers: ReadonlyArray<{ name: string; value: string }>;
+  modelPiApi?: string;
 }
 
 function normalizeHeaderRows(
@@ -183,6 +184,8 @@ export function connectionTestCanUseSaved(
   if (form.baseUrl.trim() !== baseline.baseUrl.trim()) return false;
   if (form.requestPath.trim() !== baseline.requestPath.trim()) return false;
   if (form.wireProtocol !== baseline.wireProtocol) return false;
+  const firstModel = form.models.find((model) => model.id.trim().length > 0);
+  if ((firstModel?.piApi ?? null) !== (baseline.modelPiApi ?? null)) return false;
   if (authMode === 'apiKey' && form.apiKey.trim() !== baseline.apiKey.trim()) return false;
   return headerRowsEqual(form.headers, baseline.headers);
 }
@@ -196,5 +199,6 @@ export function providerConnectionTestRequestSignature(
     request: providerModelFetchRequestSignature(fields, authMode),
     wireProtocol: fields.wireProtocol,
     modelId: fields.models.map((model) => model.id.trim()).find(Boolean) ?? null,
+    modelPiApi: fields.models.find((model) => model.id.trim().length > 0)?.piApi ?? null,
   });
 }

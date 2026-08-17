@@ -86,8 +86,9 @@ function toDescriptor(
   if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
-  const supportsImageInput = m.supportsImageInput
-    ?? (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
+  const supportsImageInput =
+    m.supportsImageInput ??
+    (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
   if (supportsImageInput !== undefined) d.supportsImageInput = supportsImageInput;
   return d;
 }
@@ -181,11 +182,12 @@ export function resolvePiRuntimeModelDescriptor(
   providerId: string | null | undefined,
   modelId: string,
 ): ModelDescriptor | null {
-  const providers = providerId === 'cindy'
-    ? catalog.providers.filter((provider) => provider.source !== 'user')
-    : providerId
-      ? catalog.providers.filter((provider) => provider.id === providerId)
-      : catalog.providers;
+  const providers =
+    providerId === 'cindy'
+      ? catalog.providers.filter((provider) => provider.source !== 'user')
+      : providerId
+        ? catalog.providers.filter((provider) => provider.id === providerId)
+        : catalog.providers;
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
@@ -204,10 +206,9 @@ export function resolvePiRuntimeModelDescriptor(
 
 /** Pi 默认 gateway 的 v3 transport 来自 XD；描述符必须使用同一来源。 */
 export function resolvePiGatewayDescriptorProviderId(
-  providerId: string | null | undefined,
+  _providerId: string | null | undefined,
 ): string {
-  const source = providerId?.trim();
-  return !source || source === 'cindy' ? 'xd' : source;
+  return 'xd';
 }
 
 /**

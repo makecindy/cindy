@@ -96,6 +96,12 @@ describe('providerConnectionTestRequestSignature', () => {
       ),
     ).not.toBe(original);
     expect(providerConnectionTestRequestSignature(connectionFields, 'none')).not.toBe(original);
+    expect(
+      providerConnectionTestRequestSignature(
+        { ...connectionFields, models: [{ id: 'model-a', piApi: 'anthropic-messages' }] },
+        'apiKey',
+      ),
+    ).not.toBe(original);
   });
 });
 
@@ -313,21 +319,50 @@ describe('connectionTestCanUseSaved', () => {
     expect(connectionTestCanUseSaved(connForm, headerAuthBaseline, 'none')).toBe(true);
   });
 
+  it('falls back to adhoc when the first model protocol override changed', () => {
+    expect(
+      connectionTestCanUseSaved(
+        { ...connForm, models: [{ id: 'm-1', piApi: 'anthropic-messages' }] },
+        headerAuthBaseline,
+        'none',
+      ),
+    ).toBe(false);
+    expect(
+      connectionTestCanUseSaved(
+        { ...connForm, models: [{ id: 'm-1', piApi: 'anthropic-messages' }] },
+        { ...headerAuthBaseline, modelPiApi: 'anthropic-messages' },
+        'none',
+      ),
+    ).toBe(true);
+  });
+
   it('falls back to adhoc when endpoint, protocol or auth mode changed', () => {
     expect(
-      connectionTestCanUseSaved({ ...connForm, baseUrl: 'https://gw.example/v2' }, headerAuthBaseline, 'none'),
+      connectionTestCanUseSaved(
+        { ...connForm, baseUrl: 'https://gw.example/v2' },
+        headerAuthBaseline,
+        'none',
+      ),
     ).toBe(false);
     expect(
       connectionTestCanUseSaved({ ...connForm, requestPath: '/chat' }, headerAuthBaseline, 'none'),
     ).toBe(false);
     expect(
-      connectionTestCanUseSaved({ ...connForm, wireProtocol: 'openai-chat' }, headerAuthBaseline, 'none'),
+      connectionTestCanUseSaved(
+        { ...connForm, wireProtocol: 'openai-chat' },
+        headerAuthBaseline,
+        'none',
+      ),
     ).toBe(false);
     expect(connectionTestCanUseSaved(connForm, headerAuthBaseline, 'apiKey')).toBe(false);
   });
 
   it('falls back to adhoc when the user changed the api key so the new key is what gets tested', () => {
-    const apiKeyBaseline: SavedProviderProbeBaseline = { ...headerAuthBaseline, authMode: 'apiKey', apiKey: 'saved-key' };
+    const apiKeyBaseline: SavedProviderProbeBaseline = {
+      ...headerAuthBaseline,
+      authMode: 'apiKey',
+      apiKey: 'saved-key',
+    };
     expect(
       connectionTestCanUseSaved({ ...connForm, apiKey: 'saved-key' }, apiKeyBaseline, 'apiKey'),
     ).toBe(true);

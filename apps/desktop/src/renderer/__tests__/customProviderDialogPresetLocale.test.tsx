@@ -106,6 +106,22 @@ const piProtocolPreset: ProviderPreset = {
   },
 };
 
+const legacyMissingPiProtocolPreset: ProviderPreset = {
+  id: 'legacy-missing-pi-protocol',
+  name: 'Legacy Missing Pi Protocol',
+  authMethod: 'none',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'http://127.0.0.1:4010/anthropic',
+      models: [{ id: 'model-a', name: 'Model A' }],
+    },
+    pi: {
+      baseUrl: 'http://127.0.0.1:4010/pi',
+      models: [{ id: 'model-a', name: 'Model A' }],
+    },
+  },
+};
+
 function renderDialog(onClose = vi.fn()) {
   return {
     onClose,
@@ -156,7 +172,7 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       listProviderPresets: vi.fn(async () => ({
-        presets: [localizedPreset, piProtocolPreset],
+        presets: [localizedPreset, piProtocolPreset, legacyMissingPiProtocolPreset],
       })),
       fetchProviderModels: vi.fn(async () => ({
         ok: true,
@@ -201,6 +217,17 @@ describe('CustomProviderDialog preset locale ownership', () => {
       expect(vi.mocked(createCustomProvider).mock.calls[0][0].name).toBe(expectedName);
     },
   );
+
+  it('skips a legacy preset Pi runtime instead of guessing Chat', async () => {
+    renderDialog();
+    const trigger = await findReadyPresetTrigger();
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Legacy Missing Pi Protocol' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toBeUndefined();
+  });
 
   it('dismisses only the topmost preset menu on Escape and preserves unsaved form edits', async () => {
     i18nState.language = 'zh-TW';
@@ -347,14 +374,17 @@ describe('CustomProviderDialog preset locale ownership', () => {
       i18nState.language = 'en';
       renderDialog();
 
-      fireEvent.click(
-        await screen.findByRole('button', {
-          name: 'settings.providers.custom.presets.label',
-        }),
-      );
+      fireEvent.click(await findReadyPresetTrigger());
       fireEvent.click(await screen.findByRole('option', { name: 'PI Protocol Preset' }));
-      fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' }));
+      const piTab = screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' });
+      fireEvent.click(piTab);
+      await waitFor(() => expect(piTab.getAttribute('aria-selected')).toBe('true'));
       fireEvent.click(screen.getByRole('button', { name: buttonName }));
+      await screen.findByText(
+        wireProtocol === 'anthropic-messages'
+          ? 'settings.providers.custom.wireProtocol.piAnthropicHelp'
+          : 'settings.providers.custom.wireProtocol.piChatHelp',
+      );
       fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
       await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
@@ -393,6 +423,9 @@ describe('CustomProviderDialog preset locale ownership', () => {
     ]) {
       expect(await screen.findByRole('menuitemradio', { name: optionName })).not.toBeNull();
     }
+    const menu = screen.getByRole('menu');
+    expect(menu.className).toContain('--radix-dropdown-menu-trigger-width');
+    expect(menu.className).not.toContain('--radix-popover-trigger-width');
     fireEvent.click(
       screen.getByRole('menuitemradio', {
         name: 'settings.providers.custom.modelProtocol.chat',

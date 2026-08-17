@@ -1447,7 +1447,8 @@
           "button": "測試連線",
           "testing": "測試中…",
           "ok": "連線成功（{{ms}}ms）",
-          "needFields": "請先填寫基礎 URL 和至少一個模型 ID"
+          "needFields": "請先填寫基礎 URL 和至少一個模型 ID",
+          "unsupportedProtocol": "測試連線暫不支援此模型協定"
         },
         "fetch": {
           "button": "獲取模型列表",
