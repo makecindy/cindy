@@ -484,6 +484,15 @@ describe('materializeExclusiveProviderRoute', () => {
     });
   }
 
+  it('checkModelRoute 对隐式裸 Grok 直接改绑 xAI,IM 默认不必再补一口', () => {
+    expect(checkModelRoute(xaiViews(), 'pi', 'grok-4.6', null))
+      .toEqual({ kind: 'reroute', providerId: 'xai' });
+    expect(checkModelRoute(xaiViews({ xd: true, xai: false }), 'pi', 'grok-4.6', null))
+      .toEqual({ kind: 'reject', reason: 'exclusive-source-unavailable' });
+    expect(checkModelRoute(views(), 'claude-code', 'claude-opus-5', null))
+      .toEqual({ kind: 'pass' });
+  });
+
   it('Claude/GPT 双来源保持 keep,不打断默认队列', () => {
     expect(materializeExclusiveProviderRoute(views(), 'claude-code', 'claude-opus-5', null))
       .toEqual({ kind: 'keep' });

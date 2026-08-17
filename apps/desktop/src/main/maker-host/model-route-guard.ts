@@ -179,7 +179,27 @@ function copyRetired(p: ProviderView, modelId: string, agent: AgentKind): boolea
   return getModel(p, modelId, agent)?.status === 'retired';
 }
 
-export function checkModelRoute(
+function applyExclusiveRoute(
+  views: readonly ProviderView[],
+  agent: AgentKind,
+  modelId: string,
+  providerId: string | null,
+  disableVerdict: ModelRouteVerdict,
+): ModelRouteVerdict {
+  if (disableVerdict.kind === 'reject') return disableVerdict;
+  const providerAfter =
+    disableVerdict.kind === 'reroute' ? disableVerdict.providerId : providerId;
+  const exclusive = materializeExclusiveProviderRoute(views, agent, modelId, providerAfter);
+  if (exclusive.kind === 'reject') {
+    return { kind: 'reject', reason: 'exclusive-source-unavailable' };
+  }
+  if (exclusive.kind === 'pin') {
+    return { kind: 'reroute', providerId: exclusive.providerId };
+  }
+  return disableVerdict;
+}
+
+function checkDisableAxisRoute(
   views: readonly ProviderView[],
   agent: AgentKind,
   modelId: string,
@@ -279,6 +299,23 @@ export function checkModelRoute(
     : { kind: 'reject', reason: 'model-disabled' };
 }
 
+/** 停用轴 + 独占 Grok 改绑。IM / Scheduler / create 都走这里,不再各自补一口。 */
+export function checkModelRoute(
+  views: readonly ProviderView[],
+  agent: AgentKind,
+  modelId: string,
+  providerId: string | null,
+  options: ModelRouteGuardOptions = {},
+): ModelRouteVerdict {
+  return applyExclusiveRoute(
+    views,
+    agent,
+    modelId,
+    providerId,
+    checkDisableAxisRoute(views, agent, modelId, providerId, options),
+  );
+}
+
 /**
  * 目录里第一份「已连接、启用、agent 可选」的对话模型拷贝(宽松降级的最终兜底;
  * IM 默认设置的 firstModel 亦复用,避免两处「兜底选模型」口径漂移)。
@@ -352,22 +389,12 @@ export function resolveLenientRoute(
     return { model: resolvedModel, providerId: resolvedProviderId, degraded, effort };
   };
   let verdict = checkModelRoute(views, agent, model, providerId, opts);
-  if (verdict.kind === 'pass') {
-    const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
-    if (exclusive.kind === 'pin') return withEffort(model, exclusive.providerId, false);
-    // reject: 独占 Grok 不能落到默认网关,落到下方改走可用对话模型。
-    if (exclusive.kind !== 'reject') return { model, providerId, degraded: false };
-  }
+  if (verdict.kind === 'pass') return { model, providerId, degraded: false };
   if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, false);
   if (providerId) {
     verdict = checkModelRoute(views, agent, model, null, opts);
-    if (verdict.kind === 'pass') {
-      const exclusive = materializeExclusiveProviderRoute(views, agent, model, null);
-      if (exclusive.kind === 'pin') return withEffort(model, exclusive.providerId, true);
-      if (exclusive.kind !== 'reject') return withEffort(model, null, true);
-    } else if (verdict.kind === 'reroute') {
-      return withEffort(model, verdict.providerId, true);
-    }
+    if (verdict.kind === 'pass') return withEffort(model, null, true);
+    if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, true);
   }
   if (opts.fallbackModel && opts.fallbackModel !== model) {
     const fallback = resolveLenientRoute(views, agent, opts.fallbackModel, null, opts);

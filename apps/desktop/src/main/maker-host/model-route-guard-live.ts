@@ -177,23 +177,9 @@ export async function verdictForModelRoute(
   } catch {
     const tombstoneVerdict = checkModelRoute([], agent, model, providerId, guardOptions);
     if (tombstoneVerdict.kind === 'reject') return tombstoneVerdict;
-    const exclusive = materializeExclusiveProviderRoute([], agent, model, providerId);
-    if (exclusive.kind === 'reject') {
-      return { kind: 'reject', reason: 'exclusive-source-unavailable' };
-    }
-    if (exclusive.kind === 'pin') return { kind: 'reroute', providerId: exclusive.providerId };
     return overrideOnlyVerdict(agent, model, providerId);
   }
-  const disableVerdict = checkModelRoute(views, agent, model, providerId, guardOptions);
-  if (disableVerdict.kind === 'reject') return disableVerdict;
-  const providerAfterDisable =
-    disableVerdict.kind === 'reroute' ? disableVerdict.providerId : providerId;
-  const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerAfterDisable);
-  if (exclusive.kind === 'reject') {
-    return { kind: 'reject', reason: 'exclusive-source-unavailable' };
-  }
-  if (exclusive.kind === 'pin') return { kind: 'reroute', providerId: exclusive.providerId };
-  return disableVerdict;
+  return checkModelRoute(views, agent, model, providerId, guardOptions);
 }
 
 /** Resume 旧会话:只钉死独占来源,不把停用轴 reject 套到已在跑的会话上。 */
