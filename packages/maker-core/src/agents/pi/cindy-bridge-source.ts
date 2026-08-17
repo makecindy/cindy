@@ -126,6 +126,7 @@ function isolatedBashEnvironment(
 // the execution boundary so mutations must cross Cindy's host-owned grant flow.
 const PI_PACKAGE_MUTATION_SUBCOMMANDS = new Set(['install', 'update', 'remove']);
 const PI_SHELL_WRAPPERS = new Set(['sh', 'bash', 'dash', 'ksh', 'zsh']);
+const PI_PACKAGE_MUTATION_CURRENT_SHELL_EVALUATORS = new Set(['source', '.', 'eval']);
 
 function bashStaticAssignment(word: string): { name: string; value: string } | null {
   const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(word);
@@ -285,6 +286,21 @@ function bashStaticCommandMutatesPiPackages(
         }
       }
       return false;
+    }
+    if (PI_PACKAGE_MUTATION_CURRENT_SHELL_EVALUATORS.has(command)) {
+      // eval's arguments are executable shell source. Static arguments can be
+      // inspected recursively; dynamic eval and sourced files cannot be proven
+      // package-safe, so they must use Cindy's host-owned mutation flow.
+      if (command !== 'eval') return cursor < words.length;
+      const nestedWords: string[] = [];
+      for (; cursor < words.length; cursor += 1) {
+        const nestedWord = bashResolveStaticWord(words[cursor], variables);
+        if (nestedWord === null) return true;
+        nestedWords.push(nestedWord);
+      }
+      if (nestedWords[0] === '--') nestedWords.shift();
+      if (nestedWords.length === 0) return false;
+      return bashCommandMutatesPiPackages({ command: nestedWords.join(' ') });
     }
     if (command !== 'pi' && command !== 'pi.exe') return false;
     const subcommand = bashResolveStaticWord(words[cursor] ?? '', variables);
