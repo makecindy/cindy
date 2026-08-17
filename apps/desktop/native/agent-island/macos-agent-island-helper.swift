@@ -4621,6 +4621,7 @@ final class AgentIslandController {
     notchBaselineHeight: 24,
     screenMetrics: .fallback
   )
+  private var lastCompactIslandWidth: CGFloat?
   private var globalClickMonitor: Any?
   private var localClickMonitor: Any?
   private var globalMoveMonitor: Any?
@@ -4760,7 +4761,7 @@ final class AgentIslandController {
       )
       return
     }
-    lastLayout = layout
+    rememberLayout(layout)
     if state.mode == "expanded" {
       cancelPendingCarrierFrame()
     }
@@ -5458,26 +5459,36 @@ final class AgentIslandController {
     let layout = interaction.startLayout
     let footprintWidth = compactCollapseFootprintWidth(layout: layout)
     let centerX = interaction.startFrame.midX
-    let minX = centerX - footprintWidth / 2
-    let maxX = centerX + footprintWidth / 2
     let clickX = interaction.startMouseX
-    guard clickX >= minX && clickX <= maxX else {
+    guard clickX >= centerX - footprintWidth / 2 && clickX <= centerX + footprintWidth / 2 else {
       return false
-    }
-    if layout.hasHardwareNotch {
-      return true
     }
     let visualMinX = centerX - layout.width / 2
     let visualMaxX = centerX + layout.width / 2
-    return clickX > visualMinX + compactCollapseLeadingReservedWidth
-      && clickX < visualMaxX - compactCollapseTrailingReservedWidth
+    let sideChrome = layout.hasHardwareNotch
+      ? max(0, (layout.width - layout.notchWidth) / 2)
+      : 0
+    let leadingReserved = max(compactCollapseLeadingReservedWidth, sideChrome)
+    let trailingReserved = max(compactCollapseTrailingReservedWidth, sideChrome)
+    return clickX > visualMinX + leadingReserved
+      && clickX < visualMaxX - trailingReserved
   }
 
   private func compactCollapseFootprintWidth(layout: AgentIslandLayout) -> CGFloat {
+    if let remembered = lastCompactIslandWidth, remembered > 0 {
+      return remembered
+    }
     if layout.hasHardwareNotch {
       return max(1, layout.notchWidth)
     }
     return compactIslandBaseWidth
+  }
+
+  private func rememberLayout(_ layout: AgentIslandLayout) {
+    lastLayout = layout
+    if !layout.expanded, layout.width > 0 {
+      lastCompactIslandWidth = layout.width
+    }
   }
 
   private func shouldPromotePendingMove(interaction: PanelDragInteraction, screenPoint: NSPoint) -> Bool {
@@ -5530,7 +5541,7 @@ final class AgentIslandController {
       frame: frame,
       expanded: lastLayout.expanded
     )
-    lastLayout = AgentIslandLayout.compute(
+    rememberLayout(AgentIslandLayout.compute(
       state: model.state,
       availableFrameWidth: frame.width,
       locallyHovered: model.locallyHovered,
@@ -5538,7 +5549,7 @@ final class AgentIslandController {
       screenMetrics: model.screenMetrics,
       hardwareNotchLayoutEnabled: hardwareNotchLayoutEnabled,
       preferredContentWidth: currentContentWidth(frame: frame, layout: lastLayout)
-    )
+    ))
     let nextContentWidth = currentContentWidth(frame: frame, layout: lastLayout)
     if animatedSnap {
       beginCompactSnapLayoutAnimation()
