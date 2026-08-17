@@ -50,6 +50,7 @@ import { AddBotDialog } from './AddBotDialog';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
+import { shouldDeferCanonicalBotSessionNavigation } from './botNavigation';
 import { BotRouteSettings } from './BotRouteSettings';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotEventInboxSettings } from './BotEventInboxSettings';
@@ -950,6 +951,7 @@ export function BotsHomeView() {
   const importingRef = useRef(false);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const selectedBot = useMemo(() => bots.find((bot) => bot.id === botId) ?? null, [botId, bots]);
+  const addRequested = searchParams.get('add') === '1';
   const settingsOpen = searchParams.get('settings') === '1';
 
   const createCanonicalSession = useCallback(
@@ -1056,7 +1058,11 @@ export function BotsHomeView() {
   }, [navigate, searchParams, setSearchParams, t]);
 
   useEffect(() => {
-    if (!selectedBot || settingsOpen) return;
+    if (
+      !selectedBot ||
+      shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addOpen, addRequested })
+    )
+      return;
     if (selectedBot.status !== 'active') {
       navigate(`/bots/${selectedBot.id}?settings=1`, { replace: true });
       return;
@@ -1141,7 +1147,15 @@ export function BotsHomeView() {
     return () => {
       cancelled = true;
     };
-  }, [createCanonicalSession, selectedBot, sessionId, settingsOpen, navigate]);
+  }, [
+    addOpen,
+    addRequested,
+    createCanonicalSession,
+    selectedBot,
+    sessionId,
+    settingsOpen,
+    navigate,
+  ]);
 
   const openAdd = () => {
     setAddOpen(true);
