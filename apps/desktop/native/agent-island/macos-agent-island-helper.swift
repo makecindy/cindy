@@ -1633,6 +1633,8 @@ private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
 private let compactIslandMinContentWidth: CGFloat = 80
+private let compactCollapseLeadingReservedWidth: CGFloat = 80
+private let compactCollapseTrailingReservedWidth: CGFloat = 100
 private let compactIslandBadgeCollapseContentThreshold: CGFloat = 152
 private let compactIslandDetailCollapseContentThreshold: CGFloat = 190
 private let compactIslandCjkTitleMinimumWidth: CGFloat = 32
@@ -2744,7 +2746,12 @@ struct IdleIslandView: View {
         idleCreateEntry
 
         HStack {
-          Spacer(minLength: 0)
+          Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+              eventSink(["type": "collapse"])
+            }
           ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
         }
         .padding(.horizontal, expandedIslandCardHorizontalPadding)
@@ -2794,6 +2801,12 @@ struct IdleIslandView: View {
         .frame(width: sideWidth, alignment: .leading)
         .clipped()
       Spacer(minLength: layout.notchWidth)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          if layout.expanded {
+            eventSink(["type": "collapse"])
+          }
+        }
       Color.clear
         .frame(width: sideWidth)
     }
@@ -2905,7 +2918,7 @@ struct ExpandedIslandTopBar: View {
   private var regularBody: some View {
     HStack(spacing: 8) {
       leadingContent
-      Spacer(minLength: 8)
+      compactCollapseHit
       ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
     }
     .frame(maxWidth: .infinity, minHeight: expandedIslandTopBarHeight, alignment: .center)
@@ -2920,7 +2933,7 @@ struct ExpandedIslandTopBar: View {
           .frame(width: sideWidth, alignment: .leading)
           .clipped()
 
-        Color.clear
+        compactCollapseHit
           .frame(width: notchWidth)
 
         ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
@@ -2954,6 +2967,15 @@ struct ExpandedIslandTopBar: View {
         }
       }
     }
+  }
+
+  private var compactCollapseHit: some View {
+    Color.clear
+      .frame(minWidth: 8, maxWidth: .infinity, maxHeight: .infinity)
+      .contentShape(Rectangle())
+      .onTapGesture {
+        eventSink(["type": "collapse"])
+      }
   }
 }
 
@@ -5257,6 +5279,8 @@ final class AgentIslandController {
     pendingMoveInteraction = nil
     if shouldTreatAsCompactClick(interaction: interaction, screenPoint: screenPoint) {
       eventSink(["type": "expand"])
+    } else if shouldTreatAsCompactCollapseClick(interaction: interaction, screenPoint: screenPoint) {
+      eventSink(["type": "collapse"])
     }
     handleMouseMoved(screenPoint: screenPoint, force: true)
     replayDeferredInteractionUpdateIfNeeded()
@@ -5424,8 +5448,54 @@ final class AgentIslandController {
     guard interaction.mode == .move, !interaction.startLayout.expanded else {
       return false
     }
-    return abs(screenPoint.x - interaction.startMouseX) <= agentIslandClickDragTolerance
+    return isClickWithoutDrag(interaction: interaction, screenPoint: screenPoint)
+  }
+
+  private func shouldTreatAsCompactCollapseClick(
+    interaction: PanelDragInteraction,
+    screenPoint: NSPoint
+  ) -> Bool {
+    guard interaction.mode == .move, interaction.startLayout.expanded else {
+      return false
+    }
+    guard isClickWithoutDrag(interaction: interaction, screenPoint: screenPoint) else {
+      return false
+    }
+    return isCompactFootprintClick(interaction: interaction)
+  }
+
+  private func isClickWithoutDrag(interaction: PanelDragInteraction, screenPoint: NSPoint) -> Bool {
+    abs(screenPoint.x - interaction.startMouseX) <= agentIslandClickDragTolerance
       && abs(screenPoint.y - interaction.startMouseY) <= agentIslandClickDragTolerance
+  }
+
+  /// The screen rectangle where the collapsed island sat. After expand, that
+  /// center strip is blank (hardware-notch Color.clear, or the top-bar spacer).
+  /// Clicking it should fold the island back; toolbar / title live outside it.
+  private func isCompactFootprintClick(interaction: PanelDragInteraction) -> Bool {
+    let layout = interaction.startLayout
+    let footprintWidth = compactCollapseFootprintWidth(layout: layout)
+    let centerX = interaction.startFrame.midX
+    let minX = centerX - footprintWidth / 2
+    let maxX = centerX + footprintWidth / 2
+    let clickX = interaction.startMouseX
+    guard clickX >= minX && clickX <= maxX else {
+      return false
+    }
+    if layout.hasHardwareNotch {
+      return true
+    }
+    let visualMinX = centerX - layout.width / 2
+    let visualMaxX = centerX + layout.width / 2
+    return clickX > visualMinX + compactCollapseLeadingReservedWidth
+      && clickX < visualMaxX - compactCollapseTrailingReservedWidth
+  }
+
+  private func compactCollapseFootprintWidth(layout: AgentIslandLayout) -> CGFloat {
+    if layout.hasHardwareNotch {
+      return max(1, layout.notchWidth)
+    }
+    return compactIslandBaseWidth
   }
 
   private func shouldPromotePendingMove(interaction: PanelDragInteraction, screenPoint: NSPoint) -> Bool {
