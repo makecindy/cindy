@@ -927,6 +927,49 @@ function glmGenerationOf(providerId: string): number {
   return glmCodingPlanUsageGenerations.get(providerId) ?? 0;
 }
 
+/**
+ * GLM 用量条件提交令牌(七轮根因修复,审计规划 §2):调用方在**发起 fetch 之前**
+ * 领取,fetch 完成后随 record/clear 带回;期间任何 clear(世代 bump)或 owner 切换
+ * (epoch 前进)都会令令牌失效,store 直接拒绝提交。它取代「写完再验 + 补偿」形态
+ * ——补偿自身仍是跨 await 的先检查后动作,窗口永远关不干净(#2768 四~七轮实证)。
+ * 令牌失效判定不依赖身份字段可区分:两账号身份完全相同时 ownerEpoch 仍不同。
+ */
+export interface GlmUsageWriteToken {
+  readonly providerId: string;
+  readonly generation: number;
+  readonly ownerEpoch: number;
+}
+
+/** 领取条件提交令牌(在发起 fetch 之前调用;token 捕获点 = fetch 前,非提交时)。 */
+export function beginGlmCodingPlanUsageWrite(providerId: string): GlmUsageWriteToken {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  return {
+    providerId,
+    generation: glmGenerationOf(providerId),
+    ownerEpoch: glmCodingPlanUsageOwnerEpoch,
+  };
+}
+
+/**
+ * 只作废在飞令牌、不删持久化快照(CRUD 更新的正确动作):provider CRUD 在
+ * UPDATE handler 末尾无条件触发(afterChange 不区分改了哪个字段),但改显示名 /
+ * 加模型 / 调 header 不改变额度归属 —— 快照仍是有效数据,删了会让额度显示在
+ * 无关编辑后立刻消失(补刷失败则空一个节流窗)。作废令牌(堵 fetch 窗口竞态)
+ * 与删快照(数据真失效)是两件事,UPDATE 除非身份失配只做前者。
+ */
+export function invalidateGlmCodingPlanUsageWrites(providerId: string): void {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  glmCodingPlanUsageGenerations.set(providerId, glmGenerationOf(providerId) + 1);
+}
+
+/** 令牌是否仍然有效(世代与 owner epoch 都未前进;providerId 属调用方自查)。 */
+function isGlmUsageWriteTokenCurrent(token: GlmUsageWriteToken): boolean {
+  return (
+    token.ownerEpoch === glmCodingPlanUsageOwnerEpoch
+    && token.generation === glmGenerationOf(token.providerId)
+  );
+}
+
 function resetGlmCodingPlanUsageCacheIfOwnerChanged(): void {
   const owner = currentAccountUsageOwner();
   if (glmCodingPlanUsageOwnerInitialized && owner === glmCodingPlanUsageOwner) return;
@@ -992,10 +1035,15 @@ function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
 export async function recordGlmCodingPlanUsageSnapshot(
   providerId: string,
   snapshot: unknown,
+  token?: GlmUsageWriteToken,
 ): Promise<void> {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
-  const generation = glmGenerationOf(providerId);
-  const ownerEpoch = glmCodingPlanUsageOwnerEpoch;
+  // 令牌在 fetch 前领取:CRUD 落在 fetch 期间(而非 record 自己的 await 里)时,
+  // 世代/epoch 已在领取后前进 → 此处直接拒绝。无令牌 = 老调用路径,沿用入口
+  // 捕获(仍防 record 自身 await 窗口内的 clear)。
+  const generation = token ? token.generation : glmGenerationOf(providerId);
+  const ownerEpoch = token ? token.ownerEpoch : glmCodingPlanUsageOwnerEpoch;
+  if (token && token.providerId !== providerId) return;
   await ensureGlmCodingPlanUsageLoaded(providerId);
   if (
     ownerEpoch !== glmCodingPlanUsageOwnerEpoch
@@ -1037,8 +1085,15 @@ export async function recordGlmCodingPlanUsageSnapshot(
   }
 }
 
-export async function clearGlmCodingPlanUsageSnapshot(providerId: string): Promise<void> {
+export async function clearGlmCodingPlanUsageSnapshot(
+  providerId: string,
+  token?: GlmUsageWriteToken,
+): Promise<void> {
   resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  // 带令牌的清除('empty' / 401 降级路径):令牌失效 → 静默放弃,不 bump 世代、
+  // 不广播——CRUD 已在此期间接管(它自己的强制清会 bump)。无令牌 = 强制清
+  // (CRUD 钩子 / read 身份失配),无条件执行。
+  if (token && !isGlmUsageWriteTokenCurrent(token)) return;
   glmCodingPlanUsageHydrated.add(providerId);
   glmCodingPlanUsageSnapshots.set(providerId, null);
   // 只 bump 本 provider 的世代 —— 其它 provider 并发中的 hydration/record 不受影响。

@@ -139,4 +139,38 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     await broadcaster.recordGlmCodingPlanUsageSnapshot('p1', null);
     await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toBeNull();
   });
+
+  it('rejects a tokened write whose generation was bumped mid-flight (store-level T2)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    const token = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    await broadcaster.clearGlmCodingPlanUsageSnapshot('p1'); // CRUD 强制清 → 世代 bump
+    await broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(50), token);
+    // 提交被拒:内存无快照、不落库(exec 只剩 clear 的 DELETE)
+    await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toBeNull();
+    expect(mocks.exec.mock.calls.filter((call) => String((call as unknown[])[0]).includes('INSERT'))).toHaveLength(0);
+  });
+
+  it('rejects a tokened write across an owner-epoch advance (store-level T3)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    const token = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    mocks.getCurrentUserId.mockReturnValue('user-2'); // owner 切换
+    await broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(50), token);
+    await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toBeNull();
+  });
+
+  it('accepts a tokened write with a current token; skips a stale tokened clear', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    const token = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    await broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(42), token);
+    expect((await broadcaster.readGlmCodingPlanUsageSnapshot('p1'))?.fiveHour?.utilization).toBe(42);
+    // 令牌失效后的条件清 → 静默跳过(不 bump、不广播删除)
+    const staleToken = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    await broadcaster.clearGlmCodingPlanUsageSnapshot('p1');
+    await broadcaster.clearGlmCodingPlanUsageSnapshot('p1', staleToken);
+    // staleToken 在第二次 clear 后失效,但快照已被第一次(强制)清掉 → null
+    await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toBeNull();
+  });
 });

@@ -7,10 +7,12 @@
  *     (不是 Claude 的全局单账号 OAuth)。
  *   - 单一数据源(monitor 端点),无 headers 旁路,无 merge 语义。
  *   - provider 配置 / key 变化走 syncForProviderChange(providerHandlers 的 CRUD 钩子调用):
- *     删除或失去 usage 能力 → 无条件清快照;换 key → 指纹失配清快照 + 立即刷新。
+ *     删除或失去 usage 能力 → 无条件清快照;更新 → 作废在飞提交令牌(fetch 窗口
+ *     竞态)且仅身份(key/baseUrl/platform)失配才清快照,改名/加模型类编辑不删。
  */
 
 import type { GlmCodingPlanUsageSnapshot } from '../../shared/glmCodingPlanUsage.js';
+import type { GlmUsageWriteToken } from '../usageBroadcaster.js';
 
 /** reader 眼中一个可查询的 coding plan provider(由 usage.ts 装配层解析配置得出)。 */
 export interface GlmCodingPlanProviderSource {
@@ -41,8 +43,26 @@ export interface GlmCodingPlanUsageRefreshDeps {
   fetchSnapshot(
     source: GlmCodingPlanProviderSource,
   ): Promise<GlmCodingPlanUsageSnapshot | 'empty' | null>;
-  recordSnapshot(providerId: string, snapshot: GlmCodingPlanUsageSnapshot): Promise<void>;
-  clearSnapshot(providerId: string): Promise<void>;
+  /**
+   * 在**发起 fetch 之前**领取条件提交令牌(七轮根因修复):fetch 期间发生
+   * provider CRUD(世代 bump)或 owner 切换(epoch 前进)→ 令牌失效 →
+   * record/clear 的提交被 store 拒绝。取代「写完再验 + 补偿」——补偿自身
+   * 仍是跨 await 的先检查后动作,窗口关不干净(#2768 四~七轮实证)。
+   */
+  beginWrite(providerId: string): GlmUsageWriteToken;
+  /**
+   * 只作废在飞令牌、不删快照(CRUD 更新路径):UPDATE handler 对任何字段变更都
+   * 触发,但只有身份(key/baseUrl/platform)变化才使快照数据失效 —— 改名/加模型
+   * 不删快照,额度显示不断(七轮复审 R2 修正)。
+   */
+  invalidateWrites(providerId: string): void;
+  recordSnapshot(
+    providerId: string,
+    snapshot: GlmCodingPlanUsageSnapshot,
+    token?: GlmUsageWriteToken,
+  ): Promise<void>;
+  /** 无令牌 = 强制清(CRUD 钩子 / read 身份失配);带令牌 = 条件清('empty'/401)。 */
+  clearSnapshot(providerId: string, token?: GlmUsageWriteToken): Promise<void>;
   readCachedSnapshot(providerId: string): Promise<GlmCodingPlanUsageSnapshot | null>;
   /** API key → 快照归属指纹(与 record 侧同一实现);read() 用它识别换 key 后的过期快照。 */
   fingerprintKey(key: string): string;
@@ -83,6 +103,24 @@ export interface GlmCodingPlanUsageReader {
   triggerRefresh(providerId: string): void;
   /** provider CRUD(key / baseUrl / usage 能力变化或删除)后的强制同步。 */
   syncForProviderChange(providerId: string): Promise<void>;
+}
+
+/**
+ * owner 全出口复核(审计 B):包一层 readSource,入口捕获 owner、**每个返回路径**
+ * 出口复核——包括「无 usage 能力」「无 key」这类提前 return。此前哨兵只在找到 key
+ * 之后复核,提前 return 的 null 会在切账号瞬间误删新账号同名 provider 的快照。
+ * 纯函数,owner 读取器由装配层注入(usage.ts 注 getCurrentUserId)。
+ */
+export function createOwnerGuardedReadSource(
+  readOwner: () => string | null,
+  readSource: (providerId: string) => Promise<GlmCodingPlanReadSourceResult>,
+): (providerId: string) => Promise<GlmCodingPlanReadSourceResult> {
+  return async (providerId) => {
+    const ownerAtStart = readOwner();
+    const result = await readSource(providerId);
+    if (readOwner() !== ownerAtStart) return 'stale-owner';
+    return result;
+  };
 }
 
 export function createGlmCodingPlanUsageReader(
@@ -130,12 +168,16 @@ export function createGlmCodingPlanUsageReader(
     s.backoffUntil = 0;
   }
 
-  async function clearSnapshotQuiet(providerId: string): Promise<void> {
-    const s = stateFor(providerId);
+  /** 重置节流/退避/身份状态(数据归属变了,旧节流不再适用)。 */
+  function resetRefreshState(s: ProviderRefreshState): void {
     s.identity = null;
     s.lastRefreshAt = 0;
     s.backoffMs = 0;
     s.backoffUntil = 0;
+  }
+
+  async function clearSnapshotQuiet(providerId: string): Promise<void> {
+    resetRefreshState(stateFor(providerId));
     try {
       await deps.clearSnapshot(providerId);
     } catch (err) {
@@ -154,75 +196,6 @@ export function createGlmCodingPlanUsageReader(
     }
   }
 
-  /**
-   * 飞行中身份是否仍然有效:重读当前源并与飞行发起时的完整身份比对——key 指纹 +
-   * baseUrl + platform(对齐 claude reader 的 isRefreshStillCurrent 口径)。换 key /
-   * 换端点 / 换平台 / 删除发生在 fetch 途中时,旧配置的响应(含 'empty' / 401 的
-   * 清快照副作用)必须整体丢弃 —— 只比 key 指纹不够:同一把 key 改 baseUrl(如
-   * zhipu↔zai)后,旧端点的迟到响应同样会污染新配置(#2768 二轮 review r3788456291)。
-   * 只在 fetch 完成时调用(每完成一次付一次 source 解析),不在请求热路径上。
-   */
-  async function isRefreshStillCurrent(
-    providerId: string,
-    keyFingerprint: string,
-    source: GlmCodingPlanProviderSource,
-  ): Promise<boolean> {
-    const current = await readSourceSafe(providerId);
-    if (!current || current === 'stale-owner') return false;
-    return (
-      current.runtimeBaseUrl === source.runtimeBaseUrl
-      && current.platform === source.platform
-      && deps.fingerprintKey(current.apiKey) === keyFingerprint
-    );
-  }
-
-  /**
-   * 持久化快照是否仍属于给定身份(旧请求视角):身份字段齐全且全部匹配。
-   * 字段不完整的旧快照归属不明,保守按"不属于"处理(宁可留给补刷覆盖,
-   * 不冒误删风险)。
-   */
-  function cachedBelongsToSource(
-    cached: GlmCodingPlanUsageSnapshot | null,
-    keyFingerprint: string,
-    source: GlmCodingPlanProviderSource,
-  ): boolean {
-    if (!cached) return false;
-    if (!cached.keyFingerprint || !cached.runtimeBaseUrl || cached.platform === undefined) {
-      return false;
-    }
-    return (
-      cached.keyFingerprint === keyFingerprint
-      && cached.runtimeBaseUrl === source.runtimeBaseUrl
-      && cached.platform === source.platform
-    );
-  }
-
-  /**
-   * 副作用后补偿(四轮 review,Greptile 残余竞态):活体校验通过 → record/clear
-   * 完成之间还有一段 await 窗口,provider CRUD 恰在此刻落地时旧副作用仍会执行
-   * ——写回旧快照(覆盖 sync 刚清的结果)或清掉新身份刚写入的快照。副作用完成后
-   * 再验一次身份,失配则清残留并按当前源立即补刷。
-   *
-   * 清除带身份条件(六轮 review,Greptile 4/5):新身份的链式补刷可能在本窗口内
-   * **已先落库**——无条件按 providerId 删会误删新快照,补刷再遇网络错误/401/429
-   * 时当前账号额度显示丢失(一个节流窗内无法恢复)。因此只清「仍属于旧身份」的
-   * 快照;新身份已落库的不动。补偿刷新的节流绕过不依赖 clearSnapshotQuiet 的
-   * 身份重置——refreshWith 对不同身份天然重置节流。
-   */
-  async function compensateIfStale(
-    providerId: string,
-    keyFingerprint: string,
-    source: GlmCodingPlanProviderSource,
-  ): Promise<void> {
-    if (await isRefreshStillCurrent(providerId, keyFingerprint, source)) return;
-    const cached = await deps.readCachedSnapshot(providerId);
-    if (cachedBelongsToSource(cached, keyFingerprint, source)) {
-      await clearSnapshotQuiet(providerId);
-    }
-    const current = await readSourceSafe(providerId);
-    if (current && current !== 'stale-owner') void refreshWith(providerId, current);
-  }
-
   function refreshWith(
     providerId: string,
     source: GlmCodingPlanProviderSource,
@@ -232,7 +205,7 @@ export function createGlmCodingPlanUsageReader(
     const identity = identityOf(source);
     if (s.inFlight) {
       // 飞行中的 fetch 属于另一身份(换 key / 换端点):等旧请求收尾后按当时最新源
-      // 补一次(旧响应会被活体校验丢弃)。同身份直接复用旧 promise。
+      // 补一次(旧提交会被令牌拒绝)。同身份直接复用旧 promise。
       if (s.inFlightIdentity !== identity) {
         return s.inFlight.finally(() => {
           void readSourceSafe(providerId).then((current) => {
@@ -251,22 +224,22 @@ export function createGlmCodingPlanUsageReader(
     s.lastRefreshAt = now;
     s.inFlightIdentity = identity;
     s.inFlight = (async () => {
+      // 令牌在 fetch 前领取:fetch 期间 CRUD(世代 bump)/ owner 切换(epoch 前进)
+      // → 提交被 store 拒绝。覆盖四~七轮全部场景,且不依赖身份字段可区分
+      // (两账号身份完全相同时 ownerEpoch 仍不同)。
+      const token = deps.beginWrite(providerId);
       try {
         const result = await deps.fetchSnapshot(source);
         s.backoffMs = 0;
         s.backoffUntil = 0;
-        // 换 key / 换端点 / 删除发生在飞行中:重读当前源比对完整身份(死守卫教训
-        // —— 与自身保存的字段比较恒过,等于没有检查),旧响应整体丢弃。
-        if (!(await isRefreshStillCurrent(providerId, keyFingerprint, source))) return;
         if (result === 'empty') {
-          // 端点成功但无可解析窗口 —— 清快照降级;不动节流状态(防逐次重打敏感端点)。
+          // 端点成功但无可解析窗口 —— 带令牌条件清(降级);不动节流状态(防逐次
+          // 重打敏感端点)。令牌失效 → 静默放弃,CRUD 已在此期间接管。
           try {
-            await deps.clearSnapshot(providerId);
+            await deps.clearSnapshot(providerId, token);
           } catch (clearErr) {
             deps.onRefreshError(clearErr);
           }
-          // 清完补偿:窗口期内换装则按当前源立即补刷(空清除可能误删新身份快照)。
-          await compensateIfStale(providerId, keyFingerprint, source);
           return;
         }
         if (result) {
@@ -276,23 +249,17 @@ export function createGlmCodingPlanUsageReader(
             // 完整身份随快照落库:同 key 换端点时据此判定持久化快照过期。
             runtimeBaseUrl: source.runtimeBaseUrl,
             platform: source.platform,
-          });
-          // 写完补偿:校验→写库的 await 窗口内换装则清掉刚写的旧身份快照并补刷。
-          await compensateIfStale(providerId, keyFingerprint, source);
+          }, token);
         }
       } catch (err) {
         if (deps.isUnauthorizedError(err)) {
           // 只清快照、不动 API key —— 401/403 也可能是套餐类型 / 接口权限不支持;
-          // 节流保留,防每个 read 都重打。清快照同样要过活体校验:旧配置的 401
-          // 不得把新配置刚写入的快照清掉。
-          if (await isRefreshStillCurrent(providerId, keyFingerprint, source)) {
-            try {
-              await deps.clearSnapshot(providerId);
-              // 清完补偿:401 的清快照同样可能落在换装窗口内,误删新身份快照。
-              await compensateIfStale(providerId, keyFingerprint, source);
-            } catch (clearErr) {
-              deps.onRefreshError(clearErr);
-            }
+          // 节流保留,防每个 read 都重打。条件清同样带令牌:旧配置的 401 不得
+          // 清掉新配置刚写入的快照(令牌失效 → 静默放弃)。
+          try {
+            await deps.clearSnapshot(providerId, token);
+          } catch (clearErr) {
+            deps.onRefreshError(clearErr);
           }
           return;
         }
@@ -321,16 +288,17 @@ export function createGlmCodingPlanUsageReader(
       }
       if (!source) {
         s.noSourceUntil = deps.now() + throttleMs;
-        // 只在「之前有过源」时清一次 —— 普通 provider 的常规读不应反复触发 DELETE。
-        if (s.hadSource || s.identity !== null) {
-          s.hadSource = false;
-          await clearSnapshotQuiet(providerId);
-        } else {
+        s.hadSource = false;
+        if (s.identity === null) {
           // 从未存在过的 provider 不留状态槽:slug 白名单挡了形状,这里挡数量,
           // states Map 只随真实 provider 增长(#2768 review r3788644122)。
           states.delete(providerId);
         }
-        return null;
+        // 读路径**不删除任何东西**(审计 A):「读不到」≠「不存在」——safeStorage /
+        // DB 瞬时故障同样走 null,清了就把用户余量从磁盘抹掉且 180s 不补刷。真删
+        // 除归 CRUD 钩子(syncForProviderChange 知道真的发生了变更);此处返回
+        // 缓存快照,瞬时故障下显示不中断。
+        return await deps.readCachedSnapshot(providerId);
       }
       s.noSourceUntil = 0;
       s.hadSource = true;
@@ -384,9 +352,14 @@ export function createGlmCodingPlanUsageReader(
       }
       s.noSourceUntil = 0;
       s.hadSource = true;
+      // CRUD 更新拆两件事(七轮复审 R2 修正):①作废在飞令牌——UPDATE handler
+      // 对任何字段变更都触发,fetch 窗口竞态必须无条件堵(T2 教训:首刷进行中
+      // 换 key 时缓存为 null,不做这步旧写照样落库);②删持久化快照——只有
+      // 身份(key/baseUrl/platform)失配才删,改名/加模型类编辑不删,额度显示
+      // 不断。节流随归属变化重置,补刷不被旧窗口卡住。
+      resetRefreshState(s);
+      deps.invalidateWrites(providerId);
       const cached = await deps.readCachedSnapshot(providerId);
-      // 同 key 换 baseUrl / platform 也要清:旧端点的余量不能顶着新配置展示
-      // (新请求失败时会无限期残留;#2768 三轮 review r3788613366)。
       if (isCachedSnapshotStale(cached, source, deps.fingerprintKey)) {
         await clearSnapshotQuiet(providerId);
       }

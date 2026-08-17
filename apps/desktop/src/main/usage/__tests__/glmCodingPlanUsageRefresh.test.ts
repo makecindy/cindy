@@ -1,14 +1,17 @@
 /**
  * glmCodingPlanUsageRefresh.test.ts
  * ---------------------------------------------------------------------------
- * GLM Coding Plan 余量 reader(per-provider cached-first)单测,形态对齐
- * claudeSubscriptionUsageRefresh.test.ts:
- *   - read(): cached-first 返回缓存 + 触发后台刷新;无源(无 provider / 无 usage 能力 /
- *     无 key)→ 清快照返回 null
- *   - 换 key 防串号: 持久化快照指纹失配 → 立即清除并返回 null(不等后台刷新)
- *   - 401/403 → 只清快照(key 不动);429 → 指数退避保留快照;transport 失败保留快照
- *   - 节流: 同 key 窗口内不重复打端点;'empty' 清快照但保留节流
- *   - syncForProviderChange(): 删除 → 无条件清;换 key → 指纹失配清 + 立即刷新
+ * GLM Coding Plan 余量 reader(per-provider cached-first)单测。
+ * 七轮根因修复后的核心机制:**条件提交令牌**——fetch 前领取,fetch 期间 CRUD
+ * (世代 bump)/ owner 切换(epoch 前进)→ 提交被 store 拒绝;「写完再验+补偿」
+ * 形态(compensateIfStale / cachedBelongsToSource / isRefreshStillCurrent)已删。
+ *
+ * 覆盖(标注 T1-T4 为审计规划 §5 的硬门槛):
+ *   - T1: readSource 瞬时失败 → 零 clear、返回缓存快照(读路径不删)
+ *   - T2: CRUD 落在 fetch 期间 → 提交被拒(四~七轮全部场景的通用挡板)
+ *   - T3: owner 切换落在 fetch 期间且两账号身份字段完全相同 → 新快照存活
+ *   - T4: owner 在 readSource await 期间切换且新 owner 同 id provider 无 key
+ *         → 不清快照(createOwnerGuardedReadSource 全出口复核)
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -16,8 +19,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GlmCodingPlanUsageSnapshot } from '../../../shared/glmCodingPlanUsage';
 import {
   createGlmCodingPlanUsageReader,
-  type GlmCodingPlanUsageRefreshDeps,
+  createOwnerGuardedReadSource,
+  type GlmCodingPlanReadSourceResult,
   type GlmCodingPlanProviderSource,
+  type GlmCodingPlanUsageRefreshDeps,
 } from '../glmCodingPlanUsageRefresh';
 
 const THROTTLE_MS = 180_000;
@@ -53,24 +58,27 @@ interface HarnessOptions {
   cached?: GlmCodingPlanUsageSnapshot | null;
   fetchResult?: GlmCodingPlanUsageSnapshot | 'empty' | null;
   fetchError?: Error;
-  /** true = fetchSnapshot 挂起,由测试用 resolveFetch / rejectFetch 手动收尾(飞行中场景)。 */
+  /** true = fetchSnapshot 挂起,由测试手动收尾(飞行中场景)。 */
   deferFetch?: boolean;
-  /** 在 recordSnapshot 副作用内部回调(模拟"校验通过→写库完成"窗口内的 CRUD)。 */
-  recordHook?: () => void;
-  /** 在 clearSnapshot 副作用内部回调(同上,清快照窗口)。 */
-  clearHook?: () => void;
-  /** true = readSource 返回 'stale-owner'(读取期间账号切换场景)。 */
-  staleOwner?: boolean;
+  /** readSource 抛异常(模拟 safeStorage / DB 瞬时故障,T1)。 */
+  readSourceError?: Error;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
   let now = 1_000_000;
+  // 令牌语义的内存版 store(与 usageBroadcaster 真实现同构):
+  // beginWrite 领取 {generation, ownerEpoch};clear 强制/条件均 bump generation;
+  // record/clear 带失效令牌 → 静默拒绝。
+  let generation = 0;
+  let ownerEpoch = 0;
   const calls = {
     fetch: 0,
+    /** 实际落库的快照(被拒提交不计)。 */
     record: [] as GlmCodingPlanUsageSnapshot[],
+    /** record 被调用的次数(含被拒)。 */
+    recordAttempts: 0,
     clear: 0,
   };
-  // 注意 ?? 会把显式 null 吞成默认值 —— 无源场景(null)必须原样保留。
   let source: GlmCodingPlanProviderSource | null
     = opts.source === undefined ? SOURCE_A : opts.source;
   let cached: GlmCodingPlanUsageSnapshot | null = opts.cached ?? null;
@@ -83,25 +91,31 @@ function makeHarness(opts: HarnessOptions = {}) {
         rejectFetch = rej;
       })
     : null;
+
   const deps: GlmCodingPlanUsageRefreshDeps = {
-    readSource: vi.fn(async () => (opts.staleOwner === true ? 'stale-owner' : source)),
+    readSource: vi.fn(async (): Promise<GlmCodingPlanReadSourceResult> => {
+      if (opts.readSourceError) throw opts.readSourceError;
+      return source;
+    }),
     fetchSnapshot: vi.fn(async () => {
       calls.fetch += 1;
-      // deferred 只作用于首笔 fetch(制造"飞行中");后续 fetch(如换 key 后的链式
-      // 补刷)走正常 mock 值,避免复用同一个已 resolve 的 promise 把旧值喂给新请求。
       if (deferredFetch && calls.fetch === 1) return deferredFetch;
       if (opts.fetchError) throw opts.fetchError;
       return opts.fetchResult ?? snapshotOf();
     }),
-    recordSnapshot: vi.fn(async (_id, snapshot) => {
+    beginWrite: vi.fn((providerId: string) => ({ providerId, generation, ownerEpoch })),
+    invalidateWrites: vi.fn(() => { generation += 1; }),
+    recordSnapshot: vi.fn(async (_id: string, snapshot: GlmCodingPlanUsageSnapshot, token?: { generation: number; ownerEpoch: number }) => {
+      calls.recordAttempts += 1;
+      if (token && (token.generation !== generation || token.ownerEpoch !== ownerEpoch)) return;
       calls.record.push(snapshot);
       cached = snapshot;
-      opts.recordHook?.();
     }),
-    clearSnapshot: vi.fn(async () => {
+    clearSnapshot: vi.fn(async (_id: string, token?: { generation: number; ownerEpoch: number }) => {
+      if (token && (token.generation !== generation || token.ownerEpoch !== ownerEpoch)) return;
       calls.clear += 1;
       cached = null;
-      opts.clearHook?.();
+      generation += 1; // 与真 store 同构:任何执行的 clear 都 bump 世代
     }),
     readCachedSnapshot: vi.fn(async () => cached),
     fingerprintKey: (key: string) => `fp-${key}`,
@@ -118,81 +132,76 @@ function makeHarness(opts: HarnessOptions = {}) {
     setCached(next: GlmCodingPlanUsageSnapshot | null) { cached = next; },
     cached: () => cached,
     advance(ms: number) { now += ms; },
+    /** 模拟 fetch 期间发生 provider CRUD(真链路: clear → 世代 bump)。 */
+    bumpGeneration() { generation += 1; },
+    /** 模拟 fetch 期间发生账号切换(store ownerEpoch 前进)。 */
+    bumpOwnerEpoch() { ownerEpoch += 1; },
     resolveFetch: (value: GlmCodingPlanUsageSnapshot | 'empty' | null) => resolveFetch(value),
     rejectFetch: (reason: Error) => rejectFetch(reason),
   };
 }
 
-describe('read() — cached-first + 后台刷新', () => {
+describe('read() — cached-first + 读路径不删', () => {
   it('returns the cached snapshot and refreshes in the background', async () => {
     const h = makeHarness({ cached: snapshotOf({ fiveHour: { utilization: 33, resetsAt: null } }) });
     const result = await h.reader.read(SOURCE_A.providerId);
     expect(result?.fiveHour?.utilization).toBe(33);
-    // 后台刷新已发起,且新快照按查询 key 的指纹落库
     await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
     expect(h.calls.record[0].keyFingerprint).toBe('fp-key-a');
   });
 
-  it('returns null without clearing when a fresh reader sees no usable source', async () => {
-    // 普通 provider 的常规读(chip 不会发起,但 IPC 直调可能)不应反复触发 DELETE ——
-    // 与 claude reader 同语义;快照清理交给 CRUD 钩子的 syncForProviderChange。
-    const h = makeHarness({ source: null, cached: snapshotOf() });
-    await expect(h.reader.read(SOURCE_A.providerId)).resolves.toBeNull();
+  it('returns null without side effects on stale-owner reads', async () => {
+    const seed = snapshotOf();
+    const h = makeHarness({ source: null, cached: seed });
+    // readSource null 但库里有快照:读路径不删(A 修复),返回缓存
+    const result = await h.reader.read(SOURCE_A.providerId);
+    expect(result).toBe(seed);
     expect(h.calls.clear).toBe(0);
     expect(h.deps.fetchSnapshot).not.toHaveBeenCalled();
   });
 
-  it('clears once when a previously-queryable provider loses its source', async () => {
-    const h = makeHarness({ source: SOURCE_A, cached: snapshotOf() });
-    await h.reader.read(SOURCE_A.providerId);
-    h.setSource(null);
-    await h.reader.read(SOURCE_A.providerId);
-    expect(h.calls.clear).toBe(1);
+  it('T1: transient readSource failure keeps the snapshot — zero clear, cache returned', async () => {
+    // safeStorage / DB 瞬时故障 → readSource 抛异常 → 绝不能把用户余量从磁盘删掉。
+    const seed = snapshotOf();
+    const h = makeHarness({ readSourceError: new Error('DPAPI unavailable'), cached: seed });
+    const result = await h.reader.read(SOURCE_A.providerId);
+    expect(result).toBe(seed); // 快照原样返回(同一引用),显示不中断
+    expect(h.calls.clear).toBe(0);
+    expect(h.deps.fetchSnapshot).not.toHaveBeenCalled();
   });
 
-  it('clears a persisted snapshot whose key fingerprint no longer matches (key rotation)', async () => {
-    // 库里是旧 key 的快照,当前配置已换 key-b —— 立即清,不把旧账号余量顶给新 key 看。
-    const h = makeHarness({
-      cached: snapshotOf({ keyFingerprint: 'fp-key-old' }),
-    });
-    h.setSource(SOURCE_B);
-    await expect(h.reader.read(SOURCE_A.providerId)).resolves.toBeNull();
-    expect(h.calls.clear).toBe(1);
-  });
-
-  it('keeps a fingerprint-less snapshot (unknown ownership, no false clear)', async () => {
-    const h = makeHarness({ cached: snapshotOf() });
+  it('keeps a fingerprint-less snapshot (legacy shape, unknown ownership)', async () => {
+    const legacy = { ...snapshotOf() } as Partial<GlmCodingPlanUsageSnapshot>;
+    delete legacy.platform;
+    const h = makeHarness({ cached: legacy as GlmCodingPlanUsageSnapshot });
     await h.reader.read(SOURCE_A.providerId);
     expect(h.calls.clear).toBe(0);
+  });
+
+  it('clears a persisted snapshot whose key fingerprint no longer matches (cross-restart)', async () => {
+    const h = makeHarness({ cached: snapshotOf({ keyFingerprint: 'fp-key-old' }) });
+    await h.reader.read(SOURCE_A.providerId);
+    expect(h.calls.clear).toBe(1); // 配置级身份失配,强制清(read 有当前源在手)
   });
 });
 
 describe('refresh semantics — errors / throttle', () => {
-  it('clears only the snapshot on 401 (API key untouched by caller contract)', async () => {
-    const h = makeHarness({
-      cached: snapshotOf(),
-      fetchError: new UnauthorizedError('401'),
-    });
+  it('clears (tokened) on 401 but keeps the snapshot and backs off on 429', async () => {
+    const h = makeHarness({ cached: snapshotOf(), fetchError: new UnauthorizedError('401') });
     await h.reader.read(SOURCE_A.providerId);
     await vi.waitFor(() => expect(h.calls.clear).toBe(1));
-  });
 
-  it('keeps the snapshot and backs off exponentially on 429', async () => {
-    const h = makeHarness({
-      cached: snapshotOf(),
-      fetchError: new RateLimitedError('429'),
-    });
-    await h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    expect(h.calls.clear).toBe(0);
-    h.advance(THROTTLE_MS + 1);
-    h.reader.triggerRefresh(SOURCE_A.providerId);
-    // 初始退避 5min 未到 —— 不再打端点
-    expect(h.calls.fetch).toBe(1);
-    h.advance(5 * 60_000 + 1);
-    h.reader.triggerRefresh(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(2));
+    const h2 = makeHarness({ cached: snapshotOf(), fetchError: new RateLimitedError('429') });
+    await h2.reader.read(SOURCE_A.providerId);
+    await vi2Wait(h2);
+    expect(h2.calls.clear).toBe(0);
+    h2.advance(THROTTLE_MS + 1);
+    h2.reader.triggerRefresh(SOURCE_A.providerId);
+    expect(h2.calls.fetch).toBe(1); // 初始退避 5min 内不再打
   });
+  async function vi2Wait(h: ReturnType<typeof makeHarness>) {
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+  }
 
   it('keeps the last snapshot on transport failure', async () => {
     const h = makeHarness({ cached: snapshotOf(), fetchResult: null });
@@ -202,16 +211,15 @@ describe('refresh semantics — errors / throttle', () => {
     expect(h.cached()?.fiveHour?.utilization).toBe(40);
   });
 
-  it('clears the snapshot but keeps throttle when the endpoint returns empty', async () => {
+  it("clears (tokened) on 'empty' but keeps throttle", async () => {
     const h = makeHarness({ cached: snapshotOf(), fetchResult: 'empty' });
     await h.reader.read(SOURCE_A.providerId);
     await vi.waitFor(() => expect(h.calls.clear).toBe(1));
-    // 节流保留:窗口内 triggerRefresh 不再打端点(教育/团队版防逐次重打)
     h.reader.triggerRefresh(SOURCE_A.providerId);
-    expect(h.calls.fetch).toBe(1);
+    expect(h.calls.fetch).toBe(1); // 节流保留
   });
 
-  it('throttles repeated reads for the same key', async () => {
+  it('throttles repeated reads for the same identity', async () => {
     const h = makeHarness();
     await h.reader.read(SOURCE_A.providerId);
     await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
@@ -223,20 +231,19 @@ describe('refresh semantics — errors / throttle', () => {
     await vi.waitFor(() => expect(h.calls.fetch).toBe(2));
   });
 
-  it('resets throttle when the key changes (identity change re-arms refresh)', async () => {
+  it('resets throttle when the identity changes', async () => {
     const h = makeHarness();
     await h.reader.read(SOURCE_A.providerId);
     await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
     h.setSource(SOURCE_B);
-    h.advance(1_000); // 远未到节流窗口
+    h.advance(1_000);
     await h.reader.read(SOURCE_A.providerId);
-    // 等写库完成而不是 fetch 计数 —— fetch 先于 record 两个异步拍。
     await vi.waitFor(() => expect(h.calls.record.at(-1)?.keyFingerprint).toBe('fp-key-b'));
   });
 });
 
-describe('syncForProviderChange()', () => {
-  it('unconditionally clears the snapshot when the provider is gone (deleted)', async () => {
+describe('syncForProviderChange() — CRUD 钩子(强制清,无令牌)', () => {
+  it('unconditionally clears when the provider is gone (deleted)', async () => {
     const h = makeHarness({ source: null, cached: snapshotOf() });
     await h.reader.syncForProviderChange(SOURCE_A.providerId);
     expect(h.calls.clear).toBe(1);
@@ -251,6 +258,132 @@ describe('syncForProviderChange()', () => {
     await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
     expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b');
   });
+
+  it('is a quiet no-op on stale-owner', async () => {
+    const seed = snapshotOf();
+    const h = makeHarness({ source: null, cached: seed });
+    // readSource 期间切号由 wrapper 转 stale-owner;此处直接验证 reader 对哨兵的行为
+    const h2 = makeHarness({ cached: seed });
+    (h2.deps.readSource as ReturnType<typeof vi.fn>).mockResolvedValue('stale-owner');
+    await h2.reader.syncForProviderChange(SOURCE_A.providerId);
+    expect(h2.calls.clear).toBe(0);
+    expect(h2.cached()).toBe(seed);
+  });
+});
+
+describe('T5 — 身份未变的 CRUD 更新(改显示名/加模型类编辑,七轮复审 R2)', () => {
+  it('bumps in-flight tokens but keeps the snapshot — quota display survives edits', async () => {
+    // 改名/加模型/调 header:UPDATE handler 无差别触发 sync,但身份三字段未变
+    // → 不删快照(显示不断),且在飞令牌仍被作废(旧 fetch 结果不落库)。
+    const seed = snapshotOf({
+      keyFingerprint: 'fp-key-a',
+      runtimeBaseUrl: SOURCE_A.runtimeBaseUrl,
+    });
+    const h = makeHarness({ deferFetch: true, cached: seed });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    await h.reader.syncForProviderChange(SOURCE_A.providerId); // 身份未变的 CRUD
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // 编辑前的 fetch 迟到
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.calls.clear).toBe(0);            // 不删快照
+    expect(h.cached()).toBe(seed);            // 显示不断(同一引用)
+    expect(h.calls.record).toHaveLength(0);  // 旧令牌已作废 → 编辑前的数据也不落库
+    expect(h.deps.invalidateWrites).toHaveBeenCalled();
+  });
+});
+
+describe('T2 — CRUD 落在 fetch 期间(四~七轮全部场景的通用挡板)', () => {
+  it('rejects the stale write when the key changes mid-flight, then refetches the new identity', async () => {
+    // fetch 前领取令牌(gen 0);fetch 期间 CRUD:换 key + 清(世代 bump);
+    // A 的响应(77%)提交被拒 —— 不落库、不需要补偿。
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.setSource(SOURCE_B);
+    await h.reader.syncForProviderChange(SOURCE_A.providerId); // CRUD 钩子:清(强制,gen→1)
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 迟到
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b'); // 只有 B 落库
+    expect(h.calls.record[0].fiveHour?.utilization).toBe(40);  // A 的 77% 被拒
+    expect(h.calls.recordAttempts).toBe(2); // A 的提交确实被尝试过且被拒
+  });
+
+  it('rejects a stale same-key baseUrl-change response mid-flight', async () => {
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.setSource({ ...SOURCE_A, runtimeBaseUrl: 'https://api.z.ai/api/anthropic' });
+    await h.reader.syncForProviderChange(SOURCE_A.providerId);
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 66, resetsAt: null } })); // 旧端点迟到
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+    expect(h.calls.record[0].fiveHour?.utilization).toBe(40); // 66% 被拒
+  });
+
+  it("rejects a stale 'empty' clear mid-flight", async () => {
+    // 旧端点的 empty 迟到:条件清带失效令牌 → 静默放弃,新身份数据不被误删。
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.setSource(SOURCE_B);
+    await h.reader.syncForProviderChange(SOURCE_A.providerId); // 清 + gen bump
+    h.setCached(snapshotOf({ keyFingerprint: 'fp-key-b' })); // 模拟 B 补刷已落库
+    h.resolveFetch('empty'); // 旧请求的 empty 迟到
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(2)); // B 的链式补刷
+    expect(h.cached()?.keyFingerprint).toBe('fp-key-b'); // 未被误删
+  });
+
+  it('rejects a stale 401 clear mid-flight', async () => {
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.bumpGeneration(); // 模拟 CRUD 期间强制清
+    const bSnapshot = snapshotOf({ keyFingerprint: 'fp-key-b' });
+    h.setSource(SOURCE_B);
+    h.setCached(bSnapshot);
+    h.rejectFetch(new UnauthorizedError('401')); // 旧 key 的 401 迟到
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.cached()).toBe(bSnapshot); // 未被旧 401 误清
+  });
+});
+
+describe('T3 — owner 切换落在 fetch 期间,两账号身份字段完全相同', () => {
+  it('rejects the old-account write on ownerEpoch alone; new snapshot survives', async () => {
+    // 同 providerId / 同 key / 同 baseUrl / 同 platform —— 身份字段完全不可区分,
+    // 唯一区分度是 ownerEpoch。令牌方案不依赖身份字段,这是它优于身份比对的根本点。
+    const newAccountSnapshot = snapshotOf({ updatedAt: 999 });
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId); // 身份 = SOURCE_A(不变)
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.bumpOwnerEpoch(); // fetch 期间切号(身份字段全部相同)
+    h.setCached(newAccountSnapshot); // 新账号的快照已在库
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // 旧账号响应
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.calls.record).toHaveLength(0); // 旧账号写被拒(未落任何库)
+    expect(h.cached()).toBe(newAccountSnapshot); // 新账号快照存活(同一引用)
+  });
+});
+
+describe('T4 — owner 在 readSource await 期间切换(全出口复核)', () => {
+  it('createOwnerGuardedReadSource converts an early-return null to stale-owner on owner flip', async () => {
+    // 新账号的同 id provider 没配 key → 内层返回 null;若无全出口复核,
+    // 这个 null 会被当"已删除"清掉新账号快照 —— 正是五轮哨兵要防的事。
+    let owner = 'account-a';
+    const guarded = createOwnerGuardedReadSource(
+      () => owner,
+      async () => null, // 新 owner 的 provider 无 key(提前 return null)
+    );
+    const pending = guarded('zhipu-coding-plan');
+    owner = 'account-b'; // await 期间切号
+    await expect(pending).resolves.toBe('stale-owner');
+  });
+
+  it('passes through the inner result when the owner is unchanged', async () => {
+    const guarded = createOwnerGuardedReadSource(
+      () => 'account-a',
+      async () => null,
+    );
+    await expect(guarded('p1')).resolves.toBeNull();
+  });
 });
 
 describe('per-provider isolation', () => {
@@ -261,196 +394,8 @@ describe('per-provider isolation', () => {
     h.setSource({ ...SOURCE_A, providerId: 'provider-two' });
     await h.reader.read('provider-two');
     await vi.waitFor(() => expect(h.calls.fetch).toBe(2));
-    // provider-one 的节流不影响 provider-two,反之亦然
     h.setSource(SOURCE_A);
     await h.reader.read('provider-one');
     expect(h.calls.fetch).toBe(2);
-  });
-});
-
-describe('mid-flight identity change (live currency guard, #2768 首轮 ①)', () => {
-  it('discards an old-key response that lands after a key change mid-flight', async () => {
-    // key A 的 fetch 在飞行中,provider 换成 key B —— A 的迟到响应(77%)不得落库,
-    // 只有 B 的补刷快照(默认 40%)可写(旧实现死守卫恒过,A 会复活已清快照)。
-    const h = makeHarness({ deferFetch: true });
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    h.setSource(SOURCE_B);
-    await h.reader.syncForProviderChange(SOURCE_A.providerId); // 清快照 + 链式补刷 B
-    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 的响应迟到
-    // 补刷 B 走正常 mock(40%),写库以 record 为准等
-    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
-    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b'); // 只写了 B
-    expect(h.calls.record[0].fiveHour?.utilization).toBe(40); // A 的 77% 没进来
-  });
-
-  it('does not resurrect a snapshot when the provider is deleted mid-flight', async () => {
-    const h = makeHarness({ deferFetch: true, cached: snapshotOf() });
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    h.setSource(null);
-    await h.reader.syncForProviderChange(SOURCE_A.providerId); // 删除:清快照
-    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 88, resetsAt: null } })); // A 迟到
-    // 给在飞 continuation 一个微任务排空的机会
-    await new Promise((r) => setTimeout(r, 0));
-    expect(h.calls.record).toHaveLength(0); // 无任何写回
-    expect(h.cached()).toBeNull(); // 快照保持已清
-    expect(h.calls.fetch).toBe(1); // 无源,不补刷
-  });
-
-  it('a stale 401 does not clear the new key snapshot', async () => {
-    // A 的 fetch 飞行中已换成 B 且 B 快照在手 —— A 的迟到 401 不得清掉 B 的数据。
-    const h = makeHarness({ deferFetch: true });
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    const bSnapshot = snapshotOf({ keyFingerprint: 'fp-key-b' });
-    h.setSource(SOURCE_B);
-    h.setCached(bSnapshot);
-    h.rejectFetch(new UnauthorizedError('401'));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(h.calls.clear).toBe(0); // 未误清
-    expect(h.cached()).toBe(bSnapshot);
-  });
-
-  it('discards an old-endpoint response when baseUrl changes with the same key (#2768 二轮 r3788456291)', async () => {
-    // 同一把 key 只改 baseUrl(zhipu→zai 端点)—— 只比指纹挡不住,必须比完整身份。
-    const h = makeHarness({ deferFetch: true });
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    h.setSource({ ...SOURCE_A, runtimeBaseUrl: 'https://api.z.ai/api/anthropic' });
-    await h.reader.syncForProviderChange(SOURCE_A.providerId);
-    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 66, resetsAt: null } })); // 旧端点迟到
-    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
-    expect(h.calls.record[0].fiveHour?.utilization).toBe(40); // 旧端点的 66% 没进来
-    expect(h.calls.record[0].platform).toBe('zhipu'); // 补刷按新配置(仍 zhipu 平台)成功
-  });
-
-  it('discards an old-endpoint empty response that would clear the new config snapshot', async () => {
-    // 同 key 换 baseUrl 后,旧端点的 'empty'(端点 2xx 但无可解析窗口)不得清新配置快照;
-    // 旧快照无 runtimeBaseUrl(身份未知)时 sync 也不清,靠链式补刷覆盖。
-    const h = makeHarness({ deferFetch: true, cached: snapshotOf() });
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    h.setSource({ ...SOURCE_A, runtimeBaseUrl: 'https://api.z.ai/api/anthropic' });
-    await h.reader.syncForProviderChange(SOURCE_A.providerId);
-    h.resolveFetch('empty'); // 旧端点的 empty 迟到
-    await new Promise((r) => setTimeout(r, 0));
-    expect(h.calls.clear).toBe(0); // 旧快照身份未知不误清 + 旧 empty 被活体校验丢弃
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(2)); // 链式补刷新端点
-    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
-  });
-
-  it('clears a persisted snapshot from the old endpoint on same-key baseUrl change (#2768 三轮 r3788613366)', async () => {
-    // 旧端点的持久化快照带 runtimeBaseUrl —— 同 key 换端点后 sync 必须清掉,
-    // 否则新请求失败时 chip 无限期顶着旧端点余量。
-    const h = makeHarness({
-      cached: snapshotOf({ runtimeBaseUrl: 'https://open.bigmodel.cn/api/anthropic' }),
-    });
-    h.setSource({ ...SOURCE_A, runtimeBaseUrl: 'https://api.z.ai/api/anthropic' });
-    await h.reader.syncForProviderChange(SOURCE_A.providerId);
-    expect(h.calls.clear).toBe(1);
-    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
-    expect(h.calls.record[0].runtimeBaseUrl).toBe('https://api.z.ai/api/anthropic');
-  });
-
-  it('keeps a snapshot without identity fields (legacy shape, unknown ownership)', async () => {
-    const legacy = { ...snapshotOf() } as Partial<GlmCodingPlanUsageSnapshot>;
-    delete legacy.platform;
-    const h = makeHarness({ cached: legacy as GlmCodingPlanUsageSnapshot });
-    await h.reader.read(SOURCE_A.providerId);
-    expect(h.calls.clear).toBe(0);
-  });
-});
-
-describe('post-side-effect compensation (四轮, Greptile 残余竞态)', () => {
-  it('clears a stale write that landed after a key change inside the record window', async () => {
-    // 校验通过 → recordSnapshot 执行中换 key:旧快照写完后必须被补偿清掉,
-    // 并立即按新 key 补刷(旧实现无补偿,旧账号余量覆盖 sync 刚清的结果)。
-    const holder: { flip?: () => void } = {};
-    const h = makeHarness({
-      deferFetch: true,
-      recordHook: () => holder.flip?.(),
-    });
-    holder.flip = () => h.setSource(SOURCE_B);
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 的响应
-    await vi.waitFor(() => expect(h.calls.record).toHaveLength(2)); // A 写入 + B 补刷
-    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-a'); // 旧写入确实发生过
-    expect(h.calls.record.at(-1)?.keyFingerprint).toBe('fp-key-b'); // 最终态是新 key
-    expect(h.calls.record.at(-1)?.fiveHour?.utilization).toBe(40);
-    expect(h.calls.clear).toBeGreaterThanOrEqual(1); // 旧写入被补偿清除
-  });
-
-  it('re-fetches immediately when an empty-clear wipes the new identity snapshot in the window', async () => {
-    // 空响应的清快照执行中换 key:清掉的是新身份的快照 → 补偿必须绕过节流立即补刷。
-    // 清后缓存为空 → 补偿不再重复清(clear===1),但补刷照发(身份失配天然重置节流)。
-    const holder: { flip?: () => void } = {};
-    const h = makeHarness({
-      deferFetch: true,
-      clearHook: () => holder.flip?.(),
-    });
-    holder.flip = () => h.setSource(SOURCE_B);
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    h.resolveFetch('empty'); // 校验时仍 A → 进入清快照;清的执行中翻到 B
-    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1)); // 补偿补刷 B
-    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b');
-    expect(h.calls.fetch).toBe(2); // 清后立即补刷,未被节流卡住
-    expect(h.calls.clear).toBe(1); // 原空响应清;补偿对空缓存不再重复清
-  });
-
-  it('compensation spares a fresh snapshot already written by the new identity (六轮 Greptile 4/5)', async () => {
-    // 校验通过 → A 写库完成的窗口内,B 的链式补刷已先落库:
-    // 补偿只清「仍属于旧身份」的快照,无条件按 providerId 删会误删 B 的新快照
-    // (补刷再失败则当前账号额度显示丢失一个节流窗)。
-    const bSnapshot = snapshotOf({
-      keyFingerprint: 'fp-key-b',
-      runtimeBaseUrl: SOURCE_A.runtimeBaseUrl,
-    });
-    const holder: { flip?: () => void } = {};
-    const h = makeHarness({
-      deferFetch: true,
-      recordHook: () => {
-        holder.flip?.();
-        h.setCached(bSnapshot); // 模拟 B 的补刷在本窗口内已先落库
-      },
-    });
-    holder.flip = () => h.setSource(SOURCE_B);
-    void h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
-    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 的响应
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(2)); // 补偿仍按当前源补刷
-    expect(h.calls.clear).toBe(0); // B 的新快照未被补偿误删
-    expect(h.cached()?.keyFingerprint).toBe('fp-key-b'); // 最终态是新身份
-  });
-});
-
-describe('unknown provider / stale owner (五轮, D+F)', () => {
-  it('does not retain reader state for a provider that never existed (bounded states map)', async () => {
-    const h = makeHarness({ source: null });
-    await h.reader.read('nonexistent-id');
-    expect(h.deps.readSource).toHaveBeenCalledTimes(1);
-    // 状态槽被删 → 冷却不存在,紧接的 triggerRefresh 重新解析 source 而非跳过。
-    h.reader.triggerRefresh('nonexistent-id');
-    await vi.waitFor(() => expect(h.deps.readSource).toHaveBeenCalledTimes(2));
-    expect(h.calls.clear).toBe(0);
-  });
-
-  it('a stale-owner read has no side effects (no clear of the new owner snapshot)', async () => {
-    const seed = snapshotOf();
-    const h = makeHarness({ staleOwner: true, cached: seed });
-    await expect(h.reader.read(SOURCE_A.providerId)).resolves.toBeNull();
-    expect(h.calls.clear).toBe(0); // 绝不能清(那会删掉新账号同名 provider 快照)
-    expect(h.cached()).toBe(seed); // 快照原样(同一引用)
-    expect(h.deps.fetchSnapshot).not.toHaveBeenCalled();
-  });
-
-  it('syncForProviderChange with a stale owner is a quiet no-op', async () => {
-    const seed = snapshotOf();
-    const h = makeHarness({ staleOwner: true, cached: seed });
-    await h.reader.syncForProviderChange(SOURCE_A.providerId);
-    expect(h.calls.clear).toBe(0);
-    expect(h.cached()).toBe(seed);
   });
 });

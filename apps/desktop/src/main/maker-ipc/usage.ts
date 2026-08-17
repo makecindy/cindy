@@ -29,7 +29,10 @@ import {
   GlmCodingPlanUsageUnauthorizedError,
   fetchGlmCodingPlanUsageSnapshot,
 } from '../usage/glmCodingPlanUsage.js';
-import { createGlmCodingPlanUsageReader } from '../usage/glmCodingPlanUsageRefresh.js';
+import {
+  createGlmCodingPlanUsageReader,
+  createOwnerGuardedReadSource,
+} from '../usage/glmCodingPlanUsageRefresh.js';
 import type { GlmCodingPlanReadSourceResult } from '../usage/glmCodingPlanUsageRefresh.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
@@ -39,9 +42,11 @@ import {
 } from '../usage/codexWebUsage.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
 import {
+  beginGlmCodingPlanUsageWrite,
   clearClaudeSubscriptionUsageSnapshot,
   clearCodexAccountUsageSnapshot,
   clearGlmCodingPlanUsageSnapshot,
+  invalidateGlmCodingPlanUsageWrites,
   readAgentTodayUsage,
   readClaudeSubscriptionUsageSnapshot,
   readCodexAccountUsageSnapshot,
@@ -206,15 +211,13 @@ function fingerprintGlmKey(key: string): string {
  * 已知限制(v1):per-runtime key 理论上可不同,快照按"实际用于查询的那把 key"的
  * 指纹归属;两端不同 key 的边缘形态以查询端为准。
  *
- * 跨 owner 防拼接(#2768 三轮 review r3788613362):配置来自按 owner 切片的 DB,
- * key 来自按"当前 owner"解析的 secret store —— 两步异步之间换号会把 B 的 key 拼到
- * A 的端点上。入口/出口各读一次 owner,变化即整体作废(同 providerHandlers 的
- * captureProviderOwnerSession 口径)。
+ * owner 复核由 createOwnerGuardedReadSource 统一包一层(全出口覆盖,审计 B):
+ * 「无 usage 能力 / 无 key」这类提前 return 的 null,同样会在切账号瞬间被
+ * 误当"已删除"清掉新账号同名 provider 的快照。
  */
 async function readGlmCodingPlanSource(
   providerId: string,
 ): Promise<GlmCodingPlanReadSourceResult> {
-  const ownerAtStart = getCurrentUserId();
   const config = await getCustomProvider(providerId);
   if (config?.usage?.kind !== 'glm-coding-plan') return null;
   for (const agent of ['claude-code', 'codex', 'pi'] as const) {
@@ -222,12 +225,6 @@ async function readGlmCodingPlanSource(
     if (!rt) continue;
     const key = readCustomProviderKey(providerId, agent);
     if (!key) continue;
-    if (getCurrentUserId() !== ownerAtStart) {
-      // 读取期间账号切换:素材不可信。返回 'stale-owner' 哨兵而非 null ——
-      // reader 对 null 走"不可查询"路径(可能清快照),对哨兵静默放弃,
-      // 避免换号误删新账号同名 provider 的快照(#2768 review r3788644129)。
-      return 'stale-owner';
-    }
     return {
       providerId,
       runtimeBaseUrl: rt.baseUrl,
@@ -239,7 +236,8 @@ async function readGlmCodingPlanSource(
 }
 
 const glmCodingPlanUsageReader = createGlmCodingPlanUsageReader({
-  readSource: readGlmCodingPlanSource,
+  // owner 全出口复核(审计 B):提前 return 的 null 也在切账号时转 stale-owner。
+  readSource: createOwnerGuardedReadSource(getCurrentUserId, readGlmCodingPlanSource),
   fetchSnapshot: (source) =>
     fetchGlmCodingPlanUsageSnapshot({
       runtimeBaseUrl: source.runtimeBaseUrl,
@@ -249,6 +247,10 @@ const glmCodingPlanUsageReader = createGlmCodingPlanUsageReader({
       // 模式时裸 fetch 直连会被拒)。
       fetchFn: outboundFetch,
     }),
+  // 条件提交令牌(七轮根因修复):fetch 前领取,失效即拒——取代写后补偿;
+  // CRUD 更新走 invalidate(只作废令牌,身份未变不删快照)。
+  beginWrite: beginGlmCodingPlanUsageWrite,
+  invalidateWrites: invalidateGlmCodingPlanUsageWrites,
   recordSnapshot: recordGlmCodingPlanUsageSnapshot,
   clearSnapshot: clearGlmCodingPlanUsageSnapshot,
   readCachedSnapshot: readGlmCodingPlanUsageSnapshot,
