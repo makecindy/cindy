@@ -19,7 +19,8 @@
     "allowOnce": "한 번 허용",
     "allowOnceAccessibility": "권한 요청 한 번 허용",
     "allowOnceConfirm": "한 번 허용 확인",
-    "highRisk": "고위험"
+    "highRisk": "고위험",
+    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요."
   },
   "planMode": {
     "label": "플랜 모드",

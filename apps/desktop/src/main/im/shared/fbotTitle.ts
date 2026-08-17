@@ -5,7 +5,10 @@
  * 抽到独立模块避免反向 import (cardActionHandler 已经 import runAgentTurn)。
  *
  * 命名约定:
- *   - prefix 'FBot · ' 给所有飞书 bot 接管/新建出来的 session 打标
+ *   - prefix 'FBot · ' 是接管 session 标题的兜底前缀(无渠道命名约定的渠道);
+ *     feishu 接管 session 与渠道默认会话对齐 — 话题 lane 走 composeGeneratedTitle
+ *     ([飞书·{群名}·{话题简介}] {threadId}), DM 走 generatedTitlePrefix
+ *     ([飞书·DM] {简介}), 见 turnRunner.composeOrGenerateTitle
  *   - 草稿态 title = 'FBot · New', 跟 desktop 'New Maker' 占位 title 同语义:
  *     表示用户还没发第一条消息, 等首条消息到达后由 oneshot 生成正式 title
  *

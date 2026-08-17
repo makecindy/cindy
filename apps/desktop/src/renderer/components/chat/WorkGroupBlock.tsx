@@ -158,6 +158,7 @@ function ThinkingActivityRow({
     <button
       type="button"
       data-live-work-activity="thinking"
+      data-message-client-id={activity.key}
       data-work-thinking-expandable={canExpand ? 'true' : 'false'}
       disabled={!canExpand}
       aria-expanded={canExpand ? expanded : undefined}
@@ -235,11 +236,13 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
   if (!activity) {
     if (!message.thinkingRedacted) return null;
     return (
-      <ThinkingCard
-        blockKey={message.clientId}
-        content={message.content}
-        isRedacted
-      />
+      <div data-message-client-id={message.clientId}>
+        <ThinkingCard
+          blockKey={message.clientId}
+          content={message.content}
+          isRedacted
+        />
+      </div>
     );
   }
 
@@ -247,6 +250,7 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
     <button
       type="button"
       data-live-work-activity="thinking"
+      data-message-client-id={message.clientId}
       data-work-thinking-expandable={canExpand ? 'true' : 'false'}
       onClick={onToggle}
       disabled={!canExpand}

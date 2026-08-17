@@ -321,6 +321,32 @@ describe('RemoteHost remote forwarding', () => {
     expect(host.listRemoteForwards()).toEqual([]);
   });
 
+  it('keeps a shared forward alive until the last handle closes (refcount)', async () => {
+    // 轮 42 P1(codex-connector):同 host 多个 Pi 会话共享同一 in-process MCP
+    // bridge(local 端口相同) — ensure 幂等命中同一 record, 一方 dispose 不得
+    // 拆掉别人还在用的隧道。最后一个 handle close 才真正 unforward。
+    const client = new FakeClient();
+    const host = makeReadyHost(client);
+    const a = await host.ensureRemoteForward({ localHost: '127.0.0.1', localPort: 7890 });
+    const b = await host.ensureRemoteForward({ localHost: '127.0.0.1', localPort: 7890 });
+
+    // a dispose: 共享者 b 还在 → 不拆。
+    await a.close();
+    expect(client.unforwardInCalls).toEqual([]);
+    expect(host.listRemoteForwards()).toHaveLength(1);
+
+    // b dispose: 最后一人 → 真正 unforward + 摘除。
+    await b.close();
+    expect(client.unforwardInCalls).toEqual([
+      { addr: '127.0.0.1', port: DEFAULT_REMOTE_FORWARD_PORT_BASE },
+    ]);
+    expect(host.listRemoteForwards()).toEqual([]);
+
+    // 同 handle 重复 close 幂等: 不再触发第二次 unforward。
+    await b.close();
+    expect(client.unforwardInCalls).toHaveLength(1);
+  });
+
   it('re-arms on reconnect and reports a changed port via onRearmed', async () => {
     const client1 = new FakeClient();
     const host = makeReadyHost(client1);

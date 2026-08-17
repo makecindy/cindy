@@ -9,6 +9,11 @@
  *   - ack emoji: REACTION_PROCESSING
  *   - 群 lane(senderId = `g/{chatId}[/{threadId}]`, @cindy/im feishu/codec.ts):
  *     群主流 @ 入站即开话题(每话题一个会话, 群 lane 仅开话题失败的降级路径);
+ *     **`/ctr` 接管严格按话题记账**: binding 的 userId 就是话题 lane, 一个话题
+ *     一份接管, 群主流的 @ 恒开新话题走该话题自己的会话(不会被任何接管吃掉);
+ *     要跟接管会话说话就在那个话题里说 —— 群主流不是接管的入口;
+ *     群里新建的会话一律用渠道设置「群聊新建任务权限档」(sessions.permissionModeFor,
+ *     `/ctr` 新建走 cardActionHandler 读同一设置);
  *     群轮次挂「非只读即确认」策略 + 触发时按页回翻群历史(50/页, 最多 5 页,
  *     模型相关性早停 + 注入扫描), 图片/文件下载后进上下文, 统一防注入包裹
  *     (见 ./groupContext.ts)。
@@ -22,6 +27,7 @@ import { app } from 'electron';
 import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
+import { readImDefaultSettings } from '../defaultSettingsStore';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { createLogger } from '../../logger';
 import { buildFeishuGroupContext, sanitizeDisplayText } from './groupContext';
@@ -222,6 +228,25 @@ export function buildFeishuAdapter(
         feishuBotAppId: botAppId,
         feishuOpenId: userId,
       }),
+      /**
+       * 群/话题里新建的会话一律用渠道设置「群聊新建任务权限档」, 不吃上面那条
+       * 面向私聊的 `permissionMode`。
+       *
+       * 覆盖到的建会话路径(都经 sessionRepo.prepareNewSession):
+       *   - 群主流 @bot 开新话题 → 话题 lane 首条消息建行(turnRunner)
+       *   - 群里 `/new` 重开上下文(slashCommands → resetSessionToDefaults)
+       *   - 群主流降级 lane(开话题失败时)建行
+       * `/ctr` 新建接管会话不走这里(它建的是 desktop 会话, 见
+       * cardActionHandler), 那边读的是同一个设置项。
+       *
+       * DM(userId 是 open_id, decode 得 null)返回 null = 不覆写, 私聊照旧。
+       * 群那档比私聊那档**宽**时同样覆写 —— 这是用户在设置里对群的显式选择,
+       * 「群里的事只看这一行」是产品裁决(不看用户是否手动改过该下拉框)。
+       */
+      permissionModeFor: (userId) =>
+        decodeFeishuLaneUserId(userId) === null
+          ? null
+          : readImDefaultSettings('feishu').groupPermissionMode,
       // 群/话题 lane 建行后异步拉群名把标题升级为 [飞书·群] {群名} /
       // [飞书·话题] {群名}; 拉不到(无「获取群基本信息」权限)保持后缀回落。
       // 只对新建行生效(sessionRepo 侧保证), 复活行保留自己的历史标题。
@@ -239,31 +264,51 @@ export function buildFeishuAdapter(
         return lane !== null && lane.threadId === '';
       },
       // 话题 lane 的 oneshot 标题拼装: [飞书·{群名}·{话题简介}] {threadId 后 6 位}
-      // — 群名拉不到时退化为 [飞书·话题·{简介}]。DM/群主流 lane 返回 null,
-      // 回落默认 generatedTitlePrefix 路径(DM → [飞书·DM] {简介})。
+      // — 群名拉不到时退化为 [飞书·话题·{简介}]。DM 返回 null, 回落默认
+      // generatedTitlePrefix 路径(DM → [飞书·DM] {简介})。
+      // 群主流 lane 拼固定名 [飞书·群] {群名|chatId 后 6 位}, 与 defaultTitle /
+      // resolveSessionTitle 同族 — 非 ctr 群主流会话不参与 oneshot
+      // (skipOneshotTitleFor), 只有 /ctr 新建的接管会话走到这里, 命名与
+      // 群会话族对齐(oneshot 文本用不上, 有意忽略)。
       composeGeneratedTitle: async (userId, _scopeKey, generated) => {
         const lane = decodeFeishuLaneUserId(userId);
-        if (!lane || !lane.threadId) return null;
-        const name = await resolveChatName(feishuIm, lane.chatId);
+        if (!lane) return null;
         const label = isLark() ? 'Lark' : '飞书';
+        if (!lane.threadId) {
+          const name = await resolveChatName(feishuIm, lane.chatId);
+          return `[${label}·群] ${name ?? lane.chatId.slice(-6)}`;
+        }
+        const name = await resolveChatName(feishuIm, lane.chatId);
         const mid = name ? `${label}·${name}·${generated}` : `${label}·话题·${generated}`;
         return `[${mid}] ${lane.threadId.slice(-6)}`;
       },
     },
     processingEmoji: REACTION_PROCESSING,
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
+
     // 群轮次(speaker 存在)统一挂强确认策略 — 群历史前缀携带成员可控文本,
     // 注入可借 owner 轮次的宽松档执行危险操作; 确认卡经 deliverToOwnerDm
     // 改投 owner 私聊, 点击也只认 owner。DM 不挂, owner 私聊保持全速。
     turnPermissionPolicyFor: (event) =>
       event.speaker ? createFeishuGroupTurnPermissionPolicy(event.messageId) : undefined,
+    // 群护栏取缔: 用户在渠道设置里显式允许群会话用「完全访问」→ 该档位
+    // 不再挂强确认策略(maker 不再拒绝, 按用户选择直接执行)。群上下文的
+    // 防注入过滤/包裹在 prepareAgentTurnText 里独立生效, 不随权限档关闭;
+    // acceptEdits 仍保持失败路径(错误 + 私聊修复卡)。
+    turnPolicyOptionalForMode: (mode) => mode === 'bypassPermissions',
     // 群 lane: 触发时按页回翻群历史拼上下文前缀(含媒体附件), 落库仍是渠道原文。
     prepareAgentTurnText: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);
       if (!lane) return null;
       // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
-      // IMMessageEvent.groupContextLane) — 新话题是空的, 群历史仍按群主流
-      // 拉取, 「总结上面」等依赖上文的消息才能拿到上下文。
+      // IMMessageEvent.groupContextLane) — 触发消息发在群主流(只是回复被折成
+      // 了新话题), 所以群历史仍按群主流拉取, 「总结上面」才拿得到上下文。
+      //
+      // 话题里发的消息一律按**话题容器**取数(contextLane = lane): 会话里只看
+      // 会话。`/ctr` 曾把「开话题之前的群主流讨论」记下来补给话题里第一条消息,
+      // 已按产品裁决去掉 —— 它让 /ctr 后的第一句要回翻整条群主流(5 页 + 每页
+      // 一次模型判断), 首句实测被拖到 87s; 而话题的语义本就是「另起一摊」,
+      // 需要群里的上文时在群主流里 @ 即可。
       const contextLane = event.groupContextLane ?? lane;
       const built = await buildFeishuGroupContext({
         lane: contextLane,
@@ -276,7 +321,7 @@ export function buildFeishuAdapter(
           judgePageRelevant: judgeHistoryPageRelevant,
           scanInjection: scanHistoryInjection,
           notifyFetchFailure: (errMsg) =>
-            notifyContextFetchFailure(feishuIm, lane, errMsg, isLark()),
+            notifyContextFetchFailure(feishuIm, contextLane, errMsg, isLark()),
           log,
         },
       });

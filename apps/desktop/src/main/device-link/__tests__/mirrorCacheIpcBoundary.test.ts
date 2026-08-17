@@ -90,6 +90,15 @@ vi.mock('../index', () => ({
   restoreController: vi.fn(),
   broadcast: vi.fn(),
   deviceLinkApiBase: 'https://example.invalid',
+  applyControllerDisplayNameListSnapshot: vi.fn(),
+  beginControllerDisplayNameDirectoryRefresh: vi.fn(() => 1),
+  captureControllerDisplayNameRequestEpoch: () => 0,
+  isLatestControllerDisplayNameDirectoryRefresh: vi.fn(() => true),
+  waitForNewerControllerDisplayNameDirectoryRefresh: vi.fn(async () => {}),
+  readControllerDisplayNameFreshnessSince: () => ({
+    changedAfterRequest: false,
+    authoritativeName: null,
+  }),
 }));
 vi.mock('../dispatch', () => ({ getActiveControllers: () => [] }));
 vi.mock('../outboundMedia', () => ({ rewriteOutboundMedia: vi.fn(async (_c, a) => a) }));
@@ -98,7 +107,9 @@ vi.mock('../outboundSessionReferences', () => ({
   rewriteOutboundSessionReferences: vi.fn(async (_c, a) => a),
 }));
 vi.mock('../settings-store', () => ({
+  forgetLastKnownDeviceName: vi.fn(),
   isPlaceholderDeviceName: () => false,
+  normalizeCachedDeviceName: (name: string) => name.trim() || null,
   readDeviceLinkSettings: () => ({
     remoteControlEnabled: true,
     keepAwake: false,

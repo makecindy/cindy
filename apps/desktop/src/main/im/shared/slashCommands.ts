@@ -34,7 +34,7 @@ import {
 import { startThreadControlFlow } from './controlFlow';
 import { enterControl } from './controlState';
 import { bindingStore, executeDetach } from '../binding';
-import type { IdentityKey } from '@cindy/im';
+import type { IdentityKey, InteractiveCardSpec } from '@cindy/im';
 import type { ImChannelAdapter } from './types';
 import {
   permissionModeCommandContext,
@@ -52,6 +52,16 @@ export function looksLikeSlashCommand(text: string): boolean {
 export interface SlashCtx {
   botContextId: string;
   userId: string;
+  /**
+   * 群主流 @ 开话题的首条 slash 时由 messageHandler 注入: slash 的**首个**
+   * 回复(文本或卡片)就地消费开场白卡(patch 文本 / 替换卡片)而不是另发 —
+   * 「思考中」卡不会卡住, 也不会撤回后拿已删消息当回复锚点。消费过一次
+   * 后返回 false, 后续回复正常发送。
+   */
+  consumePendingOpener?: {
+    withMarkdown(userId: string, markdown: string): Promise<boolean>;
+    withCard(userId: string, spec: InteractiveCardSpec): Promise<boolean>;
+  };
 }
 
 export interface ImSlashHandlers {
@@ -80,13 +90,65 @@ export function createSlashHandlers(
    * 所有 slash 反馈都走 markdown (body-only interactive card), 因为很多文案带
    * **粗体** / `code` / emoji, 渠道原生 text 不渲染 markdown 标记会显示成原文。
    * markdown 同样兼容纯文本: 没标记的字符串显示效果跟 text 一致。
+   *
+   * 群主流 @ 开话题的首条 slash: 首个回复经 ctx.consumePendingOpener 就地
+   * patch 开场白卡(消费过一次后回落正常发送)。
    */
-  async function safeSendText(userId: string, text: string): Promise<void> {
+  async function safeSendText(ctx: SlashCtx, text: string): Promise<void> {
     try {
-      await im.sendMarkdownText(userId, text);
+      if (ctx.consumePendingOpener) {
+        try {
+          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) return;
+        } catch (err) {
+          // patch 失败不吞回复: 认领已完成(卡不会再被误 patch), 回落正常
+          // 发送 — 用户至少收到结果。
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`consumePendingOpener withMarkdown failed (fallback to normal send): ${msg}`);
+        }
+      }
+      const fallbackOpenerId = richIm?.takeNotedFallbackOpenerId?.(ctx.userId, 'markdown');
+      if (fallbackOpenerId) {
+        await im.sendMarkdownText(ctx.userId, text, { fallbackOpenerId });
+      } else {
+        await im.sendMarkdownText(ctx.userId, text);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendText failed (non-fatal): ${msg}`);
+    }
+  }
+
+  /**
+   * 卡片反馈: 首条经 consumePendingOpener 替换开场白卡, 替换失败回落正常发卡。
+   * 返回是否送达(替换成功或发卡成功)— /ctr 等依赖「卡片确实可见」的调用方
+   * 据此决定是否进入控制态。
+   */
+  async function safeSendCard(ctx: SlashCtx, spec: InteractiveCardSpec): Promise<boolean> {
+    try {
+      if (ctx.consumePendingOpener) {
+        try {
+          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) return true;
+        } catch (err) {
+          // 替换失败回落正常发卡: 认领已完成, 用户至少拿到一张可用卡片。
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`consumePendingOpener withCard failed (fallback to normal send): ${msg}`);
+        }
+      }
+      if (!richIm) {
+        log.warn('safeSendCard failed: channel has no rich-card output');
+        return false;
+      }
+      const fallbackOpenerId = richIm.takeNotedFallbackOpenerId?.(ctx.userId, 'spec');
+      if (fallbackOpenerId) {
+        await richIm.sendInteractiveCard(ctx.userId, spec, { fallbackOpenerId });
+      } else {
+        await richIm.sendInteractiveCard(ctx.userId, spec);
+      }
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`safeSendCard failed (non-fatal): ${msg}`);
+      return false;
     }
   }
 
@@ -141,7 +203,7 @@ export function createSlashHandlers(
       )
     ) {
       await safeSendText(
-        ctx.userId,
+        ctx,
         ui.slash.interactiveCommandUnsupported?.(cmd) ?? ui.slash.unknownCommand(cmd),
       );
       return true;
@@ -149,17 +211,17 @@ export function createSlashHandlers(
 
     switch (cmd) {
       case '/help':
-        await safeSendText(ctx.userId, ui.slash.help);
+        await safeSendText(ctx, ui.slash.help);
         return true;
 
       case '/start': {
         // Telegram 私聊首次交互必发 /start(START 按钮) — 有欢迎语的渠道回
         // 欢迎语, 其它渠道走未知命令提示。
         if (ui.slash.start) {
-          await safeSendText(ctx.userId, ui.slash.start);
+          await safeSendText(ctx, ui.slash.start);
           return true;
         }
-        await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+        await safeSendText(ctx, ui.slash.unknownCommand(cmd));
         return true;
       }
 
@@ -178,21 +240,21 @@ export function createSlashHandlers(
           log.error(`/stop stopActiveTurn threw: ${msg}`);
           reply = ui.agent.sendInternalError(msg);
         }
-        await safeSendText(ctx.userId, reply);
+        await safeSendText(ctx, reply);
         return true;
       }
 
       case '/new': {
         // thread = session 模型: 发新顶层消息即新会话, /new 无意义 → 废弃提示。
         if (threadScoped && threadUi) {
-          await safeSendText(ctx.userId, threadUi.newDeprecated);
+          await safeSendText(ctx, threadUi.newDeprecated);
           return true;
         }
         const prepared = await repo.prepareNewSession(ctx.botContextId, ctx.userId);
         const auth = await turnRunner.getAuthStatusForRoute?.(prepared);
         if (auth ? !auth.ok : !(await turnRunner.hasAuthForRoute(prepared))) {
           await safeSendText(
-            ctx.userId,
+            ctx,
             auth && ui.agent.authMissing
               ? ui.agent.authMissing({
                   ...auth,
@@ -211,24 +273,24 @@ export function createSlashHandlers(
           await resetSessionToDefaults(row.id, adapter.config, prepared, adapter.channel);
         }
         await turnRunner.disposeOneSession(row.id);
-        await safeSendText(ctx.userId, ui.slash.new);
+        await safeSendText(ctx, ui.slash.new);
         return true;
       }
 
       case '/model': {
         if (!richIm) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         // thread 模型: slash 命令不携带 thread 上下文(Slack 平台限制), 无法定位
         // 目标 thread/session;不拦的话 resolveRouteTarget 会误建空 scope session。
         if (threadScoped && threadUi) {
-          await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
+          await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
           return true;
         }
         const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
         if (!target) {
-          await safeSendText(ctx.userId, ui.agent.apiKeyMissing);
+          await safeSendText(ctx, ui.agent.apiKeyMissing);
           return true;
         }
         const { row } = target;
@@ -268,7 +330,7 @@ export function createSlashHandlers(
             : undefined,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/model card send failed: ${msg}`);
@@ -282,7 +344,7 @@ export function createSlashHandlers(
         if (threadScoped && threadUi) {
           const all = bindingStore.listByIdentity(channel, ctx.botContextId, ctx.userId);
           if (all.length === 0) {
-            await safeSendText(ctx.userId, threadUi.exctrNothing);
+            await safeSendText(ctx, threadUi.exctrNothing);
             return true;
           }
           let detached = 0;
@@ -295,7 +357,7 @@ export function createSlashHandlers(
               log.error(`${invocation} executeDetach(scope) threw: ${msg}`);
             }
           }
-          await safeSendText(ctx.userId, threadUi.exctrAllDone(detached));
+          await safeSendText(ctx, threadUi.exctrAllDone(detached));
           return true;
         }
         // 结束当前 (bot, owner) 的接管, 让后续消息回到渠道默认 session。
@@ -309,21 +371,21 @@ export function createSlashHandlers(
         try {
           const result = await executeDetach(identity, `${channel}-slash`);
           if (!result.wasAttached) {
-            await safeSendText(ctx.userId, ui.slash.notAttached);
+            await safeSendText(ctx, ui.slash.notAttached);
           } else {
-            await safeSendText(ctx.userId, ui.slash.detachedBySlash);
+            await safeSendText(ctx, ui.slash.detachedBySlash);
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`${invocation} executeDetach threw: ${msg}`);
-          await safeSendText(ctx.userId, `❌ 结束接管失败：${msg}`);
+          await safeSendText(ctx, `❌ 结束接管失败：${msg}`);
         }
         return true;
       }
 
       case '/ctr': {
         if (!richIm) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         // ── thread 模型: 整个选择流程在"接管锚点卡"的 thread 里进行 ────────
@@ -364,12 +426,11 @@ export function createSlashHandlers(
           projects,
           currentAttachedTitle,
         });
-        try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+        const sent = await safeSendCard(ctx, spec);
+        if (sent) {
           enterControl(ctx.botContextId, ctx.userId);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.error(`/ctr card send failed: ${msg}`);
+        } else {
+          log.error('/ctr picker card send failed — control NOT entered (avoid locking the user)');
         }
         return true;
       }
@@ -379,7 +440,7 @@ export function createSlashHandlers(
         // 才放行; 选中走 control:session-pick 接管路径。
         const recentUi = ui.cards.control.recentSessions;
         if (!richIm || !recentUi) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         const recent = await listRecentSessionsForPicker();
@@ -388,7 +449,7 @@ export function createSlashHandlers(
           sessions: recent,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/session card send failed: ${msg}`);
@@ -401,7 +462,7 @@ export function createSlashHandlers(
         // 未知命令处理, 不暴露半成品入口。
         const projectUi = ui.cards.project;
         if (!richIm || !adapter.projectSwitching || !projectUi) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         // /ctr 接管期间语义冲突(消息在被接管的 desktop 会话里跑): 先 /exctr。
@@ -411,7 +472,7 @@ export function createSlashHandlers(
           userId: ctx.userId,
         };
         if (bindingStore.get(identity)) {
-          await safeSendText(ctx.userId, projectUi.attachedUnsupported);
+          await safeSendText(ctx, projectUi.attachedUnsupported);
           return true;
         }
         const [projects, current] = await Promise.all([
@@ -429,7 +490,7 @@ export function createSlashHandlers(
           currentName,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/project card send failed: ${msg}`);
@@ -441,11 +502,11 @@ export function createSlashHandlers(
         // 只读总览 —— 不改任何配置, 所以不需要富卡, 纯文本渠道也照常可用。
         const render = ui.slash.settings;
         if (!render) {
-          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          await safeSendText(ctx, ui.slash.unknownCommand(cmd));
           return true;
         }
         if (threadScoped && threadUi) {
-          await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
+          await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
           return true;
         }
         // /ctr 接管期间, 下一条消息跑在**被接管的 desktop 会话**里 —— /model、
@@ -478,7 +539,7 @@ export function createSlashHandlers(
           effective.workspaceKind,
         );
         await safeSendText(
-          ctx.userId,
+          ctx,
           render({
             workspace,
             agent: effective.agentKind,
@@ -492,12 +553,12 @@ export function createSlashHandlers(
 
       case '/permission': {
         if (threadScoped && threadUi) {
-          await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
+          await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
           return true;
         }
         const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
         if (!target) {
-          await safeSendText(ctx.userId, ui.agent.apiKeyMissing);
+          await safeSendText(ctx, ui.agent.apiKeyMissing);
           return true;
         }
         const { row } = target;
@@ -509,12 +570,12 @@ export function createSlashHandlers(
         if (!richIm) {
           const requested = commandArgs[0];
           if (!requested) {
-            await safeSendText(ctx.userId, renderTextPermissionModePicker(ui, context));
+            await safeSendText(ctx, renderTextPermissionModePicker(ui, context));
             return true;
           }
           const mode = resolvePermissionMode(context.modes, requested);
           if (!mode) {
-            await safeSendText(ctx.userId, renderTextPermissionModePicker(ui, context));
+            await safeSendText(ctx, renderTextPermissionModePicker(ui, context));
             return true;
           }
           const confirmedFullAccess = ['confirm', '确认'].includes(commandArgs[1]?.toLowerCase());
@@ -524,7 +585,7 @@ export function createSlashHandlers(
             modes: context.modes,
             confirmedFullAccess,
           });
-          await safeSendText(ctx.userId, renderTextPermissionModeResult(ui, result));
+          await safeSendText(ctx, renderTextPermissionModeResult(ui, result));
           return true;
         }
         const spec = cards.buildPermissionModePickerCard({
@@ -534,7 +595,7 @@ export function createSlashHandlers(
           currentMode: row.permissionMode,
         });
         try {
-          await richIm.sendInteractiveCard(ctx.userId, spec);
+          await safeSendCard(ctx, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/permission card send failed: ${msg}`);
@@ -543,7 +604,7 @@ export function createSlashHandlers(
       }
 
       default:
-        await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+        await safeSendText(ctx, ui.slash.unknownCommand(cmd));
         return true;
     }
   }

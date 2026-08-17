@@ -222,9 +222,12 @@ export const MAKER_INVOKE = {
   /**
    * renderer → main 单向镜像「模型显示/隐藏」override(modelVisibilityPrefs)。
    * override 真源仍在 renderer localStorage;main 只缓存一份内存副本,供 IM `/model`
-   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。fire-and-forget,不落盘。
+   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。入参带 dataOwnerId +
+   * ownerGeneration，Main 拒绝账号切换期间的迟到快照。fire-and-forget,不落盘。
    */
   MODEL_VISIBILITY_SYNC: 'maker:model-visibility:sync',
+  /** Sync read: which stable local/cloud owner may import the pre-account Renderer preference key. */
+  MODEL_VISIBILITY_LEGACY_OWNER_CLAIM_SYNC: 'maker:model-visibility:legacy-owner-claim-sync',
   /**
    * 「模型 / 供应商停用」override 写入(model-disable-store,main 侧持久化真源)。
    * 入参 = { kind:'model', providerId, modelIds: string[], disabled: boolean }
@@ -345,6 +348,10 @@ export const MAKER_INVOKE = {
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
+  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
+  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
+  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
+  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',

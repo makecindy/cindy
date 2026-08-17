@@ -341,4 +341,28 @@ describe('createAutoPermissionReviewer', () => {
 
     await expect(pending).resolves.toEqual({ verdict: 'allow', reason: 'Routine test' });
   });
+
+  it('runs a retry-owning request chain once and aborts it at the reviewer deadline', async () => {
+    vi.useFakeTimers();
+    const observedSignals: AbortSignal[] = [];
+    const requestText = vi.fn((_request, _prompt, context: { signal: AbortSignal }) => {
+      observedSignals.push(context.signal);
+      return new Promise<string | null>((resolve) => {
+        context.signal.addEventListener('abort', () => resolve(null), { once: true });
+      });
+    });
+    const reviewer = createAutoPermissionReviewer({
+      requestText,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      managesRetries: true,
+      resolveRequestTimeoutMs: () => 50,
+    });
+
+    const pending = reviewer(request());
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(pending).resolves.toBeNull();
+    expect(requestText).toHaveBeenCalledTimes(1);
+    expect(observedSignals[0]?.aborted).toBe(true);
+  });
 });

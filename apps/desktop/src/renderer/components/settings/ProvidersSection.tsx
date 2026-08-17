@@ -1495,9 +1495,10 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
       aria-current={selected}
       className={cn(
         'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
-        !selected && 'hover:bg-[var(--surface-hover)]',
+        selected
+          ? 'bg-[var(--settings-menu-bg-selected)]'
+          : 'hover:bg-[var(--settings-menu-bg-hover)]',
       )}
-      style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
@@ -1555,9 +1556,10 @@ function ListRow({
     <div
       className={cn(
         'relative flex w-full items-center rounded-lg text-left transition-colors',
-        !selected && 'hover:bg-[var(--surface-hover)]',
+        selected
+          ? 'bg-[var(--settings-menu-bg-selected)]'
+          : 'hover:bg-[var(--settings-menu-bg-hover)]',
       )}
-      style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       {sortable && (
         <button
@@ -1663,7 +1665,7 @@ function SuggestionRow({
           : 'settings.providers.detect.hintInstalled',
         { cli: cliName },
       )}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
     >
       <div
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg opacity-70"
@@ -2088,7 +2090,7 @@ export function ProvidersSection() {
         toast.success(t('settings.providers.models.refreshDone'));
         refetch();
       } catch (err) {
-        // 目录拉取被禁用(dev 缺省禁网/XDT_DISABLE_MODELS_FETCH)时 main 根本没
+        // 目录拉取被禁用(XDT_DISABLE_MODELS_FETCH)时 main 根本没
         // 发起请求——这是预期内的跳过,用 info 如实提示,不和真实网络失败
         // 混为一谈地报「刷新失败,请稍后再试」。
         const ipcError = extractIpcError(err);

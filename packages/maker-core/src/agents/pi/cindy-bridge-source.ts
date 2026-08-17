@@ -81,10 +81,28 @@ function withoutPiSecrets(env: Record<string, string | undefined>): Record<strin
 
 function managedRipgrepPath(): string {
   const configured = process.env[MANAGED_RG_PATH_ENV];
-  if (!configured || !path.isAbsolute(configured)) {
-    throw new Error('Cindy managed ripgrep is unavailable');
+  if (configured && path.isAbsolute(configured)) return configured;
+  // 轮 42 P1(codex-connector):远端 Pi 会话不注入 CINDY_PI_MANAGED_RG_PATH
+  // (本地 rg 二进制远端无意义)—— 远端 fallback 到 PATH 上的 rg(远端 POSIX
+  // 系统常见, 与 CC/Codex 远端一致)。两者都拿不到才 throw(fail-closed)。
+  const fallback = whichRgOnPath();
+  if (fallback) return fallback;
+  throw new Error('Cindy managed ripgrep is unavailable');
+}
+
+/** PATH 上找 rg(远端 fallback)。未找到返回空串。 */
+function whichRgOnPath(): string {
+  const dirs = (process.env.PATH ?? '').split(':');
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const candidate = dir.endsWith('/') ? dir + 'rg' : dir + '/rg';
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* keep scanning */
+    }
   }
-  return configured;
+  return '';
 }
 
 // 凭证/密钥路径特征由 maker-core 的单一来源生成。bridge 自包含、运行时不能 import，
@@ -150,8 +168,15 @@ function currentPermissionState(): {
   reviewReadPaths: string[];
   reviewOnly: boolean;
 } {
+  // 轮 40-w4-t12 HIGH-1:review-only 是会话创建时的启动语义(reviewMode), 由
+  // PiAgent 以独立 env 标记注入 —— 权限文件损坏/缺失时**不得**降级成普通 ask
+  // (否则 hard review-only 变成可交互确认的普通会话)。文件解析失败 → fail-closed:
+  // 保留 reviewOnly(按启动标记), reviewReadPaths 保守清空(读不了就不放行额外路径)。
+  const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
-  if (!file) return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: false };
+  if (!file) {
+    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+  }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
     return {
@@ -162,10 +187,10 @@ function currentPermissionState(): {
       reviewReadPaths: Array.isArray(parsed?.reviewReadPaths)
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
-      reviewOnly: parsed?.reviewOnly === true,
+      reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
     };
   } catch {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: false };
+    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
   }
 }
 
@@ -1084,10 +1109,55 @@ export default async function cindyBridge(pi: any) {
     // Extra Dirs 的结构化写工具永远禁止，即使 Full access 也不能把“只读引用”静默
     // 升级成写目录。bash 仍由 Cindy 审批/模型指令约束（Pi 暂无 OS sandbox API）。
     const targetPath = typeof event.input?.path === 'string' ? event.input.path : '';
+    // agent 运行时目录(configHome:models.json/权限档/subagent 快照/bridge 扩展)
+    // 是控制面:模型改写 models.json 的 baseUrl/apiKey 可把后续请求全部 MITM 到
+    // 攻击者 endpoint, 会话内容随之外泄(R5 安全审计 H-4)。host 侧写入不经此门
+    // (直连远端 fs / 本地 fs, 不走 pi 工具);模型的结构化写一律硬拦,含 Full access
+    // —— 与 permission file 同等级防护(CINDY_PI_PERMISSION_FILE 已在 SECRET_ENV_NAMES
+    // 剥离, models.json 走这条统一路径拦截)。
+    const agentHomeDir = process.env.PI_CODING_AGENT_DIR;
+    // 轮 40-w4-t12 HIGH-2 + 轮 40-w4-t13 HIGH:写目标 symlink 绕过 —— isInsideRoot
+    // 只看字面路径。realpathSync(目标) 在文件不存在时抛(null), 只回落字面检查会
+    // 漏掉 **symlink 父目录**(agentHome/link/perm.json, link -> /outside)。修:
+    // 目标存在 → realpath 目标;目标不存在 → realpath 最近的**存在的父目录**,
+    // 用真实父目录判定(父目录链上的 symlink 一并解析)。
+    const writeTargetResolved = (() => {
+      if (!targetPath) return null;
+      try {
+        return realpathSync(targetPath);
+      } catch {
+        // 目标不存在:向上找最近存在的祖先并 realpath。
+        let dir = path.dirname(targetPath);
+        for (let i = 0; i < 64; i += 1) {
+          try {
+            return path.join(realpathSync(dir), path.basename(targetPath));
+          } catch {
+            const parent = path.dirname(dir);
+            if (parent === dir) return null;
+            dir = parent;
+          }
+        }
+        return null;
+      }
+    })();
+    const writeInsideAgentHome = agentHomeDir
+      && (
+        isInsideRoot(targetPath, agentHomeDir)
+        || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, agentHomeDir))
+      );
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.readOnlyRoots.some((root) => isInsideRoot(targetPath, root))
+      && writeInsideAgentHome
+    ) {
+      return { block: true, reason: 'Cindy agent runtime directory is read-only.' };
+    }
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && permission.readOnlyRoots.some((root) =>
+        isInsideRoot(targetPath, root)
+        || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, root)))
     ) {
       return { block: true, reason: 'Cindy extra reference directories are read-only.' };
     }
@@ -1138,6 +1208,336 @@ export default async function cindyBridge(pi: any) {
       // Best-effort capture; tool results must never fail because observability did.
     }
   });
+
+  // ── 视觉桥工具（层 C）─────────────────────────────────────────────────────
+  // 从 host 注入的 CINDY_PI_VISION_BRIDGE env 读主/fallback 视觉后端，提供
+  // vision（glance 式描述）与 vision-locate（ground 式坐标定位）两个工具。
+  // 自包含：只依赖 fetch / node:fs / process.env，不 import 任何 Cindy 模块。
+  const VISION_DEFAULT_PROMPT =
+    'Describe this image accurately and factually. Do NOT guess or fabricate details. ' +
+    'Report visible text verbatim. If the image contains UI elements, list their labels and state.';
+  const VISION_LOCATE_PROMPT_PREFIX =
+    'Locate the target below and return its bounding box as "x1,y1,x2,y2" ' +
+    '(pixel coordinates, top-left origin). If the target is not present, return NOT_FOUND. Target: ';
+
+  interface PiVisionBackendSpec {
+    baseUrl: string;
+    requestPath: string;
+    model: string;
+    authorization: string | null;
+    /** 路由指定额外头（host 侧已滤客户端凭证头），请求时合并，勿丢。 */
+    headers: Record<string, string>;
+    wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat';
+  }
+  interface PiVisionBridgeEnvPayload {
+    enabled: boolean;
+    primary: PiVisionBackendSpec | null;
+    fallback: PiVisionBackendSpec | null;
+  }
+
+  function readPiVisionBridge(): PiVisionBridgeEnvPayload | null {
+    const rawEnv = process.env.CINDY_PI_VISION_BRIDGE;
+    if (!rawEnv) return null;
+    try {
+      const parsed = JSON.parse(rawEnv);
+      return parsed && typeof parsed === 'object' ? (parsed as PiVisionBridgeEnvPayload) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 图片魔数识别：非真实图片字节直接拒绝，阻断把任意本地文件当图外传。 */
+  /** 手动超时 signal（AbortSignal.timeout 缺失时的降级）。timer 不 hold 事件循环。 */
+  function createVisionTimeoutSignal(ms: number): AbortSignal {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    timer.unref?.();
+    return controller.signal;
+  }
+
+  function sniffImageMime(buf: Buffer): string | null {
+    if (buf.length < 12) return null;
+    // PNG: 89 50 4E 47
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+    // JPEG: FF D8 FF
+    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+    // GIF: 47 49 46 38
+    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'image/gif';
+    // WebP: RIFF .... WEBP
+    if (
+      buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+    ) return 'image/webp';
+    return null;
+  }
+
+  async function callPiVision(
+    spec: PiVisionBackendSpec,
+    imagePath: string,
+    prompt: string,
+  ): Promise<string> {
+    // 读文件失败 / 超大 / 非图片：包成泛化错误，不把路径/URL 泄漏给模型侧。
+    // 先 stat 前置拒超大文件，避免 readFileSync 整文件进内存（阻塞 Pi bridge 事件循环）。
+    const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+    try {
+      const st = statSync(imagePath);
+      if (st.size > MAX_IMAGE_BYTES) {
+        throw new Error('vision: image file too large');
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === 'vision: image file too large') throw err;
+      throw new Error('vision: unable to read the image file');
+    }
+    let raw: Buffer;
+    try {
+      raw = readFileSync(imagePath);
+    } catch {
+      throw new Error('vision: unable to read the image file');
+    }
+    // TOCTOU 复查：stat 后文件可能被替换/增大。
+    if (raw.length > MAX_IMAGE_BYTES) {
+      throw new Error('vision: image file too large');
+    }
+    // 安全：只允许真实图片字节（魔数校验），防止模型把任意本地文件（.env / 密钥 /
+    // 文档）base64 后外发到第三方视觉端点。非图片直接拒绝。
+    const mime = sniffImageMime(raw);
+    if (!mime) {
+      throw new Error('vision: not a supported image file (magic-byte check failed)');
+    }
+    const base64 = raw.toString('base64');
+    const url = spec.baseUrl + (spec.requestPath.startsWith('/') ? spec.requestPath : '/' + spec.requestPath);
+    // 合并路由指定额外头（anthropic-version / x-api-key / 自定义 provider 头），
+    // 缺失会被后端拒（P1）。authorization 后置覆盖,保证显式凭证头优先。
+    const headers: Record<string, string> = { 'content-type': 'application/json', ...spec.headers };
+    if (spec.authorization) headers.authorization = spec.authorization;
+    const dataUrl = 'data:' + mime + ';base64,' + base64;
+    // 按 wire 协议构造请求体（对齐 host 侧 vision-channel 的 buildVisionRequestBody）。
+    const wire = spec.wireProtocol || 'openai-chat';
+    const body = wire === 'openai-responses'
+      ? {
+          model: spec.model,
+          input: [
+            {
+              role: 'user',
+              content: [
+                { type: 'input_text', text: prompt },
+                { type: 'input_image', image_url: dataUrl },
+              ],
+            },
+          ],
+        }
+      : wire === 'anthropic-messages'
+        ? {
+            model: spec.model,
+            // /v1/messages 强制要求 max_tokens,缺省会 400 让 anthropic 风格后端
+            // 看起来不可用(对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS=1024)。
+            max_tokens: 1024,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: prompt },
+                  { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } },
+                ],
+              },
+            ],
+          }
+        : {
+            model: spec.model,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: prompt },
+                  { type: 'image_url', image_url: { url: dataUrl } },
+                ],
+              },
+            ],
+          };
+    // 安全：视觉请求携带 authorization 头与图片内容，禁止跟随 30x 重定向
+    // （重定向会把凭证/图片发往非预期端点；30x 按 !res.ok 处理）。
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        redirect: 'error',
+        // 超时中止：后端 hang 不一直占用工具调用。AbortSignal.timeout 需 bun 支持；
+        // 老版本缺失时降级为手动 AbortController（不崩工具）。
+        signal: typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(30000)
+          : createVisionTimeoutSignal(30000),
+      });
+    } catch {
+      // 网络失败包成泛化错误，不带 URL/网络细节。
+      throw new Error('vision: vision backend request failed');
+    }
+    if (!res.ok) throw new Error('vision HTTP ' + res.status);
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      throw new Error('vision: vision backend returned an invalid response');
+    }
+    const MAX_DESC = 32 * 1024;
+    const trimDesc = (s: string): string =>
+      s.length > MAX_DESC ? s.slice(0, MAX_DESC) + '…[truncated]' : s;
+    // 按 wire 协议抽描述文本（对齐 host 侧 extractVisionContent）。
+    let content: unknown = null;
+    if (wire === 'anthropic-messages') {
+      const blocks = (json as { content?: unknown })?.content;
+      if (Array.isArray(blocks)) {
+        content = blocks
+          .map((b) => (b && typeof b === 'object' ? (b as { text?: unknown }).text : ''))
+          .filter((t): t is string => typeof t === 'string')
+          .join('');
+      }
+    } else if (wire === 'openai-responses') {
+      const output = (json as { output?: unknown })?.output;
+      if (Array.isArray(output)) {
+        content = output
+          .map((item) => {
+            if (!item || typeof item !== 'object') return '';
+            const it = item as { type?: unknown; content?: unknown; text?: unknown };
+            if (it.type === 'output_text' && typeof it.text === 'string') return it.text;
+            if (Array.isArray(it.content)) {
+              return it.content
+                .map((b) => (b && typeof b === 'object' ? (b as { text?: unknown }).text : ''))
+                .filter((t): t is string => typeof t === 'string')
+                .join('');
+            }
+            return '';
+          })
+          .join('');
+      }
+    } else {
+      const choices = (json as { choices?: unknown })?.choices;
+      if (Array.isArray(choices) && choices.length > 0) {
+        const first = choices[0] as { message?: { content?: unknown } };
+        content = first?.message?.content ?? null;
+      }
+    }
+    if (typeof content === 'string' && content.trim().length > 0) return trimDesc(content.trim());
+    if (Array.isArray(content)) {
+      const parts = content
+        .map((part) => {
+          const t = (part as { text?: unknown })?.text;
+          return typeof t === 'string' ? t : '';
+        })
+        .join('');
+      if (parts.trim().length > 0) return trimDesc(parts.trim());
+    }
+    throw new Error('vision empty description');
+  }
+
+  async function describePiVisionWithFallback(imagePath: string, prompt: string): Promise<string> {
+    const cfg = readPiVisionBridge();
+    if (!cfg || !cfg.enabled || !cfg.primary) throw new Error('vision bridge not configured');
+    // host 可关联日志：仅含 backendRole/model/errorClass（脱敏），不含 image path、base64、
+    // Authorization 或请求体。走 stderr，host 侧 Pi 子进程日志收集可消费。
+    const errClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
+    try {
+      return await callPiVision(cfg.primary, imagePath, prompt);
+    } catch (primaryErr) {
+      console.error('[cindy-bridge] vision bridge pi primary backend failed', {
+        backendRole: 'primary',
+        model: cfg.primary.model,
+        errorClass: errClass(primaryErr),
+      });
+      // fallback 与 primary 的 (baseUrl, requestPath, model, authorization, headers)
+      // 完全相同才算重复；同 baseUrl/model 但不同 requestPath、不同凭证（网关 key）或
+      // 不同路由头（如不同 anthropic-beta 的 anthropic 兼容路由）是独立后端，应允许
+      // （防止误杀）。headers 是 Record，按 JSON 序列化比较——两个 spec 都由 host 侧
+      // 同源序列化而来，键序一致，可直接 stringify 比较。
+      const sameBackend =
+        cfg.fallback &&
+        cfg.fallback.baseUrl === cfg.primary.baseUrl &&
+        cfg.fallback.requestPath === cfg.primary.requestPath &&
+        cfg.fallback.model === cfg.primary.model &&
+        cfg.fallback.authorization === cfg.primary.authorization &&
+        JSON.stringify(cfg.fallback.headers ?? {}) === JSON.stringify(cfg.primary.headers ?? {});
+      if (cfg.fallback && !sameBackend) {
+        try {
+          const text = await callPiVision(cfg.fallback, imagePath, prompt);
+          console.error('[cindy-bridge] vision bridge pi used fallback backend', {
+            backendRole: 'fallback',
+            model: cfg.fallback.model,
+          });
+          return text;
+        } catch (fallbackErr) {
+          console.error('[cindy-bridge] vision bridge pi fallback backend failed', {
+            backendRole: 'fallback',
+            model: cfg.fallback.model,
+            errorClass: errClass(fallbackErr),
+          });
+          throw fallbackErr;
+        }
+      }
+      throw primaryErr;
+    }
+  }
+
+  // 视觉桥工具只在「已启用且可解析 primary 后端」时注册：未启用时完全不暴露给 Pi 模型
+  // （零干扰契约），而不是注册了执行时报 "vision bridge not configured"。
+  const piVisionCfg = readPiVisionBridge();
+  if (piVisionCfg && piVisionCfg.enabled && piVisionCfg.primary) {
+  pi.registerTool({
+    name: 'vision',
+    label: 'vision',
+    description:
+      'Describe an image at a local path using an external multimodal model. ' +
+      'Use this to read screenshots, UI mockups, diagrams, or any image referenced by the user ' +
+      'or produced by tools. Pass an optional query (-q) to focus on a specific aspect.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to the image file.' },
+        query: { type: 'string', description: 'Optional focus question about the image.' },
+      },
+      required: ['path'],
+    },
+    async execute(_toolCallId: string, params: unknown) {
+      const input = params as { path?: string; query?: string };
+      if (typeof input.path !== 'string' || input.path.length === 0) {
+        throw new Error('vision: path is required');
+      }
+      const prompt = typeof input.query === 'string' && input.query.trim().length > 0
+        ? input.query.trim()
+        : VISION_DEFAULT_PROMPT;
+      const text = await describePiVisionWithFallback(input.path, prompt);
+      return { content: [{ type: 'text', text }] };
+    },
+  });
+
+  pi.registerTool({
+    name: 'vision-locate',
+    label: 'vision-locate',
+    description:
+      'Locate a target element in an image and return its pixel bounding box as "x1,y1,x2,y2" ' +
+      '(top-left origin). Use this before cropping or acting on a specific UI element.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to the image file.' },
+        target: { type: 'string', description: 'What to locate (e.g. "the send button").' },
+      },
+      required: ['path', 'target'],
+    },
+    async execute(_toolCallId: string, params: unknown) {
+      const input = params as { path?: string; target?: string };
+      if (typeof input.path !== 'string' || input.path.length === 0) {
+        throw new Error('vision-locate: path is required');
+      }
+      if (typeof input.target !== 'string' || input.target.trim().length === 0) {
+        throw new Error('vision-locate: target is required');
+      }
+      const prompt = VISION_LOCATE_PROMPT_PREFIX + input.target.trim();
+      const text = await describePiVisionWithFallback(input.path, prompt);
+      return { content: [{ type: 'text', text }] };
+    },
+  });
+  }
 
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;

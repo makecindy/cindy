@@ -398,4 +398,75 @@ describe('im default settings store', () => {
     expect(persisted.channels.feishu.permissionMode).toBe('bypassPermissions');
     expect(persisted.channels.slack.agentKind).toBe('codex');
   });
+
+  it('group permission mode: auto default, per-channel override, reset clears it', () => {
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('auto');
+    writeImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('bypassPermissions');
+    // 其它渠道不受影响, 跟随系统默认。
+    expect(readImDefaultSettings('discord').groupPermissionMode).toBe('auto');
+    expect(readImDefaultSettingsState('feishu').customizedKeys).toContain(
+      'groupPermissionMode',
+    );
+
+    resetImDefaultSettingsChannel('feishu');
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('auto');
+    expect(readImDefaultSettingsState('feishu').isCustomized).toBe(false);
+
+    // override 清空后文件整体删除(createOverrideSettingsFile 清理语义)。
+    const persisted = fs.existsSync(settingsFile())
+      ? JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))
+      : {};
+    expect(persisted.channels).toBeUndefined();
+  });
+
+  it('falls back group permission to auto for persisted documents without the field', () => {
+    const without = {
+      agentKind: IM_DEFAULT_SETTINGS.agentKind,
+      permissionMode: 'auto' as const,
+      agents: IM_DEFAULT_SETTINGS.agents,
+    };
+    const migrated = __testing.normalizeDocument({
+      schemaVersion: 3,
+      global: without,
+      channels: { feishu: without },
+    });
+    expect(migrated.global.groupPermissionMode).toBe('auto');
+    expect(migrated.channels.feishu.groupPermissionMode).toBe('auto');
+  });
+
+  /**
+   * 存量兼容: 该设置项最初叫「群聊 /ctr 新建任务权限档」, 键名 groupCtrPermissionMode。
+   * 作用域扩到「群里新建的所有会话」后键名改了, 已经存过旧键的用户升级后什么都不做,
+   * 原来选的档位必须照旧生效(漏这条 = 用户的完全访问被静默改回自动审批)。
+   */
+  it('keeps a legacy groupCtrPermissionMode value after the key rename', () => {
+    const legacy = {
+      agentKind: IM_DEFAULT_SETTINGS.agentKind,
+      permissionMode: 'auto' as const,
+      groupCtrPermissionMode: 'bypassPermissions' as const,
+      agents: IM_DEFAULT_SETTINGS.agents,
+    };
+    const migrated = __testing.normalizeDocument({
+      schemaVersion: 3,
+      global: legacy,
+      channels: { feishu: legacy },
+    });
+    expect(migrated.global.groupPermissionMode).toBe('bypassPermissions');
+    expect(migrated.channels.feishu.groupPermissionMode).toBe('bypassPermissions');
+
+    // 新键同时在场时新键胜出(写侧只写新键, 旧键只是历史残留)。
+    const both = __testing.normalize({
+      ...legacy,
+      groupPermissionMode: 'auto' as const,
+    });
+    expect(both.groupPermissionMode).toBe('auto');
+  });
+
+  it('writes only the new group permission key (legacy key not resurrected)', () => {
+    writeImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.channels.feishu.groupPermissionMode).toBe('bypassPermissions');
+    expect(persisted.channels.feishu.groupCtrPermissionMode).toBeUndefined();
+  });
 });

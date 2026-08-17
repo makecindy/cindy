@@ -6,6 +6,7 @@ import {
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
+import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskPriority';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
 import { formatIslandToolDetail } from './toolDetail.js';
@@ -1588,7 +1589,8 @@ function orderSessionsForCurrentSurface(
 
   const rank = new Map(state.expandedSessionOrder.map((sessionId, index) => [sessionId, index]));
   const ordered = sortedSessions.slice().sort((a, b) => {
-    const priorityDelta = priorityRank(state, b, now) - priorityRank(state, a, now);
+    const priorityDelta =
+      islandDisplayPriorityRank(state, a, now) - islandDisplayPriorityRank(state, b, now);
     if (priorityDelta !== 0) return priorityDelta;
     const aRank = rank.get(a.sessionId);
     const bRank = rank.get(b.sessionId);
@@ -2184,22 +2186,55 @@ function compareSessionsForDisplay(
   b: AgentIslandSessionState,
   now: number,
 ): number {
-  const rankDelta = priorityRank(state, b, now) - priorityRank(state, a, now);
+  const rankDelta = islandDisplayPriorityRank(state, a, now) - islandDisplayPriorityRank(state, b, now);
   if (rankDelta !== 0) return rankDelta;
   const activityDelta = b.sortActivityAt - a.sortActivityAt;
   if (activityDelta !== 0) return activityDelta;
   return b.startedAt - a.startedAt;
 }
 
-function priorityRank(state: AgentIslandState, session: AgentIslandSessionState, now: number): number {
-  if (session.pendingInteractionIds.size > 0 || session.phase === 'needs-interaction') return 500;
-  if (session.phase === 'error' && (session.unread || (session.errorUntil && session.errorUntil > now))) return 400;
-  if (state.activeTransientSessionId === session.sessionId && session.revealUntil && session.revealUntil > now) {
-    return 350;
+function isWaitingSession(session: AgentIslandSessionState, now: number): boolean {
+  return (
+    session.pendingInteractionIds.size > 0
+    || session.phase === 'needs-interaction'
+    || (session.phase === 'error' && (session.unread || (session.errorUntil !== null && session.errorUntil > now)))
+  );
+}
+
+function isUnreadCompletedSession(session: AgentIslandSessionState, now: number): boolean {
+  return session.phase === 'completed' && (session.unread || (session.completedUntil !== null && session.completedUntil > now));
+}
+
+function isTransientlyPinnedSession(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  now: number,
+): boolean {
+  return (
+    state.activeTransientSessionId === session.sessionId
+    && session.revealUntil !== null
+    && session.revealUntil > now
+  );
+}
+
+/**
+ * 岛上展示序 = 与侧栏共用的活任务档位,再叠一层「刚完成短暂置顶」。
+ * 数字越小越靠前。短暂置顶只压过完成未读 / 运行中,压不过等你处理(含出错)。
+ */
+function islandDisplayPriorityRank(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  now: number,
+): number {
+  const live = liveTaskPriorityRank({
+    waiting: isWaitingSession(session, now),
+    unread: isUnreadCompletedSession(session, now),
+    running: session.running,
+  });
+  if (isTransientlyPinnedSession(state, session, now) && live > LIVE_TASK_PRIORITY.waiting) {
+    return LIVE_TASK_PRIORITY.waiting + 0.5;
   }
-  if (session.phase === 'completed' && (session.unread || (session.completedUntil && session.completedUntil > now))) return 300;
-  if (session.running) return 100;
-  return 0;
+  return live;
 }
 
 function detailForInteraction(

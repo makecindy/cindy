@@ -63,7 +63,8 @@ import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
 import { generateTakeoverSummary } from './sessionSummary';
 import { broadcastSessionCreated } from './sessionBroadcast';
-import type { IdentityKey } from '@cindy/im';
+import { readImDefaultSettings } from '../defaultSettingsStore';
+import { decodeFeishuLaneUserId, type IdentityKey } from '@cindy/im';
 import {
   readModelRouteSnapshot,
   readPermissionMode,
@@ -113,6 +114,47 @@ export function createCardActionHandler(
     if (!threadUi)
       throw new Error(`${channel} thread UI is required for thread-scoped control cards`);
     return threadUi;
+  }
+
+  /**
+   * 群卡片的 /ctr 绑定必须落在**发卡那条话题 lane** 上 —— 认不出 lane 就不许建。
+   *
+   * 飞书卡片回调不带话题上下文, senderId 靠 transport 侧「发卡 messageId → lane」
+   * 登记表归一(outbound.resolveCardLane)。那张表只在进程内存里: 应用重启 / 换连接
+   * 后清空, 老卡片再被点时 senderId 回落成点击人的 open_id —— 那是**私聊身份**。
+   * 照它 attach 会把群里的接管挂到私聊上: 之后 owner 在私聊说的每句话都被路由进
+   * 这个项目会话, 而那条话题反而没接上(用户感知:「绑定之后不管在哪问, 工作目录
+   * 都是绑定那个项目」)。绑定错身份比不绑定糟得多 —— fail-closed, 让用户在目标
+   * 话题里重发 /ctr 拿一张新卡。
+   *
+   * 判据: 群卡(chatId 为 `oc_` 前缀)+ senderId 不是 lane。DM 卡(chatId 是对方
+   * open_id)与改投 owner 私聊的卡本就该按 open_id 记账, 不受影响。
+   */
+  function isGroupCardWithLostLane(event: IMCardActionEvent): boolean {
+    if (channel !== 'feishu') return false;
+    if (!event.chatId.startsWith('oc_')) return false;
+    return decodeFeishuLaneUserId(event.senderId) === null;
+  }
+
+  /** 认不出话题的群卡: 原地收口成「重发 /ctr」提示, 不建任何绑定。 */
+  async function rejectStaleGroupCard(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    where: string,
+  ): Promise<void> {
+    log.warn(
+      `${where}: group card lane unresolved (senderId=...${event.senderId.slice(-8)} is not a lane) — ` +
+        'refusing to attach so the takeover cannot land on the DM identity',
+    );
+    const body =
+      ui.cards.control.staleGroupCard ??
+      ui.cards.control.attachFailed('card lane unresolved (app restarted)');
+    try {
+      await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(body));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`${where}: stale group card patch failed (non-fatal): ${msg}`);
+    }
   }
 
   /** thread root 卡上的退出接管按钮(payload 只带 botAppId, scope 用卡自身 ts 反查)。 */
@@ -488,6 +530,43 @@ export function createCardActionHandler(
     }
   }
 
+  async function handlePermissionModeFixToAuto(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+  ): Promise<void> {
+    // 群会话「完全访问」档被拒时发到 owner 私聊的一键修复卡 — 把该会话
+    // 切回 auto(自动审批)。走与 permmode:pick 相同的切换链(运行时先切、
+    // 落库失败回滚);auto 不需要二次确认。文案缺失(非飞书渠道)时忽略 —
+    // 这张卡只有提供 permissionModeFix 文案的渠道会发出。
+    const fixUi = ui.cards.permissionModeFix;
+    const sessionId = String(event.payload.sessionId ?? '');
+    if (!sessionId || !fixUi) {
+      log.warn('permissionMode:fix-auto missing sessionId/fixUi — ignoring');
+      return;
+    }
+    const agentKind: AgentKind =
+      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const result = await changeSessionPermissionMode({
+      sessionId,
+      mode: 'auto',
+      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      confirmedFullAccess: false,
+      readPreviousMode: () => readPermissionMode(sessionId),
+      getLiveSession: () => turnRunner.getMakerSessionById(sessionId),
+      persist: (nextMode) => updatePermissionMode(sessionId, nextMode),
+    });
+    const label =
+      result.kind === 'changed'
+        ? fixUi.resolved
+        : fixUi.failed(result.kind === 'invalid' || result.kind === 'failed' ? result.reason : '');
+    try {
+      await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(label));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`permissionMode:fix-auto card patch failed (non-fatal): ${msg}`);
+    }
+  }
+
   async function handleControlPick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
     const botContextId = String(event.payload.botAppId ?? '');
     const workingDir = String(event.payload.workingDir ?? '');
@@ -584,6 +663,11 @@ export function createCardActionHandler(
     const displayName = String(event.payload.displayName ?? '');
     if (!sessionId || !botContextId) {
       log.warn('control:session-pick missing sessionId/botAppId — ignoring');
+      return;
+    }
+    // 群卡认不出自己属于哪条话题时绝不建绑定(否则接管会挂到私聊身份上)。
+    if (isGroupCardWithLostLane(event)) {
+      await rejectStaleGroupCard(im, event, 'control:session-pick');
       return;
     }
     log.info(`control:session-pick sessionId=...${sessionId.slice(-8)} displayName=${displayName}`);
@@ -795,8 +879,11 @@ export function createCardActionHandler(
     // 然后 attach binding 把后续渠道消息路由到这个新 session。
     // session 创建参数:
     //   - agentKind = 'claude-code' (跟 desktop 默认一致)
-    //   - model/effort/permissionMode/fastMode 用 desktop 当前偏好, 缺省走
-    //     DESKTOP_CC_DEFAULTS — 这是"用 desktop 默认"的承诺
+    //   - model/effort/fastMode 用 desktop 当前偏好(含 providerId, 缺省走
+    //     DESKTOP_CC_DEFAULTS) — 这是"用 desktop 默认"的承诺
+    //   - permissionMode 例外: 飞书群 /ctr 用渠道设置「群聊新建任务权限档」
+    //     (默认 auto), 私聊/其它渠道保持 desktop 偏好 — 两个创建分支必须一致,
+    //     非 thread 分支才是 feishu(非 threadScoped 渠道)实际走的路径
     //   - 不传 vendorOptions, 跟 desktop renderer spawn 时一致 (没有
     //     send_file_to_user MCP, 接管期间该工具不可用 — 方案 A 取舍)
     const botContextId = String(event.payload.botAppId ?? '');
@@ -806,11 +893,33 @@ export function createCardActionHandler(
       log.warn('control:new missing botAppId/workingDir — ignoring');
       return;
     }
+    // 同 session-pick: 认不出话题的群卡不许建绑定, 免得接管落到私聊身份上。
+    if (isGroupCardWithLostLane(event)) {
+      await rejectStaleGroupCard(im, event, 'control:new');
+      return;
+    }
     log.info(
       `control:new workingDir=${workingDir} displayName=${displayName} sender=...${event.senderId.slice(-8)}`,
     );
 
     const desktopPrefs = getDesktopCcPrefs() ?? DESKTOP_CC_DEFAULTS;
+    // 飞书群/话题里的 /ctr 新建: 权限档用渠道设置「群聊新建任务权限档」
+    // (默认 auto 自动审批, 与群里 @bot 开话题建会话同一个设置项 —— 见
+    // feishu adapter 的 sessions.permissionModeFor); 私聊保持 desktop 偏好不变。
+    // 正常路径走 senderId 的 lane 归一(群卡回调恒是话题 lane)。chatId 前缀
+    // (群 oc_ / p2p 是对方 open_id)保留作兜底判据: 上面的 fail-closed 已经把
+    // 「群卡 + 非 lane senderId」拦在建绑定之前, 这条兜底如今够不着, 留着是为了
+    // 万一那道门被放宽时权限档不会静默退回私聊那档(宁可按群算)。
+    const isFeishuGroupControl =
+      channel === 'feishu' &&
+      (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'));
+    const controlNewPermissionMode = isFeishuGroupControl
+      ? readImDefaultSettings('feishu').groupPermissionMode
+      : desktopPrefs.permissionMode;
+    log.info(
+      `control:new permission mode=${controlNewPermissionMode} group=${isFeishuGroupControl} ` +
+        `sender=...${event.senderId.slice(-8)}`,
+    );
     // 停用轴准入(PR #744 review 第五轮):IM 新建会话是新的付费路由,desktop 偏好里
     // 保存的 model/provider 可能已被用户停用 —— 宽松降级:被停用的显式来源/模型逐级
     // 丢弃(退回 agent 默认路由),隐式默认被停用时显式落替代来源;不因停用让 IM
@@ -882,7 +991,7 @@ export function createCardActionHandler(
           model: requireRouteModel(),
           providerId: route.providerId ?? undefined,
           ...(routeEffort ? { effort: routeEffort } : {}),
-          permissionMode: desktopPrefs.permissionMode as PermissionMode,
+          permissionMode: controlNewPermissionMode as PermissionMode,
           fastMode: routeFastMode,
           title: FBOT_DRAFT_TITLE,
         });
@@ -964,7 +1073,7 @@ export function createCardActionHandler(
         model: requireRouteModel(),
         providerId: route.providerId ?? undefined,
         ...(routeEffort ? { effort: routeEffort } : {}),
-        permissionMode: desktopPrefs.permissionMode as PermissionMode,
+        permissionMode: controlNewPermissionMode as PermissionMode,
         fastMode: routeFastMode,
         title: FBOT_DRAFT_TITLE,
       });
@@ -1299,6 +1408,10 @@ export function createCardActionHandler(
           }
           if (event.buttonId === 'permmode:cancel-full-access') {
             await handlePermissionModeCancel(im, event);
+            return;
+          }
+          if (event.buttonId === 'permissionMode:fix-auto') {
+            await handlePermissionModeFixToAuto(im, event);
             return;
           }
 

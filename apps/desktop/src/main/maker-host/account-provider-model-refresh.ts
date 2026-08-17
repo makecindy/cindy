@@ -10,6 +10,7 @@ interface AccountProviderModelRefreshLogger {
 export interface AccountProviderModelRefreshDeps {
   restartCodex(): Promise<void>;
   shutdownCodexEnvironment(): Promise<void>;
+  loadXaiLkg(): Promise<boolean>;
   refreshProviderModels(
     trigger: ProviderModelAutoRefreshTrigger,
     providerIds?: readonly BuiltinRefreshableProviderId[],
@@ -47,6 +48,17 @@ export async function refreshProviderModelsAfterAccountReady(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  try {
+    // Account readiness is also the owner boundary. Restore this owner's authoritative xAI LKG
+    // before the HTTP refresh so an offline/timeout result never exposes the generic fallback in
+    // place of a previously verified account snapshot.
+    await deps.loadXaiLkg();
+  } catch (error) {
+    deps.log.warn('xAI owner LKG load failed; continuing with network discovery', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   const backgroundRefresh = deps

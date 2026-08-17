@@ -127,6 +127,7 @@
       "chipMetrics": "使用量インジケーター",
       "memory": "メモリ",
       "subagentModels": "サブエージェント",
+      "visionBridge": "ビジョンブリッジ",
       "compaction": "コンテキスト圧縮",
       "terminalShell": "デフォルトターミナルシェル",
       "composer": "メッセージ入力",
@@ -308,6 +309,7 @@
         "statusInstalled": "インストール済み",
         "statusNotInstalled": "未インストール",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "インストール",
           "reinstall": "再インストール",
@@ -477,7 +479,7 @@
         "reset": "初期レイアウトに戻す",
         "resetSuccess": "パネルレイアウトを初期状態に戻しました",
         "resetFailed": "パネルレイアウトを初期状態に戻せませんでした",
-        "saved": "パネル位置を保存しました。設定 → 外観から初期レイアウトに戻せます。",
+        "saved": "パネル位置を保存しました。［設定 → 一般］の［外観］セクションで初期レイアウトに戻せます。",
         "saveFailed": "パネル位置を保存できませんでした"
       }
     },
@@ -984,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "ショートカット監視",
-          "tooltip": "Fn、単独の Command / Option / Control、Fn を含む音声入力ショートカットを検出するために使います。通常の組み合わせキーや F1-F24 単独キーでは多くの場合不要です。許可済みは、現在実行中のアプリがショートカットを監視できることを意味します。開発版では Terminal 経由で許可される場合があります。"
+          "tooltip": "Fn、単独の Command / Option / Control、Fn を含むショートカット、および F1-F24 単独キーの長押し音声入力でキーを放したことを検出するために使います。通常の組み合わせキーには不要です。許可済みは、現在実行中のアプリがショートカットを監視できることを意味します。開発版では Terminal 経由で許可される場合があります。"
         },
         "accessibility": {
           "label": "自動入力",
@@ -2319,7 +2321,7 @@
       "title": "サブエージェント",
       "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定し、Codex サブエージェントのガードレールを構成します。設定は入口ごとに適用され、モデルごとには保存されません。",
       "unspecified": "指定しない（既定の動作を使用）",
-      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
+      "hint": "Claude Code のサブエージェントではモデルのみ指定でき、推論強度は Claude Code 本来の動作に従います。選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
       "codexV2ModelHint": "サブエージェントの既定モデルは Codex 自身のモデルカタログ内のモデルである必要があり、カタログ外のモデル（互換ブリッジ経由のサードパーティモデルなど）は Codex に拒否されます。Sol / Terra（マルチエージェント V2）はさらに V2 カタログモデル（現在は gpt-5.6-sol と gpt-5.6-terra）のみを受け付けます。旧版マルチエージェント（V1）に V2 の制限はありません。",
       "saveFailed": "サブエージェント設定の保存に失敗しました",
       "guardrails": {
@@ -2389,6 +2391,37 @@
     "compatMode": {
       "title": "ヒント",
       "description": "機能的なスイッチ。一部は新しいセッションで反映されます(各 cell の説明を参照)。"
+    },
+    "visionBridge": {
+      "title": "ビジョンブリッジ",
+      "description": "テキスト専用モデルに画像認識能力を与えます。別のマルチモーダルモデルが画像をテキストに変換してから渡します。",
+      "enableLabel": "ビジョンブリッジを有効化",
+      "enableHint": "オフのときはすべてのモデルが以前と同じ動作をします。オンのとき、下で選択したモデルの画像はビジョンバックエンドでテキストに変換されます。有効にすると、これらのモデルに送信される画像と、フォーカスヒントとして使われる近くのテキストが、選択したビジョンバックエンドに送信されます。",
+      "enableAria": "ビジョンブリッジを切り替え",
+      "toast": {
+        "saved": "ビジョンブリッジ設定を保存しました",
+        "saveFailed": "ビジョンブリッジ設定の保存に失敗しました"
+      },
+      "capability": {
+        "vision": "画像対応と判明",
+        "noVision": "テキスト専用と判明",
+        "unknown": "画像対応不明"
+      },
+      "targetModels": {
+        "label": "ビジョンブリッジを使うモデル",
+        "hint": "テキスト専用モデル（DeepSeek など）はデフォルトで選択済みです。画像対応モデルも選択できます（例: 安価な説明モデルでトークンを節約）。",
+        "empty": "利用可能なモデルがありません。",
+        "toggleAria": "{{model}} のビジョンブリッジを切り替え"
+      },
+      "backends": {
+        "label": "ビジョンバックエンドモデル",
+        "hint": "画像をテキストに変換するマルチモーダルモデルを最大2つ選択します。2つ目（バックアップ）は任意です。",
+        "primary": "プライマリ",
+        "fallback": "バックアップ",
+        "unset": "未選択",
+        "noBackup": "バックアップなし",
+        "hintSecondary": "プライマリを優先します。失敗してバックアップがあれば切り替えます。両方失敗した場合は画像を認識できず、テキストのお知らせに置き換えて通知します。"
+      }
     },
     "terminalShell": {
       "title": "デフォルトターミナルシェル",
@@ -3155,7 +3188,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupPermissionLabel": "グループで新規タスクを作成するときの権限モード",
+        "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。"
       }
     },
     "shortcuts": {
@@ -4810,7 +4845,10 @@
         "localOnly": "メッセージ単位の正確な変更は、リモートタスクではまだ利用できません。",
         "partialNotice": "このメッセージには正確に追跡できないコマンドまたはツールの書き込みが含まれます。以下は取得できた一部のみで、完全なパッチではありません。",
         "emptyTitle": "記録された変更はありません",
-        "emptyDesc": "このメッセージで保存されたパッチに表示可能なファイル変更はありません。"
+        "emptyDesc": "このメッセージで保存されたパッチに表示可能なファイル変更はありません。",
+        "crossSessionSwitchDisabled": "このレビューはコラボレーターのセッションに属しています。ソースを切り替えられるのは、そのセッション内だけです。",
+        "previewUnavailable": "このメッセージは過去の変更を記録しているため、現在のディスク上のファイル内容を確実にプレビューできません。",
+        "snapshotPatchUnavailable": "過去の変更スナップショットから、現在の worktree 向けの git apply コマンドは生成できません。"
       },
       "fileCount_one": "{{count}} ファイル",
       "fileCount_other": "{{count}} ファイル",
@@ -4868,6 +4906,7 @@
         "in-progress": "git 操作が進行中です",
         "agent-running": "エージェントが実行中です",
         "disabled": "レビューを利用できません",
+        "historical-snapshot": "過去の変更スナップショットは読み取り専用です",
         "remote-device": "リモートデバイスのセッションは閲覧のみです",
         "remote-ssh": "SSH ワークスペースのレビューは表示専用です"
       },
@@ -5580,6 +5619,7 @@
         "context": "コンテキスト {{value}}",
         "codexCompatibilityMode": "Codex 互換モード",
         "price": "{{input}}/{{output}} / 100万",
+        "subscriptionBadgeCompact": "サブスク",
         "fastBadge": "高速"
       },
       "source": {
@@ -5900,6 +5940,7 @@
       "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
+      "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。",
       "ruleSeparator": "、"
     },
     "deviceSwitcher": {
@@ -6081,6 +6122,11 @@
     "imageMissing": {
       "title": "画像が失われました"
     },
+    "visionBridge": {
+      "analyzing": "画像を認識中…（{{count}}枚）",
+      "fallback": "ビジョンブリッジは予備のビジョンバックエンドを使用しました（プライマリが利用不可）",
+      "unavailable": "ビジョンブリッジは現在利用できません。画像を認識できず、テキストのお知らせに置き換えました"
+    },
     "newMessageIndicator": {
       "aria": "下部に戻り、{{count}} 件の新着メッセージを表示",
       "label_one": "{{count}} 件の新着",
@@ -6183,7 +6229,10 @@
       "networkShowRaw": "元のエラーを表示",
       "networkHideRaw": "元のエラーを隠す",
       "silentStopContinue": "続行",
-      "silentStopContinueTitle": "現在のタスクを続行"
+      "silentStopContinueTitle": "現在のタスクを続行",
+      "piTransportClosed": "リモート Pi の接続が切断されました（SSH チャンネルが閉じました）。リモートのタスクは実行中のままです。再接続すると続行できます。",
+      "piManagerUnavailable": "リモート Pi マネージャーが準備できていません。しばらくして再試行してください。失敗が続く場合は「設定 → リモートマシン」で Pi を再インストールしてください。",
+      "piBundledNodeMissing": "リモートホストに実行環境（Node.js）がありません。「設定 → リモートマシン」でホストを展開し、まず Claude Code または Codex の「インストール」をクリックしてください（Node.js もインストールされます）。その後 Pi タスクを開始してください。"
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
@@ -6600,6 +6649,8 @@
       "automationSent": "自動化タスクから送信",
       "automationSentNamed": "自動化タスク「{{name}}」から送信",
       "automationViewTask": "自動化タスクを表示",
+      "orcaFromLead": "Lead からのメッセージ",
+      "orcaFromWorker": "Worker からのメッセージ",
       "expandLongMessage": "全文を表示",
       "collapseLongMessage": "折りたたむ",
       "sessionReference": {
@@ -6665,20 +6716,22 @@
       }
     },
     "upgradeBanner": {
-      "description": "{{hostId}} の cc-manager に新しいバージョンがあります — アップグレードするとこのホスト上のすべての Claude Code リモートセッションが中断されます",
-      "upgrading": "{{hostId}} の cc-manager をアップグレード中…",
+      "description": "{{hostId}} の {{manager}} に新しいバージョンがあります — アップグレードするとこのホスト上のすべてのリモートセッションが中断されます",
+      "upgrading": "{{hostId}} の {{manager}} をアップグレード中…",
       "upgrade": "今すぐアップグレード",
-      "upgradeTitle": "新しい cc-manager をダウンロードして再起動（現在のセッションは中断されます）",
+      "upgradeTitle": "新しい {{manager}} をダウンロードして再起動（現在のセッションは中断されます）",
       "dismissTitle": "あとで（次回起動時に再度通知）",
       "failed": "アップグレード失敗: {{message}}",
-      "daemonNotReady": "cc-manager のアップグレードは完了しましたが、リモート daemon がまだ起動していません — メッセージを手動で再送信してください"
+      "daemonNotReady": "{{manager}} のアップグレードは完了しましたが、リモート daemon がまだ起動していません — メッセージを手動で再送信してください"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "リモート接続が中断されました（daemon がアップグレードまたは再起動中の可能性があります）。ターンが終了しました — 再送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
       "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした（ネットワークまたはサービスの一時的な問題）。レビューが必要な操作はご自身での確認に切り替わりました。中断を減らしたい場合は、このタスクをデフォルト権限に切り替えてください。",
+      "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動レビューを完了できず、確認も完了しませんでした。これはユーザーによる拒否ではありません。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
     },
@@ -9055,8 +9108,9 @@
       "archiveWorkerAria": "Worker {{name}} をアーカイブ",
       "createWorker": "新しい Worker を作成",
       "hardLimitHint": "ハード上限 {{count}} に達しました。既存 Worker をアーカイブすると追加できます。",
+      "hardLimitSettingsHint": "ハード上限 {{count}} に達しました。クリックして協同設定を調整します。",
       "softLimitHint": "ソフト上限 {{count}} を超えています。Worker が多いほどメモリ使用量が増えます。",
-      "settingsCollaboration": "設定 · コラボレーション",
+      "settingsCollaboration": "設定 · 協同",
       "layoutMenuLabel": "Worker リストの表示方式",
       "layoutTabs": "タブ",
       "layoutDropdown": "ドロップダウン",
@@ -9340,13 +9394,20 @@
         "endsAt": "{{date}} にプラン終了",
         "cancelAction": "サブスクリプションを解約",
         "cancelConfirmTitle": "現在のサブスクリプションを解約しますか？",
-        "cancelConfirmDescription": "この操作による返金や残高の即時変更はありません。現在のプランは {{date}} まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
-        "cancelConfirmDescriptionWithoutDate": "この操作による返金や残高の即時変更はありません。現在のプランは請求期間の終了まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmDescription": "この操作による返金や残高の即時変更はありません。現在のプランは {{date}} まで利用でき、その後は更新されません。この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmDescriptionWithoutDate": "この操作による返金や残高の即時変更はありません。現在のプランはこの請求期間が終了するまで利用でき、その後は更新されません。それまでは新しいプランを購入できません。",
         "cancelConfirmAction": "解約を確定",
         "cancelSuccess": "自動更新を停止しました。現在のプランは {{date}} まで利用できます。",
         "cancelSuccessWithoutDate": "自動更新を停止しました。現在のプランはこの請求期間の終了後に終了します。",
         "cancelNotSupported": "このサブスクリプションは現在解約できません。",
-        "cancelFailed": "サブスクリプションを解約できませんでした。しばらくしてからもう一度お試しください。"
+        "cancelFailed": "サブスクリプションを解約できませんでした。しばらくしてからもう一度お試しください。",
+        "resumeAction": "サブスクリプションを再開",
+        "resumeConfirmTitle": "現在のサブスクリプションを再開しますか？",
+        "resumeConfirmDescription": "再開すると、更新日に自動更新されます。",
+        "resumeConfirmAction": "サブスクリプションを再開",
+        "resumeSuccess": "サブスクリプションを再開しました。予定どおり自動更新されます。",
+        "resumeNotAvailable": "このサブスクリプションは再開できません。最新の状態を確認してから、もう一度お試しください。",
+        "resumeFailed": "サブスクリプションを再開できませんでした。しばらくしてからもう一度お試しください。"
       },
       "topupCard": {
         "action": "残高チャージ"

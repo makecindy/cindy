@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   diffGhostPermissionItems,
   ghostPermissionBaselineKey,
+  validateGhostManifest,
   type GhostInstallApproval,
+  type GhostManifest,
 } from '../../../shared/ghost.js';
 
 const runtime = vi.hoisted(() => ({
@@ -144,6 +146,41 @@ function manifest(
     entry: 'main.js',
     slots,
   };
+}
+
+function setupKvManifest(id = 'cindy-test', version = '1.0.0') {
+  return {
+    ...manifest(id, version),
+    settingsHtml: 'settings.html',
+    setup: {
+      requires: [{ anyOf: [{ kv: 'repoDir', label: '本机 cindy 项目目录' }] }],
+    },
+  };
+}
+
+function setupSecretManifest(id = 'cindy-test', version = '1.0.0') {
+  return {
+    ...manifest(id, version),
+    slots: ['notify', 'network'],
+    settingsHtml: 'settings.html',
+    network: {
+      hosts: ['api.example.com'],
+      secrets: [
+        {
+          key: 'api_key',
+          label: 'API key',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        },
+      ],
+    },
+    setup: { requires: [{ anyOf: ['secret:api_key'] }] },
+  };
+}
+
+function normalizedManifest(raw: unknown): GhostManifest {
+  const validated = validateGhostManifest(raw);
+  if (!validated.ok) throw new Error(validated.reason);
+  return validated.manifest;
 }
 
 function summary(overrides: Partial<VisiblePluginSummary> = {}): VisiblePluginSummary {
@@ -506,6 +543,40 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
   });
 
+  it('installs a default package whose permission cap contains normalized setup requirements', async () => {
+    const item = summary({ defaultInstall: true });
+    const rawManifest = setupKvManifest();
+    const approvedManifest = normalizedManifest(rawManifest);
+    const h = harness([item]);
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: rawManifest },
+    } as unknown as VisiblePluginDetail);
+    runtime.install.mockImplementation(async () => {
+      const ghost = {
+        manifest: { ...approvedManifest },
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: true,
+      };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'installed', enabled: true }],
+    });
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({
+        permissionPolicy: {
+          mode: 'cap',
+          manifest: approvedManifest,
+          sourceType: 'server',
+        },
+      }),
+    );
+  });
+
   it('returns a Renderer snapshot before a default install download finishes', async () => {
     const item = summary({ defaultInstall: true });
     const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-deferred-'));
@@ -655,6 +726,36 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.api.listAll).toHaveBeenCalledTimes(1);
     // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
     expect(ghost?.enabled).toBe(true);
+  });
+
+  it('manual market install accepts the normalized setup manifest returned by detail', async () => {
+    const item = summary();
+    const rawManifest = setupSecretManifest();
+    const reviewedManifest = normalizedManifest(rawManifest);
+    const h = harness([item]);
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: rawManifest },
+    } as unknown as VisiblePluginDetail);
+    runtime.install.mockResolvedValue({
+      manifest: reviewedManifest,
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+
+    await expect(
+      h.service.install(item.id, {
+        ...reviewedInstallOptions(item),
+        expectedManifest: reviewedManifest,
+      }),
+    ).resolves.toMatchObject({
+      ghost: {
+        manifest: {
+          setup: { requires: [{ anyOf: [{ kind: 'secret', key: 'api_key' }] }] },
+        },
+      },
+    });
+    expect(runtime.install).toHaveBeenCalledOnce();
   });
 
   it('installs the explicitly selected official entry when another entry shares its ghostId', async () => {
@@ -1325,6 +1426,56 @@ describe('PluginMarketService migration and defaultInstall', () => {
       permissions: null,
       hasPermissionExpansion: false,
     });
+  });
+
+  it('silently upgrades a default package whose reviewed manifest contains normalized setup', async () => {
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: {
+        ...summary().currentRelease,
+        id: 'release-2',
+        version: '2.0.0',
+      },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const rawManifest = setupSecretManifest(item.ghostId, '2.0.0');
+    const upgradedManifest = normalizedManifest(rawManifest);
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-setup-upgrade-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    h.api.detail.mockResolvedValueOnce({
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: rawManifest },
+    } as unknown as VisiblePluginDetail);
+    runtime.install.mockImplementationOnce(async () => {
+      const ghost = { manifest: { ...upgradedManifest }, dir: installDir, enabled: true };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'installed', version: '2.0.0' }],
+    });
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({
+        permissionPolicy: {
+          mode: 'cap',
+          manifest: upgradedManifest,
+          sourceType: 'server',
+        },
+      }),
+    );
   });
 
   it('integration: snapshot upgrades an organization defaultInstall release and consumes its notice', async () => {

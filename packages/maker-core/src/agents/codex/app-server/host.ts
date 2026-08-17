@@ -274,6 +274,12 @@ export interface AppServerHostOptions {
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   /** Cindy-side fallback used only when a subagent's actual model is not reported. */
   subagentModelFallback?: string;
+  /** Frozen provider/catalog/runtime identity for the configured default subagent model. */
+  subagentRoute?: {
+    providerId: string;
+    catalogModel: string;
+    runtimeModel: string;
+  };
 }
 
 interface BufferedNotification {
@@ -432,6 +438,14 @@ export class AppServerHost {
   /** Display metadata only; observed thread model always wins. */
   getSubagentModelFallback(): string | undefined {
     return this.opts.subagentModelFallback;
+  }
+
+  getSubagentRoute(): {
+    providerId: string;
+    catalogModel: string;
+    runtimeModel: string;
+  } | undefined {
+    return this.opts.subagentRoute;
   }
 
   getConnectionId(): string {

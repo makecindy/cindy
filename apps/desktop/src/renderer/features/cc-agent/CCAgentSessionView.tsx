@@ -2555,7 +2555,9 @@ export function CCAgentSessionView({
       // nor share a mutable attachment ref with a later command.
       if (hit.name === 'review') {
         if (!sessionId) return { handled: true, accepted: false, message };
-        if (remoteDeviceId) {
+        if (remoteDeviceId || session?.remoteHostId) {
+          // 轮 35 HIGH-2:SSH 远端会话同样不支持 /review —— 与 device-link 并列
+          // 前置拦截, 避免命令进入 main 后被 UNSUPPORTED_CAPABILITY 拒绝。
           toast.warning(t('review.toast.remoteUnsupported'));
           return { handled: true, accepted: false, message };
         }
@@ -4242,15 +4244,15 @@ export function CCAgentSessionView({
               />
             )}
 
-            {/* cc-mgr 升级提示 — 仅 cc remote session (cc agentKind + remoteHostId 在场)。
-              session.agentKind 在 sessionService 端是 'cc' / 'codex' (不是 SDK 风格的
-              'claude-code'); 这里判 'cc' 才匹配 cc-mgr 链路的会话。
-              内部会订阅 ccMgrUpgradeStore, 该 host 无 pending 时自渲染 null (零开销)。
-              sessionId 传给 banner 用于 U3 — 升级完成后自动重发该 session 的 last
-              user message (避免用户手动重新输入被中断的消息)。 */}
-            {session?.agentKind === 'cc' && session?.remoteHostId && (
+            {/* cc-mgr / pi-manager 升级提示 — cc 与 pi remote session (agentKind +
+              remoteHostId 在场)。轮 22:pi 复用同一 banner 通道(store 按 hostId +
+              agent 区分 pending)。内部会订阅 ccMgrUpgradeStore, 该 host 无 pending
+              时自渲染 null (零开销)。sessionId 传给 banner 用于 U3 — 升级完成后
+              自动重发该 session 的 last user message。 */}
+            {(session?.agentKind === 'cc' || session?.agentKind === 'pi') && session?.remoteHostId && (
               <UpgradeBanner
                 hostId={session.remoteHostId}
+                agent={session.agentKind === 'pi' ? 'pi' : 'cc'}
                 sessionId={session.id}
                 style={{ width: inputWidth }}
                 className="py-1"

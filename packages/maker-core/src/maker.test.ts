@@ -242,6 +242,39 @@ describe('Maker session creation singleflight', () => {
     expect(startSession).toHaveBeenCalledTimes(2);
   });
 
+  // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage 写
+  // 失败时, PI(无 codexThreadClaim)的 handle 也必须 close, 否则远端残留。
+  it('closes the agent handle when session storage fails (non-Codex/PI path)', async () => {
+    const closeSpy = vi.fn(async () => undefined);
+    const startSession = vi.fn(async () => {
+      const h = createHandle({ id: 'pi-handle', agentKind: 'pi' });
+      h.close = closeSpy;
+      return h;
+    });
+    const storage = createStorage();
+    const origCreate = storage.create;
+    storage.create = vi.fn(async () => {
+      throw new Error('db lock');
+    });
+    const maker = new Maker({
+      agents: { pi: createAgent(startSession, 'pi') },
+      storage,
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-storage-fail',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'pi-model',
+    };
+
+    await expect(maker.createSession(options)).rejects.toThrow('db lock');
+    // handle 被 close(agent-agnostic 回滚) —— 即使没有 codexThreadClaim。
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(startSession).toHaveBeenCalledTimes(1);
+    void origCreate;
+  });
+
   it('rejects a second business task using the same live Codex thread until close completes', async () => {
     const threadId = '11111111-1111-1111-1111-111111111111';
     const closeGate = createDeferred();

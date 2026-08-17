@@ -109,7 +109,7 @@ describe('mergeWithBundled', () => {
     expect(merged.providers.find((p) => p.id === 'anthropic')!.models['claude-code']!.length).toBe(1);
   });
 
-  it('keeps a newer bundled modelRegistry when the primary full snapshot is stale', () => {
+  it('keeps a newer bundled Registry without replacing the independent xAI fallback provider', () => {
     const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
     const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!bundledRegistry) throw new Error('missing bundled modelRegistry');
@@ -129,7 +129,7 @@ describe('mergeWithBundled', () => {
 
     expect(merged.modelRegistry).toBe(bundledRegistry);
     expect(merged.modelRegistry?.models.length).toBeGreaterThan(staleRegistry.models.length);
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(bundledXai);
+    expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('STALE-XAI');
   });
 
   it('uses a newer primary modelRegistry as one complete snapshot, including retirements', () => {
@@ -153,7 +153,13 @@ describe('mergeWithBundled', () => {
     expect(merged.modelRegistry).toBe(newerRegistry);
     expect(merged.modelRegistry?.models).toHaveLength(1);
     expect(merged.modelRegistry?.models[0]?.status).toBe('retired');
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(newerXai);
+    const mergedXai = merged.providers.find((provider) => provider.id === 'xai');
+    expect(mergedXai).toMatchObject({
+      ...newerXai,
+      agents: expect.arrayContaining(['claude-code', 'codex', 'pi']),
+      routing: expect.objectContaining({ pi: bundledXai.routing.pi }),
+      models: expect.objectContaining({ pi: bundledXai.models.pi }),
+    });
   });
 
   it('orders result by bundled provider order (v2 远端只带 xai 时不得窜位)', () => {
@@ -225,19 +231,23 @@ describe('mergeWithBundled', () => {
     expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('REMOTE-XAI');
   });
 
-  it('旧远端未声明媒体能力时继承 bundled;显式空清单仍可停用', () => {
+  it('旧远端未声明 xAI 媒体能力时继承 bundled;显式空清单仍可停用', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
     delete oldRemoteXai.imageModels;
+    delete oldRemoteXai.videoModels;
     const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXai] });
     expect(inherited.providers.find((p) => p.id === 'xai')?.imageModels)
       .toEqual(bundledXai.imageModels);
+    expect(inherited.providers.find((p) => p.id === 'xai')?.videoModels)
+      .toEqual(bundledXai.videoModels);
 
     const explicitlyDisabled = mergeWithBundled({
       version: '2',
-      providers: [{ ...oldRemoteXai, imageModels: [] }],
+      providers: [{ ...oldRemoteXai, imageModels: [], videoModels: [] }],
     });
     expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
+    expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.videoModels).toEqual([]);
   });
 
   it('旧远端未声明向量清单时继承 bundled;显式空清单仍是停用语义', () => {
@@ -268,6 +278,7 @@ describe('mergeWithBundled', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
     delete oldRemoteXai.imageModels;
+    delete oldRemoteXai.videoModels;
 
     const apiKeyXai: Provider = {
       ...oldRemoteXai,
@@ -290,9 +301,19 @@ describe('mergeWithBundled', () => {
       )?.imageModels,
     ).toBeUndefined();
     expect(
+      mergeWithBundled({ version: '2', providers: [apiKeyXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.videoModels,
+    ).toBeUndefined();
+    expect(
       mergeWithBundled({ version: '2', providers: [alternateRouteXai] }).providers.find(
         (p) => p.id === 'xai',
       )?.imageModels,
+    ).toBeUndefined();
+    expect(
+      mergeWithBundled({ version: '2', providers: [alternateRouteXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.videoModels,
     ).toBeUndefined();
   });
 
@@ -300,6 +321,7 @@ describe('mergeWithBundled', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
     delete oldRemoteXai.imageModels;
+    delete oldRemoteXai.videoModels;
 
     for (const access of [
       { kind: 'api' as const },
@@ -312,6 +334,12 @@ describe('mergeWithBundled', () => {
           providers: [{ ...oldRemoteXai, access }],
         }).providers.find((p) => p.id === 'xai')?.imageModels,
       ).toBeUndefined();
+      expect(
+        mergeWithBundled({
+          version: '2',
+          providers: [{ ...oldRemoteXai, access }],
+        }).providers.find((p) => p.id === 'xai')?.videoModels,
+      ).toBeUndefined();
     }
 
     expect(
@@ -320,6 +348,12 @@ describe('mergeWithBundled', () => {
         providers: [{ ...oldRemoteXai, access: bundledXai.access }],
       }).providers.find((p) => p.id === 'xai')?.imageModels,
     ).toEqual(bundledXai.imageModels);
+    expect(
+      mergeWithBundled({
+        version: '2',
+        providers: [{ ...oldRemoteXai, access: bundledXai.access }],
+      }).providers.find((p) => p.id === 'xai')?.videoModels,
+    ).toEqual(bundledXai.videoModels);
   });
 
   it('非 xAI 远端条目缺少媒体字段时不从 bundled 恢复已撤下能力', () => {
@@ -383,9 +417,99 @@ describe('loadCatalog', () => {
       { fetchText: vi.fn(async () => { throw new Error('network down'); }) },
     );
 
-    expect(local).toMatchObject({ source: 'local', catalog: { version: 'test' } });
-    expect(remote).toMatchObject({ source: 'remote', catalog: { version: 'test' } });
-    expect(bundled).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+    expect(local).toMatchObject({
+      source: 'local',
+      capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
+      catalog: { version: 'test' },
+    });
+    expect(remote).toMatchObject({
+      source: 'remote',
+      capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
+      catalog: { version: 'test' },
+    });
+    expect(bundled).toEqual({
+      source: 'bundled',
+      capabilityEvidence: 'fallback',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
+      catalog: BUNDLED_CATALOG,
+    });
+  });
+
+  it('tracks only XD media fields inherited from bundled in a current snapshot', async () => {
+    const bundledXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+    if (!bundledXd) throw new Error('missing bundled XD provider');
+    const oldXd = structuredClone(bundledXd);
+    delete oldXd.embeddingModels;
+    delete oldXd.embeddingDefaults;
+
+    const inherited = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      {
+        fetchText: vi.fn(async () =>
+          JSON.stringify({ version: '2', providers: [oldXd] }),
+        ),
+      },
+    );
+    expect(inherited.capabilityEvidence).toBe('current');
+    expect(inherited.unverifiedXdMediaKinds).toEqual(['embedding']);
+    expect(
+      inherited.catalog.providers.find((provider) => provider.id === 'xd')?.embeddingModels,
+    ).toEqual(bundledXd.embeddingModels);
+
+    const explicitlyDisabled = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      {
+        fetchText: vi.fn(async () =>
+          JSON.stringify({ version: '2', providers: [{ ...oldXd, embeddingModels: [] }] }),
+        ),
+      },
+    );
+    expect(explicitlyDisabled.unverifiedXdMediaKinds).toEqual([]);
+    expect(
+      explicitlyDisabled.catalog.providers.find((provider) => provider.id === 'xd')
+        ?.embeddingModels,
+    ).toEqual([]);
+  });
+
+  it('only backfills Pi metadata for proven legacy snapshots across local, remote, and cache', async () => {
+    const bundledPreset = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
+    if (!bundledPreset) throw new Error('missing bundled DeepSeek preset');
+    const { pi: _missing, ...legacyRuntimes } = bundledPreset.runtimes;
+    const legacy = JSON.stringify({
+      version: '2',
+      providers: MINIMAL.providers,
+      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
+    });
+    const current = JSON.stringify({
+      version: BUNDLED_CATALOG.version,
+      providers: MINIMAL.providers,
+      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
+    });
+    const local = await loadCatalogWithSource(
+      { localPath: '/repo/providers.json' },
+      { readFile: vi.fn(async () => legacy) },
+    );
+    const remote = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => legacy) },
+    );
+    const cache = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json', remoteBudgetMs: 0 },
+      { readCache: vi.fn(async () => legacy) },
+    );
+    for (const loaded of [local, remote, cache]) {
+      expect(loaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+        .toEqual(bundledPreset.runtimes.pi);
+    }
+
+    const currentLoaded = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => current) },
+    );
+    expect(currentLoaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+      .toBeUndefined();
   });
 
   it('persists a valid remote snapshot and uses its source-scoped LKG after failure', async () => {
@@ -413,6 +537,7 @@ describe('loadCatalog', () => {
       },
     );
     expect(cached).toMatchObject({ source: 'cache', catalog: { version: 'test' } });
+    expect(cached.capabilityEvidence).toBe('fallback');
   });
 
   it('keeps a newer cached modelRegistry when a valid remote Catalog is stale', async () => {
@@ -455,6 +580,7 @@ describe('loadCatalog', () => {
     );
 
     expect(loaded.source).toBe('remote');
+    expect(loaded.capabilityEvidence).toBe('fallback');
     expect(loaded.catalog.providers[0]?.name).toBe(MINIMAL.providers[0]?.name);
     expect(loaded.catalog.modelRegistry?.updatedAt).toBe(newerUpdatedAt);
     expect(
@@ -500,6 +626,7 @@ describe('loadCatalog', () => {
     );
 
     expect(loaded.source).toBe('remote');
+    expect(loaded.capabilityEvidence).toBe('fallback');
     expect(loaded.catalog.modelRegistry?.models).toHaveLength(registry.models.length);
     expect(warns.some((msg) => msg.includes('republished the same updatedAt'))).toBe(true);
   });
@@ -532,6 +659,7 @@ describe('loadCatalog', () => {
     );
 
     expect(loaded.source).toBe('remote');
+    expect(loaded.capabilityEvidence).toBe('fallback');
     expect(loaded.catalog.modelRegistry?.updatedAt).toBe(newerUpdatedAt);
   });
 
@@ -555,7 +683,12 @@ describe('loadCatalog', () => {
         readCache: vi.fn(async () => '{"version":"bad","providers":[]}'),
       },
     );
-    expect(invalid).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+    expect(invalid).toEqual({
+      source: 'bundled',
+      capabilityEvidence: 'fallback',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
+      catalog: BUNDLED_CATALOG,
+    });
   });
 
   it('dev: reads local path, skips network', async () => {
@@ -602,6 +735,26 @@ describe('loadCatalog', () => {
       expect.any(String),
     );
     expect(JSON.parse(writeCache.mock.calls[0]![1])).not.toHaveProperty('cindyModelMeta');
+  });
+
+  it('marks legacy OSS as fallback evidence even when its HTTP request succeeds', async () => {
+    const fetchText = vi.fn()
+      .mockRejectedValueOnce(new Error('api unavailable'))
+      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
+    const result = await loadCatalogWithSource(
+      {
+        baseUrl: 'https://model-access.example.com',
+        fallbackBaseUrl: 'https://cdn.example.com/cindy',
+        now: () => 0,
+      },
+      { fetchText },
+    );
+
+    expect(result).toMatchObject({
+      source: 'remote',
+      capabilityEvidence: 'fallback',
+      catalog: { version: 'test' },
+    });
   });
   it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
     const fetchText = vi.fn()
@@ -653,6 +806,7 @@ describe('loadCatalog', () => {
       { fetchText, readCache },
     );
     expect(result.source).toBe('cache');
+    expect(result.capabilityEvidence).toBe('fallback');
     expect(result.catalog.version).toBe('test');
     expect(result.catalog).not.toHaveProperty('cindyModelMeta');
   });
@@ -765,7 +919,12 @@ describe('loadCatalog', () => {
       { fetchText },
     );
 
-    expect(result).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+    expect(result).toEqual({
+      source: 'bundled',
+      capabilityEvidence: 'fallback',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
+      catalog: BUNDLED_CATALOG,
+    });
     expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
   });
 

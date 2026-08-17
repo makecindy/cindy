@@ -4,10 +4,24 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDefaultLayout, type Layout } from '../../../shared/layoutTree';
-import { BuiltinPanelBridgeProvider, type BuiltinPanelBridge } from '../../panels/BuiltinPanelBridge';
+import {
+  BuiltinPanelBridgeProvider,
+  type BuiltinPanelBridge,
+} from '../../panels/BuiltinPanelBridge';
 import { __resetBuiltinPanelsForTest } from '../../panels/builtinPanels';
-import { __resetPanelRegistryForTest } from '../../panels/registry';
-import { LayoutRoot } from '../LayoutRoot';
+import { __resetPanelRegistryForTest, registerPanelKind } from '../../panels/registry';
+import { LayoutRoot, normalizeSubMinFractions } from '../LayoutRoot';
+import { usePaneAtWindowTop, usePaneFill } from '../panePlacement';
+
+const ghostPanelSyncMock = vi.hoisted(() => ({ version: 0 }));
+
+vi.mock('../../cindy-brain/ghostPanels', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../cindy-brain/ghostPanels')>();
+  return {
+    ...actual,
+    useGhostPanelsSync: () => ghostPanelSyncMock.version,
+  };
+});
 
 /** stub electronAPI.layout:同步返回给定树 + 可手动触发 onChanged。 */
 let currentLayout: Layout;
@@ -57,6 +71,7 @@ function rowChildTestIds(): string[] {
 }
 
 beforeEach(() => {
+  ghostPanelSyncMock.version = 0;
   currentLayout = createDefaultLayout();
   stubElectronLayoutApi();
 });
@@ -93,8 +108,9 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
 
   it('未注册 panelKind(未安装意识残留)整个 pane 隐藏,不留孤儿分割线', () => {
     const withGhost = createDefaultLayout();
-    (withGhost.content as { children: { node: { panelKind: string } }[] }).children[1].node.panelKind =
-      'ghost:not-installed';
+    (
+      withGhost.content as { children: { node: { panelKind: string } }[] }
+    ).children[1].node.panelKind = 'ghost:not-installed';
     currentLayout = withGhost;
     renderLayoutRoot();
     expect(rowChildTestIds()).toEqual(['p-chat']);
@@ -119,5 +135,156 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
     expect(changedListeners).toHaveLength(1);
     unmount();
     expect(changedListeners).toHaveLength(0);
+  });
+
+  it('根级 column split 渲染为插件 grid，两个 pane 填满各自格并带横向分割线', () => {
+    const GridPane = ({ name }: { name: string }) => (
+      <div
+        data-testid={`grid-${name}`}
+        data-fill={String(usePaneFill())}
+        data-window-top={String(usePaneAtWindowTop())}
+      />
+    );
+    registerPanelKind({
+      kind: 'ghost:alpha',
+      Component: () => <GridPane name="alpha" />,
+      collapseMemory: 'global',
+    });
+    registerPanelKind({
+      kind: 'ghost:beta',
+      Component: () => <GridPane name="beta" />,
+      collapseMemory: 'global',
+    });
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          {
+            fraction: 0.35,
+            node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 },
+          },
+          {
+            fraction: 0.35,
+            node: {
+              type: 'split',
+              id: 'grid-alpha',
+              direction: 'column',
+              children: [
+                { fraction: 0.5, node: { type: 'pane', id: 'alpha', panelKind: 'ghost:alpha' } },
+                { fraction: 0.5, node: { type: 'pane', id: 'beta', panelKind: 'ghost:beta' } },
+              ],
+            },
+          },
+          { fraction: 0.3, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+        ],
+      },
+    };
+
+    renderLayoutRoot();
+
+    expect(screen.getByTestId('grid-alpha').getAttribute('data-fill')).toBe('true');
+    expect(screen.getByTestId('grid-beta').getAttribute('data-fill')).toBe('true');
+    expect(screen.getByTestId('grid-alpha').getAttribute('data-window-top')).toBe('true');
+    expect(screen.getByTestId('grid-beta').getAttribute('data-window-top')).toBe('false');
+    expect(document.querySelector('[data-layout-root-child-id="grid-alpha"]')).not.toBeNull();
+    expect(screen.getAllByTestId('layout-divider')).toHaveLength(3);
+  });
+
+  it('插件重新注册但布局树未变化时，恢复 grid 列的持久宽度', () => {
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          {
+            fraction: 0.5,
+            node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 },
+          },
+          {
+            fraction: 0.3,
+            node: {
+              type: 'split',
+              id: 'grid-restored',
+              direction: 'column',
+              children: [
+                {
+                  fraction: 1,
+                  node: { type: 'pane', id: 'restored', panelKind: 'ghost:restored' },
+                },
+              ],
+            },
+          },
+          { fraction: 0.2, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+        ],
+      },
+    };
+
+    const rendered = renderLayoutRoot();
+    expect(document.querySelector('[data-layout-root-child-id="grid-restored"]')).toBeNull();
+
+    registerPanelKind({
+      kind: 'ghost:restored',
+      Component: () => <div data-testid="restored-panel" />,
+      collapseMemory: 'global',
+    });
+    ghostPanelSyncMock.version += 1;
+    rendered.rerender(
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <div data-testid="row">
+          <LayoutRoot />
+        </div>
+      </BuiltinPanelBridgeProvider>,
+    );
+
+    const grid = document.querySelector<HTMLElement>(
+      '[data-layout-root-child-id="grid-restored"]',
+    );
+    expect(grid).not.toBeNull();
+    expect(grid?.style.width).toBe('360px');
+    expect(screen.getByTestId('restored-panel')).not.toBeNull();
+  });
+});
+
+describe('normalizeSubMinFractions', () => {
+  it('全隐藏 grid 不进入在场比例尺，也不会触发布局自愈写回', () => {
+    const layout: Layout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          {
+            fraction: 0.35,
+            node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 },
+          },
+          {
+            fraction: 0.6,
+            node: {
+              type: 'split',
+              id: 'hidden-grid',
+              direction: 'column',
+              children: [
+                { fraction: 1, node: { type: 'pane', id: 'hidden', panelKind: 'ghost:hidden' } },
+              ],
+            },
+          },
+          { fraction: 0.05, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+        ],
+      },
+    };
+
+    const fixed = normalizeSubMinFractions(
+      layout,
+      2000,
+      (kind) => kind === 'chat-main' || kind === 'right-tabs',
+    );
+
+    expect(fixed).toBeNull();
   });
 });

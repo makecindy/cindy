@@ -31,9 +31,16 @@ export const SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
   },
   { source: String.raw`/proc/[^\s]*/environ\b`, flags: "i" },
   {
-    source: String.raw`\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b`,
+    // 轮 30 HIGH-1:补 .key(TLS 私钥标配)与 .pfx(PKCS#12 Windows 习惯)。
+    // 自定义命名 SSH 私钥(无扩展名、非 id_*)无法靠文件名可靠区分, 属已知
+    // 盲区 —— 依赖 .ssh/ 目录规则与 magic-byte 检测(未来)。
+    source: String.raw`\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b|\.pfx\b|\.key\b`,
     flags: "i",
   },
+  // 远端 agent home(CC/Codex 的 ~/.xdt-server/v1/ 亦然)由 Cindy 托管,内含
+  // daemon env-file、codex-home 凭证、cc-manager 配置等真值 —— LLM 无合法
+  // 读取场景,任一 harness 一律拦截(R5 安全审计 C-1)。
+  { source: String.raw`(?:^|[\\/\s'"~])\.xdt-server\b`, flags: "i" },
 ] as const;
 
 /**
@@ -115,10 +122,14 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/environ",
   "**/*.pem",
   "**/*.p12",
+  "**/*.pfx",
+  "**/*.key",
   "**/id_rsa",
   "**/id_ed25519",
   "**/id_ecdsa",
   "**/id_dsa",
+  "**/.xdt-server",
+  "**/.xdt-server/**",
 ] as const;
 
 export const SENSITIVE_CREDENTIAL_PATH_PATTERNS: readonly RegExp[] =

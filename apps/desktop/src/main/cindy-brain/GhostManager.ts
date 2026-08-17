@@ -23,6 +23,7 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
   type GhostManifestLocaleResource,
@@ -3557,7 +3558,7 @@ export class GhostManager {
     });
     const sourceManifestRaw = JSON.parse(fs.readFileSync(sourceManifestPath, 'utf8')) as unknown;
     const sourceManifest = validateGhostManifest(sourceManifestRaw);
-    const expectedManifest = validateGhostManifest(manifest);
+    const expectedManifest = validateNormalizedGhostManifest(manifest);
     if (
       !sourceManifest.ok ||
       !expectedManifest.ok ||

@@ -235,6 +235,58 @@ describe('writeDeviceLinkSetting', () => {
     expect(h.writeFileSync).not.toHaveBeenCalled();
   });
 
+  it('forgetLastKnownDeviceName 删除已清空的数据库展示名缓存', async () => {
+    h.seed(SETTINGS_PATH, JSON.stringify({ lastKnownDeviceNames: { 'dev-1': 'MacBook' } }));
+    const { forgetLastKnownDeviceName, readDeviceLinkSettings } = await load();
+
+    await expect(forgetLastKnownDeviceName('dev-1')).resolves.toBe(true);
+    expect(readDeviceLinkSettings().lastKnownDeviceNames).toEqual({});
+  });
+
+  it('空名删除排在尚未完成的旧名称写入之后，最终不残留旧缓存', async () => {
+    const {
+      forgetLastKnownDeviceName,
+      readDeviceLinkSettings,
+      rememberLastKnownDeviceName,
+    } = await load();
+
+    const remember = rememberLastKnownDeviceName('dev-1', '旧名称');
+    const forget = forgetLastKnownDeviceName('dev-1');
+    await expect(Promise.all([remember, forget])).resolves.toEqual([true, true]);
+    expect(readDeviceLinkSettings().lastKnownDeviceNames).toEqual({});
+  });
+
+  it('空名删除尚未完成时，同名有效名称恢复会排在删除后重新写回', async () => {
+    h.seed(SETTINGS_PATH, JSON.stringify({ lastKnownDeviceNames: { 'dev-1': 'MacBook' } }));
+    const {
+      forgetLastKnownDeviceName,
+      readDeviceLinkSettings,
+      rememberLastKnownDeviceName,
+    } = await load();
+
+    const forget = forgetLastKnownDeviceName('dev-1');
+    const remember = rememberLastKnownDeviceName('dev-1', 'MacBook');
+    await expect(Promise.all([forget, remember])).resolves.toEqual([true, true]);
+    expect(readDeviceLinkSettings().lastKnownDeviceNames).toEqual({ 'dev-1': 'MacBook' });
+  });
+
+  it('remember/forget 待落盘时，同步读取先合并最新内存意图供重连 seed 使用', async () => {
+    h.seed(SETTINGS_PATH, JSON.stringify({ lastKnownDeviceNames: { 'dev-1': '旧名称' } }));
+    const {
+      forgetLastKnownDeviceName,
+      readLastKnownDeviceNames,
+      rememberLastKnownDeviceName,
+    } = await load();
+
+    const remember = rememberLastKnownDeviceName('dev-1', '新名称');
+    expect(readLastKnownDeviceNames()).toEqual({ 'dev-1': '新名称' });
+    await expect(remember).resolves.toBe(true);
+
+    const forget = forgetLastKnownDeviceName('dev-1');
+    expect(readLastKnownDeviceNames()).toEqual({});
+    await expect(forget).resolves.toBe(true);
+  });
+
   it('rememberLastKnownDeviceName 写缓存失败时不影响调用方', async () => {
     h.writeFileSync.mockImplementationOnce(() => {
       throw new Error('disk full');

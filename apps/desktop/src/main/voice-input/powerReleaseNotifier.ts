@@ -28,6 +28,8 @@ export interface VoicePowerMonitorLike {
 
 export interface VoiceInputPowerReleaseDeps {
   powerMonitor: VoicePowerMonitorLike;
+  /** End a global push-to-talk press before the OS can lose its key-up event. */
+  releaseActiveShortcut?: () => void;
   /** 把 payload 送到所有 renderer;注入以便单测断言广播内容。 */
   broadcast: (channel: string, payload: VoiceInputPowerStatePayload) => void;
   logger?: Pick<typeof log, 'debug'>;
@@ -73,6 +75,7 @@ export function installVoiceInputPowerRelease(deps: VoiceInputPowerReleaseDeps):
   const logger = deps.logger ?? log;
   const emit = (reason: VoiceInputPowerReleaseReason): void => {
     logger.debug('voice input keep-alive release broadcast', { reason });
+    deps.releaseActiveShortcut?.();
     deps.broadcast(VOICE_INPUT_POWER_STATE_CHANNEL, { reason });
   };
 

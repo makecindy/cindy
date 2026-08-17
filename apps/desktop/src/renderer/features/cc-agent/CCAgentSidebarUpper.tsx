@@ -154,7 +154,7 @@ import {
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
-import { ProjectsSection } from './sidebar/sections/ProjectsSection';
+import { holdSidebarViewedPriority, ProjectsSection } from './sidebar/sections/ProjectsSection';
 import { isAutomationGeneratedSession } from './lib/scheduledSessionGrouping';
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
@@ -1059,6 +1059,8 @@ function ExpandedView({
       onSessionNeedsReply: handleSessionNeedsReply,
     },
   );
+  const attentionKinds = useSessionAttentionKinds();
+  const urgentSet = useSessionAttentionUrgencySet();
   const unreadScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
     for (const [sessionId, info] of scheduleSessionIndex) {
@@ -1347,8 +1349,8 @@ function ExpandedView({
   );
 
   // 内联会话搜索:输入行在 SidebarTopNav 的第 4 行,状态经 ConversationSearchProvider 共享;
-  // 这里只取 search 来渲染下方的结果 overlay(query 非空时盖住置顶 + 项目 + 对话)。
-  const { search } = useConversationSearchContext();
+  // query 非空时同一份顶部导航 sticky 钉住,结果替换下方列表,不再用 overlay 盖输入框。
+  const { search, openSignal } = useConversationSearchContext();
   const gcProjectKeys = useMemo(
     () => projectUniverse.projects.map((p) => p.projectKey),
     [projectUniverse.projects],
@@ -1697,10 +1699,29 @@ function ExpandedView({
     setOrganizeMenuPos({ x: event.clientX, y: event.clientY });
   }, []);
   const [topFade, setTopFade] = useState(false);
+  const searchActive = Boolean(search.trimmed);
+  const searchActiveRef = useRef(searchActive);
+  searchActiveRef.current = searchActive;
+  // 搜索激活前持续记下列表 scrollTop:layout effect 跑时原列表已经 hidden,
+  // 那时再读会被浏览器钳成 0。
+  const lastListScrollTopRef = useRef(0);
+  // 列表还原位置只记用户自己滚出来的偏移,不记程序化打开 / focus 带出来的滚动。
+  // 「在此项目内搜索」先冻住再滚到顶部露出搜索行;没打字就点走 / 失焦则还原并解冻。
+  const freezeListScrollOnOpenRef = useRef(false);
+  const lastOpenSignalRef = useRef(openSignal);
+  if (openSignal !== lastOpenSignalRef.current) {
+    lastOpenSignalRef.current = openSignal;
+    if (openSignal > 0 && !searchActive) {
+      freezeListScrollOnOpenRef.current = true;
+    }
+  }
   useEffect(() => {
     const el = sidebarScrollRef.current;
     if (!el) return undefined;
     const update = () => {
+      if (!searchActiveRef.current && !freezeListScrollOnOpenRef.current) {
+        lastListScrollTopRef.current = el.scrollTop;
+      }
       const next = el.scrollTop > 1;
       setTopFade((prev) => (prev === next ? prev : next));
     };
@@ -1714,6 +1735,95 @@ function ExpandedView({
       ro?.disconnect();
     };
   }, []);
+  const restoreListScroll = useCallback(() => {
+    freezeListScrollOnOpenRef.current = false;
+    sidebarScrollRef.current?.scrollTo({ top: lastListScrollTopRef.current });
+  }, []);
+  // 指针手势期间不还原滚动:按下的按钮会在 click 前被滚走,第一次点击被吞。
+  // 空查询取消和有查询退出共用这一条,等 pointerup 后再还原。
+  const pointerDownRef = useRef(false);
+  const pendingRestoreRef = useRef(false);
+  const restoreListScrollAfterPointer = useCallback(() => {
+    if (pointerDownRef.current) {
+      pendingRestoreRef.current = true;
+      return;
+    }
+    pendingRestoreRef.current = false;
+    restoreListScroll();
+  }, [restoreListScroll]);
+  useEffect(() => {
+    const onPointerDown = () => {
+      pointerDownRef.current = true;
+    };
+    const onPointerEnd = () => {
+      pointerDownRef.current = false;
+      if (!pendingRestoreRef.current) return;
+      pendingRestoreRef.current = false;
+      window.setTimeout(() => restoreListScroll(), 0);
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('pointerup', onPointerEnd, true);
+    window.addEventListener('pointercancel', onPointerEnd, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointerup', onPointerEnd, true);
+      window.removeEventListener('pointercancel', onPointerEnd, true);
+    };
+  }, [restoreListScroll]);
+  useLayoutEffect(() => {
+    if (openSignal === 0 || searchActive || !freezeListScrollOnOpenRef.current) return;
+    sidebarScrollRef.current?.scrollTo({ top: 0 });
+  }, [openSignal, searchActive]);
+  useEffect(() => {
+    if (searchActive || !freezeListScrollOnOpenRef.current) return undefined;
+    const isOutsideSearch = (event: Event) => {
+      const target = event.target as Element | null;
+      if (!target) return false;
+      if (target.closest('[data-conversation-search-surface]')) return false;
+      if (target.closest('[data-radix-popper-content-wrapper]')) return false;
+      return true;
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!isOutsideSearch(event)) return;
+      restoreListScrollAfterPointer();
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      if (!isOutsideSearch(event) || pointerDownRef.current) return;
+      restoreListScroll();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('focusin', onFocusIn);
+    };
+  }, [openSignal, searchActive, restoreListScroll, restoreListScrollAfterPointer]);
+  // 搜索结果替换同一滚动容器里的列表:打开 / 换词 / 换筛选时滚回顶部;
+  // 清查询时还原搜索前记下的列表位置。
+  const wasSearchActiveRef = useRef(false);
+  const searchProjectKey =
+    search.projectSelection === 'all' ? 'all' : search.projectSelection.join('\0');
+  useLayoutEffect(() => {
+    const el = sidebarScrollRef.current;
+    if (!el) return;
+    if (searchActive) {
+      freezeListScrollOnOpenRef.current = false;
+      pendingRestoreRef.current = false;
+      el.scrollTo({ top: 0 });
+    } else if (wasSearchActiveRef.current) {
+      restoreListScrollAfterPointer();
+    }
+    wasSearchActiveRef.current = searchActive;
+  }, [
+    searchActive,
+    search.trimmed,
+    search.statusFilter,
+    search.agentFilter,
+    search.lastActivityFilter,
+    search.sortBy,
+    searchProjectKey,
+    restoreListScrollAfterPointer,
+  ]);
   // 含远程会话:device-link 远程行也渲染在可选行里,bulk 选择/归档/删除必须能解析到它们
   // (否则选中远程行 → 计数加了但 archive/delete 查 sessionsById 落空、静默忽略)。
   const sessionsById = useMemo(
@@ -1895,6 +2005,17 @@ function ExpandedView({
         setSelectedSessionIds(new Set());
       }
       setSelectionAnchorSessionId(id);
+      // 清点会先于路由更新抹掉 attention。必须先按当前档位钉住,否则
+      // ProjectsSection 首次 hold 只能读到 rest,刚打开的完成未读仍会立刻沉底。
+      const waiting = new Set(urgentSet);
+      for (const [sessionId, kind] of attentionKinds) {
+        if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
+      }
+      holdSidebarViewedPriority(id, {
+        runningSessionIds,
+        attentionSessionIds: sidebarNotifications,
+        waitingSessionIds: waiting,
+      });
       // F-SB-7: Clear done notification on click
       clearNotification(id);
       markAutomationSessionRunsRead(id);
@@ -1904,10 +2025,15 @@ function ExpandedView({
       const target = sessionsRef.current.find((s) => s.id === id);
       navigate(await resolveSessionRoute(id, target));
     },
-    // deps 只剩三个天然稳定的引用:navigate(router)、clearNotification(空 deps
-    // useCallback)、markAutomationSessionRunsRead(随 scheduleSessionIndex,仅
-    // schedule 真变时换)。至此 onClick 在运行期与切换时都不再换引用。
-    [navigate, clearNotification, markAutomationSessionRunsRead],
+    [
+      navigate,
+      clearNotification,
+      markAutomationSessionRunsRead,
+      urgentSet,
+      attentionKinds,
+      runningSessionIds,
+      sidebarNotifications,
+    ],
   );
 
   /* ---- mod+1..9 快速切换对话 + 按住修饰键浮现序号徽标(复刻 Codex 桌面版) ----
@@ -3066,8 +3192,9 @@ function ExpandedView({
       )}
 
       {/* 侧栏内容区:单一滚动容器(顶部导航的可滚动段 + 置顶 + 项目 + 对话一起滚动)。
-         外层 relative 承载搜索结果 overlay。「新建」仍固定在 shell 顶部;自动任务 /
-         插件 / 搜索 / 远程机器四行随列表滚走(2026-08-12 用户裁决,对齐 Codex)。 */}
+         「新建」仍固定在 shell 顶部;自动任务 / 插件 / 搜索随列表滚走
+         (2026-08-12 用户裁决,对齐 Codex)。搜索有查询时只钉搜索行,
+         结果替换下方列表 —— 输入框不卸载、也不会被结果盖住。 */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={sidebarScrollRef}
@@ -3081,7 +3208,7 @@ function ExpandedView({
               scrollbarGutter: 'stable',
               // 顶部溢出渐隐:滚动后首行不再紧贴「新建」被硬切(见 topFade 注释)。
               // 24px 与右栏 TabBar 的横向 fade 同幅度,保持同一套视觉语言。
-              ...(topFade
+              ...(topFade && !search.trimmed
                 ? {
                     WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black 24px)',
                     maskImage: 'linear-gradient(to bottom, transparent 0, black 24px)',
@@ -3090,9 +3217,24 @@ function ExpandedView({
             } as React.CSSProperties
           }
         >
-          {/* 顶部导航可滚动段:置于列表最上方,一起滚动。本组件即展开态视图
-              (rail 走 CollapsedView 自己的图标入口),无需再判折叠。 */}
+          {/* 顶部导航可滚动段:置于列表最上方,一起滚动。搜索打开时由 TopNav
+              只钉搜索行,输入框保持同一份实例,结果替换下方列表。 */}
           <SidebarTopNav section="scrollable" />
+          {searchActive ? (
+            <div
+              data-conversation-search-surface
+              onContextMenu={(event) => event.stopPropagation()}
+            >
+              <SearchResultsBody
+                trimmed={search.trimmed}
+                status={search.status}
+                results={search.results}
+                onSelect={search.handleSelect}
+              />
+            </div>
+          ) : null}
+          {/* 搜索时原列表只隐藏、不卸载:置顶段折叠等本地 state 才能保住。 */}
+          <div hidden={searchActive} className="flex flex-col gap-2">
           {remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent ? (
             <>
               <MainListScopeHeader
@@ -3258,6 +3400,7 @@ function ExpandedView({
                 collapsed={collapse.collapsed}
                 isAllCollapsed={collapse.isAllCollapsed}
                 activeSessionId={activeSessionId}
+                viewedSessionId={viewedSessionId}
                 runningSessionIds={displayRunningSessionIds}
                 attachedSessionIds={attachedSessionIds}
                 notifications={sidebarNotifications}
@@ -3290,23 +3433,8 @@ function ExpandedView({
               />
             </>
           )}
-        </div>
-        {/* 搜索结果 overlay:query 非空时盖住搜索框下方的全部空间(置顶 + 项目 + 对话)。
-            data-conversation-search-surface:标记为「搜索界面内部」——Provider 的 outside-pointerdown
-            监听据此判定,overlay 内点击 / 滚动都不收起,只有点到本标记以外才收起(见 conversationSearchContext)。 */}
-        {search.trimmed && (
-          <div
-            data-conversation-search-surface
-            className="absolute inset-0 z-20 overflow-y-auto bg-[var(--cmd-palette-bg)]"
-          >
-            <SearchResultsBody
-              trimmed={search.trimmed}
-              status={search.status}
-              results={search.results}
-              onSelect={search.handleSelect}
-            />
           </div>
-        )}
+        </div>
       </div>
 
       {/* 空白处右键的整理菜单:与段头 sliders 按钮同一个组件、同一份内容,
