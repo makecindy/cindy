@@ -1369,10 +1369,23 @@ export interface StartSessionOptions {
 }
 
 /**
+ * Main-only send metadata. Symbol keys cannot cross Electron/device-link
+ * structured-clone boundaries, so Renderer-controlled send options cannot mint
+ * this proof. Main dispatchers attach it only after authenticating the source.
+ */
+export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
+
+export interface MainOwnedSendContext {
+  readonly origin: TurnPermissionOrigin;
+}
+
+/**
  * Session.send / handle.send 的可选附加项。
  * 缺省 / 不识别字段必须安全忽略。
  */
 export interface SendOptions {
+  /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
+  readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
    * 当前 session 的展示 title (renderer / IPC 层在调 send 前查到的最新值)。
    * 仅用于在 SDK ▷ token usage 等诊断日志里多一行可读上下文,

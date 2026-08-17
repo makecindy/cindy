@@ -5,7 +5,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { TurnPermissionPolicyUnsupportedError } from '@cindy/maker-core';
+import {
+  MAIN_OWNED_SEND_CONTEXT,
+  TurnPermissionPolicyUnsupportedError,
+} from '@cindy/maker-core';
 import type {
   AgentEvent,
   Capabilities,
@@ -686,6 +689,17 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(maker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentKind: 'pi', providerId: null }),
     );
+  });
+
+  it('attaches a Main-owned IM origin proof to every channel dispatch', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+
+    const sendOptions = h.send.mock.calls[0]?.[1];
+    expect(sendOptions?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'im', channel: 'feishu', taskId: 'msg-user' },
+    });
   });
 
   it('marks only an accepted attached IM turn headless and releases it on done', async () => {

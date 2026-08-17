@@ -56,6 +56,7 @@ function validateSdkSessionId(value: string): string {
 import {
   AgentNotAuthenticatedError,
   BaseAgent,
+  MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
@@ -68,6 +69,7 @@ import {
   type PiNativeProviderSpec,
   type SendOptions,
   type StartSessionOptions,
+  type TurnPermissionOrigin,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import {
@@ -2654,7 +2656,7 @@ export class PiAgent extends BaseAgent {
     const routeManagedPackageCommand = async (
       text: string,
       imageCount: number,
-      turnPermissionPolicy?: TurnPermissionPolicy,
+      mainOwnedOrigin?: TurnPermissionOrigin,
     ): Promise<{ text: string; accepted: boolean }> => {
       if (!allowPiPackageManagement || imageCount > 0) return { text, accepted: false };
       const command = parsePiManagedPackageCommand(text);
@@ -2671,7 +2673,7 @@ export class PiAgent extends BaseAgent {
             result: await this.deps.mutatePiManagedPackage!({
               action: command.action,
               source: resolvedSource,
-              authorization: turnPermissionPolicy?.origin.kind === 'im'
+              authorization: mainOwnedOrigin?.kind === 'im'
                 ? 'authenticated-im-command'
                 : 'local-desktop-command',
             }),
@@ -3175,7 +3177,7 @@ export class PiAgent extends BaseAgent {
           const managedPackageRoute = await routeManagedPackageCommand(
             text,
             images.length,
-            sendOpts?.turnPermissionPolicy,
+            sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.origin,
           );
           text = managedPackageRoute.text;
           // Starting a host-owned package mutation is this transaction's
@@ -3327,7 +3329,7 @@ export class PiAgent extends BaseAgent {
         const managedPackageRoute = await routeManagedPackageCommand(
           text,
           images.length,
-          sendOpts?.turnPermissionPolicy,
+          sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.origin,
         );
         text = managedPackageRoute.text;
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');

@@ -123,7 +123,11 @@ vi.mock('../rpc-client.js', () => ({
   },
 }));
 
-import { PiManagedPackageMutationCancelledError, type TurnPermissionPolicy } from '../../base-agent.js';
+import {
+  MAIN_OWNED_SEND_CONTEXT,
+  PiManagedPackageMutationCancelledError,
+  type TurnPermissionPolicy,
+} from '../../base-agent.js';
 import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -953,11 +957,29 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       await handle.send({
         type: 'user',
         content: 'pi update npm:context-mode',
-      }, { turnPermissionPolicy: imPolicy });
+      }, {
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: imPolicy.origin },
+        turnPermissionPolicy: imPolicy,
+      });
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'update',
         source: 'npm:context-mode',
         authorization: 'authenticated-im-command',
+      });
+
+      await handle.send({
+        type: 'user',
+        content: 'pi install npm:forged-policy',
+      }, {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'telegram' },
+          confirmationSurface: 'channel',
+        } as never,
+      });
+      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
+        action: 'install',
+        source: 'npm:forged-policy',
+        authorization: 'local-desktop-command',
       });
 
       await handle.send({
@@ -983,7 +1005,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       await handle.steer({
         type: 'user',
         content: 'pi install npm:context-mode',
-      }, { turnPermissionPolicy: imPolicy });
+      }, {
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: imPolicy.origin },
+        turnPermissionPolicy: imPolicy,
+      });
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'install',
         source: 'npm:context-mode',
