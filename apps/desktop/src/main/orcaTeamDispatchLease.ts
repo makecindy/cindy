@@ -55,6 +55,8 @@ export type OrcaTeamDispatchLeaseRelease = (
 export class OrcaTeamDispatchLeaseCoordinator {
   private tail: Promise<void> = Promise.resolve();
   private client: { scopeKey: string; value: IsolatedSqliteClient } | null = null;
+  private teardownController = new AbortController();
+  private disposePromise: Promise<void> | null = null;
 
   constructor(private readonly deps: OrcaTeamDispatchLeaseDeps) {}
 
@@ -63,6 +65,8 @@ export class OrcaTeamDispatchLeaseCoordinator {
     cleanupTarget?: OrcaTeamDispatchCleanupTarget,
     intent: OrcaTeamDispatchLeaseIntent = 'initial',
   ): Promise<OrcaTeamDispatchLeaseRelease> {
+    if (this.disposePromise) await this.disposePromise;
+    const teardownSignal = this.teardownController.signal;
     let unlock!: () => void;
     const previous = this.tail;
     this.tail = new Promise<void>((resolve) => {
@@ -72,6 +76,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
 
     let transactionOpen = false;
     try {
+      throwIfOrcaDispatchTeardownRequested(teardownSignal, teamId, cleanupTarget);
       const client = await this.ensureClient();
       await this.beginImmediate(client);
       transactionOpen = true;
@@ -165,6 +170,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
               client,
               teamId,
               cleanupTarget,
+              teardownSignal,
             );
           } else {
             await this.releaseTransaction(client);
@@ -228,18 +234,32 @@ export class OrcaTeamDispatchLeaseCoordinator {
     }
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
+
+    const teardownController = this.teardownController;
+    teardownController.abort(createOrcaDispatchTeardownSignalError());
     let unlock!: () => void;
     const previous = this.tail;
     this.tail = new Promise<void>((resolve) => {
       unlock = resolve;
     });
-    await previous;
-    try {
-      await this.disposeClient();
-    } finally {
-      unlock();
-    }
+    const disposing = (async () => {
+      await previous;
+      try {
+        await this.disposeClient();
+      } finally {
+        if (this.teardownController === teardownController) {
+          this.teardownController = new AbortController();
+        }
+        unlock();
+      }
+    })();
+    const tracked = disposing.finally(() => {
+      if (this.disposePromise === tracked) this.disposePromise = null;
+    });
+    this.disposePromise = tracked;
+    return tracked;
   }
 
   private async ensureClient(): Promise<IsolatedSqliteClient> {
@@ -268,14 +288,17 @@ export class OrcaTeamDispatchLeaseCoordinator {
     client: IsolatedSqliteClient,
     sql: string,
     params?: unknown[],
+    signal?: AbortSignal,
   ): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
     const deadline = Date.now() + 5_000;
     while (true) {
+      if (signal?.aborted) throw signal.reason;
       try {
         return await client.exec(sql, params);
       } catch (error) {
+        if (signal?.aborted) throw signal.reason;
         if (!isSqliteBusy(error) || Date.now() >= deadline) throw error;
-        await delay(10);
+        await delay(10, undefined, { signal });
       }
     }
   }
@@ -302,9 +325,17 @@ export class OrcaTeamDispatchLeaseCoordinator {
     client: IsolatedSqliteClient,
     teamId: string,
     cleanupTarget: OrcaTeamDispatchCleanupTarget,
+    teardownSignal: AbortSignal,
   ): Promise<void> {
     let attempt = 0;
+    let lastError: unknown;
     while (true) {
+      throwIfOrcaDispatchTeardownRequested(
+        teardownSignal,
+        teamId,
+        cleanupTarget,
+        lastError,
+      );
       try {
         await this.execWithBusyRetry(
           client,
@@ -320,10 +351,18 @@ export class OrcaTeamDispatchLeaseCoordinator {
               AND rewind_at IS NULL
               AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
           [cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
+          teardownSignal,
         );
-        await this.execWithBusyRetry(client, 'COMMIT');
+        await this.execWithBusyRetry(client, 'COMMIT', undefined, teardownSignal);
         return;
       } catch (error) {
+        lastError = error;
+        throwIfOrcaDispatchTeardownRequested(
+          teardownSignal,
+          teamId,
+          cleanupTarget,
+          error,
+        );
         attempt += 1;
         if (attempt === 1 || attempt % 60 === 0) {
           log.error('failed to persist submitted dispatch state; retaining writer lease and retrying', {
@@ -334,7 +373,19 @@ export class OrcaTeamDispatchLeaseCoordinator {
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        await delay(Math.min(1_000, attempt * 25));
+        try {
+          await delay(Math.min(1_000, attempt * 25), undefined, {
+            signal: teardownSignal,
+          });
+        } catch (error) {
+          throwIfOrcaDispatchTeardownRequested(
+            teardownSignal,
+            teamId,
+            cleanupTarget,
+            lastError,
+          );
+          throw error;
+        }
       }
     }
   }
@@ -446,5 +497,29 @@ function throwOrcaDispatchUnconfirmed(teamId: string, clientId: string): never {
     `ORCA_MESSAGE_ALREADY_SUBMITTED: team ${teamId} message ${clientId} may already be executing`,
   ) as Error & { code?: string };
   error.code = 'TURN_DISPATCH_UNCONFIRMED';
+  throw error;
+}
+
+function createOrcaDispatchTeardownSignalError(): Error & { code: string } {
+  const error = new Error(
+    'ORCA_TEAM_DISPATCH_TEARDOWN: database owner teardown interrupted dispatch settlement',
+  ) as Error & { code: string };
+  error.code = 'ORCA_TEAM_DISPATCH_TEARDOWN';
+  return error;
+}
+
+function throwIfOrcaDispatchTeardownRequested(
+  signal: AbortSignal,
+  teamId: string,
+  cleanupTarget?: OrcaTeamDispatchCleanupTarget,
+  cause?: unknown,
+): void {
+  if (!signal.aborted) return;
+  const messageTarget = cleanupTarget ? ` message ${cleanupTarget.clientId}` : '';
+  const error = new Error(
+    `ORCA_TEAM_DISPATCH_TEARDOWN: database owner teardown interrupted settlement for team ${teamId}${messageTarget}`,
+    cause === undefined ? undefined : { cause },
+  ) as Error & { code: string };
+  error.code = 'ORCA_TEAM_DISPATCH_TEARDOWN';
   throw error;
 }

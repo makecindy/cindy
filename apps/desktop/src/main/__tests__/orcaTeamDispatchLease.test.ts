@@ -376,6 +376,55 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     expect(client.exec).toHaveBeenCalledWith('COMMIT', undefined);
   });
 
+  it('aborts submitted-state persistence retries when the database owner tears down', async () => {
+    const options = await createClientOptions();
+    let markerAttempts = 0;
+    const client: IsolatedSqliteClient = {
+      queryOne: async <T = unknown>(sql: string): Promise<T | undefined> => {
+        if (sql.includes('SELECT status FROM orca_teams')) {
+          return { status: 'active' } as T;
+        }
+        if (sql.includes("json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId')")) {
+          return { teamId: 'team-teardown', phase: 'pre-vendor' } as T;
+        }
+        return { ok: 1 } as T;
+      },
+      exec: vi.fn(async (sql: string) => {
+        if (sql.includes("SET agent_meta = json_set")) {
+          markerAttempts += 1;
+          throw new Error('disk is full');
+        }
+        return { changes: 1, lastInsertRowid: 0 };
+      }),
+      dispose: vi.fn(async () => {}),
+    };
+    const createClient = vi.fn(async () => client);
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient,
+      getTerminalFenceState: () => 'open',
+    });
+
+    const release = await coordinator.acquire('team-teardown', {
+      sessionId: 'session-1',
+      clientId: 'client-teardown',
+    });
+    const releaseError = release('submitted').catch((error: unknown) => error);
+    await vi.waitFor(() => expect(markerAttempts).toBeGreaterThan(0));
+
+    await expect(coordinator.dispose()).resolves.toBeUndefined();
+    await expect(releaseError).resolves.toMatchObject({
+      code: 'ORCA_TEAM_DISPATCH_TEARDOWN',
+      message: expect.stringContaining('team team-teardown message client-teardown'),
+    });
+    expect(client.exec).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.dispose).toHaveBeenCalledOnce();
+
+    const nextRelease = await coordinator.acquire('team-teardown');
+    await nextRelease();
+    expect(createClient).toHaveBeenCalledTimes(2);
+  });
+
   it('tombstones a marked row when another instance already ended the team', async () => {
     const options = await createClientOptions();
     const setup = await trackedClient(options);
