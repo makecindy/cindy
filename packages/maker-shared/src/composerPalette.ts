@@ -146,6 +146,14 @@ export function restoreSlashCommandRuntimeAlias(
   return `/${originalCommand}${editedText.slice(editedCommand.length + 1)}`;
 }
 
+/** Range of a leading `/command` token in already-restored submit text. */
+export function leadingSlashCommandRange(
+  text: string,
+): { start: number; end: number } | undefined {
+  const match = text.match(/^\/\S+/);
+  return match ? { start: 0, end: match[0].length } : undefined;
+}
+
 /**
  * Length of the hidden `skill:` run after `/` when the visible token is a Pi
  * runtime alias. Zero when the document already uses the human name.

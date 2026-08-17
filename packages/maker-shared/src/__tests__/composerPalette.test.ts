@@ -5,6 +5,7 @@ import {
   filterSlashCommands,
   insertAtResource,
   insertSlashCommand,
+  leadingSlashCommandRange,
   mergeSlashCommands,
   projectSlashCommandsInText,
   restoreSlashCommandRuntimeAlias,
@@ -115,6 +116,17 @@ describe('shared composer palette model', () => {
       restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/git please review'),
     ).toBe('/skill:git please review');
     expect(restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/help')).toBe('/help');
+    expect(leadingSlashCommandRange('/skill:git please review')).toEqual({ start: 0, end: 10 });
+    const quoted = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up',
+    ].join('\n');
+    const skillStart = quoted.indexOf('/skill:git');
+    expect(
+      projectSlashCommandsInText(quoted, [{ start: skillStart, end: skillStart + 10 }]),
+    ).toContain('/git follow-up');
     expect(
       slashCommandRuntimePrefixLength('/skill:git', {
         name: 'git',

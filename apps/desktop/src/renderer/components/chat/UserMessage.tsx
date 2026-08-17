@@ -1146,8 +1146,11 @@ export function UserMessage({
   // copy text per V1.2: original text + (if files) "\n\n附件：a.md, b.md"
   // ghost-summon-card:copy 给用户的是"他自己的话"(剥离机器追加段);
   // 追加段原文在卡片展开区可查可选中。
+  // Project on the persisted wire text first so slashCommandRanges stay valid,
+  // then strip private quote markers for copy / edit display.
+  const projectedSource = projectSlashCommandsInText(ghostBody, slashCommandRanges);
+  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(projectedSource) : projectedSource;
   const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
-  const copyBody = projectSlashCommandsInText(visibleSource, slashCommandRanges);
   const editSubmitText = quotesEncoded
     ? ghostBody
     : copyBody !== visibleSource

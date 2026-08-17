@@ -30,7 +30,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { restoreSlashCommandRuntimeAlias } from '@cindy/maker-shared/composer-palette';
+import {
+  leadingSlashCommandRange,
+  restoreSlashCommandRuntimeAlias,
+} from '@cindy/maker-shared/composer-palette';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
@@ -189,9 +192,11 @@ export function UserMessageEditBox({
         visibleTextUnchanged && pastedTextRanges && pastedTextRanges.length > 0
           ? [...pastedTextRanges]
           : undefined;
-      const preservedSlashCommandRanges =
-        visibleTextUnchanged && slashCommandRanges !== undefined
-          ? [...slashCommandRanges]
+      const rebuiltSlashRange = leadingSlashCommandRange(submitText);
+      const preservedSlashCommandRanges = visibleTextUnchanged && slashCommandRanges !== undefined
+        ? [...slashCommandRanges]
+        : rebuiltSlashRange
+          ? [rebuiltSlashRange]
           : undefined;
       if (onCommitOverride) {
         // 被拦消息:普通重发(不 rewind)。失败抛错落入下方 catch 保留编辑态。

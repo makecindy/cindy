@@ -26,10 +26,10 @@ type ClipboardNavigator = {
 };
 
 export function buildMobileMessageCopyText(message: NormalizedRemoteMessage): string {
-  const rawBody = message.quotesEncoded
-    ? stripChatQuoteMarkerLines(message.body)
-    : message.body;
-  const body = projectSlashCommandsInText(rawBody, message.slashCommandRanges);
+  const projectedBody = projectSlashCommandsInText(message.body, message.slashCommandRanges);
+  const body = message.quotesEncoded
+    ? stripChatQuoteMarkerLines(projectedBody)
+    : projectedBody;
   const parts = [body];
   if (message.secondaryBody) parts.push(message.secondaryBody);
   const attachments = message.attachments?.map((item) => item.name).filter(Boolean) ?? [];

@@ -92,6 +92,19 @@ describe('messageActions', () => {
     expect(buildMobileMessageCopyText(normalizedMessage({
       body: '/skill:git is just prose here',
     }))).toBe('/skill:git is just prose here');
+    const quoted = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up review',
+    ].join('\n');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: quoted,
+      quotesEncoded: true,
+      slashCommandRanges: [
+        { start: quoted.indexOf('/skill:git'), end: quoted.indexOf('/skill:git') + 10 },
+      ],
+    }))).toBe(['> quoted', '', '/git follow-up review'].join('\n'));
   });
 
   it('builds desktop-compatible copy text with attachment names', () => {
