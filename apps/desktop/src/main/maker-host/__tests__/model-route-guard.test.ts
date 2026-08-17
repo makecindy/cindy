@@ -506,6 +506,21 @@ describe('materializeExclusiveProviderRoute', () => {
       .toEqual({ kind: 'reject' });
   });
 
+  it('目录里对应 xai/ 副本被停用时,裸 id 也不能 pin', () => {
+    const catalog = {
+      providers: [
+        provider('xd', [model('claude-opus-5')]),
+        {
+          ...provider('xai', [model('xai/grok-4.5', { disabled: true })]),
+          agents: ['claude-code', 'pi'],
+        },
+      ],
+    } as Catalog;
+    const views = buildRegistry(catalog, { xd: true, xai: true });
+    expect(materializeExclusiveProviderRoute(views, 'claude-code', 'grok-4.5', null))
+      .toEqual({ kind: 'reject' });
+  });
+
   it('网关风格 x-ai/ 与自定义供应商不占用独占门', () => {
     expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'x-ai/grok-4.6', null))
       .toEqual({ kind: 'keep' });

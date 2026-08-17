@@ -21,6 +21,7 @@ import {
   isBudgetModel,
   isChatEligible,
   isModelSelectableForNewRoute,
+  exclusiveXaiCatalogModelId,
   isExclusiveXaiModelId,
   isSubscriptionDirectModel,
   isSubscriptionDirectRoute,
@@ -504,6 +505,13 @@ describe('isExclusiveXaiModelId / isSubscriptionDirectRoute', () => {
     expect(isSubscriptionDirectRoute('chatgpt/gpt-5.5')).toBe(true);
     expect(isSubscriptionDirectRoute('x-ai/grok-4.6')).toBe(false);
     expect(isSubscriptionDirectRoute('claude-opus-5')).toBe(false);
+  });
+
+  it('exclusiveXaiCatalogModelId 把裸 grok 归一成 xai/ 目录 id', () => {
+    expect(exclusiveXaiCatalogModelId('grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('xai/grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('x-ai/grok-4.6')).toBeNull();
+    expect(exclusiveXaiCatalogModelId('claude-opus-5')).toBeNull();
   });
 });
 

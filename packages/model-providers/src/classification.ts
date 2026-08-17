@@ -58,6 +58,13 @@ export function isSubscriptionDirectRoute(model: string | null | undefined): boo
   return isSubscriptionDirectModel(model) || isExclusiveXaiModelId(model);
 }
 
+/** 独占 Grok 的目录/报价身份:裸 grok-4.6 → xai/grok-4.6。非独占返回 null。 */
+export function exclusiveXaiCatalogModelId(model: string | null | undefined): string | null {
+  if (!isExclusiveXaiModelId(model) || !model) return null;
+  const id = model.trim().replace(/\[1m\]$/i, '');
+  return id.startsWith(XAI_MODEL_PREFIX) ? id : `${XAI_MODEL_PREFIX}${id}`;
+}
+
 // 仅用于分组展示, 不参与持久化或 onModelChange 数据流。
 // 对话厂商组(anthropic..ungrouped)在前;非对话类型组(image/tts/stt/realtime/video/embedding/
 // compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、

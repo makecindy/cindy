@@ -27,6 +27,7 @@ export function isSubscriptionDirectModel(model: string | null | undefined): boo
 }
 
 export {
+  exclusiveXaiCatalogModelId,
   isExclusiveXaiModelId,
   isSubscriptionDirectRoute,
 } from '@cindy/model-providers';

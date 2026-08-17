@@ -32,6 +32,7 @@ import {
   effectiveSourceIdForModel,
   getModel,
   isAgentSelectableModel,
+  exclusiveXaiCatalogModelId,
   isExclusiveXaiModelId,
   isModelSelectableForNewRoute,
   nativeDefaultSourceId,
@@ -78,14 +79,21 @@ export function materializeExclusiveProviderRoute(
       && provider.suspended !== true
       && provider.agents.includes(agent),
   );
-  if (providerId === 'xai') {
-    return xai ? { kind: 'keep' } : { kind: 'reject' };
+  if (!xai) {
+    return providerId && !shouldApplyExclusiveProviderReroute(providerId) && providerId !== 'xai'
+      ? { kind: 'keep' }
+      : { kind: 'reject' };
   }
-  if (providerId === 'xd' || providerId === 'anthropic' || providerId === 'openai') {
-    return xai ? { kind: 'pin', providerId: 'xai' } : { kind: 'reject' };
+  const catalogId = exclusiveXaiCatalogModelId(modelId);
+  const copy =
+    (catalogId ? getModel(xai, catalogId, agent) : undefined)
+    ?? getModel(xai, modelId.replace(/\[1m\]$/i, ''), agent);
+  if (copy && !isModelSelectableForNewRoute(copy, { userProvider: false })) {
+    return { kind: 'reject' };
   }
-  if (providerId) return { kind: 'keep' };
-  return xai ? { kind: 'pin', providerId: 'xai' } : { kind: 'reject' };
+  if (providerId === 'xai') return { kind: 'keep' };
+  if (providerId && !shouldApplyExclusiveProviderReroute(providerId)) return { kind: 'keep' };
+  return { kind: 'pin', providerId: 'xai' };
 }
 
 /** SET_MODEL: undefined = 保持当前来源,不能当成显式 null 去改绑。 */

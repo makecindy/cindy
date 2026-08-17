@@ -10,7 +10,11 @@ import {
   type ModelPricingCatalog,
   type MoneyCurrency,
 } from './regionalMoney.js';
-import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from './subscriptionModels.js';
+import {
+  CHATGPT_MODEL_PREFIX,
+  exclusiveXaiCatalogModelId,
+  XAI_MODEL_PREFIX,
+} from './subscriptionModels.js';
 
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -339,11 +343,12 @@ export function subscriptionDirectPriceQuote(
   agent?: AgentKind,
   at?: string | Date,
 ): ModelPriceQuote | undefined {
+  const routedId = exclusiveXaiCatalogModelId(modelId) ?? modelId;
   let quote: ModelPriceQuote | undefined;
-  if (modelId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('openai', modelId, registry, { agent, at });
-  } else if (modelId.startsWith(XAI_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('xai', modelId, registry, { agent, at });
+  if (routedId.startsWith(CHATGPT_MODEL_PREFIX)) {
+    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at });
+  } else if (routedId.startsWith(XAI_MODEL_PREFIX)) {
+    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at });
   }
   return quote
     ? {

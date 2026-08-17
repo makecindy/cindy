@@ -160,6 +160,7 @@ export {
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
   isSubscriptionDirectModel,
   isExclusiveXaiModelId,
+  exclusiveXaiCatalogModelId,
   isSubscriptionDirectRoute,
   CATEGORY_ORDER,
   CHAT_VENDOR_CATEGORY_ORDER,
