@@ -1080,6 +1080,14 @@ for (const [tier, hex] of Object.entries(EFFORT_TIER_COLORS)) {
 for (const [tier, hex] of Object.entries(PRICE_TIER_COLORS)) {
   registerColor(`price-tier-${tier}`, { light: hex, dark: hex }, `价格档位色 — ${tier}`);
 }
+// Fast(插队加速)开启态的强调蓝 —— 与档位色 / 价格档色同一类**跨主题固定功能色**
+// (DESIGN.md §10 语义豁免):它表达的是「这一格开着 Fast」这个功能态,不表达界面明暗层次,
+// 两种模式给同一个值是**有意决策**,不是漏配 dark。配置浮层里的按钮底色由组件用 color-mix
+// 从同一个 var 派生,不另存第二份数值。只在浮层内部用(外侧闪电保持中性色,规格 §1.3)。
+registerColor('fast-accent', {
+  light: '#3B9EFF',
+  dark: '#3B9EFF',
+}, 'Fast 开启态强调蓝(light/dark 同值,跨主题固定功能色)');
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',

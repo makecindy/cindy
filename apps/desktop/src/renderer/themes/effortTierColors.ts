@@ -37,8 +37,9 @@ export const EFFORT_TIER_COLORS = {
 /** 未知档位(服务端新下发、客户端还没认识)的兜底色 —— 落中间档,不谎报成顶档。 */
 export const EFFORT_TIER_FALLBACK_COLOR = EFFORT_TIER_COLORS.medium;
 
-/** Fast(插队加速)开启态的蓝 —— 只在配置浮层内部使用(外侧闪电保持中性色,§1.3)。 */
-export const FAST_ACCENT_COLOR = '#3B9EFF';
+// Fast(插队加速)开启态的蓝不在本表:它没有插值需求,数值直接注册成语义 token
+// `--fast-accent`(colors.ts),组件一律 `var(--fast-accent)` 消费 —— TS 侧不再持有它的
+// hex,也就不会出现「组件拿常量、主题拿 token」两条路各画各的。
 
 /**
  * 价格档($ 串)的档位色 —— 设计稿 v4 定稿(saveStyle F)的三档:便宜绿 / 中档琥珀 /

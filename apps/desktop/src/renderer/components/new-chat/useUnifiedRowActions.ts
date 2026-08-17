@@ -6,7 +6,9 @@
  *   - 引擎:模型行写 `modelEnginePrefs` override;收藏行改的是**那一条收藏**;
  *   - 深度 / Fast:**live 选中行**交给调用方的实时状态(绝不预写记忆 —— device-link
  *     写穿失败会污染被控端草稿),其余行写 `providerModelMemory` 既有槽;
- *   - 恢复推荐:删 override(随版本跟随新推荐)+ 把深度 / Fast 收回目录默认;
+ *   - 恢复推荐:删 override(随版本跟随新推荐)+ 把深度 / Fast 收回目录默认;**live 选中行
+ *     还要把推荐配置真的应用到正在跑的那一份**(live 状态不读记忆表,只清记忆等于只改了
+ *     显示),跨引擎时复用与 applyEngine 同一条切换链路;
  *   - 收藏:☆ 是单向「存一份当前生效配置的副本」,收藏行的 ☆ 才是删除;
  *   - 选中:跨引擎的那一下**不走**普通 onSelect,交给调用方的切换事务。
  *
@@ -33,6 +35,7 @@ import type { UnifiedSelectedRow } from './UnifiedModelPanel';
 import {
   agentKindOfEngine,
   anchorKey,
+  engineOfAgentKind,
   wireModelIdOf,
   type UnifiedAnchor,
   type UnifiedEngine,
@@ -207,24 +210,92 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     );
   };
 
-  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry) => {
+  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
     if (interactionDisabled || anchor.kind === 'fav') return;
-    clearModelEngineOverride(anchor.providerId, anchor.modelId);
     const recommendedAgent = entry.recommended;
+    const recommendedEngine = engineOfAgentKind(recommendedAgent);
+    // 推荐档一律取 M1 已解析的那一份(`UnifiedAgentCapability.defaultEffort`,缺省回落
+    // 已经在那边应用过),不在这里另推一遍 —— 两处各推必然漂移。
     const defaultEffort = entry.capabilities[recommendedAgent]?.defaultEffort ?? null;
-    // 记忆槽没有「删」的语义(providerModelMemory 是 (agent, model) → 值的表);把它写回
-    // 目录默认 = 用户看到的就是推荐配置。真正的「跟随服务端新默认」由引擎 override 的删除
-    // 承担 —— 深度默认变了,用户下次进浮层看到的仍是自己这次确认过的档,不会被静默改。
     // 恢复推荐是把**推荐引擎**那一格收回默认,故按推荐引擎的 wire id 写(与该行当前
     // 生效引擎的 wire id 可能不是同一个 id)。
     const recommendedWireId = wireModelIdOf(entry, recommendedAgent);
-    if (defaultEffort) {
-      modelMemory?.setEffort(recommendedAgent, anchor.providerId, recommendedWireId, defaultEffort);
+
+    /** 「跟随推荐」的持久化部分:删 override + 把推荐引擎那一格的记忆槽写回目录默认。 */
+    const resetStoredConfig = (): void => {
+      clearModelEngineOverride(anchor.providerId, anchor.modelId);
+      // 记忆槽没有「删」的语义(providerModelMemory 是 (agent, model) → 值的表);把它写回
+      // 目录默认 = 用户看到的就是推荐配置。真正的「跟随服务端新默认」由引擎 override 的删除
+      // 承担 —— 深度默认变了,用户下次进浮层看到的仍是自己这次确认过的档,不会被静默改。
+      if (defaultEffort) {
+        modelMemory?.setEffort(
+          recommendedAgent,
+          anchor.providerId,
+          recommendedWireId,
+          defaultEffort,
+        );
+      }
+      // Fast 无条件收回:`config.fast` 是**当前生效引擎**那一格的值,拿它当门会漏掉「行现在
+      // 落在 codex(Fast 关),推荐引擎槽里还留着上次开的 Fast」这一路 —— 恢复推荐后行会
+      // 当场翻回带 ⚡ 的样子。清的槽与上面的深度一样按推荐引擎 + 推荐引擎 wire id 走。
+      modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
+    };
+
+    // 非 live 行:改的只是「下次选它用什么」,清记忆就够了。
+    if (!isLiveRow(entry, config)) {
+      resetStoredConfig();
+      return;
     }
-    // Fast 无条件收回:`config.fast` 是**当前生效引擎**那一格的值,拿它当门会漏掉「行现在
-    // 落在 codex(Fast 关),推荐引擎槽里还留着上次开的 Fast」这一路 —— 恢复推荐后行会
-    // 当场翻回带 ⚡ 的样子。清的槽与上面的深度一样按推荐引擎 + 推荐引擎 wire id 走。
-    modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
+
+    // ★ live 选中行还得把推荐配置**真的应用到正在跑的那一份**(2026-08-17 review):
+    // 会话的实时深度 / Fast、草稿的 vendor+model 配置都**不读记忆表**(选中行读的是 live 值,
+    // 见 UnifiedModelPanel.configOf)。只清记忆的话,用户点完「恢复推荐」当前任务照旧用着
+    // 旧引擎 / 旧深度 / 旧 Fast 在跑,浮层却已经显示成推荐态 —— 显示与事实分家。
+    if (recommendedAgent === config.agent) {
+      // 引擎没变:推荐态 = 跟随推荐档 + 无 Fast。两个 live 回调即「应用」,与用户在浮层里
+      // 手动拖档 / 关 ⚡ 走同一条持久化链路(applyEffort / applyFast 的 live 分支)。
+      resetStoredConfig();
+      if (defaultEffort && onEffortChangeLive) onEffortChangeLive(defaultEffort);
+      // 无条件关:`config.fast` 只是本次渲染看到的值,漏关一次留下的是一个用户以为已经
+      // 恢复、实际还在插队加速的任务;重复关是幂等的。
+      if (onFastModeChangeLive) void onFastModeChangeLive(false);
+      return;
+    }
+
+    // 推荐引擎 ≠ 当前引擎 —— 这一下等于「把行切回推荐引擎」,必须走与 applyEngine 完全
+    // 相同的两条链路,不另造第三条。
+    if (sessionEngineFilter && sessionAgent !== undefined) {
+      // 会话内换引擎有损(确认弹窗 + 上下文重建):先跑事务,**成功了才**落 override / 记忆。
+      // 顺序刻意与 applyEngine 的会话分支一致(那里的规则是「不预写 override,取消不留痕」)——
+      // 取消 = 一点都没应用,不会出现「override 清了、任务还在旧引擎上」的半套状态。
+      void Promise.resolve(
+        sessionEngineFilter.onCrossEngineSelect({
+          providerId: anchor.providerId,
+          modelId: recommendedWireId,
+          targetAgent: recommendedAgent,
+          effort: defaultEffort ?? '',
+        }),
+      ).then(
+        (applied) => {
+          // 只有明确的 false 表示「没切」(见 UnifiedModelPanelProps.onCrossEngineSelect);
+          // 返回 void 的调用方视为已切。
+          if (applied === false) return;
+          resetStoredConfig();
+        },
+        // 事务抛错(切换失败)同样按「没应用」处理:不留 override 已清、任务还在旧引擎的半套。
+        () => {},
+      );
+      return;
+    }
+    // 草稿换引擎无损:先落 override / 记忆,再把推荐引擎的整份配置按既有选中链路写回草稿
+    // (与 applyEngine 的草稿分支同形)。
+    resetStoredConfig();
+    onSelect(anchor.providerId, recommendedWireId, defaultEffort ?? '', {
+      engine: recommendedEngine,
+      fast: false,
+      favoriteUid: null,
+      rowModelId: anchor.modelId,
+    });
   };
 
   const addFavorite: UnifiedRowActions['addFavorite'] = (anchor, config) => {

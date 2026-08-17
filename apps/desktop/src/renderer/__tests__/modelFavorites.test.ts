@@ -391,6 +391,106 @@ describe('modelFavorites store', () => {
     expect(m.listModelFavorites().map((item) => item.modelId)).toEqual([OPUS.modelId]);
   });
 
+  it('多窗口交错写入:另一窗口刚加的收藏不被本窗口的陈旧缓存覆盖', async () => {
+    const m = await loadModule();
+    const mine = m.addModelFavorite({ ...OPUS, effort: 'high' });
+    expect(mine).toBe('fav-1');
+
+    // 另一个窗口加了一条(共享 localStorage),**storage 事件还没送到本窗口** —— 本窗口
+    // 缓存此刻只有 fav-1。
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        uidSeq: 3,
+        items: [
+          { uid: 'fav-1', ...OPUS, effort: 'high' },
+          { uid: 'fav-2', providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' },
+        ],
+      }),
+    );
+
+    // 本窗口继续加第三条:必须落在新鲜基底上 —— 两笔都在,且 uid 单调不复用 fav-2。
+    const later = m.addModelFavorite({ ...OPUS, effort: 'low' });
+    expect(later).toBe('fav-3');
+    const persisted = JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}');
+    expect(persisted.items.map((i: { uid: string }) => i.uid)).toEqual([
+      'fav-1',
+      'fav-2',
+      'fav-3',
+    ]);
+    expect(persisted.uidSeq).toBe(4);
+  });
+
+  it('多窗口交错:去重按新鲜基底判(另一窗口已存的同配置不再堆一条)', async () => {
+    const m = await loadModule();
+    m.addModelFavorite({ ...OPUS, effort: 'high' });
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        uidSeq: 3,
+        items: [
+          { uid: 'fav-1', ...OPUS, effort: 'high' },
+          { uid: 'fav-2', providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' },
+        ],
+      }),
+    );
+    // 与另一窗口那条完全相同的配置 → 复用它的 uid,不新建。
+    expect(m.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' })).toBe(
+      'fav-2',
+    );
+    const persisted = JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}');
+    expect(persisted.items).toHaveLength(2);
+  });
+
+  it('多窗口交错:删除 / 编辑不抹掉另一窗口刚加的条目', async () => {
+    const m = await loadModule();
+    m.addModelFavorite({ ...OPUS, effort: 'high' });
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        uidSeq: 3,
+        items: [
+          { uid: 'fav-1', ...OPUS, effort: 'high' },
+          { uid: 'fav-2', providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' },
+        ],
+      }),
+    );
+    m.updateModelFavorite('fav-1', { effort: 'low' });
+    let persisted = JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}');
+    expect(persisted.items).toHaveLength(2);
+    expect(persisted.items[0].effort).toBe('low');
+
+    m.removeModelFavorite('fav-1');
+    persisted = JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}');
+    expect(persisted.items.map((i: { uid: string }) => i.uid)).toEqual(['fav-2']);
+  });
+
+  it('多窗口交错:另一窗口投放的 seeded 标记不被本窗口的写入抹掉', async () => {
+    const m = await loadModule();
+    m.addModelFavorite({ ...OPUS });
+    // 另一个窗口投放了种子收藏(它那边落下 seeded 标记),事件还没到。
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        uidSeq: 3,
+        items: [
+          { uid: 'fav-1', ...OPUS },
+          { uid: 'fav-2', providerId: 'xd', modelId: 'deepseek-v4-pro', agent: 'codex' },
+        ],
+        seeded: true,
+      }),
+    );
+    m.addModelFavorite({ ...OPUS, effort: 'low' });
+    const persisted = JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}');
+    // 标记还在 → 本窗口不会再投一遍种子(否则用户看到重复的种子收藏)。
+    expect(persisted.seeded).toBe(true);
+    expect(persisted.items).toHaveLength(3);
+    m.seedDefaultFavorite({ providerId: 'xd', modelId: 'deepseek-v4-pro', agent: 'codex' });
+    expect(
+      JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}').items,
+    ).toHaveLength(3);
+  });
+
   it('落盘失败静默吞,内存态仍生效', async () => {
     const m = await loadModule();
     const setItem = vi.spyOn(memStorage, 'setItem').mockImplementationOnce(() => {

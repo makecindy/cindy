@@ -285,6 +285,64 @@ describe('modelEnginePrefs store', () => {
     expect(m.getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
   });
 
+  it('多窗口交错写入:另一窗口的新记录不被本窗口的陈旧缓存覆盖', async () => {
+    const m = await loadModule();
+    // 本窗口先写一条 → 内存缓存建立。
+    m.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+
+    // 另一个窗口写入共享 localStorage,**storage 事件还没送到本窗口**(异步),
+    // 于是本窗口缓存此刻是陈旧的。
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        'xd:gpt-5.5': { agent: 'cc' },
+        'anthropic:claude-opus-5': { agent: 'codex' },
+      }),
+    );
+
+    // 本窗口继续写另一条:整表写回必须落在**新鲜基底**上,不能拿陈旧缓存覆盖。
+    m.setModelEngineOverride('openai', 'gpt-5.6', 'pi');
+    expect(JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}')).toEqual({
+      'xd:gpt-5.5': { agent: 'cc' },
+      'anthropic:claude-opus-5': { agent: 'codex' },
+      'openai:gpt-5.6': { agent: 'pi' },
+    });
+  });
+
+  it('多窗口交错:clear 只删点名那条,不连带抹掉另一窗口刚加的记录', async () => {
+    const m = await loadModule();
+    m.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        'xd:gpt-5.5': { agent: 'cc' },
+        'anthropic:claude-opus-5': { agent: 'codex' },
+      }),
+    );
+    m.clearModelEngineOverride('xd', 'gpt-5.5');
+    expect(JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}')).toEqual({
+      'anthropic:claude-opus-5': { agent: 'codex' },
+    });
+  });
+
+  it('多窗口交错:另一窗口已写成同值时,本窗口短路不再落盘(不制造回滚窗口)', async () => {
+    const m = await loadModule();
+    m.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        'xd:gpt-5.5': { agent: 'pi' },
+        'anthropic:claude-opus-5': { agent: 'codex' },
+      }),
+    );
+    // 本窗口要写的正是另一窗口已经写好的那个值 → 同值短路(基底是新鲜的,判等才准)。
+    m.setModelEngineOverride('xd', 'gpt-5.5', 'pi');
+    expect(JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}')).toEqual({
+      'xd:gpt-5.5': { agent: 'pi' },
+      'anthropic:claude-opus-5': { agent: 'codex' },
+    });
+  });
+
   it('落盘失败静默吞,内存态仍生效', async () => {
     const m = await loadModule();
     const setItem = vi.spyOn(memStorage, 'setItem').mockImplementationOnce(() => {

@@ -40,7 +40,8 @@
  * - **来源之外的可见性策略**:可见性谓词由调用方注入(本包不读用户偏好)。
  *   注意 `scope:'session'` 只管**来源解析**那一步;`disabled` / `status:'retired'` 的选中行
  *   要留在列表里,得由调用方传 `unifiedModelEntries` 的 `keepModel`(与 `deriveModelList`
- *   的 `keepSelected` 同一条既有约定)。
+ *   的 `keepSelected` 同一条既有约定)。豁免**按 agent 收窄**:只放行「当前正在跑的那一格」,
+ *   同一行其它引擎上的目录副本照常受准入与来源校验。
  * - 用户的引擎 override 与收藏副本:本模块只给「推荐」,override 合成在 renderer store(M2)。
  * - **effort 落档**:本模块给出的 `defaultEffort` 已应用「缺省回落 medium」(见
  *   `UnifiedAgentCapability.defaultEffort`),调用方必须把这个**已回落的值**传给
@@ -516,11 +517,21 @@ export interface UnifiedModelEntriesOptions {
    * 下架或被用户停用后,那一行会从面板里凭空消失:选择器打开是空选态,用户看不出自己
    * 正在跑什么,更换不回来。
    *
+   * ⚠️ **`agent` 必填,豁免只覆盖这一个引擎**(2026-08-17 review 修正)。豁免的语义是
+   * 「让用户看见并保住**当前正在跑的那份运行配置**」,当前 agent 一定是已知的。早先按
+   * **整行**豁免有真实的越权:同一 (来源, 模型) 在别的引擎下还有目录副本时,那些副本
+   * 即便已 retired / 停用 / 解析不回本行来源,也会一并跳过校验变成可点候选 —— 用户在
+   * 浮层里把行切过去,要么路由到另一条来源,要么直接发不出去(正是「不做假按钮」要挡的)。
+   * 现在:**只有 `agent` 这一格**跳过枚举准入与来源校验,同一行的其它引擎照常走全部校验,
+   * 不合格就不进 `candidates`(`capabilities` 键集 = `candidates` 的不变量因此保持)。
+   *
    * `providerId` 传 `null` = 按 wire id 匹配任意来源(跟随默认路由的选中态)。
-   * 被豁免的行**不走新路由准入的第二道来源校验**,只要目录里能解析出能力就成行;
-   * 解析不出能力的引擎照常不进候选(不做假按钮),整行一个候选都没有时才丢弃。
+   * 被豁免的那一格仍要能从目录里解析出能力才成行;整行一个候选都没有时才丢弃。
+   *
+   * `modelId` 必须是 **`agent` 这一格的 wire id**(= 会话 / 草稿里存着的那个 id),不是行的
+   * 归一化身份:豁免要在 `agent` 自己的目录列表上命中才生效。调用方本来就存的是它。
    */
-  keepModel?: { providerId: string | null; modelId: string };
+  keepModel?: { providerId: string | null; modelId: string; agent: AgentKind };
 }
 
 function entryKey(providerId: string, keyModelId: string): string {
@@ -541,7 +552,7 @@ function entryKey(providerId: string, keyModelId: string): string {
  *
  * 准入:复用 `deriveModelList` 的标准派生(非聊天模型 / `disabled` / `retired` 内建过滤),
  * 再叠一层「生效来源必须就是本行来源」的校验。空候选的行整行丢弃。`keepModel` 点名的那一行
- * 豁免这两道(见该选项头注)。
+ * **只在 `keepModel.agent` 那一格**豁免这两道,同行的其它引擎照常受校验(见该选项头注)。
  *
  * 供应商范围固定 `'connected-for-agent'`:第二道来源校验本就只认已连接来源
  * (`effectiveSourceIdForModel` / `actualSourceIdForModel` 都过 `chatEligibleSourcesForModel`
@@ -568,7 +579,10 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     /** 该行在各引擎下被枚举到的 wire id。 */
     wireIds: Partial<Record<AgentKind, string>>;
     agents: AgentKind[];
-    /** 这一行是 `keepModel` 点名的选中行 → 豁免新路由准入(见该选项头注)。 */
+    /**
+     * 这一行是 `keepModel` 点名的选中行 → **仅 `keepModel.agent` 那一格**豁免新路由准入
+     * (见该选项头注:整行豁免会把别的引擎上已不可路由的目录副本一起放行)。
+     */
     kept: boolean;
   }
   const drafts = new Map<string, Draft>();
@@ -596,7 +610,11 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
         : {}),
       // 选中行豁免直接借 deriveModelList 的既有 keepSelected:它同时松开可见性 override 与
       // 「新路由准入」(改用 isAgentSelectableModel),正是 disabled / retired 选中行要的那两道。
-      ...(keepModel ? { keepSelected: keepModel } : {}),
+      // **只在 kept agent 这一轮传**:别的引擎上的同 id 副本必须照常受准入约束,否则一条
+      // retired 的 bridge 副本会跟着混进候选(见 keepModel 头注)。
+      ...(keepModel && keepModel.agent === agent
+        ? { keepSelected: { providerId: keepModel.providerId, modelId: keepModel.modelId } }
+        : {}),
     });
     for (const row of rows) {
       const keyModelId = unifiedModelKeyId(row.id);
@@ -633,16 +651,22 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     // 候选与能力**一次求齐**,保证「capabilities 键集 = candidates」这条不变量成立:
     //   1. 校验用枚举时记下的**该引擎自己的 wire id**(不是行的归一化 id)—— 归一化 id 在
     //      bridge 引擎的目录里根本不存在,拿它重查会把校验做成一次运气;
-    //   2. 解析生效来源:必须解析回本行来源(约束 1)。`keepModel` 点名的选中行跳过这一步
-    //      (它可能已被停用 / 下架,新路由准入本就会拒;但那一行必须留着能看见);
+    //   2. 解析生效来源:必须解析回本行来源(约束 1)。**只有 `keepModel.agent` 那一格**
+    //      跳过这一步(它可能已被停用 / 下架,新路由准入本就会拒;但当前跑着的那一格必须
+    //      留着能看见)。同一行的其它引擎照常校验 —— 那些格子是「换过去」的候选,不是
+    //      「正在跑」的事实,放行等于给一个点了会路由错来源或直接失败的胶囊;
     //   3. 目录条目解析不出能力的引擎一律剔除 —— 宁可少一个胶囊,不做点了发不出去的假按钮。
+    //      kept 那一格同样按这条走(不另开兜底):它的 wire id 就是刚从该引擎自己的目录列表
+    //      里枚举出来的,`capabilityOf` 拿同一个 id 精确回查恒命中;真解析不出说明目录自相
+    //      矛盾,此时宁可整行落空也不合成一份能力未知的假配置。
     const candidates: AgentKind[] = [];
     const capabilities: Partial<Record<AgentKind, UnifiedAgentCapability>> = {};
     for (const agent of UNIFIED_AGENT_PRIORITY) {
       if (!draft.agents.includes(agent)) continue;
       const wireId = draft.wireIds[agent];
       if (wireId === undefined) continue;
-      if (!draft.kept) {
+      const keptAgent = draft.kept && keepModel?.agent === agent;
+      if (!keptAgent) {
         const sourceId = resolveSourceId(providers, draft.providerId, wireId, agent, scope);
         if (sourceId !== draft.providerId) continue;
       }

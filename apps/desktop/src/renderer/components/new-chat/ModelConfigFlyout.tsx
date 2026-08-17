@@ -10,7 +10,7 @@ import {
   type ModelPricePresentation,
 } from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
-import { EFFORT_TIER_COLORS, FAST_ACCENT_COLOR } from '@/themes/effortTierColors';
+import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 
 import { agentOptionOf } from './agentOptions';
@@ -189,8 +189,10 @@ export function ModelConfigFlyout({
                 config.fast
                   ? {
                       // Fast 开启态的蓝**只在浮层内**(外侧闪电保持中性色,规格 §1.3)。
-                      color: FAST_ACCENT_COLOR,
-                      backgroundColor: `color-mix(in srgb, ${FAST_ACCENT_COLOR} 16%, transparent)`,
+                      // 走语义 token(themes/colors.ts 的 `fast-accent`,light / dark 双值已注册),
+                      // 底色由同一个 var 经 color-mix 派生 —— 组件里不再持有第二份 hex。
+                      color: 'var(--fast-accent)',
+                      backgroundColor: 'color-mix(in srgb, var(--fast-accent) 16%, transparent)',
                     }
                   : undefined
               }

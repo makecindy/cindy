@@ -130,6 +130,33 @@ function load(): EnginePrefsMap {
   return cache;
 }
 
+/**
+ * **写路径的基底** —— 每次写入前重读 localStorage,拿此刻的共享真相当底,而不是本窗口的
+ * 内存快照(与 modelFavorites 同一处理,同一理由)。
+ *
+ * `persist` 是整表写回:另一个窗口刚记下一条 override、`storage` 事件还没送到本窗口时,
+ * 本窗口任何写入都会用陈旧整表覆盖回去,对方那条静默消失(用户看到的是「刚选的引擎又变
+ * 回去了」)。读路径仍走缓存(读多写少,且陈旧一帧无害)。
+ *
+ * 读不到持久化值时退回内存缓存、不退回空表:私密窗口 / 写满时 `setItem` 静默失败(见
+ * persist),`getItem` 恒 null —— 拿空表当基底会把本次会话内的全部 override 一次抹掉。
+ */
+function freshMap(): EnginePrefsMap {
+  if (typeof window === 'undefined') return load();
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(storageKey());
+  } catch {
+    return load();
+  }
+  if (raw === null) return load();
+  try {
+    return sanitize(JSON.parse(raw));
+  } catch {
+    return load();
+  }
+}
+
 // ── 订阅 / 版本(供 useSyncExternalStore)──────────────────────────────────
 let version = 0;
 const listeners = new Set<() => void>();
@@ -218,7 +245,9 @@ export function setModelEngineOverride(
   agent: ModelEngine,
 ): void {
   if (!isUsableProviderId(providerId) || !modelId || !isSelectableVendor(agent)) return;
-  const map = load();
+  // 基底取**重读后的**持久化快照(见 freshMap):整表写回不能带着陈旧缓存,否则会抹掉
+  // 另一个窗口刚写入、事件还没到达的 override。
+  const map = freshMap();
   const k = keyOf(providerId, modelId);
   if (map[k]?.agent === agent) return;
   persist({ ...map, [k]: { agent } });
@@ -230,7 +259,7 @@ export function setModelEngineOverride(
  */
 export function clearModelEngineOverride(providerId: string, modelId: string): void {
   if (!isUsableProviderId(providerId) || !modelId) return;
-  const map = load();
+  const map = freshMap();
   const k = keyOf(providerId, modelId);
   if (!(k in map)) return;
   const next = { ...map };

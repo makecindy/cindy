@@ -417,6 +417,137 @@ describe('统一面板 · 会话内形态', () => {
 });
 
 /**
+ * 「恢复推荐」作用在 **live 选中行**上(2026-08-17 review):会话的实时深度 / Fast 与草稿的
+ * vendor 配置都**不读记忆表**,只清记忆等于只改了浮层的样子 —— 用户点完仍在用旧引擎 / 旧档
+ * 跑,UI 却已经显示成推荐态。这一组锁的就是「真的应用出去」。
+ */
+describe('统一面板 · 恢复推荐应用到 live 配置', () => {
+  async function openFlyoutFor(name: string): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor(name));
+    });
+    return await screen.findByTestId('unified-model-config-flyout');
+  }
+
+  it('草稿 live 选中行:清 override 之外,深度 / Fast 走实时回调真的落下去', async () => {
+    // 行落在 codex(= 草稿当前引擎,推荐引擎也是 codex),live 深度 low、Fast 开着。
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    // codex 那条目录条目的默认档是 high;推荐态恒无 Fast。
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+  });
+
+  it('会话内同引擎:同样走实时回调,不走跨引擎事务', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onCrossEngineSelect = vi.fn();
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+  });
+
+  it('会话内跨引擎:走既有切换事务(带推荐引擎的 wire id 与推荐档)', async () => {
+    // 会话在 cc 上跑 xd 的 GPT-5.5,而该行的推荐引擎是 codex → 恢复推荐 = 一次跨引擎切换。
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onCrossEngineSelect = vi.fn(() => true);
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      targetAgent: 'codex',
+      effort: 'high',
+    });
+    // 事务成功 → override 收掉(行回到跟随推荐)。
+    await waitFor(() => {
+      expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    });
+  });
+
+  it('会话内跨引擎被取消:override 不落地,不留半套状态', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onCrossEngineSelect = vi.fn(() => false);
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+      onFastModeChange,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledTimes(1);
+    // 取消 = 什么都没应用:override 仍在,live 的 Fast 也没被顺手关掉。
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+    expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+
+  it('非 live 行不动实时状态(只清记忆,回归保护)', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    // 选中的是 Opus 5,GPT-5.5 那一行不是 live 行。
+    renderPanel({
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+      onEffortChange,
+      onFastModeChange,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * M5 新会话接线的**面板侧契约**:草稿把整行直通接走。撤掉 AgentSelect 之后,「换引擎」
  * 只剩这一条路径 —— 回传的 engine 一旦不是行上显示的那个,用户就会看着 Codex 建出
  * 一个 Claude 会话。

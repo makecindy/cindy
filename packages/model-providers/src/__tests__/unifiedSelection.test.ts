@@ -903,34 +903,135 @@ describe('unifiedModelEntries', () => {
       providers: [mixed],
       isVisible: alwaysVisible,
       scope: 'session',
-      keepModel: { providerId: 'anthropic', modelId: 'claude-sonnet-5' },
+      keepModel: { providerId: 'anthropic', modelId: 'claude-sonnet-5', agent: 'claude-code' },
     });
     const disabledRow = find(withDisabled, 'anthropic', 'claude-sonnet-5');
     expect(disabledRow?.candidates).toEqual(['claude-code']);
     expect(disabledRow?.capabilities['claude-code']?.wireModelId).toBe('claude-sonnet-5');
 
-    // retired 条目 + `providerId: null`(跟随默认路由)同样保得住,候选跨两个引擎。
+    // retired 条目 + `providerId: null`(跟随默认路由)同样保得住。
     const withRetired = unifiedModelEntries({
       providers: [mixed],
       isVisible: alwaysVisible,
       scope: 'session',
-      keepModel: { providerId: null, modelId: 'claude-haiku-5' },
+      keepModel: { providerId: null, modelId: 'claude-haiku-5', agent: 'claude-code' },
     });
-    expect(find(withRetired, 'anthropic', 'claude-haiku-5')?.candidates).toEqual([
-      'claude-code',
-      'codex',
-    ]);
+    // ★ 豁免按 agent 收窄:codex 上那份同 id 副本同样 retired、不可新路由,不许跟着放行 ——
+    // 放行的话用户在浮层里把行切到 codex,点下去要么路由错来源、要么直接发不出去。
+    expect(find(withRetired, 'anthropic', 'claude-haiku-5')?.candidates).toEqual(['claude-code']);
+    expect(find(withRetired, 'anthropic', 'claude-haiku-5')?.capabilities.codex).toBeUndefined();
     // 豁免只作用于点名那一行,不是把整张表的准入放开。
     expect(withRetired.some((e) => e.modelId === 'claude-sonnet-5')).toBe(false);
+  });
+
+  it('选中行豁免:kept agent 之外的引擎照常受来源校验(reviewer 场景)', () => {
+    // 会话在 codex 上跑一条已 retired 的模型;同一供应商在 cc / pi 下还有同 id 的目录副本,
+    // 但它们也已 retired(不可用于新路由)。整行豁免会把 cc / pi 一起放进候选 —— 用户切过去
+    // 就路由错来源 / 直接失败。收窄后:行还在(codex 那格是当前运行配置的锚),候选只剩 codex。
+    const retiredEverywhere = view({
+      id: 'anthropic',
+      models: {
+        'claude-code': [m('claude-opus-5'), m('claude-haiku-5', { status: 'retired' })],
+        codex: [m('claude-haiku-5', { status: 'retired' })],
+        pi: [m('claude-haiku-5', { status: 'retired' })],
+      },
+    });
+    const entries = unifiedModelEntries({
+      providers: [retiredEverywhere],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: 'anthropic', modelId: 'claude-haiku-5', agent: 'codex' },
+    });
+    const row = find(entries, 'anthropic', 'claude-haiku-5');
+    expect(row?.candidates).toEqual(['codex']);
+    expect(row?.recommended).toBe('codex');
+    expect(Object.keys(row?.capabilities ?? {})).toEqual(['codex']);
+  });
+
+  it('选中行豁免:其它引擎的副本本身可正常路由时,仍是合法候选(反向用例)', () => {
+    // 与上一条唯一的差别:cc / pi 的副本是**健康**的。它们靠自己走完准入 + 来源校验进候选,
+    // 不需要豁免 —— 收窄豁免不该顺手砍掉真正能用的引擎。
+    const healthyElsewhere = view({
+      id: 'anthropic',
+      models: {
+        'claude-code': [m('claude-haiku-5')],
+        codex: [m('claude-haiku-5', { status: 'retired' })],
+        pi: [m('claude-haiku-5')],
+      },
+    });
+    const entries = unifiedModelEntries({
+      providers: [healthyElsewhere],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: 'anthropic', modelId: 'claude-haiku-5', agent: 'codex' },
+    });
+    const row = find(entries, 'anthropic', 'claude-haiku-5');
+    expect(row?.candidates).toEqual(['claude-code', 'codex', 'pi']);
+    expect(row?.capabilities.codex?.wireModelId).toBe('claude-haiku-5');
+  });
+
+  it('选中行豁免:整行只剩 kept agent 一格时,行仍在(条目停用 + 隐藏叠加)', () => {
+    // 四类「行会消失」的状态里,枚举得到的那三类(条目 disabled / 目录 retired / 用户隐藏)
+    // 叠在一起也必须保住 kept 那一格,且只保那一格。
+    const hostile = view({
+      id: 'anthropic',
+      models: {
+        'claude-code': [m('claude-opus-5', { disabled: true })],
+        codex: [m('claude-opus-5', { status: 'retired' })],
+      },
+    });
+    const entries = unifiedModelEntries({
+      providers: [hostile],
+      isVisible: () => false,
+      scope: 'session',
+      keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
+    });
+    expect(entries.map((e) => e.modelId)).toEqual(['claude-opus-5']);
+    expect(entries[0].candidates).toEqual(['claude-code']);
+  });
+
+  it('选中行豁免够不到「供应商停用 / 来源断开」—— 那是枚举 rail 挡的,不是本层放行的', () => {
+    // ⚠️ 边界记录(不是期望的产品行为,是当前实现的事实):枚举固定走
+    // `providerScope:'connected-for-agent'`,suspended / 未连接的供应商**整家**进不了
+    // rail,keepModel 再点名也无从豁免 —— 与豁免是否按 agent 收窄无关(收窄前同结果)。
+    // 要覆盖这两态,得让 rail 对 kept 那一家开口,那是 deriveModelList 的口径改动。
+    const suspended = view({
+      id: 'anthropic',
+      suspended: true,
+      models: { 'claude-code': [m('claude-opus-5')] },
+    });
+    expect(
+      unifiedModelEntries({
+        providers: [suspended],
+        isVisible: alwaysVisible,
+        scope: 'session',
+        keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
+      }),
+    ).toEqual([]);
+    const offline = view({
+      id: 'anthropic',
+      connected: false,
+      models: { 'claude-code': [m('claude-opus-5')] },
+    });
+    expect(
+      unifiedModelEntries({
+        providers: [offline],
+        isVisible: alwaysVisible,
+        scope: 'session',
+        keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
+      }),
+    ).toEqual([]);
   });
 
   it('选中行豁免也松开可见性 override(与 deriveModelList.keepSelected 同约定)', () => {
     const entries = unifiedModelEntries({
       providers: [anthropic],
       isVisible: () => false,
-      keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5' },
+      keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
     });
     expect(entries.map((e) => e.modelId)).toEqual(['claude-opus-5']);
+    // 可见性豁免同样只覆盖 kept agent:被用户隐藏的 codex / pi 副本不跟着回到候选。
+    expect(entries[0].candidates).toEqual(['claude-code']);
   });
 
   it('展示元数据取推荐引擎那条目录条目', () => {

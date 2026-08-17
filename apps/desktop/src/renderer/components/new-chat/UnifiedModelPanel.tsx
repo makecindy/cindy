@@ -282,6 +282,31 @@ export function UnifiedModelPanel({
   const predicatesRef = useRef({ isVisible, excludeProvider, excludeModel });
   predicatesRef.current = { isVisible, excludeProvider, excludeModel };
   const agentsKey = agents ? agents.join(',') : 'all';
+  // 「正在用的引擎」的单一口径:会话内以 sessionAgent 为准(已确认的会话引擎;liveAgentKind
+  // 在元数据未到时可能回退成 cc),草稿才用 liveAgentKind(= 草稿 vendor)。选中行豁免
+  // (keepModel.agent)、isLiveRow 与选中行的 forceEngine 必须用**同一个**口径,否则强制显示
+  // 出来的引擎反而让 isLiveRow 判不中(2026-08-14 测试当场抓到)。
+  const liveEngineAgent = sessionAgent ?? liveAgentKind;
+  /**
+   * 选中行豁免(`keepModel`)只对**已建会话**开:
+   *   - `scope:'session'` = 面板画的是一个正在跑的会话,它选中的模型即便被下架 / 停用也必须
+   *     看得见、换得回来(否则一打开就是空选态);
+   *   - `scope:'draft'` 是**新路由**,不可路由的条目留在列表里就是个点了会失败的假按钮,
+   *     草稿本身另有校准链路把选择迁到可用模型上,不靠面板兜。
+   * 引擎未知(会话元数据还没到)时不传:豁免要按 agent 收窄(见 keepModel 头注),没有
+   * agent 就无从收窄,宁可这一帧不豁免 —— 元数据到了自然重算。
+   */
+  const keepModel =
+    scope === 'session' && liveEngineAgent
+      ? {
+          providerId: selected.providerId,
+          modelId: selected.modelId,
+          agent: liveEngineAgent,
+        }
+      : null;
+  const keepModelKey = keepModel
+    ? `${keepModel.providerId ?? ''}::${keepModel.modelId}::${keepModel.agent}`
+    : '';
   const entries = useMemo(
     () =>
       unifiedModelEntries({
@@ -294,12 +319,13 @@ export function UnifiedModelPanel({
         excludeModel: (model, provider, agent) =>
           predicatesRef.current.excludeModel?.(model, provider, agent) ?? false,
         scope,
-        // 选中行豁免:当前会话 / 草稿正在用的那一条即便被停用或服务端下架,也必须留在
-        // 列表里 —— 否则选择器一打开就是空选态,用户看不出自己在跑什么、也换不回来。
-        keepModel: { providerId: selected.providerId, modelId: selected.modelId },
+        // 选中行豁免:会话正在用的那一条即便被停用或服务端下架,也必须留在列表里 ——
+        // 否则选择器一打开就是空选态,用户看不出自己在跑什么、也换不回来。豁免按 agent
+        // 收窄(见上面 keepModel 的推导注释与该选项头注)。
+        ...(keepModel ? { keepModel } : {}),
       }),
-    // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份。
-    [providers, agentsKey, scope, sourceVersion, selected.providerId, selected.modelId],
+    // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份;keepModel 以 keepModelKey 表达身份。
+    [providers, agentsKey, scope, sourceVersion, keepModelKey],
   );
 
   const railItems = useMemo(
@@ -497,11 +523,7 @@ export function UnifiedModelPanel({
   }, [closeFlyout, interactionDisabled]);
 
   // ── 行配置合成 ────────────────────────────────────────────────────────────
-  // 「正在用的引擎」的单一口径:会话内以 sessionAgent 为准(已确认的会话引擎;
-  // liveAgentKind 在元数据未到时可能回退成 cc),草稿才用 liveAgentKind(= 草稿 vendor)。
-  // isLiveRow 与选中行的 forceEngine 必须用**同一个**口径,否则强制显示出来的引擎
-  // 反而让 isLiveRow 判不中(2026-08-14 测试当场抓到)。
-  const liveEngineAgent = sessionAgent ?? liveAgentKind;
+  // 「正在用的引擎」的口径 = 上面推 keepModel 时用的那一个(liveEngineAgent),不另起一份。
 
   /** 这一行是不是**当前会话 / 草稿正在用的那一行**(来源 + 模型 + 引擎三者都对上)。 */
   const isLiveRow = useCallback(

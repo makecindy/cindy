@@ -63,7 +63,11 @@ import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSu
 import { PromotionalGrantNotice } from '@/components/onboarding/PromotionalGrantNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
-import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import {
+  dbToMakerAgentKind,
+  normalizeDbAgentKind,
+  type MakerAgentKindWire,
+} from '../../../shared/agentKindConversion';
 import { getBranchName } from '../../../shared/managedWorktreeBranches';
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
@@ -1788,19 +1792,48 @@ export function NewMakerDraftRoute() {
   //     真正选择模型时额外带 markModelChoice=true 更新该来源 lastModel。
   // 选中模型编辑时两路都会触发(effort 经 ChatInput.rememberProviderChoice + onEffortDidChange;
   // fast 经 ModelSelector.handleEditFast + onFastModeChange),各司其职,缺一会丢 trigger 或 provider 记忆。
+  //
+  // ⚠️ **`target` 是给「这一次选择顺带写穿」用的**(2026-08-17 review):缺省分支从闭包读
+  // `dlSel` / `capabilityAgentKind`,那是**上一次**渲染看到的运行配置。选中一行时
+  // `setDlSel` 还没提交、跨引擎时 `switchVendor` 还在途,此刻读闭包会把**新模型**的
+  // effort / Fast 以 active:true 写到**旧模型**(甚至旧引擎)的偏好上 —— 被控端那边看到的
+  // 是「A 模型被改了档」。所以选中路径必须把本次 selection 的目标值显式传进来。
   const pushActiveDraftPref = useCallback(
-    (patch: { effort?: Effort; fast?: boolean }) => {
+    (
+      patch: { effort?: Effort; fast?: boolean },
+      /**
+       * 本次写穿的显式目标(选中一行时 = 这次 selection 的目标配置);不传 = 沿用当前状态,
+       * 既有调用点(handleEffortDidChange / handleFastModeChange)行为不变。
+       */
+      target?: {
+        agent: MakerAgentKindWire;
+        providerId: string | null;
+        modelId: string;
+        effort?: Effort;
+      },
+    ) => {
       if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) return;
-      const model = dlSel?.model ?? deviceLinkInitial?.model;
+      const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;
       if (!model) return;
+      // 只改 Fast 时也要带上激活档(被控端 trigger 要更新激活 effort)。给了显式目标就**只**
+      // 认目标自己的档:此刻 dlSel 里还是上一个模型的档,拿它顶上等于把 A 的档写到 B 头上;
+      // 目标没档就整个不下发 effort,让被控端保留它为该模型记的那份。
       const activeEffort =
         patch.effort ??
-        (patch.fast !== undefined ? (dlSel?.effort ?? deviceLinkInitial?.effort) : undefined);
+        (patch.fast !== undefined
+          ? target
+            ? target.effort
+            : (dlSel?.effort ?? deviceLinkInitial?.effort)
+          : undefined);
       window.electronAPI.deviceLink
         .invoke(effectiveDeviceLinkDeviceId, 'maker:apply-new-maker-draft-pref', [
           {
-            agent: capabilityAgentKind,
-            providerId: dlSel?.providerId ?? deviceLinkInitial?.providerId ?? '',
+            agent: target?.agent ?? capabilityAgentKind,
+            // 显式目标里 providerId 可以是 null(跟随默认路由)—— 与「没给目标」区分开:
+            // 前者落成空串(被控端 provider 层 no-op),后者才回落当前状态。
+            providerId: target
+              ? (target.providerId ?? '')
+              : (dlSel?.providerId ?? deviceLinkInitial?.providerId ?? ''),
             modelId: model,
             active: true,
             markModelChoice: false,
@@ -2614,10 +2647,24 @@ export function NewMakerDraftRoute() {
         });
         // 选中模型的 effort/fast 写穿被控端(active=true):与既有 handleEffortDidChange /
         // handleFastModeChange 同一条通道,缺了它被控端 trigger 的激活档不会跟着变。
-        pushActiveDraftPref({
-          ...(selection.effort ? { effort: selection.effort } : {}),
-          fast: selection.fast,
-        });
+        //
+        // ★ 目标必须**显式**给(2026-08-17 review):上面的 setDlSel 还没提交,此刻
+        // pushActiveDraftPref 从闭包读到的 dlSel / capabilityAgentKind 都还是**上一次**的
+        // 运行配置 —— 同引擎 A 切 B 会把 B 的 effort / Fast 以 active:true 写到 **A** 的偏好上;
+        // 跨引擎连 agent 都是旧的(switchVendor 在途,capabilityAgentKind 下一帧才跟上)。
+        // 口径与 handleModelDidChange 的远程分支一致:换模型一律按**目标模型 / 目标引擎**走。
+        pushActiveDraftPref(
+          {
+            ...(selection.effort ? { effort: selection.effort } : {}),
+            fast: selection.fast,
+          },
+          {
+            agent: dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)),
+            providerId: selection.providerId,
+            modelId: selection.modelId,
+            ...(selection.effort ? { effort: selection.effort } : {}),
+          },
+        );
         return;
       }
       // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——

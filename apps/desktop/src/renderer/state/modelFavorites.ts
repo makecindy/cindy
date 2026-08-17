@@ -225,6 +225,38 @@ function load(): FavoritesState {
   return cache;
 }
 
+/**
+ * **写路径的基底** —— 每次写入前重读 localStorage,拿到的是此刻的共享真相,而不是本窗口
+ * 的内存快照。
+ *
+ * 为什么读路径走缓存、写路径不能:Electron 每个 renderer 有独立模块实例,`storage` 事件是
+ * **异步**的。另一个窗口刚加了一条收藏、事件还没送到本窗口时,本窗口任何写操作(点 ☆ /
+ * 改一条收藏 / 删一条)都会拿陈旧的整表覆盖回去 —— 对方那条静默消失。整表写回是这个 store
+ * 的既定形状(见 persist),所以修法是把**基底**换新鲜,不是改写入粒度。
+ *
+ * 读不到持久化值时退回内存缓存,不退回空表:私密窗口 / localStorage 写满时 `setItem` 是
+ * 静默失败的(见 persist),此时 `getItem` 恒 null —— 拿空表当基底会把本次会话内已有的
+ * 全部收藏一次抹掉。缓存与真相不一致的代价远小于当场清空。
+ *
+ * 刻意**不**在这里回写 cache / emit:那是 persist 与 storage 监听器的职责,写路径要么随后
+ * persist(cache 自然收敛到合并结果),要么因无变化短路(与改动前同行为)。
+ */
+function freshState(): FavoritesState {
+  if (typeof window === 'undefined') return load();
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(storageKey());
+  } catch {
+    return load();
+  }
+  if (raw === null) return load();
+  try {
+    return sanitize(JSON.parse(raw));
+  } catch {
+    return load();
+  }
+}
+
 // ── 订阅(供 useSyncExternalStore)──────────────────────────────────────────
 const listeners = new Set<() => void>();
 
@@ -319,7 +351,9 @@ export function getModelFavorite(uid: string): ModelFavoriteItem | undefined {
 export function addModelFavorite(config: ModelFavoriteConfig): string {
   const normalized = normalizeConfig(config);
   if (!normalized) return '';
-  const state = load();
+  // 基底取**重读后的**持久化快照(见 freshState):另一窗口刚加的条目要一起带上,
+  // 否则本次整表写回会把它抹掉。uidSeq 的单调性、identityOf 去重都在这份新鲜基底上判。
+  const state = freshState();
   const identity = identityOf(normalized);
   const existing = state.items.find((item) => identityOf(item) === identity);
   if (existing) return existing.uid;
@@ -343,7 +377,9 @@ export function addModelFavorite(config: ModelFavoriteConfig): string {
  *   - 配置字段与普通收藏同一套校验(normalizeConfig),effort / fast 缺省跟随推荐档。
  */
 export function seedDefaultFavorite(config: ModelFavoriteConfig): void {
-  const state = load();
+  // 同 addModelFavorite:基底必须新鲜 —— 另一窗口若已投放过种子,这里读到的 seeded
+  // 就是 true,不会重复投放,也不会把它的标记写回成未投放。
+  const state = freshState();
   if (state.seeded) return;
   const normalized = normalizeConfig(config);
   if (!normalized) return;
@@ -370,7 +406,7 @@ export function seedDefaultFavorite(config: ModelFavoriteConfig): void {
  */
 export function updateModelFavorite(uid: string, patch: ModelFavoritePatch): void {
   if (!uid) return;
-  const state = load();
+  const state = freshState();
   const index = state.items.findIndex((item) => item.uid === uid);
   if (index < 0) return;
   const current = state.items[index];
@@ -402,7 +438,7 @@ export function updateModelFavorite(uid: string, patch: ModelFavoritePatch): voi
  */
 export function removeModelFavorite(uid: string): void {
   if (!uid) return;
-  const state = load();
+  const state = freshState();
   const items = state.items.filter((item) => item.uid !== uid);
   if (items.length === state.items.length) return;
   persist({ ...state, items });
