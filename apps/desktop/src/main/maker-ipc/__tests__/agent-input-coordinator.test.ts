@@ -3541,6 +3541,68 @@ describe('AgentInputCoordinator send transaction', () => {
     );
   });
 
+  it('durably prepares the exact persisted pre-vendor Orca row without rewinding it', async () => {
+    const h = createHarness();
+    const sid = 'terminal-transition-cleanup-intent';
+    const beforeDispatch = deferred<void>();
+    const item = makeOrcaItem('orca-persisted', 'old worker report', 'team-old');
+    h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
+    await h.coordinator.ensureQueueRestored(sid);
+
+    h.coordinator.enqueue(sid, item);
+    await vi.waitFor(() =>
+      expect(h.onUserMessagePersisted).toHaveBeenCalledWith(
+        sid,
+        expect.objectContaining({ clientId: item.clientId }),
+      ),
+    );
+
+    await expect(
+      h.coordinator.persistOrcaCleanupIntentWhere(
+        sid,
+        (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === 'team-old',
+      ),
+    ).resolves.toBe(item.clientId);
+
+    expect(h.rewindPersistedUserMessageAfterClear).not.toHaveBeenCalled();
+    expect(latestSnapshotItems(h.persistQueueSnapshot)).toEqual([
+      expect.objectContaining({
+        clientId: item.clientId,
+        mainSnapshotRecoveryKind: 'active-turn-cleanup',
+      }),
+    ]);
+
+    const discard = h.coordinator.discardQueuedItemsWhere(
+      sid,
+      (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === 'team-old',
+    );
+    beforeDispatch.resolve();
+    await expect(discard).resolves.toMatchObject({ activeCancelled: true });
+  });
+
+  it('persists a supplemental direct-send cleanup item that has no coordinator active turn', async () => {
+    const h = createHarness();
+    const sid = 'terminal-transition-direct-cleanup-intent';
+    const item = makeOrcaItem('orca-direct', 'direct worker report', 'team-old');
+    await h.coordinator.ensureQueueRestored(sid);
+
+    await expect(
+      h.coordinator.persistOrcaCleanupIntentWhere(
+        sid,
+        (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === 'team-old',
+        [item],
+      ),
+    ).resolves.toBe(item.clientId);
+
+    expect(h.rewindPersistedUserMessageAfterClear).not.toHaveBeenCalled();
+    expect(latestSnapshotItems(h.persistQueueSnapshot)).toEqual([
+      expect.objectContaining({
+        clientId: item.clientId,
+        mainSnapshotRecoveryKind: 'active-turn-cleanup',
+      }),
+    ]);
+  });
+
   it('retries direct-send cleanup recovery while its Orca team remains active', async () => {
     const h = createHarness();
     const sid = 'active-orca-direct-cleanup-retry';

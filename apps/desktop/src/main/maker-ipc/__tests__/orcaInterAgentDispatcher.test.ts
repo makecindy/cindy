@@ -100,6 +100,8 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
       order.push('rewind-user-row');
     }),
     retainPersistedUserMessageCleanup: vi.fn(() => {}),
+    trackPersistedUserMessageBeforeVendorDispatch: vi.fn(() => {}),
+    untrackPersistedUserMessageBeforeVendorDispatch: vi.fn(() => {}),
     beginDirectTurnChangeSet: vi.fn(async () => {
       order.push('change-set');
     }),
@@ -161,6 +163,16 @@ describe('Orca lead/worker dispatcher', () => {
     expect(h.deps.beginDirectTurnChangeSet).toHaveBeenCalledWith('target-session', 'client-1');
     expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
     expect(h.deps.rewindPersistedUserMessage).not.toHaveBeenCalled();
+    expect(h.deps.trackPersistedUserMessageBeforeVendorDispatch).toHaveBeenCalledWith(
+      'target-session',
+      expect.objectContaining({
+        clientId: 'client-1',
+        origin: expect.objectContaining({ kind: 'orca', teamId: 'team-1' }),
+      }),
+    );
+    expect(h.deps.untrackPersistedUserMessageBeforeVendorDispatch).toHaveBeenCalledWith(
+      'client-1',
+    );
     expect(h.deps.createDbMessage).toHaveBeenCalledWith('target-session', {
       clientId: 'client-1',
       role: 'user',
@@ -693,6 +705,9 @@ describe('Orca lead/worker dispatcher', () => {
       'client-1',
     );
     expect(h.deps.retainPersistedUserMessageCleanup).not.toHaveBeenCalled();
+    expect(h.deps.untrackPersistedUserMessageBeforeVendorDispatch).toHaveBeenCalledWith(
+      'client-1',
+    );
     expect(h.order).toEqual([
       'send-called',
       'db',
@@ -764,6 +779,9 @@ describe('Orca lead/worker dispatcher', () => {
         origin: expect.objectContaining({ kind: 'orca', teamId: 'team-1' }),
       }),
       expect.objectContaining({ message: 'database busy' }),
+    );
+    expect(h.deps.untrackPersistedUserMessageBeforeVendorDispatch).toHaveBeenCalledWith(
+      'client-1',
     );
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(mocks.logger.warn).toHaveBeenCalledWith(

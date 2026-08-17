@@ -88,19 +88,27 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('ends the active team before selectively invalidating only that team queued input', () => {
-    const endedAt = registerSource.indexOf("await markTeamEnded(team.id, 'completed')");
-    const invalidatedAt = registerSource.indexOf('await discardOrcaTeamQueuedInputs({');
-    const directSettledAt = registerSource.indexOf(
-      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(team.id)',
-      invalidatedAt,
+  it('persists cleanup intent before terminal commit and settles it after commit', () => {
+    const endedAt = registerSource.indexOf("await markTeamEnded(team.id, 'completed', {");
+    const preparedAt = registerSource.indexOf(
+      'beforeTerminalCommit: () => prepareOrcaTeamCleanupIntents(cleanupScope)',
+      endedAt,
+    );
+    const rollbackAt = registerSource.indexOf(
+      'onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope)',
+      endedAt,
+    );
+    const settledAt = registerSource.indexOf(
+      'await settleOrcaTeamQueuedInputs(cleanupScope)',
+      endedAt,
     );
     const clearedAt = registerSource.indexOf('await clearLeadOrcaRoleState(leadSessionId)', endedAt);
 
     expect(endedAt).toBeGreaterThan(-1);
-    expect(invalidatedAt).toBeGreaterThan(endedAt);
-    expect(directSettledAt).toBeGreaterThan(invalidatedAt);
-    expect(clearedAt).toBeGreaterThan(directSettledAt);
+    expect(preparedAt).toBeGreaterThan(endedAt);
+    expect(rollbackAt).toBeGreaterThan(preparedAt);
+    expect(settledAt).toBeGreaterThan(rollbackAt);
+    expect(clearedAt).toBeGreaterThan(settledAt);
   });
 
   it('uses the legacy workflow id fallback for both end-team invalidation and snapshot restore', () => {

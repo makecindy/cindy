@@ -305,7 +305,7 @@ describe('sendToSession ordering', () => {
   it('selectively invalidates reconciled duplicate-team recovery before returning control', () => {
     const reconciliationBlock = extractBetween(
       source,
-      'setOrcaDuplicateTeamReconciliationHandler(async (reconciliation) => {',
+      'setOrcaDuplicateTeamReconciliationHandler(async (reconciliation, phase) => {',
       '  getAgentIslandService()?.setCompletionDeferResolver',
     );
 
@@ -314,17 +314,23 @@ describe('sendToSession ordering', () => {
     expect(reconciliationBlock).toContain(
       'for (const teamId of reconciliation.staleTeamIds) {',
     );
+    expect(reconciliationBlock).toContain("if (phase === 'prepare') {");
     expect(reconciliationBlock).toContain(
-      'await discardOrcaTeamQueuedInputs({ teamId, sessionIds });',
+      'await prepareOrcaTeamCleanupIntents({ teamId, sessionIds });',
     );
     expect(reconciliationBlock).toContain(
-      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(teamId);',
+      'await settleOrcaTeamQueuedInputs({ teamId, sessionIds });',
     );
     expectOrder(
       reconciliationBlock,
-      'await discardOrcaTeamQueuedInputs({ teamId, sessionIds });',
-      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(teamId);',
+      "if (phase === 'prepare') {",
+      'await settleOrcaTeamQueuedInputs({ teamId, sessionIds });',
     );
+    expect(source).toContain('const results = await Promise.allSettled(');
+    expect(source).toContain(
+      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);',
+    );
+    expect(source).toContain('const remainingDirectItems = persistedOrcaPreVendorInputsForTeam(');
   });
 
   it('keeps queued Orca lead/worker items structured-cloneable', () => {

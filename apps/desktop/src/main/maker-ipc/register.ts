@@ -8404,6 +8404,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           content: persistedContent ?? message,
         });
         userMessagePersisted = true;
+        if (orcaCleanupRecoveryItem) {
+          trackPersistedOrcaPreVendorInput(targetSessionId, orcaCleanupRecoveryItem);
+        }
         await runAcceptedCallback(onAccepted, targetSessionId, clientId);
       };
       const rewindPersistedUserMessageAfterFailedDispatch = async (): Promise<void> => {
@@ -8423,6 +8426,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             );
           }
           throw error;
+        } finally {
+          untrackPersistedOrcaPreVendorInput(clientId);
         }
       };
 
@@ -8528,6 +8533,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
               onDispatching: () => {
                 assertOrcaQueueOriginActive(origin);
+                untrackPersistedOrcaPreVendorInput(clientId);
                 dispatchAgentIslandUserPrompt(targetSessionId);
               },
             },
@@ -8644,6 +8650,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
             onDispatching: () => {
               assertOrcaQueueOriginActive(origin);
+              untrackPersistedOrcaPreVendorInput(clientId);
               dispatchAgentIslandUserPrompt(targetSessionId);
             },
           },
@@ -8973,6 +8980,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Lead input-send lock: end_team needs to mark the team terminal while an old
   // Worker -> Lead send is still inside its asynchronous pre-vendor hooks.
   const orcaLeadLifecycleLocks = new Map<string, Promise<void>>();
+  const persistedOrcaPreVendorInputs = new Map<
+    string,
+    { teamId: string; sessionId: string; item: AgentInputQueuedMessage }
+  >();
+
+  function trackPersistedOrcaPreVendorInput(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ): void {
+    const teamId = resolveOrcaQueueItemTeamId(item);
+    if (!teamId) throw new Error('cannot track a non-Orca pre-vendor input');
+    persistedOrcaPreVendorInputs.set(item.clientId, { teamId, sessionId, item });
+  }
+
+  function untrackPersistedOrcaPreVendorInput(clientId: string): void {
+    persistedOrcaPreVendorInputs.delete(clientId);
+  }
+
+  function persistedOrcaPreVendorInputsForTeam(
+    teamId: string,
+    sessionIds: Set<string>,
+  ): Map<string, AgentInputQueuedMessage[]> {
+    const bySession = new Map<string, AgentInputQueuedMessage[]>();
+    for (const tracked of persistedOrcaPreVendorInputs.values()) {
+      if (tracked.teamId !== teamId || !sessionIds.has(tracked.sessionId)) continue;
+      const items = bySession.get(tracked.sessionId) ?? [];
+      items.push(tracked.item);
+      bySession.set(tracked.sessionId, items);
+    }
+    return bySession;
+  }
 
   function reserveOrcaTeamPreVendorDispatch(teamId: string): () => void {
     assertOrcaQueueOriginActive({ kind: 'orca', teamId, senderLabel: 'Orca' });
@@ -9156,6 +9194,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ),
     retainPersistedUserMessageCleanup: (sessionId, item, error) =>
       inputCoordinator.retainPersistedOrcaCleanupRecovery(sessionId, item, error),
+    trackPersistedUserMessageBeforeVendorDispatch: trackPersistedOrcaPreVendorInput,
+    untrackPersistedUserMessageBeforeVendorDispatch: untrackPersistedOrcaPreVendorInput,
     beginDirectTurnChangeSet: async (sessionId, clientId) => {
       const liveSession = maker.getSession(sessionId);
       if (!liveSession) {
@@ -9349,7 +9389,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionIds: string[];
   }): Promise<void> {
     const sessionIds = [...new Set(input.sessionIds)];
-    await Promise.all(
+    const results = await Promise.allSettled(
       sessionIds.map((sessionId) =>
         inputCoordinator.discardQueuedItemsWhere(
           sessionId,
@@ -9357,6 +9397,55 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ),
       ),
     );
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failure) throw failure.reason;
+  }
+
+  async function prepareOrcaTeamCleanupIntents(input: {
+    teamId: string;
+    sessionIds: string[];
+  }): Promise<void> {
+    const sessionIds = new Set(input.sessionIds);
+    const directItems = persistedOrcaPreVendorInputsForTeam(input.teamId, sessionIds);
+    const results = await Promise.allSettled(
+      [...sessionIds].map((sessionId) =>
+        inputCoordinator.persistOrcaCleanupIntentWhere(
+          sessionId,
+          (item) => resolveOrcaQueueItemTeamId(item) === input.teamId,
+          directItems.get(sessionId),
+        ),
+      ),
+    );
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failure) throw failure.reason;
+  }
+
+  async function settleOrcaTeamQueuedInputs(input: {
+    teamId: string;
+    sessionIds: string[];
+  }): Promise<void> {
+    await discardOrcaTeamQueuedInputs(input);
+    await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);
+
+    // A direct attempt may finish after the first invalidation pass. If it
+    // remained before onDispatching, adopt and rewind its exact row now that
+    // every team-scoped dispatch settlement has closed.
+    const sessionIds = new Set(input.sessionIds);
+    const remainingDirectItems = persistedOrcaPreVendorInputsForTeam(
+      input.teamId,
+      sessionIds,
+    );
+    if (remainingDirectItems.size > 0) {
+      await prepareOrcaTeamCleanupIntents(input);
+      await discardOrcaTeamQueuedInputs(input);
+      for (const items of remainingDirectItems.values()) {
+        for (const item of items) untrackPersistedOrcaPreVendorInput(item.clientId);
+      }
+    }
   }
 
   /**
@@ -9413,12 +9502,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
-    await markTeamEnded(team.id, 'completed');
-    await discardOrcaTeamQueuedInputs({
+    const cleanupScope = {
       teamId: team.id,
       sessionIds: [leadSessionId, ...activeWorkers.map((worker) => worker.sessionId)],
+    };
+    await markTeamEnded(team.id, 'completed', {
+      beforeTerminalCommit: () => prepareOrcaTeamCleanupIntents(cleanupScope),
+      onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope),
     });
-    await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(team.id);
+    await settleOrcaTeamQueuedInputs(cleanupScope);
     for (const w of activeWorkers) {
       orcaTeamService.clearAutoBridgeState(w.sessionId);
       await cancelIOSSimulatorSessionOperations(w.sessionId);
@@ -11522,16 +11614,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
-  setOrcaDuplicateTeamReconciliationHandler(async (reconciliation) => {
+  setOrcaDuplicateTeamReconciliationHandler(async (reconciliation, phase) => {
     const sessionIds = [
       reconciliation.leadSessionId,
       ...reconciliation.staleWorkerSessionIds,
     ];
+    if (phase === 'prepare') {
+      for (const teamId of reconciliation.staleTeamIds) {
+        await prepareOrcaTeamCleanupIntents({ teamId, sessionIds });
+      }
+      return;
+    }
     for (const teamId of reconciliation.staleTeamIds) {
-      await discardOrcaTeamQueuedInputs({ teamId, sessionIds });
-      await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(teamId);
+      await settleOrcaTeamQueuedInputs({ teamId, sessionIds });
     }
     log.warn('discarded inputs for reconciled stale duplicate orca teams', {
+      phase,
       leadSessionId: reconciliation.leadSessionId,
       keptTeamId: reconciliation.keptTeamId,
       staleTeamIds: reconciliation.staleTeamIds,

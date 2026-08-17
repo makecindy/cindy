@@ -194,6 +194,11 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     item: AgentInputQueuedMessage,
     error: unknown,
   ) => void | Promise<void>;
+  trackPersistedUserMessageBeforeVendorDispatch: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ) => void;
+  untrackPersistedUserMessageBeforeVendorDispatch: (clientId: string) => void;
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
@@ -513,10 +518,19 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           source: params.meta.source,
           context: params.meta.context,
           onAccepted: runAccepted,
+          onPersisted: () =>
+            deps.trackPersistedUserMessageBeforeVendorDispatch(
+              params.targetSessionId,
+              cleanupItem,
+            ),
           acquireVendorDispatchLease: () =>
             deps.acquireVendorDispatchLease(params.teamId),
-          beforeVendorDispatch: () =>
-            deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId),
+          beforeVendorDispatch: () => {
+            deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId);
+            deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId);
+          },
+          onConfirmedUndispatched: () =>
+            deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId),
           onRewindFailed: (error) =>
             deps.retainPersistedUserMessageCleanup(
               params.targetSessionId,
@@ -660,8 +674,10 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     source: string;
     context: string;
     onAccepted?: () => void | Promise<void>;
+    onPersisted?: () => void | Promise<void>;
     acquireVendorDispatchLease?: SessionSendOptions['acquireVendorDispatchLease'];
     beforeVendorDispatch?: () => void;
+    onConfirmedUndispatched?: () => void;
     onRewindFailed?: (error: unknown) => void | Promise<void>;
   },
 ): Promise<CollabDirectDispatchResult & { terminalTransitionPending?: true }> {
@@ -700,6 +716,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           content: dbContent,
         });
         userMessagePersisted = true;
+        await params.onPersisted?.();
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;
         await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
@@ -732,6 +749,8 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
       });
       await params.onRewindFailed?.(err);
       throw err;
+    } finally {
+      params.onConfirmedUndispatched?.();
     }
   }
   return {

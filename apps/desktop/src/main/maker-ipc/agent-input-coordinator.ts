@@ -1359,6 +1359,65 @@ export class AgentInputCoordinator {
   }
 
   /**
+   * Persist the exact accepted Orca row that a pending terminal transition may
+   * need to rewind after restart. This is preparation only: it neither cancels
+   * the active send nor rewinds the row before the team UPDATE commits.
+   *
+   * supplementalItems covers direct live/resumed sends, which bypass the
+   * coordinator activeTurn but are tracked by the host until onDispatching.
+   */
+  async persistOrcaCleanupIntentWhere(
+    sessionId: string,
+    predicate: (item: AgentInputQueuedMessage) => boolean,
+    supplementalItems: AgentInputQueuedMessage[] = [],
+  ): Promise<string | null> {
+    await this.ensureQueueRestored(sessionId);
+    const state = this.getState(sessionId);
+    const existing = state.activeTurnCleanupRecoveryItem;
+    if (existing && !predicate(existing)) {
+      throw new Error(
+        `cleanup recovery ${existing.clientId} already owns session ${sessionId}`,
+      );
+    }
+
+    const candidates = new Map<string, AgentInputQueuedMessage>();
+    const active = state.activeTurn;
+    if (
+      active?.item &&
+      active.persisted &&
+      isActiveTurnBeforeVendorDispatch(active) &&
+      predicate(active.item)
+    ) {
+      candidates.set(active.item.clientId, active.item);
+    }
+    if (state.recovery?.kind === 'active-turn' && predicate(state.recovery.item)) {
+      candidates.set(state.recovery.item.clientId, state.recovery.item);
+    }
+    if (existing && predicate(existing)) {
+      candidates.set(existing.clientId, existing);
+    }
+    for (const item of supplementalItems) {
+      if (predicate(item)) candidates.set(item.clientId, item);
+    }
+    if (candidates.size === 0) return null;
+    if (candidates.size > 1) {
+      throw new Error(
+        `multiple persisted pre-vendor inputs own session ${sessionId}: ${[
+          ...candidates.keys(),
+        ].join(', ')}`,
+      );
+    }
+
+    const item = candidates.values().next().value;
+    if (!item || resolveOrcaQueueItemTeamId(item) === null) {
+      throw new Error('cannot persist cleanup intent for a non-Orca queue item');
+    }
+    state.activeTurnCleanupRecoveryItem = item;
+    await this.emitAndWaitForQueueSnapshot(sessionId);
+    return item.clientId;
+  }
+
+  /**
    * Adopt a direct Orca row whose pre-vendor rewind failed. Live and resumed
    * sends bypass the coordinator's active turn, so the dispatch path hands the
    * complete durable item back here before surfacing its failure. This cleanup debt is

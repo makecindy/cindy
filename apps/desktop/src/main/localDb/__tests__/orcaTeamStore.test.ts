@@ -182,6 +182,68 @@ describe('orcaTeamStore', () => {
     ).toBe('pi');
   });
 
+  it('prepares terminal cleanup before committing the team status', async () => {
+    const { markTeamEnded } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    const beforeTerminalCommit = vi.fn(async () => {
+      await expect(
+        client.queryOne<{ status: string }>(
+          'SELECT status FROM orca_teams WHERE id = ?',
+          ['team-1'],
+        ),
+      ).resolves.toEqual({ status: 'active' });
+      expect(h.terminalFenceBegin).toHaveBeenCalledWith('team-1');
+      expect(h.terminalFenceCommit).not.toHaveBeenCalled();
+    });
+
+    await expect(
+      markTeamEnded('team-1', 'completed', { beforeTerminalCommit }),
+    ).resolves.toBeUndefined();
+
+    expect(beforeTerminalCommit).toHaveBeenCalledOnce();
+    await expect(
+      client.queryOne<{ status: string }>(
+        'SELECT status FROM orca_teams WHERE id = ?',
+        ['team-1'],
+      ),
+    ).resolves.toEqual({ status: 'completed' });
+    expect(h.terminalFenceCommit).toHaveBeenCalledOnce();
+    expect(h.terminalFenceRollback).not.toHaveBeenCalled();
+  });
+
+  it('settles prepared cleanup before reopening a failed terminal fence', async () => {
+    const { markTeamEnded } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+
+    const onTerminalCommitFailed = vi.fn(async () => {
+      await expect(
+        client.queryOne<{ status: string }>(
+          'SELECT status FROM orca_teams WHERE id = ?',
+          ['team-1'],
+        ),
+      ).resolves.toEqual({ status: 'active' });
+      expect(h.terminalFenceRollback).not.toHaveBeenCalled();
+    });
+
+    await expect(
+      markTeamEnded('team-1', 'completed', {
+        beforeTerminalCommit: async () => {
+          throw new Error('cleanup snapshot unavailable');
+        },
+        onTerminalCommitFailed,
+      }),
+    ).rejects.toThrow('cleanup snapshot unavailable');
+
+    expect(onTerminalCommitFailed).toHaveBeenCalledOnce();
+    expect(h.terminalFenceRollback).toHaveBeenCalledOnce();
+    expect(h.terminalFenceCommit).not.toHaveBeenCalled();
+  });
+
   it('fences duplicate active teams before committing read-time reconciliation', async () => {
     const {
       getActiveTeamByLead,
@@ -214,12 +276,26 @@ describe('orcaTeamStore', () => {
     });
     expect(h.terminalFenceCommit).toHaveBeenCalledWith(staleTransition);
     expect(h.terminalFenceRollback).not.toHaveBeenCalled();
-    expect(reconcileInputs).toHaveBeenCalledWith({
-      leadSessionId: 'lead-duplicate',
-      keptTeamId: 'team-latest',
-      staleTeamIds: ['team-stale'],
-      staleWorkerSessionIds: ['worker-stale-session'],
-    });
+    expect(reconcileInputs).toHaveBeenNthCalledWith(
+      1,
+      {
+        leadSessionId: 'lead-duplicate',
+        keptTeamId: 'team-latest',
+        staleTeamIds: ['team-stale'],
+        staleWorkerSessionIds: ['worker-stale-session'],
+      },
+      'prepare',
+    );
+    expect(reconcileInputs).toHaveBeenNthCalledWith(
+      2,
+      {
+        leadSessionId: 'lead-duplicate',
+        keptTeamId: 'team-latest',
+        staleTeamIds: ['team-stale'],
+        staleWorkerSessionIds: ['worker-stale-session'],
+      },
+      'cleanup',
+    );
   });
 
   it('does not cancel an active team inserted after duplicate reconciliation is captured', async () => {
@@ -255,12 +331,17 @@ describe('orcaTeamStore', () => {
   });
 
   it('rolls back duplicate-team fences when reconciliation persistence fails', async () => {
-    const { getActiveTeamByLead } = await import('../orcaTeamStore.js');
+    const {
+      getActiveTeamByLead,
+      setOrcaDuplicateTeamReconciliationHandler,
+    } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
     await seedDuplicateActiveTeams(client);
     const staleTransition = { teamId: 'team-stale', token: Symbol('team-stale') };
     h.terminalFenceBegin.mockReturnValueOnce(staleTransition);
+    const reconcileInputs = vi.fn(async () => {});
+    setOrcaDuplicateTeamReconciliationHandler(reconcileInputs);
     client.tx = (async () => {
       throw new Error('cancel stale teams failed');
     }) as DbClient['tx'];
@@ -270,6 +351,16 @@ describe('orcaTeamStore', () => {
     );
     expect(h.terminalFenceRollback).toHaveBeenCalledWith(staleTransition);
     expect(h.terminalFenceCommit).not.toHaveBeenCalled();
+    expect(reconcileInputs).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ staleTeamIds: ['team-stale'] }),
+      'prepare',
+    );
+    expect(reconcileInputs).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ staleTeamIds: ['team-stale'] }),
+      'rollback',
+    );
   });
 
   it('retries committed duplicate-team cleanup from persisted cancelled rows', async () => {
@@ -292,9 +383,15 @@ describe('orcaTeamStore', () => {
       'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
       ['worker-stale-2', 'team-stale-2', 'worker-stale-session-2', 0, 0],
     );
-    const reconcileInputs = vi.fn()
-      .mockRejectedValueOnce(new Error('cleanup database busy'))
-      .mockResolvedValueOnce(undefined);
+    let cleanupAttempts = 0;
+    const reconcileInputs = vi.fn(async (
+      _reconciliation: unknown,
+      phase: 'prepare' | 'cleanup' | 'rollback',
+    ) => {
+      if (phase === 'cleanup' && cleanupAttempts++ === 0) {
+        throw new Error('cleanup database busy');
+      }
+    });
     setOrcaDuplicateTeamReconciliationHandler(reconcileInputs);
 
     await expect(getActiveTeamByLead('lead-duplicate')).rejects.toThrow(
@@ -313,13 +410,16 @@ describe('orcaTeamStore', () => {
     await expect(getActiveTeamByLead('lead-duplicate')).resolves.toMatchObject({
       id: 'team-latest',
     });
-    expect(reconcileInputs).toHaveBeenCalledTimes(2);
-    expect(reconcileInputs).toHaveBeenLastCalledWith({
-      leadSessionId: 'lead-duplicate',
-      keptTeamId: 'team-latest',
-      staleTeamIds: ['team-stale', 'team-stale-2'],
-      staleWorkerSessionIds: ['worker-stale-session', 'worker-stale-session-2'],
-    });
+    expect(reconcileInputs).toHaveBeenCalledTimes(3);
+    expect(reconcileInputs).toHaveBeenLastCalledWith(
+      {
+        leadSessionId: 'lead-duplicate',
+        keptTeamId: 'team-latest',
+        staleTeamIds: ['team-stale', 'team-stale-2'],
+        staleWorkerSessionIds: ['worker-stale-session', 'worker-stale-session-2'],
+      },
+      'cleanup',
+    );
   });
 
   it('replays persisted terminal cleanup when no active team remains', async () => {
@@ -344,12 +444,15 @@ describe('orcaTeamStore', () => {
     await expect(getActiveTeamByLead('lead-duplicate')).resolves.toBeNull();
 
     expect(reconcileInputs).toHaveBeenCalledTimes(2);
-    expect(reconcileInputs).toHaveBeenLastCalledWith({
-      leadSessionId: 'lead-duplicate',
-      keptTeamId: null,
-      staleTeamIds: ['team-latest', 'team-stale'],
-      staleWorkerSessionIds: ['worker-stale-session'],
-    });
+    expect(reconcileInputs).toHaveBeenLastCalledWith(
+      {
+        leadSessionId: 'lead-duplicate',
+        keptTeamId: null,
+        staleTeamIds: ['team-latest', 'team-stale'],
+        staleWorkerSessionIds: ['worker-stale-session'],
+      },
+      'cleanup',
+    );
   });
 
   it('does not commit duplicate-team cancellation when cleanup scope lookup fails', async () => {
@@ -473,6 +576,7 @@ describe('orcaTeamStore', () => {
         im_user_id TEXT,
         used_project_context INTEGER NOT NULL DEFAULT 0,
         codex_history_has_product_prompt INTEGER,
+        codex_plan_json TEXT,
         extra_dirs TEXT NOT NULL DEFAULT '[]',
         remote_host_id TEXT,
         provider_id TEXT,
