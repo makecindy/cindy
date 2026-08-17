@@ -58,6 +58,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,
@@ -289,6 +290,12 @@ export function GhostPluginDetailView({
                   type="button"
                   onClick={onUpdate}
                   disabled={updateBusy}
+                  aria-label={
+                    updateVersion === detail.version
+                      ? t('settings.ghosts.market.update')
+                      : t('settings.ghosts.market.updateTo', { version: updateVersion })
+                  }
+                  aria-busy={updateBusy || undefined}
                   className={cn(
                     'inline-flex h-10 items-center justify-center gap-1.5 rounded-full px-5 text-13 font-medium',
                     'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -297,10 +304,16 @@ export function GhostPluginDetailView({
                     'disabled:cursor-wait disabled:opacity-60 disabled:active:scale-100',
                   )}
                 >
-                  <ArrowUp size={14} aria-hidden="true" />
-                  {updateVersion === detail.version
-                    ? t('settings.ghosts.market.update')
-                    : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                  {updateBusy ? (
+                    <Spinner size={14} />
+                  ) : (
+                    <>
+                      <ArrowUp size={14} aria-hidden="true" />
+                      {updateVersion === detail.version
+                        ? t('settings.ghosts.market.update')
+                        : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                    </>
+                  )}
                 </button>
               ) : null}
               {primaryAction !== 'manage' ? (

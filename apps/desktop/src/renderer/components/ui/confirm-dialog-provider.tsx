@@ -35,6 +35,11 @@ export interface ConfirmOptions {
    * 破坏性确认(删除/重置等)请保持默认。
    */
   autoFocusConfirm?: boolean;
+  /**
+   * 点确认后保持弹窗、主按钮换成 Spinner,等这个 Promise 结束后再关。
+   * 失败会 reject 这次 confirm();pending 期间 Esc / 外点不能关。
+   */
+  pendingWork?: () => Promise<void>;
 }
 
 const DONT_SHOW_AGAIN_PREFIX = 'confirm-dialog.skip:';
@@ -86,6 +91,7 @@ interface QueueItem {
     checkboxDefaultChecked?: boolean;
   };
   resolve: (value: ConfirmThreeResult, dontShowAgain?: boolean) => void;
+  reject?: (error: unknown) => void;
 }
 
 const ConfirmDialogContext = createContext<ConfirmDialogContextValue | null>(null);
@@ -119,8 +125,10 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   const currentItemRef = useRef<QueueItem | null>(null);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
   const [open, setOpen] = useState(false);
+  const [confirmLoading, setConfirmLoading] = useState(false);
   const isShowingRef = useRef(false);
   const resolvedRef = useRef(false);
+  const pendingWorkActiveRef = useRef(false);
 
   const processNext = useCallback(() => {
     const next = queueRef.current.shift();
@@ -128,8 +136,10 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
       currentItemRef.current = next;
       setCurrentItem(next);
       setOpen(true);
+      setConfirmLoading(false);
       isShowingRef.current = true;
       resolvedRef.current = false;
+      pendingWorkActiveRef.current = false;
     }
   }, []);
 
@@ -140,7 +150,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
       if (options.dontShowAgainKey && isSkipped(options.dontShowAgainKey)) {
         return Promise.resolve(true);
       }
-      return new Promise<boolean>((resolve) => {
+      return new Promise<boolean>((resolve, reject) => {
         let settled = false;
         // 二状态调用复用同一队列:把 'confirm'→true,其它→false 透传给原 boolean 契约。
         // 用户勾上"下次不再提示"且点 confirm 时,把 key 写入 localStorage。
@@ -154,6 +164,12 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
               markSkipped(options.dontShowAgainKey);
             }
             resolve(r === 'confirm');
+          },
+          reject: (error) => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener('abort', abort);
+            reject(error);
           },
         };
         const abort = () => {
@@ -214,16 +230,36 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     [processNext],
   );
 
-  const handleConfirm = useCallback(
-    (opts?: { dontShowAgain?: boolean }) => {
-      if (!resolvedRef.current) {
+  const handleConfirm = useCallback((opts?: { dontShowAgain?: boolean }) => {
+    const item = currentItemRef.current;
+    if (!item || resolvedRef.current || pendingWorkActiveRef.current) return;
+    const work = item.options.pendingWork;
+    if (!work) {
+      resolvedRef.current = true;
+      item.resolve('confirm', opts?.dontShowAgain);
+      setOpen(false);
+      return;
+    }
+    pendingWorkActiveRef.current = true;
+    setConfirmLoading(true);
+    void (async () => {
+      try {
+        await work();
+        if (currentItemRef.current !== item || resolvedRef.current) return;
         resolvedRef.current = true;
-        currentItem?.resolve('confirm', opts?.dontShowAgain);
+        item.resolve('confirm', opts?.dontShowAgain);
         setOpen(false);
+      } catch (error) {
+        if (currentItemRef.current !== item || resolvedRef.current) return;
+        resolvedRef.current = true;
+        item.reject?.(error);
+        setOpen(false);
+      } finally {
+        pendingWorkActiveRef.current = false;
+        setConfirmLoading(false);
       }
-    },
-    [currentItem],
-  );
+    })();
+  }, []);
 
   const handleTertiary = useCallback(() => {
     if (!resolvedRef.current) {
@@ -234,19 +270,18 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     }
   }, [currentItem]);
 
-  const handleOpenChange = useCallback(
-    (value: boolean) => {
-      if (!value) {
-        // Fallback: if not yet resolved (overlay click / Escape), resolve as cancel
-        if (!resolvedRef.current) {
-          resolvedRef.current = true;
-          currentItem?.resolve('cancel');
-        }
-        setOpen(false);
+  const handleOpenChange = useCallback((value: boolean) => {
+    if (!value) {
+      // pendingWork 进行中:Action 的自动关窗和 Esc 都拦住。
+      if (pendingWorkActiveRef.current) return;
+      // Fallback: if not yet resolved (overlay click / Escape), resolve as cancel
+      if (!resolvedRef.current) {
+        resolvedRef.current = true;
+        currentItemRef.current?.resolve('cancel');
       }
-    },
-    [currentItem],
-  );
+      setOpen(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!open && currentItem !== null) {
@@ -288,6 +323,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
               : currentItem.options.checkboxLabel
           }
           checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}
+          loading={confirmLoading}
           onConfirm={handleConfirm}
           onTertiary={handleTertiary}
         />
