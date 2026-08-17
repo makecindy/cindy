@@ -1440,6 +1440,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (release) await release();
     };
 
+    const releaseVendorDispatchLeaseAfterLocalHandoff = (input: SdkUserInput): void => {
+      if (!vendorDispatchLeaseByInput.has(input)) return;
+      // Async-generator yield resolves the SDK consumer in the current
+      // microtask checkpoint. A timer releases the writer lease only after
+      // that handoff, without retaining it for the provider response.
+      setTimeout(() => {
+        void releaseVendorDispatchLeaseForInput(input).catch((error: unknown) => {
+          log.warn('Claude vendor dispatch lease release after local handoff failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }, 0);
+    };
+
     const releasePendingVendorDispatchLeases = (reason: string): void => {
       const releases = [...pendingVendorDispatchLeases];
       if (releases.length > 0) {
@@ -1483,8 +1497,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       const stream = (async function* (): AsyncGenerator<SdkUserInput> {
         for await (const input of queue) {
           // The SDK asking for the next item is the local transport handoff.
-          // Release immediately before resolving that iterator request.
-          await releaseVendorDispatchLeaseForInput(input);
+          // Resolve its iterator request before releasing the SQLite writer.
+          releaseVendorDispatchLeaseAfterLocalHandoff(input);
           yield input;
         }
       })();

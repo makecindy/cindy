@@ -148,6 +148,7 @@ async function startHarness(args: {
   transcriptExists: boolean;
   onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'];
   promptConsumptionGate?: Promise<void>;
+  onPromptConsumed?: () => void;
 }) {
   const configDir = await makeTempDir();
   const workingDir = await makeTempDir();
@@ -170,7 +171,10 @@ async function startHarness(args: {
       void (async () => {
         try {
           await args.promptConsumptionGate;
-          for await (const input of prompt) consumed.push(input);
+          for await (const input of prompt) {
+            consumed.push(input);
+            args.onPromptConsumed?.();
+          }
         } catch {
           /* query replacement closes the old prompt */
         }
@@ -222,12 +226,13 @@ describe('Claude invalid-resume recovery', () => {
     const promptConsumptionGate = new Promise<void>((resolve) => {
       allowPromptConsumption = resolve;
     });
+    const order: string[] = [];
     const h = await startHarness({
       transcriptExists: false,
       onInvalidResumeSession: undefined,
       promptConsumptionGate,
+      onPromptConsumed: () => order.push('consume'),
     });
-    const order: string[] = [];
 
     await h.handle.send(
       { type: 'user', content: 'lease boundary' },
@@ -243,8 +248,8 @@ describe('Claude invalid-resume recovery', () => {
 
     expect(order).toEqual(['acquire']);
     allowPromptConsumption();
-    await vi.waitFor(() => expect(h.consumedInputs[0]).toHaveLength(1));
-    expect(order).toEqual(['acquire', 'release']);
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'consume', 'release']));
+    expect(h.consumedInputs[0]).toHaveLength(1);
     await h.handle.close();
     h.streams[0].end();
     await h.collected;
