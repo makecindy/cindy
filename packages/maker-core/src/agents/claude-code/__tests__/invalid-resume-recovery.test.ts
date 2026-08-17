@@ -334,8 +334,66 @@ describe('Claude invalid-resume recovery', () => {
     finishRemoteSubmission();
     await vi.waitFor(() => expect(order).toEqual(['acquire', 'release:submitted']));
     finishRemoteResponse();
+    await vi.waitFor(() => expect(order).toEqual([
+      'acquire',
+      'release:submitted',
+      'release:accepted',
+    ]));
     stream.end();
     await collected;
+  });
+
+  it('settles an explicit remote rejection after transport submission', async () => {
+    const workingDir = await makeTempDir();
+    const stream = createControlledStream();
+    let finishRemoteSubmission!: () => void;
+    const remoteSubmissionGate = new Promise<void>((resolve) => {
+      finishRemoteSubmission = resolve;
+    });
+    let rejectRemoteResponse!: (error: Error) => void;
+    const remoteResponseGate = new Promise<void>((_resolve, reject) => {
+      rejectRemoteResponse = reject;
+    });
+    const remoteQuery = {
+      ...createFakeQuery(stream),
+      send: vi.fn(async () => remoteResponseGate),
+      sendWithSubmission: vi.fn(() => ({
+        submitted: remoteSubmissionGate,
+        response: remoteResponseGate,
+      })),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gateway.example' },
+      remoteCcQueryFactory: vi.fn(async () => remoteQuery as never),
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'remote-rejection-lease-session',
+      remoteHostId: 'remote-host',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+    const order: string[] = [];
+
+    await handle.send(
+      { type: 'user', content: 'remote rejected lease boundary' },
+      {
+        acquireVendorDispatchLease: async () => (outcome) => {
+          order.push(`release:${outcome}`);
+        },
+      },
+    );
+    await vi.waitFor(() => expect(remoteQuery.sendWithSubmission).toHaveBeenCalledOnce());
+    finishRemoteSubmission();
+    await vi.waitFor(() => expect(order).toEqual(['release:submitted']));
+    rejectRemoteResponse(new Error('SESSION_NOT_FOUND: remote session is closed'));
+    await vi.waitFor(() => expect(order).toEqual([
+      'release:submitted',
+      'release:confirmed-undispatched',
+    ]));
+
+    await handle.close();
+    stream.end();
   });
 
   it('preflight missing clears the old id and starts fresh before any turn is sent', async () => {
@@ -762,6 +820,11 @@ describe('Claude invalid-resume recovery', () => {
       ]);
     });
     expect(acquireVendorDispatchLease).toHaveBeenCalledTimes(2);
+    expect(acquireVendorDispatchLease).toHaveBeenNthCalledWith(1);
+    expect(acquireVendorDispatchLease).toHaveBeenNthCalledWith(
+      2,
+      'retry-after-confirmed-rejection',
+    );
     h.streams[1].emit({
       type: 'system',
       subtype: 'init',

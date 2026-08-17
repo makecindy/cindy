@@ -1427,17 +1427,29 @@ export class ClaudeCodeAgent extends BaseAgent {
       input: SdkUserInput,
       release: VendorDispatchLeaseRelease,
     ): void => {
-      let released = false;
-      const releaseOnce = async (
+      let phase: 'held' | 'submitted' | 'terminal' = 'held';
+      let settlementTail: Promise<void> = Promise.resolve();
+      const releaseTracked = (
         outcome: VendorDispatchLeaseOutcome = 'submitted',
       ): Promise<void> => {
-        if (released) return;
-        released = true;
-        vendorDispatchLeaseByInput.delete(input);
-        queuedVendorDispatchLeaseInputs.delete(input);
-        await release(outcome);
+        const settlement = settlementTail.then(async () => {
+          if (phase === 'terminal') return;
+          if (outcome === 'submitted') {
+            if (phase === 'submitted') return;
+            await release('submitted');
+            phase = 'submitted';
+            queuedVendorDispatchLeaseInputs.delete(input);
+            return;
+          }
+          await release(outcome);
+          phase = 'terminal';
+          vendorDispatchLeaseByInput.delete(input);
+          queuedVendorDispatchLeaseInputs.delete(input);
+        });
+        settlementTail = settlement.catch(() => undefined);
+        return settlement;
       };
-      vendorDispatchLeaseByInput.set(input, releaseOnce);
+      vendorDispatchLeaseByInput.set(input, releaseTracked);
     };
 
     const releaseVendorDispatchLeaseForInput = async (
@@ -3255,6 +3267,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // inputQueue msg 又调死掉的 send 触发同款 warn。
         (async (): Promise<void> => {
           for await (const msg of inputQueue) {
+            let providerAccepted = false;
             try {
               const remoteTransport = remoteQuery as unknown as {
                 send: (m: unknown) => Promise<void>;
@@ -3275,22 +3288,32 @@ export class ClaudeCodeAgent extends BaseAgent {
               } else {
                 // Compatibility fallback for injected legacy test/host queries.
                 await remoteTransport.send(msg);
-                await releaseVendorDispatchLeaseForInput(msg, 'submitted');
               }
+              providerAccepted = true;
+              await releaseVendorDispatchLeaseForInput(msg, 'accepted');
             } catch (e) {
-              log.warn('cc remote: forwarding inputQueue → remoteQuery.send failed; closing remote query to surface aborted-turn', {
-                error: String((e as Error)?.message ?? e),
-              });
-              if (activeRemoteQuery) {
-                void activeRemoteQuery.close().catch((err) => {
-                  log.warn('cc remote: remoteQuery.close after send failure threw (best-effort)', {
-                    error: String((err as Error)?.message ?? err),
-                  });
+              if (providerAccepted) {
+                log.warn('cc remote: accepted input cleanup settlement failed', {
+                  error: String((e as Error)?.message ?? e),
                 });
+                continue;
+              } else {
+                log.warn('cc remote: forwarding inputQueue → remoteQuery.send failed; closing remote query to surface aborted-turn', {
+                  error: String((e as Error)?.message ?? e),
+                });
+                if (activeRemoteQuery) {
+                  void activeRemoteQuery.close().catch((err) => {
+                    log.warn('cc remote: remoteQuery.close after send failure threw (best-effort)', {
+                      error: String((err as Error)?.message ?? err),
+                    });
+                  });
+                }
               }
               break;
             } finally {
-              await releaseVendorDispatchLeaseForInput(msg, 'confirmed-undispatched');
+              if (!providerAccepted) {
+                await releaseVendorDispatchLeaseForInput(msg, 'confirmed-undispatched');
+              }
             }
           }
         })().catch(() => undefined);
@@ -4868,7 +4891,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           const reacquireVendorDispatchLease =
             vendorDispatchLeaseAcquireByInput.get(replayInput);
           const releaseVendorDispatchLease =
-            await reacquireVendorDispatchLease?.();
+            await reacquireVendorDispatchLease?.(
+              'retry-after-confirmed-rejection',
+            );
           if (typeof releaseVendorDispatchLease === 'function') {
             retainVendorDispatchLease(replayInput, releaseVendorDispatchLease);
           }
