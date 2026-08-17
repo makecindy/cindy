@@ -184,7 +184,9 @@ export class RpcClient {
         entry.timer = setTimeout(() => {
           if (this.pending.delete(id)) {
             const error = new Error(`RPC ${method} timed out after ${opts.timeoutMs}ms`);
-            rejectSubmitted(error);
+            // Response timeout does not cancel an already queued Duplex write.
+            // Keep submitted pending until the raw write callback settles so a
+            // caller cannot release a dispatch lease while bytes may still land.
             reject(error);
           }
         }, opts.timeoutMs);

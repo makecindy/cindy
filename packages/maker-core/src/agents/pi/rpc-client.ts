@@ -212,8 +212,12 @@ export class PiRpcProcess {
         const entry = this.pending.get(id);
         if (!entry) return;
         this.pending.delete(id);
+        if (submissionTimer) clearTimeout(submissionTimer);
+        submissionTimer = null;
         const error = new PiRpcRequestTimeoutError(entry.commandType, entry.timeoutMs);
-        entry.rejectSubmitted(error);
+        // A response timeout cannot cancel an in-flight transport write.
+        // submitted remains owned by transportSubmission so dispatch leases
+        // stay held until the raw write actually succeeds or fails.
         entry.reject(error);
       }, timeoutMs);
       this.pending.set(id, {
@@ -227,8 +231,9 @@ export class PiRpcProcess {
         commandType: typeof command.type === 'string' ? command.type : '',
       });
       // Prompt response acceptance can legitimately run for ten minutes and
-      // refresh on compaction progress. The local/SSH write must still have a
-      // short independent bound so it cannot hold a database dispatch lease.
+      // refresh on compaction progress. This shorter timer bounds the caller's
+      // response wait, but cannot settle submitted because it does not cancel
+      // the underlying local/SSH write.
       if (submissionTimeoutMs !== null) {
         submissionTimer = setTimeout(() => {
           const entry = this.pending.get(id);
@@ -236,7 +241,6 @@ export class PiRpcProcess {
           this.pending.delete(id);
           clearTimeout(entry.timer);
           const error = new PiRpcRequestTimeoutError(entry.commandType, submissionTimeoutMs);
-          entry.rejectSubmitted(error);
           entry.reject(error);
         }, submissionTimeoutMs);
       }

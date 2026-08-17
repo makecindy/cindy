@@ -50,17 +50,24 @@ describe('RpcClient request submission', () => {
     stream.destroy();
   });
 
-  it('rejects submission when the RPC timeout beats a stalled Duplex write', async () => {
+  it('keeps submission pending when the RPC timeout beats a stalled Duplex write', async () => {
     const stream = new ControlledDuplex();
     const client = new RpcClient(stream);
     const pending = client.requestWithSubmission('query/send', { message: 'blocked' }, {
       timeoutMs: 5,
     });
+    const submissionSettled = vi.fn();
+    void pending.submitted.then(submissionSettled, submissionSettled);
+    const responseTimedOut = expect(pending.response).rejects.toThrow(
+      'RPC query/send timed out after 5ms',
+    );
 
-    await Promise.all([
-      expect(pending.submitted).rejects.toThrow('RPC query/send timed out after 5ms'),
-      expect(pending.response).rejects.toThrow('RPC query/send timed out after 5ms'),
-    ]);
+    await responseTimedOut;
+    expect(submissionSettled).not.toHaveBeenCalled();
+
+    stream.completeWrite();
+    await expect(pending.submitted).resolves.toBeUndefined();
+    expect(submissionSettled).toHaveBeenCalledOnce();
 
     client.dispose();
     stream.destroy();
