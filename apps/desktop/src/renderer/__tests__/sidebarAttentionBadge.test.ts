@@ -156,7 +156,7 @@ describe('sidebar attention badge', () => {
 });
 
 describe('sidebar draft indicator', () => {
-  it('uses the awaiting accent so unsent content stands out from neutral metadata', () => {
+  it('uses the dedicated high-contrast color for unsent content', () => {
     sidebarState.hasDraft = true;
 
     const { getByTitle } = render(
@@ -170,7 +170,7 @@ describe('sidebar draft indicator', () => {
     );
 
     expect(getByTitle('ccAgent.sidebar.hasDraft').className).toContain(
-      'text-[var(--card-status-awaiting)]',
+      'text-[var(--sidebar-draft-indicator)]',
     );
   });
 });

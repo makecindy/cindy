@@ -436,6 +436,17 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     expect(contrast(cindyLight.colors['sidebar-item-active-foreground']!, cindyLight.colors['sidebar-item-active']!), 'light 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
     expect(contrast(cindyDark.colors['sidebar-item-active-foreground']!, cindyDark.colors['sidebar-item-active']!), 'dark 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
   });
+
+  it('CINDY 侧栏草稿铅笔×普通行底色对比度 ≥3:1', () => {
+    const draftLight = colorRegistry.resolveDefault('sidebar-draft-indicator', 'light') ?? '';
+    const draftDarkAlias = colorRegistry.resolveDefault('sidebar-draft-indicator', 'dark') ?? '';
+    const awaitingDark = colorRegistry.resolveDefault('card-status-awaiting', 'dark') ?? '';
+
+    expect(draftLight).toBe('#0D8178');
+    expect(draftDarkAlias).toBe('var(--card-status-awaiting)');
+    expect(contrast(draftLight, light['sidebar']), 'light 草稿铅笔×侧栏').toBeGreaterThanOrEqual(3);
+    expect(contrast(awaitingDark, dark['sidebar']), 'dark 草稿铅笔×侧栏').toBeGreaterThanOrEqual(3);
+  });
 });
 
 // ===== ⑧ 可证伪自检 =====
