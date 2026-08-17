@@ -798,6 +798,19 @@ describe('materializeLocalMarkdownFiles', () => {
     });
   });
 
+  it('leaves an indented xdt-file example after a heading untouched and unsent', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'secret.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+    const text = `# 标题\n    [示例](xdt-file://${reportPath})`;
+
+    await expect(materializeLocalMarkdownFiles({ text, workingDir })).resolves.toEqual({
+      files: [],
+      tempDirs: [],
+      text,
+    });
+  });
+
   it('redacts a bare xdt-file URL without attempting to upload it', async () => {
     const workingDir = await makeTempRoot();
     const text = 'Download xdt-file:///Users/alice/private.pdf now';

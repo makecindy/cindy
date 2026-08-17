@@ -54,6 +54,15 @@ function isBlankLine(text: string, start: number, end: number): boolean {
   return text.slice(start, end).trim() === '';
 }
 
+function contentLeavesParagraphOpen(content: string): boolean {
+  if (content === '') return false;
+  if (/^#{1,6}(?:[ \t]+|$)/.test(content)) return false;
+  if (/^(?:={1,}|-{1,})[ \t]*$/.test(content)) return false;
+  if (/^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content)) return false;
+  if (/^(?:`{3,}|~{3,})/.test(content)) return false;
+  return true;
+}
+
 function listItemContentIndent(text: string, start: number, end: number): number | null {
   const line = text.slice(start, end);
   const match = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/);
@@ -68,14 +77,14 @@ function listItemContentIndent(text: string, start: number, end: number): number
 function indentedCodeStartLines(text: string): Set<number> {
   const starts = new Set<number>();
   let lineStart = 0;
-  let previousBlank = true;
+  let paragraphOpen = false;
   let activeListIndent: number | null = null;
   let activeQuoteDepth = 0;
   while (lineStart < text.length) {
     const lineEnd = lineEndAfterNewline(text, lineStart);
     const prefix = lineContainerPrefix(text, lineStart, lineEnd);
     if (prefix.quoteDepth !== activeQuoteDepth) {
-      previousBlank = true;
+      paragraphOpen = false;
       activeListIndent = null;
       activeQuoteDepth = prefix.quoteDepth;
     }
@@ -83,14 +92,20 @@ function indentedCodeStartLines(text: string): Set<number> {
     const indent = prefix.indent;
     const containedByList =
       activeListIndent !== null && indent >= activeListIndent && indent < activeListIndent + 4;
-    if (indent >= 4 && previousBlank && !containedByList) starts.add(lineStart);
+    const startsIndentedCode = indent >= 4 && !paragraphOpen && !containedByList;
+    if (startsIndentedCode) starts.add(lineStart);
 
     if (!blank) {
       const relativeListIndent = listItemContentIndent(text, prefix.cursor, lineEnd);
       if (relativeListIndent !== null) activeListIndent = indent + relativeListIndent;
       else if (indent === 0) activeListIndent = null;
     }
-    previousBlank = blank;
+    if (blank || startsIndentedCode) paragraphOpen = false;
+    else if (indent < 4 || containedByList) {
+      paragraphOpen = contentLeavesParagraphOpen(
+        text.slice(prefix.cursor, lineEnd).trim(),
+      );
+    }
     lineStart = lineEnd;
   }
   return starts;
@@ -284,12 +299,7 @@ function lineLeavesParagraphOpen(
   start: HtmlBlockLineStart,
 ): boolean {
   const content = text.slice(start.contentStart, lineEnd).trim();
-  if (content === '') return false;
-  if (/^#{1,6}(?:[ \t]+|$)/.test(content)) return false;
-  if (/^(?:={1,}|-{1,})[ \t]*$/.test(content)) return false;
-  if (/^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content)) return false;
-  if (/^(?:`{3,}|~{3,})/.test(content)) return false;
-  return true;
+  return contentLeavesParagraphOpen(content);
 }
 
 function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {

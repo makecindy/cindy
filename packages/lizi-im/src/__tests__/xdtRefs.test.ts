@@ -446,6 +446,21 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
   });
 
+  it('starts indented code immediately after an ATX heading', () => {
+    const text = '# 标题\n    [示例](xdt-file:///tmp/heading-code.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('does not let an indented line interrupt an open paragraph', () => {
+    const text = '正文\n    [报告](xdt-file:///tmp/paragraph-continuation.pdf)';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/paragraph-continuation.pdf' },
+    ]);
+  });
+
   it('ignores managed media references inside tab-indented code blocks', () => {
     const text = `\t[报告](xdt-file:///tmp/tabbed.pdf)\n\t![图片](${BLOB})`;
 
