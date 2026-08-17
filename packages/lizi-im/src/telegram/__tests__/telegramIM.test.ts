@@ -1623,6 +1623,14 @@ describe('TelegramIM', () => {
       // 两张可读的仍然逐张发了出去; 缺失那张在读盘处失败, 不产生出站
       expect(api.calls.filter((c) => c.method === 'sendPhoto')).toHaveLength(2);
       expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(present);
+
+      // 连续断点停在缺失图片之前，但后面那张已实际送达。再次 finalize 只重试
+      // 缺失项，不能把断点之后已送达的图片再发一遍。
+      await expect(handle.finalize('三张图, 其中一张缺失')).rejects.toThrow(
+        'telegram single image upload rejected',
+      );
+      expect(api.calls.filter((c) => c.method === 'sendPhoto')).toHaveLength(2);
+      expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(present);
     });
 
     it('400 拒绝 → 逐张回落(确定一张都没进聊天)', async () => {

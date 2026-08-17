@@ -121,13 +121,15 @@ export interface TelegramStreamingDeps {
    * `startIndex` 是本次要从第几张开始传 —— 上一次尝试已经发出去的不再重传。
    * 实现方按去重后的顺序切片, 并通过 `onProgress(count)` 回报**累计已收口**的
    * 张数(相册按批, 单发按张); 抛错时调用方据此从断点续传, 不会让用户收到重复
-   * 附件。不报进度也不算错, 只是重试会从 startIndex 重来。
+   * 附件。`settledRefs` 补充记录失败边界之后已送达/不可重试的非连续图片, 重试时
+   * 也必须跳过。不报进度也不算错, 只是重试会从 startIndex 重来。
    */
   uploadImages: (
     messageId: string,
     imageUrls: string[],
     opts?: {
       startIndex?: number;
+      settledRefs?: readonly string[];
       onProgress?: (settledCount: number, result?: TelegramImageUploadResult) => void;
     },
   ) => Promise<TelegramImageUploadResult | void>;
@@ -209,6 +211,8 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
   private extraImageAbsPaths: string[] = [];
   private deliveredExtraImageAbsPaths: string[] = [];
   private nonRetryableExtraImageAbsPaths: string[] = [];
+  /** 失败边界之后也可能已有图片送达；跨 finalize 重试按 ref 精确跳过。 */
+  private readonly settledImageRefs = new Set<string>();
   /**
    * 惰性占位(2026-07-30 review): 有真实正文才发首条消息 — ambient turn 的
    * NO_REPLY 沉默从"发 '…' 再删"变成从头到尾零消息零通知; 普通 turn 也不再
@@ -271,6 +275,8 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     if (!result) return;
     const deliveredRefs = new Set(result.delivered);
     const nonRetryableRefs = new Set(result.nonRetryable);
+    for (const ref of deliveredRefs) this.settledImageRefs.add(ref);
+    for (const ref of nonRetryableRefs) this.settledImageRefs.add(ref);
     for (const absPath of this.extraImageAbsPaths) {
       if (
         deliveredRefs.has(`abs:${absPath}`) &&
@@ -475,6 +481,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       if (this.deliveredImages < allImageRefs.length) {
         const uploadResult = await this.deps.uploadImages(this.messageIdValue, allImageRefs, {
           startIndex: this.deliveredImages,
+          settledRefs: [...this.settledImageRefs],
           onProgress: (deliveredCount, result) => {
             // 单调推进: 实现方回报的是累计张数, 不接受回退。
             if (deliveredCount > this.deliveredImages) this.deliveredImages = deliveredCount;

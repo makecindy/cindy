@@ -2000,6 +2000,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     assertLive?: () => void,
     opts?: {
       startIndex?: number;
+      settledRefs?: readonly string[];
       onProgress?: (
         settledCount: number,
         result?: { delivered: readonly string[]; nonRetryable: readonly string[] },
@@ -2058,7 +2059,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     });
     // 续传起点按**去重后**的序号切: 与 onProgress 回报的口径一致。
     const startIndex = Math.max(0, Math.min(opts?.startIndex ?? 0, absPaths.length));
-    const pending = absPaths.slice(startIndex);
+    // 连续断点之后也可能已有单张成功(例如相册回落时中间一张明确失败、后面的
+    // 图片照常发出)。只靠 startIndex 会在下一次 finalize 重发这些图片，因此按
+    // ref 再精确跳过已送达/不可重试项；同一路径的别名任一收口即代表文件已处理。
+    const settledRefs = new Set(opts?.settledRefs ?? []);
+    const pending = absPaths.slice(startIndex).filter((absPath) =>
+      (refsByAbsPath.get(absPath) ?? []).every((ref) => !settledRefs.has(ref)),
+    );
     if (pending.length === 0) return result();
     // 累计计数含已跳过的部分, 这样调用方存的始终是"总共已收口多少张"。
     let settled = startIndex;
