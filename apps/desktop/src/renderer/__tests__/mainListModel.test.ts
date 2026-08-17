@@ -229,6 +229,60 @@ describe('buildMainListEntries — 混排(recency)', () => {
     ]);
   });
 
+  it('groups one schedule across project and dialogue destinations before grouping dialogues', () => {
+    const olderProjectRun = session({
+      updatedAt: '2026-08-10T10:00:00Z',
+      title: 'project run',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const newerDialogueRun = session({
+      updatedAt: '2026-08-12T10:00:00Z',
+      title: 'dialogue run',
+      source: 'scheduler',
+      workspaceKind: 'dialogue',
+      workingDir: null,
+    });
+    const manualDialogue = session({
+      updatedAt: '2026-08-11T10:00:00Z',
+      title: 'manual dialogue',
+    });
+    const scheduleInfo = {
+      scheduleId: 'schedule-cindy-check',
+      scheduleName: '自动检查 Cindy',
+      unreadRunIds: [],
+      hasUnreadRun: false,
+      hasUnreadFailedRun: false,
+    };
+
+    const entries = buildMainListEntries({
+      projects: [project('/repo', [olderProjectRun])],
+      dialogues: [manualDialogue, newerDialogueRun],
+      groupBy: 'flat',
+      groupDialogue: true,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      scheduleSessionIndex: new Map([
+        [olderProjectRun.id, scheduleInfo],
+        [newerDialogueRun.id, scheduleInfo],
+      ]),
+    });
+
+    expect(labels(entries)).toEqual(['auto:自动检查 Cindy', 'dlg-group']);
+    const automationGroup = entries[0];
+    expect(automationGroup.kind).toBe('automation-group');
+    if (automationGroup.kind !== 'automation-group') throw new Error('expected automation group');
+    expect(automationGroup.group.sessions.map((item) => item.id)).toEqual([
+      newerDialogueRun.id,
+      olderProjectRun.id,
+    ]);
+    const dialogueGroup = entries[1];
+    expect(dialogueGroup.kind).toBe('dialogue-group');
+    if (dialogueGroup.kind !== 'dialogue-group') throw new Error('expected dialogue group');
+    expect(dialogueGroup.sessions.map((item) => item.id)).toEqual([manualDialogue.id]);
+  });
+
   it('keeps matching schedule ids isolated by remote device', () => {
     const runs = ['dev-a', 'dev-b'].flatMap((deviceLinkDeviceId, deviceIndex) =>
       [1, 2].map((runIndex) =>

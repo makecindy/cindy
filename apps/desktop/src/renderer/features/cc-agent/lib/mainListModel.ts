@@ -249,18 +249,15 @@ export interface BuildMainListEntriesInput {
 
 const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set<string>();
 
-function appendFlatSessionEntries(
-  entries: MainListEntry[],
+function buildFlatSessionEntries(
   sessions: readonly Session[],
   sortBy: FilterSortBy,
   priorityContext: MainListPriorityContext,
   notifications: ReadonlySet<string>,
   scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>,
-): void {
+): SidebarSessionEntry[] {
   const sortedSessions = sortSessionsForMainList(sessions, sortBy, priorityContext);
-  entries.push(
-    ...groupAutomationSidebarEntries(sortedSessions, { notifications, scheduleSessionIndex }),
-  );
+  return groupAutomationSidebarEntries(sortedSessions, { notifications, scheduleSessionIndex });
 }
 
 /** 产出主列表的有序顶层条目。 */
@@ -279,22 +276,42 @@ export function buildMainListEntries({
   const ctx = priorityContext;
   const entries: MainListEntry[] = [];
 
-  if (groupBy === 'project') {
-    for (const project of projects) {
-      entries.push({
-        kind: 'project',
-        project: { ...project, sessions: sortSessionsForMainList(project.sessions, sortBy, ctx) },
-      });
-    }
-  } else {
-    appendFlatSessionEntries(
-      entries,
-      projects.flatMap((project) => project.sessions),
+  if (groupBy === 'flat') {
+    const flatEntries = buildFlatSessionEntries(
+      [...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified],
       sortBy,
       ctx,
       notifications,
       scheduleSessionIndex,
     );
+    if (!groupDialogue) {
+      entries.push(...flatEntries);
+    } else {
+      const dialogueSessionIds = new Set(dialogues.map((session) => session.id));
+      const groupedDialogues: Session[] = [];
+      for (const entry of flatEntries) {
+        const sessions = getMainListEntrySessions(entry);
+        if (sessions.every((session) => dialogueSessionIds.has(session.id))) {
+          groupedDialogues.push(...sessions);
+        } else {
+          entries.push(entry);
+        }
+      }
+      if (groupedDialogues.length > 0) {
+        entries.push({
+          kind: 'dialogue-group',
+          sessions: sortSessionsForMainList(groupedDialogues, sortBy, ctx),
+        });
+      }
+    }
+    return sortMainListEntries(entries, sortBy, manualProjectOrder, ctx);
+  }
+
+  for (const project of projects) {
+    entries.push({
+      kind: 'project',
+      project: { ...project, sessions: sortSessionsForMainList(project.sessions, sortBy, ctx) },
+    });
   }
 
   if (groupDialogue) {
@@ -305,10 +322,14 @@ export function buildMainListEntries({
       });
     }
   } else {
-    appendFlatSessionEntries(entries, dialogues, sortBy, ctx, notifications, scheduleSessionIndex);
+    entries.push(
+      ...buildFlatSessionEntries(dialogues, sortBy, ctx, notifications, scheduleSessionIndex),
+    );
   }
 
-  appendFlatSessionEntries(entries, unclassified, sortBy, ctx, notifications, scheduleSessionIndex);
+  entries.push(
+    ...buildFlatSessionEntries(unclassified, sortBy, ctx, notifications, scheduleSessionIndex),
+  );
 
   return sortMainListEntries(entries, sortBy, manualProjectOrder, ctx);
 }
