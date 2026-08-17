@@ -129,12 +129,7 @@ describe('registry presence 实体化', () => {
   });
 
   it('公共 Registry 的 newSessionDefault 不进入 CatalogModel；默认只信区域门控后的 /models', () => {
-    setActiveCatalog(
-      baseCatalog(
-        [gpt6Entry({ newSessionDefault: ['claude-code', 'codex'] })],
-        2,
-      ),
-    );
+    setActiveCatalog(baseCatalog([gpt6Entry({ newSessionDefault: ['claude-code', 'codex'] })], 2));
 
     const codex = models('openai', 'codex').find((m) => m.id === 'gpt-6');
     const claude = models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6');
@@ -151,26 +146,53 @@ describe('registry presence 实体化', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({
+          contextWindow: 1_000_000,
           efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
           defaultEffort: 'xhigh',
           perAgent: {
-            codex: { efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+            codex: {
+              contextWindow: 272_000,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'high',
+            },
             'claude-code': { efforts: ['low', 'medium'], defaultEffort: 'medium' },
           },
         }),
       ]),
     );
     expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')).toMatchObject({
+      contextWindow: 272_000,
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
     });
     expect(models('openai', 'claude-code').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
+      contextWindow: 1_000_000,
       efforts: ['low', 'medium'],
       defaultEffort: 'medium',
     });
-    // Pi 没有 wire perAgent,恒定从 codex root 派生。
+    // Pi 没有 wire perAgent，但仍是独立消费端：使用 entry 基线，再执行 bridge 硬约束。
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toMatchObject({
-      efforts: ['low', 'medium', 'high'],
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'xhigh',
+    });
+  });
+
+  it('没有 Registry entry 时 Pi 保留 Codex discovery 的既有字段', () => {
+    setActiveCatalog(baseCatalog());
+    setDiscoveredCodexModels([
+      {
+        id: 'gpt-discovered',
+        name: 'Discovered GPT',
+        contextWindow: 272_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      },
+    ]);
+
+    expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-discovered')).toMatchObject({
+      contextWindow: 272_000,
+      efforts: ['high'],
       defaultEffort: 'high',
     });
   });
@@ -402,8 +424,7 @@ describe('registry presence 实体化', () => {
         ?.newSessionDefault,
     ).toEqual(['claude-code', 'codex', 'pi']);
     expect(
-      models('xd', 'codex').find((m) => m.id === 'deepseek/deepseek-v4-pro')
-        ?.newSessionDefault,
+      models('xd', 'codex').find((m) => m.id === 'deepseek/deepseek-v4-pro')?.newSessionDefault,
     ).toEqual(['claude-code', 'codex', 'pi']);
     expect(
       models('xd', 'pi').find((m) => m.id === 'deepseek/deepseek-v4-pro')?.newSessionDefault,

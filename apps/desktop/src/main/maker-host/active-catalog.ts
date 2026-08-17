@@ -375,6 +375,7 @@ function projectCodexModelsToBridges(
   p: Provider,
   claudeExcluded: ReadonlySet<string> = new Set(),
   prepareClaudeModel: (model: CatalogModel) => CatalogModel = (model) => model,
+  preparePiModel: (model: CatalogModel) => CatalogModel = (model) => model,
 ): Provider {
   const codex = p.models.codex ?? [];
   const canonical = new Map(codex.map((model) => [model.id, model]));
@@ -398,7 +399,12 @@ function projectCodexModelsToBridges(
     claudeSource.map((model) => toChatgptBridgeModel(prepareClaudeModel(model))),
     true,
   );
-  return augmentModels(withClaude, 'pi', codex.map(toChatgptBridgeModel), true);
+  return augmentModels(
+    withClaude,
+    'pi',
+    codex.map((model) => toChatgptBridgeModel(preparePiModel(model))),
+    true,
+  );
 }
 
 /** 静态段被淘汰的供应商：先清空 providers.models，再由 discovery + Registry/local root 装配。 */
@@ -746,8 +752,7 @@ function computeMerged(): Catalog {
         )
       : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
   const catalogXd = b.providers.find((provider) => provider.id === 'xd');
-  const xdShell =
-    catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
+  const xdShell = catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
   const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
@@ -828,7 +833,14 @@ function computeMerged(): Catalog {
           localOverrides,
           plan.warnings,
         );
-      const projected = projectCodexModelsToBridges(withRoot, excluded, prepareClaudeModel);
+      const preparePiModel = (model: CatalogModel): CatalogModel =>
+        applyRegistryConsumerOverlay(model, 'openai', 'pi', model.id, plan);
+      const projected = projectCodexModelsToBridges(
+        withRoot,
+        excluded,
+        prepareClaudeModel,
+        preparePiModel,
+      );
       return {
         ...projected,
         models: {

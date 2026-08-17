@@ -49,7 +49,10 @@ export interface BuiltinModelPlanePolicy {
 /** 实体化 allowlist:只有这三家允许由 registry presence 长出可选实体。 */
 export const MODEL_PLANE_POLICIES: ReadonlyMap<string, BuiltinModelPlanePolicy> = new Map([
   ['openai', { roots: ['codex'], piRoot: 'codex', membershipGatedBridges: ['claude-code'] }],
-  ['anthropic', { roots: ['claude-code'], piRoot: 'claude-code', membershipGatedBridges: ['codex'] }],
+  [
+    'anthropic',
+    { roots: ['claude-code'], piRoot: 'claude-code', membershipGatedBridges: ['codex'] },
+  ],
   ['xai', { roots: ['claude-code', 'codex'], piRoot: 'claude-code', membershipGatedBridges: [] }],
   // xd 有意不在表内:Gateway 独占存在性(见文件头)。
 ]);
@@ -104,7 +107,9 @@ const CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS: ReadonlySet<Effort> = new Set(['max', '
 
 /** OpenAI Codex root → Claude/Pi bridge;目录装配与 retired 续跑共同复用。 */
 export function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
-  const bridgeEfforts = model.efforts.filter((effort) => !CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(effort));
+  const bridgeEfforts = model.efforts.filter(
+    (effort) => !CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(effort),
+  );
   const cappedDefault: Effort | null =
     model.defaultEffort && CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(model.defaultEffort)
       ? bridgeEfforts.includes('xhigh')
@@ -155,7 +160,7 @@ export interface ModelPlaneWarning {
 export interface ModelPlaneRegistryPlan {
   /** key = `${providerId}:${rootAgent}`。 */
   roots: Map<string, RootRegistryPlan>;
-  /** key = `${providerId}:${bridgeAgent}`；目标消费端的 perAgent overlay。 */
+  /** key = `${providerId}:${consumer}`；wire bridge 用 perAgent，Pi 用 entry 基线。 */
   consumers: Map<string, Map<string, Partial<CatalogModel>>>;
   warnings: ModelPlaneWarning[];
 }
@@ -164,7 +169,7 @@ export function rootPlanKey(providerId: string, agent: RootAgentKind): string {
   return `${providerId}:${agent}`;
 }
 
-export function consumerPlanKey(providerId: string, agent: RootAgentKind): string {
+export function consumerPlanKey(providerId: string, agent: AgentKind): string {
   return `${providerId}:${agent}`;
 }
 
@@ -206,9 +211,9 @@ interface EffectiveRouteFields {
 /** entry 基线 + perAgent[agent] 覆盖后的有效字段(仅 wire enum agent 有 perAgent)。 */
 function effectiveRouteFields(
   entry: ModelRegistryEntry,
-  agent: RootAgentKind,
+  agent?: RootAgentKind,
 ): EffectiveRouteFields {
-  const override = entry.perAgent?.[agent];
+  const override = agent ? entry.perAgent?.[agent] : undefined;
   const efforts = override?.efforts ?? entry.efforts;
   const candidateDefaultEffort = override?.defaultEffort ?? entry.defaultEffort;
   const hasInvalidEffort =
@@ -339,6 +344,28 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
         rootPlan.additions.push(materialized);
       }
       if (!acceptedRoot) continue;
+      // Pi 不在 wire perAgent enum 中，但它仍是 Registry 的独立消费端。它必须从
+      // entry 基线投影，不能继承 piRoot 上的 Codex/Claude 专属覆盖。
+      if (memberRoots.includes(policy.piRoot)) {
+        const fields = effectiveRouteFields(entry);
+        if (fields.validationError) {
+          plan.warnings.push({
+            source: 'registry',
+            providerId: route.providerId,
+            agent: policy.piRoot,
+            modelId: route.modelId,
+            reason: `pi baseline ${fields.validationError}`,
+          });
+        } else {
+          const key = consumerPlanKey(route.providerId, 'pi');
+          let overlays = plan.consumers.get(key);
+          if (!overlays) {
+            overlays = new Map();
+            plan.consumers.set(key, overlays);
+          }
+          overlays.set(route.modelId, toOverlay(fields, status));
+        }
+      }
       // 目标 bridge 的 effective fields = entry base + perAgent[bridge]。metadata-only
       // 仍可 overlay 已存在的 discovery bridge，但不能在下面改变投影拓扑。
       for (const bridgeAgent of policy.membershipGatedBridges) {
@@ -402,7 +429,7 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
 export function applyRegistryConsumerOverlay(
   model: CatalogModel,
   providerId: string,
-  consumer: RootAgentKind,
+  consumer: AgentKind,
   rootModelId: string,
   plan: ModelPlaneRegistryPlan,
 ): CatalogModel {
@@ -495,11 +522,12 @@ export function resolveRetiredRegistryModelForPi(
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!registry || !policy) return null;
   const rootAgent = policy.piRoot;
-  const rootModelId = providerId === 'openai'
-    ? piModelId.startsWith(CHATGPT_MODEL_PREFIX)
-      ? piModelId.slice(CHATGPT_MODEL_PREFIX.length)
-      : null
-    : piModelId;
+  const rootModelId =
+    providerId === 'openai'
+      ? piModelId.startsWith(CHATGPT_MODEL_PREFIX)
+        ? piModelId.slice(CHATGPT_MODEL_PREFIX.length)
+        : null
+      : piModelId;
   if (!rootModelId) return null;
 
   const matched = findModelRegistryRoute(registry, providerId, rootModelId, rootAgent);
