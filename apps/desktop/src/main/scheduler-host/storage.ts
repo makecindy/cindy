@@ -699,7 +699,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           })
           .from(scheduleSessionBindings)
           .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id))
-          .innerJoin(sessions, eq(scheduleSessionBindings.sessionId, sessions.id)))
+          .innerJoin(sessions, eq(scheduleSessionBindings.sessionId, sessions.id))
+          .where(validScheduleSessionBindingWhere()))
           .map((row) => ({
             ...row,
             schedulerGeneratedAssociation: 0,

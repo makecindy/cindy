@@ -692,6 +692,108 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  it('keeps only valid association-only bindings in a full sidebar snapshot', async () => {
+    const harness = createStorageHarness();
+    const ordinary = baseSchedule({ id: 'sch-full-ordinary', name: 'full ordinary' });
+    const generated = baseSchedule({ id: 'sch-full-generated', name: 'full generated' });
+    const legacy = baseSchedule({ id: 'sch-full-legacy', name: 'full legacy' });
+    const prefixDisabled = baseSchedule({
+      id: 'sch-full-prefix-disabled',
+      name: 'full prefix disabled',
+    });
+    try {
+      await harness.storage.insert(ordinary);
+      await harness.storage.insert(generated);
+      await harness.storage.insert(legacy);
+      await harness.storage.insert(prefixDisabled);
+      enableLegacySessionFallback(harness, legacy.id);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-full-ordinary-a', 'former ordinary target', 'desktop', 1, 1),
+          ('sess-full-ordinary-b', 'current ordinary target', 'desktop', 2, 2),
+          ('sess-full-generated-a', 'historical generated target', 'scheduler', 3, 3),
+          ('sess-full-generated-b', 'current generated target', 'desktop', 4, 4),
+          ('sess-full-legacy-a', '[Schedule] prior strict key', 'desktop', 5, 5),
+          ('sess-full-legacy-b', 'current legacy target', 'desktop', 6, 6),
+          ('sess-full-prefix-a', '[Schedule] disabled prior key', 'desktop', 7, 7),
+          ('sess-full-prefix-b', 'current prefix target', 'desktop', 8, 8)
+      `);
+
+      const histories = [
+        {
+          scheduleId: ordinary.id,
+          oldSessionId: 'sess-full-ordinary-a',
+          currentSessionId: 'sess-full-ordinary-b',
+        },
+        {
+          scheduleId: generated.id,
+          oldSessionId: 'sess-full-generated-a',
+          currentSessionId: 'sess-full-generated-b',
+        },
+        {
+          scheduleId: legacy.id,
+          oldSessionId: 'sess-full-legacy-a',
+          currentSessionId: 'sess-full-legacy-b',
+        },
+        {
+          scheduleId: prefixDisabled.id,
+          oldSessionId: 'sess-full-prefix-a',
+          currentSessionId: 'sess-full-prefix-b',
+        },
+      ] as const;
+
+      for (const [index, history] of histories.entries()) {
+        harness.db.run(sql`
+          UPDATE schedules
+          SET target_session_id = ${history.oldSessionId}
+          WHERE id = ${history.scheduleId}
+        `);
+        const oldRunId = `run-full-old-${index}`;
+        await harness.storage.insertRun({
+          id: oldRunId,
+          scheduleId: history.scheduleId,
+          sessionId: history.oldSessionId,
+          firedAt: 100 + index,
+          status: 'success',
+        });
+        harness.db.run(sql`
+          UPDATE schedules
+          SET target_session_id = ${history.currentSessionId}
+          WHERE id = ${history.scheduleId}
+        `);
+        const currentRunId = `run-full-current-${index}`;
+        await harness.storage.insertRun({
+          id: currentRunId,
+          scheduleId: history.scheduleId,
+          sessionId: history.currentSessionId,
+          firedAt: 200 + index,
+          status: 'success',
+        });
+        // The 0094 trigger-created bindings survive run-history cleanup and are
+        // the only rows under test in the full association-only branch.
+        await harness.storage.deleteRun(oldRunId);
+        await harness.storage.deleteRun(currentRunId);
+      }
+
+      const associations = (await harness.storage.listSidebarIndexRuns())
+        .filter((run) => run.associationOnly === true)
+        .map((run) => `${run.scheduleId}:${run.sessionId}`)
+        .sort();
+
+      expect(associations).toEqual([
+        'sch-full-generated:sess-full-generated-a',
+        'sch-full-generated:sess-full-generated-b',
+        'sch-full-legacy:sess-full-legacy-a',
+        'sch-full-legacy:sess-full-legacy-b',
+        'sch-full-ordinary:sess-full-ordinary-b',
+        'sch-full-prefix-disabled:sess-full-prefix-b',
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
   it('hydrates exact run cost from persisted assistant runId metadata', async () => {
     const harness = createStorageHarness();
     const schedule = baseSchedule({ id: 'sch-run-cost' });
