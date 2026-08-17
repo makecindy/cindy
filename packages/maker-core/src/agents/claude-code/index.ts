@@ -101,6 +101,7 @@ import { scanRemoteClaudeSkills } from '../shared/remote-skill-scanner.js';
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
+import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import {
@@ -600,7 +601,11 @@ export async function toClaudeSdkContent(
   });
 
   const prefix = refs.length > 0 ? `${refs.join(' ')} ` : '';
-  const text = `${prefix}${textParts.join('\n')}`.trim();
+  const managedImageReferences = formatManagedImageReferences(content);
+  const textBody = managedImageReferences
+    ? [...textParts, managedImageReferences].join('\n')
+    : textParts.join('\n');
+  const text = `${prefix}${textBody}`.trim();
   const imageBlocks = [...resolvedImages.values()].flatMap(({ block }) => (block ? [block] : []));
   if (imageBlocks.length === 0) return text || prefix.trim();
   return text ? [...imageBlocks, { type: 'text', text }] : imageBlocks;

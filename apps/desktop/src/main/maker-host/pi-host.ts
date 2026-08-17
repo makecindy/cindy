@@ -96,8 +96,16 @@ export interface PiBundledModelInfo {
 }
 
 export type PiBundledModelCatalog = ReadonlyMap<string, ReadonlyMap<string, PiBundledModelInfo>>;
+export type PiListedModelIds = ReadonlyMap<string, ReadonlySet<string>>;
 
 const piBundledModelsByBinary = new Map<string, Promise<PiBundledModelCatalog | null>>();
+const listedIdsByCatalog = new WeakMap<PiBundledModelCatalog, PiListedModelIds>();
+
+export function listedPiModelIds(
+  catalog: PiBundledModelCatalog | undefined,
+): PiListedModelIds | undefined {
+  return catalog ? listedIdsByCatalog.get(catalog) : undefined;
+}
 const PI_NATIVE_APIS = new Set<PiNativeApi>([
   'anthropic-messages',
   'openai-responses',
@@ -391,7 +399,9 @@ export async function readPiBundledModels(
         initialProvider,
         initialModel,
       );
-      return catalog.size > 0 ? catalog : null;
+      if (catalog.size === 0) return null;
+      listedIdsByCatalog.set(catalog, listed);
+      return catalog;
     } catch (err) {
       log.warn(
         'readPiBundledModels: PI catalog probe failed; using daily PI annotations without bundled baseline',
@@ -410,6 +420,29 @@ export async function readPiBundledModels(
   return pending;
 }
 
+function catalogCostForPiNative(cost: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+} | undefined): { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined {
+  if (
+    !cost ||
+    (typeof cost.input !== 'number' &&
+      typeof cost.output !== 'number' &&
+      typeof cost.cacheRead !== 'number' &&
+      typeof cost.cacheWrite !== 'number')
+  ) {
+    return undefined;
+  }
+  return {
+    input: cost.input ?? 0,
+    output: cost.output ?? 0,
+    cacheRead: cost.cacheRead ?? 0,
+    cacheWrite: cost.cacheWrite ?? 0,
+  };
+}
+
 /**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
  * provider catalog. No model is copied into models.json unless the daily Cindy
@@ -420,6 +453,7 @@ export function buildPiSubscriptionNativeProviders(
   catalog: Catalog,
   endpoint: string,
   bundledModelsByProvider?: PiBundledModelCatalog,
+  listedModelIdsByProvider?: PiListedModelIds,
 ): PiNativeProvidersResult {
   const providers: PiNativeProviderSpec[] = [];
   const env: Record<string, string> = {
@@ -460,6 +494,7 @@ export function buildPiSubscriptionNativeProviders(
           !!bundledModel &&
           bundledModel.api !== model.piApi;
         const preserved = isProtocolCorrection ? bundledModel : undefined;
+        const catalogCost = catalogCostForPiNative(model.cost);
         return {
           id: model.id,
           wireId,
@@ -470,6 +505,18 @@ export function buildPiSubscriptionNativeProviders(
           ...(sourceProviderId === 'openai' && isAnnotatedAddition
             ? { catalogAddition: true }
             : {}),
+          // SuperGrok 没有官方列模型通道，Cindy 目录是成员唯一来源。
+          // 缺席证明必须来自未过滤的 --list-models id：解析后的
+          // bundled 表会丢掉未知 api 的行，不能把「解析失败」当成
+          // 「二进制没有这个模型」。
+          ...(() => {
+            if (sourceProviderId !== 'xai') return {};
+            const listedIds =
+              listedModelIdsByProvider?.get(piProviderId) ??
+              listedPiModelIds(bundledModelsByProvider)?.get(piProviderId);
+            if (!listedIds || listedIds.has(wireId)) return {};
+            return { catalogAddition: true };
+          })(),
           ...(sourceProviderId !== 'openai' &&
           model.piApi &&
           (isAnnotatedAddition || isProtocolCorrection)
@@ -500,7 +547,11 @@ export function buildPiSubscriptionNativeProviders(
                   ),
                 }
               : {}),
-          ...(preserved?.cost ? { cost: { ...preserved.cost } } : {}),
+          ...(preserved?.cost
+            ? { cost: { ...preserved.cost } }
+            : catalogCost
+              ? { cost: catalogCost }
+              : {}),
           ...(preserved?.headers ? { headers: { ...preserved.headers } } : {}),
           ...(preserved?.compat ? { compat: structuredClone(preserved.compat) } : {}),
         };
