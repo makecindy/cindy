@@ -1511,6 +1511,7 @@ async function copySnapshotEntryBounded(
     throw new Error('Pi extension snapshot contains an escaped link');
   }
   const sourceStat = await fs.stat(canonicalSource);
+  const sourceMode = sourceStat.mode & 0o777;
   budget.entries += 1;
   assertSnapshotBudget(budget, sourceStat.isFile() ? sourceStat.size : 0);
 
@@ -1521,7 +1522,7 @@ async function copySnapshotEntryBounded(
     budget.activeDirectories.add(canonicalSource);
     const directory = await fs.opendir(canonicalSource);
     try {
-      await fs.mkdir(targetPath, { mode: sourceStat.mode & 0o777 });
+      await fs.mkdir(targetPath, { mode: sourceMode });
       for await (const entry of directory) {
         await copySnapshotEntryBounded(
           confinementRoot,
@@ -1530,6 +1531,10 @@ async function copySnapshotEntryBounded(
           budget,
         );
       }
+      // mkdir applies the process umask. Restore the source mode only after
+      // children are materialized so a read-only source directory cannot make
+      // its in-progress snapshot unwritable.
+      await fs.chmod(targetPath, sourceMode);
     } finally {
       await directory.close().catch(() => undefined);
       budget.activeDirectories.delete(canonicalSource);
@@ -1541,7 +1546,7 @@ async function copySnapshotEntryBounded(
   const sourceHandle = await fs.open(canonicalSource, 'r');
   let targetHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    targetHandle = await fs.open(targetPath, 'wx', sourceStat.mode & 0o777);
+    targetHandle = await fs.open(targetPath, 'wx', sourceMode);
     const chunk = Buffer.allocUnsafe(SNAPSHOT_COPY_CHUNK_BYTES);
     let position = 0;
     for (;;) {
@@ -1553,6 +1558,9 @@ async function copySnapshotEntryBounded(
       budget.bytes += bytesRead;
       position += bytesRead;
     }
+    // open(mode) is also masked by umask; the already-open handle can restore
+    // the exact approved mode without a path replacement race.
+    await targetHandle.chmod(sourceMode);
   } finally {
     await sourceHandle.close().catch(() => undefined);
     await targetHandle?.close().catch(() => undefined);

@@ -545,6 +545,94 @@ describe('Pi package executable-code boundary', () => {
     expect(leftovers).toEqual([]);
   });
 
+  it.runIf(process.platform !== 'win32').each([
+    { layout: 'local' as const, source: 'local' },
+    { layout: 'npm' as const, source: 'npm:mode-preserving-extension' },
+  ])('preserves directory and file modes for $layout snapshots under a simulated restrictive umask', async ({
+    layout,
+    source: requestedSource,
+  }) => {
+    const packageRoot = layout === 'npm'
+      ? path.join(
+          runtime.userData,
+          'pi-package-home',
+          'npm',
+          'node_modules',
+          'mode-preserving-extension',
+        )
+      : await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-mode-local-'));
+    if (layout === 'local') roots.push(packageRoot);
+    const extensionDir = path.join(packageRoot, 'extensions');
+    const extensionFile = path.join(extensionDir, 'index.js');
+    const manifestFile = path.join(packageRoot, 'package.json');
+    await fs.mkdir(extensionDir, { recursive: true });
+    await fs.writeFile(manifestFile, JSON.stringify({
+      name: 'mode-preserving-extension',
+      version: '1.0.0',
+      pi: { extensions: ['./extensions/index.js'] },
+    }));
+    await fs.writeFile(extensionFile, 'module.exports = function setup() {};\n');
+
+    const directories = layout === 'npm'
+      ? [
+          path.join(runtime.userData, 'pi-package-home', 'npm'),
+          path.join(runtime.userData, 'pi-package-home', 'npm', 'node_modules'),
+          packageRoot,
+          extensionDir,
+        ]
+      : [packageRoot, extensionDir];
+    await Promise.all(directories.map((directory) => fs.chmod(directory, 0o775)));
+    await Promise.all([manifestFile, extensionFile].map((file) => fs.chmod(file, 0o664)));
+
+    const source = layout === 'local' ? packageRoot : requestedSource;
+    runtime.listOutput = `User packages:\n  ${source}\n    ${packageRoot}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+
+    const snapshotRoot = path.join(runtime.userData, `${layout}-mode-session`, 'managed-packages');
+    const temporaryPrefix = `${snapshotRoot}.tmp-`;
+    const originalMkdir = fs.mkdir.bind(fs);
+    const originalOpen = fs.open.bind(fs);
+    const mkdirSpy = vi.spyOn(fs, 'mkdir').mockImplementation((async (
+      target: Parameters<typeof fs.mkdir>[0],
+      options?: Parameters<typeof fs.mkdir>[1],
+    ) => {
+      if (
+        String(target).startsWith(temporaryPrefix)
+        && options
+        && typeof options === 'object'
+        && typeof options.mode === 'number'
+      ) {
+        return originalMkdir(target, { ...options, mode: options.mode & ~0o027 });
+      }
+      return originalMkdir(target, options);
+    }) as typeof fs.mkdir);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (
+      target: Parameters<typeof fs.open>[0],
+      flags: Parameters<typeof fs.open>[1],
+      mode?: number,
+    ) => originalOpen(
+      target,
+      flags,
+      String(target).startsWith(temporaryPrefix) && flags === 'wx' && typeof mode === 'number'
+        ? mode & ~0o027
+        : mode,
+    )) as typeof fs.open);
+    try {
+      const resources = await store.resolveManagedPiPackageResources({ snapshotRoot });
+      expect(resources.extensions).toHaveLength(1);
+      const copiedExtension = resources.extensions[0]!;
+      expect((await fs.stat(path.dirname(copiedExtension))).mode & 0o777).toBe(0o775);
+      expect((await fs.stat(copiedExtension)).mode & 0o777).toBe(0o664);
+      const listed = await store.listPiPackages();
+      expect(listed).toMatchObject({ packages: [{ source, enabled: true }] });
+      expect(listed.packages[0]).not.toHaveProperty('requiresExtensionApproval');
+    } finally {
+      mkdirSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+  });
+
   it('preserves v1 disabled sources while migrating approval state and blocks lifecycle scripts', async () => {
     const { source } = await createPackage();
     const stateDir = path.join(runtime.userData, 'pi-package-home');
