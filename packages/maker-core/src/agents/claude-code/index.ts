@@ -99,6 +99,7 @@ import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palett
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
+import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import {
@@ -241,14 +242,23 @@ function isProviderRoutedModel(model: string): boolean {
 }
 
 /**
- * 结果感知的硬中断目前只覆盖既有 DeepSeek 与原生 Claude 系列。
+ * 结果感知的硬中断目前覆盖 DeepSeek、原生 Claude 与 xai Grok 系列
+ * (Grok 为 2026-08 维护者确认新增:单 turn 在 4 个不同 Grep 里轮转上千次调用的实锤)。
  * 其他 provider-routed 模型需要独立确认产品口径,不能因共用 Claude Code harness
- * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…);sidechain 的
- * 判断来自 SDK 流内的原始 id(可能是裸 deepseek-… 形态,同 toSdkModelString 的双形态),
- * 因此 DeepSeek 按家族前缀匹配,不带 [1m] 的 SDK 改写。
+ * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…、xai/…);
+ * sidechain 的判断来自 SDK 流内的原始 id(可能是裸 deepseek-… / grok-… 形态,
+ * 同 toSdkModelString 的双形态),因此按家族前缀匹配,不带 [1m] 的 SDK 改写。
+ * grok 家族按 model-providers classification 口径同时认三种形态:xai/(订阅直连)、
+ * x-ai/(网关命名空间,toSdkModelString 原样透传)与裸 grok-(sidechain 原始 id)。
  */
 function shouldUseToolLoopGuard(model: string): boolean {
-  return model.startsWith('deepseek') || model.startsWith('claude-');
+  return (
+    model.startsWith('deepseek')
+    || model.startsWith('claude-')
+    || model.startsWith('xai/')
+    || model.startsWith('x-ai/')
+    || model.startsWith('grok-')
+  );
 }
 
 /** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
@@ -558,7 +568,11 @@ export async function toClaudeSdkContent(
   });
 
   const prefix = refs.length > 0 ? `${refs.join(' ')} ` : '';
-  const text = `${prefix}${textParts.join('\n')}`.trim();
+  const managedImageReferences = formatManagedImageReferences(content);
+  const textBody = managedImageReferences
+    ? [...textParts, managedImageReferences].join('\n')
+    : textParts.join('\n');
+  const text = `${prefix}${textBody}`.trim();
   const imageBlocks = [...resolvedImages.values()].flatMap(({ block }) => (block ? [block] : []));
   if (imageBlocks.length === 0) return text || prefix.trim();
   return text ? [...imageBlocks, { type: 'text', text }] : imageBlocks;
@@ -2310,6 +2324,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.sawCompactBoundary = false;
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
+      runtimeState.streamStopTokenByKey.clear();
       turnState.pendingApiError = null;
       turnState.lastAssistantRequestId = undefined;
       turnState.lastAssistantMsgHadSubstance = true;

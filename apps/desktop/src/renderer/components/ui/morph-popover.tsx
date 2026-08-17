@@ -122,6 +122,16 @@ function prefersReducedMotion(): boolean {
   );
 }
 
+/** overflow-y:auto/hidden 会把 visible 的 overflow-x 算成 auto;横轴必须显式 hidden。 */
+function setContentOverflowY(
+  content: HTMLDivElement | null,
+  overflowY: 'auto' | 'hidden',
+): void {
+  if (!content) return;
+  content.style.overflowY = overflowY;
+  content.style.overflowX = 'hidden';
+}
+
 export function MorphPopover({
   open,
   onOpenChange,
@@ -283,7 +293,7 @@ export function MorphPopover({
       // 形变期间内容区禁滚:高度未长够时滚动条短暂出现会把行宽压窄 ~10px,
       // 高度到位后又弹回 —— 行尾元素(对勾/选中条)看起来往右抖一下
       // (2026-07-22 用户反馈)。动画完成(settle)后再开自滚。
-      if (contentRef.current) contentRef.current.style.overflowY = 'hidden';
+      setContentOverflowY(contentRef.current, 'hidden');
       panel.dataset.state = 'closed';
       // 开场解除 inert(收合分支置上):closed 态面板必须整体退出 tab order,见 else 分支。
       panel.inert = false;
@@ -319,7 +329,7 @@ export function MorphPopover({
       const focusDelay = reduced ? 0 : MORPH_MS;
       closeTimerRef.current = setTimeout(() => {
         settledRef.current = true;
-        if (contentRef.current) contentRef.current.style.overflowY = 'auto';
+        setContentOverflowY(contentRef.current, 'auto');
         // RO 在 opening 期间收到的尺寸变化不会在 settled 后自动重发,这里补量一次
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
         syncPanelToContent();
@@ -350,7 +360,7 @@ export function MorphPopover({
       if (rect) chipRectRef.current = rect;
       const reducedClose = reduced || !rect;
       panel.dataset.state = 'closed';
-      if (contentRef.current) contentRef.current.style.overflowY = 'hidden';
+      setContentOverflowY(contentRef.current, 'hidden');
       if (rect) applyChipGeometry(panel, rect);
       panel.style.opacity = '0';
       // 焦点归还判定(§14.2)延迟一拍快照,不在本 layout effect 里同步做:outside
@@ -535,7 +545,10 @@ export function MorphPopover({
             <div
               ref={contentRef}
               className={cn(
-                'max-h-full overflow-y-hidden',
+                // overflow-x must stay hidden: overflow-y:auto/hidden otherwise
+                // computes overflow-x to auto (CSS overflow pairing), and a 1px
+                // border-box mismatch flashes a 2s horizontal scrollbar thumb.
+                'max-h-full overflow-x-hidden overflow-y-hidden',
                 side === 'top' ? 'translate-y-[5px]' : 'translate-y-[-5px]',
                 'opacity-0 transition-[opacity,transform] delay-[50ms] duration-[140ms] ease-out',
                 'group-data-[state=open]:translate-y-0 group-data-[state=open]:opacity-100',

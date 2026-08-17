@@ -288,8 +288,8 @@ function xaiProviderConfig(): BridgeProviderConfig {
     buildHeaders: async () => ({
       authorization: `Bearer ${await getGrokAccessToken()}`,
     }),
-    // api.x.ai 无 ChatGPT 那种订阅窗口端点;尽力抓响应头 x-ratelimit-* 给底部 chip 展示,
-    // 拿不到(上游不返头)则 renderer 诚实降级为仅价值估算。
+    // 周用量走 cli-chat-proxy billing,不在这条推理链上。这里只尽力抓 x-ratelimit-*
+    // 作为 RPM/TPM 瞬时值;拿不到不影响账号周用量 chip。
     onRateLimit: (info) => recordXaiRateLimitSnapshot(info),
     // 上游判定 OAuth 凭证失效时收口本地登录态。缺这一步的话:token 被服务端提前作废后
     // 本地 expires_at 仍未到期 → 永不刷新 → 每次请求都 403,而「设置 → 模型供应商」还

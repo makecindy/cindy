@@ -11,6 +11,7 @@ import type {
   MobileCodexRateLimitsResult,
 } from '@cindy/maker-shared/device-link-contract';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import type { ClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import type { ModelPricingMap } from '../usage/modelPricing.js';
 import type { UsageHistoryPayload, UsageHistoryReadOptions } from '../usage/usageHistory.js';
@@ -60,6 +61,8 @@ export interface MakerUsageHandlerDeps {
   readCodexRateLimits(): Promise<MobileCodexRateLimitsResult>;
   consumeCodexRateLimitReset(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
   readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null>;
+  assertTrustedSender?(event: unknown): void;
   readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null;
   triggerClaudeAccountUsageRefresh(force: boolean): Promise<void>;
   readModelPricing(): Promise<ModelPricingMap | null>;
@@ -121,6 +124,11 @@ export function registerMakerUsageHandlers(
   // Claude 订阅账号余量 (5h/周/分模型窗口) — cached-first, 内部按需后台刷新。
   registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async () => {
     return await deps.readClaudeSubscriptionUsageSnapshot();
+  });
+
+  registry.handle(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION, async (event) => {
+    deps.assertTrustedSender?.(event);
+    return await deps.readXaiSubscriptionUsageSnapshot();
   });
 
   // device-link v1:保留旧扁平 USD 形状，不能把 CNY 伪装成 *Usd。

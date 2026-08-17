@@ -45,7 +45,15 @@ export type ReasoningDisplay = 'off' | 'summarized' | 'full';
  */
 export type UserContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'image'; path: string; mimeType?: string; pathOrigin?: 'desktop-host' }
+  | {
+      type: 'image';
+      /** Filesystem location used by the harness to read image bytes. */
+      path: string;
+      /** Host-managed identity exposed for attachment-taking tools. */
+      managedUrl?: string;
+      mimeType?: string;
+      pathOrigin?: 'desktop-host';
+    }
   | { type: 'file'; path: string; mimeType?: string }
   | { type: 'mention'; name: string; path: string; kind?: 'file' | 'dir' | 'agent' };
 

@@ -6,8 +6,8 @@
  *   recordXaiRateLimitSnapshot 广播 `usage:xai-rate-limit-changed` → 本 hook。
  *   null payload = main 主动清空(xAI 登出 / 换账号,clearXaiRateLimitSnapshot)。
  *
- * 与 useAccountUsage 的取舍差异:xAI 没有 ChatGPT 那种订阅窗口端点,这份数据是**请求级瞬时值**、
- * 不落库 —— 应用重启后为 null,等下一个 xai/ 轮自然补上;为 null 时 chip 诚实降级为仅价值估算。
+ * 这是请求级 RPM/TPM 瞬时值,不是 SuperGrok 周用量(周用量见 useXaiSubscriptionUsage)。
+ * 不落库 —— 应用重启后为 null,等下一个 xai/ 轮自然补上。
  *
  * 模块缓存用**全局订阅**维护(首个 hook 挂载时绑定一次、进程内常驻),与组件的 enabled 解耦:
  * 若订阅跟随 enabled 挂/卸,chip 卸载期间(切走了 xAI 模型 / 无会话)到达的清空广播会没有

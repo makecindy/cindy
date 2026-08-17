@@ -8,6 +8,8 @@ import {
   parseAuthSessionRecord,
   reduceAuthFlow,
   serializeAccountDeletionReceiptRecord,
+  soleAutoStartSsoMethod,
+  soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
   type AuthFetch,
@@ -300,6 +302,12 @@ describe("CindyAuthClient", () => {
         ssoRequired: false,
       },
     ]);
+    expect(
+      soleAutoStartSsoMethod(ssoOrgDiscoveryToMethods(discovery)),
+    ).toMatchObject({
+      type: "sso",
+      connectionId: "conn-1",
+    });
   });
 
   it("maps an empty SSO connection list to the precise ORG_SSO_NOT_FOUND error", async () => {
@@ -357,6 +365,73 @@ describe("CindyAuthClient", () => {
     expect(url.pathname).toBe("/api/auth/sso/conn%2Fa/authorize");
     expect(url.searchParams.get("client_state")).toBe("state-1");
     expect(url.searchParams.get("device_id")).toBe("device-1");
+  });
+});
+
+describe("soleLoginMethod", () => {
+  it("returns the only method when discovery has no real choice", () => {
+    expect(soleLoginMethod([{ type: "email_code" }])).toEqual({
+      type: "email_code",
+    });
+  });
+
+  it("returns null when enterprise and personal methods both exist", () => {
+    expect(
+      soleLoginMethod([
+        { type: "email_code" },
+        {
+          type: "sso",
+          connectionId: "conn-1",
+          protocol: "oidc",
+          orgName: "心动网络",
+          connectionName: "心动",
+          ssoRequired: false,
+        },
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("soleAutoStartSsoMethod", () => {
+  const ssoA = {
+    type: "sso" as const,
+    connectionId: "conn-1",
+    protocol: "oidc" as const,
+    orgName: "心动网络",
+    connectionName: "心动",
+    ssoRequired: false,
+  };
+  const ssoB = {
+    ...ssoA,
+    connectionId: "conn-2",
+    connectionName: "Okta",
+  };
+
+  it("auto-starts a lone SSO connection from the org entry", () => {
+    expect(soleAutoStartSsoMethod([ssoA])).toEqual(ssoA);
+  });
+
+  it("auto-starts when enterprise email discovery only offers SSO", () => {
+    expect(soleAutoStartSsoMethod([{ ...ssoA, ssoRequired: true }])).toEqual({
+      ...ssoA,
+      ssoRequired: true,
+    });
+  });
+
+  it("keeps method-choice when the user can still pick personal email", () => {
+    expect(soleAutoStartSsoMethod([{ type: "email_code" }, ssoA])).toBeNull();
+  });
+
+  it("keeps method-choice when multiple SSO connections remain", () => {
+    expect(soleAutoStartSsoMethod([ssoA, ssoB])).toBeNull();
+  });
+
+  it("does not treat personal-only email as an SSO auto-start", () => {
+    expect(soleAutoStartSsoMethod([{ type: "email_code" }])).toBeNull();
+  });
+
+  it("does not auto-start an empty method list", () => {
+    expect(soleAutoStartSsoMethod([])).toBeNull();
   });
 });
 

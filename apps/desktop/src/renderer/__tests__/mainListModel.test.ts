@@ -272,6 +272,52 @@ describe('buildMainListEntries — 排序口径', () => {
     expect(labels(recencyIgnoresLeave)).toEqual(['s:older-rest', 's:just-read']);
   });
 
+  it('does not reorder already-read rest tasks when browsing among them', () => {
+    const olderRest = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'older-rest' });
+    const newerRest = session({ updatedAt: '2026-08-12T00:00:00Z', title: 'newer-rest' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map<string, number>(),
+    };
+    const restCtx = {
+      runningSessionIds: new Set<string>(),
+      attentionSessionIds: new Set<string>(),
+      waitingSessionIds: new Set<string>(),
+    };
+    const openedOlder = advanceViewedPriorityHold(hold, olderRest.id, restCtx, 1_000);
+    expect(openedOlder.heldPriorityRanks.get(olderRest.id)).toBe(LIVE_TASK_PRIORITY.rest);
+    const leftOlder = advanceViewedPriorityHold(
+      openedOlder,
+      newerRest.id,
+      restCtx,
+      Date.parse('2026-08-13T00:00:00Z'),
+    );
+    expect(leftOlder.recentlyViewedAtMs.has(olderRest.id)).toBe(false);
+    const afterBrowse = buildMainListEntries({
+      projects: [],
+      dialogues: [olderRest, newerRest],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        ...restCtx,
+        heldPriorityRanks: leftOlder.heldPriorityRanks,
+        recentlyViewedAtMs: leftOlder.recentlyViewedAtMs,
+      },
+    });
+    expect(labels(afterBrowse)).toEqual(['s:newer-rest', 's:older-rest']);
+    const recency = buildMainListEntries({
+      projects: [],
+      dialogues: [olderRest, newerRest],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+    });
+    expect(labels(afterBrowse)).toEqual(labels(recency));
+  });
+
   it('holds the unread rank even if attention is cleared before the first viewed render', () => {
     const unread = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'just-read' });
     const olderRest = session({ updatedAt: '2026-08-12T00:00:00Z', title: 'older-rest' });
