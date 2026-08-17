@@ -157,6 +157,8 @@ const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
 /** 远端权限/Extra Dir 快照指纹 —— 档位变则 envHash 变, daemon 重启而非覆盖热读文件。 */
 const PI_PERMISSION_HASH_ENV = 'CINDY_PI_PERMISSION_HASH';
+/** Cindy-owned extension 源码指纹。bridge/subagent 字节变则远端必须 restart，不能 reattach 到旧进程。 */
+const PI_EXTENSION_BUNDLE_HASH_ENV = 'CINDY_PI_EXTENSION_BUNDLE_HASH';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /**
@@ -1281,6 +1283,8 @@ export class PiAgent extends BaseAgent {
     await mkdirp(sessionDir);
 
     // cindy-bridge extension:每次 startSession 覆写,保证桥代码与本版本一致。
+    // 远端 launch identity 另含 CINDY_PI_EXTENSION_BUNDLE_HASH(源码字节指纹),
+    // 避免路径不变时 daemon 把仍在跑的旧进程当成可 reattach。
     // 与 models.json 同放隔离 configHome(Pi 从 PI_CODING_AGENT_DIR/extensions 扫描)。
     const extensionsDir = joinRemotePosixPath(configHome, 'extensions');
     await mkdirp(extensionsDir);
@@ -1990,6 +1994,12 @@ export class PiAgent extends BaseAgent {
       if (remote) {
         spawnEnv[PI_MODELS_JSON_HASH_ENV] = modelsJsonHash;
         spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
+        spawnEnv[PI_EXTENSION_BUNDLE_HASH_ENV] = createHash('sha256')
+          .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+          .update('\n')
+          .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+          .digest('hex')
+          .slice(0, 16);
       }
       mergeLoopbackNoProxy(spawnEnv);
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;

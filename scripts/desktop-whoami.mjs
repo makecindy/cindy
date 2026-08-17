@@ -271,6 +271,8 @@ export function mergeDesktopInstanceRecords(scanned, records, worktrees) {
       region: record.region ?? null,
       passive: Boolean(record.passive),
       isolated: Boolean(record.isolated),
+      isolationIntent: record.isolationIntent === true,
+      profileKind: typeof record.profileKind === 'string' ? record.profileKind : null,
       userDataDir: record.userDataDir,
       commit: record.commit ?? null,
       commitVerified: typeof record.commit === 'string' && record.commit.length > 0,

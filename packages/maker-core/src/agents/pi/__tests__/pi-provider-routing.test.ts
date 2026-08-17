@@ -1,7 +1,11 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
+import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
 
 const captured = vi.hoisted(() => ({
   args: [] as string[],
@@ -2125,6 +2129,60 @@ describe('Pi provider-aware model routing', () => {
       .toContain(capturedRemoteEnvs[0]!.CINDY_PI_PERMISSION_HASH);
     expect(capturedRemoteEnvs[1]!.CINDY_PI_PERMISSION_FILE)
       .toContain(capturedRemoteEnvs[1]!.CINDY_PI_PERMISSION_HASH);
+  });
+
+  it('puts a deterministic Cindy extension bundle hash into remote spawn env', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    const startRemote = async () => {
+      const base = byomDeps(async () => ({ providers: [], env: {} }));
+      const agent = new PiAgent({
+        ...base,
+        runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+        resolveRemotePiBinaryPath: async () => '/remote/pi',
+        getRemotePiTransport: async (_hostId, opts) => {
+          capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+          return remoteStub;
+        },
+        getRemotePiFileOps: () => ({
+          mkdirp: async () => {},
+          writeFile: async () => {},
+          stat: async () => ({ isFile: true }),
+          rm: async () => {},
+          listDir: async () => [],
+        }),
+      });
+      const handle = await agent.startSession({
+        sessionId: 'remote-extension-hash',
+        workingDir: cwd,
+        model: 'local-model',
+        remoteHostId: 'remote-host',
+      });
+      await handle.close();
+    };
+
+    await startRemote();
+    await startRemote();
+    const expected = createHash('sha256')
+      .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+      .update('\n')
+      .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+      .digest('hex')
+      .slice(0, 16);
+    expect(capturedRemoteEnvs).toHaveLength(2);
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_EXTENSION_BUNDLE_HASH).toBe(expected);
+    expect(capturedRemoteEnvs[1]!.CINDY_PI_EXTENSION_BUNDLE_HASH).toBe(expected);
+    expect(expected).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it('isolates remote configHome by models.json hash so a later route change does not overwrite the live child', async () => {

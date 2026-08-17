@@ -13,9 +13,15 @@
 export const DEFINITIVE_REFRESH_FAILURE_CODES: ReadonlySet<string> = new Set([
   'REFRESH_TOKEN_EXPIRED',
   'INVALID_REFRESH_TOKEN',
-  'DEVICE_MISMATCH',
   'MEMBERSHIP_DISABLED',
 ]);
+
+/**
+ * 当前进程的 device 配不上这枚 token。token 对真正的那台设备可能仍然有效，
+ * 不能单凭这个错误码删盘（2026-08-16：isolated 身份落在正式 profile 上，
+ * DEVICE_MISMATCH 后删掉正式版 refresh token）。
+ */
+export const FOREIGN_DEVICE_REFRESH_FAILURE_CODE = 'DEVICE_MISMATCH';
 
 /** 只有这个错误码可能来自同机多实例轮换竞态;其它确定性错误换 token 无效。 */
 const REPLACEMENT_RETRY_ELIGIBLE_CODES: ReadonlySet<string> = new Set(['INVALID_REFRESH_TOKEN']);
@@ -27,8 +33,8 @@ export interface RefreshErrorBody {
 
 /**
  * 判断一次 `/api/auth/refresh` 调用结果是否为「确定性凭据失效」——即应当从本地清除
- * refresh token。返回 `false` 表示:要么成功,要么是应当**保留** token 的瞬时失败
- * (429 限流 / 5xx / 断网 status:0 / 无识别码的 4xx)。
+ * refresh token。返回 `false` 表示:要么成功,要么是应当**保留** token 的失败
+ * (429 限流 / 5xx / 断网 status:0 / 无识别码的 4xx / DEVICE_MISMATCH)。
  *
  * @param result apiFetch 返回值的最小子集:`ok` + 响应体 `data`。
  */
@@ -36,6 +42,11 @@ export function isDefinitiveRefreshFailure(result: { ok: boolean; data: unknown 
   if (result.ok) return false;
   const code = (result.data as RefreshErrorBody | null)?.error?.code;
   return typeof code === 'string' && DEFINITIVE_REFRESH_FAILURE_CODES.has(code);
+}
+
+export function isForeignDeviceRefreshFailure(result: { ok: boolean; data: unknown }): boolean {
+  if (result.ok) return false;
+  return getRefreshErrorCode(result) === FOREIGN_DEVICE_REFRESH_FAILURE_CODE;
 }
 
 function getRefreshErrorCode(result: { data: unknown }): string | undefined {
@@ -119,11 +130,13 @@ export function resolveSessionExpiredReason(code: string | undefined): SessionEx
 export type RefreshFailureAction =
   | { kind: 'transient-failure' }
   | { kind: 'definitive-failure' }
+  | { kind: 'foreign-device' }
   | { kind: 'replacement-retry'; refreshToken: string };
 
 /**
- * 把 refresh 失败分为三类:
+ * 把 refresh 失败分为四类:
  * - transient: 网络/限流/服务端临时问题,保留 token 后续自愈;
+ * - foreign-device: 当前进程 device 配不上这枚 token,本进程登出但不得删盘;
  * - definitive: 当前磁盘 token 也已失败,清态重登;
  * - replacement-retry: 本次请求用的是 stale token,磁盘已有别的实例写入的新 token。
  */
@@ -135,6 +148,7 @@ export function resolveRefreshFailureAction(
   requestedToken: string,
   latestStoredToken: string | null,
 ): RefreshFailureAction {
+  if (isForeignDeviceRefreshFailure(result)) return { kind: 'foreign-device' };
   if (!isDefinitiveRefreshFailure(result)) return { kind: 'transient-failure' };
   if (!isReplacementRetryEligibleFailure(result)) return { kind: 'definitive-failure' };
   const replacement = getRefreshTokenReplacementCandidate(requestedToken, latestStoredToken);
@@ -231,15 +245,18 @@ export async function runRefreshWithTransientRetry<T>(
   for (const delayMs of retryDelaysMs) {
     if (result.ok) break;
     const definitive = isDefinitiveRefreshFailure(result);
+    const foreignDevice = isForeignDeviceRefreshFailure(result);
     const skipRateLimited = result.status === 429 && rateLimitDelayMs <= 0;
     opts?.onFailure?.({
       attempt: attempts,
       status: result.status,
       code: (result.data as RefreshErrorBody | null)?.error?.code,
       definitive,
-      willRetry: !definitive && !skipRateLimited,
+      willRetry: !definitive && !foreignDevice && !skipRateLimited,
     });
-    if (definitive) return { result, attempts };
+    // DEVICE_MISMATCH 不得当瞬时失败重试：会拖 1/2 秒，且后续 429/断网会把
+    // 终态盖成 transient-failure，冷启动就立不上 foreign-device 墓碑。
+    if (definitive || foreignDevice) return { result, attempts };
     if (skipRateLimited) return { result, attempts };
     const effectiveDelay = result.status === 429 ? rateLimitDelayMs : delayMs;
     await sleep(effectiveDelay);

@@ -156,25 +156,68 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(connectedProvidersForAgent(cached?.providers ?? [], 'codex')).toEqual([]);
   });
 
-  it('嵌套模型损坏时整份 provider 响应失败', async () => {
+  it('嵌套模型损坏时丢掉坏模型，保留供应商', async () => {
     const malformed = {
       ...provider('malformed-model'),
-      models: { 'claude-code': [null] },
+      models: {
+        'claude-code': [
+          null,
+          {
+            id: 'kept',
+            name: 'Kept',
+            contextWindow: 200_000,
+            efforts: ['medium'],
+            defaultEffort: 'medium',
+          },
+        ],
+      },
     };
     const invoke = vi.fn(async () => ({ providers: [malformed] }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
     const mod = await import('@/hooks/useDeviceProviders');
-    const listener = vi.fn();
-    mod.subscribeDeviceProviders('dev-malformed-model', listener);
 
     await mod.prefetchDeviceProviders('dev-malformed-model');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid provider list response',
-      unsupported: false,
-    });
-    expect(mod.getCachedDeviceProviders('dev-malformed-model')).toBeNull();
+    expect(
+      mod.getCachedDeviceProviders('dev-malformed-model')?.providers[0]?.models['claude-code'],
+    ).toEqual([
+      expect.objectContaining({ id: 'kept' }),
+    ]);
+  });
+
+  it('模型有 efforts 却没有自洽 defaultEffort 时丢掉该行，不整表失败', async () => {
+    const invoke = vi.fn(async () => ({
+      providers: [
+        {
+          ...provider('openai'),
+          models: {
+            'claude-code': [
+              {
+                id: 'gpt-5.6-luna',
+                name: 'GPT-5.6-Luna',
+                contextWindow: 1_050_000,
+                efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+              },
+              {
+                id: 'claude-opus-5',
+                name: 'Claude Opus 5',
+                contextWindow: 200_000,
+                efforts: ['high'],
+                defaultEffort: 'high',
+              },
+            ],
+          },
+        },
+      ],
+    }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+
+    await mod.prefetchDeviceProviders('dev-luna');
+
+    expect(
+      mod.getCachedDeviceProviders('dev-luna')?.providers[0]?.models['claude-code']?.map((m) => m.id),
+    ).toEqual(['claude-opus-5']);
   });
 
   it.each([
@@ -193,48 +236,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
         routing: { 'claude-code': { wireProtocol: 'future-protocol' } },
       },
     ],
-    [
-      'model.disabled',
-      {
-        ...providerWithModel('bad-model-disabled'),
-        models: {
-          'claude-code': [
-            {
-              ...providerWithModel('bad-model-disabled').models['claude-code'][0],
-              disabled: 'true',
-            },
-          ],
-        },
-      },
-    ],
-    [
-      'model.supportsFastMode',
-      {
-        ...providerWithModel('bad-fast-mode'),
-        models: {
-          'claude-code': [
-            {
-              ...providerWithModel('bad-fast-mode').models['claude-code'][0],
-              supportsFastMode: 'true',
-            },
-          ],
-        },
-      },
-    ],
-    [
-      'model.defaultEnabled',
-      {
-        ...providerWithModel('bad-default-enabled'),
-        models: {
-          'claude-code': [
-            {
-              ...providerWithModel('bad-default-enabled').models['claude-code'][0],
-              defaultEnabled: 'false',
-            },
-          ],
-        },
-      },
-    ],
   ])('%s 类型损坏时整份 provider 响应失败', async (field, malformed) => {
     const deviceId = `dev-invalid-${field}`;
     const invoke = vi.fn(async () => ({ providers: [malformed] }));
@@ -251,6 +252,46 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       unsupported: false,
     });
     expect(mod.getCachedDeviceProviders(deviceId)).toBeNull();
+  });
+
+  it.each([
+    ['model.disabled', 'true'],
+    ['model.supportsFastMode', 'true'],
+    ['model.defaultEnabled', 'false'],
+  ])('%s 类型损坏时丢掉该模型，不整表失败', async (field, badValue) => {
+    const key = field.split('.')[1] as 'disabled' | 'supportsFastMode' | 'defaultEnabled';
+    const invoke = vi.fn(async () => ({
+      providers: [
+        {
+          ...providerWithModel('kept-provider'),
+          models: {
+            'claude-code': [
+              {
+                ...providerWithModel('kept-provider').models['claude-code'][0],
+                [key]: badValue,
+              },
+              {
+                id: 'good',
+                name: 'Good',
+                contextWindow: 200_000,
+                efforts: ['medium'],
+                defaultEffort: 'medium',
+              },
+            ],
+          },
+        },
+      ],
+    }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+
+    await mod.prefetchDeviceProviders(`dev-drop-${key}`);
+
+    expect(
+      mod
+        .getCachedDeviceProviders(`dev-drop-${key}`)
+        ?.providers[0]?.models['claude-code']?.map((model) => model.id),
+    ).toEqual(['good']);
   });
 
   it('模型可见性 override 含非布尔值时不得缓存', async () => {

@@ -37,9 +37,14 @@ Cindy 内部而拒绝重启，或因目标 userData 被其他 checkout 占用而
   数据」时用。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
   （见 [`database-and-migrations.md`](database-and-migrations.md)）。沙箱（及任何 dev
   userData 覆写）内不触发首登旧数据迁移（mToc）：不探测老目录、不弹确认窗、不把正式
-  数据复制进沙箱。
-- `--passive`：定时任务被动模式，本实例不自动触发 schedule，但数据仍与其它实例共享；
-  多开导致定时任务重复、需要让位给 primary 时用。共享 userData 的 passive 实例对
+  数据复制进沙箱。**`--isolated` 不得落在任一正式 profile 上**：显式 `XDT_USER_DATA_DIR`
+  若指向 CN / Global / Dev 任一正式目录（不限当前构建区域），启动器与主进程都 fail closed。isolated 会换独立 deviceId，
+  正式目录里的 refresh token 属于正式版设备，叠在一起必然 `DEVICE_MISMATCH`，再删盘会
+  把正式版踢下线（2026-08-16）。
+- `--passive`：定时任务被动模式，本实例不自动触发 schedule。多开导致定时任务重复、
+  需要让位给 primary 时用。它可以和 `--isolated` 组合（隔离沙箱只看 UI、不跑定时任务
+  是合法的）。**共库只读契约不是这个旗标本身**，而是解析后的正式 profile + passive
+  才落地。共享正式 profile 的 passive 实例对
   userData 布局保持只读：不执行 owner-namespace 迁移（claim 推迟到下次独占启动），
   legacy 数据导入（`hasLegacyOwnerNamespaceClaim` 门控的 secret／IM／brain 搬账）
   一并等待。非 passive 实例执行该迁移前也会先查 `.dev-instances` 实例注册表
@@ -58,17 +63,21 @@ Cindy 内部而拒绝重启，或因目标 userData 被其他 checkout 占用而
   refresh token——那写入的是有效凭证，primary 侧由 replacement-retry 消化。反过来让
   passive 停止续期，会使它的 access token 过期后再无替换途径（primary 的续期只更新磁盘
   token，不更新 passive 进程的内存态，而直接走 `apiFetch` 的路径没有 401 refresh/retry）。
-- `--preserve-running`：并行 dev，不停止任何已有 Cindy dev 进程，每个新实例强制 passive
-  并共享当前区域的 userData／登录态；启动前必须由 `.dev-instances` 存活记录证明已运行
+- `--preserve-running`：启动编排，不是运行期模式。默认 restart 本来就不会关正式版和
+  其它 worktree，只替换**当前 checkout** 的旧 dev；本旗标连这份旧 dev 也保留，再并排
+  开一个共库预览，并强制 `--passive`。启动前必须由 `.dev-instances` 存活记录证明已运行
   实例与目标区域一致，旧记录没有 region 或跨区域都会 fail closed。仅供能证明实例归属的
-  上层编排，或用户明确「不要关当前实例／不要重新登录」时用。仅支持 remote，禁止与
-  `--isolated` 组合。共享实例若只发现没有 realm 的旧版裸 refresh token，也不得猜区域迁移
-  或轮换，保持本进程登出，交给同区域独占实例完成凭证迁移。
+  上层编排，或用户明确「不要关当前实例／不要重新登录」时用。仅支持 remote。禁止与
+  `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。共享实例若只发现没有 realm 的旧版裸
+  refresh token，也不得猜区域迁移或轮换，保持本进程登出，交给同区域独占实例完成凭证迁移。
 
 已手动设 `XDT_USER_DATA_DIR` 时尊重用户值，不覆盖，也不探测或迁移正式区域目录。
+唯一例外：`--isolated` / `XDT_ISOLATED=1` 把该目录指到正式 profile 时直接拒绝启动。
 
 正式版目录保持历史兼容：CN → `Cindy`，Global → `CindyGlobal`，不在启动时改名或搬迁用户数据。
 非隔离 dev 也使用当前区域对应的正式 profile；`--isolated` 沙箱再按相同区域映射派生目录。
+**dev writer 不得把正式 profile 升到当前 checkout 比安装版更新的 schema**：有 pending
+migration 就拒绝启动，改用 `--isolated=<名字>`。`--preserve-running` / 共库 passive 仍只读。
 跨区域共享、登录态迁移或旧版本回滚应使用显式隔离目录，避免不同构建误用同一 profile。
 
 ### 并行多开 dev

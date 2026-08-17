@@ -28,7 +28,7 @@ import os from 'node:os';
 
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
-import { fetchManifest, getBaseUrl, isDev } from './manifestService';
+import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifest } from './manifestService';
 import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
@@ -40,6 +40,13 @@ import {
   resetAutoUpdateSettings,
   writeAutoRelaunchOnIdle,
 } from './auto-update-settings-store';
+import {
+  readUpdateChannelSettings,
+  readUpdateChannelSettingsState,
+  resetUpdateChannelSettings,
+  writeEnableBeta,
+} from './updateChannelStore';
+import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer';
 import {
   AUTO_UPDATE_IDLE_THRESHOLD_SECONDS,
   getAutoRelaunchBlockReason,
@@ -134,6 +141,12 @@ const STARTUP_MANIFEST_TIMEOUT_MS = 8_000;
 let currentStatus: UpdateStatus = 'idle';
 let readyVersion: string | undefined;
 let readyFilePath: string | undefined;
+/**
+ * 更新渠道代际计数:用户在下载进行中关掉 beta(clearStagedPatch)时 +1,
+ * 让 in-flight 的 checkForUpdate 在写回 patch-info / 恢复旧 patch 前察觉
+ * 「渠道已变」,放弃本次下载产物,避免 opt-out 后仍被装到 beta 版本。
+ */
+let updateChannelEpoch = 0;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoRelaunchPollTimer: ReturnType<typeof setInterval> | null = null;
 let isRelaunching = false;
@@ -545,6 +558,36 @@ function removePatchInfo(): void {
   try { fs.unlinkSync(path.join(getUpdatesDir(), PATCH_INFO_FILE)); } catch { /* ignore */ }
 }
 
+/**
+ * 清掉已 staged 的补丁(ready 态):删 zip + patch-info.json,状态回 idle。
+ * 只在「用户关掉 beta 开关」时调用——opt-out 后不能仍让 staged 的 beta patch
+ * 在下一次启动/后台轮询里被装上去(切渠道不等于切版本,必须把旧渠道的补丁作废)。
+ */
+function clearStagedPatch(): void {
+  if (readyFilePath) {
+    try { fs.unlinkSync(readyFilePath); } catch { /* ignore */ }
+  }
+  readyVersion = undefined;
+  readyFilePath = undefined;
+  removePatchInfo();
+  // 递增代际:任何 in-flight 的 checkForUpdate 在写回 patch 前都会看到代际变化,
+  // 从而放弃本次(基于旧渠道的)下载产物,不把 beta patch 重新落盘。
+  updateChannelEpoch += 1;
+  // 切渠道后旧渠道的 manifest 缓存作废:否则 agent 二进制 prepare 先
+  // getCachedManifest() 会继续按旧渠道的版本号/下载地址安装资产。
+  clearCachedManifest();
+  // downloading 也要重置:opt-out 若发生在「首次 beta 下载进行中」,status 仍是
+  // downloading;不 reset 的话,in-flight 下载完成后 discard 分支只是 `return 'idle'`
+  // 而不 setStatus,update-get-status / update-check-now 会永远卡在 downloading。
+  if (
+    currentStatus === 'ready' ||
+    currentStatus === 'superseding' ||
+    currentStatus === 'downloading'
+  ) {
+    setStatus('idle');
+  }
+}
+
 function incrementApplyAttempts(): void {
   const infoPath = path.join(getUpdatesDir(), PATCH_INFO_FILE);
   try {
@@ -677,6 +720,9 @@ export function isVersionlessAppVersion(version: string): boolean {
 
 async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<CheckForUpdateResult> {
   log.info('checkForUpdate() called, currentStatus=%s', currentStatus);
+  // 快照发起时的渠道代际;下载期间若用户 opt-out(clearStagedPatch 递增),
+  // 成功/失败写回前都据此作废本次产物。
+  const channelEpochAtStart = updateChannelEpoch;
 
   if (isVersionlessAppVersion(app.getVersion())) {
     log.info('Versionless build (placeholder %s) — in-app update disabled', app.getVersion());
@@ -842,6 +888,18 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       cleanOldFiles(fileName);
     }
 
+    // 下载期间用户切渠道(渠道代际已变):放弃这次下载的产物,不写 patch-info。
+    // 否则会重新落盘一份旧渠道 patch,用户切渠道后仍被呈现旧版本更新。
+    if (channelEpochAtStart !== updateChannelEpoch) {
+      log.info('update channel changed during download — discarding patch v%s', latestVersion);
+      try { fs.unlinkSync(destPath); } catch { /* ignore */ }
+      // 必须 setStatus:切渠道可能发生在请求仍在 checking 阶段时(clearStagedPatch
+      // 不覆盖 checking),本分支之前已被 setStatus('downloading'),不归位的话
+      // update-check-now 会一直 short-circuit 返回 downloading。
+      setStatus('idle');
+      return 'idle';
+    }
+
     const requireRelogin = manifest.app.requireRelogin === true;
     writePatchInfo({
       version: latestVersion,
@@ -875,6 +933,12 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     // readyFilePath 全都没动过,直接重新广播 ready 让 banner 按钮从 loading 恢复成可点。
     // 下一次 30min 轮询会再次尝试 b。
     if (wasReady) {
+      // 下载期间用户切渠道:旧 patch 已被 clearStagedPatch 清掉,不能恢复。
+      if (channelEpochAtStart !== updateChannelEpoch) {
+        log.info('update channel changed during superseding download — not restoring stale patch');
+        setStatus('idle');
+        return 'idle';
+      }
       log.info('Superseding download failed — rolling back to ready v%s', previousReadyVersion);
       readyVersion = previousReadyVersion;
       readyFilePath = previousReadyFilePath;
@@ -1181,6 +1245,70 @@ export function initUpdateService(): void {
     resetAutoUpdateSettings();
     void evaluateAutoRelaunch('settings-reset');
     return autoUpdateSettingsWire();
+  });
+
+  // beta 测试渠道(设备级)开关。开关本身即时落盘,但 manifest 通道只在
+  // 下一次 fetchManifest(后台轮询)或重启后才会切换;设置页打开后引导用户重启。
+  // 这些 handler 写本地设置 / 触发重启,按 electron-security-and-process-boundaries.md
+  // §5 必须做 trusted-renderer 来源断言——utility/Ghost 等带 preload 的窗口不应能改
+  // 更新设置或重启应用(旧 update-auto-settings 没断言是历史债,不构成豁免)。
+  ipcMain.handle('update-channel-settings-get', (event) => {
+    assertTrustedAppRendererEvent(event);
+    const state = readUpdateChannelSettingsState();
+    return { enableBeta: state.value.enableBeta, isCustomized: state.isCustomized };
+  });
+
+  ipcMain.handle('update-channel-settings-set', (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!payload || typeof payload !== 'object') {
+      throwIpcError('INVALID_PARAMS', 'update channel settings payload required');
+    }
+    const next = (payload as { enableBeta?: unknown }).enableBeta;
+    if (typeof next !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enableBeta required (boolean)');
+    }
+    const wasBeta = readUpdateChannelSettings().enableBeta;
+    writeEnableBeta(next);
+    // 渠道一变(无论 opt-in 还是 opt-out)就作废已 staged 的旧渠道补丁:
+    // - opt-out(beta→release):否则用户关掉 beta 后仍被装到 beta 版本;
+    // - opt-in(release→beta):否则旧 release 补丁仍 staged,重启后 beta manifest
+    //   拉取失败时 checkExistingPatch() 会兜底把用户装到 release 版本。
+    // 切渠道不等于切版本,两个方向都要清。
+    if (wasBeta !== next) {
+      clearStagedPatch();
+    }
+    const state = readUpdateChannelSettingsState();
+    return { enableBeta: state.value.enableBeta, isCustomized: state.isCustomized };
+  });
+
+  ipcMain.handle('update-channel-settings-reset', (event) => {
+    assertTrustedAppRendererEvent(event);
+    const wasBeta = readUpdateChannelSettings().enableBeta;
+    resetUpdateChannelSettings();
+    // 恢复默认 = 关闭 beta;同 set(false),渠道变化即作废已 staged 的补丁。
+    if (wasBeta) {
+      clearStagedPatch();
+    }
+    const state = readUpdateChannelSettingsState();
+    return { enableBeta: state.value.enableBeta, isCustomized: state.isCustomized };
+  });
+
+  // 打开 beta 前的预检:探测 manifest-{platform}-beta.json 是否可达。
+  ipcMain.handle('update-channel-probe-beta', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const available = await probeBetaManifest();
+    return { available };
+  });
+
+  // 用户主动重启:让 beta 通道切换在下次冷启动的 manifest 拉取前生效。
+  // 用 app.quit() 而非 app.exit(0):切渠道重启不是 updater 替换场景,没有独立更新器
+  // 进程负责收尾,必须走 before-quit 链优雅停掉 Codex/IM/后台服务、落盘本地状态。
+  // app.relaunch() 只是标记「退出后重启」,真正触发重启的是 app.quit() 的退出流程。
+  ipcMain.handle('update-channel-relaunch', (event) => {
+    assertTrustedAppRendererEvent(event);
+    log.info('relaunch requested for update channel change');
+    app.relaunch();
+    app.quit();
   });
 
   ipcMain.on('update-set-relaunch-theme', (_event, theme: 'light' | 'dark') => {

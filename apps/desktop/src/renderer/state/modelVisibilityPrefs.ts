@@ -183,11 +183,12 @@ function load(): VisibilityMap {
  */
 function mirrorToMain(map: VisibilityMap): void {
   try {
-    void window.electronAPI?.maker?.syncModelVisibility?.(
+    const syncPromise = window.electronAPI?.maker?.syncModelVisibility?.(
       activeOwnerId,
       activeOwnerGeneration,
       map,
     );
+    if (syncPromise) void syncPromise.catch(() => undefined);
   } catch {
     // ignore — 镜像失败不影响本地可见性逻辑
   }

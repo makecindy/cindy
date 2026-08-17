@@ -62,9 +62,8 @@ const TooltipContent = React.forwardRef<
         // select-none:tooltip 是 hover 提示 chrome,role="tooltip" 不在
         // globals.css 的全局禁选名单里,不加会让全 app 提示文字可被划选。
         'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-lg',
-        // Light：白底深字 + 浅边框；Dark：近黑底白字
-        'border border-[var(--cmd-palette-border)] bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
-        'dark:border-transparent',
+        // Cindy tooltip 两模式都是深底白字；Board 浅描边叠在深底上会看成一圈白边。
+        'border border-transparent bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
         'max-w-[420px] break-all', // 长路径允许任意位置截断换行
         variant === 'mono' && 'font-mono',
         // 入场/出场动画:tooltip 是信息不是对象,入场纯 opacity 不缩放,
