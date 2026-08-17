@@ -86,6 +86,19 @@ export function setCustomProviderModelPiApi(
     const next = { ...model };
     if (piApi) next.piApi = piApi;
     else delete next.piApi;
+    const selectedWireProtocol = piApi === 'anthropic-messages'
+      ? 'anthropic-messages'
+      : piApi === 'openai-completions'
+        ? 'openai-chat'
+        : piApi === 'openai-responses'
+          ? 'openai-responses'
+          : undefined;
+    // "Inherit default" means inheriting both protocol and endpoint. For an explicit override,
+    // retain a model endpoint only when it already speaks that protocol; otherwise the provider
+    // endpoint is the only safe pair (also repairs legacy protocol/route mismatches on save).
+    if (!selectedWireProtocol || next.route?.wireProtocol !== selectedWireProtocol) {
+      delete next.route;
+    }
     return next;
   });
 }

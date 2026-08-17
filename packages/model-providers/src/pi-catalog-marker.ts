@@ -47,8 +47,13 @@ export function resolvePiModelRoute(
 ): ResolvedPiModelRoute | null {
   const wireProtocol = resolvePiModelWireProtocol(model, providerDefault.wireProtocol);
   if (!wireProtocol) return null;
+  const modelRouteMatchesProtocol = model?.route?.wireProtocol === wireProtocol;
   return {
-    baseUrl: model?.route?.baseUrl ?? providerDefault.baseUrl,
+    // An explicit portable override is authoritative. Legacy configs may pair it with a stale
+    // route from the previous protocol; only reuse that endpoint when the route still agrees.
+    baseUrl: modelRouteMatchesProtocol
+      ? (model.route?.baseUrl ?? providerDefault.baseUrl)
+      : providerDefault.baseUrl,
     wireProtocol,
   };
 }

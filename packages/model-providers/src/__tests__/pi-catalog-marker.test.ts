@@ -36,6 +36,47 @@ describe('resolvePiModelRoute', () => {
       wireProtocol: 'anthropic-messages',
     });
   });
+
+  it.each([
+    ['openai-completions', 'openai-chat'],
+    ['openai-responses', 'openai-responses'],
+  ] as const)(
+    'ignores a stale model endpoint when %s selects another protocol',
+    (piApi, wireProtocol) => {
+      expect(
+        resolvePiModelRoute(
+          {
+            piApi,
+            route: {
+              baseUrl: 'https://provider.example/anthropic',
+              wireProtocol: 'anthropic-messages',
+            },
+          },
+          { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat' },
+        ),
+      ).toEqual({
+        baseUrl: 'https://provider.example/v1',
+        wireProtocol,
+      });
+    },
+  );
+
+  it('keeps a legacy route authoritative when no portable override was stored', () => {
+    expect(
+      resolvePiModelRoute(
+        {
+          route: {
+            baseUrl: 'https://provider.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+          },
+        },
+        { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat' },
+      ),
+    ).toEqual({
+      baseUrl: 'https://provider.example/anthropic',
+      wireProtocol: 'anthropic-messages',
+    });
+  });
 });
 
 describe('resolvePiModelWireProtocol', () => {

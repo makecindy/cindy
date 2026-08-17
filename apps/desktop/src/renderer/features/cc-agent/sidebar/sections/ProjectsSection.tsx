@@ -91,7 +91,7 @@ import type { SessionMoveTarget } from '../sessionMoveTarget';
 /** 设备段折叠/对话组折叠共用的段 key:本机段 'local',远程段用 deviceId。 */
 const deviceSectionKey = (deviceId: string | null) => deviceId ?? 'local';
 
-// 优先级排序的「看的时候钉住、离开后再落到已看过最前」是模块生命周期内的展示态,
+// 优先级排序的「看的时候钉住;只有从完成未读切走才置顶」是模块生命周期内的展示态,
 // 不落盘。放模块级而不是组件 ref:ProjectsSection 重挂(含 React Strict Mode
 // 双挂)不能丢掉正在看的档位,否则看的过程中会跳到其余档。
 export const viewedPriorityHold: ViewedPriorityHoldState = {
@@ -153,7 +153,7 @@ export interface ProjectsSectionProps {
   activeSessionId?: string;
   /**
    * 当前注视中的任务(files 路由下 activeSessionId 为空,回落到被浏览文件所属任务)。
-   * 优先级排序用它钉住打开时的档位,离开后再落到已看过最前。
+   * 优先级排序用它钉住打开时的档位;只有从完成未读切走才置顶。
    */
   viewedSessionId?: string;
   runningSessionIds: ReadonlySet<string>;

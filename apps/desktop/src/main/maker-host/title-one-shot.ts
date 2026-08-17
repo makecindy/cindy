@@ -120,6 +120,13 @@ export interface TitleOneShotDeps {
     Promise<{ accessToken: string } | null> | { accessToken: string } | null;
   readCodexCreds?: () => { accessToken: string; accountId: string } | null;
   readGatewayKey?: () => string | null;
+  /**
+   * 派发紧前复查(异步):凭证到手、请求发出的紧前,回读会话归属 / agent 是否仍与本次
+   * one-shot 的解析口径一致。返回 false 则中止本次 one-shot(回落失败,不发出付费请求)。
+   * prompt prediction 用它防「等待期间会话被切换 agent,仍把转写路由到切换前的 provider /
+   * 账号」的 TOCTOU 竞态;标题场景无此竞态,缺省不复查。
+   */
+  beforeDispatch?: (args: { sessionId: string; agentKind: AgentKind; providerId: string }) => Promise<boolean>;
 }
 
 const EFFORT_RANK: Record<Effort, number> = {
@@ -246,7 +253,7 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
       if (!base) return null;
       const model = pickXdTitleModel(provider);
       if (!model) {
-        log.debug('title oneShot skipped: no usable chat model in xd gateway catalog', {
+        log.debug('oneShot skipped: no usable chat model in xd gateway catalog', {
           providerId,
         });
         return null;
@@ -266,7 +273,9 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
 
 // ── wire fetchers(各自一次 fetch;失败 / 空 → 抛错,由编排层吞成 null)─────────────
 
-/** Anthropic Messages:Bearer 订阅 OAuth + anthropic-beta;model 经 toSdkModelString 还原 wire 串。 */
+/** Anthropic Messages:Bearer 订阅 OAuth + anthropic-beta;model 经 toSdkModelString 还原 wire 串。
+ *  systemPrompt(可选)写入 Messages API 顶层 `system` 字段，而非作为消息角色。
+ *  prompt prediction 依赖此字段将系统指令与对话上下文正确分离。 */
 async function fetchAnthropicTitle(
   upstream: string,
   modelId: string,
@@ -274,7 +283,19 @@ async function fetchAnthropicTitle(
   oauthToken: string,
   fetchImpl: FetchImpl,
   signal: AbortSignal,
+  maxTokens: number = TITLE_MAX_TOKENS,
+  systemPrompt?: string,
 ): Promise<string> {
+  // Anthropic Messages API 不支持 role: 'system' 消息 —— 系统指令必须写入
+  // 顶层 `system` 字段，否则请求会被 API 拒绝。
+  const body: Record<string, unknown> = {
+    model: toSdkModelString(modelId),
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content: prompt }],
+  };
+  if (systemPrompt) {
+    body.system = systemPrompt;
+  }
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/v1/messages`, {
     method: 'POST',
     signal,
@@ -284,11 +305,7 @@ async function fetchAnthropicTitle(
       'anthropic-beta': 'oauth-2025-04-20',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      model: toSdkModelString(modelId),
-      max_tokens: TITLE_MAX_TOKENS,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`anthropic messages HTTP ${res.status}`);
   const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
@@ -308,10 +325,15 @@ async function fetchCodexTitle(
   creds: { accessToken: string; accountId: string },
   fetchImpl: FetchImpl,
   signal: AbortSignal,
+  instructions: string = CODEX_TITLE_INSTRUCTIONS,
+  systemPrompt?: string,
 ): Promise<string> {
+  const effectiveInstructions = systemPrompt
+    ? `${systemPrompt}\n\n${instructions}`
+    : instructions;
   const body: Record<string, unknown> = {
     model: modelId,
-    instructions: CODEX_TITLE_INSTRUCTIONS,
+    instructions: effectiveInstructions,
     input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     tools: [],
     tool_choice: 'auto',
@@ -320,6 +342,9 @@ async function fetchCodexTitle(
     stream: true,
   };
   if (effort) body.reasoning = { effort };
+  // ChatGPT Codex 订阅的 chatgpt.com/backend-api/codex 端点不支持 max_output_tokens，
+  // 会对该参数返回 400（见 anthropic-responses-bridge/src/translate-request.ts:290）。
+  // 长度限制由调用方在响应后通过 maxVisualChars 截断实现，不在此处注入。
 
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/responses`, {
     method: 'POST',
@@ -347,7 +372,13 @@ async function fetchGatewayTitle(
   gatewayKey: string,
   fetchImpl: FetchImpl,
   signal: AbortSignal,
+  maxTokens: number = TITLE_MAX_TOKENS,
+  systemPrompt?: string,
 ): Promise<string> {
+  const messages: Array<{ role: string; content: string }> = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  messages.push({ role: 'user', content: prompt });
+
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/chat/completions`, {
     method: 'POST',
     signal,
@@ -357,9 +388,9 @@ async function fetchGatewayTitle(
     },
     body: JSON.stringify({
       model: modelId,
-      max_tokens: TITLE_MAX_TOKENS,
+      max_tokens: maxTokens,
       thinking: TITLE_GATEWAY_THINKING,
-      messages: [{ role: 'user', content: prompt }],
+      messages,
     }),
   });
   if (!res.ok) throw new Error(`gateway chat HTTP ${res.status}`);
@@ -401,13 +432,40 @@ export function parseResponsesSse(raw: string): string {
 }
 
 /**
+ * 非标题 one-shot 调用的可选参数覆盖。标题调用不传(走默认值)。
+ * 用于 prompt prediction 等复用同一条 provider 通路但需要不同 token/校验的场景。
+ */
+export interface OneShotOpts {
+  /** 覆盖 max_tokens(标题默认 32)。 */
+  maxTokens?: number;
+  /** 覆盖 Codex instructions(标题默认 CODEX_TITLE_INSTRUCTIONS)。 */
+  codexInstructions?: string;
+  /** 覆盖输出校验时的最大 Unicode 长度(标题默认 256)。0 跳过 validateTitleOutput。 */
+  maxOutputChars?: number;
+  /** 校验通过后的 Unicode 截断长度(标题默认 40)。0 跳过截断。 */
+  maxVisualChars?: number;
+  /**
+   * 可选的 system 指令。
+   * - Anthropic Messages wire: 写入顶层 `system` 字段（该 API 不接受 role: 'system' 消息）。
+   * - Codex Responses wire: 拼接到 instructions 前。
+   * - Gateway chat wire: 作为 role: 'system' 消息插入 messages 数组。
+   * prompt prediction 用此字段将系统指令与对话上下文正确分离。
+   */
+  systemPrompt?: string;
+}
+
+/**
  * 标题 oneShot 诊断入口:解析本会话 provider → titleModel → 单次 HTTP 起标题。
- * 无标题 wire 的会话供应商先回落官方 `xd`;仍组不出目标时才区分“当前供应商不支持”与通用失败,
+* 无标题 wire 的会话供应商先回落官方 `xd`;仍组不出目标时才区分”当前供应商不支持”与通用失败,
  * 供手动 AI 重命名给出可操作提示。全程不打印 token(只记 providerId / model / wire / 耗时)。
+ *
+ * `opts` 仅用于非标题场景(如 prompt prediction)覆盖默认 token 数/校验规则;
+ * 标题场景不传即可走默认值。
  */
 export async function generateTitleViaProviderResult(
   args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
   deps: TitleOneShotDeps = {},
+  opts?: OneShotOpts,
 ): Promise<TitleOneShotResult> {
   // 默认走吃系统代理的 undici fetch:上游可能是境外端点(catalog routing.upstream)。
   const fetchImpl = deps.fetchImpl ?? outboundUndiciFetch;
@@ -437,7 +495,7 @@ export async function generateTitleViaProviderResult(
   }
 
   if (!providerId) {
-    log.debug('title oneShot skipped: no connected provider', { agentKind: args.agentKind });
+    log.debug('oneShot skipped: no connected provider', { agentKind: args.agentKind });
     return { status: 'failed' };
   }
 
@@ -464,7 +522,7 @@ export async function generateTitleViaProviderResult(
     const status = TITLE_ONE_SHOT_PROVIDER_IDS.has(sessionProviderId)
       ? 'failed'
       : 'unsupported-provider';
-    log.debug('title oneShot skipped: no title target', {
+log.debug('title oneShot skipped: no title target', {
       providerId: sessionProviderId,
       agentKind: args.agentKind,
       status,
@@ -482,7 +540,7 @@ export async function generateTitleViaProviderResult(
     ? titleRouteUnavailableReason(titleCatalogModel, railProvider?.source === 'user')
     : null;
   if (initialUnavailableReason) {
-    log.debug('title oneShot skipped: title model unavailable for new route', {
+    log.debug('oneShot skipped: title model unavailable for new route', {
       providerId,
       model: target.model,
       reason: initialUnavailableReason,
@@ -528,7 +586,7 @@ export async function generateTitleViaProviderResult(
   const canDispatchNow = (stage: string): boolean => {
     const reason = routeUnavailableNow();
     if (!reason) return true;
-    log.debug('title oneShot skipped: route unavailable before dispatch', {
+    log.debug('oneShot skipped: route unavailable before dispatch', {
       providerId,
       model: target.model,
       reason,
@@ -536,16 +594,78 @@ export async function generateTitleViaProviderResult(
     });
     return false;
   };
+  // 派发紧前复查:同步的 route 可用性(canDispatchNow)之外,再叠加可选的异步会话归属
+  // 复查(beforeDispatch)。凭证获取是可能数秒的 await,期间会话可能被切换 agent / 转远程,
+  // 仅在发出付费请求的紧前复查才能把窗口缩到最小。
+  const preDispatchEligible = async (stage: string): Promise<boolean> => {
+    if (!canDispatchNow(stage)) return false;
+    if (
+      deps.beforeDispatch &&
+      !(await deps.beforeDispatch({ sessionId: args.sessionId, agentKind: args.agentKind, providerId }))
+    ) {
+      log.debug('oneShot skipped: pre-dispatch eligibility check failed', {
+        providerId,
+        model: target.model,
+        stage,
+      });
+      return false;
+    }
+    return true;
+  };
+  // 非标题场景(如 prompt prediction)可覆盖 token 数/校验规则。
+  const maxTokens = opts?.maxTokens ?? TITLE_MAX_TOKENS;
+  const codexInstructions = opts?.codexInstructions ?? CODEX_TITLE_INSTRUCTIONS;
+  const maxOutputChars = opts?.maxOutputChars ?? TITLE_OUTPUT_MAX_CHARS;
+  const maxVisualChars = opts?.maxVisualChars ?? 40;
   try {
     let text = '';
     switch (target.wire) {
       case 'anthropic-messages': {
         const oauth = await readAnthropicOAuth();
         if (!oauth?.accessToken) {
-          log.debug('title oneShot skipped: no anthropic OAuth', { providerId });
+          log.debug('oneShot skipped: no anthropic OAuth', { providerId });
           return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-refresh')) {
+        // 紧前复查：readAnthropicOAuth 是异步操作，期间用户可能登出/切换账号/轮换凭证。
+        // 重新读取当前凭证并与捕获值比对，不一致则中止，避免向旧账号外发付费调用。
+        const oauthRecheck = await readAnthropicOAuth();
+        if (oauthRecheck?.accessToken !== oauth.accessToken) {
+          log.debug('oneShot skipped: credential changed during OAuth read', {
+            providerId,
+          });
+          return { status: 'failed' };
+        }
+        // 凭证确认后再做派发紧前复查（会话资格），把凭证读取期间的 TOCTOU 窗口也覆盖。
+        // preDispatchEligible 内部异步操作（listConnectedProviders 等）之后，实际
+        // fetch 之前不再有 await，使会话变更窗口最小化。
+        if (!(await preDispatchEligible('after-credential-recheck'))) {
+          return { status: 'failed' };
+        }
+        // preDispatchEligible 内部可能有异步 provider 状态读取，期间用户仍可能登出/
+        // 切换账号/轮换凭证。在最后一个 await 之后重新读取并比对，捕获 eligibility
+        // 检查期间的凭证变更，避免向旧账号外发付费调用。
+        const oauthPostEligibility = await readAnthropicOAuth();
+        if (oauthPostEligibility?.accessToken !== oauth.accessToken) {
+          log.debug('oneShot skipped: credential changed during eligibility check', {
+            providerId,
+          });
+          return { status: 'failed' };
+        }
+        // readAnthropicOAuth 是异步操作，期间 session 可能被删除/切换 agent/
+        // 转远程/改工作目录。在最后一个 await 之后再做一次 session 归属复核
+        // （仅 DB 查询，不做 provider/credential 状态读取），避免用过期
+        // session 上下文外发付费调用。
+        if (
+          deps.beforeDispatch &&
+          !(await deps.beforeDispatch({
+            sessionId: args.sessionId,
+            agentKind: args.agentKind,
+            providerId,
+          }))
+        ) {
+          log.debug('oneShot skipped: session eligibility changed during final OAuth check', {
+            providerId,
+          });
           return { status: 'failed' };
         }
         text = await fetchAnthropicTitle(
@@ -555,16 +675,63 @@ export async function generateTitleViaProviderResult(
           oauth.accessToken,
           fetchImpl,
           controller.signal,
+          maxTokens,
+          opts?.systemPrompt,
         );
         break;
       }
       case 'codex-responses': {
         const creds = readCodexCreds();
         if (!creds) {
-          log.debug('title oneShot skipped: no codex creds', { providerId });
+          log.debug('oneShot skipped: no codex creds', { providerId });
           return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-read')) {
+        // 紧前复查：readCodexCreds 之后用户可能切换 ChatGPT workspace/账号或轮换 token。
+        // 重新读取并与捕获值比对（accountId + accessToken），不一致则中止。
+        const credsRecheck = readCodexCreds();
+        if (
+          !credsRecheck ||
+          credsRecheck.accountId !== creds.accountId ||
+          credsRecheck.accessToken !== creds.accessToken
+        ) {
+          log.debug('oneShot skipped: credential changed during creds read', {
+            providerId,
+          });
+          return { status: 'failed' };
+        }
+        // 凭证确认后再做派发紧前复查（会话资格），把凭证读取期间的 TOCTOU 窗口也覆盖。
+        if (!(await preDispatchEligible('after-credential-recheck'))) {
+          return { status: 'failed' };
+        }
+        // preDispatchEligible 内部可能有异步 provider 状态读取，期间用户仍可能登出/
+        // 切换 workspace/轮换 token。在最后一个 await 之后重新读取并比对，捕获
+        // eligibility 检查期间的凭证变更，避免向旧账号外发付费调用。
+        const credsPostEligibility = readCodexCreds();
+        if (
+          !credsPostEligibility ||
+          credsPostEligibility.accountId !== creds.accountId ||
+          credsPostEligibility.accessToken !== creds.accessToken
+        ) {
+          log.debug('oneShot skipped: credential changed during eligibility check', {
+            providerId,
+          });
+          return { status: 'failed' };
+        }
+        // readCodexCreds 是同步操作，但 preDispatchEligible 内部有异步 provider
+        // 状态读取，期间 session 可能被删除/切换 agent/转远程。在最后一个 await
+        // 之后再做一次 session 归属复核（仅 DB 查询），避免用过期 session 上下文
+        // 外发付费调用。
+        if (
+          deps.beforeDispatch &&
+          !(await deps.beforeDispatch({
+            sessionId: args.sessionId,
+            agentKind: args.agentKind,
+            providerId,
+          }))
+        ) {
+          log.debug('oneShot skipped: session eligibility changed during final creds check', {
+            providerId,
+          });
           return { status: 'failed' };
         }
         text = await fetchCodexTitle(
@@ -575,16 +742,53 @@ export async function generateTitleViaProviderResult(
           creds,
           fetchImpl,
           controller.signal,
+          codexInstructions,
+          opts?.systemPrompt,
         );
         break;
       }
       case 'gateway-chat': {
         const key = readGatewayKey();
         if (!key) {
-          log.debug('title oneShot skipped: no gateway key', { providerId });
+          log.debug('oneShot skipped: no gateway key', { providerId });
           return { status: 'failed' };
         }
-        if (!canDispatchNow('after-credential-read')) {
+        // 紧前复查：readGatewayKey 之后用户可能轮换 XD 网关 key。
+        // 重新读取并与捕获值比对，不一致则中止。
+        if (readGatewayKey() !== key) {
+          log.debug('oneShot skipped: credential changed during key read', {
+            providerId,
+          });
+          return { status: 'failed' };
+        }
+        // 凭证确认后再做派发紧前复查（会话资格），把凭证读取期间的 TOCTOU 窗口也覆盖。
+        if (!(await preDispatchEligible('after-credential-recheck'))) {
+          return { status: 'failed' };
+        }
+        // preDispatchEligible 内部可能有异步 provider 状态读取，期间用户仍可能轮换
+        // 网关 key。在最后一个 await 之后重新读取并比对，捕获 eligibility 检查期间的
+        // 凭证变更，避免用旧 key 外发付费调用。
+        if (readGatewayKey() !== key) {
+          log.debug('oneShot skipped: gateway key changed during eligibility check', {
+            providerId,
+          });
+          return { status: 'failed' };
+        }
+        // readGatewayKey 是同步操作，但 preDispatchEligible 内部有异步 provider
+        // 状态读取，期间 session 可能被删除/切换 agent/转远程。在最后一个 await
+        // 之后再做一次 session 归属复核（仅 DB 查询），避免用过期 session 上下文
+        // 外发付费调用。
+        if (
+          deps.beforeDispatch &&
+          !(await deps.beforeDispatch({
+            sessionId: args.sessionId,
+            agentKind: args.agentKind,
+            providerId,
+          }))
+        ) {
+          log.debug('oneShot skipped: session eligibility changed during final key check', {
+            providerId,
+          });
           return { status: 'failed' };
         }
         text = await fetchGatewayTitle(
@@ -594,6 +798,8 @@ export async function generateTitleViaProviderResult(
           key,
           fetchImpl,
           controller.signal,
+          maxTokens,
+          opts?.systemPrompt,
         );
         break;
       }
@@ -602,10 +808,15 @@ export async function generateTitleViaProviderResult(
     // response, Markdown wrapper, or multiline answer. Validate the complete response
     // before applying the historical 40-character auto-title truncation, so a bad suffix
     // cannot hide beyond the slice boundary.
-    const normalized = validateTitleOutput(text, TITLE_OUTPUT_MAX_CHARS);
-    const title = normalized ? Array.from(normalized).slice(0, 40).join('') : null;
+    // `maxOutputChars === 0`: skip validation (non-title use cases like prompt prediction).
+    const normalized =
+      maxOutputChars > 0 ? validateTitleOutput(text, maxOutputChars) : text.trim() || null;
+    const title =
+      normalized && maxVisualChars > 0
+        ? Array.from(normalized).slice(0, maxVisualChars).join('')
+        : normalized;
     if (!title) {
-      log.warn('title oneShot rejected invalid model output', {
+      log.warn('oneShot rejected invalid model output', {
         providerId,
         model: target.model,
         wire: target.wire,
@@ -613,7 +824,7 @@ export async function generateTitleViaProviderResult(
       });
       return { status: 'failed' };
     }
-    log.info('title oneShot done', {
+    log.info('oneShot done', {
       providerId,
       model: target.model,
       wire: target.wire,
@@ -622,7 +833,7 @@ export async function generateTitleViaProviderResult(
     });
     return { status: 'ok', title };
   } catch (err) {
-    log.warn('title oneShot failed', {
+    log.warn('oneShot failed', {
       providerId,
       model: target.model,
       wire: target.wire,

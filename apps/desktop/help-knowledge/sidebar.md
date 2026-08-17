@@ -37,7 +37,7 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 **Display:**
 
 - The main list has **Text** (compact single row) and **List** (two-line row with a preview) styles. Fresh installs default to List; installs upgraded from an older version keep Text so the sidebar looks the way it did before the upgrade. This is separate from the Pinned section's style.
-- **Session info** — choose what shows at the right edge of each row: **Time** (default), **PR status** (a status icon plus a monospace `#number`; only the icon is colored — green open / gray draft / red closed / accent merged; unknown state shows a gray icon; sessions without a PR show nothing), **Tokens** (compact total like `1.4M`), and **Cost** (`$`/`¥` by currency). Multi-select; items render in the order you selected them.
+- **Session info** — choose what shows at the right edge of each row: **Time** (default), **PR status** (a status icon plus a monospace `#number`; only the icon is colored — green open / gray draft / red closed / accent merged; the open green follows the row surface so it stays readable on both the rest background and the inverse selected pill; a small orange dot on the icon means the PR still has unresolved review threads; unknown state shows a gray icon; sessions without a PR show nothing), **Tokens** (compact total like `1.4M`), and **Cost** (`$`/`¥` by currency). Multi-select; items render in the order you selected them.
 
 **Pinning:**
 

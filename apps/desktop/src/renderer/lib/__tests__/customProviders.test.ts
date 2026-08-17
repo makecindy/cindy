@@ -270,6 +270,46 @@ describe('PI custom-provider protocol overrides', () => {
     });
   });
 
+  it.each([
+    [undefined, undefined],
+    ['openai-completions', 'openai-completions'],
+    ['openai-responses', 'openai-responses'],
+    ['google-generative-ai', 'google-generative-ai'],
+  ] as const)(
+    'drops a stale Messages route when switching the model override to %s',
+    (piApi, expected) => {
+      const models: ProviderRuntimeModelConfig[] = [{
+        id: 'routed-model',
+        name: 'Routed model',
+        piApi: 'anthropic-messages',
+        route: {
+          baseUrl: 'https://provider.example/anthropic',
+          wireProtocol: 'anthropic-messages',
+        },
+      }];
+
+      expect(setCustomProviderModelPiApi(models, 0, piApi)[0]).toEqual({
+        id: 'routed-model',
+        name: 'Routed model',
+        ...(expected ? { piApi: expected } : {}),
+      });
+    },
+  );
+
+  it('retains a model route when the selected override still uses its protocol', () => {
+    const model: ProviderRuntimeModelConfig = {
+      id: 'routed-model',
+      name: 'Routed model',
+      piApi: 'anthropic-messages',
+      route: {
+        baseUrl: 'https://provider.example/anthropic',
+        wireProtocol: 'anthropic-messages',
+      },
+    };
+
+    expect(setCustomProviderModelPiApi([model], 0, 'anthropic-messages')[0]).toEqual(model);
+  });
+
   it('persists the Pi provider default without rewriting model overrides', () => {
     expect(customProviderWireProtocolForSave('pi', 'openai-chat', 'openai-chat')).toBe(
       'openai-chat',
