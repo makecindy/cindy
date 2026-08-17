@@ -116,15 +116,30 @@ export function resolveExclusiveSetModelReroute(
   if (!currentKnown) return requestedProviderId;
   if (requestedProviderId === null) return rerouteProviderId;
   if (
+    typeof requestedProviderId === 'string'
+    && shouldApplyExclusiveProviderReroute(requestedProviderId)
+  ) {
+    return rerouteProviderId;
+  }
+  if (
     requestedProviderId === undefined
-    && (!currentProviderId
-      || currentProviderId === 'xd'
-      || currentProviderId === 'anthropic'
-      || currentProviderId === 'openai')
+    && shouldApplyExclusiveProviderReroute(currentProviderId)
   ) {
     return rerouteProviderId;
   }
   return requestedProviderId;
+}
+
+/** 内置非 xAI 来源上的独占 Grok 应改绑 SuperGrok;自定义供应商除外。 */
+export function shouldApplyExclusiveProviderReroute(
+  providerId: string | null | undefined,
+): boolean {
+  return (
+    !providerId
+    || providerId === 'xd'
+    || providerId === 'anthropic'
+    || providerId === 'openai'
+  );
 }
 
 export interface ModelRouteGuardOptions {

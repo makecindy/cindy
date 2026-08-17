@@ -17,6 +17,7 @@ import {
   resolveExclusiveSetModelReroute,
   resolveLenientRoute,
   resolveSetModelGuardProviderId,
+  shouldApplyExclusiveProviderReroute,
 } from '../model-route-guard.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
@@ -517,6 +518,10 @@ describe('materializeExclusiveProviderRoute', () => {
     expect(resolveExclusiveSetModelReroute(undefined, 'my-litellm', 'xai')).toBeUndefined();
     expect(resolveExclusiveSetModelReroute(undefined, null, 'xai')).toBe('xai');
     expect(resolveExclusiveSetModelReroute(undefined, 'anthropic', 'xai')).toBe('xai');
+    expect(resolveExclusiveSetModelReroute('anthropic', 'anthropic', 'xai')).toBe('xai');
+    expect(resolveExclusiveSetModelReroute('xd', null, 'xai')).toBe('xai');
+    expect(shouldApplyExclusiveProviderReroute('anthropic')).toBe(true);
+    expect(shouldApplyExclusiveProviderReroute('my-litellm')).toBe(false);
     expect(resolveExclusiveSetModelReroute(null, 'my-litellm', 'xai')).toBe('xai');
   });
 

@@ -764,6 +764,7 @@ import {
   resolveCurrentSetModelProviderId,
   resolveExclusiveSetModelReroute,
   resolveSetModelGuardProviderId,
+  shouldApplyExclusiveProviderReroute,
 } from '../maker-host/model-route-guard.js';
 import {
   pinExclusiveSessionProvider,
@@ -6490,7 +6491,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (!verifiedResume) {
         const reroute = await assertModelRouteUsable(o.agentKind, o.model, o.providerId ?? null);
-        if (reroute && !o.providerId) o.providerId = reroute;
+        if (reroute && shouldApplyExclusiveProviderReroute(o.providerId)) {
+          o.providerId = reroute;
+        }
       } else if (!o.providerId) {
         const pin = await pinExclusiveSessionProvider(o.agentKind, o.model, null);
         if (pin) o.providerId = pin;
