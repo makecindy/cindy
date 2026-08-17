@@ -138,22 +138,25 @@ describe('Pi project skill availability', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('retries a Pi slash name while the runtime catalog may still be arriving', async () => {
-    const sleeps: number[] = [];
-    const reload = vi.fn(async () => [] as UnifiedCommand[]);
+  it.each(['foo', 'path'])(
+    'forwards unknown Pi slash text /%s after one refresh without retry delays',
+    async (commandName) => {
+      const sleeps: number[] = [];
+      const reload = vi.fn(async () => [] as UnifiedCommand[]);
 
-    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
-      agentKind: 'pi',
-      sessionId: 'session-1',
-      commandName: 'missing',
-      commands: [],
-      retryDelaysMs: [10, 20],
-      sleep: async (delayMs) => { sleeps.push(delayMs); },
-      reload,
-    })).resolves.toEqual({ command: undefined, commands: [] });
-    expect(sleeps).toEqual([10, 20]);
-    expect(reload).toHaveBeenCalledTimes(3);
-  });
+      await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+        agentKind: 'pi',
+        sessionId: 'session-1',
+        commandName,
+        commands: [],
+        retryDelaysMs: [10, 20],
+        sleep: async (delayMs) => { sleeps.push(delayMs); },
+        reload,
+      })).resolves.toEqual({ command: undefined, commands: [] });
+      expect(sleeps).toEqual([]);
+      expect(reload).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('disables unproven runtime skills while keeping approved new-task previews available', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
@@ -360,6 +363,30 @@ describe('Pi project skill availability', () => {
       },
     })).resolves.toEqual({ command: loaded, commands: [loaded] });
     expect(events).toEqual(['runtime', 'catalog']);
+  });
+
+  it('retries a missing command after explicitly starting its project runtime', async () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+    const sleeps: number[] = [];
+    let reloads = 0;
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [],
+      prepareRuntime: async () => undefined,
+      retryDelaysMs: [10, 20],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload: async () => (++reloads < 2 ? [] : [loaded]),
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(sleeps).toEqual([10]);
+    expect(reloads).toBe(2);
   });
 
   it('does not restart the runtime for an already loaded Pi skill', async () => {

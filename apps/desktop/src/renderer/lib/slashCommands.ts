@@ -384,6 +384,8 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   const current = params.commands.find(
     (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
   );
+  const mayStillBeLoading = params.prepareRuntime !== undefined
+    || (current !== undefined && isSlashCommandUnavailable(current));
   const shouldPrepareRuntime = !current
     || current.kind === 'desktop'
     || isSlashCommandUnavailable(current);
@@ -398,11 +400,12 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   let result = await reconcilePiRuntimeCommandForDispatch(params);
   for (const delayMs of retryDelaysMs) {
     const shouldRetry = result.command === undefined
-      || isSlashCommandUnavailable(result.command)
-      || (
-        result.command.kind === 'desktop'
-        && hasShadowedUnavailableSkill(result.commands, params.commandName)
-      );
+      ? mayStillBeLoading
+      : isSlashCommandUnavailable(result.command)
+        || (
+          result.command.kind === 'desktop'
+          && hasShadowedUnavailableSkill(result.commands, params.commandName)
+        );
     if (!shouldRetry) return result;
     await sleep(delayMs);
     result = await reconcilePiRuntimeCommandForDispatch({
