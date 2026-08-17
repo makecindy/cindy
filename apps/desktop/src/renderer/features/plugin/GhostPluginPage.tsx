@@ -61,7 +61,11 @@ import {
   pickAndUpdateGhost,
   reapproveInstalledGhost,
 } from '@/cindy-brain/installFlow';
-import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
+import {
+  GhostManualSummary,
+  GhostPermissionList,
+  GhostUpdateReview,
+} from '@/cindy-brain/GhostPermissionList';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -1293,7 +1297,10 @@ export function GhostPluginPage({
           content: isUpdate ? (
             <GhostUpdateReview diff={diff!} />
           ) : (
-            <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+            <div>
+              <GhostManualSummary count={marketDetail.manifest.manual?.items.length ?? 0} />
+              <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+            </div>
           ),
           maxWidth: 520,
           confirmText: isUpdate

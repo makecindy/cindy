@@ -4731,9 +4731,23 @@ async function installOrUpdateMarketGhostPackageLocked(
             : expected.permissionPolicy.mode === 'manual'
               ? (permissionDiff?.added.map((item) => item.key) ?? [])
               : unreviewed.map((item) => item.key);
+        const reviewDiff = permissionDiff
+          ? {
+              ...permissionDiff,
+              builtinOauthClientChanged:
+                permissionDiff.builtinOauthClientChanged || builtinOauthClientChanged,
+            }
+          : builtinOauthClientChanged
+            ? {
+                added: [],
+                removed: [],
+                unchanged: [],
+                builtinOauthClientChanged: true,
+              }
+            : null;
         const review: PluginMarketPackageReviewFacts = {
           manifest: inspected.manifest,
-          permissionDiff,
+          permissionDiff: reviewDiff,
           isUpdate: installed !== undefined,
           packageSha256: inspected.packageSha256,
           installedBaseline,

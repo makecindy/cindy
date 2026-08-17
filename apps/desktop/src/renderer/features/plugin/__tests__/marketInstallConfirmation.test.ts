@@ -15,6 +15,7 @@ describe('market install confirmation', () => {
 
   it('shows an immediate catalog permission card before download', () => {
     expect(pageSource).toContain('<GhostUpdateReview');
+    expect(pageSource).toContain('<GhostManualSummary');
     expect(pageSource).toContain('<GhostPermissionList');
     expect(pageSource).toContain(
       '下载真实包;权限卡已在页面确认,Host 只在真实包超出已审清单时再弹',
