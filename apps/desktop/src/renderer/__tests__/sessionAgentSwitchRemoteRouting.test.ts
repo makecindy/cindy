@@ -948,9 +948,13 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 取消确认 = false(现状,不变)。
     expect(body).toContain('if (!(await confirmAgentBrowseSwitch())) return false;');
     // 真实结果原样交出去;绝不再出现 fire-and-forget + 提前 true。
-    expect(body).toContain('return await performAgentSwitchRef.current(');
+    expect(body).toContain('const applied = await performAgentSwitchRef.current(');
+    expect(body).toContain('return applied;');
     expect(body).not.toContain('void performAgentSwitchRef.current(');
     expect(body).not.toContain('return true;');
+    // 收藏锚点也挂在**真实结果**上(2026-08-17 review 第三轮 G4):取消 / 失败不记锚点。
+    expect(body).toContain('if (applied) {');
+    expect(body).toContain('setSessionFavoriteAnchor(');
   });
 });
 

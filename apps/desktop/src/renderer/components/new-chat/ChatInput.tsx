@@ -1413,6 +1413,29 @@ export function ChatInput({
   // 「目标 Agent + 目标模型 + 旧来源」的混合状态；null 仍表示跟随目标引擎默认路由。
   const activeProviderId = agentSwitchIntent ? agentSwitchIntent.providerId : selectedProviderId;
 
+  /**
+   * 会话内经统一面板选中的**收藏锚点**(model-selector-unified §1.5,2026-08-17 review 第三轮 G4)。
+   *
+   * ★ 刻意只是**渲染进程内存态**:重启 / 刷新 / 换个窗口即忘。它是「面板上哪一行该打勾」的
+   * UI 选中提示,**不是用户数据** —— 本轮非目标明确写了不动 sessions 表 schema、不回填存量,
+   * 所以它既不落库,也不进 device-link payload。忘掉的代价只是重开面板时选中态落回模型行,
+   * 与「从没选过收藏」等价,不会让任何配置出错。
+   *
+   * 草稿的同名状态在 NewMakerDraftRoute(经 `selectedFavoriteUid` prop 传进来),两者不共用:
+   * 草稿的锚点跟着草稿走,会话的锚点跟着会话走。
+   */
+  const [sessionFavoriteAnchor, setSessionFavoriteAnchor] = useState<{
+    uid: string;
+    /** 选中时会话落下的 wire model id(≠ 收藏条目里的归一化行 id,见草稿侧同名快照的说明)。 */
+    wireModelId: string;
+    engine: 'cc' | 'codex' | 'pi';
+  } | null>(null);
+  // 换会话 = 换一份「当前选了什么」:上一条会话的锚点绝不能跟过去(新会话恰好同模型同引擎时
+  // 会在一条不相干的收藏上打勾)。
+  useEffect(() => {
+    setSessionFavoriteAnchor(null);
+  }, [sessionId]);
+
   // 乐观切换解除:props(被控端 echo 回流的 mirror)追上目标三元组即交回 props;否则 5s 兜底解除
   // (被控端把 effort 降级等导致永不相等时,避免 selector 永久置灰)。
   useEffect(() => {
@@ -5329,6 +5352,11 @@ export function ChatInput({
     [onFastModeChange, t],
   );
 
+  /**
+   * 返回值 = **这次 Fast 写入真的落下去了没有**(2026-08-17 review 第三轮 G2)。统一面板的
+   * 三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 / 编辑选中收藏)按它决定要不要收尾:
+   * 报假成功会让 override / 记忆 / 收藏被清掉,而任务还在旧配置上跑。其余调用方无视返回值。
+   */
   const handleFastModeChange = useCallback(
     async (
       enabled: boolean,
@@ -5336,18 +5364,20 @@ export function ChatInput({
       effort = activeEffort,
       syncDraft = true,
       memoryProviderId = effectiveSourceId,
-    ) => {
-      if (settingsLocked) return;
+    ): Promise<boolean> => {
+      if (settingsLocked) return false;
       // 切换意图期:Fast 改动是"更新意图"而不是改当前会话实时状态(否则普通
       // SET_FAST 链路会让 main 清意图、renderer 乐观态失配)。经 ref 调用——
       // performAgentSwitch 声明在本回调之后(TDZ)。
       if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitchRef.current(intent.target, intent.model, intent.providerId, {
-          fastMode: enabled,
-          effort: intent.effort as Effort | undefined,
-        });
-        return;
+        // await 而非 fire-and-forget:意图重登记是不是真的成功,是这次 Fast 写入的唯一结果。
+        return (
+          (await performAgentSwitchRef.current(intent.target, intent.model, intent.providerId, {
+            fastMode: enabled,
+            effort: intent.effort as Effort | undefined,
+          })) !== false
+        );
       }
       const sourceRemoteDeviceId = sessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sessionId))
@@ -5355,7 +5385,7 @@ export function ChatInput({
       const persisted = await persistFastModeChange(enabled, {
         remoteDeviceId: sourceRemoteDeviceId,
       });
-      if (!persisted) return;
+      if (!persisted) return false;
       if (modelId && currentModelAgentKind && memoryProviderId) {
         modelMemory?.setFast(currentModelAgentKind, memoryProviderId, modelId, enabled);
       }
@@ -5366,6 +5396,7 @@ export function ChatInput({
           { remoteDeviceId: sourceRemoteDeviceId },
         );
       }
+      return true;
     },
     [
       sessionId,
@@ -5727,11 +5758,13 @@ export function ChatInput({
         modelId,
         targetAgent,
         effort,
+        favoriteUid = null,
       }: {
         providerId: string;
         modelId: string;
         targetAgent: AgentKind;
         effort: Effort | '';
+        favoriteUid?: string | null;
       }): Promise<boolean> => {
         // 取消 = 什么都不改;返回 false 让选择器留在原地(用户还能挑别的行)。
         if (!(await confirmAgentBrowseSwitch())) return false;
@@ -5744,12 +5777,23 @@ export function ChatInput({
         // 代价是面板会在事务在途期间多停留一会儿:这段时间由 ModelSelector 的
         // keepOpenForAgentConfirmation 保命锁按住(它已经覆盖整个 await 期),面板本身在
         // 切换 in-flight 期间是置灰的,不会出现「面板可点却在切换中」的中间态。
-        return await performAgentSwitchRef.current(
+        const applied = await performAgentSwitchRef.current(
           targetAgent,
           modelId,
           providerId,
           effort ? { effort } : undefined,
         );
+        // 收藏锚点只在事务**真成功**后才记(G4):确认框被取消 / 登记失败时这次选择根本没
+        // 发生,记下来会让面板在一条没被采用的收藏上打勾。选普通模型行 → favoriteUid 为
+        // null → 顺带把上一条锚点清掉。
+        if (applied) {
+          setSessionFavoriteAnchor(
+            favoriteUid
+              ? { uid: favoriteUid, wireModelId: modelId, engine: agentKindToVendor(targetAgent) }
+              : null,
+          );
+        }
+        return applied;
       },
     };
   }, [
@@ -5771,6 +5815,26 @@ export function ChatInput({
     ? (resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??
       null)
     : (vendorKey ?? null);
+
+  /**
+   * 下发给统一面板的收藏锚点:草稿用调用方(NewMakerDraftRoute)持有的那一份,会话用上面
+   * 那份内存态。
+   *
+   * 会话侧刻意做成**派生校验**而不是「配置一变就 setState 清掉」:同引擎选中一条收藏时,
+   * 模型的持久化是异步的(onProviderChange → IPC),清理式写法会在那个窗口里把刚记下的锚点
+   * 当场抹掉。派生写法在那一帧只是先不打勾,等 activeModel 收敛回来自然对上;而配置真被别的
+   * 路径改走(换模型 / 换引擎)之后,它永远对不上,等价于清除。判据与草稿侧同名兜底逐字同构:
+   * 比的是**快照里的 wire id** 与当前会话的 wire id(收藏条目按归一化行 id 存,两者天生可能不等)。
+   * 引擎身份未加载时(composerEngineMarkVendor 为 null)不参与判定,免得一帧未就绪就误判。
+   * 锚点指向的收藏被删 / 换账号后查无此条,由面板侧 activeFavoriteUid 兜底。
+   */
+  const effectiveSelectedFavoriteUid = sessionId
+    ? sessionFavoriteAnchor &&
+      sessionFavoriteAnchor.wireModelId === activeModel &&
+      (composerEngineMarkVendor === null || sessionFavoriteAnchor.engine === composerEngineMarkVendor)
+      ? sessionFavoriteAnchor.uid
+      : null
+    : selectedFavoriteUid;
 
   // 会话内拿不到跨引擎切换事务(SSH 远程会话 / 被控端不支持 session-agent-switch /
   // Orca 会话)时,统一面板**不能**摆出其它引擎的行:useUnifiedRowActions.selectRow 只有在
@@ -6109,17 +6173,23 @@ export function ChatInput({
     [deviceLinkDeviceId, performModelChange, sessionId],
   );
 
+  /**
+   * 返回值 = **这次深度写入真的落下去了没有**(2026-08-17 review 第三轮 G2,口径同
+   * handleFastModeChange)。统一面板的「先应用、后清存储」入口按它决定要不要收尾。
+   */
   const handleEffortChange = useCallback(
-    async (newEffort: Effort) => {
-      if (settingsLocked) return;
+    async (newEffort: Effort): Promise<boolean> => {
+      if (settingsLocked) return false;
       // 切换意图期:effort 改动 = 更新意图(重登记),不走普通 setEffort 链路。
       if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitch(intent.target, intent.model, intent.providerId, {
-          effort: newEffort,
-          fastMode: intent.fastMode,
-        });
-        return;
+        // await 而非 fire-and-forget:意图重登记成功与否就是这次深度写入的结果。
+        return (
+          (await performAgentSwitch(intent.target, intent.model, intent.providerId, {
+            effort: newEffort,
+            fastMode: intent.fastMode,
+          })) !== false
+        );
       }
       // 用户在当前模型上显式选了 effort → 记下来, 切走再切回来时能恢复
       if (activeModel) {
@@ -6150,7 +6220,7 @@ export function ChatInput({
                   ),
                 );
               }
-              return;
+              return false;
             } finally {
               if (isSessionScopeCurrent(sessionId, currentSessionIdRef.current))
                 setRemoteSwitchInFlight(false);
@@ -6179,13 +6249,13 @@ export function ChatInput({
                 if (activeModel) rememberProviderChoice(activeModel, effort);
               },
             });
-            return;
+            return true;
           }
           // 远程会话由被控端 patch 回流；把稳定 device scope 一并传给父级，避免 relay
           // origin 短暂缺失时被误当成本地 session patch。
           onEffortDidChange?.(newEffort, sessionId, remoteDeviceId);
           if (activeModel) rememberProviderChoice(activeModel, newEffort);
-          return;
+          return true;
         }
 
         // 草稿态:全本地生效(同 handleModelChange 草稿分支)。onEffortDidChange → 父级
@@ -6193,8 +6263,10 @@ export function ChatInput({
         // 不再写服务端默认偏好——此前 await 服务端成功才刷 UI,token 失效时表现为"档位点不动"。
         onEffortDidChange?.(newEffort);
         if (activeModel) rememberProviderChoice(activeModel, newEffort);
+        return true;
       } catch (err) {
         log.warn('effort change failed:', err);
+        return false;
       }
     },
     [
@@ -7300,7 +7372,13 @@ export function ChatInput({
                         ? handleUnifiedDraftSelect
                         : undefined
                     }
-                    selectedFavoriteUid={selectedFavoriteUid}
+                    // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
+                    selectedFavoriteUid={effectiveSelectedFavoriteUid}
+                    // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在
+                    // sessionEngineFilter.onCrossEngineSelect 里按事务真实结果自行记录)。
+                    onSessionFavoriteAnchorChange={
+                      sessionId && unifiedPanelActive ? setSessionFavoriteAnchor : undefined
+                    }
                     // session-agent-switch:已建会话提供显式两步引擎切换(列表顶部
                     // Claude/Codex 分段,先选 Agent 再选模型)。device-link 远程会话同样
                     // 支持(隧道到被控端执行,与手机端同一套 channel),入口按被控端能力位

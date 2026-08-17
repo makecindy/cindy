@@ -39,7 +39,9 @@ describe('ChatInput model source switching wiring', () => {
     expect(selectorBlock).toContain('sessionEngineFilter={sessionEngineFilter}');
     // 新会话:选中直通(草稿),仅无 sessionId 时下发。
     expect(selectorBlock).toContain('!sessionId && unifiedPanelActive && onUnifiedDraftSelect');
-    expect(selectorBlock).toContain('selectedFavoriteUid={selectedFavoriteUid}');
+    // 收藏锚点:草稿取调用方持有的那一份,会话取本组件的内存态(2026-08-17 review 第三轮 G4)。
+    expect(selectorBlock).toContain('selectedFavoriteUid={effectiveSelectedFavoriteUid}');
+    expect(selectorBlock).toContain('onSessionFavoriteAnchorChange={');
   });
 
   it('does not render the legacy two-step agent segments under the unified panel', () => {

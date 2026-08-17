@@ -876,10 +876,10 @@ describe('远程交互接线不变式', () => {
     const body = src.slice(start, start + 2200);
     expect(body).toContain('const persisted = await persistFastModeChange(enabled, {');
     expect(body).toContain('remoteDeviceId: sourceRemoteDeviceId');
-    expect(body.indexOf('if (!persisted) return;')).toBeLessThan(
+    expect(body.indexOf('if (!persisted) return false;')).toBeLessThan(
       body.indexOf('syncSessionDraftModelPrefs'),
     );
-    expect(body.indexOf('if (!persisted) return;')).toBeLessThan(
+    expect(body.indexOf('if (!persisted) return false;')).toBeLessThan(
       body.indexOf('modelMemory?.setFast'),
     );
     expect(body.indexOf('modelMemory?.setFast')).toBeLessThan(

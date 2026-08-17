@@ -1551,6 +1551,41 @@ describe('Shared create project picker', () => {
     expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(6);
   });
 
+  /**
+   * 2026-08-17 review 第三轮 G1:统一面板跨引擎选择切了 draft.vendor,但 seed key 还停在
+   * 上一个引擎上 —— 下一帧播种 effect 看到「新目标」,按目标引擎的**被控端远程默认值**无条件
+   * 重播种,用户刚点选的模型当场被覆盖,建出来的远程任务用的不是他选的模型。
+   *
+   * 修法:让这次显式选择成为新引擎的 seed —— 前置把 key 推到目标引擎。key 的构造必须与播种
+   * effect **逐字一致**,这条断言锁的就是那份一致性(两处各拼一遍必然漂移成「永远判成新目标」
+   * 或「永远判不成新目标」)。
+   */
+  it('advances the device-link seed key to the engine the user just picked', () => {
+    const seed = newMakerDraftRouteSource.slice(
+      newMakerDraftRouteSource.indexOf('// seed dlSel:'),
+      newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
+    );
+    // 播种 effect 侧的 key 构造(正本)。
+    expect(seed).toContain('const key = `${effectiveDeviceLinkDeviceId}:${capabilityAgentKind}`;');
+
+    const unified = newMakerDraftRouteSource.slice(
+      newMakerDraftRouteSource.indexOf('const handleUnifiedDraftSelect = useCallback('),
+      newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir'),
+    );
+    // 选择侧:同一构造,agent 一维换成**目标引擎**(selection.vendor),且必须在 setDlSel 之前。
+    expect(unified).toContain(
+      'dlSeedKeyRef.current = `${effectiveDeviceLinkDeviceId}:${dbToMakerAgentKind(',
+    );
+    expect(unified).toContain('normalizeDbAgentKind(selection.vendor),');
+    expect(unified.indexOf('dlSeedKeyRef.current =')).toBeLessThan(
+      unified.indexOf('setDlSel((prev) => {'),
+    );
+    // 前置的前提是「控制端已编辑」这枚标记也在(否则同一目标遇上 capabilities 刷新照样重种)。
+    expect(unified.indexOf('dlRuntimeTouchedRef.current = true;')).toBeLessThan(
+      unified.indexOf('dlSeedKeyRef.current ='),
+    );
+  });
+
   // #807 review 第二十七轮:设备菜单行原来只有 hover / disabled 两态,且 outline-none 去掉了浏览器
   // 默认焦点圈 —— 键盘走这个菜单时完全看不出焦点落在哪一行。
   it('shows a token-backed focus ring on device menu rows', () => {

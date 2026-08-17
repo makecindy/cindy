@@ -170,6 +170,12 @@ export interface UnifiedModelPanelProps {
       modelId: string;
       targetAgent: AgentKind;
       effort: Effort | '';
+      /**
+       * 这次选中的**收藏锚点**(选普通模型行 = null;引擎胶囊 / 恢复推荐 / 删收藏这些
+       * 非「选中一行」的动作不带)。会话侧据此在事务真成功后记住「现在选中的是哪条收藏」——
+       * 取消 / 失败时锚点一点不动,与 override / 收藏的清理同一条「成功才落」规则。
+       */
+      favoriteUid?: string | null;
     }) => void | boolean | Promise<void | boolean>;
   };
   /**
@@ -191,10 +197,17 @@ export interface UnifiedModelPanelProps {
     effort: Effort | '',
     config: UnifiedSelectedRow,
   ) => void;
-  /** live 选中行改深度 —— 走会话实时状态,不预写记忆(与既有语义一致)。 */
-  onEffortChangeLive?: (effort: Effort) => void;
-  /** live 选中行改 Fast —— 必须等调用方持久化成功,不预写记忆(device-link 写穿失败会污染被控端草稿)。 */
-  onFastModeChangeLive?: (enabled: boolean) => void | Promise<void>;
+  /**
+   * live 选中行改深度 —— 走会话实时状态,不预写记忆(与既有语义一致)。
+   * 返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;返回 void 视为落了)。
+   * 「先应用、后清存储」的三个入口(恢复推荐 / 删选中收藏 / 编辑选中收藏)靠它决定要不要收尾。
+   */
+  onEffortChangeLive?: (effort: Effort) => void | boolean | Promise<void | boolean>;
+  /**
+   * live 选中行改 Fast —— 必须等调用方持久化成功,不预写记忆(device-link 写穿失败会污染
+   * 被控端草稿)。返回值语义同 `onEffortChangeLive`。
+   */
+  onFastModeChangeLive?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   /** 面板容器元素(浮层按它的左 / 右外侧定位)。 */
   panelElement: HTMLElement | null;
   overlayClassName?: string;

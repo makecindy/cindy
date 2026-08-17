@@ -47,8 +47,18 @@ export interface UnifiedRowActionsOptions {
   /** 这一行是不是当前会话 / 草稿正在用的那一行(来源 + 模型 + 引擎都对上)。 */
   isLiveRow: (entry: UnifiedModelEntry, config: UnifiedRowConfig) => boolean;
   modelMemory?: ModelMemoryAccessors | undefined;
-  onEffortChangeLive?: ((effort: Effort) => void) | undefined;
-  onFastModeChangeLive?: ((enabled: boolean) => void | Promise<void>) | undefined;
+  /**
+   * live 选中行改深度。返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;
+   * 返回 void 的调用方视为落了 —— 与 `onCrossEngineSelect` 同一条约定)。
+   * 「先应用、后清存储」的两个入口(恢复推荐 / 删除选中收藏)靠它决定要不要收尾。
+   */
+  onEffortChangeLive?:
+    | ((effort: Effort) => void | boolean | Promise<void | boolean>)
+    | undefined;
+  /** live 选中行改 Fast。返回值语义同 `onEffortChangeLive`。 */
+  onFastModeChangeLive?:
+    | ((enabled: boolean) => void | boolean | Promise<void | boolean>)
+    | undefined;
   onSelect: (
     providerId: string,
     modelId: string,
@@ -63,6 +73,8 @@ export interface UnifiedRowActionsOptions {
           modelId: string;
           targetAgent: AgentKind;
           effort: Effort | '';
+          /** 这次选中的收藏锚点(选普通模型行 / 非「选中一行」的动作为 null)。 */
+          favoriteUid?: string | null;
         }) => void | boolean | Promise<void | boolean>;
       }
     | undefined;
@@ -156,15 +168,45 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const inSession = sessionEngineFilter !== undefined && sessionAgent !== undefined;
 
   /**
+   * 把一次 live 写入的结果归一成「成功了没有」:只有明确的 `false` 与抛错算失败,
+   * 返回 void 的调用方视为成功 —— 与 `onCrossEngineSelect` 逐字同一条约定,面板里
+   * 「真成功才收尾」的判据只有这一份。
+   */
+  const runLive = async (
+    call: () => void | boolean | Promise<void | boolean>,
+  ): Promise<boolean> => {
+    try {
+      return (await call()) !== false;
+    } catch {
+      // 抛错 = 没写成(device-link 隧道失败 / 本地持久化失败)。
+      return false;
+    }
+  };
+
+  /**
    * 无损应用:引擎没变,深度 / Fast 交给调用方的实时状态 —— 与用户在浮层里手动拖档 /
    * 关 ⚡ 走同一条持久化链路(applyEffort / applyFast 的 live 分支),绝不预写记忆表。
    * Fast **无条件关**:传进来的目标配置恒是「默认 / 推荐态」(无 Fast),而 config.fast
    * 只是本次渲染看到的值,漏关一次留下的是一个用户以为已经回落、实际还在插队加速的任务;
    * 重复关是幂等的。
+   *
+   * ★ 返回「两笔都写成了没有」(2026-08-17 review 第三轮 G2)。此前这里是 fire-and-forget:
+   * 调用方**先**同步清了 override / 记忆 / 收藏,再把两个 live 回调甩出去,于是远程
+   * setEffort / setFastMode 或本地持久化一失败,存储已经清掉且不回滚 —— 面板显示推荐态,
+   * 任务还在旧配置上跑。顺序因此翻过来,与跨引擎那条链路(runCrossEngineSwitch)一致:
+   * **先实时写入成功,后清存储**。
+   *
+   * 两笔**串行且遇错即停**:深度没写成时不该顺手把 Fast 关掉 —— 那会留下一个用户从没选过的
+   * 「旧档 + 无 Fast」组合;直接放弃则整件事一点没动,用户重试即可。
    */
-  const applyDefaultsLive = (effort: Effort | null): void => {
-    if (effort && onEffortChangeLive) onEffortChangeLive(effort);
-    if (onFastModeChangeLive) void onFastModeChangeLive(false);
+  const applyDefaultsLive = async (effort: Effort | null): Promise<boolean> => {
+    if (effort && onEffortChangeLive) {
+      if (!(await runLive(() => onEffortChangeLive(effort)))) return false;
+    }
+    if (onFastModeChangeLive) {
+      if (!(await runLive(() => onFastModeChangeLive(false)))) return false;
+    }
+    return true;
   };
 
   /**
@@ -224,6 +266,61 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     });
   };
 
+  /**
+   * 在浮层里编辑**当前选中的那一条收藏**(2026-08-17 review 第三轮 G3)。
+   *
+   * 病根:收藏行的深度 / Fast 此前只更新收藏 store 就返回。选中一条收藏 = 草稿 / 会话正按
+   * 那份副本在跑,于是收藏行当场显示新档、锚点仍打勾,**实际提交用的还是旧配置** —— 与
+   * 「恢复推荐只清记忆」「删选中收藏只删记录」是同一个病的第三个入口。
+   *
+   * 三条链路与那两个入口共用同一套判据,不另造第四条:
+   *   · 这条收藏描述的就是正在跑的那一份(同模型 + 同引擎)→ 两个 live 回调,与用户在模型行上
+   *     手动拖档走完全同一条持久化链路(浮层与面板都留在原地);
+   *   · 引擎已经和 live 不是一个(用户刚在同一个浮层里改过引擎胶囊)→ 会话走跨引擎切换事务,
+   *     草稿走既有 onSelect 把整份副本写回(favoriteUid **保持该 uid**:编辑不改变「选中的是
+   *     这一条收藏」)。跨引擎那条按既有语义不带 Fast(performAgentSwitch 按目标重解析)。
+   *
+   * 顺序与 G2 一致:**live 真写成了才**落收藏 store 的这次编辑 —— 写穿失败时收藏原样保留,
+   * 不留「收藏行写着新档、任务还在旧档」的半套状态。
+   */
+  const applySelectedFavoriteEdit = (args: {
+    anchor: UnifiedAnchor;
+    entry: UnifiedModelEntry;
+    config: UnifiedRowConfig;
+    uid: string;
+    /** 编辑后的整份副本配置(旧副本 ⊕ 这次改的那一格)。 */
+    next: { effort: Effort | null; fast: boolean };
+    /** 把这次改的那一格写到 live 上;归一后的「成功了没有」。 */
+    live: () => Promise<boolean>;
+    /** 落收藏 store 的这次编辑。 */
+    commit: () => void;
+  }): void => {
+    if (isLiveRow(args.entry, args.config)) {
+      void args.live().then((applied) => {
+        if (applied) args.commit();
+      });
+      return;
+    }
+    const wireModelId = args.config.wireModelId ?? args.anchor.modelId;
+    if (inSession) {
+      runCrossEngineSwitch({
+        providerId: args.anchor.providerId,
+        wireModelId,
+        targetAgent: args.config.agent,
+        effort: args.next.effort,
+        onApplied: args.commit,
+      });
+      return;
+    }
+    onSelect(args.anchor.providerId, wireModelId, args.next.effort ?? '', {
+      engine: args.config.engine,
+      fast: args.next.fast,
+      favoriteUid: args.uid,
+      rowModelId: args.anchor.modelId,
+    });
+    args.commit();
+  };
+
   const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, entry, config, engine) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
@@ -267,7 +364,22 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const applyEffort: UnifiedRowActions['applyEffort'] = (anchor, entry, config, effort) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
-      updateModelFavorite(anchor.uid, { effort });
+      const commit = (): void => updateModelFavorite(anchor.uid, { effort });
+      // 改的不是当前选中的那条收藏(或压根没有 live 深度通道)→ 它只描述「下次选它用什么」,
+      // 行为不变:只改副本。
+      if (selectedFavoriteUid !== anchor.uid || !onEffortChangeLive) {
+        commit();
+        return;
+      }
+      applySelectedFavoriteEdit({
+        anchor,
+        entry,
+        config,
+        uid: anchor.uid,
+        next: { effort, fast: config.fast },
+        live: () => runLive(() => onEffortChangeLive(effort)),
+        commit,
+      });
       return;
     }
     if (isLiveRow(entry, config) && onEffortChangeLive) {
@@ -289,7 +401,21 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const applyFast: UnifiedRowActions['applyFast'] = (anchor, entry, config, enabled) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
-      updateModelFavorite(anchor.uid, { fast: enabled });
+      const commit = (): void => updateModelFavorite(anchor.uid, { fast: enabled });
+      // 同 applyEffort:非选中收藏(或没有 live Fast 通道)只改副本,不动正在跑的那一份。
+      if (selectedFavoriteUid !== anchor.uid || !onFastModeChangeLive) {
+        commit();
+        return;
+      }
+      applySelectedFavoriteEdit({
+        anchor,
+        entry,
+        config,
+        uid: anchor.uid,
+        next: { effort: config.effort, fast: enabled },
+        live: () => runLive(() => onFastModeChangeLive(enabled)),
+        commit,
+      });
       return;
     }
     if (isLiveRow(entry, config) && onFastModeChangeLive) {
@@ -350,8 +476,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 旧引擎 / 旧深度 / 旧 Fast 在跑,浮层却已经显示成推荐态 —— 显示与事实分家。
     if (recommendedAgent === config.agent) {
       // 引擎没变:推荐态 = 跟随推荐档 + 无 Fast,两个 live 回调即「应用」。
-      resetStoredConfig();
-      applyDefaultsLive(defaultEffort);
+      // 顺序与跨引擎分支一致(2026-08-17 review 第三轮 G2):**两笔实时写入都成功了才**清存储。
+      // 反过来先清后写,一旦远程 setEffort / setFastMode 失败,override 与记忆已经没了、
+      // 任务还在旧配置上跑 —— 面板显示的推荐态与事实分家,且没有可回滚的原值。
+      void applyDefaultsLive(defaultEffort).then((applied) => {
+        if (applied) resetStoredConfig();
+      });
       return;
     }
 
@@ -435,9 +565,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       return;
     }
     // 会话 + 默认引擎 == 当前引擎:无损,两个 live 回调把深度 / Fast 复位即可。
+    // 与跨引擎分支同一条顺序(2026-08-17 review 第三轮 G2):**live 真写成了才**删记录 ——
+    // 收藏是用户手存的东西,不可逆,写穿失败时必须原样留着。
     if (fallback.agent === sessionAgent) {
-      applyDefaultsLive(fallback.effort);
-      commit();
+      void applyDefaultsLive(fallback.effort).then((applied) => {
+        if (applied) commit();
+      });
       return;
     }
     // 会话 + 默认引擎 ≠ 当前引擎:有损,走跨引擎切换事务;真成功才删收藏。
@@ -460,11 +593,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 行的归一化身份另放在 config.rowModelId 里,调用方要记 override / 收藏时用那个。
     const wireModelId = config.wireModelId ?? anchor.modelId;
     if (sessionEngineFilter && sessionAgent !== undefined && config.agent !== sessionAgent) {
+      // 收藏锚点一并交出去:会话侧要在事务**真成功后**才把它记成「当前选中的收藏」
+      // (取消 / 失败时什么都没换,锚点当然不能动)。同引擎那一路由 onSelect 的 config 带走。
       sessionEngineFilter.onCrossEngineSelect({
         providerId: anchor.providerId,
         modelId: wireModelId,
         targetAgent: config.agent,
         effort,
+        favoriteUid: favorite ? favorite.uid : null,
       });
       return;
     }

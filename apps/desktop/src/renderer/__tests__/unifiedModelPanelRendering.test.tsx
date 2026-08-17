@@ -382,6 +382,8 @@ describe('统一面板 · 会话内形态', () => {
       modelId: 'claude-opus-5',
       targetAgent: 'claude-code',
       effort: 'medium',
+      // 选的是普通模型行 → 锚点为 null(会话侧据此把上一条收藏锚点清掉)。
+      favoriteUid: null,
     });
   });
 
@@ -691,6 +693,309 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     expect(listModelFavorites()[0]?.uid).toBe(uid);
     expect(onEffortChange).not.toHaveBeenCalled();
     expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 「先实时写入成功,后清存储」(2026-08-17 review 第三轮 G2)。恢复推荐 / 删选中收藏的
+ * **同引擎**路径此前是先同步清存储、再 fire-and-forget 甩出两个 live 回调:远程 setEffort /
+ * setFastMode 或本地持久化一失败,override / 记忆 / 收藏已经没了且不回滚 —— 面板显示推荐态,
+ * 任务还在旧配置上跑。跨引擎那条早就是「事务真成功才收尾」,这一组把同引擎路径拉齐。
+ */
+describe('统一面板 · 同引擎实时写入成功才清存储', () => {
+  async function openFlyoutFor(name: string): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor(name));
+    });
+    return await screen.findByTestId('unified-model-config-flyout');
+  }
+  function favoriteStar(): HTMLElement {
+    return within(screen.getAllByRole('group')[0]).getByRole('button', { name: '取消收藏' });
+  }
+
+  it('恢复推荐:深度写入失败 → override 保留,Fast 也不顺手关掉', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onEffortChange = vi.fn(() => false);
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    // 深度没写成 → 整件事放弃:不该留下用户从没选过的「旧档 + 无 Fast」。
+    expect(onFastModeChange).not.toHaveBeenCalled();
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+  });
+
+  it('恢复推荐:Fast 写入失败 → override 同样保留', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onFastModeChange = vi.fn(async () => false);
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange: vi.fn(),
+      onFastModeChange,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+  });
+
+  it('恢复推荐:两笔都成功才清 override(成功路径回归)', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange: vi.fn(async () => true),
+      onFastModeChange: vi.fn(async () => true),
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    await waitFor(() => {
+      expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    });
+  });
+
+  it('删除选中收藏(会话同引擎):实时写入失败 → 收藏原样保留', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+      fast: true,
+    });
+    const onEffortChange = vi.fn(() => false);
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange: vi.fn(),
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    // 收藏是用户手存的东西,不可逆:回落配置没落成就绝不能把记录删了。
+    expect(listModelFavorites()).toHaveLength(1);
+    expect(listModelFavorites()[0]?.uid).toBe(uid);
+  });
+});
+
+/**
+ * 编辑**当前选中的**收藏要同步 live(2026-08-17 review 第三轮 G3)。此前收藏行的深度 / Fast
+ * 只更新收藏 store 就返回:行上显示新档、锚点仍打勾,实际提交却还是旧配置。
+ */
+describe('统一面板 · 编辑选中的收藏同步到 live', () => {
+  async function openFavoriteFlyout(): Promise<HTMLElement> {
+    const favoritesGroup = screen.getAllByRole('group')[0];
+    const row = within(favoritesGroup)
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.pointerEnter(row);
+    });
+    return await screen.findByTestId('unified-model-config-flyout');
+  }
+
+  it('草稿选中的收藏改深度:live 回调收到新档,收藏副本同步更新', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onEffortChange = vi.fn();
+    renderPanel({
+      onUnifiedSelect: vi.fn(),
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'low',
+      onEffortChange,
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.effort).toBe('high');
+    });
+  });
+
+  it('草稿选中的收藏改 Fast:live 回调收到新值,收藏副本同步更新', async () => {
+    const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      onUnifiedSelect: vi.fn(),
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      onEffortChange: vi.fn(),
+      onFastModeChange,
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-fast-toggle]') as HTMLElement);
+    });
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.fast).toBe(true);
+    });
+  });
+
+  it('live 写入失败 → 收藏副本不留半套(这次编辑不落)', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onEffortChange = vi.fn(() => false);
+    renderPanel({
+      onUnifiedSelect: vi.fn(),
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'low',
+      onEffortChange,
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(listModelFavorites()[0]?.effort).toBe('low');
+  });
+
+  it('非选中的收藏只改副本,不动正在跑的那一份(回归保护)', async () => {
+    addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex', effort: 'low' });
+    const onEffortChange = vi.fn();
+    // 选中的是 Opus 5,那条收藏不是当前锚点。
+    renderPanel({
+      onUnifiedSelect: vi.fn(),
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+      onEffortChange,
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(listModelFavorites()[0]?.effort).toBe('high');
+  });
+});
+
+/**
+ * 会话路径的收藏锚点(2026-08-17 review 第三轮 G4)。会话内选中一条收藏时,单引擎链路
+ * (onProviderChange)只认 (来源, 模型),锚点被丢掉 —— 重开面板选中的是模型行而不是刚用的
+ * 那条收藏,「删除选中收藏回落默认」在会话内也永远走不到。
+ */
+describe('统一面板 · 会话内回传收藏锚点', () => {
+  it('同引擎选中收藏 → 回传锚点(带这次落下的 wire id 与引擎)', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+      onSessionFavoriteAnchorChange,
+    });
+    const favoriteRow = within(screen.getAllByRole('group')[0])
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(favoriteRow);
+    });
+    expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith({
+      uid,
+      wireModelId: 'gpt-5.5',
+      engine: 'codex',
+    });
+  });
+
+  it('选中普通模型行 → 回传 null(把上一条锚点清掉)', async () => {
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+      onSessionFavoriteAnchorChange,
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith(null);
+  });
+
+  it('跨引擎选中收藏:锚点随切换事务的入参交出去,由调用方按真实结果决定记不记', async () => {
+    const uid = addModelFavorite({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc' });
+    const onCrossEngineSelect = vi.fn(() => true);
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      onSessionFavoriteAnchorChange,
+    });
+    // 跨引擎收藏只在「全部」视图里出现(同引擎视图按定义只列无损可切的行)。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    const favoriteRow = within(screen.getAllByRole('group')[0])
+      .getByText('Opus 5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(favoriteRow);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'anthropic',
+      modelId: 'claude-opus-5',
+      targetAgent: 'claude-code',
+      effort: 'medium',
+      favoriteUid: uid,
+    });
+    // 跨引擎不走这个回调:记不记由 ChatInput 在事务返回非 false 之后自己决定(取消不记)。
+    expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
   });
 });
 

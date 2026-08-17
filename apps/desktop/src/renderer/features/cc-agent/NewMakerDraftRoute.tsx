@@ -2614,6 +2614,24 @@ export function NewMakerDraftRoute() {
       if (selection.vendor !== draft.vendor) switchVendor(selection.vendor, currentPrefs);
       if (isDeviceLinkDraft) {
         dlRuntimeTouchedRef.current = true;
+        // ★ 跨引擎选择必须**前置**把 seed key 推到目标引擎(2026-08-17 review 第三轮 G1)。
+        //
+        // 病根:上面的 switchVendor 改了 draft.vendor → 下一次渲染 capabilityAgentKind 跟着变 →
+        // 播种 effect 看到 `${deviceId}:${capabilityAgentKind}` 这个 key 与 dlSeedKeyRef 不等,
+        // 按 shouldReseedDeviceLinkDraftDefaults 的第一条(新目标一律重种)**无条件**拿目标引擎的
+        // 被控端远程默认值重播种 —— 用户刚点选的 selection.modelId 当场被覆盖,建出来的远程任务
+        // 用的不是他选的模型。
+        //
+        // 修法是让「这次显式选择」本身成为新引擎的 seed:key 按播种 effect 的构造**逐字一致**地
+        // 前置写进 ref,于是那次 effect 走的是「同一目标」分支;dlRuntimeTouchedRef 已置 true,
+        // 目标引擎 capabilities 到达时只做合法性夹紧(保留 current.model),不再换成区域默认。
+        // 重复渲染 / 重复播种窗口一并覆盖:key 一旦被显式选择占住,后续每一帧都判成同一目标。
+        // 同引擎分支 key 不变,本就不会进入重播种(同样由 controllerTouched 挡住能力刷新重校)。
+        if (effectiveDeviceLinkDeviceId) {
+          dlSeedKeyRef.current = `${effectiveDeviceLinkDeviceId}:${dbToMakerAgentKind(
+            normalizeDbAgentKind(selection.vendor),
+          )}`;
+        }
         setDlSel((prev) => {
           const previous = prev ?? deviceLinkInitial;
           // 与 handleModelDidChange 的远程分支同一条口径:换模型必须按**目标模型**重新解析
@@ -2680,6 +2698,7 @@ export function NewMakerDraftRoute() {
       draft.vendor,
       currentPrefs,
       isDeviceLinkDraft,
+      effectiveDeviceLinkDeviceId,
       deviceLinkInitial,
       capabilities,
       remoteDraftState,

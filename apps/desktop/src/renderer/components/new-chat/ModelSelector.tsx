@@ -562,7 +562,12 @@ interface ModelSelectorProps {
   modelId: string;
   effort: Effort;
   onModelChange: (modelId: string) => void;
-  onEffortChange: (effort: Effort) => void;
+  /**
+   * 改深度。返回值(若有)= **这次写入真的落下去了没有**(`false` / 抛错 = 没落;返回 void 的
+   * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
+   * 编辑选中收藏)靠它决定要不要收尾;其余调用方照旧无视返回值。
+   */
+  onEffortChange: (effort: Effort) => void | boolean | Promise<void | boolean>;
   /**
    * per-session 来源选择(B · Provider-first)。
    *   - currentProviderId:本会话当前显式选定的供应商 id(null = 跟随默认路由)。
@@ -589,7 +594,8 @@ interface ModelSelectorProps {
   actualRoute?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
   fastMode?: boolean;
-  onFastModeChange?: (enabled: boolean) => void | Promise<void>;
+  /** 语义同 onEffortChange(含返回值口径)。 */
+  onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
@@ -668,6 +674,8 @@ interface ModelSelectorProps {
   engineMarkVendor?: SelectableVendor | null;
   /** 语义同 ModelSelectorContentProps.selectedFavoriteUid（统一面板的收藏锚点选中态）。 */
   selectedFavoriteUid?: string | null;
+  /** 语义同 ModelSelectorContentProps.onSessionFavoriteAnchorChange（会话内收藏锚点回传）。 */
+  onSessionFavoriteAnchorChange?: ModelSelectorContentProps['onSessionFavoriteAnchorChange'];
   /** 语义同 ModelSelectorContentProps.onUnifiedSelect（统一面板选中直通）。 */
   onUnifiedSelect?: ModelSelectorContentProps['onUnifiedSelect'];
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
@@ -719,9 +727,15 @@ interface ModelSelectorContentProps {
   modelId: string;
   effort: Effort;
   onModelChange: (modelId: string) => void;
-  onEffortChange: (effort: Effort) => void;
+  /**
+   * 改深度。返回值(若有)= **这次写入真的落下去了没有**(`false` / 抛错 = 没落;返回 void 的
+   * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
+   * 编辑选中收藏)靠它决定要不要收尾;其余调用方照旧无视返回值。
+   */
+  onEffortChange: (effort: Effort) => void | boolean | Promise<void | boolean>;
   fastMode?: boolean;
-  onFastModeChange?: (enabled: boolean) => void | Promise<void>;
+  /** 语义同 onEffortChange(含返回值口径)。 */
+  onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   modelMemory?: ModelMemoryAccessors;
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
@@ -817,6 +831,18 @@ interface ModelSelectorContentProps {
    * 传 null / 不传 = 当前选中的是模型行;锚点在收藏里查无此条时面板自动回落模型行。
    */
   selectedFavoriteUid?: string | null;
+  /**
+   * 会话内经统一面板选中一行后回传该行的**收藏锚点**(选普通模型行 = null)。
+   *
+   * 草稿的锚点由 `onUnifiedSelect` 的 `favoriteUid` 一并带走(那条链路整行直通),这个回调
+   * 只服务**已建会话**:同引擎行走 `onProviderChange` 那条单引擎链路,锚点在那里会被丢掉,
+   * 于是重开面板选中的是模型行而不是刚用的那条收藏,「删除选中收藏回落默认」在会话内也永远
+   * 不可达。只在**真的应用了**这次选择时回调(同引擎直切是同步成功;跨引擎由调用方在切换
+   * 事务返回非 false 后自行记录,不经本回调)。
+   */
+  onSessionFavoriteAnchorChange?: (
+    anchor: { uid: string; wireModelId: string; engine: 'cc' | 'codex' | 'pi' } | null,
+  ) => void;
   /**
    * 统一面板的**选中直通**(M5 新会话接线)。传入后,联合列表里的每一次行选中都原样交给
    * 调用方 —— (来源, 模型, 深度, 该行生效引擎, Fast, 收藏锚点) 一次给全,不再走
@@ -973,6 +999,7 @@ function ModelSelectorContentView({
   sessionEngineFilter,
   unifiedAgents,
   selectedFavoriteUid = null,
+  onSessionFavoriteAnchorChange,
   onUnifiedSelect,
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
@@ -2547,6 +2574,16 @@ function ModelSelectorContentView({
             // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
             // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
             handleRowSelect(providerId, id, true, rowEffortValue);
+            // ★ 收藏锚点必须**在选择应用之后**回传(2026-08-17 review 第三轮 G4):单引擎链路
+            // (handleRowSelect → onProviderChange)只认 (来源, 模型),会把这一行是不是一条
+            // 收藏这件事丢掉。丢了之后重开面板选中的是模型行而不是刚用的那条收藏,「删除
+            // 选中收藏回落默认」在会话内也永远走不到。放在 handleRowSelect 之后是刻意的:
+            // 那条链路内部会按新的 (来源, 模型) 收敛调用方状态,先记锚点会被它顺手清掉。
+            onSessionFavoriteAnchorChange?.(
+              rowConfig.favoriteUid
+                ? { uid: rowConfig.favoriteUid, wireModelId: id, engine: rowConfig.engine }
+                : null,
+            );
           }}
           {...(onEffortChange ? { onEffortChangeLive: onEffortChange } : {})}
           {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
@@ -2843,6 +2880,7 @@ export function ModelSelector({
   unifiedAgents,
   engineMarkVendor = null,
   selectedFavoriteUid = null,
+  onSessionFavoriteAnchorChange,
   onUnifiedSelect,
   fallbackOption,
   reselectEmitsChange = false,
@@ -3541,6 +3579,7 @@ export function ModelSelector({
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}
       selectedFavoriteUid={selectedFavoriteUid}
+      onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
