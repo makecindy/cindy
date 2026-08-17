@@ -150,6 +150,20 @@ export interface ModelMemoryAccessors {
   setChoice?: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  /**
+   * 「恢复推荐 / 回落默认」用的**删除**入口(2026-08-17 review H3)。
+   *
+   * 记忆表是 override 表:表里**没有**该键 ⇒ 跟随当前版本的目录默认。恢复推荐若把这一版的
+   * defaultEffort **快照**写回去,用户就被钉死在旧默认上 —— 服务端之后改了推荐档,没自定义过
+   * 的人吃不到(与 modelEnginePrefs 的 clear 语义、configuration-and-overrides §4 同一条)。
+   *
+   * **可选**:device-link 的被控端镜像走隧道写穿,协议里没有「删除」这一笔(加它属于跨端
+   * wire protocol 变更,不在本次范围)。没注入时 `resetToRecommended` 退回既有的快照写法,
+   * 行为与改动前一致。
+   */
+  clearEffort?: (agent: AgentKind, providerId: string, modelId: string) => void;
+  /** 同 `clearEffort`,针对 Fast(缺省即关,所以删除与写 false 显示等价,但不钉住默认)。 */
+  clearFast?: (agent: AgentKind, providerId: string, modelId: string) => void;
 }
 
 // 供应商完整展示名:三个内置 id 复用设置页 i18n 标题(settings.providers.<id>.title),

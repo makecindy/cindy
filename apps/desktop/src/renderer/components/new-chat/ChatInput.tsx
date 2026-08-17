@@ -289,6 +289,8 @@ import {
   resolveProviderModelEfforts,
 } from '@/lib/providerModels';
 import {
+  clearProviderModelEffort,
+  clearProviderModelFast,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -1716,6 +1718,10 @@ export function ChatInput({
       setChoice: setProviderModelChoice,
       getFast: getProviderModelFast,
       setFast: setProviderModelFast,
+      // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
+      // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
+      clearEffort: clearProviderModelEffort,
+      clearFast: clearProviderModelFast,
     };
   }, [deviceLinkDeviceId, modelMemoryOverride]);
 

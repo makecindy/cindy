@@ -11,8 +11,11 @@
  *   7. dataOwnerId 分区隔离
  *   8. storage 事件跨窗口重读,迟到旧事件不回滚
  *   9. 落盘失败静默吞,内存态仍生效
+ *  10. 跨 renderer **并发**写:同步乐观写 + Web Locks 串行权威重放(2026-08-17 review H1)
  *
  * 项目 vitest env=node,无 window。沿用 newMakerDraft.test.ts 的最小 localStorage stub。
+ * node 的 globalThis.navigator 没有 locks,所以除并发那一组外全部走「锁不可用 → 跳过重放」
+ * 的退化路径 —— 整份用例同时也是那条退化路径的回归。
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -33,6 +36,33 @@ class MemLocalStorage {
   }
   keys(): string[] {
     return Array.from(this.store.keys());
+  }
+}
+
+/**
+ * `navigator.locks` 的最小串行队列 polyfill(node env 没有 Web Locks)。
+ * 同名锁按请求顺序排队,回调跑完才轮到下一个 —— 与浏览器的互斥语义一致,足以验证
+ * 「两个窗口的重放互相排队」。
+ */
+class MemLockManager {
+  private chains = new Map<string, Promise<void>>();
+  request(name: string, cb: () => unknown): Promise<void> {
+    const prev = this.chains.get(name) ?? Promise.resolve();
+    const run = prev.then(async () => {
+      await cb();
+    }, async () => {
+      await cb();
+    });
+    const settled = run.catch(() => {});
+    this.chains.set(name, settled);
+    return run;
+  }
+  /** 等所有排队的重放跑完(重放里可能再排队,故 drain 几轮)。 */
+  async settle(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.all([...this.chains.values()]);
+      await Promise.resolve();
+    }
   }
 }
 
@@ -571,5 +601,199 @@ describe('modelFavorites store', () => {
       m.seedDefaultFavorite({ ...SEED });
       expect(m.listModelFavorites()).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * 跨 renderer **并发**写(2026-08-17 review H1)。
+ *
+ * 上一轮只把写路径的基底换成「写前重读 localStorage」,那只修得了「另一窗口先写完、
+ * storage 事件还没到」那一路。这里锁的是真正的交错:两个窗口**都在对方写回之前**读了同一份
+ * 旧快照 —— 此时后写者的整表写回必然覆盖先写者(丢新增 / 丢编辑),删除与编辑交错时已删
+ * 条目还会复活。修法是同步乐观写之后,在同源 Web Locks 里**串行重放同一个 op**。
+ *
+ * 两个「窗口」= 同一 localStorage 上的两份模块实例(Electron 每个 renderer 有独立模块实例)。
+ * 交错用「让某一次 getItem 返回旧快照」精确复现,不靠时序碰运气。
+ */
+describe('modelFavorites store · 跨 renderer 并发写', () => {
+  let locks: MemLockManager;
+
+  beforeEach(() => {
+    locks = new MemLockManager();
+    vi.stubGlobal('navigator', { locks });
+  });
+
+  /** 两份模块实例(= 两个 renderer),共享同一个 localStorage stub。 */
+  async function loadTwoWindows() {
+    vi.resetModules();
+    const a = await import('@/state/modelFavorites');
+    vi.resetModules();
+    const b = await import('@/state/modelFavorites');
+    return { a, b };
+  }
+
+  /**
+   * 「对方还没写回时读到的旧快照」——**空表也要给出显式序列化值**,不能传 null:
+   * freshState 把 `getItem === null` 解释成「storage 不可读」并退回内存缓存(私密窗口 /
+   * 写满时的既有兜底),那条路径读不出旧表。
+   */
+  const EMPTY_RAW = JSON.stringify({ uidSeq: 1, items: [] });
+
+  /** 让**下一次** getItem 返回 `raw`,模拟「对方还没写回时读到的旧快照」。 */
+  function withStaleRead<T>(raw: string, run: () => T): T {
+    const spy = vi.spyOn(memStorage, 'getItem').mockImplementationOnce(() => raw);
+    try {
+      return run();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  function persisted(key: string): { uidSeq: number; items: ModelFavoriteRow[]; seeded?: true } {
+    return JSON.parse(memStorage.getItem(key) ?? '{}');
+  }
+  interface ModelFavoriteRow {
+    uid: string;
+    providerId: string;
+    modelId: string;
+    agent: string;
+    effort?: string;
+    fast?: true;
+  }
+
+  it('双窗口并发新增:后写者的整表覆盖被重放补回,两条都在', async () => {
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    // A 先写(此刻 storage 为空)。
+    const uidA = a.addModelFavorite({ ...OPUS, effort: 'high' });
+    expect(uidA).toBe('fav-1');
+    // B 在 A 写回**之前**就读了快照(空表),于是它的整表写回把 A 那条抹掉 —— 这正是病灶。
+    const uidB = withStaleRead(EMPTY_RAW, () =>
+      b.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    expect(uidB).toBe('fav-1');
+    expect(persisted(key).items).toHaveLength(1);
+
+    // 锁内重放:各自把自己的 op 叠在对方已落盘的结果上。
+    await locks.settle();
+    const items = persisted(key).items;
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.modelId).sort()).toEqual(['claude-opus-4-8', 'gpt-5.5']);
+    // 锚点不复用:抢到同一个 fav-1 时后重放的那条顺延到下一个空位。
+    expect(new Set(items.map((i) => i.uid)).size).toBe(2);
+    // 两个窗口的内存态都收敛到同一份。
+    expect(a.listModelFavorites()).toHaveLength(2);
+    expect(b.listModelFavorites()).toHaveLength(2);
+  });
+
+  it('A 编辑 + B 删除交错:条目最终不存在(整表写回不再让已删条目复活)', async () => {
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+    a.addModelFavorite({ ...OPUS, effort: 'high' }); // fav-1
+    a.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }); // fav-2
+    await locks.settle();
+    const before = memStorage.getItem(key);
+
+    // B 删掉 fav-1。
+    b.removeModelFavorite('fav-1');
+    // A 拿**删除之前**的快照编辑同一条 → 同步整表写回把它复活。
+    withStaleRead(before!, () => a.updateModelFavorite('fav-1', { effort: 'low' }));
+    expect(persisted(key).items.map((i) => i.uid)).toEqual(['fav-1', 'fav-2']);
+
+    await locks.settle();
+    // 重放:B 的 remove 施加在最新表上;A 的 update 落在「已删」状态上是 no-op。
+    expect(persisted(key).items.map((i) => i.uid)).toEqual(['fav-2']);
+    expect(a.getModelFavorite('fav-1')).toBeUndefined();
+    expect(b.getModelFavorite('fav-1')).toBeUndefined();
+  });
+
+  it('B 删除 + A 新增交错:新增保留,删除也不被顶回来', async () => {
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+    a.addModelFavorite({ ...OPUS, effort: 'high' }); // fav-1
+    await locks.settle();
+    const before = memStorage.getItem(key);
+
+    b.removeModelFavorite('fav-1');
+    withStaleRead(before!, () =>
+      a.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    await locks.settle();
+
+    const items = persisted(key).items;
+    expect(items.map((i) => i.modelId)).toEqual(['gpt-5.5']);
+    expect(a.listModelFavorites().map((item) => item.modelId)).toEqual(['gpt-5.5']);
+    expect(b.listModelFavorites().map((item) => item.modelId)).toEqual(['gpt-5.5']);
+  });
+
+  it('种子收藏并发:标记只落一次,另一窗口同时新增的收藏不被吞', async () => {
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    // B 先加了一条用户收藏,A 同时(拿空表快照)投放种子。
+    const uidB = b.addModelFavorite({ ...OPUS });
+    withStaleRead(EMPTY_RAW, () =>
+      a.seedDefaultFavorite({ providerId: 'xd', modelId: 'deepseek-v4-pro', agent: 'codex' }),
+    );
+    await locks.settle();
+
+    const state = persisted(key);
+    expect(state.seeded).toBe(true);
+    expect(state.items.map((i) => i.modelId).sort()).toEqual([
+      'claude-opus-4-8',
+      'deepseek-v4-pro',
+    ]);
+    expect(b.getModelFavorite(uidB) ?? b.listModelFavorites().find((i) => i.modelId === OPUS.modelId))
+      .toBeTruthy();
+
+    // 标记已落 → 任一窗口再投都是 no-op(不出现重复种子)。
+    a.seedDefaultFavorite({ providerId: 'xd', modelId: 'deepseek-v4-pro', agent: 'codex' });
+    b.seedDefaultFavorite({ providerId: 'xd', modelId: 'deepseek-v4-pro', agent: 'codex' });
+    await locks.settle();
+    expect(persisted(key).items).toHaveLength(2);
+  });
+
+  it('重放与 storage 事件不互相回滚:迟到的旧事件仍被重读挡下', async () => {
+    let onStorage: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal('window', {
+      localStorage: memStorage,
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === 'storage' && typeof listener === 'function') {
+          onStorage = listener as (event: StorageEvent) => void;
+        }
+      },
+      removeEventListener: vi.fn(),
+    });
+    vi.resetModules();
+    const a = await import('@/state/modelFavorites');
+    vi.resetModules();
+    const b = await import('@/state/modelFavorites');
+
+    a.addModelFavorite({ ...OPUS, effort: 'high' });
+    const stale = memStorage.getItem(a.__STORAGE_KEY);
+    withStaleRead(stale!, () =>
+      b.addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }),
+    );
+    await locks.settle();
+    expect(a.listModelFavorites()).toHaveLength(2);
+
+    // 重放落完之后才送到的旧事件(payload 是旧值)→ 监听器重读真相,不回滚。
+    const seen = vi.fn();
+    a.subscribeModelFavorites(seen);
+    onStorage?.({ key: a.__STORAGE_KEY, newValue: stale } as StorageEvent);
+    expect(a.listModelFavorites()).toHaveLength(2);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('navigator.locks 不可用时跳过重放,行为退回「重读基底 + 整表写回」', async () => {
+    vi.stubGlobal('navigator', {});
+    vi.resetModules();
+    const m = await import('@/state/modelFavorites');
+    const uid = m.addModelFavorite({ ...OPUS, effort: 'high' });
+    expect(uid).toBe('fav-1');
+    expect(m.listModelFavorites()).toHaveLength(1);
+    expect(() => m.removeModelFavorite(uid)).not.toThrow();
+    expect(m.listModelFavorites()).toEqual([]);
   });
 });

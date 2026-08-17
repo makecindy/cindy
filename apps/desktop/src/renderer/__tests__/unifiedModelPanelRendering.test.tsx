@@ -210,8 +210,8 @@ const onProviderChange = vi.fn();
 
 function renderPanel(
   props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
-): void {
-  render(
+): ReturnType<typeof render> {
+  return render(
     React.createElement(ModelSelectorContent, {
       modelId: 'claude-opus-5',
       effort: 'medium',
@@ -917,6 +917,258 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
     });
     expect(onEffortChange).not.toHaveBeenCalled();
     expect(listModelFavorites()[0]?.effort).toBe('high');
+  });
+
+  /**
+   * **引擎**编辑并进同一结构(2026-08-17 review H2)。此前收藏行的引擎胶囊只
+   * `updateModelFavorite` 就返回:收藏行当场显示新引擎,草稿 vendor 纹丝不动、会话也没执行
+   * 跨引擎切换 —— 与深度 / Fast 是同一个病的第三个入口。
+   */
+  it('草稿选中的收藏改引擎:整份副本按新引擎写回草稿(锚点保持),副本同步更新', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    // 草稿换引擎无损:整份副本(新引擎 + 该引擎仍支持的旧档 low + 无 Fast)按既有选中链路
+    // 写回草稿;favoriteUid **保持** —— 编辑不改变「选中的是这一条收藏」。
+    expect(onUnifiedSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      engine: 'cc',
+      effort: 'low',
+      fast: false,
+      favoriteUid: uid,
+    });
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.agent).toBe('cc');
+    });
+  });
+
+  it('会话内选中的收藏改引擎:走跨引擎切换事务,事务真成功才落副本', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onCrossEngineSelect = vi.fn(() => true);
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      targetAgent: 'claude-code',
+      effort: 'low',
+    });
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.agent).toBe('cc');
+    });
+  });
+
+  it('会话内改引擎被取消:副本不动,这次编辑一点不落', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onCrossEngineSelect = vi.fn(() => false);
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledTimes(1);
+    expect(listModelFavorites()[0]?.agent).toBe('codex');
+  });
+
+  it('非选中的收藏改引擎:只改副本,不动正在跑的那一份(回归保护)', async () => {
+    addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex', effort: 'low' });
+    const onUnifiedSelect = vi.fn();
+    const onCrossEngineSelect = vi.fn();
+    // 选中的是 Opus 5,那条收藏不是当前锚点。
+    renderPanel({
+      onUnifiedSelect,
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+      onEffortChange: vi.fn(),
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(listModelFavorites()[0]?.agent).toBe('cc');
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+    // 收藏行的引擎编辑绝不写模型默认的 override(那是 modelEnginePrefs 的事)。
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+});
+
+/**
+ * 「恢复推荐」写进记忆表的是**删除**,不是这一版目录默认的快照(2026-08-17 review H3)。
+ * 记忆表是 override 表:表里没有该键 ⇒ 跟随当前版本的目录默认。写快照会把用户钉死在旧默认上,
+ * 与同一个动作里 `clearModelEngineOverride` 的语义(删 key = 随版本跟随新推荐)自相矛盾。
+ */
+describe('统一面板 · 恢复推荐删记忆键', () => {
+  /** 带删除入口的最小记忆实现(本地 providerModelMemory 的形状)。 */
+  function makeMemory(seed?: {
+    effort?: Record<string, string>;
+    fast?: Record<string, boolean>;
+  }) {
+    const keyOf = (agent: string, providerId: string, modelId: string) =>
+      `${agent}|${providerId}|${modelId}`;
+    const effort = new Map<string, string>(Object.entries(seed?.effort ?? {}));
+    const fast = new Map<string, boolean>(Object.entries(seed?.fast ?? {}));
+    return {
+      effort,
+      fast,
+      keyOf,
+      accessors: {
+        getEffort: (a: string, p: string, m: string) => effort.get(keyOf(a, p, m)),
+        setEffort: (a: string, p: string, m: string, e: string) => {
+          effort.set(keyOf(a, p, m), e);
+        },
+        getFast: (a: string, p: string, m: string) => fast.get(keyOf(a, p, m)),
+        setFast: (a: string, p: string, m: string, v: boolean) => {
+          fast.set(keyOf(a, p, m), v);
+        },
+        clearEffort: (a: string, p: string, m: string) => {
+          effort.delete(keyOf(a, p, m));
+        },
+        clearFast: (a: string, p: string, m: string) => {
+          fast.delete(keyOf(a, p, m));
+        },
+      },
+    };
+  }
+
+  it('恢复推荐后记忆槽里没有该键(不是写了一份「等于当前默认」的快照)', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const memory = makeMemory({
+      effort: { 'codex|xd|gpt-5.5': 'low' },
+      fast: { 'codex|xd|gpt-5.5': true },
+    });
+    // 选中的是 Opus 5 → GPT-5.5 那一行不是 live 行,只走持久化那一半。
+    renderPanel({
+      modelMemory: memory.accessors,
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    // 键被**删掉**:留一份 'high' / false 的快照就是把这一版的默认固化成用户配置。
+    expect(memory.effort.has('codex|xd|gpt-5.5')).toBe(false);
+    expect(memory.fast.has('codex|xd|gpt-5.5')).toBe(false);
+  });
+
+  it('恢复推荐之后目录默认档变了 → 行展示跟随新默认(不被旧值钉死)', async () => {
+    const memory = makeMemory({ effort: { 'codex|xd|gpt-5.5': 'low' } });
+    const first = renderPanel({
+      modelMemory: memory.accessors,
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    // 恢复推荐前:行显示用户记忆里的 low。
+    expect(rowFor('GPT-5.5').querySelector('[data-unified-triple]')?.textContent).toContain('低');
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    first.unmount();
+    // 重开面板(夹具里的记忆是纯 Map,不发变更通知,重挂载才重读)—— 回到目录默认 high。
+    const second = renderPanel({
+      modelMemory: memory.accessors,
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    expect(rowFor('GPT-5.5').querySelector('[data-unified-triple]')?.textContent).toContain('高');
+    second.unmount();
+
+    // 服务端把 codex 那条的推荐档改成 low —— 记忆表里没有该键,所以行必须跟着变。
+    // (旧做法把 'high' 快照写进了记忆槽,这里就会仍然显示「高」。)
+    const codexModels = (providersRef.providers[2] as { models: { codex: { defaultEffort: string }[] } })
+      .models.codex;
+    const restore = codexModels[0].defaultEffort;
+    codexModels[0].defaultEffort = 'low';
+    try {
+      renderPanel({
+        modelMemory: memory.accessors,
+        currentProviderId: 'anthropic',
+        modelId: 'claude-opus-5',
+      });
+      expect(rowFor('GPT-5.5').querySelector('[data-unified-triple]')?.textContent).toContain('低');
+    } finally {
+      codexModels[0].defaultEffort = restore;
+    }
+  });
+
+  it('注入方没有删除入口(device-link 镜像)→ 退回既有快照写法,行为不变', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const setEffort = vi.fn();
+    const setFast = vi.fn();
+    renderPanel({
+      modelMemory: {
+        getEffort: () => undefined,
+        setEffort,
+        getFast: () => undefined,
+        setFast,
+      },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(setEffort).toHaveBeenCalledWith('codex', 'xd', 'gpt-5.5', 'high');
+    expect(setFast).toHaveBeenCalledWith('codex', 'xd', 'gpt-5.5', false);
   });
 });
 

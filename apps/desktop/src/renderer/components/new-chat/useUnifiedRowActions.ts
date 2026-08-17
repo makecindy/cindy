@@ -3,12 +3,14 @@
  * (model-selector-unified §1.4 / §1.5 / §1.6)。
  *
  * 集中在一个文件里的理由:这几条规则彼此纠缠,散在组件里就没法逐条对着规格审 ——
- *   - 引擎:模型行写 `modelEnginePrefs` override;收藏行改的是**那一条收藏**;
+ *   - 引擎:模型行写 `modelEnginePrefs` override;收藏行改的是**那一条收藏**(选中的那条
+ *     还要把新引擎真的应用到正在跑的那一份 —— 与深度 / Fast 同一条 applySelectedFavoriteEdit);
  *   - 深度 / Fast:**live 选中行**交给调用方的实时状态(绝不预写记忆 —— device-link
  *     写穿失败会污染被控端草稿),其余行写 `providerModelMemory` 既有槽;
- *   - 恢复推荐:删 override(随版本跟随新推荐)+ 把深度 / Fast 收回目录默认;**live 选中行
- *     还要把推荐配置真的应用到正在跑的那一份**(live 状态不读记忆表,只清记忆等于只改了
- *     显示),跨引擎时复用与 applyEngine 同一条切换链路;
+ *   - 恢复推荐:删 override(随版本跟随新推荐)+ **删掉**深度 / Fast 记忆键(删 = 跟随目录
+ *     默认;写一份「等于当前默认」的快照会把用户钉死在旧默认上);**live 选中行还要把推荐
+ *     配置真的应用到正在跑的那一份**(live 状态不读记忆表,只清记忆等于只改了显示),
+ *     跨引擎时复用与 applyEngine 同一条切换链路;
  *   - 收藏:☆ 是单向「存一份当前生效配置的副本」,收藏行的 ☆ 才是删除;
  *   - 选中:跨引擎的那一下**不走**普通 onSelect,交给调用方的切换事务。
  *
@@ -27,6 +29,7 @@ import {
   addModelFavorite,
   removeModelFavorite,
   updateModelFavorite,
+  type ModelFavoriteConfig,
   type ModelFavoriteItem,
 } from '@/state/modelFavorites';
 
@@ -85,6 +88,16 @@ export interface UnifiedRowActionsOptions {
    * 目标引擎的 wire id / 深度交给跨引擎切换事务。
    */
   resolveEngineConfig?: ((entry: UnifiedModelEntry, engine: UnifiedEngine) => UnifiedRowConfig) | undefined;
+  /**
+   * 按「这份收藏副本」解析该行的完整配置(与收藏行渲染同一条链路 ——
+   * `resolveFavoriteRowConfig`)。**编辑选中收藏的引擎**时需要它:换引擎会连带换 wire id、
+   * 换档位集合(旧档不被新引擎支持就得回落新引擎的目录默认)、换 Fast 能力,这三样必须与
+   * 编辑完之后收藏行自己算出来的那一份逐字一致 —— 在这里另推一遍必然漂移成「行上显示 A、
+   * 发给会话的是 B」。没注入(flat 选择器)时引擎编辑退回「只改副本」的老行为。
+   */
+  resolveFavoriteConfig?:
+    | ((entry: UnifiedModelEntry, favorite: ModelFavoriteConfig) => UnifiedRowConfig)
+    | undefined;
   /**
    * 该行**在没有收藏语境时**的默认配置(引擎 = 推荐 ⊕ 用户 override ⊕ 会话 pinned,
    * 深度 = 目录默认,Fast = 关)。删除**当前选中的**收藏时要回落到它 —— 由调用方按
@@ -150,6 +163,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     sessionEngineFilter,
     sessionAgent,
     resolveEngineConfig,
+    resolveFavoriteConfig,
     resolveDefaultRowConfig,
     selectedFavoriteUid,
     onFavoriteFlash,
@@ -280,41 +294,50 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    *     草稿走既有 onSelect 把整份副本写回(favoriteUid **保持该 uid**:编辑不改变「选中的是
    *     这一条收藏」)。跨引擎那条按既有语义不带 Fast(performAgentSwitch 按目标重解析)。
    *
+   * **引擎编辑并进同一结构**(2026-08-17 review H2):此前收藏行的引擎胶囊只 `updateModelFavorite`
+   * 就返回 —— 收藏行当场显示新引擎,草稿 vendor 纹丝不动、会话也没执行跨引擎切换,与深度 /
+   * Fast 那两条是同一个病。引擎编辑传 `live: null`(换引擎不存在「同引擎实时写入」这一路),
+   * 于是自然落到会话事务 / 草稿 onSelect 两条上。
+   *
    * 顺序与 G2 一致:**live 真写成了才**落收藏 store 的这次编辑 —— 写穿失败时收藏原样保留,
    * 不留「收藏行写着新档、任务还在旧档」的半套状态。
    */
   const applySelectedFavoriteEdit = (args: {
     anchor: UnifiedAnchor;
     entry: UnifiedModelEntry;
+    /** 编辑**前**的行配置,只用于判「这条收藏是不是正在跑的那一份」。 */
     config: UnifiedRowConfig;
     uid: string;
-    /** 编辑后的整份副本配置(旧副本 ⊕ 这次改的那一格)。 */
-    next: { effort: Effort | null; fast: boolean };
-    /** 把这次改的那一格写到 live 上;归一后的「成功了没有」。 */
-    live: () => Promise<boolean>;
+    /** 编辑**后**的整份副本配置(旧副本 ⊕ 这次改的那一格),引擎 / wire id / 深度 / Fast 齐活。 */
+    target: UnifiedRowConfig;
+    /**
+     * 把这次改的那一格写到 live 上;归一后的「成功了没有」。
+     * `null` = 这一维没有同引擎实时通道(引擎编辑),直接走下面两条链路。
+     */
+    live: (() => Promise<boolean>) | null;
     /** 落收藏 store 的这次编辑。 */
     commit: () => void;
   }): void => {
-    if (isLiveRow(args.entry, args.config)) {
+    if (args.live && isLiveRow(args.entry, args.config)) {
       void args.live().then((applied) => {
         if (applied) args.commit();
       });
       return;
     }
-    const wireModelId = args.config.wireModelId ?? args.anchor.modelId;
+    const wireModelId = args.target.wireModelId ?? args.anchor.modelId;
     if (inSession) {
       runCrossEngineSwitch({
         providerId: args.anchor.providerId,
         wireModelId,
-        targetAgent: args.config.agent,
-        effort: args.next.effort,
+        targetAgent: args.target.agent,
+        effort: args.target.effort,
         onApplied: args.commit,
       });
       return;
     }
-    onSelect(args.anchor.providerId, wireModelId, args.next.effort ?? '', {
-      engine: args.config.engine,
-      fast: args.next.fast,
+    onSelect(args.anchor.providerId, wireModelId, args.target.effort ?? '', {
+      engine: args.target.engine,
+      fast: args.target.fast,
       favoriteUid: args.uid,
       rowModelId: args.anchor.modelId,
     });
@@ -324,7 +347,35 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, entry, config, engine) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
-      updateModelFavorite(anchor.uid, { agent: engine });
+      const commit = (): void => updateModelFavorite(anchor.uid, { agent: engine });
+      // 编辑后的整份副本 = 旧副本 ⊕ 新引擎,由收藏行**同一条**解析链路算出(见
+      // resolveFavoriteConfig 头注:换引擎会连带换 wire id / 档位集合 / Fast 能力)。
+      const target =
+        selectedFavoriteUid === anchor.uid && engine !== config.engine
+          ? resolveFavoriteConfig?.(entry, {
+              providerId: anchor.providerId,
+              modelId: anchor.modelId,
+              agent: engine,
+              ...(config.effort ? { effort: config.effort } : {}),
+              ...(config.fast ? { fast: true as const } : {}),
+            })
+          : undefined;
+      // 改的不是当前选中的那条收藏(或引擎没变 / 没注入解析器)→ 它只描述「下次选它用什么」,
+      // 行为不变:只改副本。
+      if (!target) {
+        commit();
+        return;
+      }
+      applySelectedFavoriteEdit({
+        anchor,
+        entry,
+        config,
+        uid: anchor.uid,
+        target,
+        // 换引擎没有「同引擎实时写入」这一路:草稿走 onSelect 整份写回,会话走跨引擎事务。
+        live: null,
+        commit,
+      });
       return;
     }
     // **选中行**的引擎胶囊不是普通 override(2026-08-14):它改的是「正在跑什么」——
@@ -376,7 +427,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         entry,
         config,
         uid: anchor.uid,
-        next: { effort, fast: config.fast },
+        // 只动深度这一格,引擎 / wire id / Fast 沿用这条收藏当前的解析结果。
+        target: { ...config, effort },
         live: () => runLive(() => onEffortChangeLive(effort)),
         commit,
       });
@@ -412,7 +464,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         entry,
         config,
         uid: anchor.uid,
-        next: { effort: config.effort, fast: enabled },
+        // 只动 Fast 这一格。
+        target: { ...config, fast: enabled },
         live: () => runLive(() => onFastModeChangeLive(enabled)),
         commit,
       });
@@ -444,13 +497,18 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 生效引擎的 wire id 可能不是同一个 id)。
     const recommendedWireId = wireModelIdOf(entry, recommendedAgent);
 
-    /** 「跟随推荐」的持久化部分:删 override + 把推荐引擎那一格的记忆槽写回目录默认。 */
+    /** 「跟随推荐」的持久化部分:删 override + **删掉**推荐引擎那一格的深度 / Fast 记忆。 */
     const resetStoredConfig = (): void => {
       clearModelEngineOverride(anchor.providerId, anchor.modelId);
-      // 记忆槽没有「删」的语义(providerModelMemory 是 (agent, model) → 值的表);把它写回
-      // 目录默认 = 用户看到的就是推荐配置。真正的「跟随服务端新默认」由引擎 override 的删除
-      // 承担 —— 深度默认变了,用户下次进浮层看到的仍是自己这次确认过的档,不会被静默改。
-      if (defaultEffort) {
+      // ★ 删,不是写快照(2026-08-17 review H3)。记忆表是 override 表:表里没有该键
+      // ⇒ 跟随当前版本的目录默认。此前这里把**这一版**的 defaultEffort 快照写回记忆槽,
+      // 于是服务端之后改了推荐档,点过「恢复推荐」的用户被钉死在旧值上 —— 与
+      // clearModelEngineOverride 的语义(configuration-and-overrides §4)自相矛盾。
+      // 没有删除入口的注入方(device-link 被控端镜像:隧道协议没有「删除」那一笔)退回
+      // 既有的快照写法,行为与改动前一致。
+      if (modelMemory?.clearEffort) {
+        modelMemory.clearEffort(recommendedAgent, anchor.providerId, recommendedWireId);
+      } else if (defaultEffort) {
         modelMemory?.setEffort(
           recommendedAgent,
           anchor.providerId,
@@ -461,7 +519,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // Fast 无条件收回:`config.fast` 是**当前生效引擎**那一格的值,拿它当门会漏掉「行现在
       // 落在 codex(Fast 关),推荐引擎槽里还留着上次开的 Fast」这一路 —— 恢复推荐后行会
       // 当场翻回带 ⚡ 的样子。清的槽与上面的深度一样按推荐引擎 + 推荐引擎 wire id 走。
-      modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
+      // 记忆表缺省即「关」,所以删除与写 false 的显示等价,但删除不会把「关」固化成用户配置。
+      if (modelMemory?.clearFast) {
+        modelMemory.clearFast(recommendedAgent, anchor.providerId, recommendedWireId);
+      } else {
+        modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
+      }
     };
 
     // 非 live 行:改的只是「下次选它用什么」,清记忆就够了。

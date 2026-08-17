@@ -686,6 +686,12 @@ export function UnifiedModelPanel({
           modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
         agentFastModeCapable,
       }),
+    // 「按这份收藏副本解析该行」——与收藏行渲染(configOf 的 favorite 分支)走**同一个**
+    // resolveFavoriteRowConfig:编辑选中收藏的引擎时,新引擎的 wire id / 档位回落 / Fast
+    // 能力必须与编辑完之后行上显示的那一份逐字一致(详见 useUnifiedRowActions)。
+    // uid 在这里无意义(解析只看配置),给空串占位。
+    resolveFavoriteConfig: (entry, favorite) =>
+      resolveFavoriteRowConfig({ entry, item: { uid: '', ...favorite }, agentFastModeCapable }),
     // 「该行没有收藏语境时的默认配置」:引擎 = 推荐 ⊕ 用户 override ⊕ 会话 pinned(与
     // configOf 的模型行分支同一套合成,少给一路就会算出一个用户从没见过的引擎),
     // **刻意不传 memoryEffort / memoryFast** —— 回落的是「该模型的默认」,不是用户上次在

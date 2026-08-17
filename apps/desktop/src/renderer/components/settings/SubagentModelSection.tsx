@@ -29,6 +29,8 @@ import { createLogger } from '@/lib/logger';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
 import {
+  clearProviderModelEffort,
+  clearProviderModelFast,
   getProviderModelEffort,
   getProviderModelFast,
   setProviderModelEffort,
@@ -59,6 +61,9 @@ const CODEX_SUBAGENT_MODEL_MEMORY: ModelMemoryAccessors = {
   setEffort: setProviderModelEffort,
   getFast: getProviderModelFast,
   setFast: setProviderModelFast,
+  // 「恢复推荐」删记忆键(而不是把这一版目录默认快照写回),与标准模型面板同语义。
+  clearEffort: clearProviderModelEffort,
+  clearFast: clearProviderModelFast,
 };
 
 type SubagentAgentKind = 'claude-code' | 'codex';

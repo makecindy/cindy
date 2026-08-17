@@ -10,9 +10,11 @@
  *   6. dataOwnerId 分区:多账号各读各的桶,不串号
  *   7. storage 事件跨窗口重读,且迟到的旧事件不回滚本窗口新值
  *   8. 落盘失败(quota / 私密窗口)静默吞,内存态仍生效
+ *   9. 跨 renderer **并发**写:同步乐观写 + Web Locks 串行权威重放(2026-08-17 review H1)
  *
  * 项目 vitest env=node,无 window。沿用 newMakerDraft.test.ts / providerModelMemory.test.ts
- * 的最小 localStorage stub。
+ * 的最小 localStorage stub。node 的 globalThis.navigator 没有 locks,所以除并发那一组外
+ * 全部走「锁不可用 → 跳过重放」的退化路径 —— 整份用例同时也是那条退化路径的回归。
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -33,6 +35,30 @@ class MemLocalStorage {
   }
   keys(): string[] {
     return Array.from(this.store.keys());
+  }
+}
+
+/** `navigator.locks` 的最小串行队列 polyfill(node env 没有 Web Locks);同 modelFavorites.test。 */
+class MemLockManager {
+  private chains = new Map<string, Promise<void>>();
+  request(name: string, cb: () => unknown): Promise<void> {
+    const prev = this.chains.get(name) ?? Promise.resolve();
+    const run = prev.then(
+      async () => {
+        await cb();
+      },
+      async () => {
+        await cb();
+      },
+    );
+    this.chains.set(name, run.catch(() => {}));
+    return run;
+  }
+  async settle(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.all([...this.chains.values()]);
+      await Promise.resolve();
+    }
   }
 }
 
@@ -359,5 +385,136 @@ describe('modelEnginePrefs store', () => {
     const m = await loadModule();
     expect(() => m.setModelEngineOverride('xd', 'gpt-5.5', 'cc')).not.toThrow();
     expect(m.getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+  });
+});
+
+/**
+ * 跨 renderer **并发**写(2026-08-17 review H1)—— 与 modelFavorites 同一套机制、同一组场景。
+ * 「写前重读基底」只修得了「对方先写完、事件还没到」那一路;两个窗口**都在对方写回之前**
+ * 读了同一份旧快照时,后写者的整表写回仍会抹掉先写者,并把对方刚删掉的 override 复活。
+ */
+describe('modelEnginePrefs store · 跨 renderer 并发写', () => {
+  let locks: MemLockManager;
+
+  beforeEach(() => {
+    locks = new MemLockManager();
+    vi.stubGlobal('navigator', { locks });
+  });
+
+  /** 两份模块实例(= 两个 renderer),共享同一个 localStorage stub。 */
+  async function loadTwoWindows() {
+    vi.resetModules();
+    const a = await import('@/state/modelEnginePrefs');
+    vi.resetModules();
+    const b = await import('@/state/modelEnginePrefs');
+    return { a, b };
+  }
+
+  /**
+   * 让**下一次** getItem 返回 `raw`,模拟「对方还没写回时读到的旧快照」。
+   * 空表必须给显式 `'{}'`:freshMap 把 `getItem === null` 解释成「storage 不可读」并退回
+   * 内存缓存(私密窗口 / 写满时的既有兜底),传 null 读不出旧表。
+   */
+  function withStaleRead<T>(raw: string, run: () => T): T {
+    const spy = vi.spyOn(memStorage, 'getItem').mockImplementationOnce(() => raw);
+    try {
+      return run();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  function persisted(key: string): Record<string, { agent: string }> {
+    return JSON.parse(memStorage.getItem(key) ?? '{}');
+  }
+
+  it('双窗口并发写不同模型:后写者的整表覆盖被重放补回,两条都在', async () => {
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+
+    a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    // B 在 A 写回**之前**读了空表 → 它的整表写回把 A 那条抹掉。
+    withStaleRead('{}', () => b.setModelEngineOverride('anthropic', 'claude-opus-5', 'pi'));
+    expect(Object.keys(persisted(key))).toEqual(['anthropic:claude-opus-5']);
+
+    await locks.settle();
+    expect(persisted(key)).toEqual({
+      'xd:gpt-5.5': { agent: 'cc' },
+      'anthropic:claude-opus-5': { agent: 'pi' },
+    });
+    expect(a.getModelEngineOverride('anthropic', 'claude-opus-5')).toBe('pi');
+    expect(b.getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+  });
+
+  it('A 改别的模型 + B 恢复推荐交错:被删的 override 不复活', async () => {
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+    a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    await locks.settle();
+    const before = memStorage.getItem(key) ?? '{}';
+
+    // B 点了「恢复推荐」(删这条 override)。
+    b.clearModelEngineOverride('xd', 'gpt-5.5');
+    // A 拿**删除之前**的快照写另一条 → 同步整表写回把已删的那条带了回来。
+    withStaleRead(before, () => a.setModelEngineOverride('openai', 'gpt-5.6', 'codex'));
+    expect(persisted(key)['xd:gpt-5.5']).toEqual({ agent: 'cc' });
+
+    await locks.settle();
+    expect(persisted(key)).toEqual({ 'openai:gpt-5.6': { agent: 'codex' } });
+    expect(a.getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    expect(b.getModelEngineOverride('openai', 'gpt-5.6')).toBe('codex');
+  });
+
+  it('两个窗口改同一模型:后一次显式选择胜出,不出现「写了没生效」', async () => {
+    const { a, b } = await loadTwoWindows();
+    const key = a.__STORAGE_KEY;
+    a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    // B 在同一条上改成 pi,基底是 A 写回之前的空表。
+    withStaleRead('{}', () => b.setModelEngineOverride('xd', 'gpt-5.5', 'pi'));
+    await locks.settle();
+    // A 的重放先跑(先入队),把 cc 写回;B 的重放随后把它改成自己那次显式选择 pi。
+    // 同一条 key 上两次显式选择本来就要分先后 —— 重放保证的是「最后一次显式选择真的落盘」,
+    // 而不是把先写者的值凭空留下。A 那边的缓存由 storage 事件拉齐(见上一组用例)。
+    expect(persisted(key)).toEqual({ 'xd:gpt-5.5': { agent: 'pi' } });
+    expect(b.getModelEngineOverride('xd', 'gpt-5.5')).toBe('pi');
+  });
+
+  it('重放与 storage 事件不互相回滚:迟到的旧事件仍被重读挡下', async () => {
+    let onStorage: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal('window', {
+      localStorage: memStorage,
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === 'storage' && typeof listener === 'function') {
+          onStorage = listener as (event: StorageEvent) => void;
+        }
+      },
+      removeEventListener: vi.fn(),
+    });
+    vi.resetModules();
+    const a = await import('@/state/modelEnginePrefs');
+    vi.resetModules();
+    const b = await import('@/state/modelEnginePrefs');
+
+    a.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const stale = memStorage.getItem(a.__STORAGE_KEY) ?? '{}';
+    withStaleRead(stale, () => b.setModelEngineOverride('openai', 'gpt-5.6', 'codex'));
+    await locks.settle();
+    expect(a.getModelEngineOverride('openai', 'gpt-5.6')).toBe('codex');
+
+    const seen = vi.fn();
+    a.subscribeModelEnginePrefs(seen);
+    onStorage?.({ key: a.__STORAGE_KEY, newValue: stale } as StorageEvent);
+    expect(a.getModelEngineOverride('openai', 'gpt-5.6')).toBe('codex');
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('navigator.locks 不可用时跳过重放,行为退回「重读基底 + 整表写回」', async () => {
+    vi.stubGlobal('navigator', {});
+    vi.resetModules();
+    const m = await loadModule();
+    expect(() => m.setModelEngineOverride('xd', 'gpt-5.5', 'cc')).not.toThrow();
+    expect(m.getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+    m.clearModelEngineOverride('xd', 'gpt-5.5');
+    expect(m.getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
   });
 });

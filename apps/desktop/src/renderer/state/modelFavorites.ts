@@ -37,6 +37,26 @@
  * 多窗口:监听 storage 事件后**重读 localStorage**(不信 event.newValue —— 迟到事件带旧
  * 值,采信会把本窗口刚加的收藏回滚)。账号分区:key 带 dataOwnerId 后缀,与 newMakerDraft
  * 同形(setModelFavoritesOwner)。
+ *
+ * 并发写(2026-08-17 review H1)—— **同步乐观写 + 串行权威重放**:
+ *   整表写回 + 「写前重读基底」只能修「另一窗口先写完、事件还没到」那一路。两个 renderer
+ *   若**都在对方写回之前**读了同一份旧快照,后写者仍然整表覆盖先写者:新增丢失、编辑丢失;
+ *   删除与编辑交错时(B 删了一条、A 拿旧快照 update 同一条)已删条目还会**复活**。
+ *   localStorage 没有 CAS,所以这里改成:
+ *     1. 每个写入都表达成一个可重放的 **op**(add / seed / update / remove),核心是
+ *        `applyOp(state, op) → state`(无变化时**返回原对象**,调用方按引用判等短路);
+ *     2. 同步路径保持不变:freshState → applyOp → setItem(app.exit 场景不丢写);
+ *     3. 随后在 `navigator.locks`(同源下所有 renderer 互斥,见 storageOpReplay)里重放
+ *        同一个 op:重读最新 → 施加自己那一个 op → 有差异才写回。两个窗口的重放互相排队,
+ *        各自把自己的改动叠在对方已落盘的结果上 → 无丢写;窗口 B 删除后窗口 A 的 update
+ *        重放在「已删」状态上是 no-op → 已删条目不复活。
+ *     4. 每个 op 都是幂等的(add 按配置身份去重、update 未命中 no-op、remove 幂等、seed 有
+ *        seeded 门),所以「同步写 + 重放各应用一次」不会做出第二份效果。
+ *   `navigator.locks` 不可用(旧环境 / node 单测)时跳过重放,行为退回改动前。
+ *   已知残余:两个窗口**同时新建**收藏且抢到同一个 `fav-N` 时,后重放的那条会改分到下一个
+ *   序号,先前同步返回给调用方的 uid 会指到对方那条 —— 条目本身两条都在(不丢数据),
+ *   只是那一瞬的选中锚点可能指错。修它要改 uid 格式(现在是 `fav-<单调序号>`,sanitize /
+ *   uidSeq 的单调性契约都建在上面),代价大于收益,故按已知取舍留下。
  */
 
 import { useSyncExternalStore } from 'react';
@@ -48,6 +68,7 @@ import type { Effort } from '@/lib/userPreferences.types';
 
 import type { ModelEngine } from './modelEnginePrefs';
 import { MODEL_PRESET_SLOT_ID } from './providerModelMemory';
+import { replayWriteUnderLock } from './storageOpReplay';
 
 const STORAGE_KEY = 'xdt:modelFavorites:v1';
 
@@ -257,6 +278,151 @@ function freshState(): FavoritesState {
   }
 }
 
+/**
+ * 两份状态在**用户可见语义**上是否一致(uid 锚点 + 配置身份 + 序号 + 种子标记)。
+ * storage 事件的「无变化短路」与并发重放的「有差异才写」共用这一份判据 —— 各写一遍必然
+ * 漂移成「一边认为变了、另一边认为没变」。
+ */
+function sameState(a: FavoritesState, b: FavoritesState): boolean {
+  return (
+    a.uidSeq === b.uidSeq
+    // seeded 也要比:另一个窗口投放种子收藏后只改了这一位(已有收藏的老用户分支甚至
+    // 不动 items),漏比会让本窗口的缓存永远停在 seeded 未置位的旧值 —— 下次它自己
+    // 再投一遍,用户看到重复的种子收藏。
+    && a.seeded === b.seeded
+    && a.items.length === b.items.length
+    && a.items.every((item, i) => {
+      const other = b.items[i];
+      return (
+        other !== undefined && item.uid === other.uid && identityOf(item) === identityOf(other)
+      );
+    })
+  );
+}
+
+// ── 可重放的写操作(见文件头「并发写」)────────────────────────────────────
+
+/**
+ * 一次写入的完整表达。**必须只依赖 op 自身 + 目标状态**,不能捕获调用时的快照 ——
+ * 重放要能把它施加在另一个窗口写完之后的最新状态上。
+ */
+type FavoritesOp =
+  | { kind: 'add'; config: ModelFavoriteConfig; preferredUid: string }
+  | { kind: 'seed'; config: ModelFavoriteConfig; preferredUid: string }
+  | { kind: 'update'; uid: string; patch: ModelFavoritePatch }
+  | { kind: 'remove'; uid: string };
+
+/** 追加一条(去重 + 锚点分配),供 add / seed 共用。 */
+function appendFavorite(
+  state: FavoritesState,
+  config: ModelFavoriteConfig,
+  preferredUid: string,
+): FavoritesState {
+  const identity = identityOf(config);
+  // 幂等的关键一半:同配置已在表里(可能是本次同步写留下的,也可能是另一窗口存过的)
+  // → 原样返回,重放不会堆出第二条。
+  if (state.items.some((item) => identityOf(item) === identity)) return state;
+  const taken = new Set(state.items.map((item) => item.uid));
+  let uid = preferredUid;
+  if (!uid || taken.has(uid)) {
+    // 首选锚点被另一个窗口抢走 → 从最新的 uidSeq 往后找一个没被占的,绝不复用已有锚点。
+    let seq = state.uidSeq;
+    uid = uidOfSeq(seq);
+    while (taken.has(uid)) {
+      seq += 1;
+      uid = uidOfSeq(seq);
+    }
+  }
+  const seq = seqOfUid(uid);
+  return {
+    ...state,
+    // uidSeq 只增不减(删除不回收序号),并保证盖过刚用掉的这个锚点。
+    uidSeq: seq !== null ? Math.max(state.uidSeq, seq + 1) : state.uidSeq,
+    items: [...state.items, { uid, ...config }],
+  };
+}
+
+/**
+ * 把一个 op 施加到某份状态上。**无实际变化时返回入参对象本身** —— 调用方用引用判等就能
+ * 判断「要不要落盘 / 要不要通知」,不必再做一次深比。
+ */
+function applyOp(state: FavoritesState, op: FavoritesOp): FavoritesState {
+  switch (op.kind) {
+    case 'add':
+      return appendFavorite(state, op.config, op.preferredUid);
+    case 'seed': {
+      // 一次性标记:另一窗口已经投放过(或已落标记)→ 不复种、也不把标记写回成未投放。
+      if (state.seeded) return state;
+      // 已有收藏的用户只落标记,不动他整理过的列表。
+      if (state.items.length > 0) return { ...state, seeded: true };
+      const added = appendFavorite(state, op.config, op.preferredUid);
+      return { ...added, seeded: true };
+    }
+    case 'update': {
+      const index = state.items.findIndex((item) => item.uid === op.uid);
+      // 幂等的另一半:uid 已被另一个窗口删掉 → no-op。整表写回时代的病根就在这里 ——
+      // 拿旧快照编辑再整表写,会把已删条目原地复活。
+      if (index < 0) return state;
+      const current = state.items[index] as ModelFavoriteItem;
+      const next: ModelFavoriteItem = { ...current };
+      if (op.patch.agent !== undefined) {
+        // 引擎非法 → **整个 patch 放弃**(不是只忽略这一维):引擎是配置副本的骨架,
+        // 只应用剩下的深度 / Fast 会得到一份用户没要过的混合配置。
+        if (!isSelectableVendor(op.patch.agent)) return state;
+        next.agent = op.patch.agent;
+      }
+      if ('effort' in op.patch) {
+        // null = 显式清除(回落推荐档);非法值同样按清除处理(不写脏档名)。
+        if (isCanonicalEffort(op.patch.effort)) next.effort = op.patch.effort;
+        else delete next.effort;
+      }
+      if (op.patch.fast !== undefined) {
+        if (op.patch.fast === true) next.fast = true;
+        else delete next.fast;
+      }
+      if (identityOf(next) === identityOf(current)) return state;
+      const items = [...state.items];
+      items[index] = next;
+      return { ...state, items };
+    }
+    case 'remove': {
+      const items = state.items.filter((item) => item.uid !== op.uid);
+      if (items.length === state.items.length) return state;
+      return { ...state, items };
+    }
+  }
+}
+
+/**
+ * 一次写入 = **同步乐观写**(见文件头:热更强退不丢)+ **锁内权威重放**(跨 renderer 串行,
+ * 把自己这一个 op 叠在对方已落盘的最新状态上)。
+ */
+function commitOp(op: FavoritesOp, knownBase?: FavoritesState): void {
+  // 调用方已经为别的目的重读过一次(如 add 要先在这份基底上定锚点)时复用那一份,
+  // 不重复 parse —— 也让「同步写只读一次 localStorage」这件事在测试里可观测。
+  const base = knownBase ?? freshState();
+  const next = applyOp(base, op);
+  if (next !== base) persist(next);
+  // 锁名 = 本分区的 storage key:不同账号各排各的队。owner 在重放前被切走时直接放弃 ——
+  // 同步写已经落在旧分区里,重放不该去动新分区。
+  const key = storageKey();
+  replayWriteUnderLock(key, () => {
+    if (storageKey() !== key) return;
+    const latest = freshState();
+    const merged = applyOp(latest, op);
+    if (merged !== latest) {
+      persist(merged);
+      return;
+    }
+    // 落盘已经是权威结果(别人写的版本里本 op 无事可做)→ 只把它收进本窗口缓存,
+    // 不重复落盘;storage 事件迟到时这一步也顺带把缓存拉齐。
+    if (!sameState(cache ?? emptyState(), latest)) {
+      cache = latest;
+      emit();
+    }
+  });
+}
+
 // ── 订阅(供 useSyncExternalStore)──────────────────────────────────────────
 const listeners = new Set<() => void>();
 
@@ -298,22 +464,7 @@ const removeStorageListener = (() => {
     // 的收藏回滚(newMakerDraft 同款 rebase)。
     const next = loadFromStorage();
     const prev = cache ?? emptyState();
-    if (
-      prev.uidSeq === next.uidSeq
-      // seeded 也要比:另一个窗口投放种子收藏后只改了这一位(已有收藏的老用户分支甚至
-      // 不动 items),漏比会让本窗口的缓存永远停在 seeded 未置位的旧值 —— 下次它自己
-      // 再投一遍,用户看到重复的种子收藏。
-      && prev.seeded === next.seeded
-      && prev.items.length === next.items.length
-      && prev.items.every((item, i) => {
-        const other = next.items[i];
-        return (
-          other !== undefined
-          && item.uid === other.uid
-          && identityOf(item) === identityOf(other)
-        );
-      })
-    ) return;
+    if (sameState(prev, next)) return;
     cache = next;
     emit();
   };
@@ -358,11 +509,10 @@ export function addModelFavorite(config: ModelFavoriteConfig): string {
   const existing = state.items.find((item) => identityOf(item) === identity);
   if (existing) return existing.uid;
   const uid = uidOfSeq(state.uidSeq);
-  persist({
-    ...state,
-    uidSeq: state.uidSeq + 1,
-    items: [...state.items, { uid, ...normalized }],
-  });
+  // uid 必须**当场**返回(调用方要拿它当选中锚点),所以先在这份基底上定下首选锚点;
+  // 锁内重放时若它已被另一个窗口占走,appendFavorite 会顺延到下一个空位(见文件头
+  // 「已知残余」)。
+  commitOp({ kind: 'add', config: normalized, preferredUid: uid }, state);
   return uid;
 }
 
@@ -381,21 +531,10 @@ export function seedDefaultFavorite(config: ModelFavoriteConfig): void {
   // 就是 true,不会重复投放,也不会把它的标记写回成未投放。
   const state = freshState();
   if (state.seeded) return;
+  // 非法配置不落标记:下次给出合法推荐时仍要能投放。
   const normalized = normalizeConfig(config);
   if (!normalized) return;
-  if (state.items.length > 0) {
-    persist({ ...state, seeded: true });
-    return;
-  }
-  const uid = uidOfSeq(state.uidSeq);
-  // 与上面那条分支同形:先 spread 现有 state 再覆盖三个字段 —— 手写整个对象会在
-  // FavoritesState 新增字段时静默丢掉它。
-  persist({
-    ...state,
-    uidSeq: state.uidSeq + 1,
-    items: [{ uid, ...normalized }],
-    seeded: true,
-  });
+  commitOp({ kind: 'seed', config: normalized, preferredUid: uidOfSeq(state.uidSeq) }, state);
 }
 
 /**
@@ -406,30 +545,9 @@ export function seedDefaultFavorite(config: ModelFavoriteConfig): void {
  */
 export function updateModelFavorite(uid: string, patch: ModelFavoritePatch): void {
   if (!uid) return;
-  const state = freshState();
-  const index = state.items.findIndex((item) => item.uid === uid);
-  if (index < 0) return;
-  const current = state.items[index];
-  const next: ModelFavoriteItem = { ...current };
-  if (patch.agent !== undefined) {
-    // 引擎非法 → **整个 patch 放弃**(不是只忽略这一维):引擎是配置副本的骨架,
-    // 只应用剩下的深度 / Fast 会得到一份用户没要过的混合配置。
-    if (!isSelectableVendor(patch.agent)) return;
-    next.agent = patch.agent;
-  }
-  if ('effort' in patch) {
-    // null = 显式清除(回落推荐档);非法值同样按清除处理(不写脏档名)。
-    if (isCanonicalEffort(patch.effort)) next.effort = patch.effort;
-    else delete next.effort;
-  }
-  if (patch.fast !== undefined) {
-    if (patch.fast === true) next.fast = true;
-    else delete next.fast;
-  }
-  if (identityOf(next) === identityOf(current)) return;
-  const items = [...state.items];
-  items[index] = next;
-  persist({ ...state, items });
+  // 具体的 patch 语义(引擎非法整条放弃 / effort null 即清除 / fast false 即缺省)在
+  // applyOp 里,同步写与锁内重放共用同一份 —— 各写一遍必然漂移。
+  commitOp({ kind: 'update', uid, patch });
 }
 
 /**
@@ -438,10 +556,7 @@ export function updateModelFavorite(uid: string, patch: ModelFavoritePatch): voi
  */
 export function removeModelFavorite(uid: string): void {
   if (!uid) return;
-  const state = freshState();
-  const items = state.items.filter((item) => item.uid !== uid);
-  if (items.length === state.items.length) return;
-  persist({ ...state, items });
+  commitOp({ kind: 'remove', uid });
 }
 
 /** 订阅收藏变更(非 React 调用方)。 */

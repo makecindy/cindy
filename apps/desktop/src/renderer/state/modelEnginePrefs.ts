@@ -41,6 +41,13 @@
  * 监听 storage 事件后**重读 localStorage**(而不是信事件里的 newValue)——迟到的事件带的
  * 是旧值,直接采信会把本窗口刚写的新值回滚(newMakerDraft 的 rebase 先例)。
  *
+ * 并发写(2026-08-17 review H1)—— 与 modelFavorites **同一套机制**(共用
+ * `storageOpReplay`,细节见那两个文件的头注):写入表达成可重放且幂等的 op
+ * (set / clear),同步乐观写保持不变,随后在 `navigator.locks` 里串行重放到最新状态上。
+ * 少了这一层,两个 renderer 同时改不同模型的引擎时,后写者会拿旧快照整表覆盖先写者
+ * (对方那条 override 静默消失);「A 改引擎 + B 恢复推荐」交错时,A 的整表写还会把 B 已经
+ * 删掉的那条 override 复活。锁不可用时跳过重放,行为退回改动前。
+ *
  * 账号分区:key 带 dataOwnerId 后缀(setModelEnginePrefsOwner,与 newMakerDraft 同形),
  * 吸取 providerModelMemory 不分账号导致多账号串号的教训。
  */
@@ -50,6 +57,7 @@ import { useSyncExternalStore } from 'react';
 import { isSelectableVendor, type SelectableVendor } from '@/lib/agentVendors';
 
 import { MODEL_PRESET_SLOT_ID } from './providerModelMemory';
+import { replayWriteUnderLock } from './storageOpReplay';
 
 const STORAGE_KEY = 'xdt:modelEnginePrefs:v1';
 
@@ -157,6 +165,61 @@ function freshMap(): EnginePrefsMap {
   }
 }
 
+/**
+ * 两张表是否等价。storage 事件的「无变化短路」与并发重放的「有差异才写」共用这一份判据。
+ */
+function sameMap(a: EnginePrefsMap, b: EnginePrefsMap): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  return aKeys.length === bKeys.length && bKeys.every((k) => a[k]?.agent === b[k]?.agent);
+}
+
+// ── 可重放的写操作(见文件头「并发写」)────────────────────────────────────
+
+/** 一次写入的完整表达;只依赖 op 自身 + 目标表,能原样重放到最新状态上。 */
+type EnginePrefsOp =
+  | { kind: 'set'; key: string; agent: ModelEngine }
+  | { kind: 'clear'; key: string };
+
+/** 施加一个 op;**无实际变化时返回入参对象本身**(调用方按引用判等短路)。 */
+function applyOp(map: EnginePrefsMap, op: EnginePrefsOp): EnginePrefsMap {
+  if (op.kind === 'set') {
+    // 幂等:同值(可能是本次同步写留下的,也可能是另一窗口写的)→ 原样返回。
+    if (map[op.key]?.agent === op.agent) return map;
+    return { ...map, [op.key]: { agent: op.agent } };
+  }
+  // 幂等:已经没有这条(如另一窗口先删了)→ 原样返回,不制造无意义落盘 / 通知。
+  if (!(op.key in map)) return map;
+  const next = { ...map };
+  delete next[op.key];
+  return next;
+}
+
+/**
+ * 一次写入 = **同步乐观写**(热更强退不丢)+ **锁内权威重放**(跨 renderer 串行,把自己
+ * 这一个 op 叠在对方已落盘的最新表上)。与 modelFavorites.commitOp 逐字同形。
+ */
+function commitOp(op: EnginePrefsOp): void {
+  const base = freshMap();
+  const next = applyOp(base, op);
+  if (next !== base) persist(next);
+  const key = storageKey();
+  replayWriteUnderLock(key, () => {
+    // owner 在重放前被切走 → 放弃:同步写落在旧分区里,重放不该去动新分区。
+    if (storageKey() !== key) return;
+    const latest = freshMap();
+    const merged = applyOp(latest, op);
+    if (merged !== latest) {
+      persist(merged);
+      return;
+    }
+    if (!sameMap(cache ?? {}, latest)) {
+      cache = latest;
+      emit();
+    }
+  });
+}
+
 // ── 订阅 / 版本(供 useSyncExternalStore)──────────────────────────────────
 let version = 0;
 const listeners = new Set<() => void>();
@@ -199,13 +262,7 @@ const removeStorageListener = (() => {
     // 重读共享真相而不是采信 event.newValue:迟到的事件带旧值,直接写进内存会把本窗口
     // 刚保存的 override 回滚(newMakerDraft 同款 rebase)。
     const next = loadFromStorage();
-    const prev = cache ?? {};
-    const prevKeys = Object.keys(prev);
-    const nextKeys = Object.keys(next);
-    const unchanged =
-      prevKeys.length === nextKeys.length
-      && nextKeys.every((k) => prev[k]?.agent === next[k]?.agent);
-    if (unchanged) return;
+    if (sameMap(cache ?? {}, next)) return;
     cache = next;
     emit();
   };
@@ -246,11 +303,9 @@ export function setModelEngineOverride(
 ): void {
   if (!isUsableProviderId(providerId) || !modelId || !isSelectableVendor(agent)) return;
   // 基底取**重读后的**持久化快照(见 freshMap):整表写回不能带着陈旧缓存,否则会抹掉
-  // 另一个窗口刚写入、事件还没到达的 override。
-  const map = freshMap();
-  const k = keyOf(providerId, modelId);
-  if (map[k]?.agent === agent) return;
-  persist({ ...map, [k]: { agent } });
+  // 另一个窗口刚写入、事件还没到达的 override。跨 renderer 的**并发**交错另由 commitOp
+  // 的锁内重放收敛(见文件头「并发写」)。
+  commitOp({ kind: 'set', key: keyOf(providerId, modelId), agent });
 }
 
 /**
@@ -259,12 +314,7 @@ export function setModelEngineOverride(
  */
 export function clearModelEngineOverride(providerId: string, modelId: string): void {
   if (!isUsableProviderId(providerId) || !modelId) return;
-  const map = freshMap();
-  const k = keyOf(providerId, modelId);
-  if (!(k in map)) return;
-  const next = { ...map };
-  delete next[k];
-  persist(next);
+  commitOp({ kind: 'clear', key: keyOf(providerId, modelId) });
 }
 
 /** 该 (来源, 模型) 是否被用户自定义过 —— 行内三元组提亮 / 底栏「已自定义 · 恢复推荐」用。 */
