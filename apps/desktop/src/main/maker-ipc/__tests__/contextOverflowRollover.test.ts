@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createContextOverflowRollover,
+  findLatestRebuildableError,
   isContextOverflowErrorData,
   isPiPromptRpcTimeoutError,
   persistedUserContentToWireMessage,
@@ -56,6 +57,21 @@ describe('shouldRebuildPiNativeSession', () => {
     expect(
       shouldRebuildPiNativeSession({ message: 'pi rpc timeout after 30000ms: set_model' }),
     ).toBe(false);
+  });
+
+  it('finds a trailing prompt-timeout error as the reason to skip resume', () => {
+    expect(
+      findLatestRebuildableError([
+        msg('user', '还有建议吗', 'u1'),
+        msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1'),
+      ]),
+    ).toEqual({ message: 'pi rpc timeout after 30000ms: prompt' });
+    expect(
+      findLatestRebuildableError([
+        msg('user', '还有建议吗', 'u1'),
+        msg('assistant', '这是回答', 'a1'),
+      ]),
+    ).toBeNull();
   });
 });
 
@@ -119,6 +135,7 @@ describe('createContextOverflowRollover', () => {
         agentKind: 'pi',
         remoteHostId: null,
         clearedAt: null,
+        sdkSessionId: '/tmp/dead.jsonl',
       })),
       listMessages: vi.fn(async () => source),
       findLatestRebuildMeta: vi.fn(async () => null),
@@ -172,6 +189,20 @@ describe('createContextOverflowRollover', () => {
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds a timed-out PI session before send without replaying', async () => {
+    const deps = makeDeps([
+      msg('user', '还有建议吗', 'u1'),
+      msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1'),
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+    expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.setPendingHandoff).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('还有建议吗');
   });
 
   it('treats an unaccepted replay as recovery failure', async () => {

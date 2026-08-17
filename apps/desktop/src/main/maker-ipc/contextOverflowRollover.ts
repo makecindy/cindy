@@ -152,12 +152,44 @@ export function engineLabelForOverflow(agentKind: string): string {
   return 'Claude Code';
 }
 
+export function errorContentToData(content: unknown): unknown {
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return { message: content };
+      }
+    }
+    return { message: content };
+  }
+  return content;
+}
+
+/** 最近一条终态若是超限/prompt 超时，则原生会话已死，发送前不要再 resume。 */
+export function findLatestRebuildableError(messages: OverflowSourceMessage[]): unknown | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message) continue;
+    if (message.role === 'error') {
+      const data = errorContentToData(message.content);
+      return shouldRebuildPiNativeSession(data) ? data : null;
+    }
+    if (message.role === 'assistant' && extractPlainText(message.content).trim().length > 0) {
+      return null;
+    }
+  }
+  return null;
+}
+
 export interface ContextOverflowRolloverDeps {
   getSessionRow(sessionId: string): Promise<{
     status: string;
     agentKind: string;
     remoteHostId: string | null;
     clearedAt: number | null;
+    sdkSessionId?: string | null;
   } | null>;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
   findLatestRebuildMeta(
@@ -195,6 +227,7 @@ export type OverflowClaimResult = 'claimed' | 'in-flight' | 'idle';
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
   claim(sessionId: string): OverflowClaimResult;
   tryRecover(sessionId: string, errorData: unknown): Promise<boolean>;
+  prepareUnhealthySession(sessionId: string): Promise<boolean>;
 } {
   const inFlight = new Set<string>();
 
@@ -259,6 +292,48 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     });
   };
 
+  const runPrepare = async (sessionId: string): Promise<boolean> => {
+    const sessionRow = await deps.getSessionRow(sessionId);
+    if (!sessionRow || sessionRow.status === 'deleted') return false;
+    if (sessionRow.remoteHostId || sessionRow.agentKind !== 'pi') return false;
+    if (!sessionRow.sdkSessionId) return false;
+    const live = deps.getLiveSession(sessionId);
+    if (live?.isTurnRunning()) return false;
+    const source = await deps.listMessages(sessionId);
+    if (!findLatestRebuildableError(source)) return false;
+    let lastUser: OverflowSourceMessage | undefined;
+    for (let i = source.length - 1; i >= 0; i -= 1) {
+      const message = source[i];
+      if (message && message.role === 'user' && !isSyntheticUser(message)) {
+        lastUser = message;
+        break;
+      }
+    }
+    if (!lastUser) return false;
+    const handoffMessages = source.filter((message) => message.role !== 'error');
+    const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+    if (live) await deps.closeSession(sessionId);
+    const label = engineLabelForOverflow(sessionRow.agentKind);
+    const handoff = buildHandoffText(handoffMessages, {
+      fromLabel: label,
+      toLabel: label,
+      sessionId,
+      reason: 'context-overflow',
+    });
+    await deps.commitRebuild(sessionId, handoff, {
+      reason: 'context-overflow',
+      sourceUserClientId: lastUser.clientId,
+      expectedClearedAt: sessionRow.clearedAt,
+    });
+    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    deps.onRebuilt?.(sessionId);
+    deps.log.info('unhealthy PI native session rebuilt before send; skip compact/resume', {
+      sessionId,
+      sourceUserClientId: lastUser.clientId,
+    });
+    return true;
+  };
+
   return {
     claim(sessionId: string): OverflowClaimResult {
       if (inFlight.has(sessionId)) return 'in-flight';
@@ -274,6 +349,22 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         return await runRecover(sessionId, errorData);
       } catch (error) {
         deps.log.warn('context overflow rollover failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      } finally {
+        inFlight.delete(sessionId);
+      }
+    },
+
+    async prepareUnhealthySession(sessionId: string): Promise<boolean> {
+      if (inFlight.has(sessionId)) return false;
+      inFlight.add(sessionId);
+      try {
+        return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId));
+      } catch (error) {
+        deps.log.warn('unhealthy PI session prepare failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),
         });

@@ -10823,7 +10823,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [sessionId] = args;
     if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
     await assertReviewExternalInputAllowed(sessionId);
-    return await withSendToSessionLock(sessionId, () => sendToAgentAcceptedUnlocked(...args));
+    return await withSendToSessionLock(sessionId, async () => {
+      // 已死的 PI 原生会话不要再 resume/compact：发送前换成干净窗口，交接走 pending handoff。
+      await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+      return sendToAgentAcceptedUnlocked(...args);
+    });
   };
   contextOverflowRolloverHolder = createContextOverflowRollover({
     getSessionRow: async (sessionId) => {
@@ -10833,6 +10837,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentKind: sessions.agentKind,
           remoteHostId: sessions.remoteHostId,
           clearedAt: sessions.clearedAt,
+          sdkSessionId: sessions.sdkSessionId,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
