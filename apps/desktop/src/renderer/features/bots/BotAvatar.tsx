@@ -12,27 +12,54 @@
  * rows resolve without any data migration. Anything unrecognized is hashed into
  * a stable hue instead of collapsing every legacy Bot onto one color.
  *
- * One exception to "flat tint + emoji": the official Cindy mark. `avatar` may
- * hold a `cindy://avatar/…` sentinel instead of a grapheme, which resolves to
- * bundled Cindy artwork. The namespace is reserved — auto-assignment never mints
- * one, so an official-looking Bot is always an explicit template or user choice.
+ * One exception to "flat tint + emoji": shipped artwork. `avatar` may hold a
+ * `cindy://avatar/…` sentinel instead of a grapheme — the official Cindy mark or
+ * one of the preset characters — which resolves to a bundled portrait. The
+ * official mark is reserved: auto-assignment only ever mints a preset character,
+ * so an official-looking Bot is always an explicit template or user choice. A
+ * sentinel this build does not know (a preset added by a newer client) renders
+ * the neutral initial rather than a broken image or a raw URL.
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { useTranslation } from 'react-i18next';
 
 import cindyOfficialAvatarSrc from '@/assets/cindy-avatar-account.png';
+import presetButlerSrc from '@/assets/bot-avatar-preset-butler.png';
+import presetDinoSrc from '@/assets/bot-avatar-preset-dino.png';
+import presetMelodySrc from '@/assets/bot-avatar-preset-melody.png';
+import presetOwlSrc from '@/assets/bot-avatar-preset-owl.png';
+import presetRobotSrc from '@/assets/bot-avatar-preset-robot.png';
+import presetShibaSrc from '@/assets/bot-avatar-preset-shiba.png';
+import presetStarSrc from '@/assets/bot-avatar-preset-star.png';
+import presetWhitecatSrc from '@/assets/bot-avatar-preset-whitecat.png';
 import { cn } from '@/lib/utils';
 import {
+  BOT_PRESET_AVATAR_IDS,
   CINDY_AVATAR_SCHEME_PREFIX,
   CINDY_OFFICIAL_AVATAR,
+  CINDY_PRESET_AVATAR_PREFIX,
+  isCindyAvatarSentinel,
   isCindyOfficialAvatar,
+  parsePresetAvatarId,
+  presetAvatarValue,
+  type BotPresetAvatarId,
 } from './botAvatarIdentity';
 
-// The sentinel lives in an asset-free leaf module (see botAvatarIdentity.ts) but
-// stays part of this module's public surface: UI code imports the whole avatar
+// The sentinels live in an asset-free leaf module (see botAvatarIdentity.ts) but
+// stay part of this module's public surface: UI code imports the whole avatar
 // vocabulary from BotAvatar.
-export { CINDY_AVATAR_SCHEME_PREFIX, CINDY_OFFICIAL_AVATAR, isCindyOfficialAvatar };
+export {
+  BOT_PRESET_AVATAR_IDS,
+  CINDY_AVATAR_SCHEME_PREFIX,
+  CINDY_OFFICIAL_AVATAR,
+  CINDY_PRESET_AVATAR_PREFIX,
+  isCindyAvatarSentinel,
+  isCindyOfficialAvatar,
+  parsePresetAvatarId,
+  presetAvatarValue,
+  type BotPresetAvatarId,
+};
 
 /** Registered hue family. Order is stable — hash assignment depends on it. */
 export const BOT_AVATAR_HUES = [
@@ -51,6 +78,32 @@ export type BotAvatarHue = (typeof BOT_AVATAR_HUES)[number];
 
 /** Bundled artwork for {@link CINDY_OFFICIAL_AVATAR}. */
 export const CINDY_OFFICIAL_AVATAR_SRC = cindyOfficialAvatarSrc;
+
+/**
+ * Bundled artwork for every shipped character. Keys are exhaustive by type, so a
+ * new id in `BOT_PRESET_AVATAR_IDS` cannot ship without its portrait.
+ */
+export const BOT_PRESET_AVATAR_SRC: Record<BotPresetAvatarId, string> = {
+  shiba: presetShibaSrc,
+  whitecat: presetWhitecatSrc,
+  robot: presetRobotSrc,
+  dino: presetDinoSrc,
+  melody: presetMelodySrc,
+  star: presetStarSrc,
+  butler: presetButlerSrc,
+  owl: presetOwlSrc,
+};
+
+/**
+ * Bundled portrait for an avatar value, or null when the value is a grapheme or a
+ * sentinel this build cannot resolve. Single resolver for every Bot surface so no
+ * caller has to re-derive "is this artwork".
+ */
+export function botAvatarArtworkSrc(value: string | null | undefined): string | null {
+  if (isCindyOfficialAvatar(value)) return CINDY_OFFICIAL_AVATAR_SRC;
+  const preset = parsePresetAvatarId(value);
+  return preset ? BOT_PRESET_AVATAR_SRC[preset] : null;
+}
 
 /**
  * Curated emoji set: assistant / tool / nature / interstellar, deliberately
@@ -118,20 +171,28 @@ export function botAvatarHueForSeed(seed: string): BotAvatarHue {
   return BOT_AVATAR_HUES[hashSeed(seed) % BOT_AVATAR_HUES.length];
 }
 
-export function botAvatarEmojiForSeed(seed: string): string {
-  // Offset the emoji hash so hue and emoji do not advance in lockstep for
+export function botAvatarPresetForSeed(seed: string): BotPresetAvatarId {
+  // Salt the character hash so hue and character do not advance in lockstep for
   // adjacent names ("Bot 1" / "Bot 2" would otherwise stay visually paired).
-  return BOT_AVATAR_EMOJIS[hashSeed(`${seed}#emoji`) % BOT_AVATAR_EMOJIS.length];
+  return BOT_PRESET_AVATAR_IDS[hashSeed(`${seed}#preset`) % BOT_PRESET_AVATAR_IDS.length];
 }
 
 export interface BotAvatarAssignment {
   hue: BotAvatarHue;
+  /** Grapheme or reserved sentinel — the same shape as `BotProfile.avatar`. */
   emoji: string;
 }
 
-/** Same name → same avatar, so a new Bot looks intentional before any edit. */
+/**
+ * Same name → same avatar, so a new Bot looks intentional before any edit.
+ *
+ * Auto-assignment hands out a shipped *character*, not an emoji: a fresh Bot then
+ * reads as a persistent companion instead of a glyph on a colored disc. The
+ * official Cindy mark stays out of the pool (it must remain an explicit template
+ * or user choice), and the emoji set stays available in the picker.
+ */
 export function botAvatarAssignment(seed: string): BotAvatarAssignment {
-  return { hue: botAvatarHueForSeed(seed), emoji: botAvatarEmojiForSeed(seed) };
+  return { hue: botAvatarHueForSeed(seed), emoji: presetAvatarValue(botAvatarPresetForSeed(seed)) };
 }
 
 export function normalizeBotAvatarHue(value: string | null | undefined): BotAvatarHue {
@@ -171,7 +232,10 @@ export interface BotAvatarProps {
 
 export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
   const emoji = (bot.avatar ?? '').trim();
-  const official = isCindyOfficialAvatar(emoji);
+  const artwork = botAvatarArtworkSrc(emoji);
+  // An unresolved sentinel (a preset only a newer client knows) is still not a
+  // grapheme: fall through to the initial rather than paint `cindy://avatar/…`.
+  const glyph = artwork || isCindyAvatarSentinel(emoji) ? '' : emoji;
   return (
     <span
       aria-hidden
@@ -180,19 +244,19 @@ export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
         SIZE_CLASSES[size],
         className,
       )}
-      // Kept even for the official mark: the hue is what shows through while the
-      // bundled image decodes, so the avatar never flashes white.
+      // Kept even for artwork: the hue is what shows through while the bundled
+      // image decodes, so the avatar never flashes white.
       style={{ backgroundColor: botAvatarHueToken(bot.avatarColor) }}
     >
-      {official ? (
+      {artwork ? (
         <img
-          src={CINDY_OFFICIAL_AVATAR_SRC}
+          src={artwork}
           alt=""
           draggable={false}
           className="pointer-events-none h-full w-full select-none rounded-full object-cover"
         />
-      ) : emoji ? (
-        <span>{emoji}</span>
+      ) : glyph ? (
+        <span>{glyph}</span>
       ) : (
         <span className="font-medium text-[var(--text-primary)]">{botAvatarInitial(bot.name)}</span>
       )}
@@ -212,9 +276,11 @@ export interface BotAvatarPickerProps {
 }
 
 /**
- * Avatar editor: the avatar itself is the trigger, the panel is an emoji grid
- * plus a hue row. Panel geometry follows DESIGN.md §4 Select & Dropdown —
- * 12px container, Card fill, 1px Board border, 8px option-row highlights.
+ * Avatar editor: the avatar itself is the trigger, the panel is a character row,
+ * an emoji grid and a hue row — characters first, because that is what a Bot
+ * should look like by default. Panel geometry follows DESIGN.md §4 Select &
+ * Dropdown — 12px container, Card fill, 1px Board border, 8px option-row
+ * highlights. Cells are width-flexible so a row never overflows the panel.
  */
 export function BotAvatarPicker({
   name,
@@ -229,6 +295,7 @@ export function BotAvatarPicker({
   const [open, setOpen] = useState(false);
   const hue = useMemo(() => normalizeBotAvatarHue(avatarColor), [avatarColor]);
   const officialSelected = isCindyOfficialAvatar(avatar);
+  const selectedPreset = useMemo(() => parsePresetAvatarId(avatar), [avatar]);
 
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
@@ -252,23 +319,24 @@ export function BotAvatarPicker({
           align="start"
           sideOffset={6}
           className={cn(
-            'z-50 w-[268px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2 outline-none',
+            'z-50 w-[300px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2 outline-none',
             'data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
           )}
         >
           <p className="px-1 pb-1 text-11 text-[var(--text-tertiary)]">
-            {t('bots.avatarPicker.emojiLabel')}
+            {t('bots.avatarPicker.charactersLabel')}
           </p>
-          <div className="grid grid-cols-8 gap-0.5">
-            {/* The official Cindy mark leads the grid; same cell geometry and
-                selected state as an emoji, only the glyph is artwork. */}
+          <div className="grid grid-cols-9 gap-0.5">
+            {/* The official Cindy mark leads the character row; same cell
+                geometry and selected state as every other cell, only the glyph
+                is artwork. */}
             <button
               type="button"
               onClick={() => onChange({ hue, emoji: CINDY_OFFICIAL_AVATAR })}
               aria-pressed={officialSelected}
               aria-label={t('bots.avatarPicker.official')}
               className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+                'flex h-8 w-full items-center justify-center rounded-lg transition-colors',
                 officialSelected
                   ? 'bg-[var(--surface-chip)]'
                   : 'hover:bg-[var(--surface-hover)]',
@@ -282,6 +350,34 @@ export function BotAvatarPicker({
                 className="pointer-events-none h-6 w-6 select-none rounded-full object-cover"
               />
             </button>
+            {BOT_PRESET_AVATAR_IDS.map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => onChange({ hue, emoji: presetAvatarValue(id) })}
+                aria-pressed={selectedPreset === id}
+                aria-label={t(`bots.avatarPicker.presets.${id}`)}
+                className={cn(
+                  'flex h-8 w-full items-center justify-center rounded-lg transition-colors',
+                  selectedPreset === id
+                    ? 'bg-[var(--surface-chip)]'
+                    : 'hover:bg-[var(--surface-hover)]',
+                )}
+              >
+                <img
+                  src={BOT_PRESET_AVATAR_SRC[id]}
+                  alt=""
+                  aria-hidden
+                  draggable={false}
+                  className="pointer-events-none h-6 w-6 select-none rounded-full object-cover"
+                />
+              </button>
+            ))}
+          </div>
+          <p className="px-1 pb-1 pt-2 text-11 text-[var(--text-tertiary)]">
+            {t('bots.avatarPicker.emojiLabel')}
+          </p>
+          <div className="grid grid-cols-8 gap-0.5">
             {BOT_AVATAR_EMOJIS.map((item) => (
               <button
                 key={item}
@@ -290,7 +386,7 @@ export function BotAvatarPicker({
                 aria-pressed={avatar === item}
                 aria-label={t('bots.chooseAvatar', { avatar: item })}
                 className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-lg text-14 transition-colors',
+                  'flex h-8 w-full items-center justify-center rounded-lg text-14 transition-colors',
                   avatar === item
                     ? 'bg-[var(--surface-chip)]'
                     : 'hover:bg-[var(--surface-hover)]',

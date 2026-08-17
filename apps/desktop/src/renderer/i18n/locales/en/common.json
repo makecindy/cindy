@@ -5491,9 +5491,20 @@
     "avatarPicker": {
       "open": "Change Avatar",
       "official": "Official Cindy avatar",
+      "charactersLabel": "Characters",
       "emojiLabel": "Emoji",
       "hueLabel": "Color",
-      "hint": "Pick an emoji and a color so this Bot is easy to spot in the list."
+      "hint": "Pick a character or emoji and a color so this Bot is easy to spot in the list.",
+      "presets": {
+        "shiba": "Shiba dog",
+        "whitecat": "White cat",
+        "robot": "Little robot",
+        "dino": "Little dinosaur",
+        "melody": "Headphone girl",
+        "star": "Starry girl",
+        "butler": "Bespectacled bear",
+        "owl": "Owl"
+      }
     },
     "list": {
       "startChat": "Start the conversation"

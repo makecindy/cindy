@@ -5489,9 +5489,20 @@
     "avatarPicker": {
       "open": "アバターを変更",
       "official": "Cindy 公式アバター",
+      "charactersLabel": "キャラクター",
       "emojiLabel": "絵文字",
       "hueLabel": "色",
-      "hint": "絵文字と背景色を選ぶと、一覧でこの Bot を見分けやすくなります。"
+      "hint": "キャラクターか絵文字と背景色を選ぶと、一覧でこの Bot を見分けやすくなります。",
+      "presets": {
+        "shiba": "柴犬",
+        "whitecat": "白猫",
+        "robot": "ロボット",
+        "dino": "恐竜",
+        "melody": "ヘッドホンの少女",
+        "star": "星の少女",
+        "butler": "メガネのクマ",
+        "owl": "フクロウ"
+      }
     },
     "list": {
       "startChat": "会話を始める"

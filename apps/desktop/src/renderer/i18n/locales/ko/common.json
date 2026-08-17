@@ -5489,9 +5489,20 @@
     "avatarPicker": {
       "open": "아바타 변경",
       "official": "Cindy 공식 아바타",
+      "charactersLabel": "캐릭터",
       "emojiLabel": "이모지",
       "hueLabel": "색상",
-      "hint": "이모지와 배경색을 선택하면 목록에서 이 Bot을 쉽게 알아볼 수 있습니다."
+      "hint": "캐릭터나 이모지와 배경색을 선택하면 목록에서 이 Bot을 쉽게 알아볼 수 있습니다.",
+      "presets": {
+        "shiba": "시바견",
+        "whitecat": "흰 고양이",
+        "robot": "작은 로봇",
+        "dino": "작은 공룡",
+        "melody": "헤드폰 소녀",
+        "star": "별 소녀",
+        "butler": "안경 쓴 곰",
+        "owl": "올빼미"
+      }
     },
     "list": {
       "startChat": "대화 시작하기"

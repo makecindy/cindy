@@ -19,7 +19,12 @@ vi.mock('../botStore', () => ({
 }));
 
 import { AddBotDialog } from '../AddBotDialog';
-import { BOT_AVATAR_EMOJIS, BOT_AVATAR_HUES, CINDY_OFFICIAL_AVATAR } from '../BotAvatar';
+import {
+  BOT_AVATAR_HUES,
+  BOT_PRESET_AVATAR_IDS,
+  CINDY_OFFICIAL_AVATAR,
+  parsePresetAvatarId,
+} from '../BotAvatar';
 import { getBotTemplate } from '../botTemplates';
 
 function renderDialog() {
@@ -166,8 +171,19 @@ describe('AddBotDialog', () => {
     expect(payload.identitySource).toBe('You watch the deploy queue.');
     expect(payload.capabilities).toBeUndefined();
     expect(payload.eventSubscription).toBeUndefined();
-    // The blank card still gets a good-looking auto-assigned mark.
-    expect(BOT_AVATAR_EMOJIS).toContain(payload.avatar);
+    // The blank card still gets a good-looking auto-assigned mark: a shipped
+    // character this build can draw, never the official Cindy portrait.
+    expect(BOT_PRESET_AVATAR_IDS).toContain(parsePresetAvatarId(payload.avatar)!);
+    expect(payload.avatar).not.toBe(CINDY_OFFICIAL_AVATAR);
     expect(BOT_AVATAR_HUES).toContain(payload.avatarColor);
+  });
+
+  it('shows the auto-assigned character on the blank card, never the raw sentinel', () => {
+    renderDialog();
+
+    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
+    const trigger = screen.getByRole('button', { name: 'bots.avatarPicker.open' });
+    expect(trigger.querySelector('img')?.getAttribute('src')).toContain('bot-avatar-preset-');
+    expect(document.body.textContent).not.toContain('cindy://');
   });
 });

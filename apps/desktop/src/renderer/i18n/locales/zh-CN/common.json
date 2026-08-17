@@ -5489,9 +5489,20 @@
     "avatarPicker": {
       "open": "更换头像",
       "official": "Cindy 官方头像",
+      "charactersLabel": "角色",
       "emojiLabel": "表情",
       "hueLabel": "颜色",
-      "hint": "选一个表情和底色，列表里更容易认出这个 Bot。"
+      "hint": "选一个角色或表情，再配个底色，列表里更容易认出这个 Bot。",
+      "presets": {
+        "shiba": "柴犬",
+        "whitecat": "白猫",
+        "robot": "小机器人",
+        "dino": "小恐龙",
+        "melody": "耳机少女",
+        "star": "星星少女",
+        "butler": "眼镜小熊",
+        "owl": "猫头鹰"
+      }
     },
     "list": {
       "startChat": "开始对话"

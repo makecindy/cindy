@@ -90,6 +90,16 @@ const CHANNELS = new Set<ChannelKind>([
 const ROLES = new Set<BotRole>(['canonical', 'route', 'history']);
 const WORKSPACE_POLICIES = new Set<BotWorkspacePolicy>(BOT_WORKSPACE_POLICIES);
 const MAX_TEXT = 4000;
+/**
+ * An avatar is either a single grapheme or a reserved `cindy://avatar/…` sentinel
+ * that resolves to bundled artwork (see
+ * `renderer/features/bots/botAvatarIdentity.ts`). The longest sentinel shipped
+ * today is `cindy://avatar/preset/whitecat` (30 chars), so the old 16-char cap
+ * rejected every Bot carrying shipped artwork — including the standard Cindy
+ * assistant template. The cap stays small on purpose: it must never become a
+ * place to smuggle a URL or a blob into the profile row.
+ */
+const MAX_AVATAR_TEXT = 64;
 
 export interface CreateBotCanonicalSessionInput {
   botId: string;
@@ -799,7 +809,7 @@ export function registerBotIpc(): void {
     const description = readText(body.description, 'description');
     const id =
       readText(body.id, 'id', 128) || `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const avatar = readText(body.avatar, 'avatar', 16) || '🤖';
+    const avatar = readText(body.avatar, 'avatar', MAX_AVATAR_TEXT) || '🤖';
     const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
     const identitySource =
       readText(body.identitySource, 'identitySource', 12000) || buildDefaultBotIdentity(name);
@@ -871,7 +881,7 @@ export function registerBotIpc(): void {
     const id = readText(body.id, 'id', 128, true);
     const name = readText(body.name ?? body.displayName, 'name', 200, true);
     const description = readText(body.description, 'description');
-    const avatar = readText(body.avatar, 'avatar', 16) || '🤖';
+    const avatar = readText(body.avatar, 'avatar', MAX_AVATAR_TEXT) || '🤖';
     const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
     const identitySource =
       readText(body.identitySource, 'identitySource', 12000) || buildDefaultBotIdentity(name);
@@ -920,7 +930,8 @@ export function registerBotIpc(): void {
       patch.displayName = readText(body.name ?? body.displayName, 'name', 200, true);
     if (body.description !== undefined)
       patch.description = readText(body.description, 'description');
-    if (body.avatar !== undefined) patch.avatar = readText(body.avatar, 'avatar', 16, true);
+    if (body.avatar !== undefined)
+      patch.avatar = readText(body.avatar, 'avatar', MAX_AVATAR_TEXT, true);
     if (body.avatarColor !== undefined)
       patch.avatarColor = readText(body.avatarColor, 'avatarColor', 32, true);
     if (body.enabled !== undefined) {

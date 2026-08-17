@@ -4628,3 +4628,50 @@ describe('Bots list conversation projection', () => {
     expect(remote).not.toHaveProperty('lastMessagePreview');
   });
 });
+
+describe('Bot avatar sentinel persistence', () => {
+  // A Bot avatar is either one grapheme or a reserved `cindy://avatar/…`
+  // sentinel resolving to bundled artwork (renderer/features/bots/
+  // botAvatarIdentity.ts). The create/update guards used to cap avatar text at
+  // 16 chars, which rejected every sentinel — including the shipped Cindy
+  // assistant template and every auto-assigned character.
+  it('accepts the official and preset sentinels on create and update', async () => {
+    await invoke('local-db:bots:create', {
+      id: 'bot-official',
+      name: 'Cindy',
+      avatar: 'cindy://avatar/official',
+      avatarColor: 'graphite',
+    });
+    expect(await invoke('local-db:bots:get', 'bot-official')).toMatchObject({
+      avatar: 'cindy://avatar/official',
+    });
+
+    await invoke('local-db:bots:create', {
+      id: 'bot-preset',
+      name: 'Sora',
+      avatar: 'cindy://avatar/preset/whitecat',
+      avatarColor: 'teal',
+    });
+    expect(await invoke('local-db:bots:get', 'bot-preset')).toMatchObject({
+      avatar: 'cindy://avatar/preset/whitecat',
+    });
+
+    await invoke('local-db:bots:update', {
+      id: 'bot-preset',
+      avatar: 'cindy://avatar/preset/melody',
+    });
+    expect(await invoke('local-db:bots:get', 'bot-preset')).toMatchObject({
+      avatar: 'cindy://avatar/preset/melody',
+    });
+  });
+
+  it('still refuses an avatar long enough to smuggle a URL or a blob', async () => {
+    await expect(
+      invoke('local-db:bots:create', {
+        id: 'bot-long-avatar',
+        name: 'Overlong',
+        avatar: `https://example.com/${'a'.repeat(200)}.png`,
+      }),
+    ).rejects.toThrow();
+  });
+});

@@ -8,10 +8,10 @@ import { Spinner } from '@/components/ui/spinner';
 import { DEFAULT_CONTROL_BOT_EVENT_RULE } from '../../../shared/botSessionEvents';
 import { addBotProfileAndWait, type BotProfile } from './botStore';
 import {
+  botAvatarArtworkSrc,
   botAvatarAssignment,
   BotAvatarPicker,
-  CINDY_OFFICIAL_AVATAR_SRC,
-  isCindyOfficialAvatar,
+  isCindyAvatarSentinel,
   type BotAvatarAssignment,
   type BotAvatarHue,
 } from './BotAvatar';
@@ -164,6 +164,7 @@ export function AddBotDialog({ open, onOpenChange, onCreated }: AddBotDialogProp
                 {BOT_TEMPLATE_CHOICE_IDS.map((id) => {
                   const selected = id === templateId;
                   const definition = isBotTemplateId(id) ? getBotTemplate(id) : null;
+                  const artwork = definition ? botAvatarArtworkSrc(definition.avatar) : null;
                   const copyKey = templateCopyKey(id);
                   return (
                     <button
@@ -180,17 +181,18 @@ export function AddBotDialog({ open, onOpenChange, onCreated }: AddBotDialogProp
                     >
                       <span className="flex h-5 items-center justify-between gap-2">
                         {definition ? (
-                          isCindyOfficialAvatar(definition.avatar) ? (
-                            // A sentinel avatar is artwork, not a grapheme; painting
-                            // the raw string here would leak `cindy://avatar/…`.
+                          // A sentinel avatar is artwork, not a grapheme; painting
+                          // the raw string here would leak `cindy://avatar/…`, so an
+                          // unresolvable sentinel renders nothing at all.
+                          artwork ? (
                             <img
-                              src={CINDY_OFFICIAL_AVATAR_SRC}
+                              src={artwork}
                               alt=""
                               aria-hidden
                               draggable={false}
                               className="pointer-events-none h-5 w-5 select-none rounded-full object-cover"
                             />
-                          ) : (
+                          ) : isCindyAvatarSentinel(definition.avatar) ? null : (
                             <span className="text-16" aria-hidden>
                               {definition.avatar}
                             </span>

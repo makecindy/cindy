@@ -1075,6 +1075,13 @@ The brand block reads only `brand.icon/logo` — no compatibility with the legac
 
 The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, white text, for DARK / `wordmark-light.png`, dark text, for LIGHT): both 459×156 (@2x) with a 229.5×78 render frame (its exact 2x full frame), and **neither carries a drop shadow** — `SplashScreen.test.tsx` asserts the absence. (Asset-size and shadow history: decision log.)
 
+**Sanctioned artwork surface — Bot avatar characters (Desktop approved 2026-08-17).**
+
+- **Where**: the Bot identity mark only — `features/bots/BotAvatar.tsx` (`BotAvatar` + `BotAvatarPicker`) and the create-dialog template cards. A Bot's `avatar` field holds either one grapheme or a reserved `cindy://avatar/…` sentinel; the sentinel resolves to a bundled portrait: the official Cindy mark (`CINDY_OFFICIAL_AVATAR`, the account portrait, reserved for the standard Cindy assistant or an explicit user pick) or one of eight shipped characters (`bot-avatar-preset-*.png`). Auto-assignment mints a character, never the official mark.
+- **Why this is not decoration**: the avatar *is* the Bot's identity in the list, the sidebar and the chat header — the same job the emoji and the initial-letter fallback do. It is not a mascot dropped onto a working surface, and this approval does not extend to any other surface: cards, dialogs, tool output, empty states and headers stay neutral.
+- **Treatment**: circle-cropped and fully filling the mark (`object-cover`, `rounded-full`), with the §10 `--bot-avatar-*-bg` hue kept behind it so nothing flashes white while the image decodes. No shadow, no border, no plate, no animation, no per-mode asset swap — a portrait is an exported asset, not a UI color surface, so Light and Dark share one file (same rule as the share-export character crop below).
+- **Forward compatibility**: a sentinel this build cannot resolve (a character added by a newer client) renders the neutral initial — never a broken `<img>` and never the raw `cindy://avatar/…` string as text. Contract tests: `botAvatar.test.tsx`, `addBotDialog.test.tsx`.
+
 **Sanctioned brand surface — session-switch deferred-loading overlay (Desktop approved 2026-08-10).**
 
 - **Where**: `BrandLoadingMark` mounted by `MessageStream` only while a session switch has committed the shell but deferred the message tree. It is centered as a pointer-transparent overlay in the empty message viewport and is eligible to become visible only after the 200ms delayed-reveal threshold. The live message tree and composer never carry the mark; once messages mount, the overlay unmounts immediately.
