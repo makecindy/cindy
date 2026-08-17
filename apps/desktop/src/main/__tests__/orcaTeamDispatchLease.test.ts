@@ -179,6 +179,50 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     )).toEqual({ rewindAt: null, teamId: null, uuid: 'u1' });
   });
 
+  it('retries transient SQLite contention while committing submitted marker removal', async () => {
+    const options = await createClientOptions();
+    const busy = Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    let markerAttempts = 0;
+    let commitAttempts = 0;
+    const client: IsolatedSqliteClient = {
+      queryOne: async <T = unknown>(sql: string): Promise<T | undefined> => {
+        if (sql.includes('SELECT status FROM orca_teams')) {
+          return { status: 'active' } as T;
+        }
+        if (sql.includes("json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId')")) {
+          return { teamId: 'team-retry' } as T;
+        }
+        return { ok: 1 } as T;
+      },
+      exec: vi.fn(async (sql: string) => {
+        if (sql.includes("SET agent_meta = json_remove")) {
+          markerAttempts += 1;
+          if (markerAttempts === 1) throw busy;
+        }
+        if (sql === 'COMMIT') {
+          commitAttempts += 1;
+          if (commitAttempts === 1) throw busy;
+        }
+        return { changes: 1, lastInsertRowid: 0 };
+      }),
+      dispose: vi.fn(async () => {}),
+    };
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => client,
+      getTerminalFenceState: () => 'open',
+    });
+
+    const release = await coordinator.acquire('team-retry', {
+      sessionId: 'session-1',
+      clientId: 'client-retry',
+    });
+    await release('submitted');
+
+    expect(markerAttempts).toBe(2);
+    expect(commitAttempts).toBe(2);
+  });
+
   it('tombstones a marked row when another instance already ended the team', async () => {
     const options = await createClientOptions();
     const setup = await trackedClient(options);

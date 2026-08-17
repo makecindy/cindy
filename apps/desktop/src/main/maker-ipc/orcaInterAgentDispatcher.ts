@@ -231,6 +231,33 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   log?: OrcaInterAgentDispatcherLogger;
 }
 
+async function finalizePersistedUserMessageRewindBestEffort<TSessionMeta>(
+  deps: Pick<
+    OrcaInterAgentDispatcherDeps<TSessionMeta>,
+    'finalizePersistedUserMessageRewind' | 'log'
+  >,
+  sessionId: string,
+  clientId: string,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await deps.finalizePersistedUserMessageRewind(sessionId, clientId);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 10));
+      }
+    }
+  }
+  (deps.log ?? defaultLog).warn('direct Orca rewind finalization failed after tombstone commit', {
+    sessionId,
+    clientId,
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  });
+}
+
 /** queued 消息的 accepted 副作用状态，用于派发失败时只回滚已经执行过的副作用。 */
 interface QueuedOrcaInterAgentAcceptedCallback {
   accepted: () => void | Promise<void>;
@@ -552,7 +579,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 
               await release(outcome);
               deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId);
-              await deps.finalizePersistedUserMessageRewind(
+              await finalizePersistedUserMessageRewindBestEffort(
+                deps,
                 params.targetSessionId,
                 clientId,
               );

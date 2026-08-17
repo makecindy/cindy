@@ -75,7 +75,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
       if (row?.status !== 'active') {
         if (cleanupTarget) {
           await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
-          await client.exec('COMMIT');
+          await this.execWithBusyRetry(client, 'COMMIT');
           transactionOpen = false;
         }
         throw new Error(`ORCA_TEAM_INACTIVE: team ${teamId} has already ended`);
@@ -93,7 +93,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
       if (fenceState === 'terminal') {
         if (cleanupTarget) {
           await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
-          await client.exec('COMMIT');
+          await this.execWithBusyRetry(client, 'COMMIT');
           transactionOpen = false;
         }
         throw new Error(`ORCA_TEAM_INACTIVE: team ${teamId} has already ended`);
@@ -126,9 +126,10 @@ export class OrcaTeamDispatchLeaseCoordinator {
             // transaction that excluded terminal writers. Another Cindy
             // instance can only commit end_team after this durable rewind.
             await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
-            await client.exec('COMMIT');
+            await this.execWithBusyRetry(client, 'COMMIT');
           } else if (outcome === 'submitted' && cleanupTarget) {
-            await client.exec(
+            await this.execWithBusyRetry(
+              client,
               `UPDATE messages
                   SET agent_meta = json_remove(agent_meta, '$.orcaPreVendorCleanup')
                 WHERE session_id = ?
@@ -138,7 +139,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
                   AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
               [cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
             );
-            await client.exec('COMMIT');
+            await this.execWithBusyRetry(client, 'COMMIT');
           } else {
             await this.releaseTransaction(client);
           }
@@ -193,11 +194,18 @@ export class OrcaTeamDispatchLeaseCoordinator {
   }
 
   private async beginImmediate(client: IsolatedSqliteClient): Promise<void> {
+    await this.execWithBusyRetry(client, 'BEGIN IMMEDIATE');
+  }
+
+  private async execWithBusyRetry(
+    client: IsolatedSqliteClient,
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
     const deadline = Date.now() + 5_000;
     while (true) {
       try {
-        await client.exec('BEGIN IMMEDIATE');
-        return;
+        return await client.exec(sql, params);
       } catch (error) {
         if (!isSqliteBusy(error) || Date.now() >= deadline) throw error;
         await delay(10);
@@ -210,7 +218,8 @@ export class OrcaTeamDispatchLeaseCoordinator {
     teamId: string,
     cleanupTarget: OrcaTeamDispatchCleanupTarget,
   ): Promise<void> {
-    await client.exec(
+    await this.execWithBusyRetry(
+      client,
       `UPDATE messages
           SET rewind_at = ?
         WHERE session_id = ?

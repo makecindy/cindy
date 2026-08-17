@@ -226,6 +226,50 @@ describe('Orca lead/worker dispatcher', () => {
     expect(leaseRelease).toHaveBeenCalledWith('submitted');
   });
 
+  it('preserves a confirmed-undispatched result when rewind finalization transiently fails', async () => {
+    const finalizePersistedUserMessageRewind = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('database busy'))
+      .mockResolvedValueOnce();
+    const leaseRelease = vi.fn();
+    const liveSession = createLiveSession(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      opts?.onDispatching?.();
+      const release = await opts?.acquireVendorDispatchLease?.();
+      await release?.('confirmed-undispatched');
+      return { accepted: false, reason: 'cancelled-before-dispatch' };
+    });
+    const h = createHarness({
+      getLiveSession: vi.fn(() => liveSession),
+      acquireVendorDispatchLease: vi.fn(async () => leaseRelease),
+      finalizePersistedUserMessageRewind,
+    });
+
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Do not rewrite the transport result',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'finalize-retry-test' },
+    })).resolves.toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'session-dispatch',
+        dispatched: false,
+        reason: 'cancelled-before-dispatch',
+      },
+    });
+
+    expect(leaseRelease).toHaveBeenCalledWith('confirmed-undispatched');
+    expect(finalizePersistedUserMessageRewind).toHaveBeenCalledTimes(2);
+    expect(h.deps.abortDirectTurnChangeSet).toHaveBeenCalledWith('target-session');
+    expect(h.deps.rewindPersistedUserMessage).toHaveBeenCalledWith(
+      'target-session',
+      'client-1',
+    );
+  });
+
   it('keeps cleanup tracking until the provider dispatch lease is acquired', async () => {
     const leaseEntered = deferredVoid();
     const allowLease = deferredVoid();

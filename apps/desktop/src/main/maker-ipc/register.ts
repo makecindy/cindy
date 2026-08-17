@@ -8439,6 +8439,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           untrackPersistedOrcaPreVendorInput(clientId);
         }
       };
+      const finalizeConfirmedOrcaUserMessageRewind = async (): Promise<void> => {
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await rewindPersistedUserMessageAfterClear(targetSessionId, clientId, {
+              finalizeAlreadyRewound: true,
+            });
+            return;
+          } catch (error) {
+            lastError = error;
+            if (attempt < 3) {
+              await new Promise((resolve) => setTimeout(resolve, attempt * 10));
+            }
+          }
+        }
+        log.warn('send_to_session Orca rewind finalization failed after tombstone commit', {
+          sessionId: targetSessionId,
+          clientId,
+          error: lastError instanceof Error ? lastError.message : String(lastError),
+        });
+      };
       const acquireTrackedOriginVendorDispatchLease = orcaOriginTeamId
         ? async () => {
             const release = await acquireOrcaTeamDispatchLease(orcaOriginTeamId, {
@@ -8459,9 +8480,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // to remove; media cleanup and broadcast may follow afterward.
               await release(outcome);
               untrackPersistedOrcaPreVendorInput(clientId);
-              await rewindPersistedUserMessageAfterClear(targetSessionId, clientId, {
-                finalizeAlreadyRewound: true,
-              });
+              await finalizeConfirmedOrcaUserMessageRewind();
             };
           }
         : undefined;
