@@ -1004,10 +1004,13 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
-  options: { finalizeAlreadyRewound?: boolean } = {},
-): Promise<void> {
+  options: {
+    finalizeAlreadyRewound?: boolean;
+    preserveSubmittedOrca?: boolean;
+  } = {},
+): Promise<boolean> {
   const ownerScope = captureOwnerBroadcastScope();
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return true;
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const filters = [
@@ -1026,8 +1029,8 @@ export async function rewindPersistedUserMessageAfterClear(
     .from(messages)
     .where(and(...filters))
     .limit(1);
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (!row) return;
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return true;
+  if (!row) return true;
 
   const updated =
     row.rewindAt === null
@@ -1037,12 +1040,34 @@ export async function rewindPersistedUserMessageAfterClear(
         WHERE session_id = ?
           AND client_id = ?
           AND role = 'user'
-          AND rewind_at IS NULL`,
+          AND rewind_at IS NULL
+          ${options.preserveSubmittedOrca
+            ? `AND COALESCE(
+                    json_extract(agent_meta, '$.orcaPreVendorCleanup.phase'),
+                    'pre-vendor'
+                  ) != 'submitted'`
+            : ''}`,
           [Date.now(), sessionId, clientId],
         )
       : { changes: 0 };
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (updated.changes === 0 && !options.finalizeAlreadyRewound) return;
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return true;
+  if (updated.changes === 0 && !options.finalizeAlreadyRewound) {
+    if (options.preserveSubmittedOrca) {
+      const submitted = await dbClient.queryOne<{ submitted: number }>(
+        `SELECT 1 AS submitted
+           FROM messages
+          WHERE session_id = ?
+            AND client_id = ?
+            AND role = 'user'
+            AND rewind_at IS NULL
+            AND json_extract(agent_meta, '$.orcaPreVendorCleanup.phase') = 'submitted'
+          LIMIT 1`,
+        [sessionId, clientId],
+      );
+      if (submitted) return false;
+    }
+    return true;
+  }
 
   const mediaCleanup = await Promise.allSettled(
     [...new Set([row.id, row.clientId])].map((refId) =>
@@ -1075,6 +1100,7 @@ export async function rewindPersistedUserMessageAfterClear(
   }
   broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
+  return true;
 }
 
 /** Complete media cleanup and UI broadcast for rows already rewound by a DB transaction. */

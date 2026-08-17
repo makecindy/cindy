@@ -10540,7 +10540,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
         rewindPersistedUserMessageAfterClear(sessionId, clientId),
-      ),
+      ).then(() => undefined),
     isClearBoundaryCurrent: (sessionId, expected, expectedGeneration) => {
       const coordinator = agentInputCoordinatorHolder;
       if (!coordinator) return true;
@@ -11474,9 +11474,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // auto-resume bookkeeping as direct maker sends.  Keeping one writer also
     // preserves message ordering when a clear-race rewind follows the insert.
     createUserMessage: createUserMessageDurably,
-    rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
+    rewindPersistedUserMessageAfterClear: (sessionId, clientId, options) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
-        rewindPersistedUserMessageAfterClear(sessionId, clientId),
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, options),
       ),
     resolveSessionReferences,
     // interrupted-turn-resume:retry 续跑判定走 DB 持久化行(见 dep 注释)。

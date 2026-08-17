@@ -325,7 +325,11 @@ export interface AgentInputCoordinatorDeps {
    */
   createUserMessage?: typeof createDbMessage;
   /** Hide a user row whose turn was cancelled after persistence but before vendor dispatch. */
-  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
+  rewindPersistedUserMessageAfterClear?: (
+    sessionId: string,
+    clientId: string,
+    options?: { preserveSubmittedOrca?: boolean },
+  ) => Promise<boolean | void>;
   /**
    * interrupted-turn-resume:判断某条已派发 user 消息之后 agent 是否已产出内容
    * (assistant / tool_use / thinking 持久化行)。retryLastError 用它决定语义:
@@ -2811,7 +2815,6 @@ export class AgentInputCoordinator {
       state.recovery?.kind === 'active-turn' &&
       predicate(state.recovery.item)
     ) {
-      recoveryDiscarded = true;
       persistedItemsToRewind.set(state.recovery.item.clientId, state.recovery.item);
       discardedRecoveryItems.add(state.recovery.item.clientId);
       state.activeTurnCleanupRecoveryItem = state.recovery.item;
@@ -2819,7 +2822,6 @@ export class AgentInputCoordinator {
     }
     const cleanupRecovery = state.activeTurnCleanupRecoveryItem;
     if (cleanupRecovery && predicate(cleanupRecovery)) {
-      recoveryDiscarded = true;
       persistedItemsToRewind.set(cleanupRecovery.clientId, cleanupRecovery);
       discardedRecoveryItems.add(cleanupRecovery.clientId);
     }
@@ -2830,11 +2832,23 @@ export class AgentInputCoordinator {
     let rewindFailure: { error: unknown } | null = null;
     for (const item of persistedItemsToRewind.values()) {
       try {
-        await this.rewindUndispatchedPersistedUserMessage(
+        const rewound = await this.rewindUndispatchedPersistedUserMessage(
           sessionId,
           item,
           'selective invalidation',
+          { preserveSubmittedOrca: true },
         );
+        if (!rewound) {
+          // The conditional UPDATE observed a durable submitted marker. The
+          // provider may already be executing this prompt, so restore the
+          // user-visible recovery instead of converting it into terminal-team
+          // cleanup and silently losing its transcript boundary.
+          state.recovery = { kind: 'active-turn', item };
+          if (state.activeTurnCleanupRecoveryItem?.clientId === item.clientId) {
+            state.activeTurnCleanupRecoveryItem = null;
+          }
+          continue;
+        }
       } catch (error) {
         rewindFailure = { error };
         break;
@@ -2845,6 +2859,7 @@ export class AgentInputCoordinator {
         state.stickyError = null;
       }
       if (discardedRecoveryItems.has(item.clientId)) {
+        recoveryDiscarded = true;
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
       }
     }
@@ -4211,9 +4226,20 @@ export class AgentInputCoordinator {
     sessionId: string,
     item: AgentInputQueuedMessage,
     reason: string,
-  ): Promise<void> {
+    options?: { preserveSubmittedOrca?: boolean },
+  ): Promise<boolean> {
     try {
-      await this.deps.rewindPersistedUserMessageAfterClear?.(sessionId, item.clientId);
+      const rewound = options
+        ? await this.deps.rewindPersistedUserMessageAfterClear?.(
+            sessionId,
+            item.clientId,
+            options,
+          )
+        : await this.deps.rewindPersistedUserMessageAfterClear?.(
+            sessionId,
+            item.clientId,
+          );
+      return rewound !== false;
     } catch (err) {
       log.warn('rewind undispatched persisted user row failed', {
         sessionId,

@@ -3482,7 +3482,11 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(h.isOrcaTeamInputActive).toHaveBeenCalledWith('team-old');
-    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(sid, 'orca-old');
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(
+      sid,
+      'orca-old',
+      { preserveSubmittedOrca: true },
+    );
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
       type: 'user',
@@ -3538,6 +3542,38 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
       sid,
       expect.objectContaining({ clientId: 'orca-old' }),
+    );
+  });
+
+  it('preserves an acceptance-unknown submitted Orca recovery during selective invalidation', async () => {
+    const h = createHarness();
+    const sid = 'submitted-orca-recovery-terminal-invalidation';
+    const item = makeOrcaItem('orca-submitted', 'possibly accepted report', 'team-old');
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'TURN_DISPATCH_UNCONFIRMED');
+    await flush();
+    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item });
+
+    h.rewindPersistedUserMessageAfterClear.mockResolvedValueOnce(false);
+    await expect(
+      h.coordinator.discardQueuedItemsWhere(
+        sid,
+        (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === 'team-old',
+      ),
+    ).resolves.toMatchObject({ recoveryDiscarded: false });
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(
+      sid,
+      'orca-submitted',
+      { preserveSubmittedOrca: true },
+    );
+    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item });
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-submitted' }),
     );
   });
 
@@ -3843,7 +3879,11 @@ describe('AgentInputCoordinator send transaction', () => {
       });
     await flush();
 
-    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(sid, 'orca-pending');
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(
+      sid,
+      'orca-pending',
+      { preserveSubmittedOrca: true },
+    );
     expect(discardSettled).toBe(false);
 
     finishRewind.resolve();
@@ -6788,6 +6828,7 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(
       sid,
       'orca-old',
+      { preserveSubmittedOrca: true },
     );
 
     beforeDispatch.resolve();
@@ -6828,7 +6869,11 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
       });
     await flush();
     expect(discardSettled).toBe(false);
-    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(sid, 'orca-old');
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(
+      sid,
+      'orca-old',
+      { preserveSubmittedOrca: true },
+    );
 
     finishRewind.resolve();
     beforeDispatch.resolve();

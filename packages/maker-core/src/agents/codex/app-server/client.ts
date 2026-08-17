@@ -55,6 +55,7 @@ export class AppServerRequestTimeoutError extends Error {
 export class AppServerRpcError extends Error {
   readonly code: number;
   readonly data?: unknown;
+  private vendorDispatchRejectionSettlement: (() => Promise<void>) | null = null;
 
   constructor(
     public readonly method: string,
@@ -64,6 +65,23 @@ export class AppServerRpcError extends Error {
     this.name = 'AppServerRpcError';
     this.code = rpcError.code;
     this.data = rpcError.data;
+  }
+
+  /**
+   * Keep an authoritative rejection recoverable while the Codex adapter decides
+   * whether it will replace the rejected request. The callback is single-use so
+   * a final error path and a late cleanup path cannot tombstone the same row twice.
+   */
+  deferVendorDispatchRejectionSettlement(settle: () => Promise<void>): void {
+    this.vendorDispatchRejectionSettlement = settle;
+  }
+
+  async settleVendorDispatchRejection(): Promise<boolean> {
+    const settle = this.vendorDispatchRejectionSettlement;
+    if (!settle) return false;
+    this.vendorDispatchRejectionSettlement = null;
+    await settle();
+    return true;
   }
 }
 

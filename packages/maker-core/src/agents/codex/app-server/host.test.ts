@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { AppServerHost } from './host.js';
+import { AppServerRpcError } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 
@@ -420,6 +421,41 @@ describe('AppServerHost.request startup timeout', () => {
       ['submitted'],
       ['confirmed-undispatched'],
     ]);
+    transport.settleTurnStartWrite();
+    await host.shutdown();
+  });
+
+  it('defers tombstoning a correlated rejection until the caller declines retry', async () => {
+    const transport = new DeferredTurnStartSubmissionTransport();
+    const release = vi.fn();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      acquireSubmissionLease: async () => release,
+      deferCorrelatedRejectionSettlement: true,
+    });
+    await vi.waitFor(() => expect(transport.turnStartWriteBegan).toHaveBeenCalledOnce());
+    transport.rejectTurnStart(-32000, 'thread not found');
+
+    const error = await request.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerRpcError);
+    expect(release.mock.calls).toEqual([['submitted']]);
+
+    await expect(
+      (error as AppServerRpcError).settleVendorDispatchRejection(),
+    ).resolves.toBe(true);
+    expect(release.mock.calls).toEqual([
+      ['submitted'],
+      ['confirmed-undispatched'],
+    ]);
+    await expect(
+      (error as AppServerRpcError).settleVendorDispatchRejection(),
+    ).resolves.toBe(false);
+
     transport.settleTurnStartWrite();
     await host.shutdown();
   });

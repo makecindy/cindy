@@ -708,6 +708,7 @@ export class AppServerHost {
         | void
         | VendorDispatchLeaseRelease
         | Promise<VendorDispatchLeaseRelease>;
+      deferCorrelatedRejectionSettlement?: boolean;
     },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
@@ -747,6 +748,7 @@ export class AppServerHost {
         params,
         remaining,
         opts.acquireSubmissionLease,
+        opts.deferCorrelatedRejectionSettlement === true,
       );
     }
     await started;
@@ -755,6 +757,7 @@ export class AppServerHost {
       params,
       undefined,
       opts?.acquireSubmissionLease,
+      opts?.deferCorrelatedRejectionSettlement === true,
     );
   }
 
@@ -768,6 +771,7 @@ export class AppServerHost {
           | VendorDispatchLeaseRelease
           | Promise<VendorDispatchLeaseRelease>)
       | undefined,
+    deferCorrelatedRejectionSettlement: boolean,
   ): Promise<R> {
     const client = this.client;
     if (!client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
@@ -821,9 +825,17 @@ export class AppServerHost {
     } catch (error) {
       if (error instanceof AppServerRpcError) {
         // A correlated JSON-RPC error proves app-server rejected the turn.
-        // Serialize the terminal settlement after the local submitted marker.
+        // Serialize any terminal settlement after the local submitted marker.
+        // Retry-capable callers can retain the submitted row until they decide
+        // whether to acquire a replacement lease for the same logical prompt.
         await releaseAfterSubmission.catch(() => undefined);
-        await release?.('confirmed-undispatched');
+        if (deferCorrelatedRejectionSettlement && release) {
+          error.deferVendorDispatchRejectionSettlement(() =>
+            Promise.resolve(release('confirmed-undispatched')),
+          );
+        } else {
+          await release?.('confirmed-undispatched');
+        }
       }
       throw error;
     }

@@ -240,6 +240,38 @@ describe('message persistence clear boundary', () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
+  it('atomically preserves a submitted Orca row during selective invalidation', async () => {
+    const insert = sqlite.prepare(
+      `INSERT INTO messages
+        (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at)
+       VALUES (?, ?, 's1', 'user', ?, ?, 100, NULL)`,
+    );
+    insert.run('pending-row', 'pending-client', 'pending', JSON.stringify({
+      orcaPreVendorCleanup: { teamId: 'team-1' },
+    }));
+    insert.run('submitted-row', 'submitted-client', 'submitted', JSON.stringify({
+      orcaPreVendorCleanup: { teamId: 'team-1', phase: 'submitted' },
+    }));
+
+    await expect(
+      rewindPersistedUserMessageAfterClear('s1', 'pending-client', {
+        preserveSubmittedOrca: true,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      rewindPersistedUserMessageAfterClear('s1', 'submitted-client', {
+        preserveSubmittedOrca: true,
+      }),
+    ).resolves.toBe(false);
+
+    expect(sqlite.prepare(
+      'SELECT client_id AS clientId, rewind_at AS rewindAt FROM messages ORDER BY client_id',
+    ).all()).toEqual([
+      { clientId: 'pending-client', rewindAt: expect.any(Number) },
+      { clientId: 'submitted-client', rewindAt: null },
+    ]);
+  });
+
   it('reconciles session attachment refs for a rewound user row', async () => {
     const { collectCindyMediaHashes } = await import('../../../cindy-media/chatAttachments');
     const { removeSessionAttachmentRefIfUnreferencedByLiveMessage } = await import(
