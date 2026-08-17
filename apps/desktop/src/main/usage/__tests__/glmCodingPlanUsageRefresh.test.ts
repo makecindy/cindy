@@ -386,6 +386,55 @@ describe('T4 — owner 在 readSource await 期间切换(全出口复核)', () =
   });
 });
 
+describe('八轮 PTF — invalidate 先于 source 读取窗口', () => {
+  it('rejects an old-key fetch that completes while syncForProviderChange is still reading config', async () => {
+    // readSource 要过 DB + safeStorage(此处挂起模拟慢读);CRUD 已发生,旧 fetch
+    // 若在这段窗口内完成,令牌必须已失效(八轮前:invalidate 排在 readSource
+    // 之后,窗口内旧写照样落库)。
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    // readSource 挂起:直接接管 deps.readSource mock
+    let resolveSource!: (v: GlmCodingPlanReadSourceResult) => void;
+    (h.deps.readSource as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<GlmCodingPlanReadSourceResult>((res) => { resolveSource = res; }),
+    );
+    const syncPromise = h.reader.syncForProviderChange(SOURCE_A.providerId);
+    await new Promise((r) => setTimeout(r, 0));
+    h.setSource(SOURCE_B);
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 迟到(读取窗口内)
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.calls.record).toHaveLength(0); // A 被拒:令牌在 readSource 前已作废
+    resolveSource(SOURCE_B); // 慢读返回新 key 配置
+    await syncPromise;
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b'); // 只有 B 链补刷落库
+  });
+});
+
+describe('八轮 PTJ — source 读取失败 ≠ provider 不存在', () => {
+  it('syncForProviderChange keeps the snapshot and clears nothing on a transient readSource failure', async () => {
+    // CRUD 钩子里 DB/safeStorage 瞬时抖动:不得把异常折成"已删除"强清有效快照
+    // (八轮前:readSourceSafe 折成 null → sync 走强制清,额度消失到重挂载)。
+    const seed = snapshotOf({ keyFingerprint: 'fp-key-a' });
+    const h = makeHarness({ cached: seed });
+    (h.deps.readSource as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db busy'));
+    await h.reader.syncForProviderChange(SOURCE_A.providerId);
+    expect(h.calls.clear).toBe(0);          // 不清快照
+    expect(h.cached()).toBe(seed);          // 有效数据原样存活(同一引用)
+    expect(h.deps.fetchSnapshot).not.toHaveBeenCalled(); // 也不发起无凭证出网
+  });
+
+  it('read() returns the cached snapshot on a read-failed sentinel (display uninterrupted)', async () => {
+    const seed = snapshotOf();
+    const h = makeHarness({ cached: seed });
+    (h.deps.readSource as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('DPAPI busy'));
+    const result = await h.reader.read(SOURCE_A.providerId);
+    expect(result).toBe(seed); // 瞬时故障返回缓存,不中断显示
+    expect(h.calls.clear).toBe(0);
+  });
+});
+
 describe('per-provider isolation', () => {
   it('keeps throttle and snapshot state independent per provider id', async () => {
     const h = makeHarness();

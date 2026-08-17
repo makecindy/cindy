@@ -24,14 +24,21 @@ export interface GlmCodingPlanProviderSource {
 }
 
 /**
- * readSource 的三态结果:
+ * readSource 的四态结果:
  *   - source     → 正常素材
  *   - null       → 无该 provider / 无 usage 能力 / 无 key(业务上的"不可查询")
  *   - 'stale-owner' → 读取期间账号切换(素材已不可信,#2768 review r3788644129):
  *                     与"不存在"语义不同 —— 绝不能走清快照路径(那会删掉新账号
  *                     同名 provider 的快照),只能静默放弃本次读。
+ *   - 'read-failed' → source 解析抛异常(DB / safeStorage 瞬时故障;#2768 八轮
+ *                     review PTJ):同样不是"不存在",任何调用方都不得据此清快照
+ *                     或置冷却,只能无副作用地放弃、等下次入口重试。
  */
-export type GlmCodingPlanReadSourceResult = GlmCodingPlanProviderSource | null | 'stale-owner';
+export type GlmCodingPlanReadSourceResult =
+  | GlmCodingPlanProviderSource
+  | null
+  | 'stale-owner'
+  | 'read-failed';
 
 export interface GlmCodingPlanUsageRefreshDeps {
   /** 解析 provider 的查询素材;三态语义见 GlmCodingPlanReadSourceResult。 */
@@ -191,9 +198,17 @@ export function createGlmCodingPlanUsageReader(
     try {
       return await deps.readSource(providerId);
     } catch (err) {
+      // 瞬时故障 ≠ provider 不存在(PTJ):折成独立哨兵,调用方按「无副作用放弃」
+      // 处理,绝不走删除/冷却路径。
       deps.onRefreshError(err);
-      return null;
+      return 'read-failed';
     }
+  }
+
+  function isProviderSource(
+    result: GlmCodingPlanReadSourceResult,
+  ): result is GlmCodingPlanProviderSource {
+    return Boolean(result) && result !== 'stale-owner' && result !== 'read-failed';
   }
 
   function refreshWith(
@@ -209,7 +224,7 @@ export function createGlmCodingPlanUsageReader(
       if (s.inFlightIdentity !== identity) {
         return s.inFlight.finally(() => {
           void readSourceSafe(providerId).then((current) => {
-            if (current && current !== 'stale-owner') void refreshWith(providerId, current);
+            if (isProviderSource(current)) void refreshWith(providerId, current);
           });
         });
       }
@@ -286,6 +301,11 @@ export function createGlmCodingPlanUsageReader(
         // 新账号同名 provider 的快照),也不动冷却/状态(#2768 review r3788644129)。
         return null;
       }
+      if (source === 'read-failed') {
+        // source 解析瞬时故障(PTJ):与「不存在」不同——不动状态、不清快照,
+        // 返回缓存快照,显示不中断;下次入口自然重试。
+        return await deps.readCachedSnapshot(providerId);
+      }
       if (!source) {
         s.noSourceUntil = deps.now() + throttleMs;
         s.hadSource = false;
@@ -323,7 +343,7 @@ export function createGlmCodingPlanUsageReader(
       if (now < s.noSourceUntil) return;
       if (s.lastRefreshAt > 0 && now - s.lastRefreshAt < throttleMs) return;
       void readSourceSafe(providerId).then((source) => {
-        if (source === 'stale-owner') return;
+        if (source === 'stale-owner' || source === 'read-failed') return;
         if (!source) {
           const s2 = stateFor(providerId);
           if (!s2.hadSource && s2.identity === null) {
@@ -340,8 +360,15 @@ export function createGlmCodingPlanUsageReader(
 
     async syncForProviderChange(providerId: string): Promise<void> {
       const s = stateFor(providerId);
+      // 作废在飞令牌先于任何异步 source 读取(八轮 review PTF):读配置要过 DB +
+      // safeStorage,这段窗口内完成的旧请求仍持有效令牌、照样落库广播;CRUD 事实
+      // 已经发生,令牌应立即失效(对齐上游 xaiSubscriptionUsageRefresh 的
+      // syncForCredentialChange:先同步 bump 世代、再走慢的凭证读取)。节流重置
+      // 同理随迁:数据归属已变,旧窗口不该再约束补刷。
+      resetRefreshState(s);
+      deps.invalidateWrites(providerId);
       const source = await readSourceSafe(providerId);
-      if (source === 'stale-owner') return;
+      if (source === 'stale-owner' || source === 'read-failed') return;
       if (!source) {
         // 删除 / 失去 usage 能力:无条件清(本进程可能从未观察过该 provider,但库里
         // 可能残留上一个进程周期的快照),广播 null 让 chip 回占位态。
@@ -352,13 +379,9 @@ export function createGlmCodingPlanUsageReader(
       }
       s.noSourceUntil = 0;
       s.hadSource = true;
-      // CRUD 更新拆两件事(七轮复审 R2 修正):①作废在飞令牌——UPDATE handler
-      // 对任何字段变更都触发,fetch 窗口竞态必须无条件堵(T2 教训:首刷进行中
-      // 换 key 时缓存为 null,不做这步旧写照样落库);②删持久化快照——只有
-      // 身份(key/baseUrl/platform)失配才删,改名/加模型类编辑不删,额度显示
-      // 不断。节流随归属变化重置,补刷不被旧窗口卡住。
-      resetRefreshState(s);
-      deps.invalidateWrites(providerId);
+      // CRUD 更新拆两件事(七轮复审 R2 修正):①作废在飞令牌已在入口完成;②删
+      // 持久化快照——只有身份(key/baseUrl/platform)失配才删,改名/加模型类编辑
+      // 不删,额度显示不断。
       const cached = await deps.readCachedSnapshot(providerId);
       if (isCachedSnapshotStale(cached, source, deps.fingerprintKey)) {
         await clearSnapshotQuiet(providerId);

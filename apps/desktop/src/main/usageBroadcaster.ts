@@ -1071,22 +1071,28 @@ export async function recordGlmCodingPlanUsageSnapshot(
     return;
   }
   try {
-    await getDbClient().exec(
+    // 写库与补偿删除用**同一捕获的 client + 内容匹配**(#2768 八轮 review):INSERT
+    // 挂起期间 owner 切换的话,重新 getDbClient() 会落到新账号的 DB 切片(删错库);
+    // 新世代也可能已把更新的快照写进同一行(删错数据)。补偿只删「本次写入的那笔」
+    // ——行内容已不是我们写的就不再动它,残留清理由新世代的写入自然覆盖。
+    const db = getDbClient();
+    const written = JSON.stringify(next);
+    await db.exec(
       `INSERT INTO coding_plan_usage_snapshots (provider_id, snapshot, updated_at)
        VALUES (?, ?, ?)
        ON CONFLICT(provider_id) DO UPDATE SET
          snapshot = excluded.snapshot,
          updated_at = excluded.updated_at`,
-      [providerId, JSON.stringify(next), Date.now()],
+      [providerId, written, Date.now()],
     );
     if (
       ownerEpoch !== glmCodingPlanUsageOwnerEpoch
       || generation !== glmGenerationOf(providerId)
     ) {
       // clear 在写库 await 期间抢先:补偿删除,防下次冷启动读回残留。
-      await getDbClient().exec(
-        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ?',
-        [providerId],
+      await db.exec(
+        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ? AND snapshot = ?',
+        [providerId, written],
       );
     }
   } catch (err) {

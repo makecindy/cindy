@@ -8,11 +8,22 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  queryOne: vi.fn(),
-  exec: vi.fn(async () => undefined),
-  getCurrentUserId: vi.fn(() => 'user-1'),
-}));
+const mocks = vi.hoisted(() => {
+  const shared = {
+    queryOne: vi.fn(),
+    exec: vi.fn(async () => undefined),
+  };
+  const clientQueue: Array<{ queryOne: unknown; exec: unknown; drizzle: {} }> = [];
+  return {
+    queryOne: shared.queryOne,
+    exec: shared.exec,
+    getCurrentUserId: vi.fn(() => 'user-1'),
+    /** 逐次派发的 client 队列(八轮 PTB/Paw 用;空时回落共享 mock,旧用例零影响)。 */
+    clientQueue,
+    takeClient: () => clientQueue.shift()
+      ?? { queryOne: shared.queryOne, exec: shared.exec, drizzle: {} as const },
+  };
+});
 
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
@@ -29,7 +40,7 @@ vi.mock('../localDb/dailyModelUsage', () => ({
   incrementDailyModelUsage: vi.fn(),
 }));
 vi.mock('../localDb/client/current', () => ({
-  getDbClient: () => ({ queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} }),
+  getDbClient: () => mocks.takeClient(),
 }));
 vi.mock('../localDb/index', () => ({
   getCurrentUserId: mocks.getCurrentUserId,
@@ -51,6 +62,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     mocks.queryOne.mockReset();
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.clientQueue.length = 0;
   });
 
   it('does not drop the very first snapshot after main start', async () => {
@@ -137,6 +149,85 @@ describe('glm coding plan snapshot store (per-provider)', () => {
       fiveHour: { utilization: 31 },
     });
     expect(mocks.queryOne).toHaveBeenCalled();
+  });
+
+  it('八轮 PTB: 补偿删除复用 INSERT 时捕获的 client,owner 切换后不碰新连接', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    const aJson = JSON.stringify(snapshotOf(10));
+    // 队列按 getDbClient 调用序派发:①hydration 读 ②record 的 try 捕获 ③「切换后
+    // 的新连接」——若补偿重新 getDbClient() 就会拿到它(代表新账号的 DB 切片)。
+    let resolveInsert!: () => void;
+    const capturedExec = vi.fn(async () => undefined);
+    capturedExec.mockImplementationOnce(() => new Promise<void>((res) => { resolveInsert = res; }));
+    const postSwitch = { queryOne: vi.fn(), exec: vi.fn(async () => undefined), drizzle: {} };
+    mocks.clientQueue.push(
+      { queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} },
+      { queryOne: vi.fn(async () => null), exec: capturedExec, drizzle: {} },
+      postSwitch,
+    );
+    const token = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    const rec = broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(10), token);
+    await vi.waitFor(() => expect(capturedExec).toHaveBeenCalledTimes(1));
+    // INSERT 挂起期间切号;beginWrite 只做同步 reset(推进 ownerEpoch),不碰 DB。
+    mocks.getCurrentUserId.mockReturnValue('user-2');
+    broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    resolveInsert();
+    await rec;
+    // 补偿 DELETE 走捕获的同一 client(且带内容匹配);「新连接」零调用。
+    expect(capturedExec).toHaveBeenCalledTimes(2);
+    expect(String((capturedExec.mock.calls[1] as unknown[])[0])).toContain('AND snapshot =');
+    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', aJson]);
+    expect(postSwitch.exec).not.toHaveBeenCalled();
+    expect(postSwitch.queryOne).not.toHaveBeenCalled();
+  });
+
+  it('八轮 Paw: 补偿删除带内容匹配,不误删新世代已落库的快照', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    const aJson = JSON.stringify(snapshotOf(10));
+    const bJson = JSON.stringify(snapshotOf(60));
+    // 模拟行语义:INSERT upsert 覆盖行;DELETE 带内容参数时仅当行内容等于该参数
+    // 才删(新代码形态),单参数 DELETE 无条件删(旧形态,留给回归对照)。
+    let row: string | null = null;
+    const gates: Array<(v?: void) => void> = [];
+    const capturedExec = vi.fn((sql: string, params: unknown[]) => {
+      if (sql.includes('INSERT')) {
+        return new Promise<void>((res) => { gates.push(() => { row = params[1] as string; res(); }); });
+      }
+      return new Promise<void>((res) => {
+        gates.push(() => {
+          if (params.length > 1) { if (row === params[1]) row = null; }
+          else row = null;
+          res();
+        });
+      });
+    });
+    const newGenExec = vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes('INSERT')) row = params[1] as string;
+      return undefined;
+    });
+    mocks.clientQueue.push(
+      { queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} },
+      { queryOne: vi.fn(async () => null), exec: capturedExec, drizzle: {} },
+      { queryOne: vi.fn(async () => null), exec: newGenExec, drizzle: {} },
+    );
+    // A 的 record:INSERT 挂起
+    const tokenA = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    const recA = broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(10), tokenA);
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    // 世代前进(CRUD 作废,不删快照)
+    broadcaster.invalidateGlmCodingPlanUsageWrites('p1');
+    gates[0](); // A 的 INSERT 落库(row=A),续体判定过期 → 发出补偿 DELETE(挂起)
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
+    // 新世代补刷在补偿 DELETE 挂起期间落库(row=B)
+    const tokenB = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    const recB = broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(60), tokenB);
+    await vi.waitFor(() => expect(newGenExec).toHaveBeenCalledTimes(1));
+    gates[1](); // A 的补偿 DELETE 恢复 —— 行内容已不是 A 写的那笔
+    await Promise.all([recA, recB]);
+    expect(row).toBe(bJson); // B 的快照存活(旧形态按 provider_id 裸删会把它抹掉)
+    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', aJson]);
   });
 
   it('replaces the snapshot wholesale on record (single source, no merge)', async () => {
