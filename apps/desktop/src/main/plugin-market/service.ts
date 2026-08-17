@@ -142,6 +142,15 @@ function captureMarketOwner(): ActiveAppSession {
   return session;
 }
 
+function canCaptureMarketOwner(): boolean {
+  const session = getActiveAppSession();
+  return (
+    (session.mode === 'cloud' || session.mode === 'local') &&
+    Boolean(session.dataOwnerId) &&
+    !isAppSessionBoundaryPending()
+  );
+}
+
 function requireSameMarketOwner(expected: ActiveAppSession): void {
   const current = getActiveAppSession();
   if (
@@ -680,6 +689,33 @@ export class PluginMarketService {
     }
   }
 
+  /** 未登录只读公开插件详情；安装仍必须走 owner 门禁。 */
+  private async detailPublicCatalogWithoutOwner(pluginId: string): Promise<PluginMarketDetail> {
+    const catalog = await this.api.listAll();
+    const summary = catalog.plugins.find(
+      (plugin) => plugin.id === pluginId && plugin.scope === 'public',
+    );
+    if (!summary) {
+      throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
+    }
+    const plugin = await this.api.detail(pluginId);
+    assertDetailMatchesSummary(summary, plugin);
+    if (plugin.scope !== 'public') {
+      throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
+    }
+    const compatible = validateGhostManifest(plugin.currentRelease.manifest);
+    if (!compatible.ok) {
+      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+    }
+    if (!manifestSupportsCurrentCindy(compatible.manifest)) {
+      throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
+    }
+    return {
+      ...this.toItem(plugin, EMPTY_LOCAL_INSTALL_SNAPSHOT),
+      manifest: compatible.manifest,
+    };
+  }
+
   /** 按当前 owner 消费一次清理汇总，避免组织插件名跨账号泄露。 */
   consumeRemovalNotice(): PluginRemovalUserNotice | null {
     const key = removalNoticeKey(captureMarketOwner());
@@ -721,6 +757,12 @@ export class PluginMarketService {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
     this.requireConfigured();
+    if (!canCaptureMarketOwner()) {
+      if (isAppSessionBoundaryPending()) {
+        throwIpcError('PRECONDITION_FAILED', 'Plugin market requires a stable app session');
+      }
+      return this.detailPublicCatalogWithoutOwner(pluginId);
+    }
     return this.runForOwner(async (owner) => {
       // 本地(免账号)模式只对 public 插件暴露详情;目录 summary 也是 detail 身份
       // 绑定的依据,服务端返回的 id/ghostId/scope 与请求不一致时必须拒,防止把

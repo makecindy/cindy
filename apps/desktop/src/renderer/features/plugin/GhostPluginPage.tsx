@@ -1382,7 +1382,7 @@ export function GhostPluginPage({
               marketDetailRequestRef.current += 1;
               setMarketDetail(null);
             }}
-            onInstall={() => void handleInstallFromMarket()}
+            onInstall={mode !== 'signed-out' ? () => void handleInstallFromMarket() : undefined}
             onIconLoadError={handleMarketIconLoadError}
           />
         </div>

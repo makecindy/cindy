@@ -429,6 +429,56 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('shows public market plugin detail when signed out without leaking local install state', async () => {
+    runtime.session = {
+      mode: 'signed-out',
+      dataOwnerId: null,
+      generation: 2,
+    };
+    runtime.ghosts = [
+      {
+        manifest: manifest(),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: true,
+      },
+    ];
+    const publicPlugin = summary();
+    const organizationPlugin = summary({
+      id: `c${'b'.repeat(24)}`,
+      ghostId: 'cindy-team-only',
+      scope: 'organization',
+      organizationId: 'org-1',
+    });
+    const h = harness([publicPlugin, organizationPlugin]);
+
+    await expect(h.service.detail(publicPlugin.id)).resolves.toMatchObject({
+      pluginId: publicPlugin.id,
+      scope: 'public',
+      installState: 'not-installed',
+      enabled: null,
+    });
+    await expect(h.service.detail(organizationPlugin.id)).rejects.toThrow('[NOT_FOUND]');
+    await expect(
+      h.service.install(publicPlugin.id, reviewedInstallOptions(publicPlugin)),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('keeps signed-out detail blocked while the account boundary is pending', async () => {
+    runtime.boundaryPending = true;
+    runtime.session = {
+      mode: 'signed-out',
+      dataOwnerId: null,
+      generation: 2,
+    };
+    const item = summary();
+    const h = harness([item]);
+
+    await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(h.api.listAll).not.toHaveBeenCalled();
+    expect(h.api.detail).not.toHaveBeenCalled();
+  });
+
   it('reports missing market configuration before requiring authentication', async () => {
     runtime.pluginApiBaseUrl = null;
     runtime.session = {
