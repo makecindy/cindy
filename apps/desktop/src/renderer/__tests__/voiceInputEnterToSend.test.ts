@@ -185,6 +185,10 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     ).toBeLessThan(
       chatInputSource.indexOf('const voiceInput = useVoiceInput('),
     );
+    expect(chatInputSource).toContain(
+      'const persistKey = voiceOwnerStorageKeyRef.current ?? editorStorageKey;',
+    );
+    expect(chatInputSource).toContain('persistKey === editorStorageKey');
     expect(chatInputSource).toContain("frozenVoiceSend.kind !== 'send'");
     expect(chatInputSource).toContain('dispatchSendInFlightKeysRef');
     expect(chatInputSource).toContain('lockCurrentComposer');

@@ -2919,13 +2919,18 @@ export function ChatInput({
           { silent: true },
         );
       }
+      const persistKey = voiceOwnerStorageKeyRef.current ?? editorStorageKey;
+      // Only arm the composer that still owns this voice run. After a session
+      // switch the switch effect already persists to the source; do not write
+      // the source preview into the destination draft.
       if (
         voiceInputBusyRef.current &&
         !voiceInputStopAndSendPromiseRef.current &&
-        editorStorageKey
+        persistKey &&
+        persistKey === editorStorageKey
       ) {
         armDetachedVoiceDraftPersist(
-          editorStorageKey,
+          persistKey,
           voiceDraftTextRef.current.trim(),
         );
       }
