@@ -227,6 +227,81 @@ describe('SubagentsBody', () => {
     expect(screen.getByTestId('session-assistant-message').textContent).toContain('assistant result');
   });
 
+  it.each([
+    ['failed', 'rightSidebar.subagents.failedNoReply'],
+    ['stopped', 'rightSidebar.subagents.stoppedNoReply'],
+    ['completed', 'rightSidebar.subagents.completedNoReply'],
+  ] as const)('shows a readable %s empty-result state', async (status, messageKey) => {
+    currentDetail = {
+      ...detail(''),
+      status,
+      capabilities: { ...detail('').capabilities, viewFullTranscript: true },
+    };
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect(await screen.findByText(messageKey)).toBeTruthy();
+  });
+
+  it.each([
+    ['{"status":401,"error":"Unauthorized: token expired"}', 'credentialInvalid'],
+    ['{"status":400,"error":"Invalid model name grok-4.6"}', 'modelInvalid'],
+  ])('classifies provider errors and keeps raw JSON collapsed', async (rawError, kind) => {
+    currentDetail = {
+      ...detail(''),
+      status: 'failed',
+      capabilities: { ...detail('').capabilities, viewFullTranscript: true },
+      children: [{ id: 'child-1', role: 'worker', status: 'failed', error: rawError }],
+    };
+    const { container } = render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect(await screen.findByText(`rightSidebar.subagents.errors.${kind}`)).toBeTruthy();
+    expect(container.querySelector('[data-subagent-error-kind]')?.getAttribute('data-subagent-error-kind'))
+      .toBe(kind);
+    expect(screen.queryByTestId('session-assistant-message')).toBeNull();
+    expect(screen.getByText(rawError).closest('details')?.hasAttribute('open')).toBe(false);
+  });
+
+  it('protects a completed child result and offers follow-up instead of steer', async () => {
+    currentDetail = {
+      ...detail('still wrapping up'),
+      capabilities: { ...detail('unused').capabilities, viewFullTranscript: true, steer: true },
+      children: [{
+        id: 'child-1', role: 'worker', title: 'Completed generation', status: 'running',
+        output: 'immutable completed result',
+      }],
+    };
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect(await screen.findByText('immutable completed result')).toBeTruthy();
+    expect(screen.queryByLabelText('rightSidebar.subagents.controlActions.steer')).toBeNull();
+    expect(screen.getByLabelText('rightSidebar.subagents.controlActions.follow_up')).toBeTruthy();
+    expect(screen.getByText('rightSidebar.subagents.completedOutputFollowUpHint')).toBeTruthy();
+  });
+
   it.each(['claude-code', 'codex'] as const)(
     'does not expose a persisted %s selection through the Pi-only sidebar',
     async (provider) => {

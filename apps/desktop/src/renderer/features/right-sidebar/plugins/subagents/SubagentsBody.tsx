@@ -131,6 +131,62 @@ function childMetadata(child: SubagentChildRun, t: TFunction): string[] {
   ];
 }
 
+type SubagentErrorKind =
+  | 'providerNotConnected'
+  | 'credentialInvalid'
+  | 'modelInvalid'
+  | 'rateLimited'
+  | 'serviceUnavailable'
+  | 'requestInvalid'
+  | 'unknown';
+
+function classifySubagentError(rawError: string): SubagentErrorKind {
+  const value = rawError.toLowerCase();
+  if (
+    /invalid model|model[^\n]{0,80}(?:not found|unknown|unsupported|unavailable)|unknown[^\n]{0,40}model/.test(value)
+  ) return 'modelInvalid';
+  if (
+    /(?:status(?:code)?\s*[:=]?\s*)?401\b|unauthori[sz]ed|invalid api[- ]?key|invalid[^\n]{0,40}token|token[^\n]{0,40}(?:expired|revoked)|credential[^\n]{0,40}(?:expired|invalid|revoked)/.test(value)
+  ) return 'credentialInvalid';
+  if (
+    /provider[^\n]{0,60}(?:not connected|not configured|unavailable)|(?:missing|no)[^\n]{0,40}(?:credential|api[- ]?key|token)|authentication required|sign[- ]?in required|please[^\n]{0,40}(?:connect|sign in)/.test(value)
+  ) return 'providerNotConnected';
+  if (/(?:status(?:code)?\s*[:=]?\s*)?429\b|rate[- ]?limit|too many requests/.test(value)) {
+    return 'rateLimited';
+  }
+  if (
+    /(?:status(?:code)?\s*[:=]?\s*)?(?:500|502|503|504)\b|service unavailable|bad gateway|gateway timeout|temporarily unavailable/.test(value)
+  ) return 'serviceUnavailable';
+  if (/(?:status(?:code)?\s*[:=]?\s*)?400\b|bad request|invalid request/.test(value)) {
+    return 'requestInvalid';
+  }
+  return 'unknown';
+}
+
+function SubagentErrorNotice({ rawError }: { rawError: string }) {
+  const { t } = useTranslation();
+  const kind = classifySubagentError(rawError);
+  return (
+    <div
+      data-subagent-error-kind={kind}
+      className="rounded-[10px] border border-[color-mix(in_srgb,var(--error-fg)_28%,var(--border-default))] bg-[color-mix(in_srgb,var(--error-fg)_7%,var(--surface-elevated))] px-3 py-2.5"
+    >
+      <div className="flex items-start gap-2 text-13 leading-5 text-[var(--error-fg)]">
+        <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+        <span>{t(`rightSidebar.subagents.errors.${kind}`)}</span>
+      </div>
+      <details className="mt-2 text-11 text-[var(--text-tertiary)]">
+        <summary className="w-fit cursor-pointer rounded-[4px] hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+          {t('rightSidebar.subagents.errors.rawDetails')}
+        </summary>
+        <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[8px] bg-[var(--surface-chip)] p-2 font-mono text-11 leading-4 text-[var(--text-secondary)]">
+          {rawError}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
 function StatusGlyph({ status, label }: { status: SubagentRun['status'] | 'queued'; label: string }) {
   const Icon = statusIcon(status);
   return (
@@ -443,20 +499,21 @@ function PiDurableDetailView({
   const visibleTranscript = selectedChild
     ? transcript.filter((entry) => !entry.childId || entry.childId === selectedChild.id)
     : transcript;
+  const rawError = selectedChild?.error
+    ?? (detail.status === 'failed' && !detail.returnedResult ? detail.summary : undefined);
   const visibleResult = selectedChild
-    ? [
-        selectedChild.output,
-        selectedChild.error
-          ? t('rightSidebar.subagents.childError', { error: selectedChild.error })
-          : '',
-      ].filter(Boolean).join('\n\n')
-    : detail.returnedResult ?? detail.summary ?? '';
+    ? selectedChild.output ?? ''
+    : detail.returnedResult ?? (detail.status === 'failed' ? '' : detail.summary ?? '');
+  const displayedRunStatus = selectedChild?.status ?? detail.status;
   const selectedChildActive = !selectedChild
     || selectedChild.status === 'running'
     || selectedChild.status === 'queued';
+  const selectedChildHasCompletedOutput = Boolean(selectedChild?.output?.trim());
   const controlActions: Array<'steer' | 'follow_up' | 'resume'> =
     detail.status === 'running' && detail.capabilities.steer && selectedChildActive
-      ? ['steer', 'follow_up']
+      ? selectedChildHasCompletedOutput
+        ? ['follow_up']
+        : ['steer', 'follow_up']
       : detail.status !== 'running' && detail.capabilities.resume
         ? ['resume']
         : [];
@@ -589,7 +646,7 @@ function PiDurableDetailView({
               agentKind="pi"
               showActionBar
             />
-          ) : selectedChild?.awaitingApproval ? (
+          ) : rawError ? null : selectedChild?.awaitingApproval ? (
             <div className="flex items-center gap-2 text-13 text-[var(--text-tertiary)]">
               <Spinner icon={LoaderCircle} spinning size={14} />
               {t('rightSidebar.subagents.awaitingApprovalDetail')}
@@ -607,9 +664,15 @@ function PiDurableDetailView({
           ) : (
             <div className="flex items-start gap-2 text-13 leading-5 text-[var(--error-fg)]">
               <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-              {t('rightSidebar.subagents.noReply')}
+              {t(displayedRunStatus === 'failed'
+                ? 'rightSidebar.subagents.failedNoReply'
+                : displayedRunStatus === 'stopped'
+                  ? 'rightSidebar.subagents.stoppedNoReply'
+                  : 'rightSidebar.subagents.completedNoReply')}
             </div>
           )}
+
+          {rawError ? <SubagentErrorNotice rawError={rawError} /> : null}
 
           {selectedOutputTruncated ? (
             <p className="text-11 text-[var(--text-tertiary)]">
@@ -686,6 +749,11 @@ function PiDurableDetailView({
                 target: selectedChild?.title ?? selectedChild?.role ?? t('rightSidebar.subagents.allChildren'),
               })}
             </p>
+            {selectedChildHasCompletedOutput ? (
+              <p className="px-2 text-11 leading-4 text-[var(--text-tertiary)]">
+                {t('rightSidebar.subagents.completedOutputFollowUpHint')}
+              </p>
+            ) : null}
             {controlActions.length > 1 ? (
               <div className="flex w-fit rounded-lg bg-[var(--surface-subtle)] p-0.5" role="group">
                 {controlActions.map((action) => (

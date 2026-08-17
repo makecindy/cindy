@@ -620,6 +620,7 @@ export async function controlPiSubagentRuns(
       if (action === 'approval') {
         return task.pendingApproval?.id === options.approvalId;
       }
+      if (action === 'steer' && task.output?.trim()) return false;
       return task.status === 'queued' || task.status === 'running';
     },
   );

@@ -703,6 +703,53 @@ describe('Pi provider-aware model routing', () => {
     await namespaced.close();
   });
 
+  it('normalizes Subagent aliases to the catalog wire id without a guessed gateway fallback', async () => {
+    const deps = byomDeps(async () => ({
+      providers: [{
+        id: 'xai',
+        sourceProviderId: 'xai',
+        name: 'xAI',
+        baseUrl: 'http://xai.test',
+        api: 'anthropic-messages',
+        modelIdAliases: {
+          'grok-4.6': 'xai/grok-4.6',
+          'xai/grok-4.6': 'xai/grok-4.6',
+        },
+        models: [{ id: 'xai/grok-4.6', wireId: 'x-ai/grok-4.6' }],
+      }],
+      env: {},
+    }), [
+      { id: 'gateway-model', displayName: 'Gateway', contextWindow: 200_000, efforts: [], defaultEffort: null },
+      { id: 'grok-4.6', displayName: 'Grok 4.6', contextWindow: 500_000, efforts: [], defaultEffort: null },
+    ]);
+    deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+      modelId === 'gateway-model' ? 'openai-responses' : undefined;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'subagent-wire-normalization',
+      workingDir: cwd,
+      model: 'gateway-model',
+      providerId: 'xd',
+    });
+    const runtime = JSON.parse(
+      readFileSync(runtimeFileOf('subagent', 'subagent-wire-normalization'), 'utf8'),
+    ) as { modelRoutes: Record<string, Array<{ provider: string; model: string; sourceProviderId?: string }>> };
+    expect(runtime.modelRoutes['grok-4.6']).toEqual([
+      { provider: 'xai', model: 'x-ai/grok-4.6', sourceProviderId: 'xai' },
+    ]);
+    expect(runtime.modelRoutes['xai/grok-4.6']).toEqual([
+      { provider: 'xai', model: 'x-ai/grok-4.6', sourceProviderId: 'xai' },
+    ]);
+    expect(runtime.modelRoutes['gateway-model']).toEqual([
+      {
+        provider: 'cindy',
+        model: 'gateway-model',
+        sourceProviderId: 'cindy-gateway',
+        proxySessionAuth: true,
+      },
+    ]);
+    await handle.close();
+  });
+
   it('fails closed when provider-less aliases are ambiguous', async () => {
     const agent = new PiAgent(byomDeps(async () => ({
       providers: [

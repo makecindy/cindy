@@ -852,7 +852,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(resolver).not.toHaveBeenCalled();
   });
 
-  it('requires confirmation before an Auto Subagent exports parent context', async () => {
+  it('allows an Auto Subagent to select fork context without a second spawn approval', async () => {
     const handle = await start('auto');
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
@@ -863,11 +863,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       context: 'fork',
     });
 
-    expect(await waitForResponse('subagent-fork')).toMatchObject({ value: 'user-deny' });
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(await waitForResponse('subagent-fork')).toMatchObject({ value: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
   });
 
-  it('requires confirmation before an Auto Subagent switches child model', async () => {
+  it('allows an Auto Subagent to select a child model without a second spawn approval', async () => {
     const handle = await start('auto', undefined, true);
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
@@ -876,8 +876,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       tasks: [{ agent: 'worker', task: 'inspect the repository', model: 'm-next' }],
     });
 
-    expect(await waitForResponse('subagent-model')).toMatchObject({ value: 'user-deny' });
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(await waitForResponse('subagent-model')).toMatchObject({ value: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
   });
 
   it('keeps an explicit current-model Subagent silent in Auto', async () => {
@@ -911,6 +911,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       value: 'user-deny',
     });
     expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it('keeps Subagent spawn unprompted in Full Access', async () => {
+    const handle = await start('bypassPermissions');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-bypass', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+    });
+    await flush();
+
+    expect(captured.sent).toContainEqual({
+      type: 'extension_ui_response',
+      id: 'subagent-bypass',
+      value: 'allow',
+    });
+    expect(resolver).not.toHaveBeenCalled();
   });
 
   it('reports Auto-review, user, and system denials without conflating their source', async () => {

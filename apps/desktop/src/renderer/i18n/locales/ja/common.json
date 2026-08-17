@@ -5197,6 +5197,7 @@
       "sendShortcutHint": "{{shortcut}} で送信 · Shift+Enter で改行",
       "childEndedControlHint": "このサブエージェントは終了しました。概要または実行中のサブエージェントを選んで指示を送ってください。",
       "controlFailed": "指示を送信できませんでした。サブエージェントが利用可能か確認して再試行してください。",
+      "completedOutputFollowUpHint": "このサブエージェントは結果を返しました。元の結果を置き換えずに続けるにはフォローアップを使用してください。",
       "controlActions": {
         "steer": "現在のツール完了後に修正",
         "follow_up": "フォローアップを追加",
@@ -5210,6 +5211,19 @@
       "technicalDetails": "技術詳細",
       "waitingForReply": "サブエージェントが処理中…",
       "noReply": "サブエージェントから応答がありません。技術詳細で失敗理由を確認してください。",
+      "failedNoReply": "サブエージェントは失敗しましたが、読み取り可能な詳細を返しませんでした。",
+      "stoppedNoReply": "サブエージェントは結果を返す前に停止しました。",
+      "completedNoReply": "サブエージェントは完了しましたが、結果を返しませんでした。",
+      "errors": {
+        "providerNotConnected": "このプロバイダーは接続されていません。アカウントまたは認証情報を設定してから再試行してください。",
+        "credentialInvalid": "プロバイダーの認証情報が期限切れか拒否されました。再接続してから再試行してください。",
+        "modelInvalid": "選択したモデルは利用できないか、名前が無効です。このタスクで利用可能なモデルを選んでください。",
+        "rateLimited": "プロバイダーがリクエストを制限しています。少し待ってから再試行してください。",
+        "serviceUnavailable": "プロバイダーのサービスは一時的に利用できません。後でもう一度お試しください。",
+        "requestInvalid": "プロバイダーがリクエストを拒否しました。モデルとタスクの設定を確認してください。",
+        "unknown": "サブエージェントが失敗しました。下の元の詳細を開いて原因を確認してください。",
+        "rawDetails": "元の詳細を表示"
+      },
       "activity": "アクティビティ",
       "noActivity": "アクティビティの詳細は報告されていません。",
       "transcript": "記録",
@@ -6133,6 +6147,8 @@
       "subagentStarted": "サブエージェント {{name}} を起動しました",
       "showDetails": "サブエージェント詳細を表示",
       "hideDetails": "サブエージェント詳細を隠す",
+      "showFullResult": "結果をすべて表示",
+      "hideFullResult": "結果を折りたたむ",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",

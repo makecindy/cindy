@@ -126,6 +126,13 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('CINDY_PI_SUBAGENT_MODEL');
   });
 
+  it('fails unknown Subagent models with the frozen list instead of forwarding a raw id', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("' Available models: '");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "model \"' + task.model + '\" is not available in this session.'",
+    );
+  });
+
   it('freezes the PI model catalog inside the durable run directory', () => {
     // Parent navigation closes its ephemeral configHome. A detached runner may
     // launch queued children later, so inheriting that directory would make

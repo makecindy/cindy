@@ -84,7 +84,6 @@ import {
 } from './cindy-subagent-runner-source.js';
 import {
   normalizePiToolForAutoReview,
-  piSubagentSpawnRequiresUserConfirmation,
 } from './auto-review-policy.js';
 import {
   controlPiSubagentRuns,
@@ -1303,9 +1302,20 @@ export class PiAgent extends BaseAgent {
       && !this.capabilities.availableModels.some((model) => model.id === retainedRuntimeModel.id)
       ? [...this.capabilities.availableModels, retainedRuntimeModel]
       : this.capabilities.availableModels;
+    // `availableModels` is a flattened selection surface and may contain
+    // subscription-native models such as xAI. A child route may only claim the
+    // Cindy gateway when the host's XD catalog explicitly owns a wire protocol
+    // for that model. Otherwise the native provider route above is the sole
+    // authority; adding a guessed gateway candidate can make a bare alias pick
+    // the current `cindy` provider and leak an invalid unnamespaced model id.
+    const routedGatewaySubagentModels = gatewaySubagentModels.filter((model) => {
+      const api = this.deps.resolvePiGatewayModelApi?.(PI_PROVIDER_ID, model.id);
+      return api === 'anthropic-messages' || api === 'openai-responses';
+    });
     const gatewaySubagentRouteKey = 'cindy-gateway';
     const gatewaySubagentProxyToken =
-      !reviewMode && !opts.remoteHostId && opts.sessionId && proxySessionToken
+      routedGatewaySubagentModels.length > 0
+      && !reviewMode && !opts.remoteHostId && opts.sessionId && proxySessionToken
         ? derivePiSubagentRouteToken(proxySessionToken, gatewaySubagentRouteKey)
         : undefined;
     if (gatewaySubagentProxyToken) {
@@ -1314,7 +1324,7 @@ export class PiAgent extends BaseAgent {
         providerId: null,
       });
     }
-    for (const model of gatewaySubagentModels) {
+    for (const model of routedGatewaySubagentModels) {
       addSubagentModelRoute(
         model.id,
         PI_PROVIDER_ID,
@@ -2414,12 +2424,6 @@ export class PiAgent extends BaseAgent {
         }
         if (permissionMode !== 'auto') {
           return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
-        }
-        if (
-          toolName === CINDY_SUBAGENT_TOOL_NAME
-          && piSubagentSpawnRequiresUserConfirmation(input, [mutableModel, mutableWireModel])
-        ) {
-          return requestUserDecision({ forcePrompt: true });
         }
         try {
           const decision = await reviewAutoAction(normalizePiToolForAutoReview({
@@ -4610,13 +4614,6 @@ export class PiAgent extends BaseAgent {
           sendPermissionResolution(
             await requestUserConfirmation({ forcePrompt: turnPolicyForcePrompt }),
           );
-          return;
-        }
-        if (
-          toolName === CINDY_SUBAGENT_TOOL_NAME
-          && piSubagentSpawnRequiresUserConfirmation(input, currentModelIds)
-        ) {
-          sendPermissionResolution(await requestUserConfirmation({ forcePrompt: true }));
           return;
         }
         try {

@@ -5197,6 +5197,7 @@
       "sendShortcutHint": "{{shortcut}} 전송 · Shift+Enter 줄바꿈",
       "childEndedControlHint": "이 하위 Agent는 종료되었습니다. 개요 또는 실행 중인 하위 Agent를 선택해 지시를 보내세요.",
       "controlFailed": "지시를 전달하지 못했습니다. 하위 에이전트를 계속 사용할 수 있는지 확인한 후 다시 시도하세요.",
+      "completedOutputFollowUpHint": "이 하위 에이전트는 이미 결과를 반환했습니다. 원래 결과를 바꾸지 않고 계속하려면 후속 지시를 사용하세요.",
       "controlActions": {
         "steer": "현재 도구 완료 후 수정",
         "follow_up": "후속 지시 추가",
@@ -5210,6 +5211,19 @@
       "technicalDetails": "상세 정보",
       "waitingForReply": "하위 에이전트가 작업 중…",
       "noReply": "하위 에이전트가 응답을 반환하지 않았습니다. 상세 정보에서 실패 원인을 확인하세요.",
+      "failedNoReply": "하위 에이전트가 실패했지만 읽을 수 있는 세부 정보를 반환하지 않았습니다.",
+      "stoppedNoReply": "하위 에이전트가 결과를 반환하기 전에 중지되었습니다.",
+      "completedNoReply": "하위 에이전트가 완료되었지만 결과를 반환하지 않았습니다.",
+      "errors": {
+        "providerNotConnected": "이 제공자가 연결되어 있지 않습니다. 계정 또는 자격 증명을 설정한 후 다시 시도하세요.",
+        "credentialInvalid": "제공자 자격 증명이 만료되었거나 거부되었습니다. 다시 연결한 후 시도하세요.",
+        "modelInvalid": "선택한 모델을 사용할 수 없거나 이름이 올바르지 않습니다. 이 작업에서 사용 가능한 모델을 선택하세요.",
+        "rateLimited": "제공자가 요청 속도를 제한하고 있습니다. 잠시 후 다시 시도하세요.",
+        "serviceUnavailable": "제공자 서비스를 일시적으로 사용할 수 없습니다. 나중에 다시 시도하세요.",
+        "requestInvalid": "제공자가 요청을 거부했습니다. 모델과 작업 설정을 확인한 후 다시 시도하세요.",
+        "unknown": "하위 에이전트가 실패했습니다. 아래 원본 세부 정보를 열어 원인을 확인하세요.",
+        "rawDetails": "원본 세부 정보 보기"
+      },
       "activity": "활동",
       "noActivity": "활동 세부 정보가 보고되지 않았습니다.",
       "transcript": "전체 기록",
@@ -6133,6 +6147,8 @@
       "subagentStarted": "하위 에이전트 {{name}} 시작됨",
       "showDetails": "하위 에이전트 세부 정보 보기",
       "hideDetails": "하위 에이전트 세부 정보 숨기기",
+      "showFullResult": "전체 결과 보기",
+      "hideFullResult": "결과 접기",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",

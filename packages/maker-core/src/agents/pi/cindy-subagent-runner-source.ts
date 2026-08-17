@@ -289,7 +289,12 @@ function main() {
           thinking: task.thinking,
           toolUses: task.toolUses,
           usage: task.usage,
-          output: task.status === 'running' || task.status === 'queued' ? undefined : task.output,
+          // message_end is already a complete generation result even if Pi
+          // keeps the RPC process alive for follow-up. Publish it immediately
+          // so the host can hide late Steer before writing a doomed control.
+          output: task.output || (
+            task.status === 'running' || task.status === 'queued' ? undefined : ''
+          ),
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
           pendingApproval: task.pendingApproval,
@@ -405,6 +410,12 @@ function main() {
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
+        // A message_end is the immutable result of that completed generation.
+        // Sending steer after it exists makes Pi emit a short acknowledgement
+        // that can replace the real result. Continue via follow_up instead.
+        if (control.action === 'steer' && typeof task.output === 'string' && task.output.trim()) {
+          continue;
+        }
         const command = {
           id: control.action + '-' + randomUUID(),
           type: control.action === 'steer' ? 'steer' : 'follow_up',

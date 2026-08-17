@@ -5197,6 +5197,7 @@
       "sendShortcutHint": "{{shortcut}} 傳送 · Shift+Enter 換行",
       "childEndedControlHint": "該 Subagent 已結束。請選擇「總覽」或仍在執行的 Subagent 再傳送指令。",
       "controlFailed": "指令未能送達。請確認 Subagent 仍可用後再試一次。",
+      "completedOutputFollowUpHint": "該 Subagent 已傳回結果；請用「跟進」繼續，原結果不會被覆蓋。",
       "controlActions": {
         "steer": "目前工具結束後修正",
         "follow_up": "排入跟進",
@@ -5210,6 +5211,19 @@
       "technicalDetails": "技術詳情",
       "waitingForReply": "Subagent 正在處理…",
       "noReply": "Subagent 未傳回回覆，請展開技術詳情查看失敗原因。",
+      "failedNoReply": "Subagent 執行失敗，但沒有傳回可讀詳情。",
+      "stoppedNoReply": "Subagent 已停止，尚未傳回結果。",
+      "completedNoReply": "Subagent 已完成，但沒有傳回結果。",
+      "errors": {
+        "providerNotConnected": "目前尚未連接此供應商。請先連接帳號或設定憑證後再試。",
+        "credentialInvalid": "供應商憑證已失效或遭拒。請重新連接後再試。",
+        "modelInvalid": "所選模型無法使用或名稱無效。請改用目前任務可用的模型。",
+        "rateLimited": "供應商目前限制請求頻率。請稍後再試。",
+        "serviceUnavailable": "供應商服務暫時無法使用。請稍後再試。",
+        "requestInvalid": "供應商拒絕了這次請求。請檢查模型與任務設定後再試。",
+        "unknown": "Subagent 執行失敗，可展開下方原始詳情查看原因。",
+        "rawDetails": "查看原始詳情"
+      },
       "activity": "活動記錄",
       "noActivity": "Harness 暫未提供活動詳情。",
       "transcript": "完整記錄",
@@ -6133,6 +6147,8 @@
       "subagentStarted": "Subagent {{name}} 已啟動",
       "showDetails": "展開 Subagent 詳情",
       "hideDetails": "收起 Subagent 詳情",
+      "showFullResult": "展開完整結果",
+      "hideFullResult": "收起結果",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",

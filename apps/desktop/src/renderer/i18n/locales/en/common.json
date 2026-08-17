@@ -5199,6 +5199,7 @@
       "sendShortcutHint": "{{shortcut}} to send · Shift+Enter for a new line",
       "childEndedControlHint": "This child has ended. Choose Overview or a running child to send another instruction.",
       "controlFailed": "The instruction could not be delivered. Check that the Subagent is still available and try again.",
+      "completedOutputFollowUpHint": "This child already returned a result. Use Follow-up to continue without replacing it.",
       "controlActions": {
         "steer": "Steer after current tools",
         "follow_up": "Queue follow-up",
@@ -5212,6 +5213,19 @@
       "technicalDetails": "Technical details",
       "waitingForReply": "Subagent is working…",
       "noReply": "The Subagent did not return a reply. Open technical details to see why.",
+      "failedNoReply": "The Subagent failed without returning readable details.",
+      "stoppedNoReply": "The Subagent stopped before returning a result.",
+      "completedNoReply": "The Subagent completed without returning a result.",
+      "errors": {
+        "providerNotConnected": "This provider is not connected. Connect the account or configure its credentials, then try again.",
+        "credentialInvalid": "The provider credentials expired or were rejected. Reconnect the provider, then try again.",
+        "modelInvalid": "The selected model is unavailable or its name is invalid. Choose a model available to this task.",
+        "rateLimited": "The provider is rate-limiting requests. Wait a moment, then try again.",
+        "serviceUnavailable": "The provider service is temporarily unavailable. Try again later.",
+        "requestInvalid": "The provider rejected this request. Check the model and task settings, then try again.",
+        "unknown": "The Subagent failed. Open the raw details below for the reported cause.",
+        "rawDetails": "Show raw details"
+      },
       "activity": "Activity",
       "noActivity": "No activity details were reported.",
       "transcript": "Transcript",
@@ -6135,6 +6149,8 @@
       "subagentStarted": "Subagent {{name}} started",
       "showDetails": "Show subagent details",
       "hideDetails": "Hide subagent details",
+      "showFullResult": "Show full result",
+      "hideFullResult": "Collapse result",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",

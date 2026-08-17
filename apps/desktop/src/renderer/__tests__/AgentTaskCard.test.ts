@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -91,6 +91,28 @@ describe('AgentTaskCard', () => {
 
     expect(container.textContent).toContain(tail);
     expect(container.textContent).toContain('Summary start');
+  });
+
+  it('clamps only durable Pi results and lets the user expand the full result', () => {
+    const longResult = `line 1\nline 2\nline 3\nline 4\nline 5\n${'tail'.repeat(100)}`;
+    const { container, getByRole } = render(
+      React.createElement(AgentTaskCard, {
+        update: {
+          provider: 'pi',
+          taskId: 'pi-task-1',
+          taskType: 'pi_subagent',
+          status: 'completed',
+          title: 'Inspect files',
+          summary: longResult,
+        },
+      }),
+    );
+
+    const preview = container.querySelector('[data-agent-task-result-preview="true"]');
+    expect(preview?.className).toContain('line-clamp-4');
+    fireEvent.click(getByRole('button', { name: 'chat.agentTask.showFullResult' }));
+    expect(preview?.className).not.toContain('line-clamp-4');
+    expect(getByRole('button', { name: 'chat.agentTask.hideFullResult' })).toBeTruthy();
   });
 
   it('prefers the paired tool result over task update summaries', () => {

@@ -185,6 +185,7 @@ export function AgentTaskCard({
   const chipLabel = [modelLabel, effortLabel].filter(Boolean).join(' · ');
   const { expanded, setExpanded } = useExpandedBlockMemory(blockId);
   const toggle = useCallback(() => setExpanded((v) => !v), [setExpanded]);
+  const [piResultExpanded, setPiResultExpanded] = useState(false);
 
   // workflow-card: Workflow 工具在父会话事件流里是单个 local_workflow 任务(内部子 agent
   // 不发独立 task 事件,只有 workflow 级聚合进度)。按 taskType / toolName 识别:标题优先取
@@ -263,6 +264,11 @@ export function AgentTaskCard({
     : resultIsPiLaunchReceipt
       ? detailText(update?.summary, result)
       : detailText(result, update?.summary);
+  const piResultNeedsCollapse = Boolean(
+    isPiDurableSubagent
+      && summary
+      && (summary.length > 320 || summary.split(/\r?\n/).length > 4),
+  );
   const duration = formatDuration(update?.usage?.durationMs);
   // provider 推断与 maker-shared 的 buildAgentTaskCardModel 同口径(裸 `subagent` 是 pi
   // 扩展注册的工具名);历史回放没有 live update 时也不会把 pi 卡标成 Claude。
@@ -529,7 +535,31 @@ export function AgentTaskCard({
           <Collapse open={expanded}>
             <div className="mt-2 border-l-2 border-[var(--agent-actions-rail)] pl-3 text-13 leading-5 text-[var(--text-secondary)]">
               {description && <p className="mb-1">{description}</p>}
-              {summary && <p className="mb-1 whitespace-pre-wrap">{summary}</p>}
+              {summary && (
+                <>
+                  <p
+                    data-agent-task-result-preview={isPiDurableSubagent ? 'true' : undefined}
+                    className={cn(
+                      'mb-1 whitespace-pre-wrap',
+                      piResultNeedsCollapse && !piResultExpanded && 'line-clamp-4',
+                    )}
+                  >
+                    {summary}
+                  </p>
+                  {piResultNeedsCollapse && (
+                    <button
+                      type="button"
+                      aria-expanded={piResultExpanded}
+                      onClick={() => setPiResultExpanded((current) => !current)}
+                      className="mb-1 rounded-[4px] text-12 text-[var(--accent-fg)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    >
+                      {t(piResultExpanded
+                        ? 'chat.agentTask.hideFullResult'
+                        : 'chat.agentTask.showFullResult')}
+                    </button>
+                  )}
+                </>
+              )}
               {update?.lastToolName && (
                 <p className="text-12 leading-4 text-[var(--text-tertiary)]">
                   {t('chat.agentTask.lastTool', { tool: update.lastToolName })}

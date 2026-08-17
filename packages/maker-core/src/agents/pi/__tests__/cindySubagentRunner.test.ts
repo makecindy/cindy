@@ -53,6 +53,7 @@ async function makeFixture(options: {
   approvalMethod?: 'confirm' | 'input';
   modelError?: boolean;
   retryThenSucceed?: boolean;
+  outputThenHang?: boolean;
   hangOnMessage?: string;
   delayExitAfterInputEndMs?: number;
 } = {}) {
@@ -79,8 +80,10 @@ async function makeFixture(options: {
   await writeFile(permissionFile, '{"mode":"ask"}\n');
   const fixtureOutput = JSON.stringify(options.outputText ?? 'fixture result');
   const approvalMethod = options.approvalMethod ?? 'confirm';
-  const fixtureLifecycle = options.hang
-    ? ''
+  const fixtureLifecycle = options.outputThenHang
+    ? `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');`
+    : options.hang
+      ? ''
     : options.modelError
       ? `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'socket closed before response', usage: { input: 0, output: 0 } } }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
@@ -636,6 +639,42 @@ describe('Cindy durable PI Subagent runner', () => {
     });
     await waitForClose(fixture.child, fixture.stderr);
   });
+
+  it('keeps completed output immutable and requires follow-up instead of late steer', async () => {
+    const fixture = await makeFixture({ outputThenHang: true });
+    const running = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      if (run?.state !== 'running') return null;
+      try {
+        const transcript = await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8');
+        return transcript.includes('fixture result') ? run : null;
+      } catch {
+        return null;
+      }
+    });
+    expect(running.tasks[0]?.output).toBe('fixture result');
+    await expect(controlPiSubagentRuns(fixture.root, running.runId, 'steer', {
+      childId: running.tasks[0]?.childId,
+      message: 'late correction',
+    })).resolves.toBe(0);
+    await expect(controlPiSubagentRuns(fixture.root, running.runId, 'follow_up', {
+      childId: running.tasks[0]?.childId,
+      message: 'continue from the completed result',
+    })).resolves.toBe(1);
+    const commands = (await readFile(fixture.commandsFile, 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+    expect(commands).not.toContainEqual(expect.objectContaining({ type: 'steer', message: 'late correction' }));
+    expect(commands).toContainEqual(expect.objectContaining({
+      type: 'follow_up', message: 'continue from the completed result',
+    }));
+    await expect(controlPiSubagentRuns(fixture.root, running.runId, 'stop')).resolves.toBe(1);
+    const stopped = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'stopped' ? run : null;
+    });
+    expect(stopped.tasks[0]?.output).toBe('fixture result');
+    await waitForClose(fixture.child, fixture.stderr);
+  }, 10_000);
 
   it('bounds control dedupe and abandoned receipts without replaying the legacy mailbox', async () => {
     const fixture = await makeFixture({ hang: true });

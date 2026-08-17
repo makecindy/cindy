@@ -312,6 +312,11 @@ function parentContextSnapshot(ctx) {
 }
 
 function resolveTaskModelRoutes(tasks, runtime) {
+  const availableModels = Object.keys(runtime.modelRoutes || {}).sort();
+  const availableModelHint = availableModels.length > 0
+    ? ' Available models: ' + availableModels.slice(0, 24).join(', ')
+      + (availableModels.length > 24 ? ', ...' : '') + '.'
+    : ' No models are available in this session.';
   for (const task of tasks) {
     if (!task.model) {
       const currentRoutes = runtime.modelRoutes && Array.isArray(runtime.modelRoutes[runtime.model])
@@ -356,7 +361,10 @@ function resolveTaskModelRoutes(tasks, runtime) {
           + 'switch the parent to the intended provider before delegating.',
         );
       }
-      throw new Error('subagent: model "' + task.model + '" is not available in this session\'s frozen model routes.');
+      throw new Error(
+        'subagent: model "' + task.model + '" is not available in this session.'
+        + availableModelHint,
+      );
     }
     task.routeProvider = route.provider;
     task.routeModel = route.model;
