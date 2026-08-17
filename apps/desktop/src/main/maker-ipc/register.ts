@@ -9251,13 +9251,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rewindPersistedUserMessage: (sessionId, clientId) =>
       enqueueDurableWrite(`orca-direct-user-rewind:${sessionId}:${clientId}`, () =>
         rewindPersistedUserMessageAfterClear(sessionId, clientId),
-      ),
+      ).then(() => undefined),
     finalizePersistedUserMessageRewind: (sessionId, clientId) =>
       enqueueDurableWrite(`orca-direct-user-rewind-finalize:${sessionId}:${clientId}`, () =>
         rewindPersistedUserMessageAfterClear(sessionId, clientId, {
           finalizeAlreadyRewound: true,
         }),
-      ),
+      ).then(() => undefined),
     retainPersistedUserMessageCleanup: (sessionId, item, error) =>
       inputCoordinator.retainPersistedOrcaCleanupRecovery(sessionId, item, error),
     trackPersistedUserMessageBeforeVendorDispatch: trackPersistedOrcaPreVendorInput,
