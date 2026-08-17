@@ -9528,6 +9528,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   }
 
+  async function markOrcaTeamEndedWithCleanup(input: {
+    teamId: string;
+    status: 'completed' | 'cancelled' | 'failed';
+    sessionIds: string[];
+  }): Promise<void> {
+    const cleanupScope = {
+      teamId: input.teamId,
+      sessionIds: [...new Set(input.sessionIds)],
+    };
+    await markTeamEnded(input.teamId, input.status, {
+      beforeTerminalCommit: () => prepareOrcaTeamTerminalCommit(cleanupScope),
+      onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope),
+    });
+    await settleOrcaTeamQueuedInputs(cleanupScope);
+  }
+
   /**
    * disableOrcaInternal — 关闭 lead session 当前的协同模式。
    *   1. 查 active team;不存在则尝试兜底修复悬空 lead(见下),再返回
@@ -9582,15 +9598,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
-    const cleanupScope = {
+    await markOrcaTeamEndedWithCleanup({
       teamId: team.id,
       sessionIds: [leadSessionId, ...activeWorkers.map((worker) => worker.sessionId)],
-    };
-    await markTeamEnded(team.id, 'completed', {
-      beforeTerminalCommit: () => prepareOrcaTeamTerminalCommit(cleanupScope),
-      onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope),
+      status: 'completed',
     });
-    await settleOrcaTeamQueuedInputs(cleanupScope);
     for (const w of activeWorkers) {
       orcaTeamService.clearAutoBridgeState(w.sessionId);
       await cancelIOSSimulatorSessionOperations(w.sessionId);
@@ -10007,7 +10019,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setWorkerPermissionMode: applyWorkerPermissionModePreference,
     createWorkerInTeam: (params) => orcaWorkerCreationService.createWorkerInTeam(params),
     dispatchWorkerTask: (params) => orcaTeamService.dispatchWorkerTask(params),
-    markTeamEnded,
+    markTeamEndedWithCleanup: markOrcaTeamEndedWithCleanup,
     setSessionOrcaRole,
     clearKnownNonOrcaSession: (sessionId) => {
       knownNonOrcaSessionIds.delete(sessionId);

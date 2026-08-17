@@ -104,7 +104,13 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
       'await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds)',
       helperAt,
     );
-    const endedAt = registerSource.indexOf("await markTeamEnded(team.id, 'completed', {");
+    const terminalHelperAt = registerSource.indexOf(
+      'async function markOrcaTeamEndedWithCleanup',
+    );
+    const endedAt = registerSource.indexOf(
+      'await markTeamEnded(input.teamId, input.status, {',
+      terminalHelperAt,
+    );
     const preparedAt = registerSource.indexOf(
       'beforeTerminalCommit: () => prepareOrcaTeamTerminalCommit(cleanupScope)',
       endedAt,
@@ -118,6 +124,14 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
       endedAt,
     );
     const clearedAt = registerSource.indexOf('await clearLeadOrcaRoleState(leadSessionId)', endedAt);
+    const lifecycleCleanupAt = registerSource.indexOf(
+      'markTeamEndedWithCleanup: markOrcaTeamEndedWithCleanup',
+      endedAt,
+    );
+    const disableCleanupAt = registerSource.indexOf(
+      'await markOrcaTeamEndedWithCleanup({',
+      endedAt,
+    );
 
     expect(helperAt).toBeGreaterThan(-1);
     expect(waitedAt).toBeGreaterThan(helperAt);
@@ -127,6 +141,8 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     expect(preparedAt).toBeGreaterThan(endedAt);
     expect(rollbackAt).toBeGreaterThan(preparedAt);
     expect(settledAt).toBeGreaterThan(rollbackAt);
+    expect(disableCleanupAt).toBeGreaterThan(settledAt);
+    expect(lifecycleCleanupAt).toBeGreaterThan(disableCleanupAt);
     expect(clearedAt).toBeGreaterThan(settledAt);
   });
 

@@ -79,8 +79,8 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
         targetLastUserSendAt: null,
       } satisfies DispatchWorkerTaskResult;
     }),
-    markTeamEnded: vi.fn(async (teamId, status) => {
-      calls.push(`markTeamEnded:${teamId}:${status}`);
+    markTeamEndedWithCleanup: vi.fn(async ({ teamId, status, sessionIds }) => {
+      calls.push(`markTeamEndedWithCleanup:${teamId}:${status}:${sessionIds.join(',')}`);
     }),
     setSessionOrcaRole: vi.fn(async (sessionId, role) => {
       calls.push(`setSessionOrcaRole:${sessionId}:${role ?? 'null'}`);
@@ -223,7 +223,7 @@ describe('OrcaLifecycleService', () => {
     expect(calls).toEqual([
       'createActiveTeam:lead-1',
       'setSessionOrcaRole:lead-1:lead',
-      'markTeamEnded:team-1:failed',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -247,7 +247,7 @@ describe('OrcaLifecycleService', () => {
       'setSessionOrcaRole:lead-1:lead',
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:undefined',
-      'markTeamEnded:team-1:failed',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -734,8 +734,8 @@ describe('OrcaLifecycleService', () => {
       'setSessionOrcaRole:lead-1:lead',
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:worker-session-1',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1,worker-session-1',
       'rollbackCreatedWorker:worker-1:worker-session-1',
-      'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -768,8 +768,8 @@ describe('OrcaLifecycleService', () => {
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:worker-session-1',
       'sendWorkerReadyPlaceholder:enable_collab_mode:enable_collab_mode/worker-session-1/worker-ready-placeholder',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1,worker-session-1',
       'rollbackCreatedWorker:worker-1:worker-session-1',
-      'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
       'clearLeadVendorOptions:lead-1',
     ]);
@@ -842,7 +842,7 @@ describe('OrcaLifecycleService', () => {
 
     expect(calls).toEqual([
       'createActiveTeam:lead-1',
-      'markTeamEnded:team-1:failed',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
@@ -872,8 +872,8 @@ describe('OrcaLifecycleService', () => {
       'createActiveTeam:lead-1',
       'createWorkerInTeam:team-1:reviewer',
       'setSessionOrcaRole:lead-1:lead',
+      'markTeamEndedWithCleanup:team-1:failed:lead-1,worker-session-1',
       'rollbackCreatedWorker:worker-1:worker-session-1',
-      'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
     ]);
   });
