@@ -5195,6 +5195,11 @@
       "stop": "停止",
       "empty": "Bot 連携はまだありません",
       "emptyDetail": "この Bot が他の Bot に委任すると、進捗と結果がここに保存されます。",
+      "activity": {
+        "single": "{{name}} に委任中…",
+        "multiple": "Bot 委任 {{count}} 件が進行中",
+        "openAria": "Bot 連携の進捗を見る"
+      },
       "status": {
         "queued": "キュー待ち",
         "waiting": "開始待ち",

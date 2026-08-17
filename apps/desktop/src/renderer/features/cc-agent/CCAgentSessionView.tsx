@@ -166,6 +166,7 @@ import {
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { openBotDelegationsTab } from '@/features/right-sidebar/lib/openBotDelegationsTab';
+import { BotDelegationActivityIndicator } from '@/features/bots/BotDelegationActivityIndicator';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -4070,6 +4071,13 @@ export function CCAgentSessionView({
               />
             </div>
           </div>
+        )}
+
+        {/* Bot 委派进行中状态条:与上方 bot-delegations tab 静默注册同条件(仅路由主人
+          且视图可见的 Bot 任务)。本会话没有活跃出向委派时组件自身返回 null,不占位、
+          不遮挡消息流;点击落到右栏 Bot 协同 tab。 */}
+        {ownsWindowRoute && viewVisible && sessionId && session?.source === 'bot' && (
+          <BotDelegationActivityIndicator sessionId={sessionId} maxWidth={messageWidth} />
         )}
 
         {/* Scroll container — full height, bottom padding reserves space for input overlay.

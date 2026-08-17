@@ -5195,6 +5195,11 @@
       "stop": "중지",
       "empty": "아직 Bot 협업이 없습니다",
       "emptyDetail": "이 Bot이 다른 Bot에 위임하면 진행 상황과 결과가 여기에 보관됩니다.",
+      "activity": {
+        "single": "{{name}}에 위임 중…",
+        "multiple": "Bot 위임 {{count}}건 진행 중",
+        "openAria": "Bot 협업 진행 상황 보기"
+      },
       "status": {
         "queued": "대기열",
         "waiting": "시작 대기",

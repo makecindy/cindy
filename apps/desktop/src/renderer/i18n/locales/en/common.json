@@ -5197,6 +5197,11 @@
       "stop": "Stop",
       "empty": "No Bot collaboration yet",
       "emptyDetail": "Delegations from this Bot will keep their progress and results here.",
+      "activity": {
+        "single": "Delegating to {{name}}…",
+        "multiple": "{{count}} Bot delegations in progress",
+        "openAria": "View Bot collaboration progress"
+      },
       "status": {
         "queued": "Queued",
         "waiting": "Waiting",

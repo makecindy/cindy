@@ -5195,6 +5195,11 @@
       "stop": "停止",
       "empty": "还没有 Bot 协同",
       "emptyDetail": "当前 Bot 委派其它 Bot 后，进度与结果会保留在这里。",
+      "activity": {
+        "single": "正在委派 {{name}} 处理…",
+        "multiple": "{{count}} 个 Bot 委派进行中",
+        "openAria": "查看 Bot 委派进度"
+      },
       "status": {
         "queued": "排队中",
         "waiting": "等待启动",
