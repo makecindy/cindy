@@ -3869,10 +3869,46 @@ export class AgentInputCoordinator {
   ): Promise<boolean> {
     const recovery = state.recovery;
     const cleanupRecovery = state.activeTurnCleanupRecoveryItem;
-    if ((!recovery && !cleanupRecovery) || !this.deps.isOrcaTeamInputActive) return false;
-    const item = cleanupRecovery ?? (recovery?.kind === 'active-turn'
+    if (cleanupRecovery) {
+      const teamId = resolveOrcaQueueItemTeamId(cleanupRecovery);
+      if (!teamId) return false;
+      if (
+        this.getState(sessionId) !== state ||
+        state.activeTurnCleanupRecoveryItem !== cleanupRecovery
+      ) return false;
+
+      try {
+        const discarded = await this.discardQueuedItemsWhere(
+          sessionId,
+          (queued) => queued.clientId === cleanupRecovery.clientId,
+        );
+        log.info('retried Orca cleanup recovery before queue drain', {
+          sessionId,
+          teamId,
+          ...discarded,
+        });
+        return (
+          discarded.pendingDiscarded > 0 ||
+          discarded.activeCancelled ||
+          discarded.recoveryDiscarded
+        );
+      } catch (error) {
+        // Cleanup debt is independent of team lifecycle. Keep it across a
+        // transient DB failure, but stop this drain so queued user work cannot
+        // pass the still-visible, never-dispatched row.
+        log.warn('Orca cleanup recovery rewind failed; keeping cleanup recovery', {
+          sessionId,
+          teamId,
+          error: errorMessage(error),
+        });
+        return true;
+      }
+    }
+
+    if (!recovery || !this.deps.isOrcaTeamInputActive) return false;
+    const item = recovery.kind === 'active-turn'
       ? recovery.item
-      : state.pendingQueue.find((queued) => queued.clientId === recovery?.clientId));
+      : state.pendingQueue.find((queued) => queued.clientId === recovery.clientId);
     const teamId = item ? resolveOrcaQueueItemTeamId(item) : null;
     if (!teamId) return false;
 
@@ -3893,8 +3929,7 @@ export class AgentInputCoordinator {
     const latest = this.getState(sessionId);
     if (
       latest !== state ||
-      latest.recovery !== recovery ||
-      latest.activeTurnCleanupRecoveryItem !== cleanupRecovery
+      latest.recovery !== recovery
     ) return false;
 
     let discarded: Awaited<ReturnType<AgentInputCoordinator['discardQueuedItemsWhere']>>;
@@ -3917,7 +3952,7 @@ export class AgentInputCoordinator {
     log.info('discarded inactive cross-instance Orca recovery before queue drain', {
       sessionId,
       teamId,
-      recoveryKind: cleanupRecovery ? 'active-turn-cleanup' : recovery?.kind,
+      recoveryKind: recovery.kind,
       ...discarded,
     });
     return (

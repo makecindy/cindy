@@ -3541,6 +3541,35 @@ describe('AgentInputCoordinator send transaction', () => {
     );
   });
 
+  it('retries direct-send cleanup recovery while its Orca team remains active', async () => {
+    const h = createHarness();
+    const sid = 'active-orca-direct-cleanup-retry';
+    const item = makeOrcaItem('orca-direct-old', 'undelivered worker report', 'team-active');
+
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setOrcaTeamInputActive(true);
+    h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
+
+    h.coordinator.retainPersistedOrcaCleanupRecovery(
+      sid,
+      item,
+      new Error('database busy'),
+    );
+    await flush();
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.hasKnownClientId(sid, item.clientId)).toBe(true);
+    expect(h.isOrcaTeamInputActive).not.toHaveBeenCalled();
+
+    h.coordinator.wakeSession(sid, 'retry-active-team-cleanup');
+    await flush();
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.hasKnownClientId(sid, item.clientId)).toBe(false);
+    expect(latestSnapshotItems(h.persistQueueSnapshot)).toHaveLength(0);
+    expect(h.isOrcaTeamInputActive).not.toHaveBeenCalled();
+  });
+
   it('holds the Orca pre-vendor reservation until a queued send settles', async () => {
     const h = createHarness();
     const sid = 'orca-dispatch-reservation';
@@ -6504,7 +6533,7 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     const lifecycleCheck = vi.fn(async () => false);
     h.setQueueSnapshotItemCurrent(lifecycleCheck);
     h.setGetPersistedClientIds(async () => new Set(['orca-legacy-cleanup']));
-    h.setOrcaTeamInputActive(false);
+    h.setOrcaTeamInputActive(true);
     h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
 
     await h.coordinator.ensureQueueRestored(sid);
@@ -6513,7 +6542,7 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(lifecycleCheck).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).recovery).toBeNull();
     expect(h.coordinator.hasKnownClientId(sid, 'orca-legacy-cleanup')).toBe(true);
-    expect(h.isOrcaTeamInputActive).toHaveBeenCalledWith('team-legacy');
+    expect(h.isOrcaTeamInputActive).not.toHaveBeenCalled();
     expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(1);
     // The loaded durable snapshot already matches the retained cleanup state,
     // so the change detector should not rewrite it after a failed first retry.
