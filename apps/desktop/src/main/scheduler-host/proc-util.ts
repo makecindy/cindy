@@ -81,39 +81,49 @@ function reapWindowsDescendantsBestEffort(
     }, DESCENDANT_REAP_TIMEOUT_MS);
     watchdog.unref?.();
   };
-  // 阶段一:枚举查询。到点强杀查询进程并结算。
-  armWatchdog(() => {
-    try {
-      query?.kill();
-    } catch {
-      /* 已经没了 */
-    }
-  });
-  try {
-    query = spawn(
-      'powershell',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`,
-      ],
-      { windowsHide: true },
-    );
-    let output = '';
-    query.stdout?.on('data', (chunk: Buffer) => {
-      output += chunk.toString('utf8');
-    });
-    query.on('close', (code) => {
-      if (finished) return; // 阶段一看门狗已结算(查询被强杀后的 close 回声)
-      if (code !== 0) {
-        finish();
-        return;
+  const queryDescendants = (onResult: (childPids: string[]) => void): void => {
+    // 每次查询都有独立窗口。后代 taskkill 非零后的二次查询不能复用
+    // 第一阶段已经消耗的 deadline，否则自然退出竞态仍可能误判成死锁。
+    armWatchdog(() => {
+      try {
+        query?.kill();
+      } catch {
+        /* 已经没了 */
       }
-      const childPids = output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => /^\d+$/.test(line));
+    });
+    try {
+      query = spawn(
+        'powershell',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`,
+        ],
+        { windowsHide: true },
+      );
+      let output = '';
+      query.stdout?.on('data', (chunk: Buffer) => {
+        output += chunk.toString('utf8');
+      });
+      query.on('close', (code) => {
+        if (finished) return; // 查询看门狗已结算(被强杀后的 close 回声)
+        if (code !== 0) {
+          finish();
+          return;
+        }
+        onResult(output
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => /^\d+$/.test(line)));
+      });
+      query.on('error', () => finish());
+    } catch {
+      finish();
+    }
+  };
+  const inspectAndReap = (): void => {
+    queryDescendants((childPids) => {
       if (childPids.length === 0) {
         finish(true);
         return;
@@ -126,7 +136,15 @@ function reapWindowsDescendantsBestEffort(
       const onDescendantDone = (confirmed: boolean): void => {
         allConfirmed &&= confirmed;
         remaining -= 1;
-        if (remaining <= 0) finish(allConfirmed);
+        if (remaining > 0) return;
+        if (allConfirmed) {
+          finish(true);
+          return;
+        }
+        // A descendant can exit naturally between enumeration and taskkill.
+        // A non-zero taskkill code is therefore not proof that it survived;
+        // re-enumerate once and release strict callers when the tree is empty.
+        queryDescendants((remainingPids) => finish(remainingPids.length === 0));
       };
       for (const childPid of childPids) {
         try {
@@ -144,10 +162,8 @@ function reapWindowsDescendantsBestEffort(
         }
       }
     });
-    query.on('error', () => finish());
-  } catch {
-    finish();
-  }
+  };
+  inspectAndReap();
 }
 
 /**

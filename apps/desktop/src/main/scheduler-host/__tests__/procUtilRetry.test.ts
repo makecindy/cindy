@@ -312,6 +312,67 @@ describe('killProcessTree win32 重试(Greptile P1 加固)', () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
+  it('严格模式下后代在 taskkill 前自然退出会复查空树并 settle', () => {
+    const initialQuery = fakeProcess();
+    const descendantKiller = new EventEmitter();
+    const verificationQuery = fakeProcess();
+    spawnMock
+      .mockImplementationOnce(() => initialQuery)
+      .mockImplementationOnce(() => descendantKiller)
+      .mockImplementationOnce(() => verificationQuery);
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number;
+      signalCode: null;
+    };
+    child.kill = vi.fn();
+    child.exitCode = 0;
+    child.signalCode = null;
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    initialQuery.stdout.emit('data', Buffer.from('456\r\n'));
+    initialQuery.emit('close', 0);
+    descendantKiller.emit('exit', 128);
+
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+    verificationQuery.emit('close', 0);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('严格模式下后代 taskkill 失败且复查仍存活时保持未 settle', () => {
+    const initialQuery = fakeProcess();
+    const descendantKiller = new EventEmitter();
+    const verificationQuery = fakeProcess();
+    spawnMock
+      .mockImplementationOnce(() => initialQuery)
+      .mockImplementationOnce(() => descendantKiller)
+      .mockImplementationOnce(() => verificationQuery);
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number;
+      signalCode: null;
+    };
+    child.kill = vi.fn();
+    child.exitCode = 0;
+    child.signalCode = null;
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    initialQuery.stdout.emit('data', Buffer.from('456\r\n'));
+    initialQuery.emit('close', 0);
+    descendantKiller.emit('exit', 128);
+    verificationQuery.stdout.emit('data', Buffer.from('456\r\n'));
+    verificationQuery.emit('close', 0);
+
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
   it('严格模式下主 taskkill 成功后仍等待后代确认', () => {
     const killer = new EventEmitter();
     const psQuery = fakeProcess();

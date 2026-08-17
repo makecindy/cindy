@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -342,6 +343,60 @@ describe('Pi package executable-code boundary', () => {
       fs.readFile(snapshotSkill, 'utf8'),
       fs.readFile(snapshotPrompt, 'utf8'),
     ])).resolves.toEqual(frozenResources);
+  });
+
+  it('preserves npm hoisted dependencies in the isolated session snapshot', async () => {
+    const source = 'npm:hoisted-extension';
+    const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
+    const nodeModulesRoot = path.join(npmRoot, 'node_modules');
+    const packageRoot = path.join(nodeModulesRoot, 'hoisted-extension');
+    const dependencyRoot = path.join(nodeModulesRoot, 'hoisted-dependency');
+    await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
+    await fs.mkdir(dependencyRoot, { recursive: true });
+    await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'hoisted-extension',
+      version: '1.0.0',
+      dependencies: { 'hoisted-dependency': '1.0.0' },
+      pi: { extensions: ['./extensions/index.js'] },
+    }));
+    await fs.writeFile(path.join(packageRoot, 'extensions', 'index.js'), [
+      "const marker = require('hoisted-dependency');",
+      'module.exports = { dependencyMarker: marker };',
+      '',
+    ].join('\n'));
+    await fs.writeFile(path.join(dependencyRoot, 'package.json'), JSON.stringify({
+      name: 'hoisted-dependency',
+      version: '1.0.0',
+      main: './index.js',
+    }));
+    await fs.writeFile(path.join(dependencyRoot, 'index.js'), "module.exports = 'dependency-ok';\n");
+    runtime.listOutput = `User packages:\n  ${source}\n    ${packageRoot}\n`;
+
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+    const snapshotRoot = path.join(runtime.userData, 'hoisted-session', 'managed-packages');
+    const snapshot = await store.resolveManagedPiPackageResources({ snapshotRoot });
+    const snapshotExtension = path.join(
+      snapshotRoot,
+      '0',
+      'node_modules',
+      'hoisted-extension',
+      'extensions',
+      'index.js',
+    );
+
+    expect(snapshot).toMatchObject({
+      extensions: [snapshotExtension],
+      packageRoots: [path.join(snapshotRoot, '0')],
+    });
+    await expect(fs.readFile(
+      path.join(snapshotRoot, '0', 'node_modules', 'hoisted-dependency', 'index.js'),
+      'utf8',
+    )).resolves.toContain('dependency-ok');
+    const loaded = createRequire(snapshotExtension)(snapshotExtension) as {
+      dependencyMarker: string;
+    };
+    expect(loaded.dependencyMarker).toBe('dependency-ok');
   });
 
   it.each([

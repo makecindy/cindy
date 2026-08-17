@@ -174,6 +174,26 @@ function packageHome(): string {
   return path.join(app.getPath('userData'), 'pi-package-home');
 }
 
+async function snapshotRootForInstalledPackage(
+  source: string,
+  installedRoot: string,
+): Promise<string> {
+  if (!source.startsWith('npm:')) return installedRoot;
+  try {
+    const npmRoot = await fs.realpath(path.join(packageHome(), 'npm'));
+    const nodeModulesRoot = await fs.realpath(path.join(npmRoot, 'node_modules'));
+    // Pi installs registry packages below one shared npm/node_modules tree.
+    // Snapshot that resolver root so hoisted siblings remain reachable from
+    // the copied extension. A forged/out-of-store list entry falls back to
+    // its own package root instead of widening the copy boundary.
+    return installedRoot !== nodeModulesRoot && isWithinPath(nodeModulesRoot, installedRoot)
+      ? npmRoot
+      : installedRoot;
+  } catch {
+    return installedRoot;
+  }
+}
+
 function statePath(): string {
   return path.join(packageHome(), 'cindy-package-state.json');
 }
@@ -877,6 +897,7 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
     const rootStat = await fs.stat(root);
     if (rootStat.isFile()) {
       const isExtension = /\.(?:ts|js)$/i.test(root);
+      const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
       const resources = isExtension ? [await extensionResourceView(path.dirname(root), root)] : [];
       const requiresExtensionApproval = isExtension
         && !state.approvedExtensionSources.includes(pkg.source);
@@ -892,7 +913,7 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
           ...(resources.length === 0 ? { warning: 'no-resources' as const } : {}),
         },
         launch: enabled && isExtension
-          ? { extensions: [root], skills: [], promptTemplates: [], packageRoots: [root] }
+          ? { extensions: [root], skills: [], promptTemplates: [], packageRoots: [launchRoot] }
           : empty,
         promptCommands: [],
         installedRoot: root,
@@ -951,9 +972,10 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
       : [];
     const warning = hasDisabledInstallLifecycleScript(manifest.scripts)
       ? 'lifecycle-scripts-disabled' as const
-      : resources.length === 0
-        ? 'no-resources' as const
-        : undefined;
+        : resources.length === 0
+          ? 'no-resources' as const
+          : undefined;
+    const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
     return {
       rawSource: pkg.source,
       view: {
@@ -966,7 +988,9 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
         ...(runtimeRequirements.length > 0 ? { runtimeRequirements } : {}),
         ...(warning ? { warning } : {}),
       },
-      launch: enabled ? { extensions, skills, promptTemplates: prompts, packageRoots: [root] } : empty,
+      launch: enabled
+        ? { extensions, skills, promptTemplates: prompts, packageRoots: [launchRoot] }
+        : empty,
       promptCommands,
       installedRoot: root,
     };
