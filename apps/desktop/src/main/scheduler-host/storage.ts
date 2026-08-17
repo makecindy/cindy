@@ -33,6 +33,7 @@ import {
   schedulerGeneratedScheduleSessionBindingWhere,
   strictLegacyScheduleTitleWhere,
   validScheduleSessionBindingWhere,
+  validScheduleSessionRunWhere,
 } from '../localDb/scheduleSessionBindingPolicy.js';
 import {
   scheduleToCamel,
@@ -593,9 +594,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
   /**
    * Sidebar 聚合索引用的轻量 run 列表：
-   * - 默认 full 模式返回所有带 sessionId 的真实 run，供 Desktop 本地历史计数与归组。
+   * - 默认 full 模式返回所有侧栏关联仍有效的真实 run，另保留无 sessionId 的未读终态
+   *   run；Automation detail 的完整历史由 listRuns 独立提供，不受这里的过滤影响。
    * - compact 模式为每个请求会话返回最新有效 associationOnly 项，再只追加最新一条
-   *   running 与 50 条未读真实 run；两类都在 SQL window 子查询中先排名后截取。
+   *   running 与 50 条未读真实 run；有效会话先过滤，再在 SQL window 子查询中排名截取。
    *   scheduler/严格 legacy 会话保留历史绑定，普通手动会话只认当前 targetSessionId。
    * - 两种模式都包含未被现代绑定覆盖的 legacy association；associationOnly 项只表达
    *   归属，不计入真实运行历史。
@@ -732,8 +734,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
             })
             .from(scheduleRuns)
             .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+            .innerJoin(sessions, eq(scheduleRuns.sessionId, sessions.id))
             .where(and(
               inArray(scheduleRuns.sessionId, compactSessionIds ?? []),
+              validScheduleSessionRunWhere(),
               or(
                 eq(scheduleRuns.status, 'running'),
                 and(
@@ -790,9 +794,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           })
           .from(scheduleRuns)
           .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+          .leftJoin(sessions, eq(scheduleRuns.sessionId, sessions.id))
           .where(or(
-            isNotNull(scheduleRuns.sessionId),
             and(
+              isNotNull(scheduleRuns.sessionId),
+              validScheduleSessionRunWhere(),
+            ),
+            and(
+              isNull(scheduleRuns.sessionId),
               isNull(scheduleRuns.readAt),
               inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
             ),

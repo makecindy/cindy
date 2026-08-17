@@ -794,6 +794,163 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  it('filters invalid real runs from sidebar snapshots without hiding automation history', async () => {
+    const harness = createStorageHarness();
+    const ordinary = baseSchedule({
+      id: 'sch-run-policy-ordinary',
+      name: 'run policy ordinary',
+      targetSessionId: 'sess-run-policy-ordinary-a',
+    });
+    const generated = baseSchedule({
+      id: 'sch-run-policy-generated',
+      name: 'run policy generated',
+    });
+    const legacy = baseSchedule({ id: 'sch-run-policy-legacy', name: 'run policy legacy' });
+    const prefixDisabled = baseSchedule({
+      id: 'sch-run-policy-prefix-disabled',
+      name: 'run policy prefix disabled',
+    });
+    const nullSession = baseSchedule({
+      id: 'sch-run-policy-null-session',
+      name: 'run policy null session',
+    });
+    const rankingStale = baseSchedule({
+      id: 'sch-run-policy-ranking-stale',
+      name: 'run policy ranking stale',
+    });
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-run-policy-ordinary-a', 'former ordinary target', 'desktop', 1, 1),
+          ('sess-run-policy-ordinary-b', 'current ordinary target', 'desktop', 2, 2),
+          ('sess-run-policy-generated', 'generated without legacy title', 'scheduler', 3, 3),
+          ('sess-run-policy-legacy', '[Schedule] prior strict key', 'desktop', 4, 4),
+          ('sess-run-policy-prefix-disabled', '[Schedule] disabled prior key', 'desktop', 5, 5)
+      `);
+      await harness.storage.insert(ordinary);
+      await harness.storage.insert(generated);
+      await harness.storage.insert(legacy);
+      await harness.storage.insert(prefixDisabled);
+      await harness.storage.insert(nullSession);
+      await harness.storage.insert(rankingStale);
+      enableLegacySessionFallback(harness, legacy.id);
+
+      await harness.storage.insertRun({
+        id: 'run-policy-ordinary-a',
+        scheduleId: ordinary.id,
+        sessionId: 'sess-run-policy-ordinary-a',
+        firedAt: 100,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-generated',
+        scheduleId: generated.id,
+        sessionId: 'sess-run-policy-generated',
+        firedAt: 110,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-legacy',
+        scheduleId: legacy.id,
+        sessionId: 'sess-run-policy-legacy',
+        firedAt: 120,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-prefix-disabled',
+        scheduleId: prefixDisabled.id,
+        sessionId: 'sess-run-policy-prefix-disabled',
+        firedAt: 130,
+        status: 'failed',
+      });
+      await harness.storage.insertRun({
+        id: 'run-policy-null-session',
+        scheduleId: nullSession.id,
+        firedAt: 140,
+        status: 'failed',
+      });
+      harness.db.run(sql`
+        UPDATE schedules SET target_session_id = NULL WHERE id = ${ordinary.id}
+      `);
+
+      await expect(harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: ['sess-run-policy-ordinary-a'],
+      })).resolves.toEqual([]);
+      const freshFullRealRunIds = (await harness.storage.listSidebarIndexRuns())
+        .filter((run) => run.associationOnly !== true)
+        .map((run) => run.runId);
+      expect(freshFullRealRunIds).not.toContain('run-policy-ordinary-a');
+      expect(freshFullRealRunIds).toEqual(expect.arrayContaining([
+        'run-policy-generated',
+        'run-policy-legacy',
+        'run-policy-null-session',
+      ]));
+      expect(freshFullRealRunIds).not.toContain('run-policy-prefix-disabled');
+
+      harness.db.run(sql`
+        UPDATE schedules
+        SET target_session_id = 'sess-run-policy-ordinary-b'
+        WHERE id = ${ordinary.id}
+      `);
+      await harness.storage.insertRun({
+        id: 'run-policy-ordinary-b',
+        scheduleId: ordinary.id,
+        sessionId: 'sess-run-policy-ordinary-b',
+        firedAt: 200,
+        status: 'running',
+      });
+      // This newer invalid run shares B's partition. Filtering must happen before
+      // row_number(), otherwise it would consume B's sole running slot.
+      await harness.storage.insertRun({
+        id: 'run-policy-ranking-stale',
+        scheduleId: rankingStale.id,
+        sessionId: 'sess-run-policy-ordinary-b',
+        firedAt: 999,
+        status: 'running',
+      });
+
+      const requestedSessionIds = [
+        'sess-run-policy-ordinary-a',
+        'sess-run-policy-ordinary-b',
+        'sess-run-policy-generated',
+        'sess-run-policy-legacy',
+        'sess-run-policy-prefix-disabled',
+      ];
+      const compactRealRunIds = (await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: requestedSessionIds,
+      }))
+        .filter((run) => run.associationOnly !== true)
+        .map((run) => run.runId)
+        .sort();
+      expect(compactRealRunIds).toEqual([
+        'run-policy-generated',
+        'run-policy-legacy',
+        'run-policy-ordinary-b',
+      ]);
+
+      const fullRealRunIds = (await harness.storage.listSidebarIndexRuns())
+        .filter((run) => run.associationOnly !== true)
+        .map((run) => run.runId)
+        .sort();
+      expect(fullRealRunIds).toEqual([
+        'run-policy-generated',
+        'run-policy-legacy',
+        'run-policy-null-session',
+        'run-policy-ordinary-b',
+      ]);
+
+      expect((await harness.storage.listRuns(ordinary.id)).map((run) => run.id).sort()).toEqual([
+        'run-policy-ordinary-a',
+        'run-policy-ordinary-b',
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
   it('hydrates exact run cost from persisted assistant runId metadata', async () => {
     const harness = createStorageHarness();
     const schedule = baseSchedule({ id: 'sch-run-cost' });

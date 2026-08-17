@@ -1,6 +1,6 @@
 import { and, eq, or, sql } from 'drizzle-orm';
 
-import { scheduleSessionBindings, schedules, sessions } from './schema.js';
+import { scheduleRuns, scheduleSessionBindings, schedules, sessions } from './schema.js';
 
 export const LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] ';
 
@@ -27,12 +27,22 @@ export function schedulerGeneratedScheduleSessionBindingWhere() {
 }
 
 /**
- * A persisted binding is visible when it is generated/legacy history, or when
- * it still points at the schedule's current ordinary target session.
+ * A sidebar-index association remains valid when it is generated/legacy
+ * history, or still points at the schedule's current ordinary target session.
  */
-export function validScheduleSessionBindingWhere() {
+function validScheduleSessionWhere(
+  sessionId: typeof scheduleSessionBindings.sessionId | typeof scheduleRuns.sessionId,
+) {
   return or(
     schedulerGeneratedScheduleSessionBindingWhere(),
-    eq(schedules.targetSessionId, scheduleSessionBindings.sessionId),
+    eq(schedules.targetSessionId, sessionId),
   );
+}
+
+export function validScheduleSessionBindingWhere() {
+  return validScheduleSessionWhere(scheduleSessionBindings.sessionId);
+}
+
+export function validScheduleSessionRunWhere() {
+  return validScheduleSessionWhere(scheduleRuns.sessionId);
 }
