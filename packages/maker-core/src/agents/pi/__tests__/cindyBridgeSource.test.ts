@@ -79,6 +79,36 @@ function loadBashIsolationHelper(
   ) => Record<string, string | undefined>;
 }
 
+function loadPiPackageMutationCommandHelper(): (input: unknown) => boolean {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const parserStart = source.indexOf('function readShellRedirectionTarget');
+  const parserEnd = source.indexOf('type BashPathCandidates');
+  const helperStart = source.indexOf('const PI_PACKAGE_MUTATION_SUBCOMMANDS');
+  const helperEnd = source.indexOf('function managedRipgrepPath');
+  const redirectionStart = source.indexOf('function bashLeadingRedirectionAt');
+  const redirectionEnd = source.indexOf('function bashAssignmentPrefixAt');
+  if (parserStart < 0 || parserEnd <= parserStart
+    || helperStart < 0 || helperEnd <= helperStart
+    || redirectionStart < 0 || redirectionEnd <= redirectionStart) {
+    throw new Error('Pi package mutation command helper was not found');
+  }
+  const executableSource = [
+    source.slice(parserStart, parserEnd),
+    source.slice(redirectionStart, redirectionEnd),
+    source.slice(helperStart, helperEnd),
+    '(globalThis as any).bashCommandMutatesPiPackages = bashCommandMutatesPiPackages;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {};
+  runInNewContext(compiled, context);
+  return context.bashCommandMutatesPiPackages as (input: unknown) => boolean;
+}
+
 function loadReviewSearchHelpers(
   workingDir: string,
   overrides: {
@@ -981,8 +1011,8 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
   });
 
-  it('routes every bash spelling of the Pi CLI into an isolated package home', () => {
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('commandMutatesPiPackages');
+  it('blocks Pi package mutations before bash while preserving ordinary commands', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('bashCommandMutatesPiPackages(nextParams)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME'",
     );
@@ -993,13 +1023,26 @@ describe('cindy-bridge extension source', () => {
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('token: piPackageManagementToken');
 
+    const mutatesPiPackages = loadPiPackageMutationCommandHelper();
     const commands = [
       'pi install npm:context-mode',
       "sh -c 'pi install npm:context-mode'",
       'p=pi; "$p" install npm:context-mode',
       '/opt/cindy/pi install npm:context-mode',
+      'C:/Cindy/pi.exe remove npm:context-mode',
+      'PI_CODING_AGENT_DIR=/tmp/elsewhere pi update npm:context-mode',
+      'env -u PI_CODING_AGENT_DIR pi install npm:context-mode',
+      'env PI_CODING_AGENT_DIR=/tmp/elsewhere /opt/cindy/pi update npm:context-mode',
+      'command -p pi remove npm:context-mode',
+      'exec -- /opt/cindy/pi install npm:context-mode',
+      'exec -a managed-pi /opt/cindy/pi update npm:context-mode',
+      'sudo -u root env -u PI_CODING_AGENT_DIR pi update npm:context-mode',
+      'sudo --user root /opt/cindy/pi remove npm:context-mode',
+      "bash -lc 'command pi remove npm:context-mode'",
+      'echo safe && pi install npm:context-mode',
     ];
     for (const command of commands) {
+      expect(mutatesPiPackages({ command }), command).toBe(true);
       const isolate = loadBashIsolationHelper(path);
       const env = isolate(
         {
@@ -1019,6 +1062,24 @@ describe('cindy-bridge extension source', () => {
       expect(JSON.stringify(env)).not.toContain('/real/runtime-home');
       expect(JSON.stringify(env)).not.toContain('/cindy/managed-package-home');
     }
+
+    for (const command of [
+      'pi --version',
+      'pi help install',
+      'npm install context-mode',
+      'echo pi install npm:context-mode',
+      "printf '%s\\n' 'pi install npm:context-mode'",
+      'cat ./pi',
+      'curl https://example.test/pi-install-notes',
+      'sudo whoami',
+      'ps aux',
+      'cat ~/.ssh/id_ed25519',
+      'rm -rf ./ordinary-worktree-directory',
+    ]) {
+      expect(mutatesPiPackages({ command }), command).toBe(false);
+    }
+    expect(mutatesPiPackages({})).toBe(false);
+    expect(mutatesPiPackages({ command: 42 })).toBe(false);
 
     const isolateWindows = loadBashIsolationHelper(path.win32);
     expect(

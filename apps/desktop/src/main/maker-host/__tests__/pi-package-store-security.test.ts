@@ -201,8 +201,9 @@ describe('Pi package executable-code boundary', () => {
         const pending = store.runPiPackageCommand(['install', 'npm:test'], 1).finally(() => {
           settled = true;
         });
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        expect(processRuntime.killTree).toHaveBeenCalledOnce();
+        await vi.waitFor(() => {
+          expect(processRuntime.killTree).toHaveBeenCalledOnce();
+        }, { timeout: 1_000 });
         expect(processRuntime.killTree).toHaveBeenCalledWith(
           4242,
           expect.any(Object),
@@ -235,8 +236,9 @@ describe('Pi package executable-code boundary', () => {
           failure = error;
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        expect(processRuntime.killTree).toHaveBeenCalledOnce();
+        await vi.waitFor(() => {
+          expect(processRuntime.killTree).toHaveBeenCalledOnce();
+        }, { timeout: 1_000 });
         processRuntime.pendingTreeSettled?.();
         await new Promise((resolve) => setTimeout(resolve, 900));
         expect(failure).toBeUndefined();

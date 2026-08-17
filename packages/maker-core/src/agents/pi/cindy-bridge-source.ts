@@ -121,6 +121,194 @@ function isolatedBashEnvironment(
   return clean;
 }
 
+// The isolated package-home env is defense in depth, not an OS sandbox: bash
+// can rewrite env at will. Reject direct/static Pi package-manager spellings at
+// the execution boundary so mutations must cross Cindy's host-owned grant flow.
+const PI_PACKAGE_MUTATION_SUBCOMMANDS = new Set(['install', 'update', 'remove']);
+const PI_SHELL_WRAPPERS = new Set(['sh', 'bash', 'dash', 'ksh', 'zsh']);
+
+function bashStaticAssignment(word: string): { name: string; value: string } | null {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(word);
+  if (!match || match[2].includes('$') || match[2].includes(String.fromCharCode(96))) return null;
+  return { name: match[1], value: match[2] };
+}
+
+function bashResolveStaticWord(word: string, variables: Map<string, string>): string | null {
+  const reference = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(word)
+    ?? /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(word);
+  if (reference) return variables.get(reference[1]) ?? null;
+  return word.includes('$') || word.includes(String.fromCharCode(96)) ? null : word;
+}
+
+function bashCommandBasename(command: string): string {
+  const normalized = command.replace(/\\/g, '/');
+  return normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase();
+}
+
+function bashStaticCommandSegments(command: string): string[][] {
+  const segments: string[][] = [];
+  let words: string[] = [];
+  let cursor = 0;
+  const flush = () => {
+    if (words.length > 0) segments.push(words);
+    words = [];
+  };
+  while (cursor < command.length) {
+    while (/[ \t\r]/.test(command[cursor] ?? '')) cursor += 1;
+    if (command[cursor] === '\\' && command[cursor + 1] === '\n') {
+      cursor += 2;
+      continue;
+    }
+    if (command[cursor] === '#') {
+      const newline = command.indexOf('\n', cursor);
+      if (newline < 0) break;
+      flush();
+      cursor = newline + 1;
+      continue;
+    }
+    if (/[;&|(){}\n]/.test(command[cursor] ?? '')) {
+      flush();
+      cursor += command[cursor] === '&' && command[cursor + 1] === '&' ? 2
+        : command[cursor] === '|' && command[cursor + 1] === '|' ? 2
+          : 1;
+      continue;
+    }
+    const redirection = bashLeadingRedirectionAt(command, cursor);
+    if (redirection) {
+      cursor = Math.max(redirection.end, cursor + 1);
+      continue;
+    }
+    const word = readShellRedirectionTarget(command, cursor);
+    if (!word.target) {
+      cursor += 1;
+      continue;
+    }
+    words.push(word.target);
+    cursor = Math.max(word.end, cursor + 1);
+  }
+  flush();
+  return segments;
+}
+
+function bashStaticCommandMutatesPiPackages(
+  words: readonly string[],
+  variables: Map<string, string>,
+): boolean {
+  let cursor = 0;
+  while (cursor < words.length) {
+    const assignment = bashStaticAssignment(words[cursor]);
+    if (!assignment) break;
+    cursor += 1;
+  }
+  for (let unwraps = 0; cursor < words.length && unwraps < 16; unwraps += 1) {
+    const resolved = bashResolveStaticWord(words[cursor], variables);
+    if (!resolved) {
+      return PI_PACKAGE_MUTATION_SUBCOMMANDS.has(
+        bashResolveStaticWord(words[cursor + 1] ?? '', variables) ?? '',
+      );
+    }
+    const command = bashCommandBasename(resolved);
+    cursor += 1;
+    if (command === 'command' || command === 'builtin') {
+      while (cursor < words.length && (words[cursor] === '--' || /^-[p]+$/.test(words[cursor]))) {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (command === 'exec') {
+      while (cursor < words.length) {
+        if (words[cursor] === '--') {
+          cursor += 1;
+          break;
+        }
+        if (words[cursor] === '-a') {
+          cursor += 2;
+          continue;
+        }
+        if (/^-[cl]+$/.test(words[cursor])) {
+          cursor += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    if (command === 'env') {
+      while (cursor < words.length) {
+        const word = words[cursor];
+        if (word === '--') {
+          cursor += 1;
+          break;
+        }
+        if (word === '-S' || word === '--split-string') {
+          const nested = words[cursor + 1];
+          if (!nested) return true;
+          return bashCommandMutatesPiPackages({ command: nested });
+        }
+        if (word === '-u' || word === '--unset' || word === '-C' || word === '--chdir') {
+          cursor += 2;
+          continue;
+        }
+        if (/^(?:--unset|--chdir)=/.test(word) || /^-[i0]+$/.test(word)
+          || bashStaticAssignment(word)) {
+          cursor += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    if (command === 'sudo') {
+      while (cursor < words.length) {
+        const word = words[cursor];
+        if (word === '--') {
+          cursor += 1;
+          break;
+        }
+        if (/^(?:-u|-g|-h|-p|-r|-t|-C|-D|-R|-T|-U|--user|--group|--host|--prompt|--role|--type|--chdir|--chroot|--other-user)$/.test(word)) {
+          cursor += 2;
+          continue;
+        }
+        if (/^--(?:user|group|host|prompt|role|type|chdir|chroot|other-user)=/.test(word)
+          || /^-[AbEHnPSVvks]+$/.test(word)) {
+          cursor += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    if (PI_SHELL_WRAPPERS.has(command)) {
+      for (let index = cursor; index < words.length - 1; index += 1) {
+        if (/^-[A-Za-z]*c[A-Za-z]*$/.test(words[index])) {
+          return bashCommandMutatesPiPackages({ command: words[index + 1] });
+        }
+      }
+      return false;
+    }
+    if (command !== 'pi' && command !== 'pi.exe') return false;
+    const subcommand = bashResolveStaticWord(words[cursor] ?? '', variables);
+    return subcommand !== null && PI_PACKAGE_MUTATION_SUBCOMMANDS.has(subcommand);
+  }
+  return false;
+}
+
+function bashCommandMutatesPiPackages(input: unknown): boolean {
+  if (!input || typeof input !== 'object') return false;
+  const command = (input as Record<string, unknown>).command;
+  if (typeof command !== 'string') return false;
+  const variables = new Map<string, string>();
+  for (const words of bashStaticCommandSegments(command)) {
+    if (bashStaticCommandMutatesPiPackages(words, variables)) return true;
+    for (const word of words) {
+      const assignment = bashStaticAssignment(word);
+      if (assignment) variables.set(assignment.name, assignment.value);
+      else break;
+    }
+  }
+  return false;
+}
+
 function managedRipgrepPath(): string {
   const configured = process.env[MANAGED_RG_PATH_ENV];
   if (configured && path.isAbsolute(configured)) return configured;
@@ -2264,6 +2452,11 @@ export default async function cindyBridge(pi: any) {
     ...bashTool,
     execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) => {
       const nextParams = applyCindyBashTimeoutParams(params);
+      if (bashCommandMutatesPiPackages(nextParams)) {
+        throw new Error(
+          'Pi extension changes are unavailable through bash. Use cindy_pi_extension so Cindy can request confirmation.',
+        );
+      }
       return bashTool.execute(id, nextParams as any, signal, onUpdate as any);
     },
   });

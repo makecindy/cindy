@@ -1620,13 +1620,23 @@ export async function stageManagedPackageSnapshot(
       await copySnapshotEntryBounded(source, source, temporaryTarget, budget);
       mappings.push({ source, target: path.join(snapshotRoot, relativeTarget), directory });
     }
-    await fs.rename(temporaryRoot, snapshotRoot);
-    return {
-      extensions: resources.extensions.map((entry) => mapSnapshotPath(entry, mappings)),
-      skills: resources.skills.map((skill) => ({ ...skill, path: mapSnapshotPath(skill.path, mappings) })),
-      promptTemplates: resources.promptTemplates.map((entry) => mapSnapshotPath(entry, mappings)),
+    // Windows temp paths can use an 8.3/user-profile spelling while realpath
+    // returns the canonical long form. Compare resources and roots in the same
+    // canonical namespace so the most-specific approved root remains stable on
+    // every platform (and symlinked resources cannot inherit an ancestor root).
+    const mappedResources: PiManagedPackageResources = {
+      extensions: await Promise.all(resources.extensions.map(async (entry) =>
+        mapSnapshotPath(await fs.realpath(entry), mappings))),
+      skills: await Promise.all(resources.skills.map(async (skill) => ({
+        ...skill,
+        path: mapSnapshotPath(await fs.realpath(skill.path), mappings),
+      }))),
+      promptTemplates: await Promise.all(resources.promptTemplates.map(async (entry) =>
+        mapSnapshotPath(await fs.realpath(entry), mappings))),
       packageRoots: mappings.map((mapping) => mapping.target),
     };
+    await fs.rename(temporaryRoot, snapshotRoot);
+    return mappedResources;
   } catch (error) {
     await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
     throw error;
