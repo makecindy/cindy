@@ -2580,6 +2580,7 @@ export class AgentInputCoordinator {
     let activeCancelled = false;
     let cancelledActiveSettlement: Promise<void> | null = null;
     const persistedItemsToRewind = new Map<string, AgentInputQueuedMessage>();
+    const discardedRecoveryItems = new Set<string>();
     const active = state.activeTurn;
     if (active?.item && isActiveTurnBeforeVendorDispatch(active) && predicate(active.item)) {
       activeCancelled = true;
@@ -2591,6 +2592,10 @@ export class AgentInputCoordinator {
       if (active.persisted) {
         this.notifyUndispatchedUserTurn(sessionId, active.item, 'cancelled');
         persistedItemsToRewind.set(active.item.clientId, active.item);
+        // Keep a crash-restorable cleanup intent until the durable rewind lands.
+        // Clearing both activeTurn and recovery first would strand a visible DB
+        // row forever when the worker/database is temporarily unavailable.
+        state.recovery = { kind: 'active-turn', item: active.item };
       } else {
         this.deps.onDiscardedQueuedMessage?.(sessionId, active.item);
       }
@@ -2617,19 +2622,42 @@ export class AgentInputCoordinator {
       predicate(state.recovery.item)
     ) {
       recoveryDiscarded = true;
-      this.deps.onDiscardedQueuedMessage?.(sessionId, state.recovery.item);
       persistedItemsToRewind.set(state.recovery.item.clientId, state.recovery.item);
-      state.recovery = null;
-      state.error = null;
-      state.stickyError = null;
+      discardedRecoveryItems.add(state.recovery.item.clientId);
     }
 
+    // Persist the active-turn recovery before attempting the DB tombstone. On
+    // failure, the next drain/restart can recheck the terminal team and retry.
+    if (persistedItemsToRewind.size > 0) this.emit(sessionId);
+    let rewindFailure: { error: unknown } | null = null;
     for (const item of persistedItemsToRewind.values()) {
-      await this.rewindUndispatchedPersistedUserMessage(
-        sessionId,
-        item,
-        'selective invalidation',
-      );
+      try {
+        await this.rewindUndispatchedPersistedUserMessage(
+          sessionId,
+          item,
+          'selective invalidation',
+        );
+      } catch (error) {
+        rewindFailure = { error };
+        break;
+      }
+      const currentRecovery = state.recovery;
+      if (
+        currentRecovery?.kind === 'active-turn' &&
+        currentRecovery.item.clientId === item.clientId
+      ) {
+        state.recovery = null;
+        state.error = null;
+        state.stickyError = null;
+      }
+      if (discardedRecoveryItems.has(item.clientId)) {
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      }
+    }
+
+    if (rewindFailure) {
+      if (cancelledActiveSettlement) await cancelledActiveSettlement;
+      throw rewindFailure.error;
     }
 
     if (state.pendingQueue.length === 0 && !state.activeTurn) {
@@ -3578,7 +3606,7 @@ export class AgentInputCoordinator {
       if (this.discardOnStaleActiveTurn(sessionId, active, isSendDispatched(result))) return;
       active.persisting = false;
       if (!isSendDispatched(result)) {
-        this.handleSendNotDispatched(sessionId, active, head, result);
+        await this.handleSendNotDispatched(sessionId, active, head, result);
         return;
       }
       active.dispatchLifecycle = 'dispatched';
@@ -3640,7 +3668,7 @@ export class AgentInputCoordinator {
       // make the team active again, while commit's selective invalidation will
       // remove that recovery before disableOrca returns.
       if (isInactiveOrcaTeamError(head, err)) {
-        await this.discardInactiveOrcaInputWithoutRecovery(sessionId, active, head, {
+        await this.discardInactiveOrcaInput(sessionId, active, head, {
           kind: 'thrown-final-fence',
           error: errorMessage(err),
         });
@@ -3743,10 +3771,23 @@ export class AgentInputCoordinator {
     const latest = this.getState(sessionId);
     if (latest !== state || latest.recovery !== recovery) return false;
 
-    const discarded = await this.discardQueuedItemsWhere(
-      sessionId,
-      (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === teamId,
-    );
+    let discarded: Awaited<ReturnType<AgentInputCoordinator['discardQueuedItemsWhere']>>;
+    try {
+      discarded = await this.discardQueuedItemsWhere(
+        sessionId,
+        (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === teamId,
+      );
+    } catch (error) {
+      // discardQueuedItemsWhere persisted an active-turn recovery before the
+      // failed rewind. Stop this drain without losing the cleanup intent; a
+      // later queue wake or crash restore will retry against the shared DB.
+      log.warn('inactive Orca recovery rewind failed; keeping cleanup recovery', {
+        sessionId,
+        teamId,
+        error: errorMessage(error),
+      });
+      return true;
+    }
     log.info('discarded inactive cross-instance Orca recovery before queue drain', {
       sessionId,
       teamId,
@@ -3760,12 +3801,12 @@ export class AgentInputCoordinator {
     );
   }
 
-  private handleSendNotDispatched(
+  private async handleSendNotDispatched(
     sessionId: string,
     active: ActiveTurn,
     item: AgentInputQueuedMessage,
     result: AgentInputSendFailure,
-  ): void {
+  ): Promise<void> {
     if (!this.isActiveTurnCurrent(sessionId, active)) return;
     // 这条 turn 没派出去 → 暂存的 error 候选不会再有接管决策(settle 只挂在已派发那条路上),
     // 就地作废并让 host 补落它的行(不变量 I2)。credential-switch / SESSION_RUNNING 那两个
@@ -3776,7 +3817,7 @@ export class AgentInputCoordinator {
     const logFields = sendFailureLogFields(result);
 
     if (isInactiveOrcaTeamSendFailure(item, result)) {
-      this.discardInactiveOrcaInputWithoutRecovery(sessionId, active, item, logFields);
+      await this.discardInactiveOrcaInput(sessionId, active, item, logFields);
       return;
     }
 
@@ -3880,10 +3921,11 @@ export class AgentInputCoordinator {
         reason,
         error: errorMessage(err),
       });
+      throw err;
     }
   }
 
-  private async discardInactiveOrcaInputWithoutRecovery(
+  private async discardInactiveOrcaInput(
     sessionId: string,
     active: ActiveTurn,
     item: AgentInputQueuedMessage,
@@ -3893,7 +3935,7 @@ export class AgentInputCoordinator {
     latest.activeTurn = null;
     latest.error = null;
     latest.stickyError = null;
-    latest.recovery = null;
+    latest.recovery = active.persisted ? { kind: 'active-turn', item } : null;
     this.clearCredentialSwitchWait(latest);
     this.removePendingCompactWaitClientId(latest, item.clientId);
     latest.recentEnqueuedClientIds = latest.recentEnqueuedClientIds.filter(
@@ -3904,11 +3946,28 @@ export class AgentInputCoordinator {
     );
     if (active.persisted) {
       this.notifyUndispatchedUserTurn(sessionId, item, 'cancelled');
-      await this.rewindUndispatchedPersistedUserMessage(
-        sessionId,
-        item,
-        'inactive Orca terminal fence',
-      );
+      // Snapshot the cleanup intent before the DB write. If it fails, leave the
+      // recovery in place so a later drain can retry instead of exposing a
+      // provider-never-saw-this ghost row forever.
+      this.emit(sessionId);
+      try {
+        await this.rewindUndispatchedPersistedUserMessage(
+          sessionId,
+          item,
+          'inactive Orca terminal fence',
+        );
+      } catch (error) {
+        latest.error = errorMessage(error);
+        this.emit(sessionId);
+        this.deps.onQueueEmptied?.(sessionId);
+        return;
+      }
+      if (
+        latest.recovery?.kind === 'active-turn' &&
+        latest.recovery.item.clientId === item.clientId
+      ) {
+        latest.recovery = null;
+      }
     } else {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }

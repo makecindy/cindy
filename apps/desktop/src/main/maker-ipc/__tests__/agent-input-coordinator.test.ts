@@ -3483,6 +3483,48 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(latestProjection(h.projections).recovery).toBeNull();
   });
 
+  it('keeps an active-turn cleanup recovery until the persisted Orca row rewind succeeds', async () => {
+    const h = createHarness();
+    const sid = 'cross-instance-orca-rewind-retry';
+    const old = makeOrcaItem('orca-old', 'old accepted report', 'team-old');
+
+    h.coordinator.enqueue(sid, old);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'provider stopped');
+    await flush();
+    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item: old });
+
+    h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
+    await expect(
+      h.coordinator.discardQueuedItemsWhere(
+        sid,
+        (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === 'team-old',
+      ),
+    ).rejects.toThrow('database busy');
+
+    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item: old });
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+    );
+
+    await expect(
+      h.coordinator.discardQueuedItemsWhere(
+        sid,
+        (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === 'team-old',
+      ),
+    ).resolves.toMatchObject({ recoveryDiscarded: true });
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(2);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+    );
+  });
+
   it('holds the Orca pre-vendor reservation until a queued send settles', async () => {
     const h = createHarness();
     const sid = 'orca-dispatch-reservation';
@@ -3535,6 +3577,47 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining({ clientId: 'orca-old-persisted' }),
     );
+  });
+
+  it('retains cleanup recovery when an inactive Orca terminal-fence rewind fails', async () => {
+    const h = createHarness();
+    const sid = 'inactive-orca-rewind-failure';
+    const item = makeOrcaItem('orca-old-persisted', 'stale worker report', 'team-old');
+
+    h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      throw new Error(
+        '[PRECONDITION_FAILED] ORCA_TEAM_INACTIVE: team team-old has already ended',
+      );
+    });
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+
+    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item });
+    expect(latestProjection(h.projections).error).toContain('database busy');
+
+    h.setOrcaTeamInputActive(false);
+    h.coordinator.enqueue(
+      sid,
+      makeItem('scheduler-next', 'scheduled follow-up', {
+        origin: {
+          kind: 'scheduler',
+          scheduleId: 'schedule-next',
+          scheduleName: 'Next task',
+        },
+      }),
+    );
+    await flush();
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(2);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'scheduled follow-up',
+    });
   });
 
   it('keeps a persisted Orca input recoverable while its terminal DB transition can still roll back', async () => {
