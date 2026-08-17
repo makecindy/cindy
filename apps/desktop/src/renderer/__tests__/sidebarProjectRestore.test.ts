@@ -259,21 +259,42 @@ describe('restoreSelectedHiddenProject', () => {
     expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
   });
 
-  it('keeps an already-visible project selection side-effect free', async () => {
+  it('skips hidden-state persistence but re-admits an already-visible project', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(false);
     const ensureProjectIncluded = vi.fn();
 
     await expect(
       restoreSelectedHiddenProject({
         projectKey: PROJECT_KEY,
         hiddenProjectKeys: new Set(),
-        setProjectHidden: vi.fn().mockResolvedValue(false),
+        setProjectHidden,
         getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
         ensureProjectIncluded,
         localPlatform: 'linux',
       }),
     ).resolves.toBe(false);
 
-    expect(ensureProjectIncluded).not.toHaveBeenCalled();
+    expect(setProjectHidden).not.toHaveBeenCalled();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('admits a newly selected path without acquiring the hidden-project write lock', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(false);
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set(),
+        setProjectHidden,
+        getCurrentProjectKeys: () => new Set(),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(false);
+
+    expect(setProjectHidden).not.toHaveBeenCalled();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
   });
 
   it('finishes restoration when another window already cleared the hidden marker', async () => {

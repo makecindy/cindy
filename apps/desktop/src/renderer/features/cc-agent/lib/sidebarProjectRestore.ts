@@ -153,6 +153,9 @@ interface RestoreSelectedHiddenProjectOptions {
  * Unlike the old sidebar "New Project" action, selection must continue into
  * the draft after restoring. The chosen path itself is therefore the future
  * project key even when the restored project currently has no visible tasks.
+ * Every explicit selection is admitted by the current Project filter, while
+ * the persisted hidden-project state is only touched when the snapshot says
+ * this project is actually hidden.
  */
 export async function restoreSelectedHiddenProject({
   projectKey,
@@ -163,11 +166,10 @@ export async function restoreSelectedHiddenProject({
   localPlatform,
 }: RestoreSelectedHiddenProjectOptions): Promise<boolean> {
   const wasHidden = isProjectHidden(projectKey, hiddenProjectKeys, localPlatform);
-  const hiddenStateChanged = await setProjectHidden(projectKey, false);
-  if (!hiddenStateChanged && !wasHidden) return false;
+  if (wasHidden) await setProjectHidden(projectKey, false);
 
   ensureProjectIncluded(
     findMatchingProjectKey(projectKey, getCurrentProjectKeys(), localPlatform) ?? projectKey,
   );
-  return true;
+  return wasHidden;
 }
