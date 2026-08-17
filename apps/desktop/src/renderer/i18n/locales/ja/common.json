@@ -2610,8 +2610,8 @@
         "unsupported": "テーマ：拡張機能内には保持されますが、Cindy は Pi の TUI テーマを使用しません。"
       },
       "issues": {
-        "interactive-dialogs": "選択、確認、入力、複数行編集のダイアログはキャンセルされるため、依存する処理は完了できない場合があります。",
-        "notifications": "Pi の通知は表示されません。",
+        "interactive-dialogs": "選択、確認、入力、複数行編集は Cindy の選択カードで表示されます。タイマー付きのダイアログだけはキャンセルされます。",
+        "notifications": "Pi の通知は Pi TUI のトーストではなく、Cindy のタスクのメッセージ履歴に追加されます。",
         "status-display": "Pi の作業表示とステータスバーは表示されません。",
         "widgets": "Pi のエディターウィジェットは表示されません。",
         "terminal-title": "ターミナルウィンドウのタイトル変更は反映されません。",

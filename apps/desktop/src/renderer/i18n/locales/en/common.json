@@ -2596,8 +2596,8 @@
         "unsupported": "Themes: kept in the extension, but Cindy does not use Pi's TUI themes."
       },
       "issues": {
-        "interactive-dialogs": "Selection, confirmation, input, or multi-line editor dialogs are cancelled, so dependent flows may not finish.",
-        "notifications": "Pi notifications are not shown.",
+        "interactive-dialogs": "Selection, confirmation, input, and multi-line editor dialogs are shown as Cindy question cards. Only dialogs with a timer are cancelled.",
+        "notifications": "Pi notifications are added to the Cindy task transcript instead of being shown as Pi TUI toasts.",
         "status-display": "Pi working indicators and status-bar content are not shown.",
         "widgets": "Pi editor widgets are not shown.",
         "terminal-title": "Terminal window title changes are ignored.",

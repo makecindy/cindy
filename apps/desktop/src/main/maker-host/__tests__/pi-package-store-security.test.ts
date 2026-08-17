@@ -192,6 +192,86 @@ async function mutateAuthorized(
 }
 
 describe('Pi package executable-code boundary', () => {
+  it.each([
+    ['npm', 'npm:oversized-display'],
+    ['git', 'git:https://example.com/acme/oversized-display.git'],
+    ['local', 'file:/tmp/oversized-display'],
+  ])('bounds untrusted package and frontmatter display fields for %s sources', async (_kind, source) => {
+    const { root } = await createPackage({ source });
+    const longName = '名'.repeat(400);
+    const longVersion = 'v'.repeat(400);
+    const longSkillName = '技'.repeat(400);
+    const longDescription = '说'.repeat(2_000);
+    await fs.mkdir(path.join(root, 'skills', 'oversized'), { recursive: true });
+    await fs.writeFile(path.join(root, 'skills', 'oversized', 'SKILL.md'), [
+      '---',
+      `name: ${longSkillName}`,
+      `description: ${longDescription}`,
+      '---',
+      'skill body',
+      '',
+    ].join('\n'));
+    await fs.writeFile(path.join(root, 'prompts', 'hello.md'), [
+      '---',
+      `description: ${longDescription}`,
+      '---',
+      'prompt body',
+      '',
+    ].join('\n'));
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: longName,
+      version: longVersion,
+      pi: {
+        extensions: [],
+        skills: ['./skills'],
+        prompts: ['./prompts'],
+        themes: [],
+      },
+    }));
+
+    const store = await import('../pi-package-store.js');
+    const result = await store.listPiPackages();
+    const pkg = result.packages[0]!;
+    const skill = pkg.resources.find((resource) => resource.kind === 'skill')!;
+    expect(pkg.name.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(pkg.name, 'utf8')).toBeLessThanOrEqual(256);
+    expect(pkg.version?.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(pkg.version!, 'utf8')).toBeLessThanOrEqual(128);
+    expect(skill.name.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(skill.name, 'utf8')).toBeLessThanOrEqual(256);
+
+    const resources = await store.resolveManagedPiPackageResources();
+    expect(resources.skills[0]?.name.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(resources.skills[0]!.description!, 'utf8')).toBeLessThanOrEqual(1_024);
+    expect(resources.skills[0]?.description?.endsWith('…')).toBe(true);
+    const commands = await store.listManagedPiPromptCommands();
+    expect(commands[0]?.description.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(commands[0]!.description, 'utf8')).toBeLessThanOrEqual(1_024);
+  });
+
+  it('keeps the maximum package roster projection bounded', async () => {
+    const entries: string[] = ['User packages:'];
+    for (let index = 0; index < 128; index += 1) {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-roster-pkg-'));
+      roots.push(root);
+      const source = `npm:oversized-roster-${index}`;
+      await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+        name: `package-${index}-${'n'.repeat(4_096)}`,
+        version: `version-${index}-${'v'.repeat(4_096)}`,
+        pi: { extensions: [], skills: [], prompts: [], themes: [] },
+      }));
+      entries.push(`  ${source}`, `    ${root}`);
+    }
+    runtime.listOutput = `${entries.join('\n')}\n`;
+
+    const store = await import('../pi-package-store.js');
+    const result = await store.listPiPackages();
+    expect(result.packages).toHaveLength(128);
+    expect(result.packages.every((pkg) => pkg.name.endsWith('…'))).toBe(true);
+    expect(result.packages.every((pkg) => pkg.version?.endsWith('…'))).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(128 * 1_024);
+  });
+
   it.each(['darwin', 'win32'] as const)(
     'waits for timed-out package trees to close on %s',
     async (platform) => {

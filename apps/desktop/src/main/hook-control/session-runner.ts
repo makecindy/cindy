@@ -1018,7 +1018,12 @@ export function createMakerHookSessionRunner(deps: {
             ? {
                 [MAIN_OWNED_SEND_CONTEXT]: {
                   origin: trustedChannelOrigin,
-                  rawChannelText: req.prompt,
+                  // Slack/X thread prompts may already contain Main-owned
+                  // context decoration. The server-provided userText is the
+                  // clean channel message used for deterministic managed Pi
+                  // package commands; only older servers that omit the field
+                  // fall back to the decorated prompt.
+                  rawChannelText: req.source?.userText ?? req.prompt,
                 },
               }
             : {}),

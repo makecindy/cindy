@@ -720,7 +720,35 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', 'telegram');
   });
 
-  it('开放集合的官方 IM 来源仍用 Main-owned 原文而不信任装饰后 prompt', async () => {
+  it.each([
+    ['slack', { kind: 'im', channel: 'slack' }],
+    ['x', { kind: 'hook', source: 'x' }],
+  ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
+    const runner = createMakerHookSessionRunner({ log });
+    const rawCommand = 'pi install npm:context-mode';
+    const decoratedPrompt = [
+      '<thread_context>',
+      '[@alice] previous discussion',
+      '</thread_context>',
+      '',
+      rawCommand,
+    ].join('\n');
+    const outcome = await runner.run(baseReq({
+      prompt: decoratedPrompt,
+      source: { im, userText: rawCommand },
+    }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: expectedOrigin,
+      rawChannelText: rawCommand,
+    });
+    expect(session.send.mock.calls[0][0]).toMatchObject({
+      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}`,
+    });
+  });
+
+  it('旧服务端缺少 source.userText 时才回退 prompt', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(baseReq({ source: { im: 'x' } }));
     expect(outcome.status).toBe('ok');

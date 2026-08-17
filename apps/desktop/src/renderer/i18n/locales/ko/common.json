@@ -2610,8 +2610,8 @@
         "unsupported": "테마: 확장에는 유지되지만 Cindy는 Pi TUI 테마를 사용하지 않습니다."
       },
       "issues": {
-        "interactive-dialogs": "선택, 확인, 입력 또는 여러 줄 편집 대화상자는 취소되므로 이에 의존하는 흐름이 완료되지 않을 수 있습니다.",
-        "notifications": "Pi 알림은 표시되지 않습니다.",
+        "interactive-dialogs": "선택, 확인, 입력 및 여러 줄 편집은 Cindy 선택 카드로 표시됩니다. 타이머가 설정된 대화상자만 취소됩니다.",
+        "notifications": "Pi 알림은 Pi TUI 토스트 대신 Cindy 작업 메시지 기록에 추가됩니다.",
         "status-display": "Pi 작업 표시와 상태 표시줄 내용은 표시되지 않습니다.",
         "widgets": "Pi 편집기 위젯은 표시되지 않습니다.",
         "terminal-title": "터미널 창 제목 변경은 적용되지 않습니다.",

@@ -2595,8 +2595,8 @@
         "unsupported": "主题：会保留在扩展中，但 Cindy 不使用 Pi 的 TUI 主题。"
       },
       "issues": {
-        "interactive-dialogs": "选择、确认、输入或多行编辑对话框会被取消，依赖这些交互的流程可能无法完成。",
-        "notifications": "Pi 的通知提示不会显示。",
+        "interactive-dialogs": "选择、确认、输入和多行编辑会显示为 Cindy 选择卡；只有设置了定时的对话框会取消。",
+        "notifications": "Pi 通知会写入 Cindy 任务消息流，不会显示为 Pi TUI 浮层提示。",
         "status-display": "Pi 的工作提示和状态栏内容不会显示。",
         "widgets": "Pi 的编辑器挂件不会显示。",
         "terminal-title": "修改终端窗口标题不会生效。",

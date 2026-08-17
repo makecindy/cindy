@@ -52,6 +52,10 @@ const COMMAND_FORCE_SETTLE_MS = 1_000;
 const PACKAGE_MUTATION_LOCK_WAIT_MS = COMMAND_TIMEOUT_MS + 60_000;
 const MAX_COMMAND_OUTPUT_BYTES = 128 * 1024;
 const MAX_SOURCE_LENGTH = 2_048;
+const MAX_DISPLAY_NAME_BYTES = 256;
+const MAX_DISPLAY_VERSION_BYTES = 128;
+const MAX_DISPLAY_DESCRIPTION_BYTES = 1_024;
+const DISPLAY_TRUNCATION_MARKER = '…';
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSPECTION_METADATA_BYTES = 2 * 1024 * 1024;
 const MAX_MANIFEST_ENTRIES = 256;
@@ -393,6 +397,21 @@ function boundedAppend(current: string, chunk: Buffer): string {
     ? next
     : next.subarray(next.length - MAX_COMMAND_OUTPUT_BYTES)
   ).toString('utf8');
+}
+
+function truncateDisplayField(value: string, maxBytes: number): string {
+  const trimmed = value.trim();
+  if (Buffer.byteLength(trimmed, 'utf8') <= maxBytes) return trimmed;
+  const budget = maxBytes - Buffer.byteLength(DISPLAY_TRUNCATION_MARKER, 'utf8');
+  let bytes = 0;
+  let truncated = '';
+  for (const character of trimmed) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (bytes + characterBytes > budget) break;
+    truncated += character;
+    bytes += characterBytes;
+  }
+  return `${truncated}${DISPLAY_TRUNCATION_MARKER}`;
 }
 
 export async function runPiPackageCommand(
@@ -875,7 +894,13 @@ async function collectSkills(input: string[], budget: InspectionBudget): Promise
       if (error instanceof PiPackageInspectionLimitError) throw error;
       // Filename fallback remains usable.
     }
-    skills.push({ path: file, name, ...(description ? { description } : {}) });
+    skills.push({
+      path: file,
+      name: truncateDisplayField(name, MAX_DISPLAY_NAME_BYTES),
+      ...(description
+        ? { description: truncateDisplayField(description, MAX_DISPLAY_DESCRIPTION_BYTES) }
+        : {}),
+    });
   }
   return skills;
 }
@@ -914,7 +939,10 @@ async function collectExtensions(input: string[], budget: InspectionBudget): Pro
 function resourceView(kind: Exclude<PiPackageResourceKind, 'extension'>, file: string): PiPackageResourceView {
   return {
     kind,
-    name: kind === 'skill' ? path.basename(path.dirname(file)) : path.basename(file),
+    name: truncateDisplayField(
+      kind === 'skill' ? path.basename(path.dirname(file)) : path.basename(file),
+      MAX_DISPLAY_NAME_BYTES,
+    ),
     compatibility: kind === 'theme' ? 'unsupported' : 'supported',
   };
 }
@@ -924,7 +952,7 @@ async function extensionResourceView(root: string, file: string): Promise<PiPack
     const analysis = await analyzePiExtensionCompatibility(file, root);
     return {
       kind: 'extension',
-      name: path.basename(file),
+      name: truncateDisplayField(path.basename(file), MAX_DISPLAY_NAME_BYTES),
       compatibility: analysis.compatibility,
       ...(analysis.compatibilityIssues.length > 0
         ? { compatibilityIssues: analysis.compatibilityIssues }
@@ -934,7 +962,7 @@ async function extensionResourceView(root: string, file: string): Promise<PiPack
   } catch {
     return {
       kind: 'extension',
-      name: path.basename(file),
+      name: truncateDisplayField(path.basename(file), MAX_DISPLAY_NAME_BYTES),
       compatibility: 'unknown',
       compatibilityIssues: ['analysis-incomplete'],
     };
@@ -945,16 +973,31 @@ async function promptCommand(
   file: string,
   budget: InspectionBudget,
 ): Promise<{ name: string; description: string }> {
-  const name = path.basename(file, path.extname(file));
+  const name = truncateDisplayField(
+    path.basename(file, path.extname(file)),
+    MAX_DISPLAY_NAME_BYTES,
+  );
   try {
     const parsed = matter(await readInspectionMetadata(file, budget));
     const description = typeof parsed.data.description === 'string'
       ? parsed.data.description.trim()
       : '';
-    return { name, description: description || `Pi prompt template: ${name}` };
+    return {
+      name,
+      description: truncateDisplayField(
+        description || `Pi prompt template: ${name}`,
+        MAX_DISPLAY_DESCRIPTION_BYTES,
+      ),
+    };
   } catch (error) {
     if (error instanceof PiPackageInspectionLimitError) throw error;
-    return { name, description: `Pi prompt template: ${name}` };
+    return {
+      name,
+      description: truncateDisplayField(
+        `Pi prompt template: ${name}`,
+        MAX_DISPLAY_DESCRIPTION_BYTES,
+      ),
+    };
   }
 }
 
@@ -1057,7 +1100,7 @@ async function inspectPackage(
         rawSource: pkg.source,
         view: {
           source: displaySource,
-          name: path.basename(root),
+          name: truncateDisplayField(path.basename(root), MAX_DISPLAY_NAME_BYTES),
           enabled,
           ...(requiresExtensionApproval ? { requiresExtensionApproval: true } : {}),
           resources,
@@ -1084,7 +1127,13 @@ async function inspectPackage(
     const runtimeRequirements = evaluatePiRuntimeRequirements(
       manifest.peerDependencies,
       await getCurrentPiVersion(),
-    );
+    ).map((requirement) => ({
+      ...requirement,
+      range: truncateDisplayField(requirement.range, MAX_DISPLAY_NAME_BYTES),
+      ...(requirement.currentVersion
+        ? { currentVersion: truncateDisplayField(requirement.currentVersion, MAX_DISPLAY_VERSION_BYTES) }
+        : {}),
+    }));
     const declared = manifest.pi;
     const extensionEntries = normalizeManifestEntries(declared?.extensions, ['extensions']);
     const skillEntries = normalizeManifestEntries(declared?.skills, ['skills']);
@@ -1141,8 +1190,10 @@ async function inspectPackage(
       rawSource: pkg.source,
       view: {
         source: displaySource,
-        name: manifest.name?.trim() || displaySource,
-        ...(manifest.version?.trim() ? { version: manifest.version.trim() } : {}),
+        name: truncateDisplayField(manifest.name?.trim() || displaySource, MAX_DISPLAY_NAME_BYTES),
+        ...(manifest.version?.trim()
+          ? { version: truncateDisplayField(manifest.version, MAX_DISPLAY_VERSION_BYTES) }
+          : {}),
         enabled,
         ...(requiresExtensionApproval ? { requiresExtensionApproval: true } : {}),
         resources,
@@ -1391,22 +1442,36 @@ function projectPackageSource(source: string): PackageSourceProjection {
   const gitPrefix = source.startsWith('git:') ? 'git:' : '';
   const urlSource = gitPrefix ? source.slice(gitPrefix.length) : source;
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(urlSource)) {
-    return { displaySource: source, unsafe: false };
+    return {
+      displaySource: truncateDisplayField(source, MAX_SOURCE_LENGTH),
+      unsafe: false,
+    };
   }
   let parsed: URL;
   try {
     parsed = new URL(urlSource);
   } catch {
     const scheme = urlSource.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1] ?? 'url';
-    return { displaySource: `${gitPrefix}${scheme}://[invalid-source]`, unsafe: true };
+    return {
+      displaySource: truncateDisplayField(`${gitPrefix}${scheme}://[invalid-source]`, MAX_SOURCE_LENGTH),
+      unsafe: true,
+    };
   }
   const unsafe = Boolean(parsed.username || parsed.password || parsed.search || parsed.hash);
-  if (!unsafe) return { displaySource: source, unsafe: false };
+  if (!unsafe) {
+    return {
+      displaySource: truncateDisplayField(source, MAX_SOURCE_LENGTH),
+      unsafe: false,
+    };
+  }
   parsed.username = '';
   parsed.password = '';
   parsed.search = '';
   parsed.hash = '';
-  return { displaySource: `${gitPrefix}${parsed.toString()}`, unsafe: true };
+  return {
+    displaySource: truncateDisplayField(`${gitPrefix}${parsed.toString()}`, MAX_SOURCE_LENGTH),
+    unsafe: true,
+  };
 }
 
 function redactPackageCommandMessage(message: string): string {
