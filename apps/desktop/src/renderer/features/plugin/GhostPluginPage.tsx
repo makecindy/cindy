@@ -1723,7 +1723,11 @@ export function GhostPluginPage({
                                 item={item}
                                 busy={marketBusyId !== null}
                                 onSelect={() => void handleSelectMarket(item.pluginId)}
-                                onInstall={() => void handleInstallMarketItem(item.pluginId)}
+                                onInstall={
+                                  mode !== 'signed-out'
+                                    ? () => void handleInstallMarketItem(item.pluginId)
+                                    : undefined
+                                }
                                 onIconLoadError={handleMarketIconLoadError}
                               />
                             ))}
@@ -1739,7 +1743,11 @@ export function GhostPluginPage({
                           item={item}
                           busy={marketBusyId !== null}
                           onSelect={() => void handleSelectMarket(item.pluginId)}
-                          onInstall={() => void handleInstallMarketItem(item.pluginId)}
+                          onInstall={
+                            mode !== 'signed-out'
+                              ? () => void handleInstallMarketItem(item.pluginId)
+                              : undefined
+                          }
                           onIconLoadError={handleMarketIconLoadError}
                         />
                       ))}
