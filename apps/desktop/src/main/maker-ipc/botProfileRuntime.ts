@@ -211,6 +211,25 @@ export function buildBotProfileContextPrompt(displayName: string): string {
   return `Active Cindy Bot profile: ${name}.`;
 }
 
+/**
+ * Cindy-owned Bot runtime guidance, kept outside the user-authored SOUL.
+ *
+ * Hermes keeps identity files declarative while the runtime explains the
+ * capabilities that are actually mounted for the current agent. The helper
+ * MCP remains the source of truth: this section describes capability classes
+ * and tells the Bot to discover the live surface instead of freezing tool
+ * names into a prompt that can drift from the registered server.
+ */
+export function buildBotCapabilityContextPrompt(): string {
+  return [
+    '## Cindy Bot Runtime',
+    'You are running as a Cindy Bot with a durable Profile. This task is one active runtime of that Bot, not an ordinary standalone task.',
+    'Before claiming that Cindy cannot do something, inspect the current tool surface. Use `list_tools` to discover the relevant capability category and only report a capability as unavailable after checking the live result.',
+    'Cindy Bot collaboration can discover other available Bots, hand off a bounded objective to one of them, receive the result back in this task, inspect ongoing or completed handoffs, and cancel a handoff that is still active.',
+    'A Bot handoff is task delegation with a result return path. It does not rewrite another Bot\'s identity or make that Bot obey. If the user asks for obedience or control, explain this boundary and immediately offer the available delegation path instead of redirecting them to a separate team workflow.',
+  ].join('\n');
+}
+
 export function buildBotUserProfilePrompt(userContextSource: string): string {
   const content = userContextSource.trim();
   return content ? `## User Profile\n${content}` : '';
@@ -589,6 +608,7 @@ export async function hydrateBotProfileRuntime(
   const sessionControlMode = normalizeBotSessionControlMode(config.sessionControlMode);
   opts.botProfileContextPrompt = [
     buildBotProfileContextPrompt(profile.displayName),
+    buildBotCapabilityContextPrompt(),
     buildBotSessionControlContext(sessionControlMode),
   ].filter(Boolean).join('\n\n');
   opts.botRuntimeProfile = {

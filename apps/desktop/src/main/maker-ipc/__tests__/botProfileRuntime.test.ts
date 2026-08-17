@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildBotCapabilityContextPrompt,
   buildBotProfileContextPrompt,
   buildBotProfilePrompt,
   resolveBotMcpReferences,
@@ -43,6 +44,20 @@ describe('Bot Profile runtime prompt', () => {
     expect(buildBotProfileContextPrompt('Kitchen helper')).toBe(
       'Active Cindy Bot profile: Kitchen helper.',
     );
+  });
+
+  it('teaches every Bot to discover its live collaboration surface before denying it', () => {
+    const prompt = buildBotCapabilityContextPrompt();
+    expect(prompt).toContain('You are running as a Cindy Bot');
+    expect(prompt).toContain('Use `list_tools`');
+    expect(prompt).toContain('discover other available Bots');
+    expect(prompt).toContain('receive the result back in this task');
+    expect(prompt).toContain('inspect ongoing or completed handoffs');
+    expect(prompt).toContain('cancel a handoff that is still active');
+    expect(prompt).toContain('does not rewrite another Bot\'s identity');
+    expect(prompt).toContain('offer the available delegation path');
+    expect(prompt).not.toContain('delegate_to_bot');
+    expect(prompt).not.toContain('list_bot_delegations');
   });
 
   it('admits only Skills proven by the selected harness catalog', () => {

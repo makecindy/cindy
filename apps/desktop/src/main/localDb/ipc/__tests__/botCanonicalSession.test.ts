@@ -840,6 +840,10 @@ describe('Bot canonical Session lifecycle', () => {
 
     expect(snapshot?.sessionControlMode).toBe('coordinate');
     expect(opts.botProfilePrompt).not.toContain('Cindy Task Control');
+    expect(opts.botProfilePrompt).not.toContain('Cindy Bot Runtime');
+    expect(opts.botProfileContextPrompt).toContain('## Cindy Bot Runtime');
+    expect(opts.botProfileContextPrompt).toContain('Use `list_tools`');
+    expect(opts.botProfileContextPrompt).toContain('offer the available delegation path');
     expect(opts.botProfileContextPrompt).toContain('## Cindy Task Control');
     expect(opts.botProfileContextPrompt).toContain('permits coordination');
     const row = h
@@ -2168,7 +2172,7 @@ describe('Bot canonical Session lifecycle', () => {
     ).toBe('deleted');
   });
 
-  it('runs a Bot delegation in a separate target-owned child Session and returns the result', async () => {
+  it('wakes a target Bot without a canonical task, runs a child task, and returns the result', async () => {
     await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
       expectedCanonicalSessionId: null,
@@ -2183,6 +2187,11 @@ describe('Bot canonical Session lifecycle', () => {
         permissions: 'trusted',
       },
     });
+    expect(
+      h.sqlite!.prepare('SELECT canonical_session_id FROM bot_profiles WHERE id = ?').pluck().get(
+        'bot-2',
+      ),
+    ).toBeNull();
     const dispatch = vi.fn(
       async (params: { targetSessionId: string; onAccepted?: () => Promise<void> | void }) => {
         await params.onAccepted?.();

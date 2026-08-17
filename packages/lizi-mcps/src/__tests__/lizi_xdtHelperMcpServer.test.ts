@@ -99,4 +99,67 @@ describe("cindy_helper MCP server", () => {
       await server.close();
     }
   });
+
+  it("exposes Bot delegation through live discovery for a Bot-bound session", async () => {
+    const listBots = vi.fn(async () => ({
+      ok: true as const,
+      bots: [{ id: "bot-b", name: "Dash Bot" }],
+    }));
+    const delegateToBot = vi.fn(async () => ({
+      ok: true as const,
+      delegationId: "delegation-1",
+      childSessionId: "bot-child-session",
+      status: "running",
+    }));
+    const listDelegations = vi.fn(async () => ({ ok: true as const, delegations: [] }));
+    const cancelDelegation = vi.fn(async () => ({
+      ok: true as const,
+      delegationId: "delegation-1",
+      childSessionId: "bot-child-session",
+    }));
+    const server = createXdtHelperMcpServer(
+      {
+        botDelegation: {
+          listBots,
+          delegateToBot,
+          listDelegations,
+          cancelDelegation,
+        },
+      },
+      {
+        agentKind: "claude-code",
+        workingDir: "/repo",
+        sessionId: "bot-parent-session",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cindy-bot-delegation-test", version: "0.0.0" });
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const discovered = parsePayload(
+        await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
+      );
+      expect(discovered).toMatchObject({ ok: true, category: "bots" });
+      expect((discovered.tools as Array<{ name: string }>).map((tool) => tool.name).sort()).toEqual([
+        "cancel_bot_delegation",
+        "delegate_to_bot",
+        "list_bot_delegations",
+        "list_bots",
+      ]);
+
+      const listed = await client.callTool({
+        name: "call_tool",
+        arguments: { name: "list_bots", args: {} },
+      });
+      expect(parsePayload(listed)).toMatchObject({
+        ok: true,
+        bots: [{ id: "bot-b", name: "Dash Bot" }],
+      });
+      expect(listBots).toHaveBeenCalledWith({ callerSessionId: "bot-parent-session" });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
