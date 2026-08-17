@@ -265,7 +265,7 @@ export function ErrorBanner({
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
-    agentKind === 'codex' && usageLimitRecovery !== null && usageLimitRecovery !== undefined;
+    agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
   const usageLimitResetAt =
     usageLimitRecovery?.resetAtMs && Number.isFinite(usageLimitRecovery.resetAtMs)
       ? new Intl.DateTimeFormat(i18n?.resolvedLanguage ?? i18n?.language, {
@@ -276,6 +276,8 @@ export function ErrorBanner({
   const isOrganizationCodexPlan = ['business', 'enterprise', 'team'].includes(
     usageLimitRecovery?.planType?.toLowerCase() ?? '',
   );
+  const canContinueAfterUsageReset =
+    Boolean(onContinueAfterUsageReset) && (agentKind !== 'codex' || isCodexUsageLimitError);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
@@ -673,7 +675,7 @@ export function ErrorBanner({
           {t('chat.errorBanner.silentStopContinue')}
         </button>
       )}
-      {onContinueAfterUsageReset && (
+      {canContinueAfterUsageReset && onContinueAfterUsageReset && (
         <button
           type="button"
           data-split-pane-route-action=""

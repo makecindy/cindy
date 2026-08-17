@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import { ErrorBanner } from '../ErrorBanner';
+import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
 import { useCodexAuth } from '@/hooks/useCodexAuth';
 import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
 import {
@@ -136,12 +137,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
   it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
     const error = `LAZY_CREATE_FAILED: ${CODEX_RESUME_NOT_READY_WIRE_MESSAGE}`;
     render(
-      <ErrorBanner
-        error={error}
-        retryText="retry this turn"
-        onRetry={vi.fn()}
-        agentKind="codex"
-      />,
+      <ErrorBanner error={error} retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" />,
     );
 
     expect(screen.getByText('chat.errorBanner.codexResumeNotReady')).toBeTruthy();
@@ -812,17 +808,17 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     const onContinueAfterUsageReset = vi.fn();
     const { rerender } = render(
       <ErrorBanner
-        error="Usage limit reached"
+        error="usageLimitExceeded"
         retryText="retry this turn"
         onRetry={vi.fn()}
         agentKind="codex"
         onContinueAfterUsageReset={onContinueAfterUsageReset}
-        usageLimitRecovery={{ resetAtMs: null }}
+        usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
       />,
     );
 
     expect(screen.getByText('chat.errorBanner.codexUsageLimit')).toBeTruthy();
-    expect(screen.queryByText('Usage limit reached')).toBeNull();
+    expect(screen.queryByText('usageLimitExceeded')).toBeNull();
     const continueButton = screen.getByRole('button', {
       name: 'chat.errorBanner.continueAfterReset',
     });
@@ -849,12 +845,52 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         agentKind="codex"
         usageLimitRecovery={{
           resetAtMs: Date.parse('2026-08-31T23:58:29.000Z'),
+          isAccountUsageLimit: true,
           planType: 'business',
         }}
       />,
     );
 
     expect(screen.getByText('chat.errorBanner.codexOrganizationUsageLimitWithReset')).toBeTruthy();
+    expect(screen.queryByText(rawError)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+    expect(screen.getByText(rawError)).toBeTruthy();
+  });
+
+  it('keeps a transient Codex 429 on its normal rate-limit path', () => {
+    const rawError = 'Too many requests (429)';
+    render(
+      <ErrorBanner
+        error={rawError}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        onContinueAfterUsageReset={vi.fn()}
+        usageLimitRecovery={{ resetAtMs: null }}
+      />,
+    );
+
+    expect(screen.getByText(rawError)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.codexUsageLimit')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
+    ).toBeNull();
+  });
+
+  it('rebuilds the organization usage-limit hint for a persisted error tail', () => {
+    const rawError =
+      'API Error: Request rejected (429) · {"error":{"type":"usage_limit_reached","plan_type":"business"}}';
+    render(
+      <ErrorTailErrorBanner
+        errorText={rawError}
+        onContinue={vi.fn()}
+        onDismiss={vi.fn()}
+        agentKind="codex"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexOrganizationUsageLimit')).toBeTruthy();
     expect(screen.queryByText(rawError)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));

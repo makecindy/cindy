@@ -9,6 +9,8 @@
 
 export interface UsageLimitRecoveryHint {
   resetAtMs: number | null;
+  /** True only when upstream explicitly identifies account-cycle exhaustion, not a generic 429. */
+  isAccountUsageLimit?: boolean;
   /** Upstream subscription plan when the provider exposes it (for example `business`). */
   planType?: string;
 }
@@ -34,6 +36,7 @@ const RETRY_AFTER_SECONDS_KEYS = new Set([
   'retry_after_seconds',
 ]);
 const PLAN_TYPE_KEYS = new Set(['plantype', 'plan_type']);
+const EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN = /\busage_limit_reached\b|\busageLimitExceeded\b/;
 
 function asRecord(value: unknown): UnknownRecord | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -291,9 +294,11 @@ export function extractUsageLimitRecoveryHint(
     return null;
   }
 
+  const isAccountUsageLimit = EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN.test(text);
   const isUsageLimit =
     sdkError === 'rate_limit' ||
     codexErrorInfo === 'usageLimitExceeded' ||
+    isAccountUsageLimit ||
     root.usageLimit === true ||
     status === 429 ||
     /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted)|you(?:'|’)ve\s+hit\s+your\s+(?:(?:session|weekly)\s+)?limit)\b/i.test(
@@ -304,6 +309,7 @@ export function extractUsageLimitRecoveryHint(
   const planType = parsePlanType(records, text);
   return {
     resetAtMs: parseStructuredResetAt(records, nowMs) ?? parseTextResetAt(text, nowMs),
+    ...(isAccountUsageLimit ? { isAccountUsageLimit: true } : {}),
     ...(planType ? { planType } : {}),
   };
 }
