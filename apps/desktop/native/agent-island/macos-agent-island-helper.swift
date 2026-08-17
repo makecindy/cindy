@@ -2746,12 +2746,7 @@ struct IdleIslandView: View {
         idleCreateEntry
 
         HStack {
-          Color.clear
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture {
-              eventSink(["type": "collapse"])
-            }
+          Spacer(minLength: 0)
           ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
         }
         .padding(.horizontal, expandedIslandCardHorizontalPadding)
@@ -2801,12 +2796,6 @@ struct IdleIslandView: View {
         .frame(width: sideWidth, alignment: .leading)
         .clipped()
       Spacer(minLength: layout.notchWidth)
-        .contentShape(Rectangle())
-        .onTapGesture {
-          if layout.expanded {
-            eventSink(["type": "collapse"])
-          }
-        }
       Color.clear
         .frame(width: sideWidth)
     }
@@ -2918,7 +2907,7 @@ struct ExpandedIslandTopBar: View {
   private var regularBody: some View {
     HStack(spacing: 8) {
       leadingContent
-      compactCollapseHit
+      Spacer(minLength: 8)
       ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
     }
     .frame(maxWidth: .infinity, minHeight: expandedIslandTopBarHeight, alignment: .center)
@@ -2933,7 +2922,7 @@ struct ExpandedIslandTopBar: View {
           .frame(width: sideWidth, alignment: .leading)
           .clipped()
 
-        compactCollapseHit
+        Color.clear
           .frame(width: notchWidth)
 
         ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
@@ -2967,15 +2956,6 @@ struct ExpandedIslandTopBar: View {
         }
       }
     }
-  }
-
-  private var compactCollapseHit: some View {
-    Color.clear
-      .frame(minWidth: 8, maxWidth: .infinity, maxHeight: .infinity)
-      .contentShape(Rectangle())
-      .onTapGesture {
-        eventSink(["type": "collapse"])
-      }
   }
 }
 
@@ -5277,6 +5257,8 @@ final class AgentIslandController {
       return
     }
     pendingMoveInteraction = nil
+    // Collapse is owned here, not by SwiftUI top-bar taps, so the hit stays
+    // inside the original compact footprint instead of the whole spacer.
     if shouldTreatAsCompactClick(interaction: interaction, screenPoint: screenPoint) {
       eventSink(["type": "expand"])
     } else if shouldTreatAsCompactCollapseClick(interaction: interaction, screenPoint: screenPoint) {
