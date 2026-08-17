@@ -7,6 +7,7 @@ import {
   insertSlashCommand,
   mergeSlashCommands,
   projectSlashCommandsInText,
+  restoreSlashCommandRuntimeAlias,
   serializeAtResource,
   slashCommandDisplayLabel,
   slashCommandRuntimePrefixLength,
@@ -106,9 +107,14 @@ describe('shared composer palette model', () => {
     expect(slashCommandDisplayLabel('/skill:git')).toBe('/git');
     expect(slashCommandDisplayLabel('/git')).toBe('/git');
     expect(slashCommandDisplayLabel('/compact')).toBe('/compact');
-    expect(projectSlashCommandsInText(['/skill:git follow-up', '/skill:help'].join('\n'))).toBe(
-      ['/git follow-up', '/help'].join('\n'),
+    expect(projectSlashCommandsInText('/skill:git follow-up')).toBe('/skill:git follow-up');
+    expect(projectSlashCommandsInText('/skill:git follow-up', [{ start: 0, end: 10 }])).toBe(
+      '/git follow-up',
     );
+    expect(
+      restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/git please review'),
+    ).toBe('/skill:git please review');
+    expect(restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/help')).toBe('/help');
     expect(
       slashCommandRuntimePrefixLength('/skill:git', {
         name: 'git',

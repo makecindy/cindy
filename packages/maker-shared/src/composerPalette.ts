@@ -99,7 +99,6 @@ export function insertSlashCommand(
 
 /** Pi runtime invocation is `/skill:name`. Display layer always shows `/name`. */
 const PI_SKILL_RUNTIME_TOKEN_RE = /^\/skill:(\S+)$/i;
-const PI_SKILL_RUNTIME_IN_TEXT_RE = /(^|\n)\/skill:(\S+)/gi;
 const PI_SKILL_RUNTIME_PREFIX = 'skill:';
 
 /** Project a stored slash token (`/skill:git` or `/git`) to the human label. */
@@ -108,9 +107,43 @@ export function slashCommandDisplayLabel(commandText: string): string {
   return match ? `/${match[1]}` : commandText;
 }
 
-/** Project every line-start `/skill:name` in a message body to `/name`. */
-export function projectSlashCommandsInText(text: string): string {
-  return text.replace(PI_SKILL_RUNTIME_IN_TEXT_RE, '$1/$2');
+/**
+ * Project confirmed slash runs in a message body to the human label.
+ * Without ranges, leave the text untouched — ordinary `/skill:foo` prose
+ * must not be rewritten.
+ */
+export function projectSlashCommandsInText(
+  text: string,
+  ranges?: readonly { start: number; end: number }[],
+): string {
+  if (!ranges || ranges.length === 0) return text;
+  let result = text;
+  const ordered = [...ranges].sort((a, b) => b.start - a.start);
+  for (const range of ordered) {
+    if (range.start < 0 || range.end > result.length || range.end <= range.start) continue;
+    const token = result.slice(range.start, range.end);
+    const display = slashCommandDisplayLabel(token);
+    if (display === token) continue;
+    result = `${result.slice(0, range.start)}${display}${result.slice(range.end)}`;
+  }
+  return result;
+}
+
+/**
+ * Put a displayed `/git ...` back to the stored `/skill:git ...` when the
+ * user is resending an edited Pi skill message. Leave other commands alone.
+ */
+export function restoreSlashCommandRuntimeAlias(
+  originalText: string,
+  editedText: string,
+): string {
+  const originalCommand = originalText.match(/^\/(\S+)/)?.[1];
+  const editedCommand = editedText.match(/^\/(\S+)/)?.[1];
+  if (!originalCommand || !editedCommand) return editedText;
+  if (!originalCommand.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return editedText;
+  const humanName = originalCommand.slice(PI_SKILL_RUNTIME_PREFIX.length);
+  if (!humanName || editedCommand.toLowerCase() !== humanName.toLowerCase()) return editedText;
+  return `/${originalCommand}${editedText.slice(editedCommand.length + 1)}`;
 }
 
 /**

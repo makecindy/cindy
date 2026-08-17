@@ -1146,9 +1146,13 @@ export function UserMessage({
   // copy text per V1.2: original text + (if files) "\n\n附件：a.md, b.md"
   // ghost-summon-card:copy 给用户的是"他自己的话"(剥离机器追加段);
   // 追加段原文在卡片展开区可查可选中。
-  const copyBody = projectSlashCommandsInText(
-    quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody,
-  );
+  const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  const copyBody = projectSlashCommandsInText(visibleSource, slashCommandRanges);
+  const editSubmitText = quotesEncoded
+    ? ghostBody
+    : copyBody !== visibleSource
+      ? visibleSource
+      : undefined;
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;
@@ -1476,7 +1480,7 @@ export function UserMessage({
                 sessionId={sessionId}
                 messageClientId={messageClientId}
                 initialText={copyBody}
-                initialSubmitText={quotesEncoded ? ghostBody : undefined}
+                initialSubmitText={editSubmitText}
                 images={images}
                 files={files}
                 workingDir={workingDir}

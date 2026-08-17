@@ -84,10 +84,14 @@ describe('messageActions', () => {
     expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'user' })).toBe(false);
   });
 
-  it('projects Pi runtime /skill: aliases when copying a user message', () => {
+  it('projects confirmed Pi runtime /skill: aliases when copying a user message', () => {
     expect(buildMobileMessageCopyText(normalizedMessage({
       body: '/skill:git follow-up review',
+      slashCommandRanges: [{ start: 0, end: 10 }],
     }))).toBe('/git follow-up review');
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git is just prose here',
+    }))).toBe('/skill:git is just prose here');
   });
 
   it('builds desktop-compatible copy text with attachment names', () => {

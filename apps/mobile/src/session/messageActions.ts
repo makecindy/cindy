@@ -29,7 +29,7 @@ export function buildMobileMessageCopyText(message: NormalizedRemoteMessage): st
   const rawBody = message.quotesEncoded
     ? stripChatQuoteMarkerLines(message.body)
     : message.body;
-  const body = projectSlashCommandsInText(rawBody);
+  const body = projectSlashCommandsInText(rawBody, message.slashCommandRanges);
   const parts = [body];
   if (message.secondaryBody) parts.push(message.secondaryBody);
   const attachments = message.attachments?.map((item) => item.name).filter(Boolean) ?? [];
