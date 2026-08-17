@@ -2626,6 +2626,9 @@ export function NewMakerDraftRoute() {
         const localProjectKey = normalizeProjectKey(path);
         if (localProjectKey?.startsWith('local:')) {
           try {
+            // Selecting a folder commits its project restoration. The fence below only prevents
+            // an older async completion from overwriting a newer draft target; rolling shared
+            // visibility back could re-hide a project restored by another window.
             await requestSidebarProjectRestore(localProjectKey);
           } catch (err) {
             log.warn('[new-maker] restore selected project failed', err);

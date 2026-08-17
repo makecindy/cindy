@@ -1,6 +1,12 @@
 import type { Session } from '@/lib/ccAgent.types';
 
 import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
+import {
+  includeProjectInFilter,
+  loadProjects,
+  persistProjects,
+  type FilterProjects,
+} from '../hooks/helpers/sidebarFilterCore';
 import { sessionActivityMs } from './dateSessionGrouping';
 import { groupSessions, projectIdentityKeyForSession } from './projectGrouping';
 import { isProjectHidden } from './sidebarProjectVisibility';
@@ -37,10 +43,12 @@ export function registerSidebarProjectRestoreHandler(
   };
 }
 
-export function requestSidebarProjectRestore(projectKey: string): Promise<boolean> {
+export function requestSidebarProjectRestore(
+  projectKey: string,
+  fallback: SidebarProjectRestoreHandler = restoreSelectedHiddenProjectWithoutSidebarOwner,
+): Promise<boolean> {
   const handler = sidebarProjectRestoreHandler;
-  if (!handler) return Promise.resolve(false);
-  return handler(projectKey);
+  return (handler ?? fallback)(projectKey);
 }
 
 type RestoreVendorPredicate = (session: Pick<Session, 'agentKind'>) => boolean;
@@ -170,4 +178,53 @@ export async function restoreSelectedHiddenProject({
     findMatchingProjectKey(projectKey, getCurrentProjectKeys(), localPlatform) ?? projectKey,
   );
   return wasHidden;
+}
+
+interface RestoreSelectedHiddenProjectWithoutSidebarOwnerOptions {
+  projectKey: string;
+  hiddenProjectKeys: ReadonlySet<string>;
+  setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
+  loadFilterProjects: () => FilterProjects;
+  persistFilterProjects: (projects: FilterProjects) => void;
+  localPlatform: string;
+}
+
+/**
+ * Restores a selected project when the secondary window has not mounted its
+ * collapsed sidebar. The next sidebar mount hydrates the persisted filter.
+ */
+export async function restoreSelectedHiddenProjectWithoutMountedSidebar({
+  projectKey,
+  hiddenProjectKeys,
+  setProjectHidden,
+  loadFilterProjects,
+  persistFilterProjects,
+  localPlatform,
+}: RestoreSelectedHiddenProjectWithoutSidebarOwnerOptions): Promise<boolean> {
+  return restoreSelectedHiddenProject({
+    projectKey,
+    hiddenProjectKeys,
+    setProjectHidden,
+    getCurrentProjectKeys: () => new Set(),
+    ensureProjectIncluded: (selectedProjectKey) => {
+      const current = loadFilterProjects();
+      const next = includeProjectInFilter(current, selectedProjectKey, localPlatform);
+      if (next !== current) persistFilterProjects(next);
+    },
+    localPlatform,
+  });
+}
+
+function restoreSelectedHiddenProjectWithoutSidebarOwner(projectKey: string): Promise<boolean> {
+  const snapshot = window.electronAPI.sidebarSettings.loadSnapshot();
+  const localPlatform = window.electronAPI.platform;
+  return restoreSelectedHiddenProjectWithoutMountedSidebar({
+    projectKey,
+    hiddenProjectKeys: new Set(snapshot.hiddenProjectKeys),
+    setProjectHidden: (selectedProjectKey, hidden) =>
+      window.electronAPI.sidebarSettings.setProjectHidden(selectedProjectKey, hidden, snapshot),
+    loadFilterProjects: () => loadProjects(snapshot.dataOwnerId),
+    persistFilterProjects: (projects) => persistProjects(projects, snapshot.dataOwnerId),
+    localPlatform,
+  });
 }

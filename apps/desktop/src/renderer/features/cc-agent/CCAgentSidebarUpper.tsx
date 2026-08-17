@@ -202,6 +202,7 @@ import { hasSessionSelectionModifier, type SessionClickModifiers } from './sideb
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
   DIALOGUE_FILTER_KEY,
+  projectFilterIncludes,
   mergeVisibleReorder,
   normalizeManualPinnedOrder,
 } from './hooks/helpers/sidebarFilterCore';
@@ -1478,7 +1479,9 @@ function ExpandedView({
     );
     if (filter.projectsAsSet === null) return notHidden;
     const allowed = filter.projectsAsSet;
-    return notHidden.filter((p) => allowed.has(p.projectKey));
+    return notHidden.filter((project) =>
+      projectFilterIncludes(allowed, project.projectKey, localPlatform),
+    );
   }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
