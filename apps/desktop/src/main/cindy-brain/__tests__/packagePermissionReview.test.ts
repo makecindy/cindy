@@ -126,4 +126,27 @@ describe('marketPackageOauthIdentityChanged', () => {
       ),
     ).toBe(false);
   });
+
+  it('reviews when the catalog omitted clientId but the real package introduces one', () => {
+    expect(
+      marketPackageOauthIdentityChanged(
+        oauthManifest(''),
+        oauthManifest('real-client'),
+        oauthManifest('real-client'),
+      ),
+    ).toBe(true);
+    expect(
+      marketPackageOauthIdentityChanged(oauthManifest(''), null, oauthManifest('real-client')),
+    ).toBe(true);
+  });
+
+  it('does not treat an installed empty clientId gaining a default as a migration', () => {
+    expect(
+      marketPackageOauthIdentityChanged(
+        oauthManifest('real-client'),
+        oauthManifest(''),
+        oauthManifest('real-client'),
+      ),
+    ).toBe(false);
+  });
 });

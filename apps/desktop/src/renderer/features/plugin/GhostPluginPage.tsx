@@ -888,7 +888,6 @@ export function GhostPluginPage({
           // 原位更新不切换来源(#2043):只有冲突替换显式走 runMarketInstallFlow。
           allowSourceReplacement: false,
         };
-        const installed = { ghost: null as InstalledGhost | null };
         const approved = await confirm({
           title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
           description: t('settings.ghosts.updateConfirm.body', {
@@ -899,19 +898,17 @@ export function GhostPluginPage({
           maxWidth: 520,
           confirmText: t('settings.ghosts.updateConfirm.confirm'),
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
-          pendingWork: async () => {
-            if (!isMarketBusyLeaseActive(marketBusyLease)) return;
-            installed.ghost = await installReviewedMarketPackage({
-              pluginId: next.pluginId,
-              options,
-            });
-          },
         });
-        if (!approved || !installed.ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        const ghost = await installReviewedMarketPackage({
+          pluginId: next.pluginId,
+          options,
+        });
+        if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
         toast.success(
           t('settings.ghosts.toast.updated', {
-            name: installed.ghost.manifest.name,
-            version: installed.ghost.manifest.version,
+            name: ghost.manifest.name,
+            version: ghost.manifest.version,
           }),
         );
         // 列表/详情共用此路径:成功后不切页面,方便连续点其它插件的更新。
@@ -1280,7 +1277,6 @@ export function GhostPluginPage({
           // 来源隔离(#2043):仅用户显式选择的冲突替换允许切换来源;更新与原位安装不切换。
           allowSourceReplacement: marketDetail.installState === 'conflict',
         };
-        const installed = { ghost: null as InstalledGhost | null };
         const confirmed = await confirm({
           title: isUpdate
             ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
@@ -1307,32 +1303,30 @@ export function GhostPluginPage({
             ? t('settings.ghosts.updateConfirm.cancel')
             : t('settings.ghosts.installConfirm.cancel'),
           autoFocusConfirm: true,
-          pendingWork: async () => {
-            if (!isMarketBusyLeaseActive(marketBusyLease)) return;
-            installed.ghost = await installReviewedMarketPackage({
-              pluginId: marketDetail.pluginId,
-              options,
-            });
-          },
         });
-        if (!confirmed || !installed.ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        const ghost = await installReviewedMarketPackage({
+          pluginId: marketDetail.pluginId,
+          options,
+        });
+        if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
         // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
         // 用"已更新"(生效状态未被改变),并留在当前页方便连续更新多个插件。
         toast.success(
           isUpdate
             ? t('settings.ghosts.toast.updated', {
-                name: installed.ghost.manifest.name,
-                version: installed.ghost.manifest.version,
+                name: ghost.manifest.name,
+                version: ghost.manifest.version,
               })
             : t('settings.ghosts.toast.installed', {
-                name: installed.ghost.manifest.name,
+                name: ghost.manifest.name,
               }),
         );
         if (shouldOpenInstalledDetailAfterMarketSuccess(isUpdate)) {
           setMarketDetail((current) =>
             current?.pluginId === marketDetail.pluginId ? null : current,
           );
-          setSelectedId(installed.ghost.manifest.id);
+          setSelectedId(ghost.manifest.id);
         } else {
           await refreshVisibleMarketDetail(marketDetail.pluginId).catch(() => undefined);
         }

@@ -50,7 +50,31 @@ export function marketPackageOauthIdentityChanged(
   ) {
     return true;
   }
-  return Boolean(
-    reviewed && changedBuiltinOauthClientSecretKeys(reviewed, actual).length > 0,
+  if (!reviewed) return false;
+  if (changedBuiltinOauthClientSecretKeys(reviewed, actual).length > 0) return true;
+  // 已装基线的空 clientId→默认值不算迁移(令牌仍有效)。已审预览清单则相反:
+  // 用户没见过的具体 clientId 必须再确认。
+  return reviewedOauthClientBecameConcrete(reviewed, actual);
+}
+
+function reviewedOauthClientBecameConcrete(
+  reviewed: GhostManifest,
+  actual: GhostManifest,
+): boolean {
+  if (reviewed.id !== actual.id) return false;
+  const reviewedSecrets = new Map(
+    (reviewed.network?.secrets ?? []).map((secret) => [secret.key, secret]),
   );
+  for (const current of actual.network?.secrets ?? []) {
+    if (current.source !== 'oauth' || !current.oauth) continue;
+    if (current.oauth.tokenBroker) continue;
+    const currentClientId = current.oauth.clientId?.trim() || null;
+    if (!currentClientId) continue;
+    const previous = reviewedSecrets.get(current.key);
+    if (previous?.source !== 'oauth' || !previous.oauth || previous.oauth.tokenBroker) {
+      continue;
+    }
+    if (!(previous.oauth.clientId?.trim() || null)) return true;
+  }
+  return false;
 }
