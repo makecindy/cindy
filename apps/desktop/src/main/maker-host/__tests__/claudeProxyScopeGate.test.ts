@@ -193,6 +193,24 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     }));
   });
 
+  it('内置 anthropic 会话上的裸 grok-4.6 拒绝进 SuperGrok,避免来源与记账分叉', async () => {
+    setSessionProvider('sess-grok', 'anthropic');
+    const transform = createModelRoutingTransform();
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ),
+    );
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(400, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'exclusive_xai_route_required' },
+    });
+  });
+
   it('显式自定义供应商的裸 grok-4.6 不被 SuperGrok bridge 改写成 xai/', async () => {
     setSessionProvider('sess-grok', 'my-litellm');
     const transform = createModelRoutingTransform();

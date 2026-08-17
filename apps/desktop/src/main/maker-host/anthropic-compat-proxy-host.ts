@@ -319,6 +319,17 @@ export function createModelRoutingTransform(): RoutingTransform {
     //    放在最前:优先级高于 per-session 供应商与 spawn 默认路由。
     //    ⚠ 本分支是订阅直连的**唯一注册点**:整块摘掉 = 订阅前缀请求 passthrough 到默认上游
     //    (预期 400/502,fail-open),不需要 revert 其它代码。
+    // 内置非 xAI 来源上的裸 Grok 不能偷走 SuperGrok 额度,否则会话仍记着 anthropic/openai/xd。
+    if (
+      !piSessionId
+      && isExclusiveXaiModelId(wireModel)
+      && !wireModel.startsWith(XAI_MODEL_PREFIX)
+      && (selectedProviderId === 'xd'
+        || selectedProviderId === 'anthropic'
+        || selectedProviderId === 'openai')
+    ) {
+      return refuseExclusiveXaiDefaultGateway(wireModel);
+    }
     // 显式自定义供应商 + 裸 grok id 必须走 ① 的用户上游,不能仅凭模型名劫持到 SuperGrok。
     // `xai/` / `chatgpt/` 前缀仍是订阅户口,按 per-request 进 bridge。
     if (

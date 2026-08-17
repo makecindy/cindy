@@ -4898,6 +4898,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               // 模型读取失败仍持久化 token/cache，模型显示为 unknown。
             }
             const pricingModel = normalizeModelIdForPricing(turnModel);
+            const isCustomProviderRoute = isUserProviderSession(session.id);
             const effectiveProvider =
               sessionProvider ??
               (pricingModel.startsWith(CHATGPT_MODEL_PREFIX)
@@ -4909,7 +4910,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               effectiveProvider === 'openai' ||
               effectiveProvider === 'anthropic' ||
               effectiveProvider === 'xai' ||
-              isSubscriptionDirectRoute(pricingModel);
+              (!isCustomProviderRoute && isSubscriptionDirectRoute(pricingModel));
             const turnUsageDetails = buildTurnUsageDetails({
               ...tokens,
               model: turnModel,
@@ -4942,7 +4943,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               // 自定义(source:'user')provider——本地 Ollama / 用户自付费兼容端点——即便
               // 模型 id 与 XD 目录重名,也不能套用 XD 网关定价当作 Cindy 消费入账;只记 token
               // (上方已入库),不写 money(codex review)。仅 xd / 默认网关与订阅路由计费。
-              const isCustomProviderRoute = isUserProviderSession(session.id);
               const pricing =
                 isSubscriptionValue || isCustomProviderRoute
                   ? null

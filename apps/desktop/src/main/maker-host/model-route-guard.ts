@@ -81,7 +81,9 @@ export function materializeExclusiveProviderRoute(
   if (providerId === 'xai') {
     return xai ? { kind: 'keep' } : { kind: 'reject' };
   }
-  if (providerId === 'xd') return { kind: 'reject' };
+  if (providerId === 'xd' || providerId === 'anthropic' || providerId === 'openai') {
+    return xai ? { kind: 'pin', providerId: 'xai' } : { kind: 'reject' };
+  }
   if (providerId) return { kind: 'keep' };
   return xai ? { kind: 'pin', providerId: 'xai' } : { kind: 'reject' };
 }
@@ -113,7 +115,15 @@ export function resolveExclusiveSetModelReroute(
   if (!rerouteProviderId) return requestedProviderId;
   if (!currentKnown) return requestedProviderId;
   if (requestedProviderId === null) return rerouteProviderId;
-  if (requestedProviderId === undefined && !currentProviderId) return rerouteProviderId;
+  if (
+    requestedProviderId === undefined
+    && (!currentProviderId
+      || currentProviderId === 'xd'
+      || currentProviderId === 'anthropic'
+      || currentProviderId === 'openai')
+  ) {
+    return rerouteProviderId;
+  }
   return requestedProviderId;
 }
 

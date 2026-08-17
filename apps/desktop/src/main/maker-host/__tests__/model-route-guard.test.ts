@@ -487,10 +487,21 @@ describe('materializeExclusiveProviderRoute', () => {
       .toEqual({ kind: 'pin', providerId: 'xai' });
   });
 
-  it('显式 xd 或 xAI 未连接 → reject,不把 Grok 送进默认网关', () => {
+  it('显式 xd 在 xAI 已连接时改绑 xAI,未连接才 reject', () => {
     expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'grok-4.6', 'xd'))
+      .toEqual({ kind: 'pin', providerId: 'xai' });
+    expect(materializeExclusiveProviderRoute(xaiViews({ xd: true, xai: false }), 'claude-code', 'grok-4.6', 'xd'))
       .toEqual({ kind: 'reject' });
     expect(materializeExclusiveProviderRoute(xaiViews({ xd: true, xai: false }), 'claude-code', 'grok-4.6', null))
+      .toEqual({ kind: 'reject' });
+  });
+
+  it('内置 anthropic/openai 上的裸 Grok 改绑 xAI,不能 keep', () => {
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'grok-4.6', 'anthropic'))
+      .toEqual({ kind: 'pin', providerId: 'xai' });
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'grok-4.6', 'openai'))
+      .toEqual({ kind: 'pin', providerId: 'xai' });
+    expect(materializeExclusiveProviderRoute(xaiViews({ xd: true, xai: false }), 'claude-code', 'grok-4.6', 'anthropic'))
       .toEqual({ kind: 'reject' });
   });
 
@@ -505,6 +516,7 @@ describe('materializeExclusiveProviderRoute', () => {
     expect(resolveSetModelGuardProviderId(undefined, 'my-litellm')).toBe('my-litellm');
     expect(resolveExclusiveSetModelReroute(undefined, 'my-litellm', 'xai')).toBeUndefined();
     expect(resolveExclusiveSetModelReroute(undefined, null, 'xai')).toBe('xai');
+    expect(resolveExclusiveSetModelReroute(undefined, 'anthropic', 'xai')).toBe('xai');
     expect(resolveExclusiveSetModelReroute(null, 'my-litellm', 'xai')).toBe('xai');
   });
 
