@@ -59,6 +59,7 @@ export interface PiSubagentTaskStatus {
     method: string;
     title?: string;
     message?: string;
+    placeholder?: string;
   };
   startedAt?: number;
   endedAt?: number;
@@ -482,6 +483,7 @@ async function writeRunControl(
     childId?: string;
     approvalId?: string;
     confirmed?: boolean;
+    value?: string;
   } = {},
 ): Promise<{ requestId: string; receiptFile: string }> {
   const requestId = randomUUID();
@@ -502,6 +504,7 @@ async function writeRunControl(
     ...(options.childId ? { childId: options.childId } : {}),
     ...(options.approvalId ? { approvalId: options.approvalId } : {}),
     ...(typeof options.confirmed === 'boolean' ? { confirmed: options.confirmed } : {}),
+    ...(typeof options.value === 'string' ? { value: options.value } : {}),
     acknowledge: true,
     requestedAt,
   });
@@ -580,6 +583,7 @@ export async function controlPiSubagentRuns(
     childId?: string;
     approvalId?: string;
     confirmed?: boolean;
+    value?: string;
   } = {},
 ): Promise<number> {
   const id = taskId.trim();
@@ -587,8 +591,17 @@ export async function controlPiSubagentRuns(
   if ((action === 'steer' || action === 'follow_up') && !options.message?.trim()) {
     throw new Error(`${action} requires a non-empty message`);
   }
-  if (action === 'approval' && (!options.approvalId || typeof options.confirmed !== 'boolean')) {
-    throw new Error('approval requires approvalId and confirmed');
+  if (
+    action === 'approval'
+    && (
+      !options.approvalId
+      || (
+        typeof options.confirmed !== 'boolean'
+        && (typeof options.value !== 'string' || options.value.length === 0 || options.value.length > 64)
+      )
+    )
+  ) {
+    throw new Error('approval requires approvalId and a confirmed or value response');
   }
   const runs = (await listPiSubagentRuns(root)).filter(
     (run) => {

@@ -271,6 +271,15 @@ describe('CreateWorkerPopover', () => {
     expect(initialTask.className).toContain('h-[96px]');
   });
 
+  it('labels the worker role as a name and exposes an explanation', () => {
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+
+    expect(screen.getByText('orca.createWorker.roleLabel')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'orca.createWorker.roleHintAria' }),
+    ).toBeTruthy();
+  });
+
   it('does not claim Auto-review for a device-link worker controlled by an older peer', () => {
     render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
 

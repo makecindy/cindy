@@ -50,6 +50,7 @@ async function makeFixture(options: {
   outputText?: string;
   chain?: boolean;
   approval?: boolean;
+  approvalMethod?: 'confirm' | 'input';
   modelError?: boolean;
   retryThenSucceed?: boolean;
   hangOnMessage?: string;
@@ -77,6 +78,7 @@ async function makeFixture(options: {
   await writeFile(bridgeFile, 'export default function () {}\n');
   await writeFile(permissionFile, '{"mode":"ask"}\n');
   const fixtureOutput = JSON.stringify(options.outputText ?? 'fixture result');
+  const approvalMethod = options.approvalMethod ?? 'confirm';
   const fixtureLifecycle = options.hang
     ? ''
     : options.modelError
@@ -132,14 +134,14 @@ process.stdin.on('data', (chunk) => {
       fs.appendFileSync(process.env.CINDY_TEST_PI_PROMPTS, JSON.stringify(command.message) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'response', command: 'prompt', success: true }) + '\\n');
       ${options.approval
-    ? `process.stdout.write(JSON.stringify({ type: 'extension_ui_request', id: 'approval-1', method: 'confirm', title: 'cindy:permission', message: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }) }) + '\\n');`
+    ? `process.stdout.write(JSON.stringify({ type: 'extension_ui_request', id: 'approval-1', method: ${JSON.stringify(approvalMethod)}, title: 'cindy:permission', ${approvalMethod === 'input' ? 'placeholder' : 'message'}: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }) }) + '\\n');`
     : `${options.hangOnMessage ? `if (command.message !== ${JSON.stringify(options.hangOnMessage)}) {` : ''}
       process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'read' }) + '\\n');
       ${fixtureLifecycle}
       ${options.hangOnMessage ? '}' : ''}`}
     }
     if (command.type === 'extension_ui_response' && command.id === 'approval-1') {
-      if (command.confirmed) {
+      if (command.confirmed || command.value === 'allow') {
         process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'write' }) + '\\n');
         process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
       }
@@ -550,6 +552,31 @@ describe('Cindy durable PI Subagent runner', () => {
       childId: pending.tasks[0]?.childId,
       approvalId: 'approval-1',
       confirmed: true,
+    })).resolves.toBe(1);
+    const completed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    expect(completed.tasks[0]?.output).toBe('fixture result');
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('forwards a source-aware child approval value through the durable mailbox', async () => {
+    const fixture = await makeFixture({ approval: true, approvalMethod: 'input' });
+    const pending = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.tasks[0]?.pendingApproval ? run : null;
+    });
+    expect(pending.tasks[0]?.pendingApproval).toMatchObject({
+      id: 'approval-1',
+      method: 'input',
+      title: 'cindy:permission',
+      placeholder: expect.stringContaining('"toolName":"write"'),
+    });
+    await expect(controlPiSubagentRuns(fixture.root, 'tool-fixture', 'approval', {
+      childId: pending.tasks[0]?.childId,
+      approvalId: 'approval-1',
+      value: 'allow',
     })).resolves.toBe(1);
     const completed = await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);

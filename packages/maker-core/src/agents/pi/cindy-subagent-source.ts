@@ -531,13 +531,15 @@ function managementResult(params) {
   return action === 'steer' ? 'Steer requested.' : 'Follow-up queued.';
 }
 
-function writeApprovalControl(runDir, childId, approvalId, confirmed) {
-  writeControlRequest(runDir, {
+function writeApprovalControl(runDir, childId, approvalId, response) {
+  const control = {
     action: 'approval',
     childId: childId,
     approvalId: approvalId,
-    confirmed: confirmed,
-  });
+  };
+  if (typeof response === 'string') control.value = response;
+  else control.confirmed = response === true;
+  writeControlRequest(runDir, control);
 }
 
 async function waitForDurableRun(launched, signal, ctx, onStatus) {
@@ -561,21 +563,29 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
         if (!approval || typeof approval.id !== 'string') continue;
         const key = String(task.childId) + ':' + approval.id;
         if (handledApprovals.has(key)) continue;
-        let confirmed = approvalDecisions.get(key);
-        if (typeof confirmed !== 'boolean') {
-          confirmed = false;
+        let response = approvalDecisions.get(key);
+        if (response === undefined) {
+          response = approval.method === 'input' ? 'system-deny' : false;
           try {
-            if (approval.method === 'confirm' && ctx && ctx.ui && typeof ctx.ui.confirm === 'function') {
-              confirmed = await ctx.ui.confirm(
+            if (approval.method === 'input' && ctx && ctx.ui && typeof ctx.ui.input === 'function') {
+              const value = await ctx.ui.input(
+                approval.title || 'cindy:permission',
+                approval.placeholder || '{}',
+              );
+              response = typeof value === 'string' && value.length > 0 ? value : 'system-deny';
+            } else if (approval.method === 'confirm' && ctx && ctx.ui && typeof ctx.ui.confirm === 'function') {
+              response = await ctx.ui.confirm(
                 approval.title || 'cindy:permission',
                 approval.message || '{}',
               );
             }
-          } catch (err) { confirmed = false; }
-          approvalDecisions.set(key, confirmed === true);
+          } catch (err) {
+            response = approval.method === 'input' ? 'system-deny' : false;
+          }
+          approvalDecisions.set(key, response);
         }
         try {
-          writeApprovalControl(launched.runDir, String(task.childId), approval.id, confirmed === true);
+          writeApprovalControl(launched.runDir, String(task.childId), approval.id, response);
           handledApprovals.add(key);
           approvalDecisions.delete(key);
         } catch (err) {

@@ -1717,6 +1717,40 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'explicit bash timeout returns Pi native timeout error and continues the turn',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-bash-timeout-'));
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('bash', {
+            command: 'node -e "setTimeout(() => {}, 10000)"',
+            timeout: 1,
+          }),
+          anthropicStreamBody('timeout turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        const { resolverTools, finalText } = await runPermissionTurn({
+          sessionId: 'perm-bash-timeout',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        expect(resolverTools).toEqual([]);
+        const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
+        expect(followUp.some((body) => body.includes('Command timed out after 1 seconds'))).toBe(
+          true,
+        );
+        expect(finalText).toContain('timeout turn finished');
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
     'bash child cannot inherit Pi proxy, MCP, BYOM, or permission-control env',
     { timeout: 60_000 },
     async () => {
@@ -1791,6 +1825,45 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(followUp.some((b) => b.includes('User denied this tool call via Cindy.'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'auto mode: an automatic review block is not reported as a user rejection',
+    { timeout: 60_000 },
+    async () => {
+      const tempRoot = mkdtempSync(path.join(tmpdir(), 'pi-auto-review-denial-copy-'));
+      const workingDir = path.join(tempRoot, 'workspace');
+      mkdirSync(workingDir);
+      const marker = path.join(tempRoot, 'must-not-exist.txt');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('write', { path: marker, content: 'must not land' }),
+          anthropicStreamBody('automatic denial observed'),
+        );
+        const deps = buildDeps();
+        deps.reviewAutoPermissionAction = async () => ({ verdict: 'block' });
+        const reqBefore = seenRequests.length;
+        const { resolverTools } = await runPermissionTurn({
+          sessionId: 'pi-auto-review-source-copy',
+          workingDir,
+          permissionMode: 'auto',
+          resolverBehavior: 'deny',
+          deps,
+        });
+
+        expect(resolverTools).toEqual([]);
+        expect(existsSync(marker)).toBe(false);
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('Cindy Auto-review denied this tool call.')))
+          .toBe(true);
+        expect(followUp.some((body) => body.includes('User denied this tool call via Cindy.')))
+          .toBe(false);
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
         scriptedResponses.length = 0;
       }
     },
@@ -2097,8 +2170,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     'auto mode: Subagent spawn is silent while a dangerous child tool call is still denied',
     { timeout: 120_000 },
     async () => {
-      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-auto-approval-'));
-      const marker = path.join(workingDir, 'must-not-exist.txt');
+      const tempRoot = mkdtempSync(path.join(tmpdir(), 'pi-subagent-auto-approval-'));
+      const workingDir = path.join(tempRoot, 'workspace');
+      mkdirSync(workingDir);
+      const marker = path.join(tempRoot, 'must-not-exist.txt');
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
@@ -2108,22 +2183,27 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           }),
           // Spawn itself is safe, but the worker's concrete side effect must return to the
           // parent approval surface. The resolver denies this command below.
-          anthropicToolUseBody('bash', { command: `printf denied > ${JSON.stringify(marker)}` }),
+          anthropicToolUseBody('write', { path: marker, content: 'must not land' }),
           anthropicStreamBody('the requested command was denied'),
           anthropicStreamBody('parent turn finished'),
         );
 
+        const deps = buildDeps();
+        deps.reviewAutoPermissionAction = async () => ({ verdict: 'block' });
         const { resolverTools } = await runPermissionTurn({
           sessionId: 'pi-subagent-auto-child-deny',
           workingDir,
           permissionMode: 'auto',
           resolverBehavior: 'deny',
+          deps,
         });
 
-        expect(resolverTools).toEqual(['bash']);
+        // Auto-review blocks the concrete child side effect silently. The child receives
+        // the source-aware reason through the durable mailbox (covered by the protocol tests).
+        expect(resolverTools).toEqual([]);
         expect(existsSync(marker)).toBe(false);
       } finally {
-        rmSync(workingDir, { recursive: true, force: true });
+        rmSync(tempRoot, { recursive: true, force: true });
         scriptedResponses.length = 0;
       }
     },

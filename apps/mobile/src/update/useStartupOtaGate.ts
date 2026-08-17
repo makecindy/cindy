@@ -11,6 +11,7 @@ import {
   type StartupOtaOutcome,
 } from './startupOtaUpdate';
 import { updateChannelRequestHeaders } from './canaryChannelStore';
+import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 import {
   clearOtaReloadGuardIfLaunched,
   readOtaReloadGuard,
@@ -49,7 +50,7 @@ function logStartupOtaLaunch(outcome: StartupOtaOutcome): void {
   );
 }
 
-export function useStartupOtaGate(isCanary = false): boolean {
+export function useStartupOtaGate(channel: UpdateChannel = 'release'): boolean {
   // 仅自建变体 + 非 dev + expo-updates 运行时可用才走热更门;其余一律直接放行。
   // 审核模式(清单 review 送审版本号命中当前二进制版本)本门关闭:启动不走 JS
   // 显式 check→fetch→reload,直接进主界面(expo-updates 原生层的后台静默检查是
@@ -59,7 +60,7 @@ export function useStartupOtaGate(isCanary = false): boolean {
   const enabled = IS_OTA_SELFHOST && !__DEV__ && Updates.isEnabled && !REVIEW_MODE;
   const [ready, setReady] = useState(!enabled);
   const started = useRef(false);
-  const configuredChannelRef = useRef<boolean | null>(null);
+  const configuredChannelRef = useRef<UpdateChannel | null>(null);
 
   const configureUpdateUrl = useCallback(() => {
     if (!OTA_SERVER_BASE_URL) {
@@ -67,24 +68,24 @@ export function useStartupOtaGate(isCanary = false): boolean {
     }
     Updates.setUpdateURLAndRequestHeadersOverride({
       updateUrl: `${OTA_SERVER_BASE_URL}/manifest`,
-      requestHeaders: updateChannelRequestHeaders(isCanary),
+      requestHeaders: updateChannelRequestHeaders(channel),
     });
-    configuredChannelRef.current = isCanary;
-  }, [isCanary]);
+    configuredChannelRef.current = channel;
+  }, [channel]);
 
   // feature-flags 在登录/切账号后可能更新 channel；启动检查只跑一次，但
   // expo-updates 仍必须马上切换 request header，否则本进程会把下一个账号
   // 的请求发到上一个账号的 canary/stable 指针。stable 的空 header 也会
   // 覆盖掉之前的 canary header。
   useEffect(() => {
-    if (!enabled || configuredChannelRef.current === isCanary) return;
+    if (!enabled || configuredChannelRef.current === channel) return;
     try {
       configureUpdateUrl();
     } catch {
       // 真正的启动检查会把配置异常按 fail-open 处理；这里仅提前同步配置，
       // 失败不能阻断主界面或后续重试。
     }
-  }, [configureUpdateUrl, enabled, isCanary]);
+  }, [configureUpdateUrl, enabled, channel]);
 
   useEffect(() => {
     if (!enabled || started.current) return;

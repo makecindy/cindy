@@ -376,7 +376,11 @@ function main() {
       scheduleStatus();
       return complete({ accepted: true });
     }
-    if (control.action === 'approval' && typeof control.approvalId === 'string' && typeof control.confirmed === 'boolean') {
+    if (
+      control.action === 'approval'
+      && typeof control.approvalId === 'string'
+      && (typeof control.confirmed === 'boolean' || typeof control.value === 'string')
+    ) {
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
@@ -384,7 +388,9 @@ function main() {
         const delivered = send(task, {
           type: 'extension_ui_response',
           id: control.approvalId,
-          confirmed: control.confirmed,
+          ...(typeof control.value === 'string'
+            ? { value: control.value }
+            : { confirmed: control.confirmed }),
         });
         if (delivered) {
           accepted = true;
@@ -639,6 +645,7 @@ function main() {
             method: typeof event.method === 'string' ? event.method : 'confirm',
             title: typeof event.title === 'string' ? event.title.slice(0, 500) : undefined,
             message: typeof event.message === 'string' ? event.message.slice(0, 32000) : undefined,
+            placeholder: typeof event.placeholder === 'string' ? event.placeholder.slice(0, 32000) : undefined,
           };
           scheduleStatus();
           return;

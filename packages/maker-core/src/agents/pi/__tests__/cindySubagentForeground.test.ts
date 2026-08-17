@@ -72,12 +72,13 @@ process.stdin.on('data', (chunk) => {
     if (command.type === 'prompt') {
       process.stdout.write(JSON.stringify({ type: 'response', command: 'prompt', success: true }) + '\\n');
       process.stdout.write(JSON.stringify({
-        type: 'extension_ui_request', id: 'approval-foreground', method: 'confirm',
+        type: 'extension_ui_request', id: 'approval-foreground', method: 'input',
         title: 'cindy:permission',
-        message: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }),
+        placeholder: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }),
       }) + '\\n');
     }
     if (command.type === 'extension_ui_response' && command.id === 'approval-foreground') {
+      if (command.value !== 'allow') process.exit(13);
       process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'write' }) + '\\n');
       process.stdout.write(JSON.stringify({
         type: 'message_end',
@@ -152,15 +153,15 @@ describe('Cindy PI Subagent foreground durable path', () => {
       const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
       await extension({ registerTool: (tool) => Object.assign(registered, tool) });
       expect(registered.execute).toBeTypeOf('function');
-      const confirm = vi.fn(async () => true);
+      const input = vi.fn(async () => 'allow');
       const result = await registered.execute!(
         'tool-foreground',
         { agent: 'worker', task: 'write the fixture', model: 'claude-fable-5' },
         new AbortController().signal,
         () => undefined,
-        { ui: { confirm }, sessionManager: { getBranch: () => [] } },
+        { ui: { input }, sessionManager: { getBranch: () => [] } },
       );
-      expect(confirm).toHaveBeenCalledWith('cindy:permission', expect.stringContaining('write'));
+      expect(input).toHaveBeenCalledWith('cindy:permission', expect.stringContaining('write'));
       expect(result.content[0].text).toContain(
         `foreground approved result:${expectedRouteToken}`,
       );

@@ -39,7 +39,10 @@ export async function restoreSessionForGoal(
   deps: RestoreGoalSessionDeps,
 ): Promise<SessionLike | undefined> {
   const live = deps.maker.getSession(sessionId);
-  if (live) return live;
+  // A failed close leaves the Session in Maker's live map with status=error.
+  // Do not hand that poisoned object back to Goal: Maker.createSession owns the
+  // retry-close-then-rebuild boundary for this exact state.
+  if (live && live.getStatus?.() !== 'error') return live;
 
   const meta = await deps.maker.getSessionMeta(sessionId).catch(() => null);
   if (!meta) {

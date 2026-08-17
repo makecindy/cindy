@@ -78,7 +78,7 @@ vi.mock('../rpc-client.js', () => ({
     }
     async request(
       cmd: Record<string, unknown> & { type: string },
-    ): Promise<{ success: boolean; data?: unknown }> {
+    ): Promise<{ success: boolean; command?: string; data?: unknown }> {
       captured.requests.push(cmd);
       if (cmd.type === 'set_model' && captured.holdSetModel) {
         await captured.holdSetModel;
@@ -91,7 +91,7 @@ vi.mock('../rpc-client.js', () => ({
         return { success: false };
       }
       if (cmd.type === 'prompt' && captured.failPrompt) {
-        return { success: false };
+        return { command: 'prompt', success: false };
       }
       if (cmd.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
@@ -288,6 +288,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       id,
       title: 'cindy:permission',
       message: JSON.stringify({ toolName, input }),
+    });
+  }
+
+  function firePermissionInputRequest(
+    id: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): void {
+    captured.onEvent!({
+      type: 'extension_ui_request',
+      method: 'input',
+      id,
+      title: 'cindy:permission',
+      placeholder: JSON.stringify({ toolName, input }),
     });
   }
 
@@ -817,6 +831,64 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await flush();
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r1', confirmed: true });
     expect(resolverCalls).toBe(0);
+  });
+
+  it('auto mode silently approves first-party Subagent spawn through the source-aware envelope', async () => {
+    const handle = await start('auto');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-auto', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+    });
+
+    expect(await waitForResponse('subagent-auto')).toEqual({
+      type: 'extension_ui_response',
+      id: 'subagent-auto',
+      value: 'allow',
+    });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('keeps Subagent spawn user-confirmed outside Auto mode', async () => {
+    const handle = await start('ask');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-ask', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+    });
+
+    expect(await waitForResponse('subagent-ask')).toEqual({
+      type: 'extension_ui_response',
+      id: 'subagent-ask',
+      value: 'user-deny',
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it('reports Auto-review, user, and system denials without conflating their source', async () => {
+    const autoHandle = await start('auto', async () => ({ verdict: 'block' as const }));
+    firePermissionInputRequest('deny-auto', 'write', { path: '/tmp/blocked.txt' });
+    expect(await waitForResponse('deny-auto')).toMatchObject({ value: 'auto-review-deny' });
+    await autoHandle.close();
+
+    const userHandle = await start('ask');
+    userHandle.setInteractionResolver?.(async () => ({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'User denied',
+    }) as never);
+    firePermissionInputRequest('deny-user', 'write', { path: '/tmp/user-denied.txt' });
+    expect(await waitForResponse('deny-user')).toMatchObject({ value: 'user-deny' });
+    await userHandle.close();
+
+    const systemHandle = await start('ask');
+    firePermissionInputRequest('deny-system', 'write', { path: '/tmp/no-resolver.txt' });
+    expect(await waitForResponse('deny-system')).toMatchObject({ value: 'system-deny' });
+    await systemHandle.close();
   });
 
   it('auto mode lets the current-model reviewer allow a gray write without prompting', async () => {
