@@ -1346,9 +1346,9 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * Adopt a live-direct Orca row whose pre-vendor rewind failed. Direct sends
-   * bypass the coordinator's active turn, so the dispatcher hands the complete
-   * durable item back here before surfacing its failure. This cleanup debt is
+   * Adopt a direct Orca row whose pre-vendor rewind failed. Live and resumed
+   * sends bypass the coordinator's active turn, so the dispatch path hands the
+   * complete durable item back here before surfacing its failure. This cleanup debt is
    * deliberately separate from UI Retry recovery and cannot be abandoned by a
    * later user message.
    */

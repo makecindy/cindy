@@ -279,7 +279,7 @@ describe('sendToSession ordering', () => {
     expect(source).toContain(
       "return orcaTeamTerminalFence.getState(teamId) === 'terminal';",
     );
-    expect(source.split(durableGuard)).toHaveLength(3);
+    expect(source.split(durableGuard)).toHaveLength(4);
     expect(source).toContain(
       '    isOrcaTeamActive,\n    reserveOrcaTeamPreVendorDispatch,',
     );
@@ -370,6 +370,16 @@ describe('sendToSession ordering', () => {
       'const createOpts = buildCreateOptsWithStderr({\n          id: targetSessionId,',
       'const tracked = run.finally(() => {',
     );
+    const persistBlock = extractBetween(
+      block,
+      'const persistUserMessage = async (): Promise<void> => {',
+      'const rewindPersistedUserMessageAfterFailedDispatch',
+    );
+    const rewindBlock = extractBetween(
+      block,
+      'const rewindPersistedUserMessageAfterFailedDispatch',
+      'let live = maker.getSession(targetSessionId);',
+    );
 
     expect(source).toContain('assertDesktopSendDispatched');
     expect(orcaInterAgentDispatcherSource).toContain('resolveCollabDispatchResult');
@@ -407,12 +417,36 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
     expect(block).toContain('let userMessagePersisted = false;');
+    expect(block).toContain(
+      'let orcaCleanupRecoveryItem: AgentInputQueuedMessage | null = null;',
+    );
     expect(block).toContain("origin?.kind === 'orca' && typeof origin.teamId === 'string'");
     expect(block).toContain('? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId)');
+    expect(persistBlock).toContain(
+      'orcaCleanupRecoveryItem = await buildSendToSessionQueuedMessage({',
+    );
+    expectOrder(
+      persistBlock,
+      'orcaCleanupRecoveryItem = await buildSendToSessionQueuedMessage({',
+      'await createDbMessage(targetSessionId, {',
+    );
     expectOrder(
       block,
       'await createDbMessage(targetSessionId, {',
       'userMessagePersisted = true;',
+    );
+    expect(rewindBlock).toContain(
+      'inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+    );
+    expectOrder(
+      rewindBlock,
+      'await enqueueDurableWrite(',
+      'inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+    );
+    expectOrder(
+      rewindBlock,
+      'inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+      'throw error;',
     );
     expect(resumedBranch).toContain(
       'await rewindPersistedUserMessageAfterFailedDispatch();',

@@ -8297,12 +8297,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const clientId = explicitClientId ?? createId();
       let userPromptPreviewStarted = false;
       let userMessagePersisted = false;
+      let orcaCleanupRecoveryItem: AgentInputQueuedMessage | null = null;
       const previewSessionMeta = {
         id: targetSessionId,
         agentKind: meta.agentKind,
         workDir: meta.workDir,
       };
       const persistUserMessage = async (): Promise<void> => {
+        if (orcaOriginTeamId && !orcaCleanupRecoveryItem) {
+          orcaCleanupRecoveryItem = await buildSendToSessionQueuedMessage({
+            targetSessionId,
+            message,
+            persistedContent: persistedContent ?? message,
+            clientId,
+            meta,
+            origin,
+          });
+        }
         // 同 sendPersistedUserMessageToSession 的顺序硬约束: durable write 失败则不启动
         // turn,业务 accepted 副作用不生效。灵动岛 preview 提前到落库前以贴近用户发送
         // 瞬间;失败或未 dispatch 时由外层 rollback 恢复,避免留下假的 running card。
@@ -8322,10 +8333,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const rewindPersistedUserMessageAfterFailedDispatch = async (): Promise<void> => {
         if (!userMessagePersisted) return;
         userMessagePersisted = false;
-        await enqueueDurableWrite(
-          `send-to-session-user-rewind:${targetSessionId}:${clientId}`,
-          () => rewindPersistedUserMessageAfterClear(targetSessionId, clientId),
-        );
+        try {
+          await enqueueDurableWrite(
+            `send-to-session-user-rewind:${targetSessionId}:${clientId}`,
+            () => rewindPersistedUserMessageAfterClear(targetSessionId, clientId),
+          );
+        } catch (error) {
+          if (orcaCleanupRecoveryItem) {
+            inputCoordinator.retainPersistedOrcaCleanupRecovery(
+              targetSessionId,
+              orcaCleanupRecoveryItem,
+              error,
+            );
+          }
+          throw error;
+        }
       };
 
       let live = maker.getSession(targetSessionId);
@@ -8958,19 +8980,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   }
 
-  async function enqueueSendToSessionMessage(params: {
+  async function buildSendToSessionQueuedMessage(params: {
     targetSessionId: string;
     message: string;
     persistedContent: string;
     clientId: string;
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
-    dbRow: NonNullable<Awaited<ReturnType<typeof getSessionRowSnapshot>>>;
-    onAccepted?: () => void | Promise<void>;
-    onAcceptedRollback?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
-  }): Promise<void> {
+  }): Promise<AgentInputQueuedMessage> {
     const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta);
-    const queued: AgentInputQueuedMessage = {
+    return {
       clientId: params.clientId,
       text: params.message,
       persistedContent: params.persistedContent,
@@ -8988,6 +9007,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createOpts,
       ...(params.origin ? { origin: params.origin } : {}),
     };
+  }
+
+  async function enqueueSendToSessionMessage(params: {
+    targetSessionId: string;
+    message: string;
+    persistedContent: string;
+    clientId: string;
+    meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
+    dbRow: NonNullable<Awaited<ReturnType<typeof getSessionRowSnapshot>>>;
+    onAccepted?: () => void | Promise<void>;
+    onAcceptedRollback?: () => void | Promise<void>;
+    origin?: AgentInputQueuedMessage['origin'];
+  }): Promise<void> {
+    const queued = await buildSendToSessionQueuedMessage(params);
     // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
     // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
     await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
