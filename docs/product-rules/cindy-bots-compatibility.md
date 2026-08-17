@@ -20,6 +20,7 @@
 - Telegram 的本地群历史继续留在 `hook_group_messages` 的 adapter namespace；飞书按每轮 API 上下文降级，不伪装成同一种持久群历史。
 - Guardian heartbeat 不增加独立 schema，也不是可迁移的用户配置。它复用 0093 的 subscription / ledger / inbox 表，用保留前缀的隐藏系统 subscription 维持外键与历史归属；该条目不出现在用户订阅列表，旧数据中若保留前缀发生 owner 冲突则 fail-closed，不接管或改写其它 Bot 的记录。
 - 旧版创建的普通 subscription、ledger 和 inbox 行继续按原规则读取。Guardian 只把终态 state-transition 收件认作“应到事件已收到”，只把 `heartbeat-turn` 的 pending/processing 行认作“已有处理者”；`inbox-only` 历史不会掩盖新的失联或无人认领异常。
+- `@Bot` 使用 append-only 的 `agentReferences.kind='bot'` 元数据，原始消息仍保存可读的 `[Bot 名称](cindy://bot/<id>)` 文本。新代码校验引用范围和 Bot deep link 后才展开委派语义；不认识该 kind 的旧客户端会忽略结构化元数据并保留原始可读链接，不丢用户正文，也不会把 Bot ID 当文件路径。
 
 ## 证据入口
 

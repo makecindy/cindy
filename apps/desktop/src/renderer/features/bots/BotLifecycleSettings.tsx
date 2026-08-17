@@ -370,17 +370,20 @@ export function BotLifecycleSettings({
               const retryable = delivery.status === 'failed' || delivery.status === 'dead-letter';
               const progress = delivery.diagnostic;
               return (
-                <div key={delivery.id} className="rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11">
+                <div key={delivery.id} className="min-w-0 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-medium text-[var(--text-primary)]">
+                    <span
+                      className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]"
+                      title={`${delivery.channelKind ?? t('bots.lifecycle.deliveries.local')}${delivery.routeKey ? ` · ${delivery.routeKey}` : ''}`}
+                    >
                       {delivery.channelKind ?? t('bots.lifecycle.deliveries.local')}
                       {delivery.routeKey ? ` · ${delivery.routeKey}` : ''}
                     </span>
-                    <span className={delivery.status === 'delivered'
+                    <span className={`${delivery.status === 'delivered'
                       ? 'text-[var(--status-success)]'
                       : retryable
                         ? 'text-[var(--text-danger)]'
-                        : 'text-[var(--text-tertiary)]'}>
+                        : 'text-[var(--text-tertiary)]'} shrink-0`}>
                       {t(`bots.lifecycle.deliveries.status.${delivery.status}`)}
                     </span>
                   </div>
@@ -400,7 +403,7 @@ export function BotLifecycleSettings({
                     </p>
                   ) : null}
                   {delivery.lastError ? (
-                    <p className="mt-1 whitespace-pre-wrap text-[var(--text-danger)]">{delivery.lastError}</p>
+                    <p className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[var(--text-danger)] [overflow-wrap:anywhere]">{delivery.lastError}</p>
                   ) : null}
                   {retryable ? (
                     <div className="mt-2 flex justify-end">

@@ -178,7 +178,7 @@ import {
   resolveSessionRoute,
 } from '@/lib/orcaSessionIdentity';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
-import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
+import type { AttachedFile, ComposerBotMention, MentionedResource } from '@/lib/fileTypes';
 import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
@@ -420,6 +420,8 @@ interface CCAgentSessionViewProps {
   disableAutofocus?: boolean;
   /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
   readOnly?: boolean;
+  /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
+  botMentions?: readonly ComposerBotMention[];
 }
 
 /**
@@ -543,6 +545,7 @@ export function CCAgentSessionView({
   sidebarTargetSessionId,
   disableAutofocus = false,
   readOnly = false,
+  botMentions,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
@@ -4577,6 +4580,7 @@ export function CCAgentSessionView({
                         }
                       : undefined
                   }
+                  botMentions={botMentions}
                 />
               )}
 

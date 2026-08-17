@@ -26,6 +26,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Bot,
   Check,
   ClipboardList,
   File as FileIcon,
@@ -334,6 +335,8 @@ export function AtMentionPanel({
       meta = item.description || t('newChat.atMention.desktopWindow');
     } else if (item.type === 'session') {
       meta = t('newChat.atMention.task');
+    } else if (item.type === 'bot') {
+      meta = t('newChat.atMention.bot');
     } else if (item.type === 'plugin-command') {
       // Plugin rows follow the compact icon + name presentation used by the
       // installed-plugin menu; the command remains an internal selection key.
@@ -361,6 +364,8 @@ export function AtMentionPanel({
             ? Monitor
             : item.type === 'session'
               ? History
+              : item.type === 'bot'
+                ? Bot
               : item.type === 'plugin-command' || item.type === 'plugin-resource'
                 ? Plug
               : FileIcon;

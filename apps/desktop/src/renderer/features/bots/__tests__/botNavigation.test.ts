@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { shouldDeferCanonicalBotSessionNavigation } from '../botNavigation';
@@ -22,5 +24,21 @@ describe('shouldDeferCanonicalBotSessionNavigation', () => {
         addRequested: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe('Bot task route recovery', () => {
+  const source = readFileSync(resolve(__dirname, '..', 'BotSessionView.tsx'), 'utf8');
+
+  it('keeps load failures visible and retryable instead of silently redirecting', () => {
+    expect(source).not.toContain('<Navigate');
+    expect(source).toContain("kind: 'error'");
+    expect(source).toContain('setReloadVersion');
+    expect(source).toContain('bots.sessionLoadFailedTitle');
+  });
+
+  it('passes the live Bot roster into the shared task composer', () => {
+    expect(source).toContain('window.electronAPI.localDb.bots.list()');
+    expect(source).toContain('<CCAgentSessionView botMentions={gate.mentions} />');
   });
 });

@@ -223,7 +223,7 @@ function RunHistory({
     return <p className="py-3 text-11 text-[var(--text-tertiary)]">{t('bots.automations.loading')}</p>;
   }
   if (error) {
-    return <p className="py-3 text-11 text-[var(--text-danger)]">{error}</p>;
+    return <p className="break-words py-3 text-11 text-[var(--text-danger)] [overflow-wrap:anywhere]">{error}</p>;
   }
   if (runs.length === 0) {
     return <p className="py-3 text-11 text-[var(--text-tertiary)]">{t('bots.automations.noRuns')}</p>;
@@ -241,10 +241,10 @@ function RunHistory({
             <span className="text-[var(--text-tertiary)]">{formatTime(run.finishedAt ?? run.firedAt)}</span>
           </div>
           {run.resultText ? (
-            <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-[var(--text-secondary)]">{run.resultText}</p>
+            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[var(--text-secondary)] [overflow-wrap:anywhere]">{run.resultText}</p>
           ) : null}
           {run.errorMessage ? (
-            <p className="mt-2 whitespace-pre-wrap text-[var(--text-danger)]">{run.errorMessage}</p>
+            <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[var(--text-danger)] [overflow-wrap:anywhere]">{run.errorMessage}</p>
           ) : null}
           {run.worktreePath ? (
             <p className="mt-2 break-all text-[var(--text-tertiary)]">
@@ -309,7 +309,7 @@ function RunHistory({
             </span>
           </div>
           {run.deliveryError ? (
-            <p className="mt-1 whitespace-pre-wrap text-[var(--text-danger)]">{run.deliveryError}</p>
+            <p className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[var(--text-danger)] [overflow-wrap:anywhere]">{run.deliveryError}</p>
           ) : null}
         </div>
       ))}

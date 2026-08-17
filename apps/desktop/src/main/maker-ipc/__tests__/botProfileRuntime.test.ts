@@ -9,6 +9,7 @@ import {
   resolveBotToolsetReferences,
 } from '../botProfileRuntime';
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults';
+import { BOT_TEMPLATES } from '../../../renderer/features/bots/botTemplates';
 
 describe('Bot Profile runtime prompt', () => {
   it('uses the SOUL source verbatim as the complete identity slot', () => {
@@ -58,6 +59,31 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('offer the available delegation path');
     expect(prompt).not.toContain('delegate_to_bot');
     expect(prompt).not.toContain('list_bot_delegations');
+  });
+
+  it('keeps the same affirmative delegation guidance beside the default and every preset SOUL', () => {
+    const identities = [
+      { name: 'Default Bot', identitySource: buildDefaultBotIdentity('Default Bot') },
+      ...BOT_TEMPLATES.map((template) => ({
+        name: template.id,
+        identitySource: template.identitySource,
+      })),
+    ];
+    for (const identity of identities) {
+      const runtimePrompt = [
+        buildBotProfilePrompt({
+          displayName: identity.name,
+          identitySource: identity.identitySource,
+        }),
+        buildBotProfileContextPrompt(identity.name),
+        buildBotCapabilityContextPrompt(),
+      ].join('\n\n');
+      expect(runtimePrompt).toContain('can discover other available Bots');
+      expect(runtimePrompt).toContain('hand off a bounded objective');
+      expect(runtimePrompt).toContain('receive the result back in this task');
+      expect(runtimePrompt).toContain('offer the available delegation path');
+      expect(runtimePrompt).not.toContain('redirecting them to a separate team workflow.\n\nYou are');
+    }
   });
 
   it('admits only Skills proven by the selected harness catalog', () => {

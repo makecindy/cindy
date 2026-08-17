@@ -72,7 +72,12 @@ import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
-import type { AttachedFile, MentionedResource, ImageAnnotationStroke } from '@/lib/fileTypes';
+import type {
+  AttachedFile,
+  ComposerBotMention,
+  MentionedResource,
+  ImageAnnotationStroke,
+} from '@/lib/fileTypes';
 import {
   commentPreviewTag,
   formatBrowserCommentsForSend,
@@ -702,6 +707,8 @@ interface ChatInputProps {
    * 状态完全由 parent 持有 (controlled);ChatInput 只做展示与事件转发。
    */
   collaboration?: CollaborationMenuConfig;
+  /** Persistent Bots available as structured delegation targets in this task. */
+  botMentions?: readonly ComposerBotMention[];
 }
 
 function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
@@ -1013,6 +1020,7 @@ export function ChatInput({
   compactMiddleToolbarSlot,
   topSlot,
   collaboration,
+  botMentions = [],
 }: ChatInputProps) {
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
@@ -4145,8 +4153,19 @@ export function ChatInput({
   ]);
 
   const atResources = useMemo(
-    () => (atState.kind === 'ready' ? atState.items : []),
-    [atState],
+    () => {
+      const scanned = atState.kind === 'ready' ? atState.items : [];
+      const bots: AtResourceItem[] = botMentions.map((bot) => ({
+        type: 'bot',
+        name: bot.name,
+        relPath: bot.id,
+        ...(bot.description ? { description: bot.description } : {}),
+        _nameLower: bot.name.toLowerCase(),
+        _relPathLower: bot.id.toLowerCase(),
+      }));
+      return [...bots, ...scanned];
+    },
+    [atState, botMentions],
   );
 
   const filteredAt = useMemo(

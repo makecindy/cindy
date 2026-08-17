@@ -162,7 +162,7 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
         </button>
       </div>
 
-      {error ? <p className="mt-3 text-11 text-[var(--text-danger)]" role="alert">{error}</p> : null}
+      {error ? <p className="mt-3 break-words text-11 text-[var(--text-danger)] [overflow-wrap:anywhere]" role="alert">{error}</p> : null}
       {loading ? (
         <div className="mt-4 flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
           <LoaderCircle size={13} className="animate-spin" /> {t('bots.inbox.loading')}
@@ -185,7 +185,10 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="truncate text-12 font-medium text-[var(--text-primary)]">
+                      <p
+                        className="truncate text-12 font-medium text-[var(--text-primary)]"
+                        title={item.event.title || t('bots.inbox.untitledTask')}
+                      >
                         {item.event.title || t('bots.inbox.untitledTask')}
                       </p>
                       <time className="shrink-0 text-10 text-[var(--text-tertiary)]">
@@ -203,11 +206,11 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
                             : ''}
                     </p>
                     {item.resultText ? (
-                      <p className="mt-2 line-clamp-3 text-11 leading-5 text-[var(--text-secondary)]">
+                      <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-11 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
                         {item.resultText}
                       </p>
                     ) : item.lastError ? (
-                      <p className="mt-2 text-11 leading-5 text-[var(--text-danger)]">{item.lastError}</p>
+                      <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-11 leading-5 text-[var(--text-danger)] [overflow-wrap:anywhere]">{item.lastError}</p>
                     ) : null}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">

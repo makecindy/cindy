@@ -211,8 +211,8 @@ function BotsSidebarContent() {
                     <span aria-hidden>{bot.avatar || (bot.channel === 'local' ? '✦' : '🤖')}</span>
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-13 font-medium">{bot.name}</span>
-                    <span className="block truncate text-10 opacity-70">{channelSummary}</span>
+                    <span className="block truncate text-13 font-medium" title={bot.name}>{bot.name}</span>
+                    <span className="block truncate text-10 opacity-70" title={channelSummary}>{channelSummary}</span>
                   </span>
                   {attention > 0 ? (
                     <span
@@ -279,7 +279,7 @@ function BotsSidebarContent() {
                       >
                         <span aria-hidden>{bot.avatar || '🤖'}</span>
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-13 font-medium">
+                      <span className="min-w-0 flex-1 truncate text-13 font-medium" title={bot.name}>
                         {bot.name}
                       </span>
                       <ChevronRight size={14} className="shrink-0 opacity-50" />
