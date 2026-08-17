@@ -62,6 +62,8 @@ const log = createLogger('messagePersistBroadcaster');
 interface AssistantBlock {
   persistId: string;
   text: string;
+  /** Provider message identity; a changed identity is an assistant block boundary. */
+  agentMessageId?: string;
   agentMeta: AgentMeta | null;
   createdAt: number;
 }
@@ -235,14 +237,23 @@ export function setLastAssistantTranscriptUuid(sessionId: string, uuid: string |
  * 第二行、renderer DUP-SKIP 只挡显示不挡库 → 重开会话 assistant 翻倍(正是本 MR 要消灭
  * 的重复行)。
  *
- * 只去重"相邻且内容完全相同"的 assistant:任何其它消息(tool_use / tool_result / thinking /
- * ask_user / plan_review)入队都会刷新这条记录 → role 不再是 assistant,从而"中间夹了别的
- * 消息"的两条相同文本不会被误删(与 renderer messages[last] 语义 1:1,避免误吞合法重复回复)。
+ * 只去重"相邻、内容相同且 provider item 身份相同"的 assistant:任何其它消息
+ * (tool_use / tool_result / thinking / ask_user / plan_review)入队都会刷新这条记录；不同
+ * agentMessageId 即使文本相同也必须保留为两条消息。
  */
-const lastPersistedMsgBySession = new Map<string, { role: string; text: string; persistId: string }>();
+const lastPersistedMsgBySession = new Map<
+  string,
+  { role: string; text: string; persistId: string; agentMessageId?: string }
+>();
 
-function notePersistedMessage(sessionId: string, role: string, persistId: string, text = ''): void {
-  lastPersistedMsgBySession.set(sessionId, { role, text, persistId });
+function notePersistedMessage(
+  sessionId: string,
+  role: string,
+  persistId: string,
+  text = '',
+  agentMessageId?: string,
+): void {
+  lastPersistedMsgBySession.set(sessionId, { role, text, persistId, agentMessageId });
 }
 
 /**
@@ -478,6 +489,7 @@ function enqueuePersistAssistant(
   content: string,
   agentMeta: AgentMeta | null,
   createdAt: number,
+  agentMessageId?: string,
 ): void {
   noteAssistantTranscriptUuid(sessionId, agentMeta);
   enqueueVisibleDbMessage(`assistant:${sessionId}:${clientId}`, sessionId, {
@@ -487,7 +499,7 @@ function enqueuePersistAssistant(
     agentMeta: agentMeta ?? null,
     createdAt,
   });
-  notePersistedMessage(sessionId, 'assistant', clientId, content);
+  notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
   if (
     isTopLevelTitleAssistant(
@@ -1440,12 +1452,25 @@ export function resetTurnPersistState(sessionId: string): void {
  */
 export function onAssistantTextEvent(
   sessionId: string,
-  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown },
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown },
   agentMeta: AgentMeta | null,
 ): string | undefined {
   const text = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;
+  const agentMessageId =
+    typeof data.agentMessageId === 'string' && data.agentMessageId
+      ? data.agentMessageId
+      : undefined;
+
+  const activeBlock = assistantBlocks.get(sessionId);
+  if (
+    activeBlock?.agentMessageId &&
+    agentMessageId &&
+    activeBlock.agentMessageId !== agentMessageId
+  ) {
+    flushAssistantBlock(sessionId);
+  }
 
   if (isFinal) {
     const block = assistantBlocks.get(sessionId);
@@ -1470,11 +1495,16 @@ export function onAssistantTextEvent(
       // persistId、不再 create,把重复行挡在 main 落库层。中间夹过别的消息则 last.role
       // 不是 assistant,不会误删合法的相同文本回复。
       const last = lastPersistedMsgBySession.get(sessionId);
-      if (last && last.role === 'assistant' && last.text === text) {
+      if (
+        last &&
+        last.role === 'assistant' &&
+        last.text === text &&
+        (!agentMessageId || last.agentMessageId === agentMessageId)
+      ) {
         return last.persistId;
       }
       const persistId = createId();
-      enqueuePersistAssistant(sessionId, persistId, text, agentMeta, Date.now());
+      enqueuePersistAssistant(sessionId, persistId, text, agentMeta, Date.now(), agentMessageId);
       return persistId;
     }
     return undefined;
@@ -1483,7 +1513,7 @@ export function onAssistantTextEvent(
   // delta
   let block = assistantBlocks.get(sessionId);
   if (!block) {
-    block = { persistId: createId(), text, agentMeta, createdAt: Date.now() };
+    block = { persistId: createId(), text, agentMessageId, agentMeta, createdAt: Date.now() };
     assistantBlocks.set(sessionId, block);
   } else {
     block.text += text;
@@ -1511,7 +1541,14 @@ export function flushAssistantBlock(
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  enqueuePersistAssistant(sessionId, block.persistId, block.text, meta, block.createdAt);
+  enqueuePersistAssistant(
+    sessionId,
+    block.persistId,
+    block.text,
+    meta,
+    block.createdAt,
+    block.agentMessageId,
+  );
 }
 
 /**

@@ -3920,7 +3920,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         }
         persistId = onAssistantTextEvent(
           session.id,
-          event.data as { text?: unknown; isFinal?: unknown },
+          event.data as {
+            text?: unknown;
+            isFinal?: unknown;
+            isFullText?: unknown;
+            agentMessageId?: unknown;
+          },
           eventAgentMeta,
         );
       } else if (event.type === 'tool_use') {

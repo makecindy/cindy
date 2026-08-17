@@ -326,7 +326,11 @@ function installElectronBridge(): void {
   };
 }
 
-function emitTextDelta(text: string, sessionId = SESSION_ID): void {
+function emitTextDelta(
+  text: string,
+  sessionId = SESSION_ID,
+  persistId = 'assistant-1',
+): void {
   onEvent?.({
     sessionId,
     event: {
@@ -334,7 +338,7 @@ function emitTextDelta(text: string, sessionId = SESSION_ID): void {
       source: 'claude-code',
       data: { text, isFinal: false },
     },
-    persistId: 'assistant-1',
+    persistId,
   });
 }
 
@@ -1585,6 +1589,61 @@ describe('makerChatStore text delta batching', () => {
         clientId: 'assistant-1',
         role: 'assistant',
         content: 'Hello wonderful',
+      }),
+    ]);
+  });
+
+  it('keeps commentary when a distinct Codex final_answer item follows it', () => {
+    emitTextDelta('Execution preview');
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: {
+          text: 'Please confirm.',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-final',
+          phase: 'final_answer',
+        },
+      },
+      persistId: 'assistant-2',
+    });
+
+    vi.advanceTimersByTime(32);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Execution preview',
+        isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'assistant-2',
+        content: 'Please confirm.',
+        isStreaming: false,
+      }),
+    ]);
+  });
+
+  it('flushes batched deltas when the assistant persist id changes', () => {
+    emitTextDelta('Execution preview', SESSION_ID, 'assistant-1');
+    emitTextDelta('Please confirm.', SESSION_ID, 'assistant-2');
+
+    vi.advanceTimersByTime(32);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Execution preview',
+        isStreaming: false,
+      }),
+      expect.objectContaining({
+        clientId: 'assistant-2',
+        content: 'Please confirm.',
+        isStreaming: true,
       }),
     ]);
   });

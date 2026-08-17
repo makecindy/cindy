@@ -118,11 +118,11 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
         source: 'codex',
       },
     ]);
@@ -165,11 +165,11 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        data: { text: 'Hello world', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
         source: 'codex',
       },
     ]);
@@ -205,9 +205,9 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hel', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'lo ', isFinal: false }, source: 'codex' },
-      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hel', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'lo ', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
     ]);
   });
 
@@ -243,10 +243,62 @@ describe('Codex assistant text streaming contract', () => {
     );
 
     expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
-      { type: 'text', data: { text: 'Hello worxd', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'Hello worxd', isFinal: false, agentMessageId: 'msg-1' }, source: 'codex' },
       {
         type: 'text',
-        data: { text: 'Hello wonderful', isFinal: true, isFullText: true },
+        data: { text: 'Hello wonderful', isFinal: true, isFullText: true, agentMessageId: 'msg-1' },
+        source: 'codex',
+      },
+    ]);
+  });
+
+  it('preserves distinct Codex message identities and completed phases', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+
+    for (const item of [
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-commentary',
+        text: 'Execution preview',
+        phase: 'commentary',
+      },
+      {
+        type: 'agentMessage' as const,
+        id: 'msg-final',
+        text: 'Please confirm.',
+        phase: 'final_answer',
+      },
+    ]) {
+      translateItemNotification(
+        'completed',
+        { threadId: 'thread-1', turnId: 'turn-1', item },
+        q,
+        ctx,
+      );
+    }
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      {
+        type: 'text',
+        data: {
+          text: 'Execution preview',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary',
+          phase: 'commentary',
+        },
+        source: 'codex',
+      },
+      {
+        type: 'text',
+        data: {
+          text: 'Please confirm.',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-final',
+          phase: 'final_answer',
+        },
         source: 'codex',
       },
     ]);
@@ -2235,7 +2287,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(events).toEqual([
       expect.objectContaining({
         type: 'text',
-        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true },
+        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true, agentMessageId: 'msg-2' },
       }),
     ]);
   });

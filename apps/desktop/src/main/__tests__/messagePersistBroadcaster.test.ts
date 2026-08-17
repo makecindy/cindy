@@ -1625,6 +1625,68 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
 });
 
 describe('streamed assistant final calibration', () => {
+  it('persists commentary and final_answer as separate rows when Codex item ids change', async () => {
+    const commentaryId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Execution preview', isFinal: false, agentMessageId: 'msg-commentary' },
+      null,
+    );
+    expect(
+      onAssistantTextEvent(
+        SESSION,
+        {
+          text: 'Execution preview',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary',
+        },
+        null,
+      ),
+    ).toBe(commentaryId);
+
+    const finalId = onAssistantTextEvent(
+      SESSION,
+      {
+        text: 'Please confirm.',
+        isFinal: true,
+        isFullText: true,
+        agentMessageId: 'msg-final',
+      },
+      null,
+    );
+    expect(finalId).not.toBe(commentaryId);
+
+    await flushWrites();
+    const assistantCreates = vi
+      .mocked(createMessage)
+      .mock.calls
+      .filter(([, message]) => message.role === 'assistant')
+      .map(([, message]) => ({ clientId: message.clientId, content: message.content }));
+    expect(assistantCreates).toEqual([
+      { clientId: commentaryId, content: 'Execution preview' },
+      { clientId: finalId, content: 'Please confirm.' },
+    ]);
+  });
+
+  it('does not deduplicate equal text from distinct Codex message ids', async () => {
+    const firstId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Ready.', isFinal: true, isFullText: true, agentMessageId: 'msg-a' },
+      null,
+    );
+    const secondId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Ready.', isFinal: true, isFullText: true, agentMessageId: 'msg-b' },
+      null,
+    );
+
+    expect(secondId).not.toBe(firstId);
+    await flushWrites();
+    expect(
+      vi.mocked(createMessage).mock.calls.filter(([, message]) => message.role === 'assistant'),
+    ).toHaveLength(2);
+  });
+
   it('persists the authoritative final text even when it is shorter than accumulated deltas', async () => {
     const persistId = onAssistantTextEvent(
       SESSION,
