@@ -116,6 +116,29 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     expect(current?.fiveHour?.utilization).toBe(42);
   });
 
+  it('discards a hydration row when the owner switches mid-read with no entry to bump the epoch (七轮 ③)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // 冷缓存:hydration 读挂起;期间账号切换,但**没有任何 GLM 入口被调用** ——
+    // ownerEpoch 是懒检测,不前进,单靠世代比对发现不了切号。A 账号的行不得
+    // 落进 B 账号的内存(否则 B 的 chip seed A 的余量)。
+    let resolveRead!: (value: { snapshot: string } | null) => void;
+    mocks.queryOne.mockReturnValue(new Promise<{ snapshot: string } | null>((res) => {
+      resolveRead = res;
+    }));
+    const readPromise = broadcaster.readGlmCodingPlanUsageSnapshot('p1');
+    mocks.getCurrentUserId.mockReturnValue('user-2'); // 挂起期间切号(无人 reset)
+    resolveRead({ snapshot: JSON.stringify(snapshotOf(77)) }); // A 的行迟到
+    await expect(readPromise).resolves.toBeNull();
+
+    // 自愈:下一次入口的 reset 检出切号,按新 owner 重新回库水合。
+    mocks.queryOne.mockReset();
+    mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(snapshotOf(31)) });
+    await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toMatchObject({
+      fiveHour: { utilization: 31 },
+    });
+    expect(mocks.queryOne).toHaveBeenCalled();
+  });
+
   it('replaces the snapshot wholesale on record (single source, no merge)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue(null);

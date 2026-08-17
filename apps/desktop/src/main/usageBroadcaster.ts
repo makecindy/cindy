@@ -991,13 +991,19 @@ function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
   if (!load) {
     const generation = glmGenerationOf(providerId);
     const ownerEpoch = glmCodingPlanUsageOwnerEpoch;
+    const ownerAtStart = currentAccountUsageOwner();
     load = (async () => {
       try {
-        if (!currentAccountUsageOwner()) return;
+        if (!ownerAtStart) return;
         const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
           'SELECT snapshot FROM coding_plan_usage_snapshots WHERE provider_id = ?',
           [providerId],
         );
+        // owner 直接复核:ownerEpoch 是懒检测——await 期间没有任何 GLM 入口触发
+        // reset 的话它不前进,单靠世代比对发现不了切号。A 账号的 hydration 结果
+        // 不得落进 B 账号的内存(#2768 七轮 Codex P1);丢弃后下一次入口的 reset
+        // 会按新 owner 重新水合,自愈无残留。
+        if (currentAccountUsageOwner() !== ownerAtStart) return;
         // 本 provider 被 clear / owner 变化抢先 → 本次读结果作废。
         if (
           ownerEpoch !== glmCodingPlanUsageOwnerEpoch

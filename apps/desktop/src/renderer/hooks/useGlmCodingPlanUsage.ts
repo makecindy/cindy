@@ -50,13 +50,18 @@ export function ownerScopedGlmSnapshots(): Map<string, GlmCodingPlanUsageSnapsho
   return glmSnapshots;
 }
 
+/** owner id 是否仍是当前 data owner(warm read 与迟到推送判定共用同一口径)。 */
+export function isDataOwnerIdCurrent(ownerId: string | null): boolean {
+  return ownerId === getDataOwnerGeneration().dataOwnerId;
+}
+
 /**
  * 推送世代戳是否仍然当前:ownerId 缺失(旧版 main / 异常)按未知沿用不误丢;
  * 携带 ownerId 且与当前 data owner 不符 → 过期(旧账号排队的迟到推送)。
  */
 export function isGlmPushOwnerCurrent(payload: GlmCodingPlanUsagePushPayload): boolean {
   if (payload.ownerId === undefined || payload.ownerId === null) return true;
-  return payload.ownerId === getDataOwnerGeneration().dataOwnerId;
+  return isDataOwnerIdCurrent(payload.ownerId);
 }
 
 function isSnapshot(v: unknown): v is GlmCodingPlanUsageSnapshot {
@@ -140,10 +145,15 @@ export function useGlmCodingPlanUsage(
     if (!api?.getGlmCodingPlan) return;
 
     let cancelled = false;
+    // 读发起时的 data owner:resolve 时复核 —— IPC 挂起期间切账号的话,结果属于旧
+    // owner,不得写进新 owner 的缓存(chip 会先 seed 旧账号余量;#2768 七轮 Codex
+    // P1)。与迟到推送判定(isGlmPushOwnerCurrent)同口径。
+    const readOwnerId = getDataOwnerGeneration().dataOwnerId;
     void api
       .getGlmCodingPlan(providerId)
       .then((persisted) => {
         if (cancelled) return;
+        if (!isDataOwnerIdCurrent(readOwnerId)) return;
         const resolved = resolvePersistedGlmCodingPlanRead(persisted);
         if (resolved.action === 'clear') {
           ownerScopedGlmSnapshots().set(providerId, null);
