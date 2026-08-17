@@ -13,6 +13,7 @@ import {
   isExclusiveXaiModelId,
   isModelDisabled,
   isProviderDisabled,
+  XAI_MODEL_PREFIX,
 } from '@cindy/model-providers';
 
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -251,8 +252,15 @@ function resolveSubagentModelForRoute(
         ? offering.find((p) => p.id === implicitRouteId)
         : undefined;
     if (routeProvider) return copyDisabled(routeProvider.id) ? undefined : saved;
-    // 独占 Grok 不能跟着默认/非 xAI 父会话注入裸 id。
-    if (isExclusiveXaiModelId(saved) && providerId !== 'xai') return undefined;
+    // 裸 Grok 不能跟着非 xAI 父会话注入。带 xai/ 前缀的订阅覆写由 proxy 按请求路由,
+    // 不能在这里丢掉。
+    if (
+      isExclusiveXaiModelId(saved)
+      && !saved.startsWith(XAI_MODEL_PREFIX)
+      && providerId !== 'xai'
+    ) {
+      return undefined;
+    }
     // 显式父来源在目录里有该模型的其它拷贝,但本源不提供 → 不注入。
     if (providerId && offering.length > 0) return undefined;
     // 默认会话(providerId=null 且凭证形态未知)保持原保守口径:任一启用拷贝可用就保留覆写。

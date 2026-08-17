@@ -4948,14 +4948,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   ? null
                   : await getGatewayModelPricingForModel();
               const price =
-                effectiveProvider === 'openai' ||
-                effectiveProvider === 'anthropic' ||
-                effectiveProvider === 'xai'
-                  ? getModelPriceQuote(null, effectiveProvider, pricingModel)
-                  : isSubscriptionDirectRoute(pricingModel)
-                    ? getSubscriptionDirectValuePrice(pricingModel)
-                    : isCustomProviderRoute
-                      ? null
+                isCustomProviderRoute
+                  ? null
+                  : effectiveProvider === 'openai' ||
+                      effectiveProvider === 'anthropic' ||
+                      effectiveProvider === 'xai'
+                    ? getModelPriceQuote(null, effectiveProvider, pricingModel)
+                    : isSubscriptionDirectRoute(pricingModel)
+                      ? getSubscriptionDirectValuePrice(pricingModel)
                       : getModelPriceQuote(pricing, 'xd', pricingModel);
               const money = computePriceQuoteTurnMoney(
                 tokens,
