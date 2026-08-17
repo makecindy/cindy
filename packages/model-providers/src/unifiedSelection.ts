@@ -52,9 +52,12 @@
 
 import {
   actualSourceIdForModel,
+  connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
   modelSupportsFastMode,
+  providerOffersModel,
+  providersForAgent,
   type ProviderView,
 } from './registry.js';
 import { deriveModelList } from './modelList.js';
@@ -530,6 +533,15 @@ export interface UnifiedModelEntriesOptions {
    *
    * `modelId` 必须是 **`agent` 这一格的 wire id**(= 会话 / 草稿里存着的那个 id),不是行的
    * 归一化身份:豁免要在 `agent` 自己的目录列表上命中才生效。调用方本来就存的是它。
+   *
+   * 豁免覆盖**三层**过滤(2026-08-17 review:此前只够到后两层,供应商被停用 / 断开时行在
+   * rail 层就没了):
+   *   1. 供应商层 —— kept 供应商被 `connected-for-agent` 整家剔除(suspended / offline)时
+   *      并回枚举,且并回来源上只放行点名 wire id(见枚举循环内注释);
+   *   2. 模型层 —— disabled / retired / 隐藏,借 `deriveModelList.keepSelected`;
+   *   3. 引擎层 —— 生效来源校验,仅 `agent` 那一格跳过。
+   * runtime 级 disabled(目录声明该引擎不可路由)仍不豁免:那不是暂时不可用,是从来
+   * 路由不到。
    */
   keepModel?: { providerId: string | null; modelId: string; agent: AgentKind };
 }
@@ -557,6 +569,9 @@ function entryKey(providerId: string, keyModelId: string): string {
  * 供应商范围固定 `'connected-for-agent'`:第二道来源校验本就只认已连接来源
  * (`effectiveSourceIdForModel` / `actualSourceIdForModel` 都过 `chatEligibleSourcesForModel`
  * 的 `onlyConnected`),放宽枚举范围只会枚举出一批随后必被丢弃的行 —— 故不给调用方开这个口。
+ * 唯一的内建例外是 `keepModel`:kept 供应商被该 rail 整家剔除(用户停用 / 来源断开)时,
+ * 仅 kept agent 那一轮把它并回,且并回来源上只放行点名的 wire id(见循环内注释)——
+ * 豁免范围仍收在「点名模型 × kept 引擎」,不是把 rail 对整家打开。
  */
 export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedModelEntry[] {
   const {
@@ -600,10 +615,46 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     (keepModel.providerId === null || keepModel.providerId === providerId);
 
   for (const agent of activeAgents) {
+    // rail 并回(2026-08-17 review):kept 供应商被 `connected-for-agent` 整家剔除(用户
+    // 停用 suspended / 来源断开 offline)时,当前模型行在**供应商层**就消失了,`keepSelected`
+    // 在模型层再点名也无从豁免 —— 运行中会话的用户看不见自己正在跑什么。仅 kept agent
+    // 这一轮把该供应商并回枚举范围(按原目录序过滤,不破坏 rail 序契约),并回来源上只放行
+    // 点名的那一个 wire id(其余模型不因此变成新路由候选);同行其它引擎的格子照常走来源
+    // 校验(suspended / offline 来源解析不回本行,自然出局)。providerId 为 null(跟随默认
+    // 路由)时只在**没有任何已连接来源提供该 wire id** 时才并回 —— 有健康来源时行本就在,
+    // 再并回一家停用来源只会多出一条点了会改道的影子行。runtime 级 disabled(目录 routing
+    // 声明该引擎不可路由)不并回:那不是「暂时不可用」而是「从来路由不到」,并回也发不出去。
+    let keptRail: readonly ProviderView[] | null = null;
+    let restrictRejoined: ((model: CatalogModel, provider: ProviderView) => boolean) | null =
+      null;
+    if (keepModel !== undefined && keepModel.agent === agent) {
+      const connectedIds = new Set(
+        connectedProvidersForAgent([...providers], agent).map((p) => p.id),
+      );
+      const rejoined = providersForAgent([...providers], agent).filter(
+        (p) =>
+          !connectedIds.has(p.id) &&
+          (keepModel.providerId !== null
+            ? p.id === keepModel.providerId
+            : providerOffersModel(p, keepModel.modelId, agent) &&
+              !providers.some(
+                (c) => connectedIds.has(c.id) && providerOffersModel(c, keepModel.modelId, agent),
+              )),
+      );
+      if (rejoined.length > 0) {
+        const rejoinedIds = new Set(rejoined.map((p) => p.id));
+        const keptWireId = keepModel.modelId;
+        keptRail = providers.filter((p) => connectedIds.has(p.id) || rejoinedIds.has(p.id));
+        restrictRejoined = (model, provider) =>
+          rejoinedIds.has(provider.id) && model.id !== keptWireId;
+      }
+    }
     const rows = deriveModelList({
-      providers,
+      providers: keptRail ?? providers,
       agent,
-      providerScope: 'connected-for-agent',
+      // 并回生效时改走 'as-given':keptRail 已按「原 rail ∪ kept 供应商」收窄并保持目录序,
+      // 再套 connected 过滤会把刚并回的那家立刻剔掉。
+      providerScope: keptRail ? 'as-given' : 'connected-for-agent',
       // 同 id 多来源必须各出一行:联合列表按 (provider, 模型) 聚合,拍平去重会把另一来源
       // 的能力/徽章张冠李戴(规格 §4「同名模型多来源」)。
       dedupe: 'none',
@@ -611,8 +662,12 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       ...(excludeProvider
         ? { excludeProvider: (provider) => excludeProvider(provider, agent) }
         : {}),
-      ...(excludeModel
-        ? { excludeModel: (model, provider) => excludeModel(model, provider, agent) }
+      ...(excludeModel || restrictRejoined
+        ? {
+            excludeModel: (model: CatalogModel, provider: ProviderView) =>
+              (restrictRejoined !== null && restrictRejoined(model, provider)) ||
+              (excludeModel !== undefined && excludeModel(model, provider, agent)),
+          }
         : {}),
       // 选中行豁免直接借 deriveModelList 的既有 keepSelected:它同时松开可见性 override 与
       // 「新路由准入」(改用 isAgentSelectableModel),正是 disabled / retired 选中行要的那两道。

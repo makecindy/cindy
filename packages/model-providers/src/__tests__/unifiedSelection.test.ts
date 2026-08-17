@@ -1015,37 +1015,94 @@ describe('unifiedModelEntries', () => {
     expect(entries[0].candidates).toEqual(['claude-code']);
   });
 
-  it('选中行豁免够不到「供应商停用 / 来源断开」—— 那是枚举 rail 挡的,不是本层放行的', () => {
-    // ⚠️ 边界记录(不是期望的产品行为,是当前实现的事实):枚举固定走
-    // `providerScope:'connected-for-agent'`,suspended / 未连接的供应商**整家**进不了
-    // rail,keepModel 再点名也无从豁免 —— 与豁免是否按 agent 收窄无关(收窄前同结果)。
-    // 要覆盖这两态,得让 rail 对 kept 那一家开口,那是 deriveModelList 的口径改动。
+  it('选中行豁免覆盖供应商层:kept 供应商停用 / 断开时并回 rail,行保住且只保 kept 那一格', () => {
+    // 2026-08-17 review:此前这两态是记录在案的边界(rail 层整家剔除,keepModel 无从豁免),
+    // 现在 rail 对 kept 那一家开口 —— 但只放行点名 wire id × kept 引擎,同家其它模型与
+    // 同行其它引擎照常出局(三层过滤各自收口,见 keepModel 头注)。
     const suspended = view({
+      id: 'anthropic',
+      suspended: true,
+      models: {
+        // 同家还有一条健康模型 + 同模型的 codex 副本:都不得跟着 kept 并回。
+        'claude-code': [m('claude-opus-5'), m('claude-haiku-5')],
+        codex: [m('claude-opus-5')],
+      },
+    });
+    const entries = unifiedModelEntries({
+      providers: [suspended],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
+    });
+    expect(entries.map((e) => e.modelId)).toEqual(['claude-opus-5']);
+    expect(entries[0].candidates).toEqual(['claude-code']);
+    expect(Object.keys(entries[0].capabilities)).toEqual(['claude-code']);
+
+    const offline = view({
+      id: 'anthropic',
+      connected: false,
+      models: { 'claude-code': [m('claude-opus-5'), m('claude-haiku-5')] },
+    });
+    const offlineEntries = unifiedModelEntries({
+      providers: [offline],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
+    });
+    expect(offlineEntries.map((e) => e.modelId)).toEqual(['claude-opus-5']);
+    expect(offlineEntries[0].candidates).toEqual(['claude-code']);
+  });
+
+  it('供应商层并回按显式来源点名:另一家健康来源同 id 各自成行,互不放大', () => {
+    // 显式来源(providerId 非 null)被停用、而另一家已连接来源提供同名模型:kept 那一家
+    // 仍要并回(用户正在跑的是**那一家**的配置,健康行替代不了它),两行并存 ——
+    // 健康行走全套校验,kept 行只有 kept 引擎一格。
+    const suspendedA = view({
       id: 'anthropic',
       suspended: true,
       models: { 'claude-code': [m('claude-opus-5')] },
     });
-    expect(
-      unifiedModelEntries({
-        providers: [suspended],
-        isVisible: alwaysVisible,
-        scope: 'session',
-        keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
-      }),
-    ).toEqual([]);
-    const offline = view({
-      id: 'anthropic',
-      connected: false,
+    const healthyB = view({
+      id: 'xd',
       models: { 'claude-code': [m('claude-opus-5')] },
     });
-    expect(
-      unifiedModelEntries({
-        providers: [offline],
-        isVisible: alwaysVisible,
-        scope: 'session',
-        keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
-      }),
-    ).toEqual([]);
+    const entries = unifiedModelEntries({
+      providers: [suspendedA, healthyB],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'claude-code' },
+    });
+    expect(entries.map((e) => e.providerId)).toEqual(['anthropic', 'xd']);
+  });
+
+  it('供应商层并回在跟随默认路由(providerId null)时只当无任何健康来源提供该 id 才发生', () => {
+    const suspendedA = view({
+      id: 'anthropic',
+      suspended: true,
+      models: { 'claude-code': [m('claude-opus-5')] },
+    });
+    const healthyB = view({
+      id: 'xd',
+      models: { 'claude-code': [m('claude-opus-5')] },
+    });
+    // 有健康来源提供同 id:行本就在(xd),不并回停用的那一家 —— 并回只会多一条点了会
+    // 改道的影子行。
+    const withHealthy = unifiedModelEntries({
+      providers: [suspendedA, healthyB],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: null, modelId: 'claude-opus-5', agent: 'claude-code' },
+    });
+    expect(withHealthy.map((e) => e.providerId)).toEqual(['xd']);
+    // 健康来源也没了:并回停用的那一家,行保住。
+    const noneHealthy = unifiedModelEntries({
+      providers: [suspendedA],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: null, modelId: 'claude-opus-5', agent: 'claude-code' },
+    });
+    expect(noneHealthy.map((e) => e.providerId)).toEqual(['anthropic']);
+    expect(noneHealthy[0].candidates).toEqual(['claude-code']);
   });
 
   it('选中行豁免也松开可见性 override(与 deriveModelList.keepSelected 同约定)', () => {

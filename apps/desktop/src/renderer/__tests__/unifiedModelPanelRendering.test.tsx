@@ -382,6 +382,8 @@ describe('统一面板 · 会话内形态', () => {
       modelId: 'claude-opus-5',
       targetAgent: 'claude-code',
       effort: 'medium',
+      // 行上显示的目标 Fast 显式随事务交出(2026-08-17 review;该条目无 Fast 能力 → false)。
+      fast: false,
       // 选的是普通模型行 → 锚点为 null(会话侧据此把上一条收藏锚点清掉)。
       favoriteUid: null,
     });
@@ -403,6 +405,8 @@ describe('统一面板 · 会话内形态', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'claude-code',
       effort: 'medium',
+      // 浮层展示的目标配置里的 Fast(cc 那条无 Fast 能力 → false)。
+      fast: false,
       // 改的是**模型行**的引擎,与收藏无关 → 显式清锚点(2026-08-17 review K3:三类调用点
       // 的传值语义各不相同,一律显式给,不靠调用方的缺省)。
       favoriteUid: null,
@@ -502,6 +506,8 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'codex',
       effort: 'high',
+      // 推荐态显式关 Fast:留给事务重解析会读回目标记忆里残留的开(2026-08-17 review)。
+      fast: false,
       // 恢复推荐 = 不再跟着任何收藏副本跑 → 清锚点。
       favoriteUid: null,
     });
@@ -670,6 +676,8 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'codex',
       effort: 'high',
+      // 回落默认配置 = 显式无 Fast(与恢复推荐同族)。
+      fast: false,
       // 这条收藏马上就没了 → 清锚点(留着会让面板在一条已删的收藏上打勾)。
       favoriteUid: null,
     });
@@ -1359,6 +1367,8 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'claude-code',
       effort: 'low',
+      // 编辑后副本按目标引擎解析的 Fast(cc 那条无 Fast 能力 → false)。
+      fast: false,
       favoriteUid: uid,
     });
     await waitFor(() => {
@@ -1620,10 +1630,51 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
       modelId: 'claude-opus-5',
       targetAgent: 'claude-code',
       effort: 'medium',
+      // 收藏副本的 Fast(未存 = false)同样显式交给事务。
+      fast: false,
       favoriteUid: uid,
     });
     // 跨引擎不走这个回调:记不记由 ChatInput 在事务返回非 false 之后自己决定(取消不记)。
     expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Fast 收藏的跨引擎选中(2026-08-17 review):副本的 Fast **开**必须显式进事务入参 ——
+   * 此前入参不带 Fast,事务按目标引擎的旧记忆重解析,收藏 Fast 与记忆值不同时,
+   * 锚点照记、界面照勾,任务却按记忆里的另一个 Fast 在跑。
+   */
+  it('跨引擎选中 Fast 收藏:副本的 Fast 开显式随事务交出', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      fast: true,
+    });
+    const onCrossEngineSelect = vi.fn(() => true);
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+      vendorKey: 'cc',
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    const favoriteRow = within(screen.getAllByRole('group')[0])
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(favoriteRow);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      targetAgent: 'codex',
+      // 副本未存档位 → 目标条目默认 high;Fast 开(xd/codex 条目具备 Fast 能力)。
+      effort: 'high',
+      fast: true,
+      favoriteUid: uid,
+    });
   });
 
   /**
@@ -1668,6 +1719,8 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
       modelId: 'gpt-5.5',
       targetAgent: 'claude-code',
       effort: 'low',
+      // 编辑后副本按目标引擎解析的 Fast(cc 那条无 Fast 能力 → false)。
+      fast: false,
       favoriteUid: uid,
     });
     // 记不记仍由 ChatInput 按事务真实结果决定,面板不抢这一步。

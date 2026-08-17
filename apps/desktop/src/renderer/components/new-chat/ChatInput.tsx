@@ -6061,10 +6061,13 @@ export function ChatInput({
   // 跨引擎选中仍然是 confirmAgentBrowseSwitch(同一份确认与「不再提示」偏好)
   // → performAgentSwitch(意图登记、上下文容量护栏、fastMode 不跨引擎带入,全在那边)。
   //
-  // 刻意不给 performAgentSwitch 传 fastMode override:它会按**目标**(引擎, 来源, 模型)
-  // 的能力与预设重新解析,旧引擎开着的 Fast 不会被带过去 —— 这正是规格要的语义,
-  // 这里若把行上显示的 fast 传下去反而会把它带过引擎。
-  // effort 则显式传:面板行(以及收藏副本)已经按目标引擎解析好档位,那是用户看着点下去的值。
+  // Fast 与 effort 同规则:面板交出来的 `fast` 是按**目标引擎**解析并过完能力门控的值
+  // (行记忆 / 收藏副本 / 恢复推荐的显式关),那是用户看着点下去的配置,显式传进
+  // overrides.fastMode(2026-08-17 review:留给事务按目标记忆重解析,收藏 Fast 与记忆值
+  // 不同、或恢复推荐要明确关 Fast 时,界面配置与运行态分离)。**旧引擎的实时 fastMode
+  // 仍然绝不进这条链路**——缺省(面板拿不到目标配置的入口)时由 performAgentSwitch 按
+  // 目标重解析,两条路都不读旧引擎的值。
+  // effort 同样显式传:面板行(以及收藏副本)已经按目标引擎解析好档位。
   //
   // `modelId` 在契约上**已经是目标引擎的 wire model id**(面板按
   // `capabilities[targetAgent].wireModelId` 交出来)。这里对它零加工直接进切换事务 ——
@@ -6081,12 +6084,14 @@ export function ChatInput({
         modelId,
         targetAgent,
         effort,
+        fast,
         favoriteUid = null,
       }: {
         providerId: string;
         modelId: string;
         targetAgent: AgentKind;
         effort: Effort | '';
+        fast?: boolean;
         favoriteUid?: string | null;
       }): Promise<boolean> => {
         // 取消 = 什么都不改;返回 false 让选择器留在原地(用户还能挑别的行)。
@@ -6104,7 +6109,14 @@ export function ChatInput({
           targetAgent,
           modelId,
           providerId,
-          effort ? { effort } : undefined,
+          // fast 只认**面板显式给的目标值**;缺省时不传,由 performAgentSwitch 按目标
+          // 重解析。旧引擎的实时 Fast(本组件同名 state)不进这条链路。
+          effort || fast !== undefined
+            ? {
+                ...(effort ? { effort } : {}),
+                ...(fast !== undefined ? { fastMode: fast } : {}),
+              }
+            : undefined,
         );
         // 收藏锚点只在事务**真成功**后才记(G4):确认框被取消 / 登记失败时这次选择根本没
         // 发生,记下来会让面板在一条没被采用的收藏上打勾。选普通模型行 → favoriteUid 为

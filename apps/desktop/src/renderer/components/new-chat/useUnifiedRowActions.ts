@@ -99,6 +99,13 @@ export interface UnifiedRowActionsOptions {
           modelId: string;
           targetAgent: AgentKind;
           effort: Effort | '';
+          /**
+           * 目标 Fast(2026-08-17 review:行 / 收藏副本按**目标引擎**解析出来的那个值,
+           * 已过能力门控)。缺省 = 交给切换事务按目标记忆重解析;显式给值(含 `false`!)
+           * 时事务必须原样应用 —— 收藏副本的 Fast 与目标引擎记忆值不同、或恢复推荐要
+           * 明确关 Fast 时,重解析会让界面配置与运行态分离。
+           */
+          fast?: boolean;
           /** 这次选中的收藏锚点(选普通模型行 / 非「选中一行」的动作为 null)。 */
           favoriteUid?: string | null;
         }) => void | boolean | Promise<void | boolean>;
@@ -282,6 +289,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     targetAgent: AgentKind;
     effort: Effort | null;
     /**
+     * 目标 Fast。**必填、不给默认值**(2026-08-17 review,与 favoriteUid 同一条理由):
+     * 三个调用点交出来的都是「按目标解析好的显式配置」—— 收藏副本的 fast、恢复推荐 /
+     * 删收藏回落的 `false`。留给事务重解析(缺省语义)会按目标引擎的**旧记忆**算 Fast:
+     * 收藏 Fast 与记忆值不同、或恢复推荐要明确关 Fast 时,存储清了 / 收藏落了,任务却
+     * 还带着记忆里的旧 Fast 在跑 —— 界面配置与运行态分离。
+     */
+    fast: boolean;
+    /**
      * 事务成功后会话该把哪条收藏记成「当前选中」。**必填、不给默认值**(2026-08-17 review
      * 第四轮 K3):三个调用点的语义正好相反 —— 编辑选中收藏的引擎要**保住**这条锚点
      * (配置是切过去了,选中的还是这条收藏),恢复推荐 / 删除收藏要**清掉**它。缺省会被
@@ -298,6 +313,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         modelId: args.wireModelId,
         targetAgent: args.targetAgent,
         effort: args.effort ?? '',
+        fast: args.fast,
         favoriteUid: args.favoriteUid,
       }),
     ).then(
@@ -344,7 +360,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    *     手动拖档走完全同一条持久化链路(浮层与面板都留在原地);
    *   · 引擎已经和 live 不是一个(用户刚在同一个浮层里改过引擎胶囊)→ 会话走跨引擎切换事务,
    *     草稿走既有 onSelect 把整份副本写回(favoriteUid **保持该 uid**:编辑不改变「选中的是
-   *     这一条收藏」)。跨引擎那条按既有语义不带 Fast(performAgentSwitch 按目标重解析)。
+   *     这一条收藏」)。跨引擎那条把副本的 Fast 一并显式交给事务(2026-08-17 review:
+   *     留给事务按目标记忆重解析,副本 Fast 与记忆值不同时界面与运行态分离)。
    *
    * **引擎编辑并进同一结构**(2026-08-17 review H2):此前收藏行的引擎胶囊只 `updateModelFavorite`
    * 就返回 —— 收藏行当场显示新引擎,草稿 vendor 纹丝不动、会话也没执行跨引擎切换,与深度 /
@@ -387,6 +404,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         wireModelId,
         targetAgent: args.target.agent,
         effort: args.target.effort,
+        // 编辑后副本的 Fast(resolveFavoriteConfig 已按目标引擎能力门控)。
+        fast: args.target.fast,
         // 编辑不改变「选中的是这一条收藏」:锚点随事务一起交出去,会话侧在**事务真成功后**
         // 按编辑后的目标值(wire id / 引擎)重记这条锚点。草稿分支下面那条 onSelect 里的
         // `favoriteUid: args.uid` 是同一个语义,两条链路必须一致(2026-08-17 review K3)。
@@ -484,6 +503,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           modelId: next?.wireModelId ?? anchor.modelId,
           targetAgent,
           effort: next?.effort ?? '',
+          // 浮层展示的目标配置里 Fast 已按目标引擎解析 / 门控 —— 显式交给事务(用户看着
+          // 什么点的下去就用什么)。没注入解析器时拿不到目标配置,缺省让事务自行重解析。
+          ...(next ? { fast: next.fast } : {}),
           // 改的是**模型行**的引擎,与任何收藏无关 → 显式清锚点(切过去之后正在跑的是这一行
           // 的配置,不再是某条收藏那份副本)。
           favoriteUid: null,
@@ -668,6 +690,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         wireModelId: recommendedWireId,
         targetAgent: recommendedAgent,
         effort: defaultEffort,
+        // 推荐态没有 Fast:**显式关**(2026-08-17 review)。留给事务重解析会读回目标引擎
+        // 记忆里残留的 Fast —— 恢复完的任务还插队加速,与同引擎分支 applyDefaultsLive
+        // 的无条件关不一致。
+        fast: false,
         // 恢复推荐 = 回到「这一行的默认配置」,不再跟着任何收藏副本跑 → 清锚点
         // (与草稿分支 applyDefaultsToDraft 里的 `favoriteUid: null` 同一语义)。
         favoriteUid: null,
@@ -754,6 +780,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       wireModelId,
       targetAgent: fallback.agent,
       effort: fallback.effort,
+      // 默认配置的 Fast(resolveDefaultRowConfig 给的是「无收藏语境」的那一份,恒为关)——
+      // 与恢复推荐同族:显式交给事务,不留给目标记忆重解析。
+      fast: fallback.fast,
       // 这条收藏马上就没了 → 清锚点(留着会让面板在一条已删的收藏上打勾)。
       favoriteUid: null,
       onApplied: commit,
@@ -764,7 +793,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     if (interactionDisabled) return;
     const effort = config.effort ?? '';
     // 跨引擎选择不走普通 onSelect(那条链路只换 model / provider):交给调用方的切换事务
-    // (performAgentSwitch —— 确认弹窗、上下文重建、fastMode 不跨引擎带入等语义都在那边)。
+    // (performAgentSwitch —— 确认弹窗、上下文重建等语义都在那边;深度与 Fast 按行上
+    // 显示的目标值显式带过去,不带旧引擎的实时值)。
     // 草稿场景没有 sessionEngineFilter,换引擎没有代价,恒走 onSelect。
     // 交出去的一律是**该引擎的 wire id**(建会话 / 切模型 / 写 draft 都用它);
     // 行的归一化身份另放在 config.rowModelId 里,调用方要记 override / 收藏时用那个。
@@ -777,6 +807,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         modelId: wireModelId,
         targetAgent: config.agent,
         effort,
+        // 行上显示的 Fast 就是按目标引擎解析好的那个值(resolveUnifiedRowConfig /
+        // resolveFavoriteRowConfig 均已过能力门控):显式交给事务,收藏副本「Fast 关」
+        // 也要能压过目标记忆里残留的「开」(2026-08-17 review)。
+        fast: config.fast,
         favoriteUid: favorite ? favorite.uid : null,
       });
       return;

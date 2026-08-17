@@ -126,17 +126,28 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
-  it('keeps fastMode out of the cross-engine switch payload', () => {
+  /**
+   * Fast 的跨引擎口径(2026-08-17 review 改版):**只认面板显式给的目标值**。
+   * 面板交出来的 `fast` 是按目标引擎解析并过完能力门控的配置(收藏副本 / 恢复推荐的
+   * 显式关),显式给值(含 false)必须原样进 overrides;缺省才由 performAgentSwitch 按
+   * 目标重解析。**旧引擎的实时 fastMode(本组件同名 state)在两条路上都不得进 payload**——
+   * 那是最初版锁住的语义,改版后仍然成立。
+   */
+  it('passes only the panel-resolved target fast into the cross-engine switch payload', () => {
     const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
     // 确认弹窗照旧(同一份 confirmAgentBrowseSwitch,含「不再提示」偏好);
     expect(block).toContain('confirmAgentBrowseSwitch()');
-    // 切换事务照旧;effort 显式带上(用户看着点下去的档),fastMode **不**带 ——
-    // 由 performAgentSwitch 按目标引擎重新解析,旧引擎的 Fast 不跨引擎带入。
+    // 切换事务照旧;effort 显式带上(用户看着点下去的档)。
     expect(block).toContain('performAgentSwitchRef.current(');
-    expect(block).toContain("effort ? { effort } : undefined");
-    expect(block).not.toContain('fastMode');
+    expect(block).toContain('...(effort ? { effort } : {})');
+    // 显式目标 fast 进 overrides —— 判据必须是 `!== undefined`,不能是 truthy:
+    // 收藏「Fast 关」(false)也要能压过目标记忆里残留的「开」。
+    expect(block).toContain('...(fast !== undefined ? { fastMode: fast } : {})');
+    // 防复活:块内所有 fastMode 出现处只允许「fastMode: fast」这一种形态 —— 本组件自己的
+    // 实时 Fast state 不得被塞进 payload。
+    expect(block).not.toMatch(/fastMode(?!: fast\b)/);
   });
 
   /**
