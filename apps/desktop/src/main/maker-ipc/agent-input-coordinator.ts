@@ -429,6 +429,8 @@ export interface AgentInputCoordinatorDeps {
    * 没有这条，聊天里只剩用户气泡、没有红条，重试入口也不稳定。
    */
   persistTerminalSendError?: (sessionId: string, message: string) => void;
+  /** 已落库但 vendor reject：宿主可关掉卡住的原生会话，等用户重试再换窗。 */
+  onPersistedSendRejected?: (sessionId: string, message: string) => void;
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -3772,6 +3774,7 @@ export class AgentInputCoordinator {
       this.notifyRejectedUserTurn(sessionId, head);
       this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
       this.persistTerminalSendError(sessionId, latest.error);
+      this.notifyPersistedSendRejected(sessionId, latest.error);
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
@@ -3874,7 +3877,10 @@ export class AgentInputCoordinator {
         ...logFields,
       },
     );
-    if (!cancelledByUserBoundary) this.persistTerminalSendError(sessionId, message);
+    if (!cancelledByUserBoundary) {
+      this.persistTerminalSendError(sessionId, message);
+      this.notifyPersistedSendRejected(sessionId, message);
+    }
     this.emit(sessionId);
     // activeTurn 上面已置空,但队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带
     // 唤醒,scheduler 这条没有 recovery、没有人点,必须自己唤一次(review #944 第十轮 P1)。
@@ -5022,6 +5028,17 @@ export class AgentInputCoordinator {
       this.deps.persistTerminalSendError?.(sessionId, message);
     } catch (err) {
       log.warn('persistTerminalSendError failed', {
+        sessionId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  private notifyPersistedSendRejected(sessionId: string, message: string): void {
+    try {
+      this.deps.onPersistedSendRejected?.(sessionId, message);
+    } catch (err) {
+      log.warn('onPersistedSendRejected failed', {
         sessionId,
         error: errorMessage(err),
       });

@@ -202,7 +202,7 @@ export interface ContextOverflowRolloverDeps {
     sessionId: string,
     handoff: string,
     meta: {
-      reason: 'context-overflow';
+      reason: 'context-overflow' | 'pi-prompt-timeout';
       sourceUserClientId: string | null;
       expectedClearedAt?: number | null;
     },
@@ -232,7 +232,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   const inFlight = new Set<string>();
 
   const runRecover = async (sessionId: string, errorData: unknown): Promise<boolean> => {
-    if (!shouldRebuildPiNativeSession(errorData)) return false;
+    if (!isContextOverflowErrorData(errorData)) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
@@ -310,6 +310,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
     }
     if (!lastUser) return false;
+    const lastError = findLatestRebuildableError(source);
+    const rebuildReason = isPiPromptRpcTimeoutError(lastError)
+      ? 'pi-prompt-timeout'
+      : 'context-overflow';
     const handoffMessages = source.filter((message) => message.role !== 'error');
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     if (live) await deps.closeSession(sessionId);
@@ -318,10 +322,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       fromLabel: label,
       toLabel: label,
       sessionId,
-      reason: 'context-overflow',
+      reason: rebuildReason,
     });
     await deps.commitRebuild(sessionId, handoff, {
-      reason: 'context-overflow',
+      reason: rebuildReason,
       sourceUserClientId: lastUser.clientId,
       expectedClearedAt: sessionRow.clearedAt,
     });

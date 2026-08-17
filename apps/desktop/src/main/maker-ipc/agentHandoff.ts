@@ -52,10 +52,10 @@ export interface BuildHandoffOptions {
   workStateMessages?: HandoffSourceMessage[];
   /**
    * 交接触发原因。message-deletion 表示同一引擎因本地消息被删除而重建原生
-   * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话。
-   * framing 会要求只采用重建后的有效历史，且不向用户暴露内部重建。
+   * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
+   * pi-prompt-timeout 表示原生会话对 prompt 无响应后用户重试换窗。
    */
-  reason?: 'agent-switch' | 'message-deletion' | 'context-overflow';
+  reason?: 'agent-switch' | 'message-deletion' | 'context-overflow' | 'pi-prompt-timeout';
 }
 
 /** 最近多少个用户轮次进入逐字区(其余进单行提要区)。 */
@@ -376,7 +376,9 @@ const FORK_TERMINATOR = "== End of fork note; the user's new message follows =="
 
 /** 结束标记——交接正文与"用户的新消息"之间唯一的分隔,任何情况下都要留住。 */
 function handoffTerminator(opts: BuildHandoffOptions): string {
-  return opts.reason === 'message-deletion' || opts.reason === 'context-overflow'
+  return opts.reason === 'message-deletion' ||
+    opts.reason === 'context-overflow' ||
+    opts.reason === 'pi-prompt-timeout'
     ? REBUILD_TERMINATOR
     : HANDOFF_TERMINATOR;
 }
@@ -459,12 +461,20 @@ function assembleHandoffText(
   const earlier = turns.slice(0, -recentCount);
 
   const sections: string[] = [];
-  if (opts.reason === 'message-deletion' || opts.reason === 'context-overflow') {
+  if (
+    opts.reason === 'message-deletion' ||
+    opts.reason === 'context-overflow' ||
+    opts.reason === 'pi-prompt-timeout'
+  ) {
     const rebuildCause =
       opts.reason === 'context-overflow'
         ? `The previous native agent session exceeded the model's context window, so Cindy started a fresh native session in the same task. ` +
           `Below is the valid conversation history before the overflowing turn; treat only these records as the prior conversation, ` +
           `and do not try to recover, cite, or infer messages that are not listed. `
+        : opts.reason === 'pi-prompt-timeout'
+          ? `The previous native agent session stopped responding to prompts, so Cindy started a fresh native session in the same task. ` +
+            `Below is the valid conversation history before the unresponsive turn; treat only these records as the prior conversation, ` +
+            `and do not try to recover, cite, or infer messages that are not listed. `
         : `The user edited this conversation's local record, which invalidated the current native session context. ` +
           `Below is the valid conversation history after that edit; treat only these records as the prior conversation, ` +
           `and do not try to recover, cite, or infer messages that are not listed. `;

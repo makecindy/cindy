@@ -950,7 +950,7 @@ export async function commitContextRebuild(
   sessionId: string,
   handoff: string,
   meta: {
-    reason: 'context-overflow';
+    reason: 'context-overflow' | 'pi-prompt-timeout';
     sourceUserClientId: string | null;
     expectedClearedAt?: number | null;
   },

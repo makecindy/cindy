@@ -702,6 +702,8 @@ import {
 } from './agentHandoff.js';
 import {
   createContextOverflowRollover,
+  isContextOverflowErrorData,
+  isPiPromptRpcTimeoutError,
   persistedUserContentToWireMessage,
   shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
@@ -4188,7 +4190,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
-        shouldRebuildPiNativeSession(event.data);
+        isContextOverflowErrorData(event.data);
       if (suppressOverflowBroadcast) {
         overflowSuppressedBroadcasts.set(session.id, {
           sessionId: session.id,
@@ -4319,7 +4321,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
           !autoResumeSuppressesPersist &&
-          shouldRebuildPiNativeSession(attributedEvent.data)
+          isContextOverflowErrorData(attributedEvent.data)
             ? (contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
             : 'idle';
         if (overflowClaim === 'claimed') {
@@ -11855,7 +11857,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);
     },
     persistTerminalSendError: (sessionId, message) => {
-      onTurnErrorEvent(sessionId, { message }, null);
+      onTurnErrorEvent(
+        sessionId,
+        {
+          message,
+          ...(isPiPromptRpcTimeoutError({ message })
+            ? { reason: 'pi-prompt-timeout' }
+            : {}),
+        },
+        null,
+      );
+    },
+    onPersistedSendRejected: (sessionId, message) => {
+      if (!isPiPromptRpcTimeoutError({ message })) return;
+      // 第一次 timeout：只关掉卡住的原生进程，不自动 replay。用户重试时再 hidden rebuild。
+      void maker.closeSession(sessionId).catch((error) => {
+        log.warn('failed to close unhealthy PI session after prompt timeout', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {

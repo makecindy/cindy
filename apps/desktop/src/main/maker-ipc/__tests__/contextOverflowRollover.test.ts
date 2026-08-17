@@ -203,6 +203,21 @@ describe('createContextOverflowRollover', () => {
     expect(deps.setPendingHandoff).toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('还有建议吗');
+    expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('stopped responding to prompts');
+    expect(deps.commitRebuild.mock.calls[0]?.[2]).toMatchObject({ reason: 'pi-prompt-timeout' });
+  });
+
+  it('does not auto-replay a prompt RPC timeout as context-overflow', async () => {
+    const deps = makeDeps([
+      msg('user', '还有建议吗', 'u1'),
+      msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1'),
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { message: 'pi rpc timeout after 30000ms: prompt' }),
+    ).resolves.toBe(false);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
   it('treats an unaccepted replay as recovery failure', async () => {
