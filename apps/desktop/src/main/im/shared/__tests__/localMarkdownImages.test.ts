@@ -147,6 +147,21 @@ describe('materializeLocalMarkdownImages', () => {
     expect(deps.ingest).not.toHaveBeenCalled();
   });
 
+  it('decodes Markdown punctuation escapes before reading a local image', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'a(b.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const markdownPath = sourcePath.replace('(', '\\(');
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text: `![escaped](${markdownPath})`, workingDir, sessionId: 'escaped-path' },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'escaped' });
+  });
+
   it('redacts but does not materialize an angle destination missing its closing bracket', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'private.png');

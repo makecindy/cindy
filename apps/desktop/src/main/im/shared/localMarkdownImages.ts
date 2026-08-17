@@ -353,6 +353,17 @@ function exceedsPlainDestinationParenDepth(value: string): boolean {
   return false;
 }
 
+function unescapeMarkdownPunctuation(value: string): string {
+  let result = '';
+  for (let cursor = 0; cursor < value.length; cursor += 1) {
+    if (value[cursor] === '\\' && isMarkdownEscapablePunctuation(value[cursor + 1])) {
+      cursor += 1;
+    }
+    result += value[cursor];
+  }
+  return result;
+}
+
 function markdownImageDestination(raw: string): string {
   let target = raw.trim();
   if (target.startsWith('<')) {
@@ -384,7 +395,7 @@ function markdownImageDestination(raw: string): string {
     if (titled) target = titled[1];
     else if (hasUnescapedMarkdownWhitespace(target)) return '';
   }
-  return target;
+  return unescapeMarkdownPunctuation(target);
 }
 
 function markdownLocalTarget(raw: string): string | null {

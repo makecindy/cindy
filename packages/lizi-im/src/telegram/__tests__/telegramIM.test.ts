@@ -1525,7 +1525,9 @@ describe('TelegramIM', () => {
     const handle = await im.startStreamingText(OWNER_ID);
     handle.addExtraImageAbsPath?.(absPath);
 
-    await handle.finalize('一张被明确拒绝的图');
+    await expect(handle.finalize('一张被明确拒绝的图')).rejects.toThrow(
+      'telegram single image upload rejected',
+    );
 
     expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
     expect(handle.getNonRetryableExtraImageAbsPaths?.()).toEqual([]);
@@ -1575,11 +1577,14 @@ describe('TelegramIM', () => {
       const missing = path.join(tmpDir, 'gone.png'); // 故意不创建
       const handle = await im.startStreamingText(Number(OWNER_ID).toString());
       for (const abs of [present[0], missing, present[1]]) handle.addExtraImageAbsPath?.(abs);
-      await handle.finalize('三张图, 其中一张缺失');
+      await expect(handle.finalize('三张图, 其中一张缺失')).rejects.toThrow(
+        'telegram single image upload rejected',
+      );
       // 相册组装即失败, 一次 sendMediaGroup 都没打成
       expect(api.calls.filter((c) => c.method === 'sendMediaGroup')).toHaveLength(0);
       // 两张可读的仍然逐张发了出去; 缺失那张在读盘处失败, 不产生出站
       expect(api.calls.filter((c) => c.method === 'sendPhoto')).toHaveLength(2);
+      expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(present);
     });
 
     it('400 拒绝 → 逐张回落(确定一张都没进聊天)', async () => {

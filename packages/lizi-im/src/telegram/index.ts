@@ -2059,6 +2059,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         markDelivered(pending);
       } else if (outcome === 'uncertain') {
         markNonRetryable(pending);
+      } else {
+        throw new Error('telegram single image upload rejected');
       }
       settled += 1;
       report();
@@ -2075,6 +2077,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       } else if (outcome === 'uncertain') {
         markNonRetryable(group);
       } else {
+        let rejected = false;
+        let contiguous = true;
         for (const absPath of group) {
           assertLive?.();
           const singleOutcome = await this.sendSinglePhoto(chatId, absPath, anchorReply);
@@ -2082,10 +2086,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             markDelivered([absPath]);
           } else if (singleOutcome === 'uncertain') {
             markNonRetryable([absPath]);
+          } else {
+            rejected = true;
+            contiguous = false;
           }
-          settled += 1;
+          if (contiguous) settled += 1;
           report();
         }
+        if (rejected) throw new Error('telegram single image upload rejected');
         continue;
       }
       settled += group.length;
