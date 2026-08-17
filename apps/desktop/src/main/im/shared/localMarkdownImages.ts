@@ -413,8 +413,8 @@ function pathKey(value: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function attachmentDisplayName(raw: string, extension: string): string {
-  const sanitized = Array.from(raw, (char) => {
+function sanitizeAttachmentName(raw: string): string {
+  return Array.from(raw, (char) => {
     const code = char.charCodeAt(0);
     if (
       code <= 0x1f ||
@@ -432,7 +432,12 @@ function attachmentDisplayName(raw: string, extension: string): string {
     .join('')
     .replace(/\s+/g, ' ')
     .trim();
-  return Array.from(sanitized || `附件${extension}`)
+}
+
+function attachmentDisplayName(raw: string, extension: string): string {
+  const sanitized = sanitizeAttachmentName(raw);
+  const safeExtension = sanitizeAttachmentName(extension);
+  return Array.from(sanitized || `附件${safeExtension}`)
     .slice(0, 120)
     .join('');
 }

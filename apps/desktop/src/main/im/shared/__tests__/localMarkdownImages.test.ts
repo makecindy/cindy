@@ -782,6 +782,24 @@ describe('materializeLocalMarkdownFiles', () => {
     expect(result.text).toBe(displayName);
   });
 
+  it('sanitizes the extension used when an attachment label is empty', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.\u202ef\tdp');
+    await fs.writeFile(reportPath, 'approved content');
+
+    const result = await materializeLocalMarkdownFiles({
+      text: `[](xdt-file://${encodeURI(reportPath)})`,
+      workingDir,
+    });
+    tempRoots.push(...result.tempDirs);
+
+    const displayName = result.files[0]?.displayName ?? '';
+    expect(displayName).toBe('附件. f dp');
+    expect(displayName).not.toContain('\u202e');
+    expect(Array.from(displayName).every((char) => char.charCodeAt(0) > 0x1f)).toBe(true);
+    expect(result.text).toBe('附件');
+  });
+
   it('materializes SSH workdir attachments through the remote file service', async () => {
     const cacheRoot = await makeTempRoot();
     const cachePath = path.join(cacheRoot, 'remote-cache.bin');
