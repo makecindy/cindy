@@ -815,10 +815,14 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         error="Usage limit reached"
         retryText="retry this turn"
         onRetry={vi.fn()}
+        agentKind="codex"
         onContinueAfterUsageReset={onContinueAfterUsageReset}
+        usageLimitRecovery={{ resetAtMs: null }}
       />,
     );
 
+    expect(screen.getByText('chat.errorBanner.codexUsageLimit')).toBeTruthy();
+    expect(screen.queryByText('Usage limit reached')).toBeNull();
     const continueButton = screen.getByRole('button', {
       name: 'chat.errorBanner.continueAfterReset',
     });
@@ -832,6 +836,44 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(
       screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
     ).toBeNull();
+  });
+
+  it('explains an organization Codex limit and keeps the raw 429 response available', () => {
+    const rawError =
+      'API Error: Request rejected (429) · {"error":{"type":"usage_limit_reached","plan_type":"business","resets_at":1788220709}}';
+    render(
+      <ErrorBanner
+        error={rawError}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        usageLimitRecovery={{
+          resetAtMs: Date.parse('2026-08-31T23:58:29.000Z'),
+          planType: 'business',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexOrganizationUsageLimitWithReset')).toBeTruthy();
+    expect(screen.queryByText(rawError)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+    expect(screen.getByText(rawError)).toBeTruthy();
+  });
+
+  it('does not relabel another agent usage limit as a Codex account limit', () => {
+    render(
+      <ErrorBanner
+        error="You've hit your Claude session limit"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="cc"
+        usageLimitRecovery={{ resetAtMs: null }}
+      />,
+    );
+
+    expect(screen.getByText("You've hit your Claude session limit")).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.codexUsageLimit')).toBeNull();
   });
 
   it('replaces the misleading Claude Pro error with its XD Gateway attribution', () => {

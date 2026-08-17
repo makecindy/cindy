@@ -34,6 +34,21 @@ describe('usage limit recovery detection', () => {
     ).toEqual({ resetAtMs: NOW + 75 * 60_000 });
   });
 
+  it('extracts the organization plan and reset time from the Codex 429 payload', () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          message:
+            'API Error: Request rejected (429) · {"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"business","resets_at":1788220709,"eligible_promo":null,"resets_in_seconds":1264528}}',
+        },
+        Date.parse('2026-08-17T00:00:00.000Z'),
+      ),
+    ).toEqual({
+      resetAtMs: Date.parse('2026-08-31T23:58:29.000Z'),
+      planType: 'business',
+    });
+  });
+
   it('parses the real Claude session-limit wording with a named timezone', () => {
     expect(
       extractUsageLimitRecoveryHint(
