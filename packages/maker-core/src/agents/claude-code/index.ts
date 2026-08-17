@@ -1415,7 +1415,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     type VendorDispatchLeaseRelease = () => void | Promise<void>;
     const vendorDispatchLeaseByInput = new WeakMap<SdkUserInput, VendorDispatchLeaseRelease>();
-    const pendingVendorDispatchLeases = new Set<VendorDispatchLeaseRelease>();
+    const queuedVendorDispatchLeaseInputs = new Set<SdkUserInput>();
 
     const retainVendorDispatchLease = (
       input: SdkUserInput,
@@ -1426,11 +1426,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (released) return;
         released = true;
         vendorDispatchLeaseByInput.delete(input);
-        pendingVendorDispatchLeases.delete(releaseOnce);
+        queuedVendorDispatchLeaseInputs.delete(input);
         await release();
       };
       vendorDispatchLeaseByInput.set(input, releaseOnce);
-      pendingVendorDispatchLeases.add(releaseOnce);
     };
 
     const releaseVendorDispatchLeaseForInput = async (
@@ -1454,16 +1453,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       }, 0);
     };
 
-    const releasePendingVendorDispatchLeases = (reason: string): void => {
-      const releases = [...pendingVendorDispatchLeases];
-      if (releases.length > 0) {
-        log.debug('releasing pending Claude vendor dispatch leases', {
+    const releaseQueuedVendorDispatchLeases = (reason: string): void => {
+      const inputs = [...queuedVendorDispatchLeaseInputs];
+      if (inputs.length > 0) {
+        log.debug('releasing queued Claude vendor dispatch leases', {
           reason,
-          count: releases.length,
+          count: inputs.length,
         });
       }
-      for (const release of releases) {
-        void Promise.resolve(release()).catch((error: unknown) => {
+      for (const input of inputs) {
+        void releaseVendorDispatchLeaseForInput(input).catch((error: unknown) => {
           log.warn('Claude vendor dispatch lease release failed', {
             reason,
             error: error instanceof Error ? error.message : String(error),
@@ -1474,20 +1473,33 @@ export class ClaudeCodeAgent extends BaseAgent {
 
     const createInputQueue = (): AsyncQueue<SdkUserInput> => {
       const queue = createAsyncQueue<SdkUserInput>();
+      const iterate = async function* (): AsyncGenerator<SdkUserInput> {
+        for await (const item of queue) {
+          queuedVendorDispatchLeaseInputs.delete(item);
+          yield item;
+        }
+      };
       return {
-        push: (item) => queue.push(item),
+        push: (item) => {
+          const accepted = queue.push(item);
+          if (accepted && vendorDispatchLeaseByInput.has(item)) {
+            queuedVendorDispatchLeaseInputs.add(item);
+          }
+          return accepted;
+        },
         clear: () => {
           queue.clear();
-          releasePendingVendorDispatchLeases('input_queue_cleared');
+          releaseQueuedVendorDispatchLeases('input_queue_cleared');
         },
         end: () => {
+          queue.clear();
           queue.end();
-          releasePendingVendorDispatchLeases('input_queue_ended');
+          releaseQueuedVendorDispatchLeases('input_queue_ended');
         },
         get pending() {
           return queue.pending;
         },
-        [Symbol.asyncIterator]: () => queue[Symbol.asyncIterator](),
+        [Symbol.asyncIterator]: () => iterate(),
       };
     };
 

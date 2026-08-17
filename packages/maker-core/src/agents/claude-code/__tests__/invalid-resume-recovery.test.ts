@@ -320,9 +320,10 @@ describe('Claude invalid-resume recovery', () => {
     await vi.waitFor(() => expect(remoteQuery.send).toHaveBeenCalledTimes(1));
     expect(order).toEqual(['acquire']);
 
+    await handle.close();
+    expect(order).toEqual(['acquire']);
     finishRemoteSend();
     await vi.waitFor(() => expect(order).toEqual(['acquire', 'release']));
-    await handle.close();
     stream.end();
     await collected;
   });
