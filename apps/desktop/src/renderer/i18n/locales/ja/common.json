@@ -2497,6 +2497,11 @@
       },
       "toggleAria": "質問ナビゲーションレールを切り替え"
     },
+    "promptRecommendation": {
+      "label": "入力欄のおすすめプロンプト",
+      "description": "返信が終わると、入力欄に予測された次のプロンプトを表示します。Tab キーで入力できます。",
+      "toggleAria": "おすすめプロンプトを切り替え"
+    },
     "collaboration": {
       "loading": "コラボレーション設定を読み込み中…",
       "title": "コラボレーション",
@@ -3494,7 +3499,10 @@
             "copied": "ガイドをクリップボードにコピーしました。",
             "copyFailed": "コピーに失敗しました。もう一度お試しください。"
           }
-        }
+        },
+        "conflict": "利用不可",
+        "conflictAria": "{{name}} にプラグイン識別子の競合があります",
+        "conflictDescription": "このプラグイン識別子は既に使用されており、現在インストールできません"
       },
       "reapproval": {
         "badge": "権限の再確認が必要",

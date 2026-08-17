@@ -2498,6 +2498,11 @@
       },
       "toggleAria": "Toggle question navigation rail"
     },
+    "promptRecommendation": {
+      "label": "Prompt recommendations in input",
+      "description": "After a reply finishes, the input shows a predicted follow-up prompt. Press Tab to fill it in.",
+      "toggleAria": "Toggle prompt recommendations"
+    },
     "collaboration": {
       "loading": "Loading collaboration settings…",
       "title": "Collaboration",
@@ -3495,7 +3500,10 @@
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Please try again."
           }
-        }
+        },
+        "conflict": "Unavailable",
+        "conflictAria": "{{name}} has a plugin identifier conflict",
+        "conflictDescription": "This plugin identifier is already in use and cannot be installed right now"
       },
       "reapproval": {
         "badge": "Permission review needed",

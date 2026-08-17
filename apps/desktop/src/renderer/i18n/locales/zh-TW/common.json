@@ -1452,6 +1452,30 @@
           "empty": "沒有匹配的模型",
           "confirm": "填入所選模型（{{count}}）"
         },
+        "authMode": {
+          "label": "鑑權方式",
+          "apiKey": "API 金鑰",
+          "oauth": "OAuth 訂閱授權",
+          "none": "無需鑑權",
+          "noneHelp": "適用於本機或受信任的自託管 Proxy。Cindy 會移除 CLI 自帶的訂閱憑證和帳號頭，再把請求發往該端點。",
+          "oauthHelp": "適用於提供 OAuth 登入的供應商。可選擇瀏覽器回撥或裝置碼流程，儲存後從供應商列表發起授權。憑證僅加密儲存在本機。",
+          "flowLabel": "OAuth 流程",
+          "flow": {
+            "authorization-code": "瀏覽器回撥（PKCE）",
+            "device-code": "裝置碼"
+          },
+          "fields": {
+            "authorizeUrl": "授權端點 (Authorize URL)",
+            "deviceAuthorizationUrl": "裝置授權端點 (Device Authorization URL)",
+            "tokenUrl": "令牌端點 (Token URL)",
+            "clientId": "Client ID",
+            "scopes": "Scopes（空格分隔）"
+          },
+          "modelsAutoNote": "模型清單將在授權成功後自動獲取，無需手動填寫。"
+        },
+        "advanced": {
+          "label": "高階配置（模型 / 請求頭）"
+        },
         "runtimeFill": {
           "action": "填入其他 Runtime",
           "reviewTitle": "填入其他 Runtime",
@@ -1516,30 +1540,6 @@
           "modelsBusy": "請先完成正在進行的模型列表獲取或選擇，再填入其他 Runtime",
           "noCompatibleFields": "其他 Runtime 不支援目前 Runtime 中可重用的欄位",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍保持獨立"
-        },
-        "authMode": {
-          "label": "鑑權方式",
-          "apiKey": "API 金鑰",
-          "oauth": "OAuth 訂閱授權",
-          "none": "無需鑑權",
-          "noneHelp": "適用於本機或受信任的自託管 Proxy。Cindy 會移除 CLI 自帶的訂閱憑證和帳號頭，再把請求發往該端點。",
-          "oauthHelp": "適用於提供 OAuth 登入的供應商。可選擇瀏覽器回撥或裝置碼流程，儲存後從供應商列表發起授權。憑證僅加密儲存在本機。",
-          "flowLabel": "OAuth 流程",
-          "flow": {
-            "authorization-code": "瀏覽器回撥（PKCE）",
-            "device-code": "裝置碼"
-          },
-          "fields": {
-            "authorizeUrl": "授權端點 (Authorize URL)",
-            "deviceAuthorizationUrl": "裝置授權端點 (Device Authorization URL)",
-            "tokenUrl": "令牌端點 (Token URL)",
-            "clientId": "Client ID",
-            "scopes": "Scopes（空格分隔）"
-          },
-          "modelsAutoNote": "模型清單將在授權成功後自動獲取，無需手動填寫。"
-        },
-        "advanced": {
-          "label": "高階配置（模型 / 請求頭）"
         }
       },
       "models": {
@@ -2497,6 +2497,11 @@
       },
       "toggleAria": "切換提問導航條"
     },
+    "promptRecommendation": {
+      "label": "輸入框推薦提示詞",
+      "description": "AI 回覆結束後，輸入框會顯示預測的後續提示詞，按 Tab 鍵可快速填入。",
+      "toggleAria": "切換輸入框推薦提示詞"
+    },
     "collaboration": {
       "loading": "正在載入協同設定…",
       "title": "協同",
@@ -3394,11 +3399,10 @@
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
-        "replace": "替換",
-        "replaceAria": "使用此市場版本替換 {{name}}",
-        "replaceDescription": "已安裝相同標識的插件；繼續安裝會使用此市場版本替換，並保留插件資料。",
+        "conflict": "暫不可用",
+        "conflictAria": "{{name}} 存在插件標識衝突",
+        "conflictDescription": "插件標識已被佔用，當前無法安裝",
         "unavailable": "插件市場暫時不可用；已安裝插件仍可正常管理和使用。",
-        "customSourcesUnavailable": "以下自訂市場暫時不可用：{{names}}。其他市場不受影響。",
         "authenticationRequired": "登入 Cindy 後才能檢視插件市場。",
         "notConfigured": "當前環境未配置插件市場；已安裝插件仍可正常管理和使用。",
         "upgradeNotice": {
@@ -3494,7 +3498,11 @@
             "copied": "指南已複製到剪貼簿。",
             "copyFailed": "複製失敗，請重試。"
           }
-        }
+        },
+        "customSourcesUnavailable": "以下自訂市場暫時無法存取：{{names}}，其他市場不受影響。",
+        "replace": "取代",
+        "replaceAria": "以此市場版本取代 {{name}}",
+        "replaceDescription": "已安裝相同 ID 的插件，繼續將以市場版本取代，原有資料會保留。"
       },
       "install": "安裝插件…",
       "empty": "還沒有安裝任何插件",
@@ -5130,7 +5138,7 @@
         },
         "no-session": {
           "title": "任務不存在",
-          "desc": "本裝置上找不到該任務記錄。"
+          "desc": "本設備上找不到當前任務記錄。"
         },
         "no-workdir": {
           "title": "沒有工作目錄",
@@ -5567,7 +5575,6 @@
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在設定裡配置 API key 才能使用",
       "hidden": "已隱藏",
-      "modelListAria": "模型列表",
       "subscriptionDirectDisabled": {
         "chatgpt": "訂閱直連的 GPT 模型協議暫不支援 SSH 遠端會話",
         "xai": "訂閱直連的 Grok 模型協議暫不支援 SSH 遠端會話",
@@ -5671,7 +5678,8 @@
         "effortEndSmart": "更聰明",
         "railSameEngine": "僅 {{agent}}",
         "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容"
-      }
+      },
+      "modelListAria": "模型清單"
     },
     "permissionSelector": {
       "triggerAria": "選擇權限模式：{{label}}",
@@ -5743,12 +5751,12 @@
     },
     "worktree": {
       "detecting": "檢測環境中…",
-      "detectFailed": "環境檢測失敗，worktree 暫不可用",
       "gitMissing": "未檢測到 git，請先安裝",
       "notGitRepo": "當前目錄不是 git 倉庫",
       "alreadyInWorktree": "已在 worktree 中，禁止巢狀",
       "toggleAria": "啟用 worktree 隔離",
-      "chipTooltip": "在獨立 worktree 中開始這次對話，不影響當前分支"
+      "chipTooltip": "在獨立 worktree 中開始這次對話，不影響當前分支",
+      "detectFailed": "環境偵測失敗，暫時無法使用 Worktree"
     },
     "branchChip": {
       "label": "分支",
@@ -6094,7 +6102,6 @@
     "verificationFailed": "暫時無法確認 ChatGPT 登入是否已恢復，請重新檢測。"
   },
   "chat": {
-    "sessionLoading": "正在載入任務",
     "askUserQuestion": {
       "skippedAnswer": "已跳過"
     },
@@ -6616,8 +6623,8 @@
           "sourceConversationChanged": "來源任務已變更，請針對當前任務重新執行 /review。",
           "sourceFilesChanged": "來源任務的檔案已變更，請針對當前成果重新執行 /review。",
           "artifactChanged": "審查成果已變更，請針對當前成果重新執行 /review。",
-          "artifactUnavailable": "Cindy 無法安全讀取審查成果，請檢查工作區或附件後重新執行 /review。",
-          "providerFailed": "審查任務執行失敗"
+          "providerFailed": "審查任務執行失敗",
+          "artifactUnavailable": "Cindy 無法安全讀取審查成品，請檢查工作區或附件後重新執行 /review"
         }
       }
     },
@@ -6874,7 +6881,8 @@
     },
     "ghostPreview": {
       "opened": "打開了一個預覽頁面"
-    }
+    },
+    "sessionLoading": "載入任務中"
   },
   "ccAgent": {
     "agentStatus": {

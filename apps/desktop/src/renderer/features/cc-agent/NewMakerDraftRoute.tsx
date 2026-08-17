@@ -4824,7 +4824,7 @@ export function NewMakerDraftRoute() {
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
                     remoteHostId={draft.remoteHostId ?? null}
-                    deviceLinkDeviceId={effectiveDeviceLinkDeviceId}
+                    deviceLinkDeviceId={effectiveDeviceLinkDeviceId ?? null}
                     modelMemoryOverride={deviceLinkDraftMemory}
                     initialModel={draftInitialModel}
                     initialEffort={draftInitialEffort}
