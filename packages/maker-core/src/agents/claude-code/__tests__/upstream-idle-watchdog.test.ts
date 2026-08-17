@@ -588,6 +588,55 @@ describe('Claude Code tool-loop guard runtime integration', () => {
     }
   });
 
+  it('x-ai/grok 网关形态会话下 4 个不同 Grep 的 ABCD 轮转同样会被中断', async () => {
+    // x-ai/ 是网关侧 grok 命名空间(classification.ts 与 xai/ 分开登记),
+    // toSdkModelString 原样透传,顶层会话模型即该形态 —— 不得漏出 guard 覆盖。
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream(
+      'x-ai/grok-4.6',
+    );
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'find the missing implementation' });
+
+      const greps = [
+        'grep -R "planA" packages',
+        'grep -R "planB" packages',
+        'grep -R "planC" packages',
+        'grep -R "planD" packages',
+      ];
+      for (let i = 0; i < 16; i += 1) {
+        const id = `toolu_gateway_grok_rotation_${i}`;
+        stream.emit(assistantToolUse(id, greps[i % 4]));
+        stream.emit(userToolResult(id, `no result ${i}`));
+      }
+
+      await pumpUntil(
+        () => events.filter((event) => event.type === 'tool_result_full').length === 16,
+        'gateway grok rotation tool results processed',
+      );
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(toolLoopError(events)).toMatchObject({
+        type: 'error',
+        data: {
+          reason: 'tool_use_loop_detected',
+          loopKind: 'rotation',
+          loopCount: 16,
+          model: 'x-ai/grok-4.6',
+          isTerminal: true,
+        },
+        source: 'claude-code',
+      });
+      expect(fakeQuery.interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
   it('claude 会话下裸 id 形态的 grok sidechain 同样受 guard 保护', async () => {
     const result = await runStableAbabLoop(
       await startSessionWithStream('claude-opus-5'),

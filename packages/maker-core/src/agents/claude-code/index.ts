@@ -247,12 +247,15 @@ function isProviderRoutedModel(model: string): boolean {
  * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…、xai/…);
  * sidechain 的判断来自 SDK 流内的原始 id(可能是裸 deepseek-… / grok-… 形态,
  * 同 toSdkModelString 的双形态),因此按家族前缀匹配,不带 [1m] 的 SDK 改写。
+ * grok 家族按 model-providers classification 口径同时认三种形态:xai/(订阅直连)、
+ * x-ai/(网关命名空间,toSdkModelString 原样透传)与裸 grok-(sidechain 原始 id)。
  */
 function shouldUseToolLoopGuard(model: string): boolean {
   return (
     model.startsWith('deepseek')
     || model.startsWith('claude-')
     || model.startsWith('xai/')
+    || model.startsWith('x-ai/')
     || model.startsWith('grok-')
   );
 }
