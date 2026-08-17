@@ -786,11 +786,28 @@ describe('Pi package executable-code boundary', () => {
   it('uses one shared cross-process lock for every package mutation action', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
+    const tokens: string[] = [];
 
     await mutateAuthorized(store, { action: 'install', source });
+    tokens.push(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-change-token'),
+      'utf8',
+    ));
     await mutateAuthorized(store, { action: 'update', source });
+    tokens.push(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-change-token'),
+      'utf8',
+    ));
     await store.mutatePiPackage({ action: 'set-enabled', source, enabled: false });
+    tokens.push(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-change-token'),
+      'utf8',
+    ));
     await mutateAuthorized(store, { action: 'remove', source });
+    tokens.push(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-change-token'),
+      'utf8',
+    ));
 
     expect(lockRuntime.calls).toHaveLength(4);
     expect(new Set(lockRuntime.calls.map((call) => call.lockPath))).toEqual(new Set([
@@ -799,6 +816,34 @@ describe('Pi package executable-code boundary', () => {
     expect(lockRuntime.calls.every((call) => (
       call.label === 'pi-package-mutation' && (call.waitMs ?? 0) > 120_000
     ))).toBe(true);
+    expect(new Set(tokens.map((token) => token.trim())).size).toBe(4);
+  });
+
+  it('propagates package and approval changes to another shared-userData instance', async () => {
+    const { root, source } = await createPackage();
+    const firstStore = await import('../pi-package-store.js');
+    await mutateAuthorized(firstStore, {
+      action: 'set-enabled',
+      source,
+      enabled: true,
+    });
+    const listener = vi.fn();
+    const unsubscribe = firstStore.onPiPackagesChanged(listener);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+    await fs.writeFile(
+      path.join(root, 'extensions', 'index.ts'),
+      'export default function replacedByOtherInstance() {}',
+    );
+    await mutateAuthorized(secondStore, { action: 'update', source });
+
+    await vi.waitFor(() => expect(listener).toHaveBeenCalled(), { timeout: 2_000 });
+    await expect(firstStore.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
+    unsubscribe();
   });
 
   it('fails closed before touching the package tree when the shared lock is unavailable', async () => {

@@ -121,9 +121,11 @@ function isolatedBashEnvironment(
   return clean;
 }
 
-// The isolated package-home env is defense in depth, not an OS sandbox: bash
-// can rewrite env at will. Reject direct/static Pi package-manager spellings at
-// the execution boundary so mutations must cross Cindy's host-owned grant flow.
+// The isolated package-home env and command inspection are defense in depth,
+// not an OS sandbox: Full Access code can rewrite env or launch another
+// interpreter. Reject direct/static Pi package-manager spellings to prevent
+// accidental bypasses; the actual Cindy-managed store remains protected by
+// the host-only mutation capability and never treats this parser as isolation.
 const PI_PACKAGE_MUTATION_SUBCOMMANDS = new Set(['install', 'update', 'remove']);
 const PI_SHELL_WRAPPERS = new Set(['sh', 'bash', 'dash', 'ksh', 'zsh']);
 const PI_PACKAGE_MUTATION_CURRENT_SHELL_EVALUATORS = new Set(['source', '.', 'eval']);
@@ -2562,7 +2564,7 @@ export default async function cindyBridge(pi: any) {
       const nextParams = applyCindyBashTimeoutParams(params);
       if (bashCommandMutatesPiPackages(nextParams)) {
         throw new Error(
-          'Pi extension changes are unavailable through bash. Use cindy_pi_extension so Cindy can request confirmation.',
+          'Direct Pi extension changes are unavailable through bash. Use cindy_pi_extension so Cindy can request confirmation.',
         );
       }
       return bashTool.execute(id, nextParams as any, signal, onUpdate as any);

@@ -8,8 +8,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { promises as fs, type Stats } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { promises as fs, unwatchFile, watchFile, type Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -28,6 +28,7 @@ import {
 import { createLogger } from '../logger.js';
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { withSecurityBoundaryLock } from '../device-link/crossProcessLock.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 import {
   analyzePiExtensionCompatibility,
   evaluatePiRuntimeRequirements,
@@ -68,7 +69,13 @@ const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
   maxDurationMs: 15_000,
 };
 const STATE_VERSION = 3;
+const CHANGE_TOKEN_POLL_MS = 250;
 const changeListeners = new Set<() => void>();
+let changeTokenWatcherActive = false;
+let lastObservedChangeToken: string | null | undefined;
+let changeTokenReadInFlight: Promise<void> | undefined;
+let changeTokenReadQueued = false;
+const changeTokenWatchListener = () => void observePiPackageChangeToken();
 const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
 const INSTALL_LIFECYCLE_SCRIPTS = new Set([
   'preinstall', 'install', 'postinstall', 'prepare', 'prepublish', 'prepublishOnly',
@@ -76,7 +83,11 @@ const INSTALL_LIFECYCLE_SCRIPTS = new Set([
 
 export function onPiPackagesChanged(listener: () => void): () => void {
   changeListeners.add(listener);
-  return () => changeListeners.delete(listener);
+  startPiPackageChangeTokenWatcher();
+  return () => {
+    changeListeners.delete(listener);
+    if (changeListeners.size === 0) stopPiPackageChangeTokenWatcher();
+  };
 }
 
 function notifyPiPackagesChanged(): void {
@@ -89,6 +100,68 @@ function notifyPiPackagesChanged(): void {
       });
     }
   }
+}
+
+async function readPiPackageChangeToken(): Promise<string | null> {
+  try {
+    const handle = await fs.open(changeTokenPath(), 'r');
+    try {
+      const stat = await handle.stat();
+      if (stat.size > 512) throw new Error('Pi package change token is invalid');
+      return (await handle.readFile('utf8')).trim() || null;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function observePiPackageChangeToken(): Promise<void> {
+  if (changeTokenReadInFlight) {
+    changeTokenReadQueued = true;
+    return changeTokenReadInFlight;
+  }
+  const pending = readPiPackageChangeToken().then((token) => {
+    if (lastObservedChangeToken === undefined) {
+      lastObservedChangeToken = token;
+      return;
+    }
+    if (token === lastObservedChangeToken) return;
+    lastObservedChangeToken = token;
+    invalidateInspectionCache();
+    notifyPiPackagesChanged();
+  }).catch((error) => {
+    log.warn('Pi package change token observation failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }).finally(() => {
+    if (changeTokenReadInFlight === pending) changeTokenReadInFlight = undefined;
+    if (changeTokenReadQueued) {
+      changeTokenReadQueued = false;
+      void observePiPackageChangeToken();
+    }
+  });
+  changeTokenReadInFlight = pending;
+  return pending;
+}
+
+function startPiPackageChangeTokenWatcher(): void {
+  if (changeTokenWatcherActive) return;
+  changeTokenWatcherActive = true;
+  void observePiPackageChangeToken();
+  watchFile(
+    changeTokenPath(),
+    { interval: CHANGE_TOKEN_POLL_MS, persistent: false },
+    changeTokenWatchListener,
+  );
+}
+
+function stopPiPackageChangeTokenWatcher(): void {
+  if (!changeTokenWatcherActive) return;
+  changeTokenWatcherActive = false;
+  unwatchFile(changeTokenPath(), changeTokenWatchListener);
 }
 
 interface PiPackageState {
@@ -198,6 +271,24 @@ async function snapshotRootForInstalledPackage(
 
 function statePath(): string {
   return path.join(packageHome(), 'cindy-package-state.json');
+}
+
+function changeTokenPath(): string {
+  return path.join(packageHome(), 'cindy-package-change-token');
+}
+
+async function persistPiPackageChangeToken(): Promise<void> {
+  const token = `${Date.now()}-${process.pid}-${randomUUID()}`;
+  // Set the local baseline before the atomic publish. The local process emits
+  // synchronously below; its watcher must not duplicate the same refresh.
+  lastObservedChangeToken = token;
+  atomicWriteFileSync(changeTokenPath(), `${token}\n`);
+}
+
+async function publishPiPackagesChanged(options: { invalidateCache?: boolean } = {}): Promise<void> {
+  await persistPiPackageChangeToken();
+  if (options.invalidateCache !== false) invalidateInspectionCache();
+  notifyPiPackagesChanged();
 }
 
 function mutationLockPath(): string {
@@ -1200,8 +1291,7 @@ export async function resolveManagedPiPackageResources(
           .map((pkg) => pkg.rawSource);
         if (staleApprovals.length > 0) {
           await revokeExtensionApproval(staleApprovals);
-          invalidateInspectionCache();
-          notifyPiPackagesChanged();
+          await publishPiPackagesChanged();
         }
       }
       const resources = {
@@ -1237,8 +1327,7 @@ export async function resolveManagedPiPackageResources(
         if (changedSources.size > 0) {
           await fs.rm(options.snapshotRoot, { recursive: true, force: true });
           await revokeExtensionApproval(changedSources);
-          invalidateInspectionCache();
-          notifyPiPackagesChanged();
+          await publishPiPackagesChanged();
           return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
         }
         return staged;
@@ -1362,12 +1451,23 @@ async function findAffectedInspectedPackage(
   return packages.find((pkg) => pkg.installedRoot === requestedRoot);
 }
 
-function enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+function enqueueMutation<T>(
+  operation: () => Promise<T>,
+  onErrorUnderLock?: (error: unknown) => Promise<void>,
+): Promise<T> {
   // mutationTail prevents overlapping work inside one Main process. The
   // strict file lock extends the same critical section across packaged, dev,
   // and --passive instances sharing userData. It also recovers abandoned locks
   // after an owner exits and releases normally when an operation times out.
-  const result = mutationTail.then(() => withPiPackageMutationLock(operation));
+  const guardedOperation = async (): Promise<T> => {
+    try {
+      return await operation();
+    } catch (error) {
+      await onErrorUnderLock?.(error);
+      throw error;
+    }
+  };
+  const result = mutationTail.then(() => withPiPackageMutationLock(guardedOperation));
   mutationTail = result.then(() => undefined, () => undefined);
   return result;
 }
@@ -1832,17 +1932,15 @@ export async function mutatePiPackage(
       ? findAffectedPiPackage(result.packages, affectedSource)
       : findAffectedPiPackage(result.packages, source);
     const mutationResult = { ...result, changed: true, ...(affectedPackage ? { affectedPackage } : {}) };
-    notifyPiPackagesChanged();
+    await publishPiPackagesChanged({ invalidateCache: false });
     return mutationResult;
-  }).catch((error) => {
+  }, async () => {
     // Any action may already have changed Pi's package tree or Cindy's state
-    // before a later CLI/inspection step reports failure. Refresh every open
-    // Settings view and command palette instead of leaving stale state visible
-    // until the next manual reload.
+    // before a later CLI/inspection step reports failure. Persist the shared
+    // change token before releasing the cross-process lock, then refresh every
+    // open Settings view and command palette.
     if (mutationMayHaveChangedState) {
-      invalidateInspectionCache();
-      notifyPiPackagesChanged();
+      await publishPiPackagesChanged();
     }
-    throw error;
   });
 }
