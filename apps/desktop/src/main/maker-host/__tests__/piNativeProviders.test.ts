@@ -484,6 +484,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       },
     ];
     const bundled = piBundledModel('gpt-5.6-sol', 'openai-codex-responses', {
+      // readPiBundledModels probes with this deliberately unreachable endpoint.
+      // It must never override the provider-level runtime compat proxy.
+      baseUrl: 'http://127.0.0.1:1',
       contextWindow: 272_000,
       maxTokens: 128_000,
       cost: {
@@ -528,6 +531,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       }),
     ]);
     expect(provider?.models[0]?.catalogAddition).toBeUndefined();
+    expect(provider?.models[0]).not.toHaveProperty('baseUrl');
+    expect(provider?.baseUrl).toBe('http://127.0.0.1:4567/');
 
     const withoutProbe = buildPiSubscriptionNativeProviders(
       catalog,

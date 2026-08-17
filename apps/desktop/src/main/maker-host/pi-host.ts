@@ -552,7 +552,6 @@ export function buildPiSubscriptionNativeProviders(
             // makes inheritModels emit the overlay into models.json, while PI's
             // bundled provider remains authoritative for native transport quirks.
             api: bundledModel.api,
-            ...(bundledModel.baseUrl ? { baseUrl: bundledModel.baseUrl } : {}),
             name: model.name,
             contextWindow: model.contextWindow,
             maxTokens: model.maxOutput ?? bundledModel.maxTokens,
