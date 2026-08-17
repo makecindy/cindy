@@ -242,6 +242,11 @@ const COMPLETE_HTML_TAG_RE = new RegExp(
   `^(?:<${HTML_TAG_NAME}(?:\\s+${HTML_ATTRIBUTE_NAME}(?:\\s*=\\s*${HTML_ATTRIBUTE_VALUE})?)*\\s*/?>|</${HTML_TAG_NAME}\\s*>)[ \\t]*(?:\\r?\\n)?$`,
 );
 
+const INLINE_HTML_TAG_RE = new RegExp(
+  `(?:<${HTML_TAG_NAME}(?:\\s+${HTML_ATTRIBUTE_NAME}(?:\\s*=\\s*${HTML_ATTRIBUTE_VALUE})?)*\\s*/?>|</${HTML_TAG_NAME}\\s*>)`,
+  'y',
+);
+
 interface HtmlBlockLineStart {
   contentStart: number;
   quoteDepth: number;
@@ -404,6 +409,55 @@ function mergeMarkdownRanges(ranges: MarkdownCodeRange[]): MarkdownCodeRange[] {
   return merged;
 }
 
+/** CommonMark raw inline HTML tokens; Markdown inside these ranges is not parsed. */
+function markdownInlineHtmlRanges(
+  text: string,
+  excluded: readonly MarkdownCodeRange[],
+): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf('<', cursor);
+    if (start === -1) break;
+    const excludedRange = codeRangeAt(excluded, start);
+    if (excludedRange) {
+      cursor = excludedRange.end;
+      continue;
+    }
+
+    let end = -1;
+    if (text.startsWith('<!--', start)) {
+      const close = text.indexOf('-->', start + 4);
+      if (close !== -1) end = close + 3;
+    } else if (text.startsWith('<?', start)) {
+      const close = text.indexOf('?>', start + 2);
+      if (close !== -1) end = close + 2;
+    } else if (text.startsWith('<![CDATA[', start)) {
+      const close = text.indexOf(']]>', start + 9);
+      if (close !== -1) end = close + 3;
+    } else if (
+      text[start + 1] === '!' &&
+      text.charCodeAt(start + 2) >= 65 &&
+      text.charCodeAt(start + 2) <= 90
+    ) {
+      const close = text.indexOf('>', start + 3);
+      if (close !== -1) end = close + 1;
+    } else {
+      INLINE_HTML_TAG_RE.lastIndex = start;
+      const tag = INLINE_HTML_TAG_RE.exec(text)?.[0];
+      if (tag) end = start + tag.length;
+    }
+
+    if (end > start) {
+      ranges.push({ start, end });
+      cursor = end;
+    } else {
+      cursor = start + 1;
+    }
+  }
+  return ranges;
+}
+
 /** Locate non-rendered Markdown regions without copying large model output. */
 export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
   const fences: MarkdownCodeRange[] = [];
@@ -523,7 +577,9 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
     ranges.push({ start: cursor, end: closingEnd });
     cursor = closingEnd;
   }
-  return ranges.sort((a, b) => a.start - b.start);
+  const sortedRanges = ranges.sort((a, b) => a.start - b.start);
+  ranges.push(...markdownInlineHtmlRanges(text, sortedRanges));
+  return mergeMarkdownRanges(ranges);
 }
 
 /** Remove residual bare internal file URLs while preserving Markdown code examples. */

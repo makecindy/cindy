@@ -499,6 +499,26 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(collectXdtImageRefs(text)).toEqual([]);
   });
 
+  it('ignores managed media references inside raw inline HTML tokens', () => {
+    const text = [
+      `说明 <!-- ![注释图片](${BLOB}) [注释附件](xdt-file:///tmp/comment.pdf) -->`,
+      '<span title="[属性附件](xdt-file:///tmp/attribute.pdf)">正文</span>',
+      '[真实附件](xdt-file:///tmp/outside.pdf)',
+    ].join('\n');
+
+    expect(collectXdtImageRefs(text)).toEqual([]);
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '真实附件', url: 'xdt-file:///tmp/outside.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt, image: () => '图片' })).toBe(
+      [
+        `说明 <!-- ![注释图片](${BLOB}) [注释附件](xdt-file:///tmp/comment.pdf) -->`,
+        '<span title="[属性附件](xdt-file:///tmp/attribute.pdf)">正文</span>',
+        '真实附件',
+      ].join('\n'),
+    );
+  });
+
   it('ignores managed media references inside generic type-7 HTML blocks', () => {
     const text = [
       '<span class="example">',
