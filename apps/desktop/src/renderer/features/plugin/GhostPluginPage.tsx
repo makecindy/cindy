@@ -1,7 +1,8 @@
 /**
  * Plugin catalog and detail coordinator backed by the latest Ghost host APIs.
  *
- * Inputs: installed Ghost snapshots and user actions.
+ * Inputs: installed Ghost snapshots and user actions. `embedded` mounts the same
+ * catalog inside Settings; `onSelectCatalogTab` keeps Plugins / Skills in-panel.
  * Outputs: the Plugin list/detail UI, focus-stable installed queue, and Plugin action flows.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -299,7 +300,13 @@ function readIgnoredRound(storageKey: string): string {
  * real Ghost runtime. The page deliberately keeps the previous list/detail
  * interaction shape, while every displayed field comes from InstalledGhost.
  */
-export function GhostPluginPage() {
+export function GhostPluginPage({
+  embedded = false,
+  onSelectCatalogTab,
+}: {
+  embedded?: boolean;
+  onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
+} = {}) {
   const { i18n, t } = useTranslation();
   const marketLocale = resolveSystemLocale(i18n.resolvedLanguage ?? i18n.language);
   const navigate = useNavigate();
@@ -812,10 +819,7 @@ export function GhostPluginPage() {
       pluginId: string;
       options: PluginMarketInstallOptions;
     }): Promise<InstalledGhost | null> => {
-      const result = await window.electronAPI.pluginMarket.install(
-        input.pluginId,
-        input.options,
-      );
+      const result = await window.electronAPI.pluginMarket.install(input.pluginId, input.options);
       return result.ghost ?? null;
     },
     [],
@@ -1278,9 +1282,7 @@ export function GhostPluginPage() {
           ...(isUpdate && installedGhost
             ? { expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval) }
             : {}),
-          ...(isUpdate &&
-            (diff!.added.length > 0 ||
-              installedGhost?.approval.state !== 'approved')
+          ...(isUpdate && (diff!.added.length > 0 || installedGhost?.approval.state !== 'approved')
             ? {
                 allowPermissionExpansion: true,
                 ...(installedGhost
@@ -1438,6 +1440,8 @@ export function GhostPluginPage() {
       onQueryChange={setQuery}
       searchPlaceholder={t('settings.ghosts.page.search')}
       clearSearchLabel={t('settings.ghosts.page.clearSearch')}
+      embedded={embedded}
+      onSelectTab={onSelectCatalogTab}
       headerActions={
         <GhostPluginActions
           onInstall={() => void handleInstall()}
@@ -1447,7 +1451,12 @@ export function GhostPluginPage() {
       }
     >
       <div className="flex min-h-0 flex-1">
-        <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+        <main
+          className={cn(
+            'min-h-0 w-full min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]',
+            embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
+          )}
+        >
           <PluginManagementPage>
             <header className="plugin-motion-page-header pb-2">
               <div className="min-w-0">
@@ -1835,9 +1844,7 @@ export function MarketPluginCard({
   const unavailable = busy;
   const replacementDescriptionId = useId();
   const replacementDescription =
-    item.installState === 'conflict'
-      ? t('settings.ghosts.market.replaceDescription')
-      : undefined;
+    item.installState === 'conflict' ? t('settings.ghosts.market.replaceDescription') : undefined;
   return (
     <article
       className={cn(
@@ -1852,9 +1859,7 @@ export function MarketPluginCard({
         onClick={onSelect}
         disabled={unavailable}
         aria-label={item.name}
-        aria-describedby={
-          replacementDescription ? replacementDescriptionId : undefined
-        }
+        aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
         className={cn(
           'flex min-w-0 flex-1 items-start gap-4 self-stretch text-left',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -1908,9 +1913,7 @@ export function MarketPluginCard({
           onClick={onSelect}
           disabled={unavailable}
           aria-label={t('settings.ghosts.market.detailsAria', { name: item.name })}
-          aria-describedby={
-            replacementDescription ? replacementDescriptionId : undefined
-          }
+          aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
           className={cn(
             'group/market-details absolute inset-0 flex items-start justify-end rounded-xl text-[var(--text-tertiary)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
@@ -1938,9 +1941,7 @@ export function MarketPluginCard({
                 ? t('settings.ghosts.market.replaceAria', { name: item.name })
                 : t('settings.ghosts.page.installAria', { name: item.name })
             }
-            aria-describedby={
-              replacementDescription ? replacementDescriptionId : undefined
-            }
+            aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
             className={cn(
               'relative z-[1] inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
               'transition-[background-color,border-color,transform,opacity] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
