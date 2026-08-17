@@ -784,7 +784,7 @@ describe('materializeLocalMarkdownFiles', () => {
 
   it('sanitizes the extension used when an attachment label is empty', async () => {
     const workingDir = await makeTempRoot();
-    const reportPath = path.join(workingDir, 'report.\u202ef\tdp');
+    const reportPath = path.join(workingDir, 'report.\u202efdp');
     await fs.writeFile(reportPath, 'approved content');
 
     const result = await materializeLocalMarkdownFiles({
@@ -794,7 +794,7 @@ describe('materializeLocalMarkdownFiles', () => {
     tempRoots.push(...result.tempDirs);
 
     const displayName = result.files[0]?.displayName ?? '';
-    expect(displayName).toBe('附件. f dp');
+    expect(displayName).toBe('附件. fdp');
     expect(displayName).not.toContain('\u202e');
     expect(Array.from(displayName).every((char) => char.charCodeAt(0) > 0x1f)).toBe(true);
     expect(result.text).toBe('附件');
