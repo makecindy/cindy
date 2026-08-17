@@ -65,6 +65,13 @@ const txMock = vi.fn((name: string, args: unknown) => {
 const queryOneMock = vi.fn(async () => null as Record<string, unknown> | null);
 const queryMock = vi.fn(async () => [] as Array<{ role: string; content: string }>);
 
+const commitContextRebuildMock = vi.fn(async () => ({ updatedAt: Date.now() }));
+const createMessageMock = vi.fn(async () => ({}));
+vi.mock('../localDb/ipc/messages.js', () => ({
+  commitContextRebuild: (...args: unknown[]) => commitContextRebuildMock(...args),
+  createMessage: (...args: unknown[]) => createMessageMock(...args),
+}));
+
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({
     drizzle: fakeDb,
@@ -92,6 +99,8 @@ beforeEach(async () => {
   queryOneMock.mockResolvedValue(null);
   queryMock.mockReset();
   queryMock.mockResolvedValue([]);
+  commitContextRebuildMock.mockClear();
+  createMessageMock.mockClear();
   forkSdkSessionMock.mockReset();
   // 默认空 uuidMap 让 agentMeta 字段被去掉 (无映射)。具体测试按需 override。
   forkSdkSessionMock.mockResolvedValue({
@@ -597,6 +606,56 @@ describe('forkSessionAtMessage', () => {
     );
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
     expect(txCalls).toHaveLength(0);
+  });
+
+  it('forks overflow-rebuilt history as a fresh native session with handoff', async () => {
+    const target = makeMessageRow({
+      id: 'stale-history',
+      clientId: 'stale-history-client',
+      role: 'assistant',
+      createdAt: 2500,
+      rowid: 20,
+    });
+    const priorUser = makeMessageRow({
+      id: 'user-1',
+      clientId: 'user-1-client',
+      role: 'user',
+      createdAt: 2000,
+      rowid: 10,
+    });
+    selectQueue.push([makeSourceRow({
+      agentKind: 'pi',
+      sdkSessionId: 'fresh-after-rebuild',
+    })]);
+    selectQueue.push([target]);
+    selectQueue.push([]);
+    selectQueue.push([priorUser, target]);
+    selectQueue.push([makeSourceRow({
+      id: 'forked-id',
+      title: '[Fork] Project A',
+      agentKind: 'pi',
+      sdkSessionId: null,
+      parentSessionId: 'src-session',
+    })]);
+    queryOneMock.mockResolvedValueOnce({
+      id: 'later-overflow-rebuild',
+      content: JSON.stringify({
+        reason: 'context-overflow',
+        handoff: 'hidden',
+        consumed: true,
+      }),
+    });
+
+    await forkSessionAtMessage('src-session', 'stale-history-client');
+
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(txCalls.some((call) => call.name === 'fork.session')).toBe(true);
+    expect(commitContextRebuildMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('exceeded the model\'s context window'),
+      expect.objectContaining({ reason: 'context-overflow' }),
+    );
+    expect(createMessageMock).toHaveBeenCalled();
   });
 
   it('rejects a historical engine boundary without a parked native session id', async () => {

@@ -16,10 +16,12 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-i
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
+import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
-import type { Session } from '../../renderer/lib/ccAgent.types';
+import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
+import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import {
   type ClaudeTranscriptAnchorIndex,
   loadClaudeTranscriptAnchorIndex,
@@ -69,11 +71,14 @@ interface MessagePosition {
 
 interface ForkNativeSource {
   agentKind: DbAgentKind;
-  sdkSessionId: string;
+  sdkSessionId: string | null;
   model: string;
   providerId: string | null;
   /** 目标所在原生 session 离场的位置；copy 不能把这条未来边界带进子会话。 */
   nextSwitch: MessagePosition | null;
+  /** false = 原生会话已因同引擎换窗失效，只复制可见历史，首次发送走交接。 */
+  reuseVendorSession: boolean;
+  rebuildReason?: 'context-overflow' | 'pi-prompt-timeout';
 }
 
 interface ForkTimelineMessage {
@@ -94,6 +99,70 @@ interface ParsedAgentSwitchBoundary {
   fromModel: string | null;
   fromSdkSessionId: string | null;
   handoff?: string;
+}
+
+function parseJsonContent(content: string): unknown {
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    return content;
+  }
+}
+
+async function seedForkHandoffAfterSameEngineRebuild(opts: {
+  sessionId: string;
+  rows: ForkTimelineMessage[];
+  agentKind: DbAgentKind;
+  reason: 'context-overflow' | 'pi-prompt-timeout';
+}): Promise<void> {
+  const handoffMessages: HandoffSourceMessage[] = opts.rows
+    .filter(
+      (row) =>
+        row.role !== 'error' && row.role !== 'context_rebuild' && row.role !== 'agent_switch',
+    )
+    .map((row) => ({
+      role: row.role,
+      content: parseJsonContent(row.content),
+      createdAt: row.createdAt,
+      toolUseId: row.toolUseId,
+    }));
+  const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
+  const label = opts.agentKind === 'codex' ? 'Codex' : opts.agentKind === 'pi' ? 'Pi' : 'Claude Code';
+  const handoff = buildHandoffText(handoffMessages, {
+    fromLabel: label,
+    toLabel: label,
+    sessionId: opts.sessionId,
+    reason: opts.reason,
+  });
+  await commitContextRebuild(opts.sessionId, handoff, {
+    reason: opts.reason,
+    sourceUserClientId: lastUser?.clientId ?? null,
+  });
+  await createMessage(opts.sessionId, {
+    clientId: `context-rebuild-card:${createId()}`,
+    role: 'assistant',
+    content: '',
+    agentKind: opts.agentKind === 'cc' ? 'cc' : opts.agentKind,
+    agentMeta: {
+      contextRebuild: {
+        reason: opts.reason,
+        handoff,
+      },
+    } as AgentMeta,
+  });
+}
+
+function parseContextRebuildReason(
+  content: string,
+): 'context-overflow' | 'pi-prompt-timeout' | null {
+  try {
+    const parsed = JSON.parse(content) as { reason?: unknown };
+    return parsed.reason === 'context-overflow' || parsed.reason === 'pi-prompt-timeout'
+      ? parsed.reason
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | null {
@@ -148,8 +217,8 @@ async function resolveForkNativeSource(
   }
   const client = getDbClient();
   const positionParams = [sourceSessionId, target.createdAt, target.createdAt, target.rowid];
-  const invalidated = await client.queryOne<{ id: string }>(
-    `SELECT id FROM messages
+  const invalidated = await client.queryOne<{ id: string; content: string }>(
+    `SELECT id, content FROM messages
       WHERE session_id = ?
         AND role = 'context_rebuild'
         AND (created_at > ? OR (created_at = ? AND rowid > ?))
@@ -158,7 +227,20 @@ async function resolveForkNativeSource(
     positionParams,
   );
   if (invalidated) {
-    throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话已因上下文重建失效');
+    const rebuildReason = parseContextRebuildReason(invalidated.content);
+    // 消息删除重建会让旧历史失效；超限/超时换窗只换原生会话，可见历史仍可 fork。
+    if (!rebuildReason) {
+      throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话已因上下文重建失效');
+    }
+    return {
+      agentKind: normalizeDbAgentKind(source.agentKind),
+      sdkSessionId: null,
+      model: source.model,
+      providerId: source.providerId,
+      nextSwitch: null,
+      reuseVendorSession: false,
+      rebuildReason,
+    };
   }
   const nextSwitch = await client.queryOne<{
     content: string;
@@ -185,6 +267,7 @@ async function resolveForkNativeSource(
       model: source.model,
       providerId: source.providerId,
       nextSwitch: null,
+      reuseVendorSession: true,
     };
   }
   const parsed = parseAgentSwitchBoundary(nextSwitch.content);
@@ -199,6 +282,7 @@ async function resolveForkNativeSource(
     // 否则跟随目标 agent 默认 provider，不能把另一家引擎的 providerId 带过去。
     providerId: parsed.fromAgentKind === source.agentKind ? source.providerId : null,
     nextSwitch: { createdAt: nextSwitch.created_at, rowid: nextSwitch.rowid },
+    reuseVendorSession: true,
   };
 }
 
@@ -556,7 +640,7 @@ export async function forkSessionAtMessage(
         '请在 AI 回复之后的提问上 fork',
       );
     }
-  } else {
+  } else if (forkSource.reuseVendorSession && forkSource.sdkSessionId) {
     tailTurnsToDrop = await countCodexTailTurns(
       sourceSessionId,
       source.sdkSessionId,
@@ -572,7 +656,7 @@ export async function forkSessionAtMessage(
   let newSdkSessionId: string | null = null;
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
-  if (usesTailTurnFork || assistantUuid) {
+  if (forkSource.reuseVendorSession && forkSource.sdkSessionId && (usesTailTurnFork || assistantUuid)) {
     const agentKind = dbToMakerAgentKind(forkSource.agentKind);
     const forkResult = await getMaker().forkSdkSession(agentKind, {
       sourceSdkSessionId: forkSource.sdkSessionId,
@@ -677,6 +761,14 @@ export async function forkSessionAtMessage(
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
+  }
+  if (!forkSource.reuseVendorSession && forkSource.rebuildReason) {
+    await seedForkHandoffAfterSameEngineRebuild({
+      sessionId: newSessionId,
+      rows: sourceMessages,
+      agentKind: forkSource.agentKind,
+      reason: forkSource.rebuildReason,
+    });
   }
   return sessionToCamel({ ...row, messageCount: sourceMessages.length });
 }
