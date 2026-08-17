@@ -55,6 +55,9 @@ describe('SessionCard review regressions', () => {
 
   it('plays overflowing sidebar titles only while hovered', () => {
     expect(sessionItemSource).toContain('function SidebarTitleMarquee');
+    expect(sessionItemSource).toContain('[data-sidebar-session-row="true"]');
+    expect(sessionItemSource).toContain("row.addEventListener('mouseenter', onEnter)");
+    expect(sessionItemSource).toContain("row.addEventListener('mouseleave', onLeave)");
     expect(sessionItemSource).toContain("container.dataset.titleOverflowing = 'true'");
     expect(sessionItemSource).toContain('delete container.dataset.titleOverflowing');
     expect(globalsSource).toContain('@keyframes sidebar-title-marquee');
@@ -88,7 +91,7 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).not.toContain('var(--motion-base) * ${viewportCount * 12}');
   });
 
-  it('observes layout changes only while the title is hovered', () => {
+  it('observes layout changes only while the session row is hovered', () => {
     expect(sessionItemSource).toContain(
       'const resizeObserverRef = useRef<ResizeObserver | null>(null);',
     );
@@ -124,11 +127,11 @@ describe('SessionCard review regressions', () => {
     // 只并入 phase=running,与折叠 rail / remoteLampOf 同一口径;
     // needs-interaction 继续由右侧 awaiting 表达。
     expect(sessionItemSource).toContain(
-      'const leftIconRunning = isRunning || remoteActivity?.phase === \'running\'',
+      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
     );
     expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).toContain(
-      'const leftIconRunning = isRunning || remoteActivity?.phase === \'running\'',
+      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
     );
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
@@ -171,32 +174,26 @@ describe('SessionCard review regressions', () => {
     expect(automationGroupSource).toContain(
       'group/slot relative ml-auto flex h-6 max-w-[96px] shrink-0 items-center justify-end',
     );
-    expect(sessionItemSource).toContain('grid h-6 grid-cols-[max-content] items-center justify-items-end');
     expect(sessionItemSource).toContain(
-      "menuPos === null && 'hidden group-hover:flex group-focus-within/slot:flex'",
+      'grid h-6 grid-cols-[max-content] items-center justify-items-end',
     );
+    expect(sessionItemSource).toContain("'hidden group-hover:flex group-focus-within/slot:flex'");
     expect(automationGroupSource).toContain(
       'grid h-6 max-w-[96px] grid-cols-[max-content] items-center justify-items-end',
     );
     expect(automationGroupSource).toContain(
       "!menuOpen && 'hidden group-hover:block group-focus-within/slot:block'",
     );
-    expect(sessionCardSource).toContain('grid h-[22px] grid-cols-[max-content] items-center justify-items-end');
     expect(sessionCardSource).toContain(
-      "!menuOpen && 'hidden group-hover/card:flex group-focus-within/slot:flex'",
-    );
-    expect(sessionItemSource).toContain(
-      'invisible col-start-1 row-start-1 inline-flex',
-    );
-    expect(sessionItemSource).toContain(
-      '<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />',
+      'grid h-[22px] grid-cols-[max-content] items-center justify-items-end',
     );
     expect(sessionCardSource).toContain(
-      'invisible col-start-1 row-start-1 inline-flex',
+      "'hidden group-hover/card:flex group-focus-within/slot:flex'",
     );
-    expect(sessionCardSource).toContain(
-      '<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />',
-    );
+    expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-flex');
+    expect(sessionItemSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
+    expect(sessionCardSource).toContain('invisible col-start-1 row-start-1 inline-flex');
+    expect(sessionCardSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
     expect(sessionItemSource).not.toContain(
       'invisible col-start-1 row-start-1 inline-flex h-6 items-center px-1.5 py-[2px] text-11 leading-none',
     );
@@ -222,9 +219,7 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain(
       'invisible col-start-1 row-start-1 inline-block h-[22px] w-14',
     );
-    expect(sessionItemSource).toContain(
-      'invisible col-start-1 row-start-1 inline-block h-6 w-14',
-    );
+    expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-block h-6 w-14');
     expect(sessionItemSource).toContain(
       'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
     );
@@ -336,6 +331,28 @@ describe('SessionCard review regressions', () => {
     );
   });
 
+  it('lets the title truncate with an in-flow spacer while actions stay focusable', () => {
+    expect(sessionItemSource).toContain(
+      "'invisible col-start-1 row-start-1 h-6 items-center gap-0.5'",
+    );
+    expect(sessionItemSource).toContain("'hidden group-hover:flex group-focus-within/slot:flex'");
+    expect(sessionItemSource).toContain('absolute right-0 top-0 flex h-6 items-center gap-0.5');
+    expect(sessionItemSource).toContain(
+      'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+    );
+    expect(sessionItemSource).not.toContain('SESSION_ACTION_HOVER_SCRIM_CLASS');
+    expect(sessionCardSource).toContain(
+      "'invisible col-start-1 row-start-1 h-[22px] items-center gap-0.5'",
+    );
+    expect(sessionCardSource).toContain(
+      "'hidden group-hover/card:flex group-focus-within/slot:flex'",
+    );
+    expect(sessionCardSource).toContain(
+      'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
+    );
+    expect(sessionCardSource).not.toContain('SESSION_ACTION_HOVER_SCRIM_CLASS');
+  });
+
   it('aligns the session row cursor with the actual split drag source state', () => {
     expect(sessionItemSource).toContain("!isEditing && 'cursor-pointer'");
     expect(sessionItemSource).toContain(
@@ -407,20 +424,23 @@ describe('SessionCard review regressions', () => {
   });
 
   it('matches list-mode title type to the text-mode session row', () => {
+    expect(sessionCardSource).toContain('<SidebarTitleMarquee');
     expect(sessionCardSource).toContain("'text-sm font-medium leading-[1.3]'");
     expect(sessionCardSource).toContain(
       'inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-sm font-medium text-foreground"',
     );
     expect(sessionCardSource).toContain("'mt-1 overflow-hidden text-xs leading-[1.45]'");
     expect(sessionCardSource).toContain('className="leading-none"');
-    expect(sessionCardSource).not.toContain("'text-13 font-semibold leading-[1.3] tracking-[-0.005em]'");
+    expect(sessionCardSource).not.toContain(
+      "'text-13 font-semibold leading-[1.3] tracking-[-0.005em]'",
+    );
     expect(sessionItemSource).toContain("'text-left text-sm font-medium'");
   });
 
   it('keeps list-mode time and remote marks on the text-mode color and size', () => {
     expect(sessionCardSource).toContain('size={12}');
     expect(sessionCardSource).toContain(": 'text-sidebar-action-icon'");
-    expect(sessionCardSource).not.toContain("size={11}\n                      strokeWidth={1.8}");
+    expect(sessionCardSource).not.toContain('size={11}\n                      strokeWidth={1.8}');
     expect(sessionItemSource).toContain('size={12}');
     expect(sessionItemSource).toContain(": 'text-sidebar-action-icon'");
   });

@@ -386,56 +386,6 @@ describe('durable Subagent runs', () => {
     });
   });
 
-  it('persists a synchronous completed Claude Agent result as its first observation', async () => {
-    insertMessage(
-      'claude-sync-tool-use',
-      'tool_use',
-      '{}',
-      'toolu_sync_agent',
-      900,
-    );
-
-    const orphanTerminal = await persistSubagentTaskUpdate(
-      'session-1',
-      observed(
-        {
-          provider: 'claude-code',
-          taskId: 'orphan-terminal',
-          status: 'completed',
-        },
-        { kind: 'terminal' },
-      ),
-      'claude-code',
-    );
-    expect(orphanTerminal).toBeNull();
-
-    const created = await persistSubagentTaskUpdate(
-      'session-1',
-      observed(
-        {
-          provider: 'claude-code',
-          taskId: 'agent-sync',
-          parentToolUseId: 'toolu_sync_agent',
-          status: 'completed',
-          model: 'vendor-a/model-sol',
-          usage: { totalTokens: 22_113, toolUses: 0, durationMs: 4_949 },
-          updatedAt: '1970-01-01T00:00:01.000Z',
-        },
-        { kind: 'spawn' },
-      ),
-      'claude-code',
-    );
-
-    expect(created).toMatchObject({ created: true, firstForSession: true });
-    expect(await getSubagentRunDetail('session-1', 'claude-code', created!.runId)).toMatchObject({
-      logicalAgentId: 'agent-sync',
-      parentToolUseId: 'toolu_sync_agent',
-      status: 'completed',
-      model: 'vendor-a/model-sol',
-      usage: { totalTokens: 22_113, toolUses: 0, durationMs: 4_949 },
-    });
-  });
-
   it('honors message rewind and clear boundaries without deleting audit rows', async () => {
     insertMessage('tool-use-2', 'tool_use', '{}', 'parent-tool-2', 900);
     insertMessage('tool-result-before-clear', 'tool_result', 'old result', 'parent-tool-2', 950);

@@ -129,10 +129,11 @@ interface SidebarTitleMarqueeProps {
 }
 
 /**
- * 标题保持原生省略号，只有实际溢出且鼠标停留在标题区域时才播放一次横向滚动。
+ * 标题保持原生省略号，只有实际溢出且任务行处于悬浮态时才播放一次横向滚动。
+ * 绑在行上而不是标题上:指针移到更多/归档时跑马灯不能停。
  * 通过 DOM 属性和 CSS 变量驱动，避免给高密度侧栏行增加 React 状态订阅。
  */
-function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarqueeProps) {
+export function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarqueeProps) {
   const containerRef = useRef<HTMLSpanElement>(null);
   const trackRef = useRef<HTMLSpanElement>(null);
   const isHoveredRef = useRef(false);
@@ -194,6 +195,31 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
     if (isHoveredRef.current) startMarquee();
   }, [startMarquee, title]);
 
+  useEffect(() => {
+    const row = containerRef.current?.closest('[data-sidebar-session-row="true"]');
+    if (!(row instanceof HTMLElement)) return undefined;
+
+    const onEnter = () => {
+      isHoveredRef.current = true;
+      startMarquee();
+      startObserving();
+    };
+    const onLeave = () => {
+      isHoveredRef.current = false;
+      stopObserving();
+      stopMarquee();
+    };
+
+    row.addEventListener('mouseenter', onEnter);
+    row.addEventListener('mouseleave', onLeave);
+    if (row.matches(':hover')) onEnter();
+    return () => {
+      row.removeEventListener('mouseenter', onEnter);
+      row.removeEventListener('mouseleave', onLeave);
+      onLeave();
+    };
+  }, [startMarquee, startObserving, stopMarquee, stopObserving]);
+
   useEffect(() => () => stopObserving(), [stopObserving]);
 
   return (
@@ -201,16 +227,6 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
       ref={containerRef}
       className="sidebar-title-marquee min-w-0 max-w-full shrink overflow-hidden"
       title={title}
-      onMouseEnter={() => {
-        isHoveredRef.current = true;
-        startMarquee();
-        startObserving();
-      }}
-      onMouseLeave={() => {
-        isHoveredRef.current = false;
-        stopObserving();
-        stopMarquee();
-      }}
     >
       <span className={cn('sidebar-title-marquee__ellipsis', className)}>{children}</span>
       <span
@@ -941,7 +957,11 @@ export const SessionItem = memo(function SessionItem({
           ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
           : isSelected
             ? 'bg-[var(--chat-input-chip-bg)] text-foreground'
-            : 'text-foreground hover:bg-sidebar-item-hover',
+            : cn(
+                'text-foreground hover:bg-sidebar-item-hover',
+                // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
+                menuPos !== null && 'bg-sidebar-item-hover',
+              ),
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
       )}
       aria-current={isActive ? 'page' : undefined}
@@ -1048,12 +1068,10 @@ export const SessionItem = memo(function SessionItem({
           WorktreeBadge 紧贴时间左侧(仅在 WorktreeContext map 中存在 sessionId 时
           渲染), 与时间同步 hover-fade 让位给 action buttons —— 让右侧只看到一组
           视觉元素, 不和 action buttons 共存。
-          archive 快捷按钮 hover/focus 时覆盖整个槽位,避免右侧拥挤;完整菜单仍走右键。
-          槽宽跟可见内容走:状态点 / worktree / 任务信息有多宽占多宽,「任务信息 =
-          无」且无状态、无 worktree 时宽度归零,把行宽还给标题。hover / 菜单打开 /
-          二次确认时,信息层与操作占位叠在同一格,槽宽取两者较大值,标题走 truncate,
-          可见按钮仍绝对定位叠在同一槽上——不再常驻 56px,也不叠到标题上,更不把
-          信息宽和按钮宽相加。 */}
+          archive 快捷按钮 hover/focus 时进同一格文档流,标题 truncate 让位;
+          完整菜单仍走右键。槽宽跟可见内容走:平时信息槽有多宽占多宽,「任务信息 =
+          无」且无状态、无 worktree 时宽度归零。hover / 菜单打开时按钮入流,
+          槽宽取信息层与按钮的较大值——不再绝对定位盖到标题上。 */}
       {!isEditing && (
         <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
           {/* WorktreeBadge + time 同步 fade-out:hover/菜单打开/archivePending 时
@@ -1064,58 +1082,61 @@ export const SessionItem = memo(function SessionItem({
               group-focus-within,选中态(非 hover)时间会被永久隐藏而 action
               buttons 又不显示,右侧变空白。 */}
           <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
-          <div
-            className={cn(
-              'col-start-1 row-start-1 flex items-center gap-1',
-              // duration 与 action 按钮组的渐显同拍(120ms),让位/回归一进一出同步。
-              'transition-opacity duration-[120ms]',
-              !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
-              menuPos !== null && 'opacity-0',
-              archivePending && 'opacity-0',
-              // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
-              ordinalBadgeLabel != null && 'opacity-0',
-            )}
-          >
-            <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
-            {showRightStatus ? (
-              <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
-            ) : (
-              // 任务信息复选(C 期):按用户勾选拼装 pr / tokens / cost / time;默认仅
-              // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
-              <SessionInfoMeta pieces={infoPieces} prRef={infoPrRef} isActive={isActive} />
-            )}
-          </div>
-
-          {canQuickArchive && archivePending && (
-            <span aria-hidden className="invisible col-start-1 row-start-1 inline-block h-6 w-14" />
-          )}
-          {ordinalBadgeLabel != null && (
-            <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
-              <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
-            </span>
-          )}
-          {canQuickArchive && archivePending && (
-            <button
-              ref={confirmPillRef}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setArchivePending(false);
-                onAction(session.id, 'archive-now');
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
+            <div
               className={cn(
-                'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
-                'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,transparent)] text-[hsl(var(--destructive))] hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,transparent)]',
-                'transition-colors focus:outline-none',
+                'col-start-1 row-start-1 flex items-center gap-1',
+                // duration 与 action 按钮组的渐显同拍(120ms),让位/回归一进一出同步。
+                'transition-opacity duration-[120ms]',
+                !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
+                menuPos !== null && 'opacity-0',
+                archivePending && 'opacity-0',
+                // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
+                ordinalBadgeLabel != null && 'opacity-0',
               )}
-              aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
             >
-              {t('ccAgent.sidebar.sessionMenu.archived')}
-            </button>
-          )}
-          {/* Action 按钮组（hover/menu open 时浮现，archivePending 期间整组让位给红色 pill）。
+              <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
+              {showRightStatus ? (
+                <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
+              ) : (
+                // 任务信息复选(C 期):按用户勾选拼装 pr / tokens / cost / time;默认仅
+                // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
+                <SessionInfoMeta pieces={infoPieces} prRef={infoPrRef} isActive={isActive} />
+              )}
+            </div>
+
+            {canQuickArchive && archivePending && (
+              <span
+                aria-hidden
+                className="invisible col-start-1 row-start-1 inline-block h-6 w-14"
+              />
+            )}
+            {ordinalBadgeLabel != null && (
+              <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
+                <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+              </span>
+            )}
+            {canQuickArchive && archivePending && (
+              <button
+                ref={confirmPillRef}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setArchivePending(false);
+                  onAction(session.id, 'archive-now');
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={cn(
+                  'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
+                  'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,transparent)] text-[hsl(var(--destructive))] hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,transparent)]',
+                  'transition-colors focus:outline-none',
+                )}
+                aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
+              >
+                {t('ccAgent.sidebar.sessionMenu.archived')}
+              </button>
+            )}
+            {/* Action 按钮组（hover/menu open 时浮现，archivePending 期间整组让位给红色 pill）。
               尺寸/视觉与 Project Header 的 ProjectAction 同套（size-5 / icon 14 /
               strokeWidth 2 / gap-0.5）；普通行 hover 走 sidebar-item-hover，选中行
               则用 active foreground 的半透明叠色保持红色胶囊内的反色体系。唯一差异
@@ -1126,40 +1147,38 @@ export const SessionItem = memo(function SessionItem({
                   按钮立即还原,符合用户对 "撤回 = 回到点击前" 的直觉预期。
                 - archived：More + Undo（lucide Undo），单击直接走 unarchive，
                   不像 Archive 那样需要二次确认 pill（unarchive 非破坏性）。 */}
-          {!archivePending && (
-            <>
-              <div
-                aria-hidden
-                className={cn(
-                  'invisible col-start-1 row-start-1 flex h-6 items-center gap-0.5',
-                  menuPos === null && 'hidden group-hover:flex group-focus-within/slot:flex',
-                )}
-              >
-                {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
-                <span className="size-5 shrink-0" />
-                {isArchived && !remoteWritesBlocked ? (
+            {!archivePending && (
+              <>
+                {/* 入流占位只负责把标题挤窄;真正的按钮保持可聚焦,不能 display:none。 */}
+                <div
+                  aria-hidden
+                  className={cn(
+                    'invisible col-start-1 row-start-1 h-6 items-center gap-0.5',
+                    menuPos !== null
+                      ? 'flex'
+                      : 'hidden group-hover:flex group-focus-within/slot:flex',
+                  )}
+                >
+                  {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
                   <span className="size-5 shrink-0" />
-                ) : canQuickArchive ? (
-                  <span className="size-5 shrink-0" />
-                ) : null}
-              </div>
-              <div
-                // 渐显(120ms)配 pointer-events 守卫:淡出期间按钮不再占据鼠标位置,
-                // 解决了旧注释"渐变让按钮在 fade 期间仍占着鼠标位置、Radix Tooltip
-                // 收不到 pointerleave 导致 tip 挂着"的问题(当年因此禁用了
-                // transition-opacity);键盘焦点不受 pointer-events 影响,focus 路径不变。
-                className={cn(
-                  'absolute right-0 top-0 flex h-6 items-center gap-0.5',
-                  'transition-opacity duration-[120ms]',
-                  menuPos !== null
-                    ? 'opacity-100'
-                    : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
-                )}
-              >
-                {sessionActionButtons}
-              </div>
-            </>
-          )}
+                  {isArchived && !remoteWritesBlocked ? (
+                    <span className="size-5 shrink-0" />
+                  ) : canQuickArchive ? (
+                    <span className="size-5 shrink-0" />
+                  ) : null}
+                </div>
+                <div
+                  className={cn(
+                    'absolute right-0 top-0 flex h-6 items-center gap-0.5',
+                    menuPos !== null
+                      ? 'opacity-100'
+                      : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+                  )}
+                >
+                  {sessionActionButtons}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

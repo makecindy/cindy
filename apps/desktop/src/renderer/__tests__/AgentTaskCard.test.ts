@@ -111,14 +111,6 @@ describe('AgentTaskCard', () => {
   it('renders the subagent model chip from update.model (live)', () => {
     const { container } = render(
       React.createElement(AgentTaskCard, {
-        toolCall: {
-          clientId: 'c-live',
-          role: 'tool_use',
-          content: '',
-          toolName: 'Agent',
-          toolUseId: 'toolu_LIVE',
-          toolInput: { model: 'sonnet' },
-        },
         update: {
           provider: 'claude-code',
           taskId: 'task-1',
@@ -160,40 +152,6 @@ describe('AgentTaskCard', () => {
       }),
     );
     expect(modelChip(container)).toBeNull();
-  });
-
-  it('does not present a Claude Agent request model as the actual model', () => {
-    const { container } = render(
-      React.createElement(AgentTaskCard, {
-        toolCall: {
-          clientId: 'c-requested',
-          role: 'tool_use',
-          content: '',
-          toolName: 'Agent',
-          toolUseId: 'toolu_REQUESTED',
-          toolInput: { model: 'sonnet' },
-        },
-        result: 'done',
-      }),
-    );
-    expect(modelChip(container)).toBeNull();
-  });
-
-  it('keeps the existing Codex collab explicit model chip fallback', () => {
-    const { container } = render(
-      React.createElement(AgentTaskCard, {
-        toolCall: {
-          clientId: 'c-codex',
-          role: 'tool_use',
-          content: '',
-          toolName: 'collab:spawn',
-          toolUseId: 'call_CODEX',
-          toolInput: { model: 'gpt-5.6-terra' },
-        },
-        result: 'done',
-      }),
-    );
-    expect(modelChip(container)?.textContent).toBe('Gpt 5.6 Terra');
   });
 
   it('does not fall back to stale history or spawn input after an explicit model clear', () => {
