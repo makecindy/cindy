@@ -146,6 +146,14 @@ const MIME: Record<string, string> = {
  *    working, or the tool stops being usable and callers go back to launching
  *    a raw browser, which is the incident this feature exists to prevent.
  *
+ * The remaining directives are not individually load-bearing, but the overall
+ * `'self'`/`'none'` posture is: every one of them also denies a request aimed at
+ * another local service, including the no-cors shapes `connect-src` never sees
+ * (`<img src="http://127.0.0.1:<other-port>/…">`, form posts, framing). Relaxing
+ * any of them to a remote scheme — say `img-src https:` so previews can load
+ * external images — reopens part of that containment, so treat such a change as
+ * a security decision rather than a convenience one.
+ *
  * NOT a goal: stopping a preview page from exfiltrating its own content.
  * Page-initiated navigation (`location.href` with data in the URL), WebRTC and
  * DNS prefetch are all left alone, because arbitrary JS with unrestricted
