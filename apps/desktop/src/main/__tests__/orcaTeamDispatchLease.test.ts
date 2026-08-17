@@ -329,6 +329,53 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     expect(commitAttempts).toBe(2);
   });
 
+  it('retains the writer lease while retrying a non-busy submitted settlement failure', async () => {
+    const options = await createClientOptions();
+    const retryGate = Promise.withResolvers<void>();
+    let markerAttempts = 0;
+    const client: IsolatedSqliteClient = {
+      queryOne: async <T = unknown>(sql: string): Promise<T | undefined> => {
+        if (sql.includes('SELECT status FROM orca_teams')) {
+          return { status: 'active' } as T;
+        }
+        if (sql.includes("json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId')")) {
+          return { teamId: 'team-retain', phase: 'pre-vendor' } as T;
+        }
+        return { ok: 1 } as T;
+      },
+      exec: vi.fn(async (sql: string) => {
+        if (sql.includes("SET agent_meta = json_set")) {
+          markerAttempts += 1;
+          if (markerAttempts === 1) throw new Error('disk write interrupted');
+          await retryGate.promise;
+        }
+        return { changes: 1, lastInsertRowid: 0 };
+      }),
+      dispose: vi.fn(async () => {}),
+    };
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => client,
+      getTerminalFenceState: () => 'open',
+    });
+
+    const release = await coordinator.acquire('team-retain', {
+      sessionId: 'session-1',
+      clientId: 'client-retain',
+    });
+    let releaseSettled = false;
+    const releasing = release('submitted').then(() => {
+      releaseSettled = true;
+    });
+    await vi.waitFor(() => expect(markerAttempts).toBe(2));
+
+    expect(releaseSettled).toBe(false);
+    expect(client.exec).not.toHaveBeenCalledWith('ROLLBACK');
+    retryGate.resolve();
+    await releasing;
+    expect(client.exec).toHaveBeenCalledWith('COMMIT', undefined);
+  });
+
   it('tombstones a marked row when another instance already ended the team', async () => {
     const options = await createClientOptions();
     const setup = await trackedClient(options);

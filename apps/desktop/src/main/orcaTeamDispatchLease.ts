@@ -161,22 +161,11 @@ export class OrcaTeamDispatchLeaseCoordinator {
             await this.clearCleanupMarker(client, teamId, cleanupTarget);
             await this.execWithBusyRetry(client, 'COMMIT');
           } else if (cleanupTarget) {
-            await this.execWithBusyRetry(
+            await this.persistSubmittedCleanupTargetUnderLease(
               client,
-              `UPDATE messages
-                  SET agent_meta = json_set(
-                        agent_meta,
-                        '$.orcaPreVendorCleanup.phase',
-                        'submitted'
-                      )
-                WHERE session_id = ?
-                  AND client_id = ?
-                  AND role = 'user'
-                  AND rewind_at IS NULL
-                  AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
-              [cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
+              teamId,
+              cleanupTarget,
             );
-            await this.execWithBusyRetry(client, 'COMMIT');
           } else {
             await this.releaseTransaction(client);
           }
@@ -307,6 +296,47 @@ export class OrcaTeamDispatchLeaseCoordinator {
           AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
       [Date.now(), cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
     );
+  }
+
+  private async persistSubmittedCleanupTargetUnderLease(
+    client: IsolatedSqliteClient,
+    teamId: string,
+    cleanupTarget: OrcaTeamDispatchCleanupTarget,
+  ): Promise<void> {
+    let attempt = 0;
+    while (true) {
+      try {
+        await this.execWithBusyRetry(
+          client,
+          `UPDATE messages
+              SET agent_meta = json_set(
+                    agent_meta,
+                    '$.orcaPreVendorCleanup.phase',
+                    'submitted'
+                  )
+            WHERE session_id = ?
+              AND client_id = ?
+              AND role = 'user'
+              AND rewind_at IS NULL
+              AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
+          [cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
+        );
+        await this.execWithBusyRetry(client, 'COMMIT');
+        return;
+      } catch (error) {
+        attempt += 1;
+        if (attempt === 1 || attempt % 60 === 0) {
+          log.error('failed to persist submitted dispatch state; retaining writer lease and retrying', {
+            teamId,
+            sessionId: cleanupTarget.sessionId,
+            clientId: cleanupTarget.clientId,
+            attempt,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        await delay(Math.min(1_000, attempt * 25));
+      }
+    }
   }
 
   private async clearCleanupMarker(
