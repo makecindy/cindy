@@ -301,6 +301,8 @@ function dispatchTx(readyDb, payload) {
       return orcaSetWorkerFocus(readyDb, request.args);
     case 'orca.removeWorker':
       return orcaRemoveWorker(readyDb, request.args);
+    case 'orca.endTeam':
+      return orcaEndTeam(readyDb, request.args);
     case 'orca.cancelStaleTeams':
       return orcaCancelStaleTeams(readyDb, request.args);
     case 'orca.archiveWorkersByTeam':
@@ -809,6 +811,39 @@ function orcaRemoveWorker(readyDb, args) {
     deleteWorker.run(workerId);
     const archived = archiveSession.run(now, row.sessionId);
     return archived.changes > 0 ? row.sessionId : null;
+  })();
+}
+
+function orcaEndTeam(readyDb, args) {
+  const payload = asRecord(args, 'orca.endTeam args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const status = expectString(payload.status, 'status');
+  if (status !== 'completed' && status !== 'cancelled' && status !== 'failed') {
+    throw invalidArgs('status must be completed, cancelled, or failed');
+  }
+  const cleanupSessionIds = [...new Set(
+    expectArray(payload.cleanupSessionIds, 'cleanupSessionIds').map((sessionId) =>
+      expectString(sessionId, 'cleanupSessionIds[]'),
+    ),
+  )];
+  const now = expectNumber(payload.now, 'now');
+  const endTeam = readyDb.prepare(
+    'UPDATE orca_teams SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?',
+  );
+  return readyDb.transaction(() => {
+    let rewoundRows = [];
+    if (cleanupSessionIds.length > 0) {
+      const placeholders = cleanupSessionIds.map(() => '?').join(', ');
+      rewoundRows = readyDb.prepare(
+        "UPDATE messages SET rewind_at = ? WHERE role = 'user' AND rewind_at IS NULL "
+          + 'AND session_id IN (' + placeholders + ') '
+          + "AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ? "
+          + "AND COALESCE(json_extract(agent_meta, '$.orcaPreVendorCleanup.phase'), 'pre-vendor') = 'pre-vendor' "
+          + 'RETURNING session_id AS sessionId, client_id AS clientId',
+      ).all(now, ...cleanupSessionIds, teamId);
+    }
+    endTeam.run(status, now, now, teamId);
+    return rewoundRows;
   })();
 }
 

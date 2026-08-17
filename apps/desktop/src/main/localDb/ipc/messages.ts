@@ -1077,6 +1077,19 @@ export async function rewindPersistedUserMessageAfterClear(
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }
 
+/** Complete media cleanup and UI broadcast for rows already rewound by a DB transaction. */
+export async function finalizeRewoundOrcaPreVendorCleanupRows(
+  rows: Array<{ sessionId: string; clientId: string }>,
+): Promise<void> {
+  await Promise.all(
+    rows.map(({ sessionId, clientId }) =>
+      rewindPersistedUserMessageAfterClear(sessionId, clientId, {
+        finalizeAlreadyRewound: true,
+      }),
+    ),
+  );
+}
+
 /** Conditionally rewind only explicit, still-pre-vendor Orca cleanup markers. */
 export async function rewindOrcaPreVendorCleanupRows(
   teamId: string,
@@ -1099,13 +1112,7 @@ export async function rewindOrcaPreVendorCleanupRows(
       RETURNING session_id AS sessionId, client_id AS clientId`,
     [Date.now(), ...uniqueSessionIds, teamId],
   );
-  await Promise.all(
-    rows.map(({ sessionId, clientId }) =>
-      rewindPersistedUserMessageAfterClear(sessionId, clientId, {
-        finalizeAlreadyRewound: true,
-      }),
-    ),
-  );
+  await finalizeRewoundOrcaPreVendorCleanupRows(rows);
   return rows;
 }
 

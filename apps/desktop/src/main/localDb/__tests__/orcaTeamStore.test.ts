@@ -187,6 +187,16 @@ describe('orcaTeamStore', () => {
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
     await seedOrcaWorkers(client);
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, agent_meta) VALUES (?, ?, ?, ?, ?)',
+      [
+        'message-pre-vendor',
+        'client-pre-vendor',
+        'worker-session-1',
+        'user',
+        JSON.stringify({ orcaPreVendorCleanup: { teamId: 'team-1', phase: 'pre-vendor' } }),
+      ],
+    );
 
     const beforeTerminalCommit = vi.fn(async () => {
       await expect(
@@ -200,8 +210,13 @@ describe('orcaTeamStore', () => {
     });
 
     await expect(
-      markTeamEnded('team-1', 'completed', { beforeTerminalCommit }),
-    ).resolves.toBeUndefined();
+      markTeamEnded('team-1', 'completed', {
+        beforeTerminalCommit,
+        terminalCleanupSessionIds: ['lead-session-1', 'worker-session-1'],
+      }),
+    ).resolves.toEqual([
+      { sessionId: 'worker-session-1', clientId: 'client-pre-vendor' },
+    ]);
 
     expect(beforeTerminalCommit).toHaveBeenCalledOnce();
     await expect(
@@ -210,8 +225,58 @@ describe('orcaTeamStore', () => {
         ['team-1'],
       ),
     ).resolves.toEqual({ status: 'completed' });
+    await expect(
+      client.queryOne<{ rewindAt: number | null }>(
+        'SELECT rewind_at AS rewindAt FROM messages WHERE id = ?',
+        ['message-pre-vendor'],
+      ),
+    ).resolves.toEqual({ rewindAt: expect.any(Number) });
     expect(h.terminalFenceCommit).toHaveBeenCalledOnce();
     expect(h.terminalFenceRollback).not.toHaveBeenCalled();
+  });
+
+  it('rolls the final pre-vendor sweep back when the terminal status write fails', async () => {
+    const { markTeamEnded } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, agent_meta) VALUES (?, ?, ?, ?, ?)',
+      [
+        'message-rollback',
+        'client-rollback',
+        'worker-session-1',
+        'user',
+        JSON.stringify({ orcaPreVendorCleanup: { teamId: 'team-1' } }),
+      ],
+    );
+    rawDb?.exec(`
+      CREATE TRIGGER fail_orca_team_terminal_update
+      BEFORE UPDATE ON orca_teams
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal write failed');
+      END;
+    `);
+
+    await expect(
+      markTeamEnded('team-1', 'failed', {
+        terminalCleanupSessionIds: ['worker-session-1'],
+      }),
+    ).rejects.toThrow('terminal write failed');
+
+    await expect(
+      client.queryOne<{ status: string }>('SELECT status FROM orca_teams WHERE id = ?', [
+        'team-1',
+      ]),
+    ).resolves.toEqual({ status: 'active' });
+    await expect(
+      client.queryOne<{ rewindAt: number | null }>(
+        'SELECT rewind_at AS rewindAt FROM messages WHERE id = ?',
+        ['message-rollback'],
+      ),
+    ).resolves.toEqual({ rewindAt: null });
+    expect(h.terminalFenceRollback).toHaveBeenCalledOnce();
+    expect(h.terminalFenceCommit).not.toHaveBeenCalled();
   });
 
   it('settles prepared cleanup before reopening a failed terminal fence', async () => {
@@ -608,6 +673,15 @@ describe('orcaTeamStore', () => {
         idle_since INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        agent_meta TEXT,
+        rewind_at INTEGER
       );
     `);
     const db = drizzle(dbHandle, { schema });

@@ -119,6 +119,14 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
       'onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope)',
       endedAt,
     );
+    const atomicSweepAt = registerSource.indexOf(
+      'terminalCleanupSessionIds: cleanupScope.sessionIds',
+      endedAt,
+    );
+    const finalizedAt = registerSource.indexOf(
+      'await finalizeRewoundOrcaPreVendorCleanupRows(atomicallyRewoundRows)',
+      endedAt,
+    );
     const settledAt = registerSource.indexOf(
       'await settleOrcaTeamQueuedInputs(cleanupScope)',
       endedAt,
@@ -139,8 +147,10 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     expect(helperPreparedAt).toBeGreaterThan(durableSweepAt);
     expect(endedAt).toBeGreaterThan(-1);
     expect(preparedAt).toBeGreaterThan(endedAt);
-    expect(rollbackAt).toBeGreaterThan(preparedAt);
-    expect(settledAt).toBeGreaterThan(rollbackAt);
+    expect(atomicSweepAt).toBeGreaterThan(preparedAt);
+    expect(rollbackAt).toBeGreaterThan(atomicSweepAt);
+    expect(finalizedAt).toBeGreaterThan(rollbackAt);
+    expect(settledAt).toBeGreaterThan(finalizedAt);
     expect(disableCleanupAt).toBeGreaterThan(settledAt);
     expect(lifecycleCleanupAt).toBeGreaterThan(disableCleanupAt);
     expect(clearedAt).toBeGreaterThan(settledAt);

@@ -175,6 +175,7 @@ import {
   broadcastMessageDeleted,
   commitMessageDeletion,
   createMessage as createDbMessage,
+  finalizeRewoundOrcaPreVendorCleanupRows,
   rewindOrcaPreVendorCleanupRows,
   rewindPersistedUserMessageAfterClear,
   findParkedEngineSession,
@@ -9537,10 +9538,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       teamId: input.teamId,
       sessionIds: [...new Set(input.sessionIds)],
     };
-    await markTeamEnded(input.teamId, input.status, {
+    const atomicallyRewoundRows = await markTeamEnded(input.teamId, input.status, {
       beforeTerminalCommit: () => prepareOrcaTeamTerminalCommit(cleanupScope),
+      terminalCleanupSessionIds: cleanupScope.sessionIds,
       onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope),
     });
+    await finalizeRewoundOrcaPreVendorCleanupRows(atomicallyRewoundRows);
     await settleOrcaTeamQueuedInputs(cleanupScope);
   }
 

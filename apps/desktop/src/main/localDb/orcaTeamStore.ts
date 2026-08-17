@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
+import type { OrcaPreVendorCleanupRow } from './client/tx/types.js';
 import { orcaWorkers, orcaTeams, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -399,18 +400,22 @@ export async function markTeamEnded(
   status: 'completed' | 'cancelled' | 'failed',
   hooks?: {
     beforeTerminalCommit?: () => void | Promise<void>;
+    terminalCleanupSessionIds?: string[];
     onTerminalCommitFailed?: () => void | Promise<void>;
   },
-): Promise<void> {
-  const db = getDbClient().drizzle;
+): Promise<OrcaPreVendorCleanupRow[]> {
+  const client = getDbClient();
   const now = Date.now();
   const terminalTransition = orcaTeamTerminalFence.begin(teamId);
+  let rewoundRows: OrcaPreVendorCleanupRow[] = [];
   try {
     await hooks?.beforeTerminalCommit?.();
-    await db
-      .update(orcaTeams)
-      .set({ status, completedAt: now, updatedAt: now })
-      .where(eq(orcaTeams.id, teamId));
+    rewoundRows = await client.tx('orca.endTeam', {
+      teamId,
+      status,
+      cleanupSessionIds: hooks?.terminalCleanupSessionIds ?? [],
+      now,
+    });
   } catch (err) {
     try {
       await hooks?.onTerminalCommitFailed?.();
@@ -424,6 +429,7 @@ export async function markTeamEnded(
     throw err;
   }
   orcaTeamTerminalFence.commit(terminalTransition);
+  return rewoundRows;
 }
 
 /**

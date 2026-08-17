@@ -333,6 +333,12 @@ describe('sendToSession ordering', () => {
     expect(source).toContain(
       'await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds);',
     );
+    expect(source).toContain(
+      'terminalCleanupSessionIds: cleanupScope.sessionIds,',
+    );
+    expect(source).toContain(
+      'await finalizeRewoundOrcaPreVendorCleanupRows(atomicallyRewoundRows);',
+    );
     expect(source).toContain('const remainingDirectItems = persistedOrcaPreVendorInputsForTeam(');
   });
 

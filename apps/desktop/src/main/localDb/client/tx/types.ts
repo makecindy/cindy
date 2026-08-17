@@ -14,6 +14,7 @@ export type DbTxName =
   | 'orca.upsertWorker'
   | 'orca.setWorkerFocus'
   | 'orca.removeWorker'
+  | 'orca.endTeam'
   | 'orca.cancelStaleTeams'
   | 'orca.archiveWorkersByTeam'
   | 'orca.reconcileInactiveTeamWorkersForLead'
@@ -243,6 +244,19 @@ export interface OrcaSetWorkerFocusArgs {
 /** F-COLLAB: create_worker 派发失败时移除 worker link，并归档对应 session。 */
 export interface OrcaRemoveWorkerArgs {
   workerId: string;
+  now: number;
+}
+
+export interface OrcaPreVendorCleanupRow {
+  sessionId: string;
+  clientId: string;
+}
+
+/** End one team while atomically rewinding the last cross-instance pre-vendor markers. */
+export interface OrcaEndTeamArgs {
+  teamId: string;
+  status: 'completed' | 'cancelled' | 'failed';
+  cleanupSessionIds: string[];
   now: number;
 }
 
@@ -748,6 +762,7 @@ export type DbTxArgsByName = {
   'orca.upsertWorker': OrcaUpsertWorkerArgs;
   'orca.setWorkerFocus': OrcaSetWorkerFocusArgs;
   'orca.removeWorker': OrcaRemoveWorkerArgs;
+  'orca.endTeam': OrcaEndTeamArgs;
   'orca.cancelStaleTeams': OrcaCancelStaleTeamsArgs;
   'orca.archiveWorkersByTeam': OrcaArchiveWorkersByTeamArgs;
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
@@ -793,6 +808,7 @@ export type DbTxResultByName = {
   'orca.upsertWorker': undefined;
   'orca.setWorkerFocus': undefined;
   'orca.removeWorker': string | null;
+  'orca.endTeam': OrcaPreVendorCleanupRow[];
   'orca.cancelStaleTeams': undefined;
   'orca.archiveWorkersByTeam': string[];
   'orca.reconcileInactiveTeamWorkersForLead': string[];
