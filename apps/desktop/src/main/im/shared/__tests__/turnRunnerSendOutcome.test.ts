@@ -1114,6 +1114,51 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
+  it('stopActiveTurn cancels terminal materialization after the turn leaves the queue', async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'cindy-im-terminal-stop-'));
+    let resolveMaterialization!: (
+      value: Awaited<ReturnType<typeof mocks.materializeLocalMarkdownFiles>>,
+    ) => void;
+    try {
+      mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+      mocks.materializeLocalMarkdownFiles.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveMaterialization = resolve;
+          }),
+      );
+      const h = setupSession(async () => ({ accepted: true }));
+
+      await runDefaultTurn();
+      h.emit({
+        type: 'text',
+        data: { text: '[secret](xdt-file:///F:/XDMaker/secret.pdf)', isFinal: true },
+      });
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() =>
+        expect(mocks.materializeLocalMarkdownFiles).toHaveBeenCalledOnce(),
+      );
+
+      const result = await getRunner().stopActiveTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+      });
+      expect(result).toEqual({ stopped: true, droppedQueued: 0 });
+
+      resolveMaterialization({
+        files: [{ absPath: path.join(tempDir, 'secret.pdf'), displayName: 'secret.pdf' }],
+        tempDirs: [tempDir],
+        text: 'secret.pdf',
+      });
+
+      await waitForAssertion(() => expect(existsSync(tempDir)).toBe(false));
+      expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not resend media already delivered before an interaction boundary', async () => {
     const firstHandle = {
       messageId: 'stream-before-interaction',
@@ -3682,6 +3727,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const h = setupSession(async () => ({ accepted: true }));
     await runDefaultTurn();
     h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => expect(mocks.feishuIm.sendText).toHaveBeenCalledOnce());
     await flushMicrotasks();
 
     const result = await getRunner().stopActiveTurn({

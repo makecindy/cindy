@@ -236,6 +236,76 @@ describe('materializeLocalMarkdownImages', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe('a]b');
   });
 
+  it('materializes and redacts a local image whose label contains a soft line break', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const text = `![说明\n图](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-soft-break-label' },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: '说明\n图' });
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('说明\n图');
+  });
+
+  it('limits plain local image destinations to 32 nested parentheses', async () => {
+    const workingDir = await makeTempRoot();
+    const acceptedPath = path.join(
+      workingDir,
+      `${'('.repeat(32)}accepted${')'.repeat(32)}.png`,
+    );
+    const rejectedPath = path.join(
+      workingDir,
+      `${'('.repeat(33)}rejected${')'.repeat(33)}.png`,
+    );
+    const sequentialPath = path.join(workingDir, `${'()'.repeat(33)}sequential.png`);
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(acceptedPath, PNG_BYTES);
+    await fs.writeFile(rejectedPath, PNG_BYTES);
+    await fs.writeFile(sequentialPath, PNG_BYTES);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `![accepted](${acceptedPath})`,
+          workingDir,
+          sessionId: 'session-parenthesis-depth-32',
+        },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'accepted' });
+
+    const rejectedText = `![rejected](${rejectedPath})`;
+    const rejectedDeps = makeDeps(mediaAbsPath);
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: rejectedText,
+          workingDir,
+          sessionId: 'session-parenthesis-depth-33',
+        },
+        rejectedDeps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text: rejectedText });
+    expect(rejectedDeps.ingest).not.toHaveBeenCalled();
+    expect(sanitizeLocalMarkdownImageRefs(rejectedText)).toBe('rejected');
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `![sequential](${sequentialPath})`,
+          workingDir,
+          sessionId: 'session-parenthesis-sequential',
+        },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'sequential' });
+  });
+
   it('materializes and redacts an outer local image whose label contains a link', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'private.png');

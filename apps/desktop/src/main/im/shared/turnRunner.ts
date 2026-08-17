@@ -3795,7 +3795,10 @@ export function createTurnRunner(
     const state = target ? sessionStates.get(target.row.id) : undefined;
     if (!state) return { stopped: false, droppedQueued: 0 };
     const running =
-      state.queue.length > 0 || state.sendQueue.length > 0 || state.makerSession.isTurnRunning();
+      state.queue.length > 0 ||
+      state.finalizingTurns.size > 0 ||
+      state.sendQueue.length > 0 ||
+      state.makerSession.isTurnRunning();
     if (!running) return { stopped: false, droppedQueued: 0 };
     const droppedQueued = state.sendQueue.length;
     // 先清排队再 abort — abort 触发的 done/error 会走 maybeDispatchNextQueued,
@@ -3807,6 +3810,14 @@ export function createTurnRunner(
     // 重置后守卫判 superseded → settle('skip') → 挂起 turn 经现有订阅按 done 收口。
     noteSilentStopSessionReset(state.makerSession.id);
     if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
+    const finalizingMediaCleanups: Promise<void>[] = [];
+    for (const turn of state.finalizingTurns.keys()) {
+      turn.cleanupRequested = true;
+      releaseTurnInteractionRoute(turn, 'user_stop');
+      turn.terminalKind = 'aborted';
+      finalizingMediaCleanups.push(cleanupFallbackMedia(turn));
+    }
+    await Promise.all(finalizingMediaCleanups);
     await state.makerSession.abort();
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,

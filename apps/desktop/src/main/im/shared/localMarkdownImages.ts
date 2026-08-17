@@ -35,6 +35,7 @@ const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_MARKDOWN_IMAGE_LABEL_LENGTH = 512;
 const MAX_MARKDOWN_IMAGE_DESTINATION_LENGTH = 4096;
+const MAX_COMMONMARK_LINK_DESTINATION_PAREN_DEPTH = 32;
 
 interface LocalMarkdownImageMatch {
   start: number;
@@ -66,7 +67,20 @@ function markdownImageLabelEnd(text: string, labelStart: number, limit: number):
   let depth = 1;
   for (let cursor = labelStart; cursor < limit; cursor += 1) {
     const char = text[cursor];
-    if (char === '\r' || char === '\n') return -1;
+    if (char === '\r' || char === '\n') {
+      const lineEnd = char === '\r' && text[cursor + 1] === '\n' ? cursor + 2 : cursor + 1;
+      let nextContent = lineEnd;
+      while (
+        nextContent < limit &&
+        (text[nextContent] === ' ' || text[nextContent] === '\t')
+      ) {
+        nextContent += 1;
+      }
+      if (nextContent >= limit) return -1;
+      if (text[nextContent] === '\r' || text[nextContent] === '\n') return -1;
+      cursor = lineEnd - 1;
+      continue;
+    }
     if (char === '\\') {
       cursor += 1;
       continue;
@@ -309,6 +323,23 @@ function hasInvalidAngleDestinationChar(value: string): boolean {
       continue;
     }
     if (value[cursor] === '<' || value[cursor] === '\n' || value[cursor] === '\r') return true;
+  }
+  return false;
+}
+
+function exceedsPlainDestinationParenDepth(value: string): boolean {
+  let depth = 0;
+  for (let cursor = 0; cursor < value.length; cursor += 1) {
+    if (value[cursor] === '\\' && isMarkdownEscapablePunctuation(value[cursor + 1])) {
+      cursor += 1;
+      continue;
+    }
+    if (value[cursor] === '(') {
+      depth += 1;
+      if (depth > MAX_COMMONMARK_LINK_DESTINATION_PAREN_DEPTH) return true;
+    } else if (value[cursor] === ')') {
+      depth -= 1;
+    }
   }
   return false;
 }
@@ -587,6 +618,7 @@ export async function materializeLocalMarkdownImages(
     const match = matches[index];
     const rawTarget = match.target.trim();
     const destination = markdownImageDestination(rawTarget);
+    if (!rawTarget.startsWith('<') && exceedsPlainDestinationParenDepth(destination)) continue;
     const managed = isManagedImageTarget(destination);
     const localTarget = managed ? null : markdownLocalTarget(rawTarget);
     if (!managed && !localTarget) continue;
