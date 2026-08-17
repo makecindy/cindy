@@ -289,6 +289,27 @@ describe("sanitizeXaiModelInputBody", () => {
     ]);
   });
 
+  it("does not treat output item id as a call association", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "x-ai/grok-4.6",
+      input: [
+        { type: "function_call", name: "ok", arguments: "{}", call_id: "c1" },
+        { type: "function_call_output", id: "msg_abc", output: "nope" },
+        { role: "tool", id: "msg_def", content: "also nope" },
+        { type: "function_call_output", call_id: "c1", output: "ok" },
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "function_call",
+        name: "ok",
+        arguments: "{}",
+        call_id: "c1",
+      },
+      { type: "function_call_output", call_id: "c1", output: "ok" },
+    ]);
+  });
+
   it("drops tool calls that have no non-empty call id", () => {
     const out = sanitizeXaiModelInputBody({
       model: "x-ai/grok-4.6",

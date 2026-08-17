@@ -159,22 +159,27 @@ function textPartTypeForRole(role: unknown): "input_text" | "output_text" {
   return role === "assistant" ? "output_text" : "input_text";
 }
 
-function callIdFrom(item: Record<string, unknown>, fallback = ""): string {
+function callIdFrom(
+  item: Record<string, unknown>,
+  kind: "call" | "output" = "call",
+): string {
   if (typeof item.call_id === "string" && item.call_id.length > 0)
     return item.call_id;
   if (typeof item.tool_use_id === "string" && item.tool_use_id.length > 0)
     return item.tool_use_id;
   if (typeof item.tool_call_id === "string" && item.tool_call_id.length > 0)
     return item.tool_call_id;
-  if (typeof item.id === "string" && item.id.length > 0) return item.id;
-  return fallback;
+  if (kind === "call" && typeof item.id === "string" && item.id.length > 0) {
+    return item.id;
+  }
+  return "";
 }
 
 function functionCallOutputFrom(
   item: Record<string, unknown>,
   output: unknown,
 ): { item: unknown; changed: boolean } {
-  const callId = callIdFrom(item);
+  const callId = callIdFrom(item, "output");
   if (!callId) return { item: null, changed: true };
   return {
     item: {
@@ -321,7 +326,7 @@ function normalizeXaiInputItem(item: unknown): {
   }
 
   if (type === "function_call_output") {
-    const callId = callIdFrom(base);
+    const callId = callIdFrom(base, "output");
     if (!callId) return { item: null, changed: true };
     const next: Record<string, unknown> = {
       type: "function_call_output",
