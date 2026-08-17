@@ -167,6 +167,62 @@ class ManualResponseTransport implements Transport {
   }
 }
 
+class DeferredTurnStartSubmissionTransport implements Transport {
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+  private releaseTurnStartWrite: (() => void) | null = null;
+  readonly turnStartWriteBegan = vi.fn();
+
+  async writeLine(line: string): Promise<void> {
+    const message = JSON.parse(line) as { id?: unknown; method?: string };
+    if (message.method === 'turn/start') {
+      this.turnStartWriteBegan();
+      await new Promise<void>((resolve) => {
+        this.releaseTurnStartWrite = resolve;
+      });
+      return;
+    }
+    if (message.id == null || message.method !== 'initialize') return;
+    this.emit({
+      id: message.id,
+      result: {
+        userAgent: 'mock-codex/test',
+        codexHome: '/tmp/codex-home',
+        platformOs: 'linux',
+      },
+    });
+  }
+
+  settleTurnStartWrite(): void {
+    this.releaseTurnStartWrite?.();
+    this.releaseTurnStartWrite = null;
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  onStderr(): () => void {
+    return () => {};
+  }
+
+  async close(reason = 'test close'): Promise<void> {
+    this.settleTurnStartWrite();
+    for (const handler of this.closeHandlers) handler({ reason });
+  }
+
+  private emit(message: unknown): void {
+    const line = JSON.stringify(message);
+    for (const handler of this.lineHandlers) handler(line);
+  }
+}
+
 describe('AppServerHost assistant text delta routing', () => {
   it('subscribes to dedicated agentMessage deltas and routes them to the owning thread', async () => {
     const transport = new NotificationTransport();
@@ -305,6 +361,29 @@ describe('AppServerHost.request startup timeout', () => {
 
     transport.respond('turn/start', { turn: { id: 'turn-1' } });
     await expect(request).resolves.toEqual({ turn: { id: 'turn-1' } });
+    await host.shutdown();
+  });
+
+  it('keeps the submission lease after response timeout until a backpressured write settles', async () => {
+    const transport = new DeferredTurnStartSubmissionTransport();
+    const release = vi.fn();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      timeoutMs: 25,
+      acquireSubmissionLease: async () => release,
+    });
+    const timedOut = expect(request).rejects.toThrow(/timed out after \d+ms/);
+    await vi.waitFor(() => expect(transport.turnStartWriteBegan).toHaveBeenCalledOnce());
+    await timedOut;
+    expect(release).not.toHaveBeenCalled();
+
+    transport.settleTurnStartWrite();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
     await host.shutdown();
   });
 

@@ -322,6 +322,36 @@ describe('orcaTeamStore', () => {
     });
   });
 
+  it('replays persisted terminal cleanup when no active team remains', async () => {
+    const {
+      getActiveTeamByLead,
+      setOrcaDuplicateTeamReconciliationHandler,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedDuplicateActiveTeams(client);
+    await client.exec(
+      "UPDATE orca_teams SET status = 'completed', completed_at = 10, updated_at = 10",
+    );
+    const reconcileInputs = vi.fn()
+      .mockRejectedValueOnce(new Error('terminal cleanup interrupted'))
+      .mockResolvedValueOnce(undefined);
+    setOrcaDuplicateTeamReconciliationHandler(reconcileInputs);
+
+    await expect(getActiveTeamByLead('lead-duplicate')).rejects.toThrow(
+      'terminal cleanup interrupted',
+    );
+    await expect(getActiveTeamByLead('lead-duplicate')).resolves.toBeNull();
+
+    expect(reconcileInputs).toHaveBeenCalledTimes(2);
+    expect(reconcileInputs).toHaveBeenLastCalledWith({
+      leadSessionId: 'lead-duplicate',
+      keptTeamId: null,
+      staleTeamIds: ['team-latest', 'team-stale'],
+      staleWorkerSessionIds: ['worker-stale-session'],
+    });
+  });
+
   it('does not commit duplicate-team cancellation when cleanup scope lookup fails', async () => {
     const { getActiveTeamByLead } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();

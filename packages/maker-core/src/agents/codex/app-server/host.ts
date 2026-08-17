@@ -767,31 +767,51 @@ export class AppServerHost {
     const acquired = await acquireSubmissionLease?.();
     const release = typeof acquired === 'function' ? acquired : undefined;
     let pending: SubmittedAppServerRequest<R> | undefined;
-    let response!: Promise<R>;
     try {
       pending = client.requestWithSubmission<R>(
         method,
         params,
         timeoutMs === undefined ? undefined : { timeoutMs },
       );
-      response = pending.response;
-      // Release after bytes enter the local OS / websocket buffer. A response
-      // can legitimately race ahead in test/in-process transports and proves
-      // an equally strong acceptance boundary.
-      await Promise.race([
-        pending.submitted,
-        pending.response.then(() => undefined),
-      ]);
     } catch (error) {
-      // Both promises carry transport write failures. The thrown branch owns
-      // the error; consume the twin rejection to avoid an unhandled promise.
-      void pending?.submitted.catch(() => undefined);
-      void pending?.response.catch(() => undefined);
-      throw error;
-    } finally {
       await release?.();
+      throw error;
     }
-    return response;
+
+    // A successful response is stronger evidence than the local write callback,
+    // but a response rejection (notably the request timeout) proves nothing about
+    // a still-pending backpressured write. Keep the lease until that write settles
+    // so another DB owner cannot commit end_team before the late prompt lands.
+    const submissionBoundary = Promise.race([
+      pending.submitted,
+      pending.response.then(
+        () => undefined,
+        () => pending.submitted,
+      ),
+    ]);
+    const releaseAfterSubmission = (async () => {
+      try {
+        await submissionBoundary;
+      } catch {
+        // A transport write failure is also carried by response. Lease release
+        // must still run, while the caller observes the original response error.
+      }
+      await release?.();
+    })();
+    void releaseAfterSubmission.catch((error) => {
+      this.logger.warn('app-server submission lease release failed', {
+        method,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+    const result = await pending.response;
+    // On success the response itself resolves submissionBoundary; still await
+    // release so request() does not return before an async releaser settles.
+    // Timeout/server failure returns from the await promptly while the background
+    // task keeps owning the lease until local submission settles.
+    await releaseAfterSubmission;
+    return result;
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */

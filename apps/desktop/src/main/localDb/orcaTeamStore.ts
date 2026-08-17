@@ -37,7 +37,8 @@ export interface OrcaTeamRecord {
 
 export interface OrcaDuplicateTeamReconciliation {
   leadSessionId: string;
-  keptTeamId: string;
+  /** Present for duplicate-team repair; null when replaying an ended team with no active successor. */
+  keptTeamId: string | null;
   staleTeamIds: string[];
   staleWorkerSessionIds: string[];
 }
@@ -47,8 +48,8 @@ type OrcaDuplicateTeamReconciliationHandler = (
 ) => void | Promise<void>;
 
 let duplicateTeamReconciliationHandler: OrcaDuplicateTeamReconciliationHandler | null = null;
-const reconciledCancelledTeamIdsByClient = new WeakMap<object, Set<string>>();
-const cancelledTeamReconciliationByClient = new WeakMap<
+const reconciledTerminalTeamIdsByClient = new WeakMap<object, Set<string>>();
+const terminalTeamReconciliationByClient = new WeakMap<
   object,
   Map<string, Promise<void>>
 >();
@@ -65,44 +66,44 @@ export function setOrcaDuplicateTeamReconciliationHandler(
 }
 
 /**
- * A committed cancelled team is also the durable retry marker for queue cleanup.
- * The duplicate read may have crashed or rejected after its terminal write, so a
- * later read must be able to reconstruct the complete worker-session scope from
- * SQLite even though only the kept team remains active.
+ * A committed terminal team is also the durable retry marker for queue cleanup.
+ * The process may have crashed after markTeamEnded/cancelStaleTeams but before
+ * invalidating a pre-vendor active turn, so a later read must reconstruct the
+ * complete worker-session scope from SQLite even when no active team remains.
  */
-async function reconcilePersistedCancelledTeamsForLead(
+async function reconcilePersistedTerminalTeamsForLead(
   leadSessionId: string,
-  keptTeamId: string,
+  keptTeamId: string | null,
 ): Promise<void> {
   const handler = duplicateTeamReconciliationHandler;
   if (!handler) return;
 
   const client = getDbClient();
-  let inFlightByLead = cancelledTeamReconciliationByClient.get(client);
+  let inFlightByLead = terminalTeamReconciliationByClient.get(client);
   if (!inFlightByLead) {
     inFlightByLead = new Map();
-    cancelledTeamReconciliationByClient.set(client, inFlightByLead);
+    terminalTeamReconciliationByClient.set(client, inFlightByLead);
   }
   const existing = inFlightByLead.get(leadSessionId);
   if (existing) return existing;
 
   const run = (async () => {
-    let reconciledTeamIds = reconciledCancelledTeamIdsByClient.get(client);
+    let reconciledTeamIds = reconciledTerminalTeamIdsByClient.get(client);
     if (!reconciledTeamIds) {
       reconciledTeamIds = new Set();
-      reconciledCancelledTeamIdsByClient.set(client, reconciledTeamIds);
+      reconciledTerminalTeamIdsByClient.set(client, reconciledTeamIds);
     }
-    const cancelledRows = await client.drizzle
+    const terminalRows = await client.drizzle
       .select({ id: orcaTeams.id })
       .from(orcaTeams)
       .where(
         and(
           eq(orcaTeams.leadSessionId, leadSessionId),
-          eq(orcaTeams.status, 'cancelled'),
+          ne(orcaTeams.status, 'active'),
         ),
       )
       .orderBy(desc(orcaTeams.updatedAt), desc(orcaTeams.createdAt));
-    const staleTeamIds = cancelledRows
+    const staleTeamIds = terminalRows
       .map((team) => team.id)
       .filter((teamId) => !reconciledTeamIds.has(teamId));
     if (staleTeamIds.length === 0) return;
@@ -121,7 +122,7 @@ async function reconcilePersistedCancelledTeamsForLead(
       staleWorkerSessionIds,
     });
     for (const teamId of staleTeamIds) reconciledTeamIds.add(teamId);
-    log.warn('reconciled persisted cancelled orca teams', {
+    log.warn('reconciled persisted terminal orca teams', {
       leadSessionId,
       keptTeamId,
       staleTeamIds,
@@ -277,13 +278,13 @@ export async function getActiveTeamByLead(
     )
     .orderBy(desc(orcaTeams.updatedAt), desc(orcaTeams.createdAt));
 
-  const latest = rows[0];
-  if (!latest) return null;
+  const latest = rows[0] ?? null;
 
-  // Retry any earlier duplicate cancellation whose process-local cleanup did
-  // not finish. Successful ids are cached per DB client; failures stay absent
-  // from the cache and are reconstructed from SQLite on the next read.
-  await reconcilePersistedCancelledTeamsForLead(leadSessionId, latest.id);
+  // Retry any terminal write whose process-local cleanup did not finish. This
+  // deliberately runs before the no-active return so a post-markTeamEnded crash
+  // can still rewind persisted pre-vendor rows on the next lifecycle read.
+  await reconcilePersistedTerminalTeamsForLead(leadSessionId, latest?.id ?? null);
+  if (!latest) return null;
 
   // 罕见: 同一 lead 出现多个 active team(partial unique 约束缺失 / drift 时)。
   // 高频路径(0 或 1 个 team)走上面的纯 async select, 不付 worker 事务开销;
@@ -320,7 +321,7 @@ export async function getActiveTeamByLead(
     for (const transition of terminalTransitions) {
       orcaTeamTerminalFence.commit(transition);
     }
-    await reconcilePersistedCancelledTeamsForLead(leadSessionId, latest.id);
+    await reconcilePersistedTerminalTeamsForLead(leadSessionId, latest.id);
     log.warn('cancelled stale duplicate active orca teams', {
       leadSessionId,
       keptTeamId: latest.id,
