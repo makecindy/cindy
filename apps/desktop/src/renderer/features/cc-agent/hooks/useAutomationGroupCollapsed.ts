@@ -15,9 +15,8 @@
  * 历史兼容:旧版默认展开、只持久化 `collapsed: true`。这类条目仍按「已收起」读;
  * 未写过条目的组不再被猜成「用户想展开」,而是跟随本版默认收起。
  *
- * 每个分组组件各自持有自己的 collapsed 状态(useState),toggle 时对 localStorage 做
- * "读-改-写、只动自己这个 key"。JS 单线程下读改写不可被打断,不同组各写各的 key,不存在
- * 丢更新;跨实例无需同步(一个组的开/关只由它自己的箭头触发)。
+ * 每个分组组件订阅同一份 owner-scoped 存储投影。单组 toggle 与段头批量操作都走
+ * "读-改-写",写完同步通知已挂载的组,避免批量收起只改 storage、画面不更新。
  */
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
@@ -40,6 +39,19 @@ interface StoredEntry {
 }
 
 type Stored = Record<string, StoredEntry>;
+
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function emitChange(): void {
+  for (const listener of listeners) listener();
+}
 
 function loadStored(ownerId: string | null): Stored {
   try {
@@ -87,15 +99,31 @@ export function setAutomationGroupCollapsed(
   collapsed: boolean,
   ownerId: string | null,
 ): void {
+  setAutomationGroupsCollapsed([groupKey], collapsed, ownerId);
+}
+
+/** 批量写入可见自动任务组的收起态,只落一次 storage 并统一唤醒已挂载组。 */
+export function setAutomationGroupsCollapsed(
+  groupKeys: readonly string[],
+  collapsed: boolean,
+  ownerId: string | null,
+): void {
   const stored = loadStored(ownerId);
-  const wasCollapsed = isEntryCollapsed(stored[groupKey]);
-  if (wasCollapsed === collapsed) return;
-  if (collapsed) {
-    delete stored[groupKey];
-  } else {
-    stored[groupKey] = { collapsed: false, lastSeenAt: new Date().toISOString() };
+  const lastSeenAt = new Date().toISOString();
+  let changed = false;
+  for (const groupKey of groupKeys) {
+    const wasCollapsed = isEntryCollapsed(stored[groupKey]);
+    if (wasCollapsed === collapsed) continue;
+    changed = true;
+    if (collapsed) {
+      delete stored[groupKey];
+    } else {
+      stored[groupKey] = { collapsed: false, lastSeenAt };
+    }
   }
+  if (!changed) return;
   writeStored(stored, ownerId);
+  emitChange();
 }
 
 /**
@@ -112,11 +140,22 @@ export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean
   // AuthContext 先同步发布 data owner，再触发 React 重渲染。layout effect 在浏览器绘制前
   // 装载新 binding，避免短暂展示上一账号或上一分组的折叠态。
   useLayoutEffect(() => {
-    const committedBinding = committedBindingRef.current;
-    if (committedBinding.groupKey === groupKey && committedBinding.ownerId === ownerId) return;
     committedBindingRef.current = { groupKey, ownerId };
-    setCollapsedState(isAutomationGroupCollapsed(groupKey, ownerId));
-  }, [groupKey, ownerId]);
+    const ownerAtEffect = { dataOwnerId: ownerId, generation: ownerGeneration };
+    const syncFromStorage = () => {
+      const committedBinding = committedBindingRef.current;
+      if (
+        committedBinding.groupKey !== groupKey ||
+        committedBinding.ownerId !== ownerId ||
+        !isDataOwnerGenerationCurrent(ownerAtEffect)
+      ) {
+        return;
+      }
+      setCollapsedState(isAutomationGroupCollapsed(groupKey, ownerId));
+    };
+    syncFromStorage();
+    return subscribe(syncFromStorage);
+  }, [groupKey, ownerGeneration, ownerId]);
 
   const toggle = useCallback(() => {
     const ownerAtRender = { dataOwnerId: ownerId, generation: ownerGeneration };
@@ -129,14 +168,43 @@ export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean
       );
     };
     // Owner generation is published synchronously before React rerenders. Reject an old callback
-    // even during that boundary window, then check again inside the state updater.
+    // even during that boundary window. Storage is the source of truth; its change notification
+    // synchronizes every mounted instance of this group.
     if (!isCurrentBinding()) return;
-    setCollapsedState((prev) => {
-      if (!isCurrentBinding()) return prev;
-      const next = !prev;
-      setAutomationGroupCollapsed(groupKey, next, ownerId);
-      return next;
-    });
+    setAutomationGroupCollapsed(
+      groupKey,
+      !isAutomationGroupCollapsed(groupKey, ownerId),
+      ownerId,
+    );
   }, [groupKey, ownerGeneration, ownerId]);
   return [collapsed, toggle] as const;
+}
+
+/** 段头批量折叠所需的聚合状态与写入口。空集合视为已收起,便于与其它组层合取。 */
+export function useAutomationGroupsCollapsed(
+  groupKeys: readonly string[],
+): readonly [boolean, (collapsed: boolean) => void] {
+  const { dataOwnerId: ownerId, generation: ownerGeneration } = getDataOwnerGeneration();
+  const [, setRevision] = useState(0);
+
+  useLayoutEffect(() => {
+    const ownerAtEffect = { dataOwnerId: ownerId, generation: ownerGeneration };
+    return subscribe(() => {
+      if (!isDataOwnerGenerationCurrent(ownerAtEffect)) return;
+      setRevision((revision) => revision + 1);
+    });
+  }, [ownerGeneration, ownerId]);
+
+  const allCollapsed = groupKeys.every((groupKey) =>
+    isAutomationGroupCollapsed(groupKey, ownerId),
+  );
+  const setAllCollapsed = useCallback(
+    (collapsed: boolean) => {
+      const ownerAtRender = { dataOwnerId: ownerId, generation: ownerGeneration };
+      if (!isDataOwnerGenerationCurrent(ownerAtRender)) return;
+      setAutomationGroupsCollapsed(groupKeys, collapsed, ownerId);
+    },
+    [groupKeys, ownerGeneration, ownerId],
+  );
+  return [allCollapsed, setAllCollapsed] as const;
 }

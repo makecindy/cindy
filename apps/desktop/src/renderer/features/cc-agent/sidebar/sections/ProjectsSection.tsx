@@ -77,6 +77,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
+import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
 import type { SessionClickHandler } from '../SessionItem';
 import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
 import type { UseSidebarFilterReturn } from '../../hooks/useSidebarFilter';
@@ -513,11 +514,9 @@ export function ProjectsSection({
   // 「展开/收起所有分组」按钮(E 期):
   //   单层(仅组层或仅设备层)→ 收起所有 ↔ 展开所有;
   //   双层(设备 + 组层同时存在)→ 循环:收组层 → 收设备层 → 全部展开。
-  // 组层 = 项目行 + 「对话」组行(用户裁决:对话组与项目分组同一套批量折叠),
-  // 项目侧复用 ProjectNode 折叠状态(collapsed / onCollapseAll / onExpandAll)。
-  const hasGroupLayer = mixedEntries.some(
-    (entry) => entry.kind === 'project' || entry.kind === 'dialogue-group',
-  );
+  // 组层 = 项目行 + 自动任务组 + 「对话」组行。项目侧复用 ProjectNode 折叠状态,
+  // 自动任务组复用 owner-scoped 持久化状态,对话组沿用本地显示偏好。
+  const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session');
   // 当前可见的对话组 key:设备分组下 = 各含对话组条目的设备段;否则单一组。
   // 「收起/展开所有分组」只作用于这些可见 key,不动其它模式下的记忆。
   const visibleDialogueGroupKeys = useMemo<string[]>(() => {
@@ -533,14 +532,27 @@ export function ProjectsSection({
   const allDialogueGroupsCollapsed =
     visibleDialogueGroupKeys.length === 0 ||
     visibleDialogueGroupKeys.every((key) => collapsedDialogueGroups.has(key));
+  const visibleAutomationGroupKeys = useMemo(
+    () =>
+      mixedEntries
+        .filter(
+          (entry): entry is Extract<MainListEntry, { kind: 'automation-group' }> =>
+            entry.kind === 'automation-group',
+        )
+        .map((entry) => entry.group.id),
+    [mixedEntries],
+  );
+  const [allAutomationGroupsCollapsed, setAllAutomationGroupsCollapsed] =
+    useAutomationGroupsCollapsed(visibleAutomationGroupKeys);
   // 组层是否收齐必须看**当前范围**有没有项目行。allKnownProjects 是全机器宇宙,
   // 单机范围下本机只有对话组、远端仍有项目时 length>0;isAllCollapsed 却来自
   // 当前范围的 activeWorkingDirs,此时为空并恒为 false,foldState 会卡在
   // collapse-groups。有可见项目行才并上 isAllCollapsed。
   const hasVisibleProjectGroups = mixedEntries.some((entry) => entry.kind === 'project');
-  const allGroupsCollapsed = hasVisibleProjectGroups
-    ? isAllCollapsed && allDialogueGroupsCollapsed
-    : allDialogueGroupsCollapsed;
+  const allGroupsCollapsed =
+    (!hasVisibleProjectGroups || isAllCollapsed) &&
+    allDialogueGroupsCollapsed &&
+    allAutomationGroupsCollapsed;
   const hasDeviceLayer = deviceGroupingActive && deviceSections.length > 0;
   const allDevicesCollapsed =
     hasDeviceLayer &&
@@ -555,6 +567,7 @@ export function ProjectsSection({
     if (foldState === 'collapse-groups') {
       onCollapseAll();
       setDialogueCollapsed(visibleDialogueGroupKeys, true);
+      setAllAutomationGroupsCollapsed(true);
       return;
     }
     if (foldState === 'collapse-devices') {
@@ -563,10 +576,11 @@ export function ProjectsSection({
       );
       return;
     }
-    // expand-all:全部层级展开(设备段 + 项目行 + 对话组)。
+    // expand-all:全部层级展开(设备段 + 项目行 + 自动任务组 + 对话组)。
     setCollapsedDevices(new Set());
     onExpandAll();
     setDialogueCollapsed(visibleDialogueGroupKeys, false);
+    setAllAutomationGroupsCollapsed(false);
   }, [
     foldState,
     deviceSections,
@@ -574,6 +588,7 @@ export function ProjectsSection({
     onCollapseAll,
     onExpandAll,
     setDialogueCollapsed,
+    setAllAutomationGroupsCollapsed,
   ]);
   const foldLabel =
     foldState === 'collapse-groups'

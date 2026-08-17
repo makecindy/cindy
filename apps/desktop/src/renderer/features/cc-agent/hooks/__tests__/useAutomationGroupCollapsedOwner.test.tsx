@@ -11,6 +11,7 @@ import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
 import {
   setAutomationGroupCollapsed,
   useAutomationGroupCollapsed,
+  useAutomationGroupsCollapsed,
 } from '../useAutomationGroupCollapsed';
 
 const STORAGE_KEY = 'cc-agent.sidebar.collapsedAutomationGroups';
@@ -21,6 +22,39 @@ beforeEach(() => {
 });
 
 describe('automation group collapsed owner binding', () => {
+  it('synchronizes mounted groups with the batch collapse control', () => {
+    setDataOwnerGeneration('owner-a', 1);
+    const hook = renderHook(() => {
+      const [groupACollapsed] = useAutomationGroupCollapsed('schedule:a');
+      const [groupBCollapsed] = useAutomationGroupCollapsed('schedule:b');
+      const [allCollapsed, setAllCollapsed] = useAutomationGroupsCollapsed([
+        'schedule:a',
+        'schedule:b',
+      ]);
+      return { groupACollapsed, groupBCollapsed, allCollapsed, setAllCollapsed };
+    });
+
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: true,
+      groupBCollapsed: true,
+      allCollapsed: true,
+    });
+
+    act(() => hook.result.current.setAllCollapsed(false));
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: false,
+      groupBCollapsed: false,
+      allCollapsed: false,
+    });
+
+    act(() => hook.result.current.setAllCollapsed(true));
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: true,
+      groupBCollapsed: true,
+      allCollapsed: true,
+    });
+  });
+
   it('reloads owner and group changes while stale callbacks cannot cross a generation boundary', () => {
     const ownerAKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-a');
     const ownerBKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-b');
