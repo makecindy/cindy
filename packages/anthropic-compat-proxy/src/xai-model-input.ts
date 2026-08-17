@@ -155,6 +155,10 @@ const COMPACTION_UNAVAILABLE_NOTE =
   "OpenAI subscription backend and is not readable on the current model provider. Treat the " +
   "conversation from this point on as the available context; ask the user if earlier details are needed.";
 
+function textPartTypeForRole(role: unknown): "input_text" | "output_text" {
+  return role === "assistant" ? "output_text" : "input_text";
+}
+
 function callIdFrom(item: Record<string, unknown>, fallback = ""): string {
   if (typeof item.call_id === "string" && item.call_id.length > 0)
     return item.call_id;
@@ -389,7 +393,7 @@ function normalizeXaiInputItem(item: unknown): {
       const parts: unknown[] = [];
       for (const part of next.content) {
         if (typeof part === "string") {
-          parts.push({ type: "input_text", text: part });
+          parts.push({ type: textPartTypeForRole(role), text: part });
           changed = true;
           continue;
         }
@@ -400,7 +404,7 @@ function normalizeXaiInputItem(item: unknown): {
         const partType = typeof part.type === "string" ? part.type : undefined;
         if (partType === "text") {
           parts.push({
-            type: role === "assistant" ? "output_text" : "input_text",
+            type: textPartTypeForRole(role),
             text: typeof part.text === "string" ? part.text : "",
           });
           changed = true;
@@ -408,8 +412,10 @@ function normalizeXaiInputItem(item: unknown): {
         }
         if (partType === "input_text" || partType === "output_text") {
           const text = typeof part.text === "string" ? part.text : "";
-          parts.push({ type: partType, text });
+          const nextType = textPartTypeForRole(role);
+          parts.push({ type: nextType, text });
           if (
+            nextType !== partType ||
             typeof part.text !== "string" ||
             Object.keys(part).some((k) => k !== "type" && k !== "text")
           ) {
@@ -451,7 +457,7 @@ function normalizeXaiInputItem(item: unknown): {
         }
         if (partType === "refusal") {
           parts.push({
-            type: role === "assistant" ? "output_text" : "input_text",
+            type: textPartTypeForRole(role),
             text: typeof part.refusal === "string" ? part.refusal : "",
           });
           changed = true;
@@ -459,7 +465,7 @@ function normalizeXaiInputItem(item: unknown): {
         }
         if (typeof part.text === "string" && part.text.length > 0) {
           parts.push({
-            type: role === "assistant" ? "output_text" : "input_text",
+            type: textPartTypeForRole(role),
             text: part.text,
           });
           changed = true;
@@ -467,7 +473,7 @@ function normalizeXaiInputItem(item: unknown): {
         }
         if (typeof part.refusal === "string" && part.refusal.length > 0) {
           parts.push({
-            type: role === "assistant" ? "output_text" : "input_text",
+            type: textPartTypeForRole(role),
             text: part.refusal,
           });
           changed = true;
@@ -476,7 +482,12 @@ function normalizeXaiInputItem(item: unknown): {
         changed = true;
       }
       next.content = parts;
-    } else if (typeof next.content !== "string") {
+    } else if (typeof next.content === "string") {
+      if (role === "assistant") {
+        next.content = [{ type: "output_text", text: next.content }];
+        changed = true;
+      }
+    } else {
       next.content = textFromResponsesContent(next.content);
       changed = true;
     }

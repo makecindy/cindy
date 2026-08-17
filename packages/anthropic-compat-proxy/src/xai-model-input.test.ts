@@ -389,6 +389,46 @@ describe("sanitizeXaiModelInputBody", () => {
     ]);
   });
 
+  it("uses output_text for assistant string parts and string content", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "x-ai/grok-4.6",
+      input: [
+        {
+          type: "message",
+          role: "assistant",
+          content: ["reply"],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: "also a reply",
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "input_text", text: "legacy" }],
+        },
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "reply" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "also a reply" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "legacy" }],
+      },
+    ]);
+  });
+
   it("converts refusal parts to output_text instead of emptying the message", () => {
     const out = sanitizeXaiModelInputBody({
       model: "x-ai/grok-4.6",
