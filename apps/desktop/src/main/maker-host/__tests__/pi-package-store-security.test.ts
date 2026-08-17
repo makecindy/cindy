@@ -397,6 +397,123 @@ describe('Pi package executable-code boundary', () => {
       dependencyMarker: string;
     };
     expect(loaded.dependencyMarker).toBe('dependency-ok');
+
+    await fs.writeFile(
+      path.join(dependencyRoot, 'index.js'),
+      "module.exports = 'changed-out-of-band';\n",
+    );
+    const changedSnapshotRoot = path.join(
+      runtime.userData,
+      'hoisted-session-after-change',
+      'managed-packages',
+    );
+    await expect(store.resolveManagedPiPackageResources({ snapshotRoot: changedSnapshotRoot }))
+      .resolves.toEqual({
+        extensions: [],
+        skills: [],
+        promptTemplates: [],
+        packageRoots: [],
+      });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
+  });
+
+  it('invalidates a local extension approval when its copied bytes change out of band', async () => {
+    const { root } = await createPackage();
+    const source = root;
+    runtime.listOutput = `User packages:\n  ${source}\n    ${root}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+
+    await fs.writeFile(
+      path.join(root, 'extensions', 'index.ts'),
+      'export default function replacedWithoutMutationApi() {}\n',
+    );
+    const snapshotRoot = path.join(runtime.userData, 'local-changed-session', 'managed-packages');
+    await expect(store.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toEqual({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
+  });
+
+  it('rejects and removes a completed snapshot whose copied bytes no longer match approval', async () => {
+    const { root, source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+    const snapshotRoot = path.join(runtime.userData, 'tampered-session', 'managed-packages');
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(snapshotRoot)) {
+        await fs.writeFile(
+          path.join(String(from), '0', 'extensions', 'index.ts'),
+          'export default function replacedInCompletedCopy() {}\n',
+        );
+      }
+      return originalRename(from, to);
+    });
+    try {
+      await expect(store.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toEqual({
+        extensions: [],
+        skills: [],
+        promptTemplates: [],
+        packageRoots: [],
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    await expect(fs.stat(snapshotRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { approvedExtensionSources: string[]; approvedExtensionFingerprints: Record<string, string> };
+    expect(state.approvedExtensionSources).toEqual([]);
+    expect(state.approvedExtensionFingerprints).toEqual({});
+  });
+
+  it('invalidates an installed npm extension approval when its package tree changes out of band', async () => {
+    const source = 'npm:managed-tree-extension';
+    const packageRoot = path.join(
+      runtime.userData,
+      'pi-package-home',
+      'npm',
+      'node_modules',
+      'managed-tree-extension',
+    );
+    await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'managed-tree-extension',
+      version: '1.0.0',
+      pi: { extensions: ['./extensions/index.js'] },
+    }));
+    await fs.writeFile(
+      path.join(packageRoot, 'extensions', 'index.js'),
+      'module.exports = function setup() {};\n',
+    );
+    runtime.listOutput = `User packages:\n  ${source}\n    ${packageRoot}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+
+    await fs.writeFile(
+      path.join(packageRoot, 'extensions', 'index.js'),
+      'module.exports = function changedWithoutMutationApi() {};\n',
+    );
+    const snapshotRoot = path.join(runtime.userData, 'npm-changed-session', 'managed-packages');
+    await expect(store.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toEqual({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
   });
 
   it.each([
@@ -445,11 +562,19 @@ describe('Pi package executable-code boundary', () => {
     const migrated = JSON.parse(await fs.readFile(
       path.join(stateDir, 'cindy-package-state.json'),
       'utf8',
-    )) as { version: number; disabledSources: string[]; approvedExtensionSources: string[] };
+    )) as {
+      version: number;
+      disabledSources: string[];
+      approvedExtensionSources: string[];
+      approvedExtensionFingerprints: Record<string, string>;
+    };
     expect(migrated).toEqual({
-      version: 2,
+      version: 3,
       disabledSources: ['npm:keep-disabled'],
       approvedExtensionSources: [source],
+      approvedExtensionFingerprints: {
+        [source]: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
     });
 
     await mutateAuthorized(store, { action: 'install', source });
@@ -636,9 +761,14 @@ describe('Pi package executable-code boundary', () => {
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
-    )) as { disabledSources: string[]; approvedExtensionSources: string[] };
+    )) as {
+      disabledSources: string[];
+      approvedExtensionSources: string[];
+      approvedExtensionFingerprints: Record<string, string>;
+    };
     expect(state.disabledSources).toEqual([]);
     expect(state.approvedExtensionSources).toEqual([source]);
+    expect(state.approvedExtensionFingerprints[source]).toMatch(/^[a-f0-9]{64}$/);
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{ source, enabled: true }],
     });

@@ -1796,8 +1796,6 @@ function handleCollabAgentToolCall(
   ctx: CodexTranslateContext,
 ): void {
   const toolName = `collab:${item.tool}`;
-  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
-  const hasSpawnReceiver = !isSpawn || item.receiverThreadIds.length > 0;
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,
@@ -1807,13 +1805,6 @@ function handleCollabAgentToolCall(
   if (item.reasoningEffort) input.reasoningEffort = item.reasoningEffort;
 
   if (phase === 'started') {
-    // Codex can emit a provisional spawn item before validation has created a
-    // child thread. If validation then fails (for example an unknown model),
-    // 0.145 emits no matching terminal collab item. Publishing this empty-
-    // receiver placeholder would therefore leave an inline card and durable
-    // Subagent run stuck on running forever. Wait for a receiver-bearing
-    // updated/completed snapshot, which is the first proof that a child exists.
-    if (!hasSpawnReceiver) return;
     if (ctx.rt.emittedToolUse.has(item.id)) return;
     ctx.rt.emittedToolUse.add(item.id);
     queue.push({
@@ -1830,7 +1821,6 @@ function handleCollabAgentToolCall(
   }
 
   if (phase === 'updated') {
-    if (!hasSpawnReceiver) return;
     if (!ctx.rt.emittedToolUse.has(item.id)) {
       ctx.rt.emittedToolUse.add(item.id);
       queue.push({
@@ -2034,9 +2024,7 @@ function toCodexTaskUpdate(
   completedOnly = false,
 ): AgentTaskUpdateEventData {
   const isSpawn = item.tool.toLowerCase().startsWith('spawn');
-  const subagentObservation = isSpawn
-    && item.receiverThreadIds.length > 0
-    && (status !== 'completed' || completedOnly)
+  const subagentObservation = isSpawn && (status !== 'completed' || completedOnly)
     ? {
         kind: status === 'running' || completedOnly ? 'spawn' as const : 'terminal' as const,
         logicalSubagentId: item.id,

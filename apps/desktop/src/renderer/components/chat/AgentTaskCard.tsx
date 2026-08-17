@@ -144,18 +144,14 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   const { t } = useTranslation();
   const blockId = `task:${toolCall?.clientId ?? update?.taskId ?? 'unknown'}`;
   // subagent-model-chip: 子代理模型 —— 实时态优先 update.model(progress 事件
-  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel。Claude
-  // Agent/Task 的 input.model 只是请求值,可能被运行时个性化配置覆盖,不能冒充
-  // 实际模型；Codex collab spawn 沿用既有显式模型展示。`model: null` 是实时聚合卡
-  // 的显式清除指令,不能再落到历史/输入兜底,
+  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel;两者皆无时
+  // 再回退 spawn 参数里显式指定的 model(codex collab 卡,translator 透传
+  // item.model)。`model: null` 是实时聚合卡的显式清除指令,不能再落到历史/输入兜底,
   // 否则多 receiver 模型冲突时旧徽标会被重新显示。V1 多 receiver 的实时聚合结论
   // 不落库;重载后既无法证明所有 receiver 都已上报、也无法证明模型一致,所以历史态
-  // 同样不从首条子消息或 spawn 参数猜回单一徽标。默认继承主模型时 Codex live tracker
-  // 会按 spawn 当刻的运行时模型冻结到 update.model；历史态若没有这条事实仍不猜。
+  // 同样不从首条子消息或 spawn 参数猜回单一徽标。默认继承主模型时 spawn 无 model
+  // 字段——不猜继承值,不渲染。
   const receiverThreadIds = readInputStringArray(toolCall?.toolInput, 'receiverThreadIds');
-  const codexSpawnModel = toolCall?.toolName?.startsWith('collab:') === true
-    ? readInputString(toolCall.toolInput, ['model'])
-    : undefined;
   const ambiguousMultiReceiverHistory =
     !update && toolCall?.toolName?.startsWith('collab:') === true && receiverThreadIds.length > 1;
   const modelLabel = formatModelShortLabel(
@@ -163,7 +159,7 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
       ? undefined
       : update?.model ?? (ambiguousMultiReceiverHistory
         ? undefined
-        : subagentModel ?? codexSpawnModel),
+        : subagentModel ?? readInputString(toolCall?.toolInput, ['model'])),
   );
   // codex spawn 可为子代理显式指定思考强度(translator 透传 reasoningEffort);
   // 已知档位才走 effortLevels 词表,未知值不显示。CC 无此参数,行为不变。

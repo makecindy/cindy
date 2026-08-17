@@ -56,6 +56,8 @@ function validateSdkSessionId(value: string): string {
 import {
   AgentNotAuthenticatedError,
   BaseAgent,
+  TurnDispatchRejectedError,
+  TurnDispatchUnconfirmedError,
   TurnPermissionPolicyUnsupportedError,
   type AgentDeps,
   type AgentSessionHandle,
@@ -162,6 +164,8 @@ const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
 /** 远端权限/Extra Dir 快照指纹 —— 档位变则 envHash 变, daemon 重启而非覆盖热读文件。 */
 const PI_PERMISSION_HASH_ENV = 'CINDY_PI_PERMISSION_HASH';
+/** Cindy-owned extension 源码指纹。bridge/subagent 字节变则远端必须 restart，不能 reattach 到旧进程。 */
+const PI_EXTENSION_BUNDLE_HASH_ENV = 'CINDY_PI_EXTENSION_BUNDLE_HASH';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /**
@@ -195,6 +199,15 @@ function isLoopbackOnlyBaseUrl(baseUrl: string): boolean {
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
+/** prompt 接受前可能自动压缩，同样必须覆盖一次完整摘要调用。 */
+const PI_PROMPT_ACCEPTANCE_TIMEOUT_MS = PI_COMPACT_TIMEOUT_MS;
+const PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS = new Set([
+  'compaction_start',
+  'compaction_end',
+  'summarization_retry_scheduled',
+  'summarization_retry_attempt_start',
+  'summarization_retry_finished',
+]);
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
 
@@ -774,13 +787,65 @@ function piExtraDirsPrompt(dirs: readonly string[]): string {
   ].join('\n');
 }
 
+interface FailedPiStartupCleanup {
+  proc: PiRpcProcess;
+  promise: Promise<void> | null;
+  cleanupLocal?: () => void;
+}
+
 export class PiAgent extends BaseAgent {
   readonly kind: AgentKind = 'pi';
   readonly capabilities: Capabilities;
+  private readonly failedStartupCleanups = new Map<string, FailedPiStartupCleanup>();
+  private readonly inFlightStartups = new Set<Promise<AgentSessionHandle>>();
+  private disposeStarted = false;
 
   constructor(deps: AgentDeps) {
     super(deps);
     this.capabilities = this.buildCapabilities(PiAgent.baseCapabilities());
+  }
+
+  private async retryFailedStartupCleanup(
+    sessionId: string,
+    expectedEntry?: FailedPiStartupCleanup,
+  ): Promise<void> {
+    const entry = this.failedStartupCleanups.get(sessionId);
+    if (!entry || (expectedEntry && entry !== expectedEntry)) return;
+    const cleanup = entry.promise ?? entry.proc.close();
+    entry.promise = cleanup;
+    try {
+      await cleanup;
+    } catch (error) {
+      if (this.failedStartupCleanups.get(sessionId) === entry && entry.promise === cleanup) {
+        entry.promise = null;
+      }
+      throw error;
+    }
+    if (this.failedStartupCleanups.get(sessionId) === entry) {
+      this.failedStartupCleanups.delete(sessionId);
+      entry.cleanupLocal?.();
+    }
+  }
+
+  override async dispose(): Promise<void> {
+    this.disposeStarted = true;
+    const startupSnapshot = Array.from(this.inFlightStartups);
+    await Promise.allSettled(startupSnapshot);
+
+    // startSession registers before yielding and new starts are fenced above,
+    // so every failed pre-publication process is now visible in this snapshot.
+    const cleanupSnapshot = Array.from(this.failedStartupCleanups.entries());
+    const results = await Promise.allSettled(
+      cleanupSnapshot.map(([sessionId, entry]) =>
+        this.retryFailedStartupCleanup(sessionId, entry),
+      ),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Pi startup process cleanup remains unconfirmed');
+    }
   }
 
   private static baseCapabilities(): Capabilities {
@@ -1146,7 +1211,24 @@ export class PiAgent extends BaseAgent {
     };
   }
 
-  async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+  override async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    if (this.disposeStarted) {
+      throw new Error('Pi agent is disposing; refusing to start a new session');
+    }
+    const startup = this.startSessionWhileRunning(opts);
+    this.inFlightStartups.add(startup);
+    try {
+      return await startup;
+    } finally {
+      this.inFlightStartups.delete(startup);
+    }
+  }
+
+  private async startSessionWhileRunning(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    const startupCleanupKey = opts.sessionId ?? '<anonymous>';
+    // A previous pre-publication Pi process for this business session must be
+    // confirmed dead before another spawn can begin.
+    await this.retryFailedStartupCleanup(startupCleanupKey);
     // 轮 22 LOW-6:空串 remoteHostId 规范化 —— Boolean('') 是 false 会让会话
     // 被判定本地但后续仍把 '' 传给 resolvePiNativeProviders 等, 行为分裂。
     if (opts.remoteHostId === '') opts.remoteHostId = undefined;
@@ -1549,6 +1631,8 @@ export class PiAgent extends BaseAgent {
     await mkdirp(sessionDir);
 
     // cindy-bridge extension:每次 startSession 覆写,保证桥代码与本版本一致。
+    // 远端 launch identity 另含 CINDY_PI_EXTENSION_BUNDLE_HASH(源码字节指纹),
+    // 避免路径不变时 daemon 把仍在跑的旧进程当成可 reattach。
     // 与 models.json 同放隔离 configHome(Pi 从 PI_CODING_AGENT_DIR/extensions 扫描)。
     const extensionsDir = joinRemotePosixPath(configHome, 'extensions');
     await mkdirp(extensionsDir);
@@ -1744,7 +1828,7 @@ export class PiAgent extends BaseAgent {
      * 用它当"撤销开关"(上一版就是这么用的,那是个空操作,review 连点两轮)。运行期要收回子代理
      * 能力只有一条可证明有效的路:终止会话。
      */
-    let subagentRoutingEnabled = !reviewMode;
+    const subagentRoutingEnabled = !reviewMode;
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean }): Promise<boolean> => {
       const gen = ++subagentRuntimeWriteGen;
@@ -2256,6 +2340,12 @@ export class PiAgent extends BaseAgent {
       if (remote) {
         spawnEnv[PI_MODELS_JSON_HASH_ENV] = modelsJsonHash;
         spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
+        spawnEnv[PI_EXTENSION_BUNDLE_HASH_ENV] = createHash('sha256')
+          .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+          .update('\n')
+          .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+          .digest('hex')
+          .slice(0, 16);
       }
       mergeLoopbackNoProxy(spawnEnv);
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
@@ -2555,9 +2645,10 @@ export class PiAgent extends BaseAgent {
       if (!allowPiPackageManagement || imageCount > 0) return { text, accepted: false };
       const command = parsePiManagedPackageCommand(text);
       if (!command) return { text, accepted: false };
+      const uiStrings = resolvePiExtensionUiStrings(this.deps);
       let outcome: { ok: true; result: unknown } | { ok: false; error: string };
       if (!command.source || command.source.length > MAX_PI_MANAGED_PACKAGE_SOURCE_LENGTH) {
-        outcome = { ok: false, error: 'Invalid Pi extension source.' };
+        outcome = { ok: false, error: uiStrings.mutationFailed };
       } else {
         try {
           const resolvedSource = resolvePiManagedPackageSource(command.source, opts.workingDir);
@@ -2570,16 +2661,23 @@ export class PiAgent extends BaseAgent {
             }),
           };
         } catch (error) {
+          // The deterministic receipt is user/model-visible conversation data.
+          // Keep raw spawn/filesystem/inspection/CLI details in the Main log;
+          // only a stable localized failure value may cross into the receipt.
+          this.deps.logger.warn('exact Pi extension command failed', {
+            action: command.action,
+            message: error instanceof Error ? error.message : String(error),
+          });
           outcome = {
             ok: false,
-            error: error instanceof Error ? error.message : String(error),
+            error: uiStrings.mutationFailed,
           };
         }
       }
       queue.push({
         type: 'text',
         data: {
-          text: piManagedPackageVisibleReceipt(command, outcome, resolvePiExtensionUiStrings(this.deps)),
+          text: piManagedPackageVisibleReceipt(command, outcome, uiStrings),
           isFinal: false,
         },
         source: 'pi',
@@ -2729,16 +2827,35 @@ export class PiAgent extends BaseAgent {
       } catch {
         /* best-effort:注销失败不掩盖原始启动错误 */
       }
-      // 轮 42 P1(codex-connector fresh evidence):startup 失败路径的 proc.close()
-      // 被 .catch 吞掉 —— 远端 daemon 会话 killRemoteSession 失败时, pi 子进程
-      // 可能仍带着凭证 env 在跑, 这里再删 configHome/permission/subagent 会让
-      // 存活 pi 丢 bridge/permission 状态。与 onExit/close() 同口径: 远端会话
-      // 失败不清理 runtime 文件, 残留交给 daemon idle 回收 / 下次 startSession
-      // 的清陈旧目录兜底(轮 40-w4-t4); 本地 stdio close 后进程必死, 保持清理。
-      await proc.close().catch(() => {});
-      if (!remote) {
+      // startup 失败时必须确认 proc 已关闭。关闭失败的 proc 进入 session-keyed
+      // quarantine；后续同 session startSession 会先重试 cleanup，绝不直接 spawn。
+      // 远端失败时不清 runtime 文件；本地也只有确认进程结束后才清，避免存活
+      // 进程丢 bridge/permission 状态。
+      let closeError: unknown = null;
+      try {
+        await proc.close();
+      } catch (error) {
+        closeError = error;
+        this.failedStartupCleanups.set(startupCleanupKey, {
+          proc,
+          promise: null,
+          ...(!remote
+            ? { cleanupLocal: () => {
+                cleanupConfigHome();
+                cleanupRuntimeFiles();
+              } }
+            : {}),
+        });
+      }
+      if (!remote && !closeError) {
         cleanupConfigHome();
         cleanupRuntimeFiles();
+      }
+      if (closeError) {
+        throw new Error(
+          `pi startup failed and process cleanup remains unconfirmed: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+          { cause: err },
+        );
       }
       throw err;
     }
@@ -3022,6 +3139,7 @@ export class PiAgent extends BaseAgent {
         const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         let providerAccepted = false;
+        let promptRequestStarted = false;
         try {
           if (reviewMode) {
             await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
@@ -3054,12 +3172,27 @@ export class PiAgent extends BaseAgent {
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
           if (ctx.isStreaming) command.streamingBehavior = 'followUp';
-          const userEntriesBefore = sendOpts?.onTranscriptUserEntry ? await readPiUserEntryIds() : null;
+          const userEntriesBefore = sendOpts?.onTranscriptUserEntry
+            ? await readPiUserEntryIds()
+            : null;
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
+          promptRequestStarted = true;
           try {
-            const resp = await proc.request(command);
+            const resp = await proc.request(command, {
+              timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
+              // Prompt acceptance may legitimately span multiple compaction
+              // retries. Bound each silent interval, not the whole progressing
+              // preflight, so a healthy long compaction is not killed at 10m.
+              refreshTimeoutOnEvent: (event) =>
+                PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
+            });
             if (!resp.success) {
-              throw new Error(`pi prompt rejected: ${resp.error ?? 'unknown'}`);
+              if (resp.command !== command.type) {
+                throw new Error('pi prompt rejection response missing matching command');
+              }
+              throw new TurnDispatchRejectedError(
+                `pi prompt rejected before acceptance: ${resp.error ?? 'unknown'}`,
+              );
             }
             providerAccepted = true;
             await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
@@ -3134,6 +3267,21 @@ export class PiAgent extends BaseAgent {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
           if (!providerAccepted) activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+          // Before proc.request the turn is known not to have reached Pi. Once
+          // request starts, a transport/write/envelope failure cannot prove
+          // whether Pi accepted the prompt; only success:false is an explicit
+          // rejection. Fence every other unknown result before Goal may resume.
+          if (
+            promptRequestStarted
+            && !providerAccepted
+            && !(err instanceof TurnDispatchRejectedError)
+          ) {
+            const detail = err instanceof Error ? err.message : String(err);
+            throw new TurnDispatchUnconfirmedError(
+              `Pi did not confirm prompt acceptance: ${detail}`,
+              { cause: err },
+            );
+          }
           throw err;
         }
       },
@@ -3212,22 +3360,14 @@ export class PiAgent extends BaseAgent {
             message: err instanceof Error ? err.message : String(err),
           });
         }
-        // 轮 40-w4-t10 MEDIUM(修复的修复):runtime 文件清理必须在 finally ——
-        // proc.close 抛错(如 killRemoteSession 失败)时旧实现会跳过 cleanup,
-        // 权限文件/subagent snapshot 残留在磁盘。清理不受 close 成败影响。
-        // 轮 42 P1(codex-connector 修正):**远端会话不清理** —— killRemoteSession
-        // 失败说明远端 pi 可能仍持有 configHome/permission/subagent runtime
-        // 继续跑(凭证仍在 env), 删文件会让存活 pi 丢 bridge/permission 状态。
-        // 与 onExit 同口径:远端残留交给 daemon idle 回收/下次 startSession 的
-        // 清陈旧目录兜底(轮 40-w4-t4); 本地 stdio 无 daemon, close 后进程必死。
-        try {
-          await proc.close();
-        } finally {
-          if (!remote) {
-            // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
-            cleanupConfigHome();
-            cleanupRuntimeFiles();
-          }
+        // A local close is only complete after proc.close confirms process exit.
+        // Until then the still-live process may continue reading its isolated
+        // config, permission policy, and subagent routing snapshot.
+        await proc.close();
+        if (!remote) {
+          // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
+          cleanupConfigHome();
+          cleanupRuntimeFiles();
         }
       },
 

@@ -1717,6 +1717,40 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'explicit bash timeout returns Pi native timeout error and continues the turn',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-bash-timeout-'));
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('bash', {
+            command: 'node -e "setTimeout(() => {}, 10000)"',
+            timeout: 1,
+          }),
+          anthropicStreamBody('timeout turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        const { resolverTools, finalText } = await runPermissionTurn({
+          sessionId: 'perm-bash-timeout',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        expect(resolverTools).toEqual([]);
+        const followUp = seenRequests.slice(reqBefore).map((r) => r.body);
+        expect(followUp.some((body) => body.includes('Command timed out after 1 seconds'))).toBe(
+          true,
+        );
+        expect(finalText).toContain('timeout turn finished');
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
     'bash child cannot inherit Pi proxy, MCP, BYOM, or permission-control env',
     { timeout: 60_000 },
     async () => {

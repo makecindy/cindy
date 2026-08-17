@@ -9,8 +9,11 @@
  *   - xd 网关        → litellm chat-completions(`/v1/chat/completions`,Bearer 网关 key)
  *
  * 约束(用户敲定):
- *   - **只试本会话的单一 provider,不做跨 provider 兜底**。凭证缺失 / HTTP 失败 / 空响应 → 返回
- *     null,调用方(renderer scheduleAutoName)回落到「消息前 N 字」启发式。
+ *   - **本会话供应商有标题 wire 时,只试这一家,不做跨 provider 兜底**。凭证缺失 /
+ *     HTTP 失败 / 空响应 → 返回 null,调用方(renderer scheduleAutoName)回落「消息前 N 字」启发式。
+ *   - **本会话供应商没有标题 wire 时,回落到官方 `xd`(个人账号 Cindy AI /企业登录 XD,同一
+ *     provider)**。官方未连接或组不出标题目标 → 手动重命名报 TITLE_PROVIDER_UNSUPPORTED,自动起名仍
+ *     折叠为启发式。官方通道自己的凭证 / HTTP 失败同样不再 hop。
  *   - **不实现 token 自动 refresh** —— OAuth/订阅 token 的刷新由 cc 子进程 / codex app-server 负责
  *     (它们读写同一处凭证),本模块每次实时读当下值;过期就当次失败、优雅降级。
  *   - 三条标题调用都**不注入任何 system / 身份提示词**(实测 anthropic 裸调即 200),不触及系统提示词。
@@ -102,6 +105,9 @@ export type TitleOneShotResult =
 
 /** 当前实现具备完整凭证与 wire 契约的供应商；目标暂不可用不等于供应商不受支持。 */
 const TITLE_ONE_SHOT_PROVIDER_IDS = new Set(['anthropic', 'openai', 'xd']);
+
+/** 无标题 wire 的会话供应商回落到官方 Cindy AI / XD 网关(同一 provider id)。 */
+const OFFICIAL_TITLE_FALLBACK_ID = 'xd';
 
 /** 注入点 —— 便于单测(mock fetch / 伪造凭证 / 伪造 provider)。缺省均返回 null(回落启发式)。 */
 export interface TitleOneShotDeps {
@@ -396,8 +402,8 @@ export function parseResponsesSse(raw: string): string {
 
 /**
  * 标题 oneShot 诊断入口:解析本会话 provider → titleModel → 单次 HTTP 起标题。
- * 仅区分“当前供应商不支持”与通用失败，供手动 AI 重命名给出可操作提示。
- * 全程不打印 token(只记 providerId / model / wire / 耗时)。
+ * 无标题 wire 的会话供应商先回落官方 `xd`;仍组不出目标时才区分“当前供应商不支持”与通用失败,
+ * 供手动 AI 重命名给出可操作提示。全程不打印 token(只记 providerId / model / wire / 耗时)。
  */
 export async function generateTitleViaProviderResult(
   args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
@@ -435,13 +441,31 @@ export async function generateTitleViaProviderResult(
     return { status: 'failed' };
   }
 
-  const target = buildTitleTarget(providerId);
+  const sessionProviderId = providerId;
+  let target = buildTitleTarget(providerId);
+  // 无标题 wire 的会话供应商(自定义 DeepSeek / xAI 等)回落官方
+  // Cindy AI / XD;有 wire 的三家仍不因组不出目标而 hop。
+  if (!target && !TITLE_ONE_SHOT_PROVIDER_IDS.has(providerId)) {
+    const officialConnected = rail.some((p) => p.id === OFFICIAL_TITLE_FALLBACK_ID);
+    const officialTarget = officialConnected
+      ? buildTitleTarget(OFFICIAL_TITLE_FALLBACK_ID)
+      : null;
+    if (officialTarget) {
+      log.info('title oneShot falling back to official provider', {
+        sessionProviderId,
+        providerId: OFFICIAL_TITLE_FALLBACK_ID,
+        agentKind: args.agentKind,
+      });
+      providerId = OFFICIAL_TITLE_FALLBACK_ID;
+      target = officialTarget;
+    }
+  }
   if (!target) {
-    const status = TITLE_ONE_SHOT_PROVIDER_IDS.has(providerId)
+    const status = TITLE_ONE_SHOT_PROVIDER_IDS.has(sessionProviderId)
       ? 'failed'
       : 'unsupported-provider';
     log.debug('title oneShot skipped: no title target', {
-      providerId,
+      providerId: sessionProviderId,
       agentKind: args.agentKind,
       status,
     });

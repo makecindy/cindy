@@ -74,7 +74,8 @@ vi.mock('../rpc-client.js', () => ({
       captured.onEvent = opts.onEvent;
     }
     async request(
-      cmd: Record<string, unknown> & { type: string }): Promise<{ success: boolean; data?: unknown }> {
+      cmd: Record<string, unknown> & { type: string },
+    ): Promise<{ success: boolean; command?: string; data?: unknown }> {
       captured.requests.push(cmd);
       if (cmd.type === 'set_model' && captured.holdSetModel) {
         await captured.holdSetModel;
@@ -87,7 +88,7 @@ vi.mock('../rpc-client.js', () => ({
         return { success: false };
       }
       if (cmd.type === 'prompt' && captured.failPrompt) {
-        return { success: false };
+        return { command: 'prompt', success: false };
       }
       if (cmd.type === 'prompt') captured.onPrompt?.(cmd);
       if (cmd.type === 'get_commands' && captured.commandCatalog) {
@@ -875,6 +876,67 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
       expect(prompt?.message).toContain('Do not run bash');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    ['spawn', "spawn /Users/chris/private/pi ENOENT"],
+    ['filesystem', "EACCES: open '/Users/chris/Library/Application Support/Cindy/pi-package-home/state'"],
+    ['inspection', "failed to inspect /private/tmp/secret-package/package.json"],
+    ['Pi CLI', "npm ERR! raw stderr from /private/tmp/pi-package-home"],
+  ])('keeps raw %s failures out of deterministic conversation receipts', async (kind, rawError) => {
+    const warn = vi.fn();
+    const deps = buildDeps();
+    deps.logger = { ...noopLogger, warn };
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationSuccess: {
+        install: 'Pi 扩展已安装。',
+        update: 'Pi 扩展已更新。',
+        remove: 'Pi 扩展已卸载。',
+      },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      throw new Error(rawError);
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `managed-package-${kind}-failure-session`,
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send({
+        type: 'user',
+        content: 'pi install npm:context-mode',
+      });
+
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      expect(prompt).toContain('Pi 扩展操作失败。');
+      expect(prompt).not.toContain(rawError);
+
+      const events = handle.events()[Symbol.asyncIterator]();
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Pi 扩展操作失败。')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      expect(visibleReceipt).toContain('Pi 扩展操作失败。');
+      expect(visibleReceipt).not.toContain(rawError);
+      expect(warn).toHaveBeenCalledWith('exact Pi extension command failed', {
+        action: 'install',
+        message: rawError,
+      });
     } finally {
       await handle.close();
     }

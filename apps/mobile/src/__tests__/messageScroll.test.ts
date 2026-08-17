@@ -420,13 +420,25 @@ describe('resolveMobileNearBottomOnScroll', () => {
   // 阈值带 = offsetY > 972。
   const metricsAt = (offsetY: number) => ({ contentHeight: 2000, offsetY, viewportHeight: 800 });
 
-  it('距底超出阈值 → false(原有离底解除行为不变)', () => {
+  it('距底超出阈值 + 明确上滑 / 已解除 → false(原有离底解除行为不变)', () => {
     expect(resolveMobileNearBottomOnScroll({
       wasNearBottom: true, metrics: metricsAt(900), scrollDelta: -40,
     })).toBe(false);
     expect(resolveMobileNearBottomOnScroll({
       wasNearBottom: false, metrics: metricsAt(500), scrollDelta: 40,
     })).toBe(false);
+  });
+
+  it('已在跟 + 距底越线但未上滑 → 保持跟随(发送后内容长高不得解除)', () => {
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: true, metrics: metricsAt(900), scrollDelta: 0,
+    })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: true, metrics: metricsAt(500), scrollDelta: 80,
+    })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: true, metrics: metricsAt(500), scrollDelta: -1,
+    })).toBe(true);
   });
 
   it('阈值带内 + 原本在跟 → 保持跟随(贴底期间程序化 scrollToEnd 的增量不改状态)', () => {

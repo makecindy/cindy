@@ -8,7 +8,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { promises as fs, type Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -65,7 +66,7 @@ const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
   maxBytes: 128 * 1024 * 1024,
   maxDurationMs: 15_000,
 };
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
 const changeListeners = new Set<() => void>();
 const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
 const INSTALL_LIFECYCLE_SCRIPTS = new Set([
@@ -93,11 +94,7 @@ interface PiPackageState {
   version: typeof STATE_VERSION;
   disabledSources: string[];
   approvedExtensionSources: string[];
-}
-
-interface PiPackageStateV1 {
-  version: 1;
-  disabledSources: string[];
+  approvedExtensionFingerprints: Record<string, string>;
 }
 
 interface ListedPackage {
@@ -144,6 +141,10 @@ interface InspectedPackage {
   promptCommands: Array<{ name: string; description: string }>;
   /** Canonical installed path, retained even while the package is disabled. */
   installedRoot?: string;
+  /** Complete content identity of the exact root that a session would copy. */
+  contentFingerprint?: string;
+  /** Persisted approval exists but no longer matches the current package tree. */
+  staleApproval?: boolean;
 }
 
 interface PackageSourceProjection {
@@ -217,40 +218,66 @@ async function withPiPackageMutationLock<T>(operation: () => Promise<T>): Promis
   );
 }
 
+function parseApprovedExtensionFingerprints(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([source, fingerprint]) => (
+    source.length > 0
+    && typeof fingerprint === 'string'
+    && /^[a-f0-9]{64}$/.test(fingerprint)
+  ))) return undefined;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
 async function readState(): Promise<PiPackageState> {
   try {
-    const parsed = JSON.parse(await fs.readFile(statePath(), 'utf8')) as Partial<PiPackageState | PiPackageStateV1>;
+    const parsed = JSON.parse(await fs.readFile(statePath(), 'utf8')) as Record<string, unknown>;
+    const fingerprints = parseApprovedExtensionFingerprints(
+      parsed.approvedExtensionFingerprints,
+    );
     if (
       parsed.version === STATE_VERSION
       && Array.isArray(parsed.disabledSources)
       && parsed.disabledSources.every((source) => typeof source === 'string')
       && Array.isArray(parsed.approvedExtensionSources)
       && parsed.approvedExtensionSources.every((source) => typeof source === 'string')
+      && fingerprints
     ) {
+      const approvedExtensionSources = [...new Set(parsed.approvedExtensionSources)]
+        .filter((source) => Object.hasOwn(fingerprints, source));
       return {
         version: STATE_VERSION,
         disabledSources: [...new Set(parsed.disabledSources)],
-        approvedExtensionSources: [...new Set(parsed.approvedExtensionSources)],
+        approvedExtensionSources,
+        approvedExtensionFingerprints: Object.fromEntries(
+          approvedExtensionSources.map((source) => [source, fingerprints[source]!]),
+        ),
       };
     }
     if (
-      parsed.version === 1
+      (parsed.version === 1 || parsed.version === 2)
       && Array.isArray(parsed.disabledSources)
       && parsed.disabledSources.every((source) => typeof source === 'string')
     ) {
-      // Preserve every explicit disable while requiring one-time approval for
-      // extension code under the safer v2 model.
+      // Preserve explicit disables. Older approvals had no byte identity, so
+      // they cannot authorize executable code under the v3 content boundary.
       return {
         version: STATE_VERSION,
         disabledSources: [...new Set(parsed.disabledSources)],
         approvedExtensionSources: [],
+        approvedExtensionFingerprints: {},
       };
     }
   } catch {
     // Missing/corrupt state is safe for data-only packages; extension-bearing
     // packages are still held disabled after inspection until approved.
   }
-  return { version: STATE_VERSION, disabledSources: [], approvedExtensionSources: [] };
+  return {
+    version: STATE_VERSION,
+    disabledSources: [],
+    approvedExtensionSources: [],
+    approvedExtensionFingerprints: {},
+  };
 }
 
 async function writeState(state: PiPackageState): Promise<void> {
@@ -839,7 +866,31 @@ async function promptCommand(
   }
 }
 
-async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promise<InspectedPackage> {
+function fingerprintPackageTreeCached(
+  root: string,
+  cache: Map<string, Promise<string>>,
+): Promise<string> {
+  const current = cache.get(root);
+  if (current) return current;
+  const pending = fingerprintPiPackageTree(root);
+  cache.set(root, pending);
+  return pending;
+}
+
+function hasApprovedExtensionFingerprint(
+  state: PiPackageState,
+  source: string,
+  fingerprint: string,
+): boolean {
+  return state.approvedExtensionSources.includes(source)
+    && state.approvedExtensionFingerprints[source] === fingerprint;
+}
+
+async function inspectPackage(
+  pkg: ListedPackage,
+  state: PiPackageState,
+  fingerprintCache: Map<string, Promise<string>>,
+): Promise<InspectedPackage> {
   const empty: PiManagedPackageResources = {
     extensions: [], skills: [], promptTemplates: [], packageRoots: [],
   };
@@ -899,8 +950,16 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
       const isExtension = /\.(?:ts|js)$/i.test(root);
       const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
       const resources = isExtension ? [await extensionResourceView(path.dirname(root), root)] : [];
-      const requiresExtensionApproval = isExtension
-        && !state.approvedExtensionSources.includes(pkg.source);
+      const contentFingerprint = isExtension
+        ? await fingerprintPackageTreeCached(launchRoot, fingerprintCache)
+        : undefined;
+      const requiresExtensionApproval = isExtension && !(
+        contentFingerprint
+        && hasApprovedExtensionFingerprint(state, pkg.source, contentFingerprint)
+      );
+      const staleApproval = isExtension
+        && state.approvedExtensionSources.includes(pkg.source)
+        && requiresExtensionApproval;
       const enabled = !explicitlyDisabled && !requiresExtensionApproval;
       return {
         rawSource: pkg.source,
@@ -917,6 +976,8 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
           : empty,
         promptCommands: [],
         installedRoot: root,
+        ...(contentFingerprint ? { contentFingerprint } : {}),
+        ...(staleApproval ? { staleApproval: true } : {}),
       };
     }
     const manifestPath = path.join(root, 'package.json');
@@ -964,8 +1025,17 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
       ...prompts.map((file) => resourceView('prompt', file)),
       ...themes.map((file) => resourceView('theme', file)),
     ];
-    const requiresExtensionApproval = extensions.length > 0
-      && !state.approvedExtensionSources.includes(pkg.source);
+    const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
+    const contentFingerprint = extensions.length > 0
+      ? await fingerprintPackageTreeCached(launchRoot, fingerprintCache)
+      : undefined;
+    const requiresExtensionApproval = extensions.length > 0 && !(
+      contentFingerprint
+      && hasApprovedExtensionFingerprint(state, pkg.source, contentFingerprint)
+    );
+    const staleApproval = extensions.length > 0
+      && state.approvedExtensionSources.includes(pkg.source)
+      && requiresExtensionApproval;
     const enabled = !explicitlyDisabled && !requiresExtensionApproval;
     const promptCommands = enabled
       ? await Promise.all(prompts.map((file) => promptCommand(file, budget)))
@@ -975,7 +1045,6 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
         : resources.length === 0
           ? 'no-resources' as const
           : undefined;
-    const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
     return {
       rawSource: pkg.source,
       view: {
@@ -993,6 +1062,8 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
         : empty,
       promptCommands,
       installedRoot: root,
+      ...(contentFingerprint ? { contentFingerprint } : {}),
+      ...(staleApproval ? { staleApproval: true } : {}),
     };
   } catch (error) {
     log.warn('failed to inspect Pi package', {
@@ -1007,6 +1078,7 @@ async function inspectPackage(pkg: ListedPackage, state: PiPackageState): Promis
         enabled: false,
         resources: [],
         warning: error instanceof PiPackageInspectionLimitError
+          || error instanceof PiPackageSnapshotLimitError
           ? 'inspection-limit'
           : 'inspection-failed',
       },
@@ -1025,6 +1097,7 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
   const listed = parsePiPackageListOutput(stdout);
   const startedAt = Date.now();
   const inspected: InspectedPackage[] = [];
+  const fingerprintCache = new Map<string, Promise<string>>();
   for (const [index, pkg] of listed.entries()) {
     if (index >= MAX_INSPECTED_PACKAGES || Date.now() - startedAt > MAX_ALL_INSPECTION_MS) {
       const { displaySource, unsafe } = projectPackageSource(pkg.source);
@@ -1043,7 +1116,7 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
       });
       continue;
     }
-    inspected.push(await inspectPackage(pkg, state));
+    inspected.push(await inspectPackage(pkg, state, fingerprintCache));
     // Package inspection includes synchronous parser work in Electron's main
     // process. Yield between packages so a long roster cannot monopolize it.
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1106,13 +1179,58 @@ export async function resolveManagedPiPackageResources(
       const inspected = forceFresh
         ? await inspectAllPackagesFreshUnderMutationLock()
         : await inspectAllPackages();
+      if (options) {
+        const staleApprovals = inspected
+          .filter((pkg) => pkg.staleApproval)
+          .map((pkg) => pkg.rawSource);
+        if (staleApprovals.length > 0) {
+          await revokeExtensionApproval(staleApprovals);
+          invalidateInspectionCache();
+          notifyPiPackagesChanged();
+        }
+      }
       const resources = {
         extensions: [...new Set(inspected.flatMap((pkg) => pkg.launch.extensions))],
         skills: inspected.flatMap((pkg) => pkg.launch.skills),
         promptTemplates: [...new Set(inspected.flatMap((pkg) => pkg.launch.promptTemplates))],
         packageRoots: [...new Set(inspected.flatMap((pkg) => pkg.launch.packageRoots))],
       };
-      return options ? stageManagedPackageSnapshot(resources, options.snapshotRoot) : resources;
+      if (!options) return resources;
+
+      const approvalsByRoot = new Map<string, Array<{ source: string; fingerprint: string }>>();
+      for (const pkg of inspected) {
+        if (!pkg.contentFingerprint || pkg.launch.extensions.length === 0) continue;
+        for (const root of pkg.launch.packageRoots) {
+          const approvals = approvalsByRoot.get(root) ?? [];
+          approvals.push({ source: pkg.rawSource, fingerprint: pkg.contentFingerprint });
+          approvalsByRoot.set(root, approvals);
+        }
+      }
+      const staged = await stageManagedPackageSnapshot(resources, options.snapshotRoot);
+      try {
+        const changedSources = new Set<string>();
+        for (const [index, sourceRoot] of resources.packageRoots.entries()) {
+          const approvals = approvalsByRoot.get(sourceRoot);
+          if (!approvals?.length) continue;
+          const stagedRoot = staged.packageRoots[index];
+          if (!stagedRoot) throw new Error('Pi extension snapshot root mapping is incomplete');
+          const copiedFingerprint = await fingerprintPiPackageTree(stagedRoot);
+          for (const approval of approvals) {
+            if (approval.fingerprint !== copiedFingerprint) changedSources.add(approval.source);
+          }
+        }
+        if (changedSources.size > 0) {
+          await fs.rm(options.snapshotRoot, { recursive: true, force: true });
+          await revokeExtensionApproval(changedSources);
+          invalidateInspectionCache();
+          notifyPiPackagesChanged();
+          return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
+        }
+        return staged;
+      } catch (error) {
+        await fs.rm(options.snapshotRoot, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
     };
     if (options) return await enqueueMutation(() => resolveResources(true));
     await mutationTail;
@@ -1269,6 +1387,118 @@ function assertSnapshotBudget(budget: SnapshotCopyBudget, additionalBytes = 0): 
   }
 }
 
+function updatePackageFingerprintField(
+  hash: ReturnType<typeof createHash>,
+  value: string,
+): void {
+  const encoded = Buffer.from(value, 'utf8');
+  hash.update(`${encoded.length}:`);
+  hash.update(encoded);
+}
+
+function sameStableStat(
+  before: Stats,
+  after: Stats,
+): boolean {
+  return before.dev === after.dev
+    && before.ino === after.ino
+    && before.mode === after.mode
+    && before.size === after.size
+    && before.mtimeMs === after.mtimeMs
+    && before.ctimeMs === after.ctimeMs;
+}
+
+/**
+ * Hashes the complete tree that Cindy would materialize for a Pi session.
+ * Relative names, file modes, and bytes are included in a stable order so an
+ * added/removed/replaced module (including an npm-hoisted sibling) changes the
+ * approval identity even when the extension entrypoint itself is untouched.
+ */
+async function fingerprintPiPackageTree(
+  rawRoot: string,
+  limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
+): Promise<string> {
+  const root = await fs.realpath(rawRoot);
+  const budget: SnapshotCopyBudget = {
+    startedAt: Date.now(),
+    entries: 0,
+    bytes: 0,
+    activeDirectories: new Set(),
+    limits,
+  };
+  const hash = createHash('sha256');
+  updatePackageFingerprintField(hash, 'cindy-pi-package-fingerprint-v1');
+
+  const visit = async (candidate: string, relativePath: string): Promise<void> => {
+    assertSnapshotBudget(budget);
+    const canonical = await fs.realpath(candidate);
+    if (!isWithinPath(root, canonical)) {
+      throw new Error('Pi extension fingerprint contains an escaped link');
+    }
+    const before = await fs.stat(canonical);
+    budget.entries += 1;
+    assertSnapshotBudget(budget, before.isFile() ? before.size : 0);
+    const name = relativePath || '.';
+
+    if (before.isDirectory()) {
+      if (budget.activeDirectories.has(canonical)) {
+        throw new Error('Pi extension fingerprint contains a cyclic link');
+      }
+      budget.activeDirectories.add(canonical);
+      try {
+        updatePackageFingerprintField(hash, `directory:${name}:${before.mode & 0o777}`);
+        const entries = (await fs.readdir(canonical)).sort();
+        for (const entry of entries) {
+          await visit(path.join(canonical, entry), relativePath ? path.join(relativePath, entry) : entry);
+        }
+        const [after, finalEntries] = await Promise.all([
+          fs.stat(canonical),
+          fs.readdir(canonical).then((items) => items.sort()),
+        ]);
+        if (!sameStableStat(before, after) || entries.join('\0') !== finalEntries.join('\0')) {
+          throw new Error('Pi extension package changed while fingerprinting');
+        }
+      } finally {
+        budget.activeDirectories.delete(canonical);
+      }
+      return;
+    }
+    if (!before.isFile()) throw new Error('Pi extension fingerprint contains a special file');
+
+    updatePackageFingerprintField(
+      hash,
+      `file:${name}:${before.mode & 0o777}:${before.size}`,
+    );
+    const handle = await fs.open(canonical, 'r');
+    try {
+      const opened = await handle.stat();
+      if (!sameStableStat(before, opened)) {
+        throw new Error('Pi extension package changed before fingerprinting');
+      }
+      const chunk = Buffer.allocUnsafe(SNAPSHOT_COPY_CHUNK_BYTES);
+      let position = 0;
+      for (;;) {
+        assertSnapshotBudget(budget);
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+        if (bytesRead === 0) break;
+        assertSnapshotBudget(budget, bytesRead);
+        hash.update(chunk.subarray(0, bytesRead));
+        budget.bytes += bytesRead;
+        position += bytesRead;
+      }
+      const after = await handle.stat();
+      if (!sameStableStat(opened, after) || position !== after.size) {
+        throw new Error('Pi extension package changed while fingerprinting');
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  };
+
+  await visit(root, '');
+  return hash.digest('hex');
+}
+
 async function copySnapshotEntryBounded(
   confinementRoot: string,
   sourcePath: string,
@@ -1390,8 +1620,20 @@ async function revokeExtensionApproval(sources: Iterable<string>): Promise<void>
   const state = await readState();
   const approvedExtensionSources = state.approvedExtensionSources
     .filter((source) => !targets.has(source));
-  if (approvedExtensionSources.length === state.approvedExtensionSources.length) return;
-  await writeState({ ...state, approvedExtensionSources });
+  const approvedExtensionFingerprints = Object.fromEntries(
+    Object.entries(state.approvedExtensionFingerprints)
+      .filter(([source]) => !targets.has(source)),
+  );
+  if (
+    approvedExtensionSources.length === state.approvedExtensionSources.length
+    && Object.keys(approvedExtensionFingerprints).length
+      === Object.keys(state.approvedExtensionFingerprints).length
+  ) return;
+  await writeState({
+    ...state,
+    approvedExtensionSources,
+    approvedExtensionFingerprints,
+  });
 }
 
 function sourceAliases(source: string): string[] {
@@ -1466,6 +1708,10 @@ export async function mutatePiPackage(
         version: STATE_VERSION,
         disabledSources: state.disabledSources.filter((item) => !removedSources.has(item)),
         approvedExtensionSources: state.approvedExtensionSources.filter((item) => !removedSources.has(item)),
+        approvedExtensionFingerprints: Object.fromEntries(
+          Object.entries(state.approvedExtensionFingerprints)
+            .filter(([item]) => !removedSources.has(item)),
+        ),
       });
     } else if (request.action === 'update') {
       mutationMayHaveChangedState = true;
@@ -1491,20 +1737,28 @@ export async function mutatePiPackage(
       ]);
     } else if (request.action === 'set-enabled') {
       if (typeof request.enabled !== 'boolean') throw new Error('enabled must be a boolean');
-      const current = await listPiPackagesNow();
-      const target = findAffectedPiPackage(current.packages, source);
+      const inspected = await inspectAllPackages();
+      const target = await findAffectedInspectedPackage(inspected, source);
       if (!target) throw new Error('Pi package is not installed');
-      affectedSource = target.source;
+      affectedSource = target.rawSource;
       const state = await readState();
       const disabled = new Set(state.disabledSources);
       const approved = new Set(state.approvedExtensionSources);
+      const approvedFingerprints = { ...state.approvedExtensionFingerprints };
       if (request.enabled) {
-        if (target.resources.some((resource) => resource.kind === 'extension')) {
-          approved.add(target.source);
+        if (target.view.resources.some((resource) => resource.kind === 'extension')) {
+          if (!target.contentFingerprint) {
+            throw new Error('Pi extension package fingerprint is unavailable');
+          }
+          approved.add(target.rawSource);
+          approvedFingerprints[target.rawSource] = target.contentFingerprint;
+        } else {
+          approved.delete(target.rawSource);
+          delete approvedFingerprints[target.rawSource];
         }
-        disabled.delete(target.source);
+        disabled.delete(target.rawSource);
       } else {
-        disabled.add(target.source);
+        disabled.add(target.rawSource);
       }
       // writeState atomically replaces the state file. Mark the mutation before
       // entering that durable write so a successful write followed by a failed
@@ -1514,6 +1768,9 @@ export async function mutatePiPackage(
         version: STATE_VERSION,
         disabledSources: [...disabled].sort(),
         approvedExtensionSources: [...approved].sort(),
+        approvedExtensionFingerprints: Object.fromEntries(
+          Object.entries(approvedFingerprints).sort(([left], [right]) => left.localeCompare(right)),
+        ),
       });
     }
     invalidateInspectionCache();
