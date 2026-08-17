@@ -1477,15 +1477,22 @@ export class ClaudeCodeAgent extends BaseAgent {
       };
     };
 
-    const localSdkInputStream = async function* (
+    const localSdkInputStream = (
       queue: AsyncQueue<SdkUserInput>,
-    ): AsyncGenerator<SdkUserInput> {
-      for await (const input of queue) {
-        // The SDK asking for the next item is the local transport handoff.
-        // Release immediately before resolving that iterator request.
-        await releaseVendorDispatchLeaseForInput(input);
-        yield input;
-      }
+    ): AsyncGenerator<SdkUserInput> & { readonly pending: number } => {
+      const stream = (async function* (): AsyncGenerator<SdkUserInput> {
+        for await (const input of queue) {
+          // The SDK asking for the next item is the local transport handoff.
+          // Release immediately before resolving that iterator request.
+          await releaseVendorDispatchLeaseForInput(input);
+          yield input;
+        }
+      })();
+      return Object.defineProperty(stream, 'pending', {
+        configurable: false,
+        enumerable: false,
+        get: () => queue.pending,
+      }) as AsyncGenerator<SdkUserInput> & { readonly pending: number };
     };
     // mutable 引用 — rewind 重启时整个换一份新的:
     //   - 老 abortController 在 q.close() 时被 SDK 标记为 aborted (虽然我们没显式调
