@@ -12,6 +12,8 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 
 import type {
+  SubagentControlAction,
+  SubagentToolPhase,
   SubagentTranscriptEntry,
   SubagentTranscriptPageResponse,
 } from '@cindy/maker-shared/subagent-workspace';
@@ -21,6 +23,10 @@ const MAX_STATUS_BYTES = 2 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES = 50 * 1024 * 1024 + 4096;
 const MAX_TRANSCRIPT_PAGE_SIZE = 200;
 const MAX_TRANSCRIPT_ENTRY_CHARS = 32 * 1024;
+/** Tool arguments are display metadata, not a payload to mirror in full. */
+const MAX_TOOL_INPUT_CHARS = 4 * 1024;
+/** One-line tool summary budget: the key argument, not the whole record. */
+const MAX_TOOL_SUMMARY_ARG_CHARS = 120;
 const STALE_HEARTBEAT_MS = 15_000;
 let controlWriteSequence = 0;
 
@@ -297,6 +303,85 @@ function transcriptText(message: unknown): string {
     .join('');
 }
 
+/**
+ * Text of a tool result frame. PI sends `{ content: [{ type: 'text', … }] }`
+ * (same shape the foreground translator reads), but older/other harness frames
+ * may carry a bare string or a single `text` field — accept all three rather
+ * than dumping the raw JSON at the user.
+ */
+function toolResultText(result: unknown): string {
+  if (typeof result === 'string') return result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return '';
+  const record = result as Record<string, unknown>;
+  if (Array.isArray(record.content)) return transcriptText(record);
+  if (typeof record.text === 'string') return record.text;
+  if (typeof record.output === 'string') return record.output;
+  return '';
+}
+
+/**
+ * Argument keys worth putting in the one-line tool summary, most specific
+ * first. Same intent as the renderer's ToolCallCard key-param mapping, but keyed
+ * by argument name instead of tool name: PI tool names are harness-defined and
+ * lowercase, so a tool-name table would silently miss every renamed tool.
+ */
+const TOOL_SUMMARY_ARG_KEYS = [
+  'file_path',
+  'filePath',
+  'path',
+  'command',
+  'cmd',
+  'pattern',
+  'query',
+  'url',
+  'file',
+  'target',
+  'name',
+] as const;
+
+function toolSummary(toolName: string, args: unknown): string {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return toolName;
+  const record = args as Record<string, unknown>;
+  for (const key of TOOL_SUMMARY_ARG_KEYS) {
+    const value = record[key];
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    const text = String(value).replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    const display = text.length > MAX_TOOL_SUMMARY_ARG_CHARS
+      ? `${text.slice(0, MAX_TOOL_SUMMARY_ARG_CHARS - 1)}…`
+      : text;
+    return `${toolName}(${display})`;
+  }
+  return toolName;
+}
+
+function toolInputJson(args: unknown): string | undefined {
+  if (args === undefined || args === null) return undefined;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(args);
+  } catch {
+    return undefined;
+  }
+  if (typeof serialized !== 'string' || serialized === '{}' || serialized === 'null') return undefined;
+  return serialized.length > MAX_TOOL_INPUT_CHARS
+    ? `${serialized.slice(0, MAX_TOOL_INPUT_CHARS - 1)}…`
+    : serialized;
+}
+
+function controlAction(value: unknown): SubagentControlAction | undefined {
+  return value === 'steer' || value === 'follow_up' || value === 'resume' || value === 'stop'
+    ? value
+    : undefined;
+}
+
+/**
+ * Normalize one durable transcript line into the harness-neutral entry the
+ * sidebar renders as a conversation. Tool frames become structured card data
+ * (summary + serialized input + paired result) instead of raw event JSON, and
+ * parent control lines carry their action as a field instead of a `[steer]`
+ * text prefix — the renderer owns that presentation, not the record.
+ */
 function transcriptEntry(
   runId: string,
   offset: number,
@@ -315,15 +400,30 @@ function transcriptEntry(
   let content = '';
   let toolName: string | undefined;
   let childId: string | undefined;
+  let toolCallId: string | undefined;
+  let toolPhase: SubagentToolPhase | undefined;
+  let inputJson: string | undefined;
+  let isError: boolean | undefined;
+  let action: SubagentControlAction | undefined;
+  // A finished tool call with an empty result must still be recorded, otherwise
+  // its card can never leave the "running" state in the conversation.
+  let allowEmptyContent = false;
   if (record.type === 'cindy.subagent.control') {
     const control = record.control && typeof record.control === 'object' && !Array.isArray(record.control)
       ? record.control as Record<string, unknown>
       : {};
-    role = 'parent';
-    const action = typeof control.action === 'string' ? control.action : 'control';
     childId = typeof control.childId === 'string' ? control.childId : undefined;
-    const message = typeof control.message === 'string' ? control.message : '';
-    content = message ? `[${action}] ${message}` : `[${action}]`;
+    action = controlAction(control.action);
+    const message = typeof control.message === 'string' ? control.message.trim() : '';
+    if (message) {
+      role = 'parent';
+      content = message;
+    } else {
+      role = 'system';
+      content = action === 'stop'
+        ? 'A stop was requested from the parent task.'
+        : 'A control request was sent from the parent task.';
+    }
   } else if (record.type === 'cindy.subagent.stderr') {
     content = typeof record.text === 'string' ? record.text : '';
   } else if (record.type === 'cindy.subagent.stdout') {
@@ -344,12 +444,26 @@ function transcriptEntry(
       content = transcriptText(message);
     } else if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
       role = 'tool';
-      toolName = typeof event.toolName === 'string'
+      toolName = typeof event.toolName === 'string' && event.toolName
         ? event.toolName
-        : typeof event.name === 'string'
+        : typeof event.name === 'string' && event.name
           ? event.name
           : undefined;
-      content = JSON.stringify(event);
+      toolCallId = typeof event.toolCallId === 'string' && event.toolCallId
+        ? event.toolCallId
+        : typeof event.toolUseId === 'string' && event.toolUseId
+          ? event.toolUseId
+          : undefined;
+      if (event.type === 'tool_execution_start') {
+        toolPhase = 'start';
+        inputJson = toolInputJson(event.args);
+        content = toolSummary(toolName ?? 'tool', event.args);
+      } else {
+        toolPhase = 'end';
+        isError = event.isError === true;
+        content = toolResultText(event.result);
+        allowEmptyContent = true;
+      }
     } else if (event.type === 'agent_end') {
       content = 'Subagent turn ended.';
     } else if (event.type === 'response' && event.success === false) {
@@ -360,7 +474,7 @@ function transcriptEntry(
   } else {
     return null;
   }
-  if (!content.trim()) return null;
+  if (!allowEmptyContent && !content.trim()) return null;
   return {
     id: `${runId}:${offset}`,
     sequence: offset,
@@ -369,6 +483,11 @@ function transcriptEntry(
     occurredAt,
     ...(toolName ? { toolName } : {}),
     ...(childId ? { childId } : {}),
+    ...(toolCallId ? { toolCallId } : {}),
+    ...(toolPhase ? { toolPhase } : {}),
+    ...(inputJson ? { toolInputJson: inputJson } : {}),
+    ...(isError === undefined ? {} : { isError }),
+    ...(action ? { controlAction: action } : {}),
   };
 }
 
@@ -441,10 +560,16 @@ export async function readPiSubagentTranscriptPage(
     lines.close();
     input.destroy();
   }
+  // `tailCursor` is returned even at EOF, where `nextCursor` is deliberately
+  // absent: the renderer keeps it to resume from the byte it stopped at and
+  // append only newly written lines, instead of re-reading a record that may
+  // grow to the 50MB cap while a long-lived child keeps running.
+  const tailCursor = encodeTranscriptCursor(runId, offset);
   return {
     supported: true,
     entries,
-    ...(offset < stat.size ? { nextCursor: encodeTranscriptCursor(runId, offset) } : {}),
+    ...(offset < stat.size ? { nextCursor: tailCursor } : {}),
+    tailCursor,
   };
 }
 

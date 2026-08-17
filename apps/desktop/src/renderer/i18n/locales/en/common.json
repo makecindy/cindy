@@ -5228,15 +5228,23 @@
       },
       "activity": "Activity",
       "noActivity": "No activity details were reported.",
-      "transcript": "Transcript",
-      "noTranscript": "No transcript entries were reported.",
+      "systemLog": "Runtime log",
+      "noSystemLog": "No runtime log lines were reported.",
       "loadMoreTranscript": "Load more transcript",
       "transcriptUnavailable": "This Harness has not exposed a full child transcript to Cindy yet. Returned results and lifecycle activity remain available.",
-      "transcriptRoles": {
-        "parent": "Parent",
-        "subagent": "Subagent",
-        "tool": "Tool",
-        "system": "System"
+      "tool": {
+        "fallbackName": "Tool",
+        "running": "Running…",
+        "failed": "Failed",
+        "input": "Input",
+        "result": "Result",
+        "noDetails": "No input or output was recorded."
+      },
+      "controlBadges": {
+        "steer": "Steer",
+        "follow_up": "Follow-up",
+        "resume": "Resume",
+        "stop": "Stop"
       },
       "lastTool": "Last tool: {{tool}}",
       "tokens": "{{value}} tokens",

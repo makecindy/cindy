@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -316,12 +316,157 @@ describe('PI durable subagent run store', () => {
     const second = await readPiSubagentTranscriptPage(root, runId, { cursor: first.nextCursor });
     expect(second).toEqual({
       supported: true,
-      entries: [expect.objectContaining({ role: 'parent', content: '[steer] check b too' })],
+      entries: [expect.objectContaining({
+        role: 'parent',
+        content: 'check b too',
+        controlAction: 'steer',
+      })],
+      tailCursor: expect.any(String),
     });
     await expect(readPiSubagentTranscriptPage(root, '../escape')).resolves.toEqual({
       supported: false,
       entries: [],
     });
+  });
+
+  it('normalizes tool frames into paired card data instead of raw event JSON', async () => {
+    const root = await makeRoot();
+    const runId = '123e4567-e89b-42d3-a456-426614174020';
+    await writeStatus(root, status(runId));
+    const transcript = [
+      { type: 'cindy.subagent.child_event', at: 100, childId: 'child-1', event: {
+        type: 'tool_execution_start',
+        toolCallId: 'call-1',
+        toolName: 'read',
+        args: { file_path: '/tmp/a.ts', limit: 20 },
+      } },
+      { type: 'cindy.subagent.child_event', at: 110, childId: 'child-1', event: {
+        type: 'tool_execution_end',
+        toolCallId: 'call-1',
+        isError: false,
+        result: { content: [{ type: 'text', text: 'file body' }] },
+      } },
+      { type: 'cindy.subagent.child_event', at: 120, childId: 'child-1', event: {
+        type: 'tool_execution_start', toolCallId: 'call-2', toolName: 'bash', args: { command: 'pnpm test' },
+      } },
+      { type: 'cindy.subagent.child_event', at: 130, childId: 'child-1', event: {
+        type: 'tool_execution_end', toolCallId: 'call-2', isError: true, result: { content: [] },
+      } },
+    ].map((entry) => JSON.stringify(entry)).join('\n') + '\n';
+    await writeFile(path.join(root, runId, 'transcript.jsonl'), transcript);
+
+    const page = await readPiSubagentTranscriptPage(root, runId, { limit: 200 });
+    expect(page.entries).toEqual([
+      expect.objectContaining({
+        role: 'tool',
+        toolPhase: 'start',
+        toolCallId: 'call-1',
+        toolName: 'read',
+        content: 'read(/tmp/a.ts)',
+        toolInputJson: '{"file_path":"/tmp/a.ts","limit":20}',
+      }),
+      expect.objectContaining({
+        role: 'tool',
+        toolPhase: 'end',
+        toolCallId: 'call-1',
+        content: 'file body',
+        isError: false,
+      }),
+      expect.objectContaining({
+        role: 'tool',
+        toolPhase: 'start',
+        toolCallId: 'call-2',
+        content: 'bash(pnpm test)',
+      }),
+      // An empty failed result must still be recorded, or its card would stay
+      // stuck in the running state forever.
+      expect.objectContaining({
+        role: 'tool',
+        toolPhase: 'end',
+        toolCallId: 'call-2',
+        content: '',
+        isError: true,
+      }),
+    ]);
+    for (const entry of page.entries) {
+      expect(entry.content).not.toContain('tool_execution');
+    }
+  });
+
+  it('records a message-less control as a readable system line without a text prefix', async () => {
+    const root = await makeRoot();
+    const runId = '123e4567-e89b-42d3-a456-426614174021';
+    await writeStatus(root, status(runId));
+    const transcript = [
+      { type: 'cindy.subagent.control', at: 100, control: { action: 'stop' } },
+      { type: 'cindy.subagent.control', at: 110, control: { action: 'follow_up', message: 'also run tests' } },
+      { type: 'cindy.subagent.stdout', at: 120, childId: 'child-1', line: 'raw runner noise' },
+    ].map((entry) => JSON.stringify(entry)).join('\n') + '\n';
+    await writeFile(path.join(root, runId, 'transcript.jsonl'), transcript);
+
+    const page = await readPiSubagentTranscriptPage(root, runId, { limit: 200 });
+    expect(page.entries).toEqual([
+      expect.objectContaining({ role: 'system', controlAction: 'stop' }),
+      expect.objectContaining({
+        role: 'parent',
+        controlAction: 'follow_up',
+        content: 'also run tests',
+      }),
+      expect.objectContaining({ role: 'system', content: 'raw runner noise' }),
+    ]);
+    expect(page.entries[0]?.content).not.toContain('[stop]');
+    expect(page.entries[1]?.content).not.toContain('[follow_up]');
+  });
+
+  it('resumes a tail read from the EOF cursor and returns only appended entries', async () => {
+    const root = await makeRoot();
+    const runId = '123e4567-e89b-42d3-a456-426614174022';
+    await writeStatus(root, status(runId));
+    const transcriptPath = path.join(root, runId, 'transcript.jsonl');
+    const line = (at: number, text: string): string => `${JSON.stringify({
+      type: 'cindy.subagent.child_event',
+      at,
+      childId: 'child-1',
+      event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } },
+    })}\n`;
+    await writeFile(transcriptPath, line(100, 'first answer'));
+
+    const first = await readPiSubagentTranscriptPage(root, runId, { limit: 200 });
+    expect(first.entries).toHaveLength(1);
+    expect(first.nextCursor).toBeUndefined();
+    expect(first.tailCursor).toEqual(expect.any(String));
+
+    const empty = await readPiSubagentTranscriptPage(root, runId, { cursor: first.tailCursor });
+    expect(empty.entries).toEqual([]);
+    expect(empty.tailCursor).toBe(first.tailCursor);
+
+    await appendFile(transcriptPath, line(200, 'second answer'));
+    const tail = await readPiSubagentTranscriptPage(root, runId, { cursor: first.tailCursor });
+    expect(tail.entries).toEqual([
+      expect.objectContaining({ role: 'subagent', content: 'second answer', occurredAt: 200 }),
+    ]);
+    expect(tail.tailCursor).not.toBe(first.tailCursor);
+  });
+
+  it('keeps skipping unparsable and unknown transcript lines', async () => {
+    const root = await makeRoot();
+    const runId = '123e4567-e89b-42d3-a456-426614174023';
+    await writeStatus(root, status(runId));
+    const transcript = [
+      '{not json',
+      JSON.stringify({ type: 'cindy.subagent.unknown_kind', at: 100 }),
+      JSON.stringify({ type: 'cindy.subagent.child_event', at: 110, event: { type: 'thinking_delta' } }),
+      JSON.stringify({ type: 'cindy.subagent.child_event', at: 120, event: {
+        type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '   ' }] },
+      } }),
+      JSON.stringify({ type: 'cindy.subagent.child_event', at: 130, event: { type: 'agent_end' } }),
+    ].join('\n') + '\n';
+    await writeFile(path.join(root, runId, 'transcript.jsonl'), transcript);
+
+    const page = await readPiSubagentTranscriptPage(root, runId, { limit: 200 });
+    expect(page.entries).toEqual([
+      expect.objectContaining({ role: 'system', content: 'Subagent turn ended.' }),
+    ]);
   });
 
   it('requires a message and preserves concurrent control requests without overwriting', async () => {

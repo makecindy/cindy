@@ -5226,15 +5226,23 @@
       },
       "activity": "活動記錄",
       "noActivity": "Harness 暫未提供活動詳情。",
-      "transcript": "完整記錄",
-      "noTranscript": "Harness 暫未提供完整記錄。",
+      "systemLog": "執行日誌",
+      "noSystemLog": "暫無執行日誌。",
       "loadMoreTranscript": "載入更多記錄",
       "transcriptUnavailable": "該 Harness 尚未向 Cindy 提供完整的子任務記錄；已回傳的結果和生命週期活動仍會保留。",
-      "transcriptRoles": {
-        "parent": "父任務",
-        "subagent": "Subagent",
-        "tool": "工具",
-        "system": "系統"
+      "tool": {
+        "fallbackName": "工具",
+        "running": "執行中…",
+        "failed": "失敗",
+        "input": "輸入",
+        "result": "輸出",
+        "noDetails": "沒有記錄輸入或輸出。"
+      },
+      "controlBadges": {
+        "steer": "插話修正",
+        "follow_up": "跟進",
+        "resume": "繼續",
+        "stop": "停止"
       },
       "lastTool": "最近工具：{{tool}}",
       "tokens": "{{value}} tokens",

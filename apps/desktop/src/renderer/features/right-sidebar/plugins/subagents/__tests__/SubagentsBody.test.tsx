@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SubagentRunDetail,
   SubagentRunsChangedPayload,
+  SubagentTranscriptEntry,
   SubagentTranscriptPageResponse,
 } from '@cindy/maker-shared/subagent-workspace';
 
@@ -60,6 +61,20 @@ function detail(summary: string): SubagentRunDetail {
     activity: [],
     startedAt: 100,
     updatedAt: 200,
+  };
+}
+
+let entrySequence = 0;
+function entry(
+  overrides: Partial<SubagentTranscriptEntry> & { id: string },
+): SubagentTranscriptEntry {
+  entrySequence += 1;
+  return {
+    sequence: entrySequence,
+    role: 'subagent',
+    content: '',
+    occurredAt: 1_700_000_000_000 + entrySequence,
+    ...overrides,
   };
 }
 
@@ -452,7 +467,7 @@ describe('SubagentsBody', () => {
     expect(screen.getByLabelText('chat.agentTask.stop')).toBeTruthy();
   });
 
-  it('loads a capability-advertised PI transcript only after technical details open', async () => {
+  it('pages in a capability-advertised PI transcript without opening technical details', async () => {
     currentDetail = {
       ...detail('running'),
       capabilities: { ...detail('running').capabilities, viewFullTranscript: true },
@@ -477,11 +492,268 @@ describe('SubagentsBody', () => {
         }}
       />,
     );
-    fireEvent.click(await screen.findByText('rightSidebar.subagents.technicalDetails'));
     expect(await screen.findByText('transcript answer')).toBeTruthy();
     expect(loadTranscript).toHaveBeenCalledWith({
-      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'run-1',
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'run-1', limit: 200,
     });
+  });
+
+  it('follows nextCursor until the whole transcript is paged in', async () => {
+    currentDetail = {
+      ...detail('running'),
+      capabilities: { ...detail('running').capabilities, viewFullTranscript: true },
+    };
+    loadTranscript
+      .mockResolvedValueOnce({
+        supported: true,
+        entries: [entry({ id: 'entry-1', content: 'page one answer' })],
+        nextCursor: 'cursor-2',
+        tailCursor: 'cursor-2',
+      })
+      .mockResolvedValueOnce({
+        supported: true,
+        entries: [entry({ id: 'entry-2', content: 'page two answer' })],
+        tailCursor: 'cursor-tail',
+      });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect(await screen.findByText('page one answer')).toBeTruthy();
+    expect(screen.getByText('page two answer')).toBeTruthy();
+    expect(loadTranscript).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'run-1',
+      limit: 200, cursor: 'cursor-2',
+    });
+  });
+
+  it('appends from tailCursor after a change instead of duplicating entries', async () => {
+    currentDetail = {
+      ...detail('running'),
+      capabilities: { ...detail('running').capabilities, viewFullTranscript: true },
+    };
+    loadTranscript
+      .mockResolvedValueOnce({
+        supported: true,
+        entries: [entry({ id: 'entry-1', content: 'first answer' })],
+        tailCursor: 'cursor-tail-1',
+      })
+      // An overlapping tail page replays the last known entry; the merge is by
+      // id so the conversation must not grow a duplicate row.
+      .mockResolvedValueOnce({
+        supported: true,
+        entries: [
+          entry({ id: 'entry-1', content: 'first answer' }),
+          entry({ id: 'entry-2', content: 'appended answer' }),
+        ],
+        tailCursor: 'cursor-tail-2',
+      });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect(await screen.findByText('first answer')).toBeTruthy();
+
+    act(() => {
+      onChanged({
+        sessionId: 'session-1', runId: 'run-1', created: false, firstForSession: false,
+      }, OWNER_STAMP);
+    });
+
+    expect(await screen.findByText('appended answer')).toBeTruthy();
+    expect(loadTranscript).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'run-1',
+      limit: 200, cursor: 'cursor-tail-1',
+    });
+    expect(screen.getAllByText('first answer')).toHaveLength(1);
+  });
+
+  it('recovers with a full re-read after a tail read fails', async () => {
+    currentDetail = {
+      ...detail('running'),
+      capabilities: { ...detail('running').capabilities, viewFullTranscript: true },
+    };
+    loadTranscript
+      .mockResolvedValueOnce({
+        supported: true,
+        entries: [entry({ id: 'entry-1', content: 'first answer' })],
+        tailCursor: 'cursor-tail-1',
+      })
+      // The host rejects the kept cursor (the record was rewritten under it).
+      .mockRejectedValueOnce(new Error('PI Subagent transcript cursor exceeds file size'))
+      .mockResolvedValueOnce({
+        supported: true,
+        entries: [
+          entry({ id: 'entry-1', content: 'first answer' }),
+          entry({ id: 'entry-2', content: 'recovered answer' }),
+        ],
+        tailCursor: 'cursor-tail-2',
+      });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect(await screen.findByText('first answer')).toBeTruthy();
+
+    act(() => {
+      onChanged({
+        sessionId: 'session-1', runId: 'run-1', created: false, firstForSession: false,
+      }, OWNER_STAMP);
+    });
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+    expect(loadTranscript).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'run-1',
+      limit: 200, cursor: 'cursor-tail-1',
+    });
+
+    act(() => {
+      onChanged({
+        sessionId: 'session-1', runId: 'run-1', created: false, firstForSession: false,
+      }, OWNER_STAMP);
+    });
+    expect(await screen.findByText('recovered answer')).toBeTruthy();
+    // The failed cursor was dropped, so the retry reads from the start again.
+    expect(loadTranscript).toHaveBeenNthCalledWith(3, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'run-1', limit: 200,
+    });
+    expect(screen.getAllByText('first answer')).toHaveLength(1);
+  });
+
+  it('renders the transcript as a conversation of user, assistant and tool cards', async () => {
+    currentDetail = {
+      ...detail('running'),
+      capabilities: { ...detail('running').capabilities, viewFullTranscript: true },
+    };
+    loadTranscript.mockResolvedValueOnce({
+      supported: true,
+      entries: [
+        entry({ id: 'e-1', role: 'parent', content: 'do the research' }),
+        entry({
+          id: 'e-2', role: 'tool', content: 'read(/tmp/a.ts)', toolName: 'read',
+          toolCallId: 'call-1', toolPhase: 'start', toolInputJson: '{"file_path":"/tmp/a.ts"}',
+        }),
+        entry({
+          id: 'e-3', role: 'tool', content: 'file body', toolCallId: 'call-1',
+          toolPhase: 'end', isError: false,
+        }),
+        entry({ id: 'e-4', role: 'system', content: 'raw runner noise' }),
+        entry({ id: 'e-5', role: 'subagent', content: 'here is the answer' }),
+        entry({
+          id: 'e-6', role: 'parent', content: 'also check b', controlAction: 'steer',
+        }),
+      ],
+    });
+    const { container } = render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('do the research')).toBeTruthy();
+    const stream = [...container.querySelectorAll(
+      '[data-testid="session-user-message"],[data-testid="session-assistant-message"],[data-subagent-tool-card]',
+    )].map((node) => node.textContent);
+    expect(stream).toEqual([
+      'do the research',
+      'read(/tmp/a.ts)',
+      'here is the answer',
+      'also check b',
+    ]);
+
+    // The steer chip marks a parent line the user typed into this run.
+    expect(screen.getByText('rightSidebar.subagents.controlBadges.steer')).toBeTruthy();
+    // start + end fold into one card, already settled.
+    expect(container.querySelectorAll('[data-subagent-tool-card]')).toHaveLength(1);
+    expect(container.querySelector('[data-subagent-tool-card]')?.getAttribute('data-subagent-tool-card'))
+      .toBe('done');
+    // The tool result lives behind the fold, not in the reading flow.
+    expect(screen.queryByText('file body')).toBeNull();
+    fireEvent.click(screen.getByText('read(/tmp/a.ts)'));
+    expect(await screen.findByText('file body')).toBeTruthy();
+
+    // Runtime noise stays out of the conversation and lands under technical
+    // details instead.
+    expect(screen.queryByText('raw runner noise')).toBeNull();
+    fireEvent.click(screen.getByText('rightSidebar.subagents.technicalDetails'));
+    expect(screen.getByText('raw runner noise')).toBeTruthy();
+  });
+
+  it('keeps an unfinished tool call in its running state', async () => {
+    currentDetail = {
+      ...detail('running'),
+      capabilities: { ...detail('running').capabilities, viewFullTranscript: true },
+    };
+    loadTranscript.mockResolvedValueOnce({
+      supported: true,
+      entries: [entry({
+        id: 'e-1', role: 'tool', content: 'bash(pnpm test)', toolName: 'bash',
+        toolCallId: 'call-1', toolPhase: 'start',
+      })],
+    });
+    const { container } = render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect(await screen.findByText('bash(pnpm test)')).toBeTruthy();
+    expect(container.querySelector('[data-subagent-tool-card]')?.getAttribute('data-subagent-tool-card'))
+      .toBe('running');
+  });
+
+  it('falls back to the assignment and returned result when no transcript exists', async () => {
+    currentDetail = {
+      ...detail('legacy summary'),
+      status: 'completed',
+      description: 'assigned work',
+      returnedResult: 'archived result',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewReturnedResult: true,
+        viewFullTranscript: true,
+      },
+    };
+    loadTranscript.mockResolvedValueOnce({ supported: true, entries: [], tailCursor: 'tail' });
+    const { container } = render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    expect((await screen.findByTestId('session-user-message')).textContent).toContain('assigned work');
+    expect(screen.getByTestId('session-assistant-message').textContent).toContain('archived result');
+    expect(container.querySelectorAll('[data-subagent-tool-card]')).toHaveLength(0);
   });
 
   it('does not let a late transcript from the previous run overwrite the selected run', async () => {
@@ -509,7 +781,7 @@ describe('SubagentsBody', () => {
     const view = render(
       <SubagentsBody state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }} ctx={ctx} />,
     );
-    fireEvent.click(await screen.findByText('rightSidebar.subagents.technicalDetails'));
+    await screen.findByText('rightSidebar.subagents.technicalDetails');
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
 
     currentDetail = {
@@ -524,7 +796,6 @@ describe('SubagentsBody', () => {
       <SubagentsBody state={{ selectedRunId: 'run-2', selectedProvider: 'pi' }} ctx={ctx} />,
     );
     await screen.findByText('second run');
-    fireEvent.click(screen.getByText('rightSidebar.subagents.technicalDetails'));
     expect(await screen.findByText('second transcript')).toBeTruthy();
 
     await act(async () => {
@@ -579,7 +850,7 @@ describe('SubagentsBody', () => {
     expect(await screen.findByText('second run')).toBeTruthy();
   });
 
-  it('refreshes an already-open transcript after a durable run change', async () => {
+  it('re-reads the whole transcript after a change when the host reports no tailCursor', async () => {
     currentDetail = {
       ...detail('running'),
       capabilities: { ...detail('running').capabilities, viewFullTranscript: true },
@@ -603,7 +874,6 @@ describe('SubagentsBody', () => {
         }}
       />,
     );
-    fireEvent.click(await screen.findByText('rightSidebar.subagents.technicalDetails'));
     expect(await screen.findByText('before refresh')).toBeTruthy();
 
     act(() => {
@@ -613,6 +883,11 @@ describe('SubagentsBody', () => {
     });
     expect(await screen.findByText('after refresh')).toBeTruthy();
     expect(loadTranscript).toHaveBeenCalledTimes(2);
+    // Without a tailCursor the second read must be a full read, not a tail read.
+    expect(loadTranscript).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'run-1', limit: 200,
+    });
+    expect(screen.queryByText('before refresh')).toBeNull();
   });
 
   it('steers a capability-advertised PI run', async () => {

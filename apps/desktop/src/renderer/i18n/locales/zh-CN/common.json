@@ -5226,15 +5226,23 @@
       },
       "activity": "活动记录",
       "noActivity": "Harness 暂未提供活动详情。",
-      "transcript": "完整记录",
-      "noTranscript": "Harness 暂未提供完整记录。",
+      "systemLog": "运行日志",
+      "noSystemLog": "暂无运行日志。",
       "loadMoreTranscript": "加载更多记录",
       "transcriptUnavailable": "该 Harness 尚未向 Cindy 提供完整的子任务记录；已回传的结果和生命周期活动仍会保留。",
-      "transcriptRoles": {
-        "parent": "父任务",
-        "subagent": "Subagent",
-        "tool": "工具",
-        "system": "系统"
+      "tool": {
+        "fallbackName": "工具",
+        "running": "运行中…",
+        "failed": "失败",
+        "input": "输入",
+        "result": "输出",
+        "noDetails": "没有记录输入或输出。"
+      },
+      "controlBadges": {
+        "steer": "插话纠正",
+        "follow_up": "跟进",
+        "resume": "继续",
+        "stop": "停止"
       },
       "lastTool": "最近工具：{{tool}}",
       "tokens": "{{value}} tokens",

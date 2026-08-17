@@ -5226,15 +5226,23 @@
       },
       "activity": "활동",
       "noActivity": "활동 세부 정보가 보고되지 않았습니다.",
-      "transcript": "전체 기록",
-      "noTranscript": "전체 기록 항목이 보고되지 않았습니다.",
+      "systemLog": "실행 로그",
+      "noSystemLog": "실행 로그가 없습니다.",
       "loadMoreTranscript": "기록 더 불러오기",
       "transcriptUnavailable": "이 Harness는 아직 전체 하위 작업 기록을 Cindy에 제공하지 않습니다. 반환된 결과와 수명 주기 활동은 계속 보관됩니다.",
-      "transcriptRoles": {
-        "parent": "상위 작업",
-        "subagent": "하위 에이전트",
-        "tool": "도구",
-        "system": "시스템"
+      "tool": {
+        "fallbackName": "도구",
+        "running": "실행 중…",
+        "failed": "실패",
+        "input": "입력",
+        "result": "출력",
+        "noDetails": "입력과 출력이 기록되지 않았습니다."
+      },
+      "controlBadges": {
+        "steer": "수정",
+        "follow_up": "후속 지시",
+        "resume": "재개",
+        "stop": "중지"
       },
       "lastTool": "최근 도구: {{tool}}",
       "tokens": "{{value}} tokens",

@@ -5226,15 +5226,23 @@
       },
       "activity": "アクティビティ",
       "noActivity": "アクティビティの詳細は報告されていません。",
-      "transcript": "記録",
-      "noTranscript": "記録は報告されていません。",
+      "systemLog": "実行ログ",
+      "noSystemLog": "実行ログはありません。",
       "loadMoreTranscript": "記録をさらに読み込む",
       "transcriptUnavailable": "この Harness は完全な子タスク記録をまだ Cindy に提供していません。返された結果とライフサイクルは保持されます。",
-      "transcriptRoles": {
-        "parent": "親タスク",
-        "subagent": "サブエージェント",
-        "tool": "ツール",
-        "system": "システム"
+      "tool": {
+        "fallbackName": "ツール",
+        "running": "実行中…",
+        "failed": "失敗",
+        "input": "入力",
+        "result": "出力",
+        "noDetails": "入力も出力も記録されていません。"
+      },
+      "controlBadges": {
+        "steer": "修正",
+        "follow_up": "フォローアップ",
+        "resume": "再開",
+        "stop": "停止"
       },
       "lastTool": "最後のツール：{{tool}}",
       "tokens": "{{value}} tokens",
