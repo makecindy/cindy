@@ -622,6 +622,7 @@ import {
 import {
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
+  type OrcaWorkerLimitSnapshot,
 } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionExecutionConfig,
@@ -1531,6 +1532,8 @@ interface OrcaCollabService {
       }
     | { ok: false; errorCode: string; message: string }
   >;
+  /** 只读查询当前 Lead workflow 的 Worker 数量闸快照，不创建或预留 Worker。 */
+  getWorkerLimitSnapshot: (params: { leadSessionId: string }) => Promise<OrcaWorkerLimitSnapshot>;
   createWorkerFromTask: (params: {
     leadSessionId: string;
     task: string;
@@ -9821,6 +9824,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: err instanceof Error ? err.message : String(err),
         };
       }
+    },
+    getWorkerLimitSnapshot: async ({ leadSessionId }) => {
+      await assertLeadCollabProjectEnabled(leadSessionId);
+      return orcaWorkerCreationService.getWorkerLimitSnapshot({ leadSessionId });
     },
     createWorkerFromTask: async ({ leadSessionId, task, agentKind }) => {
       try {

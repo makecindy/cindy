@@ -58,6 +58,8 @@ export interface CreateWorkerDeps {
     label: string;
     initialTask?: string;
   }) => Promise<CreateWorkerControlResult>;
+  /** 可选的只读名额快照；不可用或失败时批量工具回退首项探测。 */
+  getWorkerLimitSnapshot?: (leadSessionId: string) => Promise<WorkerLimitSnapshot>;
 }
 
 /** 单个 worker 的稳定输入 schema；create_worker/create_workers 共用。 */

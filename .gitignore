@@ -3,6 +3,8 @@ node_modules/
 dist/
 # Android/Gradle modules generate local intermediates and compiled artifacts.
 **/android/build/
+# Gradle 本机缓存（fileHashes / checksums / vcs-1 等），随构建生成，不入仓。
+**/android/.gradle/
 # browser-control-runtime 的 fs-safe dist 是运行时源码，不是构建产物。
 !packages/browser-control-runtime/src/_generated/vendor/fs-safe/dist/
 !packages/browser-control-runtime/src/_generated/vendor/fs-safe/dist/**

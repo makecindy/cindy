@@ -90,12 +90,15 @@ describe('MakerContactsManager', () => {
     mgr.dispose();
   });
 
-  it('v1 库升级到 v2: 老数据保留 + relations 可用 + FTS 重建', () => {
-    // 用 v1 时刻的 SQL 手工造一个旧库(相当于线上已有数据的用户升级)
-    const dbPath = path.join(tmpDir, 'maker-contacts', 'contacts.db');
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const raw = new DatabaseCtor(dbPath);
-    raw.exec(`
+  // Windows CI 上 better-sqlite3 开旧库 + v2 迁移 + FTS 重建偶发顶穿默认 5s。
+  it(
+    'v1 库升级到 v2: 老数据保留 + relations 可用 + FTS 重建',
+    () => {
+      // 用 v1 时刻的 SQL 手工造一个旧库(相当于线上已有数据的用户升级)
+      const dbPath = path.join(tmpDir, 'maker-contacts', 'contacts.db');
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const raw = new DatabaseCtor(dbPath);
+      raw.exec(`
       CREATE TABLE contacts (id TEXT PRIMARY KEY, kind TEXT NOT NULL, display_name TEXT NOT NULL,
         aliases TEXT NOT NULL DEFAULT '[]', summary TEXT NOT NULL DEFAULT '', narrative TEXT NOT NULL DEFAULT '',
         agent_notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'confirmed',
@@ -112,19 +115,21 @@ describe('MakerContactsManager', () => {
       INSERT INTO contacts VALUES ('old-1','person','旧用户','[]','v1 时代的数据','','','confirmed','manual','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');
       PRAGMA user_version = 1;
     `);
-    raw.close();
+      raw.close();
 
-    const mgr = makeManager();
-    const store = mgr.getStore(); // init → v2 迁移 + FTS 重建
-    const old = store.getContact('old-1');
-    expect(old.displayName).toBe('旧用户');
-    expect(old.relations).toEqual([]);
-    expect(store.search('v1 时代').map((h) => h.contactId)).toContain('old-1');
-    // 新表可用
-    const org = store.createContact({ kind: 'org', displayName: 'O' });
-    expect(store.addRelation('old-1', { toId: org.id, relation: '任职' }).relation).toBe('任职');
-    mgr.dispose();
-  });
+      const mgr = makeManager();
+      const store = mgr.getStore(); // init → v2 迁移 + FTS 重建
+      const old = store.getContact('old-1');
+      expect(old.displayName).toBe('旧用户');
+      expect(old.relations).toEqual([]);
+      expect(store.search('v1 时代').map((h) => h.contactId)).toContain('old-1');
+      // 新表可用
+      const org = store.createContact({ kind: 'org', displayName: 'O' });
+      expect(store.addRelation('old-1', { toId: org.id, relation: '任职' }).relation).toBe('任职');
+      mgr.dispose();
+    },
+    30_000,
+  );
 
   it('resetAll 透传', () => {
     const mgr = makeManager();

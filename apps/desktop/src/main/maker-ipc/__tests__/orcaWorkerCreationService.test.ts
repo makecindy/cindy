@@ -379,6 +379,27 @@ describe('OrcaWorkerCreationService', () => {
     expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
   });
 
+  it('returns a read-only worker limit snapshot without reserving or creating a worker', async () => {
+    const { deps, service } = createDeps({
+      readCollaborationSettings: vi.fn(() => ({ workerSoftLimit: 2, workerHardLimit: 5 })),
+      listWorkersByLead: vi.fn(async () => [
+        { id: 'worker-1', label: 'one', status: workerStatus('idle') },
+        { id: 'worker-2', label: 'two', status: workerStatus('running') },
+      ]),
+    });
+
+    await expect(service.getWorkerLimitSnapshot({ leadSessionId: 'lead-1' })).resolves.toEqual({
+      workerHardLimit: 5,
+      occupiedSlots: 2,
+      remainingSlots: 3,
+    });
+
+    expect(deps.getActiveTeamByLead).toHaveBeenCalledWith('lead-1');
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+  });
+
   it('returns a hard-limit snapshot when the atomic reservation loses a concurrent slot race', async () => {
     const { deps, service } = createDeps({
       readCollaborationSettings: vi.fn(() => ({ workerSoftLimit: 2, workerHardLimit: 3 })),

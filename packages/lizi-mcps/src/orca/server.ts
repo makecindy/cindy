@@ -59,6 +59,7 @@ import {
 import type { ControlResult, ControlWorkerAgent } from '../types.js';
 import { resolveLiziMcpSessionContext } from '../session-context.js';
 import { errorPayload, okPayload } from '../xdt-helper/_payload.js';
+import type { WorkerLimitSnapshot } from '../xdt-helper/create_worker.js';
 
 // ── Host deps ──────────────────────────────────────────────────────────────
 
@@ -101,6 +102,8 @@ export interface OrcaMcpDeps {
       'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE'
     >
   >;
+  /** 可选的只读名额快照；缺失或失败时批量工具回退首项探测。 */
+  getWorkerLimitSnapshot?: (params: { leadSessionId: string }) => Promise<WorkerLimitSnapshot>;
   /** 列出当前 workflow 所有 worker。 */
   listWorkers: (params: { leadSessionId: string }) => Promise<
     ControlResult<{ workers: WorkerSummary[] }>
@@ -400,6 +403,13 @@ export function createOrcaMcpServer(
     sessionId: ctx.sessionId,
     getSessionContext,
     createWorker: deps.createWorker,
+    // 只有批量工具用得上只读名额快照；host 用具名参数，工具侧用位置参数，这里适配。
+    ...(deps.getWorkerLimitSnapshot
+      ? {
+          getWorkerLimitSnapshot: (leadSessionId: string) =>
+            deps.getWorkerLimitSnapshot!({ leadSessionId }),
+        }
+      : {}),
   });
   registerListWorkersTool(sink, {
     sessionId: ctx.sessionId,

@@ -425,6 +425,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     orca: {
       startTeam: wrap((s, params) => s.startTeam(params)),
       createWorker: wrap((s, params) => s.createWorker(params)),
+      getWorkerLimitSnapshot: wrap((s, params) => s.getWorkerLimitSnapshot(params)),
       listWorkers: wrap((s, params) => s.listWorkers(params)),
       switchFocus: wrap((s, params) => s.switchFocus(params)),
       sendToWorker: wrap((s, params) => s.sendToWorker(params)),

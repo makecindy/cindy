@@ -94,7 +94,8 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 1. `start_team`
 2. `end_team`
 3. `create_worker`
-4. `create_workers`（批量创建；顺序执行、hard limit 后停止并返回逐项汇总）
+4. `create_workers`（批量创建；先按只读名额快照切分可创建前缀，前缀内最多 4 路并发，
+   超限后缀不调用 host，返回按请求顺序的逐项汇总）
 5. `list_workers`
 6. `switch_focus`
 7. `send_to_worker`
@@ -108,7 +109,7 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 15. `worker_status`（只读诊断）
 16. `read_worker`（只读诊断）
 
-批量创建必须走一次 `create_workers` 调用，不能让 Lead 并行或连续发多个独立 `create_worker`。批量工具按输入顺序复用同一个 `OrcaLifecycleService.createWorker` 原语；首次收到 `WORKER_LIMIT_HARD_EXCEEDED` 或批次级 `HOST_NOT_READY` 后不再调用 host，剩余项稳定标为 `skipped`。返回值必须包含请求数、实际尝试数、成功数、失败数、跳过数、总未创建数、数量闸快照、代码确定生成的 `user_report`，以及逐项真实 worker/session 或失败终态，供 Lead 如实向用户收口；`success_count + failure_count + skipped_count` 必须等于 `request_count`，其中 `not_created_count = failure_count + skipped_count`。单个 `create_worker` 继续作为兼容入口，并返回相同的结构化 hard-limit 快照。
+批量创建必须走一次 `create_workers` 调用，不能让 Lead 并行或连续发多个独立 `create_worker`。批量工具复用同一个 `OrcaLifecycleService.createWorker` 原语，并在调用 host 之前先取一次只读名额快照（`OrcaWorkerCreationService.getWorkerLimitSnapshot`，只组合 `limitSnapshot` / `listWorkersByLead` / `readCollaborationSettings`，不 reserve、不 create、无副作用），按 `remainingSlots` 把输入切成「可创建前缀」与「超限后缀」；前缀内最多 4 路并发发起（并发上限见 `create_workers.ts` 的 `MAX_CONCURRENT_WORKER_CREATIONS`），后缀不调用 host。**并发只作用于发起，不作用于语义**：结果按请求顺序汇总，`success` / `failure` / `skipped` 仍是互斥分区。host 未注入快照回调、快照不自洽或查询抛错时，回退到原「首项既是探测也是创建、拿到 limit 后再切前缀」的路径。收到 `WORKER_LIMIT_HARD_EXCEEDED` 或批次级 `HOST_NOT_READY` 后调度器停止发起尚未入飞的调用，已入飞的仍结算真实终态；批次级 `stop_reason` 取请求顺序里更早的那个边界，其后未发起的项稳定标为 `skipped`。**每一项的 skip 原因按区间单独判定，不共用批次级原因**：容量后缀是调用 host 之前就由快照切定的分区，即使前缀里先撞上 `HOST_NOT_READY`，后缀仍标 `WORKER_LIMIT_HARD_EXCEEDED`，`suggestions` 按批次里实际用到的原因取并集（否则用户等主进程恢复后重试后缀仍会因名额不足失败，且拿不到提限/归档的出路）。前缀一经切定不做动态回填：前缀内某项因 `DUPLICATE_LABEL` 等 reservation 前错误失败时，空出的名额不会补给后缀（宁可少建，hard limit 的最终裁决仍在 main 侧原子 reservation）。所有在途调用结算后会**再取一次只读快照**作为对外报告的容量真相——并发下每个成功结果带回的 `limit` 只是它拿到 reservation 那一刻的占用，其中可能含之后又被释放的预留，沿用其中的最大值会把容量报成比实际更满。返回值必须包含请求数、实际尝试数、成功数、失败数、跳过数、总未创建数、数量闸快照、代码确定生成的 `user_report`，以及逐项真实 worker/session 或失败终态，供 Lead 如实向用户收口；`success_count + failure_count + skipped_count` 必须等于 `request_count`，其中 `not_created_count = failure_count + skipped_count`。单个 `create_worker` 继续作为兼容入口，并返回相同的结构化 hard-limit 快照。
 
 排队消息控制 3 工具让 Lead 在消息被 worker 消费前管理自己发出的排队消息：`send_to_worker` / `create_worker`（initial_task）在 `wakeKind='queued'` 时回传 `queued_message_id`（coordinator 队列内的 clientId），Lead 可据此列出、整条改写或撤回。实现走 `OrcaTeamService.listWorkerQueuedMessages / updateWorkerQueuedMessage / cancelWorkerQueuedMessage`，语义约束见「协同运行时行为契约 · 消息派发与 auto-bridge」第 6 条。
 
