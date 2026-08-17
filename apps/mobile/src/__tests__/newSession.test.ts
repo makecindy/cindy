@@ -18,7 +18,6 @@ import {
   pickAgentDefaultRuntime,
   pickInitialNewSessionWorkspace,
   pickMostRecentSessionRuntime,
-  persistRemoteGoalSessionTitle,
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   resolveRecentModelAndProvider,
@@ -1499,52 +1498,6 @@ describe('new session model', () => {
   });
 });
 
-describe('persistRemoteGoalSessionTitle', () => {
-  function makeMaker(overrides: {
-    title?: string;
-    getSession?: () => Promise<{ title: string }>;
-  } = {}) {
-    return {
-      getSession: overrides.getSession
-        ?? vi.fn(async () => ({ title: overrides.title ?? 'New Maker' })),
-      patchSessionMeta: vi.fn(async (_id: string, patch: { title?: string }) => ({
-        title: patch.title ?? 'New Maker',
-      })),
-    };
-  }
-
-  it('writes the objective while the authoritative title is still a sentinel', async () => {
-    const maker = makeMaker({ title: 'New Maker' });
-    await persistRemoteGoalSessionTitle(maker, {
-      sessionId: 's-goal',
-      objective: '帮我排查登录失败',
-    });
-    expect(maker.patchSessionMeta).toHaveBeenCalledWith('s-goal', { title: '帮我排查登录失败' });
-  });
-
-  it('does not overwrite a title the user already renamed', async () => {
-    const maker = makeMaker({ title: '我自己起的名字' });
-    await persistRemoteGoalSessionTitle(maker, {
-      sessionId: 's-goal',
-      objective: '帮我排查登录失败',
-    });
-    expect(maker.patchSessionMeta).not.toHaveBeenCalled();
-  });
-
-  it('does not write when the current title cannot be read', async () => {
-    const maker = makeMaker({
-      getSession: vi.fn(async () => {
-        throw new Error('INVOKE_TIMEOUT');
-      }),
-    });
-    await persistRemoteGoalSessionTitle(maker, {
-      sessionId: 's-goal',
-      objective: '帮我排查登录失败',
-    });
-    expect(maker.patchSessionMeta).not.toHaveBeenCalled();
-  });
-});
-
 describe('new session composer surface', () => {
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
     const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
@@ -2383,16 +2336,16 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(settleSlice.slice(lastCheck)).not.toMatch(/await /);
   });
 
-  it('goal settle 先登记预览,再 fire-and-forget 权威起名', () => {
+  it('goal settle 只登记本机预览,不把目标文案写成用户改名', () => {
     const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
     const settleSlice = goalSlice.slice(
       goalSlice.indexOf('── settle 段'),
       goalSlice.indexOf('router.replace({'),
     );
     expect(settleSlice).toContain('remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title)');
-    expect(settleSlice).toContain('void persistRemoteGoalSessionTitle(maker,');
+    expect(settleSlice).not.toContain('persistRemoteGoalSessionTitle');
+    expect(settleSlice).not.toContain('patchSessionMeta');
     expect(settleSlice).not.toContain('generateSessionTitle');
-    expect(settleSlice).not.toMatch(/await maker\.patchSessionMeta/);
   });
 });
 

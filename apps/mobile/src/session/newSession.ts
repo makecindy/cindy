@@ -3,7 +3,6 @@ import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-pat
 import {
   DEFAULT_DRAFT_SESSION_TITLE,
   deriveOptimisticSessionTitle,
-  isDefaultDraftSessionTitle,
 } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
@@ -901,45 +900,6 @@ export function sessionFromCreateResult(
     providerId: fallback.providerId ?? null,
     _count: { messages: 0 },
   };
-}
-
-/**
- * 手机 Goal 把目标原文写回被控端。Goal 首轮不经 enqueue,被控端不会自动起名。
- * 读到哨兵才写;读失败 fail-closed,绝不把未知状态当成 New Maker。
- */
-export async function persistRemoteGoalSessionTitle(
-  maker: {
-    getSession: (sessionId: string) => Promise<Pick<RemoteSession, 'title'>>;
-    patchSessionMeta: (
-      sessionId: string,
-      patch: { title: string },
-    ) => Promise<Pick<RemoteSession, 'title'>>;
-  },
-  input: {
-    sessionId: string;
-    objective: string;
-    isCurrent?: () => boolean;
-  },
-): Promise<void> {
-  const placeholder = deriveOptimisticSessionTitle({ text: input.objective });
-  if (!placeholder) return;
-  const stillCurrent = () => input.isCurrent?.() ?? true;
-  if (!stillCurrent()) return;
-  let existing: string;
-  try {
-    existing = (await maker.getSession(input.sessionId)).title?.trim() ?? '';
-  } catch {
-    return;
-  }
-  if (!stillCurrent()) return;
-  if (existing && !isDefaultDraftSessionTitle(existing) && existing !== 'New remote session') {
-    return;
-  }
-  try {
-    await maker.patchSessionMeta(input.sessionId, { title: placeholder });
-  } catch {
-    // 写回失败不影响 Goal 主流程;本进程预览仍盖着第一帧。
-  }
 }
 
 export function normalizeExtraDirs(value: readonly string[] | undefined): string[] {
