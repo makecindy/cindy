@@ -1399,6 +1399,15 @@
           "piChatHelp": "Pi가 제공자의 OpenAI 호환 Chat Completions API에 직접 연결합니다.",
           "piAnthropicHelp": "Pi가 제공자의 Anthropic Messages API에 직접 연결합니다."
         },
+        "modelProtocol": {
+          "label": "모델 프로토콜",
+          "inherit": "기본값 상속",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "help": "상속하면 위의 제공자 프로토콜을 사용합니다. 이 모델에 다른 프로토콜이 필요할 때만 재정의하세요.",
+          "ariaLabel": "{{model}} 모델 프로토콜"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code는 Anthropic 프로토콜을 따릅니다(x-api-key 인증). 이 제공자의 Claude Code용 baseURL・키・모델을 입력하세요. 비워 두면 이 제공자는 Claude Code를 제공하지 않습니다.",

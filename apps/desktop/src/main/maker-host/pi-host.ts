@@ -697,19 +697,26 @@ export interface BuildPiAgentOpts {
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
-function wireProtocolToPiApi(wp: ProviderWireProtocol | undefined): PiNativeApi {
+function wireProtocolToPiApi(wp: ProviderWireProtocol): PiNativeApi {
   switch (wp) {
     case 'anthropic-messages':
       return 'anthropic-messages';
     case 'openai-responses':
       return 'openai-responses';
     case 'openai-chat':
-    case undefined:
-      // 缺省 openai-completions:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
       return 'openai-completions';
     default:
       throw new Error(`Unsupported PI wire protocol: ${String(wp)}`);
   }
+}
+
+function piApiFromDeclaredWireProtocol(
+  wireProtocol: ProviderWireProtocol | undefined,
+): 'anthropic-messages' | 'openai-responses' | undefined {
+  if (wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses') {
+    return wireProtocol;
+  }
+  return undefined;
 }
 
 /**
@@ -817,7 +824,7 @@ function officialPiRouteMatches(
     baseUrls.size === 1 &&
     baseUrls.has(baseUrl.trim().replace(/\/+$/, '')) &&
     apis.size === 1 &&
-    apis.has(wireProtocolToPiApi(wireProtocol))
+    (wireProtocol === undefined || apis.has(wireProtocolToPiApi(wireProtocol)))
   );
 }
 
@@ -916,6 +923,42 @@ export function buildPiNativeProvidersFromConfigs(
       onSkip?.(cfg.id, 'oauth not supported for pi native');
       continue;
     }
+    const runtimeApi =
+      rt.wireProtocol === undefined ? undefined : wireProtocolToPiApi(rt.wireProtocol);
+    // Protocol authority, in order: per-model override, explicit endpoint default,
+    // strictly same-origin PI bundled knowledge, then an explicitly matched official
+    // PI catalog. Missing protocol is not Chat: one unresolved model makes the whole
+    // provider unusable so PI cannot silently send it to a guessed endpoint shape.
+    const bundledModels = rt.models.map((model) =>
+      !model.piApi && !runtimeApi
+        ? resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl)
+        : undefined,
+    );
+    const official =
+      rt.piCatalogProviderId &&
+      officialPiRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
+        ? officialPiModels(rt.piCatalogProviderId)
+        : null;
+    const officialById = new Map((official ?? []).map((model) => [model.id, model]));
+    const metadataModels = rt.models.map(
+      (model, index) => bundledModels[index] ?? officialById.get(model.id),
+    );
+    const modelApis = rt.models.map(
+      (model, index) => model.piApi ?? runtimeApi ?? metadataModels[index]?.api,
+    );
+    const unresolvedModelIndex = modelApis.findIndex((api) => api === undefined);
+    if (unresolvedModelIndex >= 0) {
+      onSkip?.(
+        cfg.id,
+        `pi protocol not configured for model '${rt.models[unresolvedModelIndex]!.id}'`,
+      );
+      continue;
+    }
+    const providerApi = runtimeApi ?? modelApis[0];
+    if (!providerApi) {
+      onSkip?.(cfg.id, 'pi protocol not configured for provider default');
+      continue;
+    }
     const headers =
       rt.headers && Object.keys(rt.headers).length > 0
         ? Object.fromEntries(
@@ -938,31 +981,6 @@ export function buildPiNativeProvidersFromConfigs(
         env[apiKeyEnvVar] = key;
       }
     }
-    const runtimeApi =
-      rt.wireProtocol === undefined ? undefined : wireProtocolToPiApi(rt.wireProtocol);
-    // Protocol authority, in order: per-model daily correction/addition,
-    // explicit endpoint protocol, strictly same-origin PI bundled knowledge,
-    // then the legacy BYOM default. A same-named model from another provider is
-    // not evidence about this user endpoint and must never rewrite its route.
-    const bundledModels = rt.models.map((model) =>
-      !model.piApi && !runtimeApi
-        ? resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl)
-        : undefined,
-    );
-    const official =
-      rt.piCatalogProviderId &&
-      officialPiRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
-        ? officialPiModels(rt.piCatalogProviderId)
-        : null;
-    const officialById = new Map((official ?? []).map((model) => [model.id, model]));
-    const metadataModels = rt.models.map(
-      (model, index) => bundledModels[index] ?? officialById.get(model.id),
-    );
-    const modelApis = rt.models.map(
-      (model, index) =>
-        model.piApi ?? runtimeApi ?? metadataModels[index]?.api ?? 'openai-completions',
-    );
-    const providerApi = runtimeApi ?? modelApis[0] ?? 'openai-completions';
     providers.push({
       id: runtimeCustomProviderId(cfg.id),
       name: cfg.name,
@@ -1361,7 +1379,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const source = providerId?.trim();
       // 本地订阅走上面的 PI 原生 provider；cindy 块只是同一会话切回 Gateway 时的备用块。
       // 即使订阅与 XD 共享 model id，也不能借用 XD v3 的协议字段。
-      if (source && source !== 'cindy' && source !== 'xd') return 'anthropic-messages';
+      if (source && source !== 'cindy' && source !== 'xd') {
+        const provider = getActiveCatalog().providers.find((candidate) => candidate.id === source);
+        return piApiFromDeclaredWireProtocol(provider?.routing.pi?.wireProtocol);
+      }
       return resolveXdPiGatewayWireProtocol(modelId);
     },
     getGhostRosterPrompt: opts.getGhostRosterPrompt,

@@ -1399,6 +1399,15 @@
           "piChatHelp": "Pi 直接連線供應商的 OpenAI 相容 Chat Completions API。",
           "piAnthropicHelp": "Pi 直接連線供應商的 Anthropic Messages API。"
         },
+        "modelProtocol": {
+          "label": "模型協定",
+          "inherit": "繼承預設",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "help": "繼承預設會使用上方供應商協定；僅在該模型需要不同協定時覆寫。",
+          "ariaLabel": "{{model}} 的模型協定"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 協議(用 x-api-key 鑑權)。填該來源用於 Claude Code 的 baseURL、金鑰與模型，留空則此來源不提供 Claude Code。",

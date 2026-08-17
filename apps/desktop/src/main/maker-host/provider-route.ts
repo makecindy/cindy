@@ -1061,7 +1061,9 @@ export function resolveVisionBackendRoute(
     model = model.slice(stripPrefix.length);
   }
 
-  // 缺省 wireProtocol 按 agent 面推断（对齐 user-provider defaultWireProtocol）。
+  // Claude/Codex 保留各自原生前门的历史缺省；Pi 是后来加入的自适应 runtime，
+  // 缺声明不能猜成 Chat，否则视觉工具会把图片与凭证发往错误协议端点。
+  if (agent === 'pi' && routing.wireProtocol === undefined) return null;
   const wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat' =
     routing.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat');
   // 缺省请求路径按协议推断（对齐上游标准路径）。

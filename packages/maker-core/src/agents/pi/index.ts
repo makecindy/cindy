@@ -679,7 +679,12 @@ export class PiAgent extends BaseAgent {
     nativeProviders: PiNativeProviderSpec[] = [],
     retainedRuntimeModel?: ModelDescriptor,
     gatewayProviderId?: string | null,
-    opts: { remote?: boolean; fileOps?: PiRemoteFileOps; preview?: boolean } = {},
+    opts: {
+      remote?: boolean;
+      fileOps?: PiRemoteFileOps;
+      preview?: boolean;
+      offlineValidationOnly?: boolean;
+    } = {},
   ): Promise<{
     gatewayImageInputByModel: Map<string, boolean>;
     gatewayApiByModel: Map<string, 'anthropic-messages' | 'openai-responses'>;
@@ -712,7 +717,7 @@ export class PiAgent extends BaseAgent {
       : publicModels;
     const gatewayImageInputByModel = new Map<string, boolean>();
     const gatewayApiByModel = new Map<string, 'anthropic-messages' | 'openai-responses'>();
-    const models = runtimeModels.map((publicModel: ModelDescriptor) => {
+    const models = runtimeModels.flatMap((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
@@ -730,14 +735,17 @@ export class PiAgent extends BaseAgent {
       ) {
         throw new Error(`Model Access v3 did not provide a Pi wire protocol for model: ${m.id}`);
       }
-      // undefined 明确表示该模型不属于 XD Pi 目录。订阅直连及 BYOM-only 模型仍需出现在
-      // cindy compat provider 的模型表中，沿用它们既有的 Messages 前门；只有 null 才是
-      // “属于 XD 但 v3 配置不完整”，上面已 fail closed。
+      // undefined means no protocol was declared for this concrete gateway route. Native
+      // subscription/BYOM models remain in their own provider blocks; normal sessions must not
+      // copy them into `cindy` under a guessed Claude protocol. Offline fork only needs Pi to
+      // parse a historical JSONL file and never sends a model request, so it gets a local-only
+      // structural placeholder.
+      if (resolvedApi === undefined && !opts.offlineValidationOnly) return [];
       const api = resolvedApi ?? 'anthropic-messages';
       gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
-      return {
+      return [{
         id: m.id,
         name: m.displayName,
         // Pi 0.83 支持同一 provider 下逐模型覆盖 API/baseUrl。provider 身份仍是
@@ -759,7 +767,7 @@ export class PiAgent extends BaseAgent {
           cacheRead: m.cost?.cacheRead ?? 0,
           cacheWrite: m.cost?.cacheWrite ?? 0,
         },
-      };
+      }];
     });
     const providers: Record<string, unknown> = {
       [PI_PROVIDER_ID]: {
@@ -2450,7 +2458,10 @@ export class PiAgent extends BaseAgent {
             `Model Access v3 did not provide a Pi wire protocol for model: ${model}`,
           );
         }
-        const desiredApi = resolvedApi ?? 'anthropic-messages';
+        if (resolvedApi === undefined) {
+          throw new Error(`Pi wire protocol is not configured for model: ${model}`);
+        }
+        const desiredApi = resolvedApi;
         const configuredApi = gatewayApiByModel.get(model);
         if (configuredApi && configuredApi !== desiredApi) {
           throw new Error(
@@ -3172,7 +3183,9 @@ export class PiAgent extends BaseAgent {
     // 用隔离的 coding-agent 目录承载 fork 专属 models.json(PI_CODING_AGENT_DIR),
     // --session-dir 仍指向共享 sessions(两者是独立 flag),互不干扰。
     const forkHome = joinRemotePosixPath(agentHome, 'fork-tmp', randomBytes(8).toString('hex'));
-    await this.writeModelsJson(forkHome);
+    await this.writeModelsJson(forkHome, [], undefined, undefined, {
+      offlineValidationOnly: true,
+    });
 
     // fork 全程离线(clone/fork 是纯 session 文件操作),真凭证拿不到也不影响;
     // 尽量取真 authEnv(含网关相关变量),失败则占位。

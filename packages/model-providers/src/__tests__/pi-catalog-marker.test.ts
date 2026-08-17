@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { effectivePiWireProtocol } from '../pi-catalog-marker.js';
 
 describe('effectivePiWireProtocol', () => {
-  it('normalizes an omitted Pi protocol to openai-chat', () => {
-    expect(effectivePiWireProtocol(undefined)).toBe('openai-chat');
+  it('keeps an omitted Pi protocol distinct from explicit Chat', () => {
+    expect(effectivePiWireProtocol(undefined)).toBeUndefined();
     expect(effectivePiWireProtocol('openai-chat')).toBe('openai-chat');
   });
 

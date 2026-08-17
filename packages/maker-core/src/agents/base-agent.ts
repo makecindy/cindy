@@ -552,7 +552,7 @@ export interface AgentDeps {
    * - `openai-responses`：Model Access v3 明确指定的 Cindy AI Pi 路由；
    * - `anthropic-messages`：非 XD compat proxy 路由；
    * - `null`：模型属于 Cindy AI Pi 目录，但协议缺失或不匹配，Pi fail closed；
-   * - `undefined`：模型不属于当前来源的 XD Pi 目录，保留既有 Messages 协议。
+   * - `undefined`：当前来源未声明该模型的 Pi 协议；不得写入 `cindy` gateway 块。
    */
   resolvePiGatewayModelApi?: (
     providerId: string | null | undefined,

@@ -137,6 +137,35 @@ describe('resolveVisionBackendEndpoint', () => {
     const d = deps({ getProviderById: () => null });
     expect(() => resolveVisionBackendEndpoint('nope', 'vision-x', d)).toThrow(/provider not found/);
   });
+
+  it('does not guess Chat for a Pi vision route without an explicit protocol', () => {
+    const d = deps();
+    d.getProviderById = () =>
+      fakeProvider({
+        agents: ['pi'],
+        routing: {
+          pi: {
+            upstream: 'https://pi.example.com/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          pi: [
+            {
+              id: 'vision-x',
+              name: 'Vision X',
+              contextWindow: 200000,
+              efforts: ['low'],
+              defaultEffort: null,
+            },
+          ],
+        },
+      });
+
+    expect(() => resolveVisionBackendEndpoint('user-x', 'vision-x', d)).toThrow(
+      /wire protocol is not configured/,
+    );
+  });
 });
 
 describe('extractChatContent', () => {

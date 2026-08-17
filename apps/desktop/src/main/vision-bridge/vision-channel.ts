@@ -174,11 +174,13 @@ function pickAgent(provider: Provider, modelId: string): AgentKind | null {
   return null;
 }
 
-/** 按 agent 面推断缺省 wireProtocol（对齐 user-provider defaultWireProtocol）。 */
-function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-responses' | 'openai-chat' {
+/** Claude/Codex 保留历史缺省；Pi 必须由来源显式声明。 */
+function defaultWireProtocol(
+  agent: AgentKind,
+): 'anthropic-messages' | 'openai-responses' | null {
   if (agent === 'claude-code') return 'anthropic-messages';
   if (agent === 'codex') return 'openai-responses';
-  return 'openai-chat';
+  return null;
 }
 
 /**
@@ -191,8 +193,11 @@ function rewriteVisionModel(modelId: string, stripPrefix: string | undefined): s
     : modelId;
 }
 
-/** 从 routing 读 wireProtocol，缺省按 agent 面推断。 */
-function wireProtocolFor(provider: Provider, agent: AgentKind): 'anthropic-messages' | 'openai-responses' | 'openai-chat' {
+/** 从 routing 读 wireProtocol；Pi 缺声明时返回 null。 */
+function wireProtocolFor(
+  provider: Provider,
+  agent: AgentKind,
+): 'anthropic-messages' | 'openai-responses' | 'openai-chat' | null {
   return provider.routing[agent]?.wireProtocol ?? defaultWireProtocol(agent);
 }
 
@@ -534,6 +539,12 @@ export function resolveVisionBackendEndpoint(
   }
   const routing = provider.routing[agent]!;
   const wireProtocol = wireProtocolFor(provider, agent);
+  if (!wireProtocol) {
+    throw new VisionBackendError(
+      'unavailable',
+      `vision wire protocol is not configured for provider ${provider.id} agent ${agent}`,
+    );
+  }
   const requestPath = routing.requestPath ?? defaultRequestPath(wireProtocol);
   // gateway-key 路由的 builtin upstream 是占位地址（如 xd-gateway.invalid），真实入口必须
   // 经 deps.resolveGatewayEndpoint 取随凭据下发的租户端点（与 key 同源不变量）。拿不到

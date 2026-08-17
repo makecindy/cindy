@@ -1399,6 +1399,15 @@
           "piChatHelp": "Pi がプロバイダーの OpenAI 互換 Chat Completions API に直接接続します。",
           "piAnthropicHelp": "Pi がプロバイダーの Anthropic Messages API に直接接続します。"
         },
+        "modelProtocol": {
+          "label": "モデルプロトコル",
+          "inherit": "デフォルトを継承",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "help": "継承すると上のプロバイダープロトコルを使用します。このモデルだけ別のプロトコルが必要な場合に上書きします。",
+          "ariaLabel": "{{model}} のモデルプロトコル"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",

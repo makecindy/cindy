@@ -1236,6 +1236,27 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     expect(resolveVisionBackendRoute('nope', 'whatever', null)).toBeNull();
   });
 
+  it('Pi 视觉路由缺显式协议时返回 null，不猜 Chat', () => {
+    const custom = {
+      id: 'pi-missing-wire',
+      name: 'Pi Missing Wire',
+      source: 'user',
+      agents: ['pi'],
+      auth: { method: 'apiKey' },
+      routing: {
+        pi: {
+          upstream: 'https://pi.example/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { pi: [{ id: 'vision-model', name: 'Vision Model' }] },
+    } as never;
+    setCustomProviders([custom]);
+    setCustomProviderKeyReader(() => 'sk-pi');
+
+    expect(resolveVisionBackendRoute('pi-missing-wire', 'vision-model', null)).toBeNull();
+  });
+
   it('modelIdRewrite.stripPrefix：视觉后端返回已剥前缀的 model', () => {
     const custom = {
       id: 'rewrite-provider',
