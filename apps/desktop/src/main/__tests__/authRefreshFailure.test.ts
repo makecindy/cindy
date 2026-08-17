@@ -11,6 +11,7 @@ import {
   DEFINITIVE_REFRESH_FAILURE_CODES,
   getRefreshTokenReplacementCandidate,
   isDefinitiveRefreshFailure,
+  isForeignDeviceRefreshFailure,
   pickRefreshTokenReplacementCandidate,
   resolveRefreshFailureAction,
   resolveSessionExpiredReason,
@@ -41,14 +42,15 @@ describe('isDefinitiveRefreshFailure', () => {
   });
 
   it('确定性凭据失效码 → 删除 token', () => {
-    for (const code of [
-      'REFRESH_TOKEN_EXPIRED',
-      'INVALID_REFRESH_TOKEN',
-      'DEVICE_MISMATCH',
-      'MEMBERSHIP_DISABLED',
-    ]) {
+    for (const code of ['REFRESH_TOKEN_EXPIRED', 'INVALID_REFRESH_TOKEN', 'MEMBERSHIP_DISABLED']) {
       expect(isDefinitiveRefreshFailure({ ok: false, data: { error: { code } } })).toBe(true);
     }
+  });
+
+  it('DEVICE_MISMATCH 不是确定性失效,不得授权删盘', () => {
+    const result = { ok: false, data: { error: { code: 'DEVICE_MISMATCH' } } };
+    expect(isDefinitiveRefreshFailure(result)).toBe(false);
+    expect(isForeignDeviceRefreshFailure(result)).toBe(true);
   });
 
   it('429 限流(RATE_LIMITED)→ 瞬时失败,保留 token', () => {
@@ -75,7 +77,6 @@ describe('isDefinitiveRefreshFailure', () => {
 
   it('确定性错误码集合保持冻结(防止误增删改变删除语义)', () => {
     expect([...DEFINITIVE_REFRESH_FAILURE_CODES].sort()).toEqual([
-      'DEVICE_MISMATCH',
       'INVALID_REFRESH_TOKEN',
       'MEMBERSHIP_DISABLED',
       'REFRESH_TOKEN_EXPIRED',
@@ -197,11 +198,17 @@ describe('refresh token replacement detection', () => {
     expect(resolveRefreshFailureAction(expiredToken, 'rt-old', 'rt-new')).toEqual({
       kind: 'definitive-failure',
     });
-    expect(resolveRefreshFailureAction(deviceMismatch, 'rt-old', 'rt-new')).toEqual({
-      kind: 'definitive-failure',
-    });
     expect(resolveRefreshFailureAction(membershipDisabled, 'rt-old', 'rt-new')).toEqual({
       kind: 'definitive-failure',
+    });
+  });
+
+  it('DEVICE_MISMATCH 即使磁盘已有其它 token 也不删盘,只判 foreign-device', () => {
+    expect(resolveRefreshFailureAction(deviceMismatch, 'rt-old', 'rt-new')).toEqual({
+      kind: 'foreign-device',
+    });
+    expect(resolveRefreshFailureAction(deviceMismatch, 'rt-old', 'rt-old')).toEqual({
+      kind: 'foreign-device',
     });
   });
 
@@ -305,7 +312,7 @@ describe('refresh token replacement detection', () => {
       requestedToken: 'rt-old',
       replacementRetries: 0,
       replacementRetryExhausted: false,
-      failureAction: { kind: 'definitive-failure' },
+      failureAction: { kind: 'foreign-device' },
     });
     expect(sleep).not.toHaveBeenCalled();
     expect(doRefresh).toHaveBeenCalledTimes(1);
@@ -399,6 +406,11 @@ describe('runRefreshWithTransientRetry', () => {
     status: 401,
     data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
   };
+  const deviceMismatch: RefreshFetchResult<unknown> = {
+    ok: false,
+    status: 401,
+    data: { error: { code: 'DEVICE_MISMATCH' } },
+  };
   /** 立即 resolve 的注入 sleep,记录每次退避时长。 */
   const makeSleep = () => {
     const calls: number[] = [];
@@ -449,6 +461,29 @@ describe('runRefreshWithTransientRetry', () => {
         status: 401,
         code: 'INVALID_REFRESH_TOKEN',
         definitive: true,
+        willRetry: false,
+      },
+    ]);
+  });
+
+  it('DEVICE_MISMATCH 立即返回,不按瞬时失败重试', async () => {
+    const doRefresh = vi.fn().mockResolvedValue(deviceMismatch);
+    const { calls, sleep } = makeSleep();
+    const failures: RefreshFailureInfo[] = [];
+    const { result, attempts } = await runRefreshWithTransientRetry(doRefresh, {
+      sleep,
+      onFailure: (info) => failures.push(info),
+    });
+    expect(result).toBe(deviceMismatch);
+    expect(attempts).toBe(1);
+    expect(doRefresh).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
+    expect(failures).toEqual([
+      {
+        attempt: 1,
+        status: 401,
+        code: 'DEVICE_MISMATCH',
+        definitive: false,
         willRetry: false,
       },
     ]);

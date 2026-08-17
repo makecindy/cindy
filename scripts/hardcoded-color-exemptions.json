@@ -35,6 +35,16 @@
   "owner": "D2"
  },
  {
+  "glob": "docs/design-rules/DESIGN.md",
+  "reason": "设计规范正本即色值权威(§15.16 色阶/用户调参记录),文档示例不是组件硬编码",
+  "owner": "D2"
+ },
+ {
+  "glob": "docs/design-rules/token-decision-table.md",
+  "reason": "token 决策表即色值权威(§9 面阶梯),文档示例不是组件硬编码",
+  "owner": "D2"
+ },
+ {
   "glob": "apps/desktop/src/renderer/themes/__tests__/cindyCodeBlockContrast.test.ts",
   "reason": "D2-6 hljs 落档:hljs 主题色数据(LIGHT/DARK)+注释引用 default/CINDY 色",
   "owner": "D2"

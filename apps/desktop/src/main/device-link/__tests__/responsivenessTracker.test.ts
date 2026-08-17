@@ -371,6 +371,9 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
       classifyDeviceSendFailure(new DeviceLinkError('VERSION_MISMATCH', 'v mismatch')),
     ).toBe('responded');
     expect(
+      classifyDeviceSendFailure(new DeviceLinkError('ACCESS_REVOKED', 'revoked')),
+    ).toBe('responded');
+    expect(
       classifyDeviceSendFailure(new DeviceLinkError('NOT_CONNECTED', 'lost')),
     ).toBe('inconclusive');
     expect(classifyDeviceSendFailure(new Error('random'))).toBe('inconclusive');

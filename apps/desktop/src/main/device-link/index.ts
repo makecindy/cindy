@@ -390,6 +390,8 @@ let appliedKeepAwake: boolean | null = null;
 /** 退出路径的持有权 DELETE 完成信号:sync 阶段发起,async 阶段 disposer await(见 onQuit 注释) */
 let pendingQuitOwnershipRelease: Promise<void> | null = null;
 const openLinkInFlight = new Map<string, Promise<LinkAcceptPayload>>();
+/** 对端已对本机撤权：自动 recover/probe 不得再 openLink；用户显式重试可清掉。 */
+const revokedByRemote = new Set<string>();
 const presenceAvailableByDevice = new Map<string, boolean>();
 /**
  * 「目标设备无响应」熔断(弱网 / 对端卡死时收敛请求风暴,见 responsivenessTracker)。
@@ -615,6 +617,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       client?.getStatus() === 'online' &&
       arbiter?.isOwner() === true &&
       presenceAvailableByDevice.get(deviceId) === true &&
+      !revokedByRemote.has(deviceId) &&
       !readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
     // observed:false 且是唯一豁免熔断快速拒绝的建链入口:recoverLink 是探测
     // 周期的延伸(业务/探测超时已由 tracker 记账,不重复观测),且 open 期间
@@ -623,7 +626,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 拒绝,review P2)。频度由探测退避与 openLinkInFlight 单飞约束。open
     // 期间 transport-timeout 重建照旧让位(观测入口被快速拒绝,熔断关闭后
     // 下一次触发生效),恢复统一由探测循环驱动。
-    recoverLink: (deviceId) => openRemoteLink(deviceId, { observed: false }),
+    recoverLink: (deviceId) => {
+      if (revokedByRemote.has(deviceId)) {
+        return Promise.reject(new DeviceLinkError('ACCESS_REVOKED', 'access revoked by target device'));
+      }
+      return openRemoteLink(deviceId, { observed: false });
+    },
     log: {
       info: (...args) => log.info(...args),
       warn: (...args) => log.warn(...args),
@@ -802,6 +810,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (reason === 'revoked') {
         // 撤权后在途请求会陆续超时——那不是「设备无响应」,是访问被收回。清熔断并
         // 作废在途结果(翻代),避免 unresponsive 状态与撤权状态并存(对齐 mobile 语义)。
+        revokedByRemote.add(env.src);
         responsivenessTracker?.clearDevice(env.src);
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
       }
@@ -1118,6 +1127,7 @@ function teardownActiveLink(): void {
   for (const timer of subscriptionReplayRetryTimers.values()) clearTimeout(timer);
   subscriptionReplayRetryTimers.clear();
   presenceAvailableByDevice.clear();
+  revokedByRemote.clear();
   // 词典同步驱动是进程级的,**不随单次链路起停**:多实例仲裁的 demote → acquire
   // 只会 client.start(),不会重跑 initDeviceLinkService,在这里 stop 掉它会让词典
   // 同步在降级过一次之后永久失效。清空 presence 就够了 —— 没有对端就不会发送,
@@ -1559,6 +1569,8 @@ export async function openRemoteLink(
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+  // 自动 recover/probe 由 recoverLink + isProbeEligible 挡。presence / subscribe
+  // 可以在对端重新授权后走这里接回；终态只在成功建链后清除,失败重试不得提前解闩。
   const existing = openLinkInFlight.get(deviceId);
   if (existing) return existing;
 
@@ -1575,12 +1587,14 @@ export async function openRemoteLink(
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
     }
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    return client.openLink(deviceId, {
+    const accepted = await client.openLink(deviceId, {
       controllerName: deviceName(),
       protocolVersion: 1,
       appVersion: app.getVersion(),
       capabilities: [...CONTROLLER_CAPABILITIES],
     });
+    revokedByRemote.delete(deviceId);
+    return accepted;
   };
   // 结算所有权由 tracker.guardInvoke 统一声明(第一个 settle 的 guard 打标,
   // 后续 guard 见标不定论):observed 发起、unobserved 发起被多个业务加入者

@@ -366,9 +366,9 @@ function createAuthClient(
  * 发生过一次,当时只把静默半死改成明确弹重登(见 authSessionExpiredDetection.test.ts),
  * 没有堵住 passive 的销毁权。
  *
- * packaged 恒不设置该 env(index.ts 启动时对 packaged / isolated 显式 delete 兜底,
- * 防 ambient env 污染),线上零影响;`--isolated` 沙箱有独立 userData 与 deviceId,
- * 本来就不共享,不受此闸门约束。
+ * packaged 恒不设置该 env(index.ts 启动时对 packaged / isolated-sandbox 显式
+ * delete 兜底,防 ambient env 污染),线上零影响。env 由解析后的 profileKind
+ * 不是 isolated-sandbox 且 passive 落地,覆盖正式目录与非隔离 custom 共库。
  */
 function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
@@ -383,6 +383,12 @@ function isPassiveSharedUserDataInstance(): boolean {
  * 直到用户在本进程显式登录或重启进程为止。
  */
 let passiveLocalSignOut = false;
+
+/**
+ * DEVICE_MISMATCH 后本进程已确认配不上磁盘 token。token 留给真正的设备,
+ * 但 initialize() 不能反复拿同一枚去撞 401。直到显式登录或进程重启为止。
+ */
+let foreignDeviceLocalSignOut = false;
 
 // ── safeStorage helpers ─────────────────────────────────────────────────────
 
@@ -2317,6 +2323,11 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     commitVolatileAppSession('signed-out');
     return snapshotLoggedOutAuthState();
   }
+  if (foreignDeviceLocalSignOut) {
+    log.info('foreign-device instance stays signed out locally (tombstone)');
+    commitVolatileAppSession('signed-out');
+    return snapshotLoggedOutAuthState();
+  }
 
   // release-relogin-on-update: if the auto-updater dropped a relogin marker
   // for *this* version, wipe persisted auth and force the user back to the
@@ -2516,6 +2527,11 @@ async function runColdStartRefreshFlow(
           clearConfirmedDeadRefreshTokens(storedRealm, confirmedDeadTokens);
         }
         resetActiveAuthRealmToBuild();
+      } else if (action.kind === 'foreign-device') {
+        log.warn(
+          'cold-start refresh: DEVICE_MISMATCH — this process starts logged out and keeps the persisted refresh token',
+        );
+        foreignDeviceLocalSignOut = true;
       } else if (action.kind === 'replacement-retry') {
         log.warn(
           `cold-start refresh failed for a stale token after ${attempts} attempt(s) — keeping latest refresh token, starting logged out`,
@@ -2741,8 +2757,9 @@ async function completeLogin(
         clearReloginFlag();
       }
       accountDeletionRestoredNoticePending = deletionWasRestored;
-      // 显式登录解除 passive 本地登出墓碑(见 passiveLocalSignOut)。
+      // 显式登录解除本进程登出墓碑(passive / foreign-device)。
       passiveLocalSignOut = false;
+      foreignDeviceLocalSignOut = false;
       currentUser = nextUser;
       commitCloudAppSession(currentUser.id);
       pendingAuthRealm = null;
@@ -2868,9 +2885,10 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       return { success: true, state: loginFlowState };
     }
 
-    // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
-    // 同区域直接进入连接选择；跨区域先进入确认状态，确认后才把连接写入
-    // start-browser 白名单并允许继续 SSO。
+    // 企业 SSO 入口（按组织 ID/slug/已验证域名）：同区域进入连接选择；
+    // 跨区域先进入确认状态，确认后才把连接写入 start-browser 白名单。
+    // 唯一 SSO 由 renderer 接到 method-choice 后直接派发 start-browser，
+    // 以便立刻投影 browser-redirect（确认框消失、露出取消）。
     if (action.type === 'discover-sso-org') {
       const discovery = await discoverOrganizationRealm(action.org.trim().toLowerCase());
       const methods = ssoOrgDiscoveryToMethods(discovery);
@@ -3233,6 +3251,16 @@ export async function refresh(): Promise<boolean> {
           const previousUserId =
             currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
           await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));
+        } else if (action.kind === 'foreign-device') {
+          log.warn(
+            'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',
+          );
+          foreignDeviceLocalSignOut = true;
+          const previousUserId =
+            currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
+          await expireRuntimeAuth(previousUserId, 'device-mismatch', {
+            preservePersistedRefreshToken: true,
+          });
         } else if (action.kind === 'replacement-retry') {
           log.warn(
             `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — retrying in ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,

@@ -1,14 +1,27 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
+import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
+
 const captured = vi.hoisted(() => ({
   args: [] as string[],
   env: {} as Record<string, string | undefined>,
   requests: [] as Array<Record<string, unknown>>,
+  requestOptions: [] as Array<{
+    timeoutMs?: number;
+    refreshTimeoutOnEvent?: (event: { type: string }) => boolean;
+  } | undefined>,
   closes: 0,
-  requestHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown; error?: string }>),
+  requestHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<{
+    success: boolean;
+    command?: unknown;
+    data?: unknown;
+    error?: string;
+  }>),
 }));
 
 vi.mock('../transport.js', () => ({
@@ -34,23 +47,44 @@ vi.mock('../transport.js', () => ({
   attachJsonlReader: () => {},
 }));
 
-vi.mock('../rpc-client.js', () => ({
-  PiRpcProcess: class {
-    isClosed = false;
-    async request(command: Record<string, unknown>) {
-      captured.requests.push(command);
-      if (captured.requestHandler) return captured.requestHandler(command);
-      if (command.type === 'get_state') {
-        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
-      }
-      return { success: true, data: {} };
+vi.mock('../rpc-client.js', () => {
+  class PiRpcRequestTimeoutError extends Error {
+    readonly code = 'PI_RPC_TIMEOUT';
+    constructor(
+      readonly commandType: string,
+      readonly timeoutMs: number,
+    ) {
+      super(`pi rpc timeout after ${timeoutMs}ms: ${commandType}`);
+      this.name = 'PiRpcRequestTimeoutError';
     }
-    send(): void {}
-    async close(): Promise<void> { this.isClosed = true; captured.closes += 1; }
-  },
-}));
+  }
+  return {
+    PiRpcRequestTimeoutError,
+    PiRpcProcess: class {
+      isClosed = false;
+      async request(
+        command: Record<string, unknown>,
+        options?: {
+          timeoutMs?: number;
+          refreshTimeoutOnEvent?: (event: { type: string }) => boolean;
+        },
+      ) {
+        captured.requests.push(command);
+        captured.requestOptions.push(options);
+        if (captured.requestHandler) return captured.requestHandler(command);
+        if (command.type === 'get_state') {
+          return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+        }
+        return { success: true, data: {} };
+      }
+      send(): void {}
+      async close(): Promise<void> { this.isClosed = true; captured.closes += 1; }
+    },
+  };
+});
 
 import { PiAgent } from '../index.js';
+import { PiRpcRequestTimeoutError } from '../rpc-client.js';
 import type { AgentDeps } from '../../base-agent.js';
 import type { ModelDescriptor } from '../../../types/capabilities.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -78,6 +112,7 @@ describe('Pi provider-aware model routing', () => {
   beforeEach(() => {
     captured.args = [];
     captured.requests = [];
+    captured.requestOptions = [];
     captured.closes = 0;
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-provider-home-'));
@@ -268,6 +303,10 @@ describe('Pi provider-aware model routing', () => {
             models: [
               { id: 'xai/grok-4.5', wireId: 'grok-4.5' },
               {
+                id: 'grok-4.6', wireId: 'grok-4.6', catalogAddition: true,
+                contextWindow: 500_000, maxTokens: 500_000,
+              },
+              {
                 id: 'xai/grok-4.20', wireId: 'grok-4.20', api: 'openai-responses',
                 contextWindow: 1_000_000, maxTokens: 64_000,
                 cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
@@ -305,12 +344,18 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers.xai).not.toHaveProperty('api');
     expect(models.providers.xai?.models).toEqual([
       expect.objectContaining({
+        id: 'grok-4.6',
+        contextWindow: 500_000,
+        maxTokens: 500_000,
+      }),
+      expect.objectContaining({
         id: 'grok-4.20',
         api: 'openai-responses',
         cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
         compat: { supportsStrictTools: true },
       }),
     ]);
+    expect(models.providers.xai?.models?.[0]).not.toHaveProperty('api');
     expect(JSON.parse(readFileSync(path.join(configHome, 'settings.json'), 'utf8')))
       .toEqual({ transport: 'sse' });
     expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8')))
@@ -519,6 +564,202 @@ describe('Pi provider-aware model routing', () => {
       provider: 'xai',
       modelId: 'xai/grok-4.6',
     });
+    await handle.close();
+  });
+
+  it('does not reissue set_model when the live session is already on the requested SuperGrok route', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'set_model') {
+        return { success: false, error: 'Model "grok-4.6" not found for provider "xai"' };
+      }
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          baseUrl: 'http://127.0.0.1:9',
+          api: 'anthropic-messages',
+          models: [{ id: 'grok-4.6' }],
+        }],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-same-route',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    });
+    captured.requests.length = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
+    await handle.close();
+  });
+
+  it('rebuilds a missing subagent snapshot on same-route SuperGrok setModel without RPC', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          baseUrl: 'http://127.0.0.1:9',
+          api: 'anthropic-messages',
+          models: [{ id: 'grok-4.6' }],
+        }],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-snapshot-retry',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    });
+    const snapshotPath = runtimeFileOf('subagent', 'grok-46-snapshot-retry');
+    rmSync(snapshotPath, { force: true });
+    captured.requests.length = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
+    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
+      model: 'grok-4.6',
+      provider: 'xai',
+    });
+    await handle.close();
+  });
+
+  it('clears a stuck pending subagent snapshot on same-route SuperGrok setModel', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          baseUrl: 'http://127.0.0.1:9',
+          api: 'anthropic-messages',
+          models: [{ id: 'grok-4.6' }],
+        }],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-pending-clear',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    });
+    const snapshotPath = runtimeFileOf('subagent', 'grok-46-pending-clear');
+    writeFileSync(snapshotPath, JSON.stringify({
+      model: 'grok-4.6',
+      provider: 'xai',
+      pending: true,
+    }) + '\n');
+    captured.requests.length = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
+    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
+      model: 'grok-4.6',
+      provider: 'xai',
+    });
+    await handle.close();
+  });
+
+  it('rejects a same-route gateway heartbeat when the live session wire protocol is stale', async () => {
+    let gatewayApi: 'anthropic-messages' | 'openai-responses' = 'anthropic-messages';
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'shared-model',
+          displayName: 'Shared',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => gatewayApi,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'gateway-same-route-stale',
+      workingDir: cwd,
+      model: 'shared-model',
+      providerId: 'xd',
+    });
+    gatewayApi = 'openai-responses';
+    captured.requests.length = 0;
+    await expect(handle.setModel!('shared-model', { providerId: 'xd' })).rejects.toThrow(
+      /restart the Pi session to change provider wire protocol/,
+    );
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
     await handle.close();
   });
 
@@ -1351,7 +1592,11 @@ describe('Pi provider-aware model routing', () => {
     );
     const imageMessage = {
       type: 'user' as const,
-      content: [{ type: 'image' as const, path: imagePath }],
+      content: [{
+        type: 'image' as const,
+        path: imagePath,
+        managedUrl: 'xdt-image://pi-managed/screenshot.png',
+      }],
     };
     const mixedMessage = {
       type: 'user' as const,
@@ -1400,6 +1645,20 @@ describe('Pi provider-aware model routing', () => {
     await handle.send(imageMessage);
     expect(captured.requests).toContainEqual(expect.objectContaining({
       type: 'prompt',
+      message: expect.stringContaining(JSON.stringify({
+        image: 1,
+        uri: 'xdt-image://pi-managed/screenshot.png',
+      })),
+      images: [expect.objectContaining({ type: 'image', mimeType: 'image/png' })],
+    }));
+    captured.requests.length = 0;
+    await handle.steer!(imageMessage);
+    expect(captured.requests).toContainEqual(expect.objectContaining({
+      type: 'steer',
+      message: expect.stringContaining(JSON.stringify({
+        image: 1,
+        uri: 'xdt-image://pi-managed/screenshot.png',
+      })),
       images: [expect.objectContaining({ type: 'image', mimeType: 'image/png' })],
     }));
 
@@ -1452,6 +1711,149 @@ describe('Pi provider-aware model routing', () => {
     ).rejects.toThrow(/failed to read image attachment/);
     // 未发送任何 prompt(失败在 dispatch 前)
     expect(captured.requests).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('waits through Pi preflight compaction when accepting a prompt', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-acceptance-budget',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await handle.send({ type: 'user', content: 'continue the goal' });
+
+    const promptIndex = captured.requests.findIndex((request) => request.type === 'prompt');
+    expect(promptIndex).toBeGreaterThanOrEqual(0);
+    expect(captured.requestOptions[promptIndex]).toMatchObject({ timeoutMs: 600_000 });
+    const refresh = captured.requestOptions[promptIndex]?.refreshTimeoutOnEvent;
+    expect(refresh?.({ type: 'compaction_start' })).toBe(true);
+    expect(refresh?.({ type: 'summarization_retry_scheduled' })).toBe(true);
+    expect(refresh?.({ type: 'agent_start' })).toBe(false);
+    await handle.close();
+  });
+
+  it('marks a true prompt acceptance timeout as an unconfirmed dispatch', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') {
+        throw new PiRpcRequestTimeoutError('prompt', 600_000);
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-acceptance-timeout',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchUnconfirmedError',
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+    });
+    await handle.close();
+  });
+
+  it.each([
+    ['transport close before response', new Error('pi process exited (code=null, signal=null)')],
+    ['unknown write result', new Error('write EPIPE')],
+    ['malformed response envelope', new Error('pi rpc: response for prompt missing boolean success')],
+  ])('marks %s after prompt request starts as an unconfirmed dispatch', async (_label, failure) => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') throw failure;
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: `prompt-unknown-${String(_label).replaceAll(' ', '-')}`,
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchUnconfirmedError',
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      cause: failure,
+    });
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('keeps an explicit prompt rejection as a confirmed undispatched error', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') {
+        return {
+          command: 'prompt',
+          success: false,
+          error: 'prompt rejected before acceptance',
+        };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-explicit-rejection',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchRejectedError',
+      code: 'TURN_DISPATCH_REJECTED',
+      message: 'pi prompt rejected before acceptance: prompt rejected before acceptance',
+    });
+    await handle.close();
+  });
+
+  it.each([
+    ['missing command', { success: false, error: 'prompt rejected before acceptance' }],
+    [
+      'non-string command',
+      { command: { type: 'prompt' }, success: false, error: 'prompt rejected before acceptance' },
+    ],
+    [
+      'mismatched command',
+      { command: 'steer', success: false, error: 'prompt rejected before acceptance' },
+    ],
+  ])('treats a rejected prompt response with %s as an unconfirmed dispatch', async (
+    label,
+    rejectionResponse,
+  ) => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return {
+          success: true,
+          data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === 'prompt') return rejectionResponse;
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: `prompt-rejection-${label.replaceAll(' ', '-')}`,
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchUnconfirmedError',
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      cause: expect.objectContaining({
+        message: 'pi prompt rejection response missing matching command',
+      }),
+    });
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
     await handle.close();
   });
 
@@ -2125,6 +2527,60 @@ describe('Pi provider-aware model routing', () => {
       .toContain(capturedRemoteEnvs[0]!.CINDY_PI_PERMISSION_HASH);
     expect(capturedRemoteEnvs[1]!.CINDY_PI_PERMISSION_FILE)
       .toContain(capturedRemoteEnvs[1]!.CINDY_PI_PERMISSION_HASH);
+  });
+
+  it('puts a deterministic Cindy extension bundle hash into remote spawn env', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    const startRemote = async () => {
+      const base = byomDeps(async () => ({ providers: [], env: {} }));
+      const agent = new PiAgent({
+        ...base,
+        runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+        resolveRemotePiBinaryPath: async () => '/remote/pi',
+        getRemotePiTransport: async (_hostId, opts) => {
+          capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+          return remoteStub;
+        },
+        getRemotePiFileOps: () => ({
+          mkdirp: async () => {},
+          writeFile: async () => {},
+          stat: async () => ({ isFile: true }),
+          rm: async () => {},
+          listDir: async () => [],
+        }),
+      });
+      const handle = await agent.startSession({
+        sessionId: 'remote-extension-hash',
+        workingDir: cwd,
+        model: 'local-model',
+        remoteHostId: 'remote-host',
+      });
+      await handle.close();
+    };
+
+    await startRemote();
+    await startRemote();
+    const expected = createHash('sha256')
+      .update(CINDY_BRIDGE_EXTENSION_SOURCE)
+      .update('\n')
+      .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+      .digest('hex')
+      .slice(0, 16);
+    expect(capturedRemoteEnvs).toHaveLength(2);
+    expect(capturedRemoteEnvs[0]!.CINDY_PI_EXTENSION_BUNDLE_HASH).toBe(expected);
+    expect(capturedRemoteEnvs[1]!.CINDY_PI_EXTENSION_BUNDLE_HASH).toBe(expected);
+    expect(expected).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it('isolates remote configHome by models.json hash so a later route change does not overwrite the live child', async () => {

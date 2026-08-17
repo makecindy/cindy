@@ -127,6 +127,7 @@ export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome 
     error.code === 'DEVICE_OFFLINE'
     || error.code === 'REMOTE_DISABLED'
     || error.code === 'VERSION_MISMATCH'
+    || error.code === 'ACCESS_REVOKED'
   ) {
     return 'responded';
   }

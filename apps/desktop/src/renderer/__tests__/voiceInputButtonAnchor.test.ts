@@ -19,7 +19,7 @@ describe('ChatInput voice button anchor contract', () => {
   const buttonGroupBlock = extractBetween(
     chatInputSource,
     '{showSecondaryStop && (',
-    '<span ref={sendButtonRef}',
+    'ref={sendButtonRef}',
   );
 
   it('renders the secondary stop button to the left of the voice input button', () => {

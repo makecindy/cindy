@@ -271,10 +271,18 @@ type AttachmentBlock = {
   type: 'image' | 'file';
   path?: string;
   base64?: string;
+  managedUrl?: string;
   mimeType?: string;
   pathOrigin?: 'desktop-host';
 };
 type UserMessageShape = string | { type: 'user'; content: string | RawBlock[] };
+
+function trustedManagedImageUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.startsWith('xdt-image://')) return value;
+  if (value.startsWith('cindy-media://blobs/')) return value;
+  return undefined;
+}
 
 /** 旧引用没有完整性声明；新引用由共享 parser 保证 size/sha256 同时合法。 */
 function integrityForRef(ref: AttachmentOssRef): AttachmentIntegrity | undefined {
@@ -300,6 +308,10 @@ export async function normalizeUserMessage(
     }
 
     const block = { ...raw } as AttachmentBlock & { type: 'image' | 'file' };
+    const managedUrl = block.type === 'image' ? trustedManagedImageUrl(block.path) : undefined;
+    // This IPC boundary does not trust a renderer-supplied identity field. Only
+    // derive it from a Host-managed path that is successfully resolved below.
+    delete block.managedUrl;
     const isDesktopHostImage = block.type === 'image' && (
       block.pathOrigin === 'desktop-host'
       || Boolean(block.base64)
@@ -364,6 +376,7 @@ export async function normalizeUserMessage(
         if (!block.mimeType && mimeType !== 'application/octet-stream') {
           block.mimeType = mimeType;
         }
+        if (managedUrl) block.managedUrl = managedUrl;
       } catch (e) {
         log.warn('xdt-image resolve failed, dropping attachment', {
           url: block.path,
@@ -380,6 +393,7 @@ export async function normalizeUserMessage(
         const { absPath, mimeType } = cindyMediaBlobStore.resolveSafe(block.path);
         block.path = absPath;
         if (!block.mimeType) block.mimeType = mimeType;
+        if (managedUrl) block.managedUrl = managedUrl;
       } catch (e) {
         log.warn('cindy-media resolve failed, dropping attachment', {
           url: block.path,
@@ -900,6 +914,7 @@ export async function materializeDirectSendOssAttachments(
     }
     const originalPath = (original as { path?: unknown }).path;
     const pathValue = (materialized as { path?: unknown }).path;
+    const managedUrl = (materialized as { url?: unknown }).url;
     if (
       isOssRefField(originalPath) &&
       typeof pathValue === 'string' &&
@@ -908,7 +923,7 @@ export async function materializeDirectSendOssAttachments(
       const isImage = (original as { type?: unknown }).type === 'image';
       nextContent[attachmentIndexes[index]] = {
         ...(original as object),
-        path: pathValue,
+        path: isImage && trustedManagedImageUrl(managedUrl) ? managedUrl : pathValue,
         ...(isImage ? { pathOrigin: 'desktop-host' as const } : {}),
         base64: undefined,
       };

@@ -178,3 +178,18 @@ describe('进度旁白仍然折进「已工作 Xs」', () => {
     expect(isFoldedIntoWorkGroup(items, 'brief')).toBe(true);
   });
 });
+
+describe('empty assistant wrap-up', () => {
+  it('does not render a leaked stop-token leftover as a bubble', () => {
+    const items = buildRenderItems([
+      mkUser('u1', '你让 Worker 检查一下'),
+      mkAssistant('say', '现有 reviewer 空闲。'),
+      mkTool('send', 'mcp__cindy_orca__send_to_worker'),
+      mkResult('send-result', 'tu-send', '{"ok":true}'),
+      mkAssistant('eos', '', true),
+    ]).items;
+
+    expect(items.some((item) => item.type === 'message' && item.message.clientId === 'eos')).toBe(false);
+    expect(items.some((item) => item.type === 'message' && item.message.clientId === 'say')).toBe(true);
+  });
+});

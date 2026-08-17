@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { soleLoginMethod } from '@cindy/auth-client';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { clearWorkersCache } from '@/features/cc-agent/hooks/useWorkers';
@@ -335,6 +336,26 @@ export function AuthProvider({
         setLoginState({ step: 'browser-redirect', label: action.label });
       }
       const result = await authServiceRef.current!.dispatchLoginAction(action);
+      // 没有真正选择时不停留 method-choice：唯一 SSO 改派 start-browser
+      //（确认窗立刻消失、露出等待态）；唯一邮箱验证码直接发码进输码页。
+      if (result.success && result.state.step === 'method-choice') {
+        const sole = soleLoginMethod(result.state.methods);
+        if (sole?.type === 'sso') {
+          return dispatchLoginAction({
+            type: 'start-browser',
+            kind: 'sso',
+            providerOrConnectionId: sole.connectionId,
+            label: sole.connectionName || sole.orgName,
+          });
+        }
+        if (sole?.type === 'email_code' && result.state.email) {
+          return dispatchLoginAction({
+            type: 'request-code',
+            kind: 'email',
+            identifier: result.state.email,
+          });
+        }
+      }
       setLoginState(result.state);
       return result;
     },

@@ -3416,6 +3416,25 @@ interface ElectronAPI {
     autoRelaunchOnIdle: boolean;
   }) => Promise<AutoUpdateSettingsPayload>;
   resetAutoUpdateSettings: () => Promise<AutoUpdateSettingsPayload>;
+  /** beta 测试渠道(设备级)开关的读/写/恢复默认。 */
+  getUpdateChannelSettings: () => Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }>;
+  setUpdateChannelSettings: (settings: {
+    enableBeta: boolean;
+  }) => Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }>;
+  resetUpdateChannelSettings: () => Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }>;
+  /** 用户主动重启,让 beta 通道切换在下次冷启动前生效。 */
+  relaunchForChannelChange: () => Promise<void>;
+  /** 打开 beta 前预检:探测 beta manifest 是否可达(HTTP 200)。 */
+  probeBetaChannel: () => Promise<{ available: boolean }>;
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: { applyVibrancy: (familyId: string, isDark: boolean) => void };
@@ -5577,6 +5596,14 @@ interface ElectronAPI {
       agentKind: 'claude-code' | 'codex' | 'pi';
       isUserText?: boolean;
     }) => Promise<{ applied: boolean; done: boolean }>;
+    /** 输入框推荐提示词:turn 结束后预测用户下一步输入。 */
+    predictNextPrompt: (request: {
+      sessionId: string;
+      agentKind: 'claude-code' | 'codex' | 'pi';
+      messages: Array<{ role: string; content: string }>;
+      workingDir?: string;
+      turnGen: number;
+    }) => Promise<{ prompt: string | null }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ) => Promise<import('../shared/helpTypes').HelpAnswerResult>;
@@ -5775,6 +5802,8 @@ interface ElectronAPI {
           } | null,
         ) => void,
       ) => () => void;
+      getXaiSubscription: () => Promise<unknown | null>;
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void) => () => void;
     };
 
     /* ── 跨 Agent 工作区互转（双向，5 项独立判断；进度 step 通过 push 流转）── */

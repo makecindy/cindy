@@ -118,6 +118,9 @@ describe('Projects sidebar section', () => {
     );
     // 三个集合作为一个整体喂给混排模型。
     expect(projectsSectionSource).toContain('priorityContext,');
+    expect(projectsSectionSource).toContain('advanceViewedPriorityHold(');
+    expect(projectsSectionSource).toContain('holdViewedPriorityRank(');
+    expect(projectsSectionSource).toContain('viewedSessionId ?? activeSessionId');
     // 折叠豁免与排序同一口径(含远程),不再用只有本地的 notifications。
     expect(projectsSectionSource).toContain(
       'entrySessions(entry).some((s) => priorityContext.attentionSessionIds.has(s.id))',

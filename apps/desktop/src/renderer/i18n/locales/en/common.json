@@ -1306,7 +1306,14 @@
         "title": "xAI",
         "subtitle": "Grok models · SuperGrok subscription (direct)",
         "modelLabel": "Grok models",
-        "billingLabel": "SuperGrok subscription (direct)"
+        "billingLabel": "SuperGrok subscription (direct)",
+        "asset": {
+          "weeklyTitle": "Weekly limit",
+          "weeklyUsed": "{{percent}}% used",
+          "resetsAt": "Resets {{at}}",
+          "productLine": "{{product}} {{percent}}%",
+          "openUsage": "Open Grok usage"
+        }
       },
       "xd": {
         "title": "Cindy AI",
@@ -1758,6 +1765,21 @@
         "enabled": "LSP enabled — takes effect in new sessions",
         "disabled": "LSP disabled — takes effect in new sessions",
         "toggleFailed": "Failed to toggle LSP"
+      }
+    },
+    "betaChannel": {
+      "title": "Beta channel",
+      "description": "Join the beta channel to receive upcoming client updates early. Takes effect after restart.",
+      "toggleAria": "Beta channel toggle",
+      "restartTitle": "Restart Cindy",
+      "restartDescription": "The beta channel requires a restart to take effect. Restart now?",
+      "restartNow": "Restart now",
+      "restartLater": "Later",
+      "restartBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart now anyway?",
+      "unavailable": "The beta channel is unavailable — could not reach the beta update server.",
+      "toast": {
+        "disabled": "Beta channel disabled; takes effect after restart",
+        "toggleFailed": "Failed to toggle beta channel"
       }
     },
     "gitSafety": {
@@ -2482,6 +2504,11 @@
         "description": "Shows a column of tick marks beside the chat, one per question: hover to preview the question and the start of its answer, click to jump back to that turn. Appears only when there are enough questions and the window is wide enough."
       },
       "toggleAria": "Toggle question navigation rail"
+    },
+    "promptRecommendation": {
+      "label": "Prompt recommendations in input",
+      "description": "After a reply finishes, the input shows a predicted follow-up prompt. Press Tab to fill it in.",
+      "toggleAria": "Toggle prompt recommendations"
     },
     "collaboration": {
       "loading": "Loading collaboration settings…",
@@ -3480,7 +3507,10 @@
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Please try again."
           }
-        }
+        },
+        "conflict": "Unavailable",
+        "conflictAria": "{{name}} has a plugin identifier conflict",
+        "conflictDescription": "This plugin identifier is already in use and cannot be installed right now"
       },
       "reapproval": {
         "badge": "Permission review needed",
@@ -4350,11 +4380,19 @@
       "second": "s"
     },
     "openProxyUsage": "Open the full usage dashboard in your browser",
-    "openXaiUsage": "Open your xAI account page",
+    "openXaiUsage": "Open Grok usage page",
     "xai": {
       "requestsLine": "Rate limit (requests): {{remaining}}/{{limit}} left",
       "tokensLine": "Rate limit (tokens): {{remaining}}/{{limit}} left",
-      "noQuotaDetail": "xAI doesn't expose subscription quota details; only the estimated value is shown"
+      "noQuotaDetail": "SuperGrok weekly usage is unavailable; only the estimated value is shown",
+      "weeklyLabel": "Weekly",
+      "windowSegment": "{{label}} {{remaining}} left",
+      "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
+      "planLine": "Plan {{plan}}",
+      "resetAt": "Resets {{at}}",
+      "productLine": "{{product}} {{percent}}",
+      "extraCreditsLine": "Extra credits {{amount}}",
+      "accountWeeklyHint": "Account weekly usage, not this session's quota"
     },
     "dailyLimitLabel": "Today {{spend}}/{{limit}}",
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
@@ -9099,9 +9137,11 @@
       "title": "Create new worker",
       "submit": "Create Worker",
       "closeAria": "Close create worker dialog",
-      "roleLabel": "Role",
-      "customRolePlaceholder": "+ custom role (optional)",
-      "customRolePredefinedError": "Custom role cannot use a predefined role name",
+      "roleLabel": "Role Name",
+      "roleHint": "Just a name to tell collaborators apart. It doesn't change capabilities.",
+      "roleHintAria": "About role name",
+      "customRolePlaceholder": "+ custom role name (optional)",
+      "customRolePredefinedError": "Custom role name cannot use a predefined role name",
       "agentLabel": "Agent",
       "modelLabel": "Model",
       "permissionLabel": "Permission Mode",

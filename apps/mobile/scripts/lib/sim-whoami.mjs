@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { dirname, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
 import { withLocalMobileRegionConfig } from './mobile-dev-region.mjs';
@@ -82,6 +82,59 @@ export function extractSimMetroPortArgs(args, defaultPort = 8081) {
   }
 
   return { port, explicit: seen, passthrough };
+}
+
+/** Parse the explicit simulator handoff permission used only by the personal Skill. */
+export function extractSimTakeoverArgs(args) {
+  let takeover = false;
+  const passthrough = [];
+
+  for (const arg of args) {
+    if (arg === '--takeover') {
+      if (takeover) throw new Error('--takeover 只能传一次');
+      takeover = true;
+    } else {
+      passthrough.push(arg);
+    }
+  }
+
+  return { takeover, passthrough };
+}
+
+/** Decide whether a listener has enough Cindy-specific identity for an explicit handoff. */
+export function classifySimMetroListener({ cwd, source, targetWorktree }) {
+  if (!cwd) return { confirmed: false, worktree: null };
+
+  const normalizedCwd = normalize(cwd).replaceAll('\\', '/').replace(/\/+$/, '');
+  const normalizedTarget = normalize(targetWorktree).replaceAll('\\', '/').replace(/\/+$/, '');
+  const suffix = '/apps/mobile';
+  if (!normalizedCwd.endsWith(suffix) || !source) {
+    return { confirmed: false, worktree: null };
+  }
+
+  const worktree = normalizedCwd.slice(0, -suffix.length);
+  return {
+    confirmed: true,
+    worktree,
+    isTarget: worktree === normalizedTarget,
+  };
+}
+
+/** Parse the machine-readable output switch for mobile:sim:whoami. */
+export function extractSimJsonArgs(args) {
+  let json = false;
+  const passthrough = [];
+
+  for (const arg of args) {
+    if (arg === '--json') {
+      if (json) throw new Error('--json 只能传一次');
+      json = true;
+    } else {
+      passthrough.push(arg);
+    }
+  }
+
+  return { json, passthrough };
 }
 
 /**

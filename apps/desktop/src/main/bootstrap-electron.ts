@@ -465,7 +465,10 @@ import {
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
 import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
-import { clearXaiRateLimitSnapshot } from './usageBroadcaster.js';
+import {
+  clearXaiRateLimitSnapshot,
+  clearXaiSubscriptionUsageSnapshot,
+} from './usageBroadcaster.js';
 import {
   ensureAnthropicCompatProxyReady,
   disposeAnthropicCompatProxy,
@@ -513,6 +516,7 @@ import {
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
+  registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
   isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
@@ -631,6 +635,7 @@ import { registerMakerStatusIpc } from './maker-ipc/status.js';
 import {
   registerMakerUsageIpc,
   syncClaudeSubscriptionUsageForAuthChange,
+  syncXaiSubscriptionUsageForAuthChange,
 } from './maker-ipc/usage.js';
 import { prewarmModelPricing } from './usage/modelPricing.js';
 import { registerMakerBinaryVersionIpc } from './maker-ipc/binary-version.js';
@@ -3773,7 +3778,11 @@ const registerIpcHandlers = () => {
     clearXaiDiscoveredModels();
     clearXaiMediaModels();
     clearXaiRateLimitSnapshot();
-    broadcastXaiAuthStateChanged();
+    void (async () => {
+      await clearXaiSubscriptionUsageSnapshot();
+      await syncXaiSubscriptionUsageForAuthChange();
+      broadcastXaiAuthStateChanged();
+    })();
   });
 
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用
@@ -3784,6 +3793,9 @@ const registerIpcHandlers = () => {
     const result = await runGrokOAuthLogin();
     if (result.ok) {
       resetProviderModelAutoRefreshCooldowns('xai');
+      // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
+      // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
+      await clearXaiSubscriptionUsageSnapshot();
       // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
       // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
       clearXaiDiscoveredModels();
@@ -3795,6 +3807,7 @@ const registerIpcHandlers = () => {
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
       clearXaiRateLimitSnapshot();
+      await syncXaiSubscriptionUsageForAuthChange();
       broadcastXaiAuthStateChanged();
       void refreshXaiModelsFromHttp();
       void refreshProviderModelsManually('xai').catch((error) => {
@@ -3810,6 +3823,7 @@ const registerIpcHandlers = () => {
     try {
       logoutGrok();
       resetProviderModelAutoRefreshCooldowns('xai');
+      await clearXaiSubscriptionUsageSnapshot();
       clearXaiDiscoveredModels();
       clearXaiMediaModels();
     } catch (err) {
@@ -3821,6 +3835,7 @@ const registerIpcHandlers = () => {
     // 登出后同步广播给其它窗口,让已挂载的 useProviders 立刻重拉连接态;
     // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
     clearXaiRateLimitSnapshot();
+    await syncXaiSubscriptionUsageForAuthChange();
     broadcastXaiAuthStateChanged();
     return { authorized: hasGrokOAuthLogin() };
   });
@@ -6884,25 +6899,43 @@ app.on('ready', async () => {
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
-      try {
-        const protectedPaths = await listPersistedChatAttachmentPaths();
-        const result = await sweepStagedChatAttachmentsOnStartup({
+      //
+      // Staged-attachment bookkeeping is not first-paint readiness. The persisted-path
+      // lookup is a LIKE + json_tree scan over every retained message body; on a
+      // multi-GB owner DB that blocked LocalDbGate for ~24s after splash had already
+      // unmounted, leaving a white window. Sweep is fire-and-forget, only queries the
+      // DB when the owner cache already has stale files, and is delayed so the shared
+      // db worker can serve session-list / first-paint RPCs first. A stale-cache user
+      // would otherwise just move the 24s stall from the white screen onto the first
+      // task-list query (the db worker's better-sqlite3 .all() is synchronous).
+      const STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS = 5_000;
+      const stagedAttachmentSweepTimer = setTimeout(() => {
+        void sweepStagedChatAttachmentsOnStartup({
           ownerId: userId,
-          protectedPaths,
           createdBeforeMs: PROCESS_STARTED_AT_MS,
-        });
-        if (result.removed > 0 || result.protected > 0) {
-          dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
-            ...result,
-            ownerId: userId,
+          loadProtectedPaths: listPersistedChatAttachmentPaths,
+          canContinue: () =>
+            getActiveAppSession().dataOwnerId === userId && !isAppSessionBoundaryPending(),
+        })
+          .then((result) => {
+            if (result.removed > 0 || result.protected > 0) {
+              dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
+                ...result,
+                ownerId: userId,
+              });
+            }
+          })
+          .catch((err) => {
+            dbClientLog.warn(
+              '[ChatAttachment] startup staged attachment sweep failed (non-fatal)',
+              {
+                ownerId: userId,
+                error: err instanceof Error ? err.message : String(err),
+              },
+            );
           });
-        }
-      } catch (err) {
-        dbClientLog.warn('[ChatAttachment] startup staged attachment sweep failed (non-fatal)', {
-          ownerId: userId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      }, STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS);
+      stagedAttachmentSweepTimer.unref?.();
       logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
@@ -7094,6 +7127,7 @@ app.on('ready', async () => {
   // invoke-registry 捕获后供控制端隧道调用,本机 renderer 不调用)。
   registerGitReviewDeviceOp();
   registerModelVisibilityOwnerClaimIpc();
+  registerModelVisibilitySyncIpc();
   registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
