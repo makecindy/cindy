@@ -402,7 +402,7 @@ export const SessionItem = memo(function SessionItem({
     isRunning,
     hasAttentionNotification,
   });
-  const leftIconRunning = sessionActivity.phase === 'running';
+  const leftIconRunning = sessionActivity.currentTurnActive === true;
   const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const showRightStatus = rightStatusKind !== 'time';
   const remoteIconKind = session.deviceLinkDeviceId

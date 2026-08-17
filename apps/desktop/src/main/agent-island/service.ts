@@ -229,6 +229,7 @@ function sessionActivitySnapshotsEqual(
 ): boolean {
   return left.sessionId === right.sessionId
     && left.phase === right.phase
+    && left.currentTurnActive === right.currentTurnActive
     && left.recordStatus === right.recordStatus
     && left.startedAtMs === right.startedAtMs
     && left.lastActivityAtMs === right.lastActivityAtMs

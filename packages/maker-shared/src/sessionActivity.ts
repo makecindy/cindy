@@ -34,6 +34,14 @@ export interface SessionWorkflowState {
 export interface SessionActivitySnapshot {
   sessionId: string;
   phase: SessionActivityPhase;
+  /**
+   * Whether the current turn is still actively running. This stays orthogonal
+   * to `phase`: a durable/stale error may keep the right-side error status at
+   * higher priority while a newer turn continues running.
+   *
+   * Optional on the wire so older device-link snapshots remain readable.
+   */
+  currentTurnActive?: boolean;
   recordStatus?: SessionRecordStatus;
   startedAtMs: number | null;
   lastActivityAtMs: number | null;
@@ -137,6 +145,7 @@ export function projectSessionActivity(
   return {
     sessionId: input.sessionId,
     phase: resolvePhase(input),
+    currentTurnActive: input.running === true || input.livePhase === 'running',
     ...(input.recordStatus ? { recordStatus: input.recordStatus } : {}),
     startedAtMs: input.startedAtMs ?? null,
     lastActivityAtMs: input.lastActivityAtMs ?? null,

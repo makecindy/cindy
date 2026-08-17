@@ -126,13 +126,13 @@ describe('SessionCard review regressions', () => {
     // 左侧运行标记和右侧状态槽必须消费同一投影，避免各自组合本地/远程状态源。
     expect(sessionItemSource).toContain('projectSidebarSessionActivity({');
     expect(sessionItemSource).toContain(
-      "const leftIconRunning = sessionActivity.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
     expect(sessionItemSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).toContain('projectSidebarSessionActivity({');
     expect(sessionCardSource).toContain(
-      "const leftIconRunning = sessionActivity.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
     expect(sessionCardSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');

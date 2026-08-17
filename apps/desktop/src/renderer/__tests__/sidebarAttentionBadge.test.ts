@@ -73,6 +73,19 @@ describe('sidebar right status priority', () => {
       isRunning: true,
       hasAttentionNotification: true,
     })).toBe('error');
+    const runningWithStaleError = projectSidebarSessionActivity({
+      sessionId: 'session-1',
+      attentionKind: 'error',
+      isUrgentFromContext: false,
+      isRunning: true,
+      hasAttentionNotification: true,
+    });
+    expect(runningWithStaleError).toMatchObject({
+      phase: 'error',
+      attention: true,
+      currentTurnActive: true,
+    });
+    expect(resolveSidebarRightStatus(runningWithStaleError)).toBe('error');
     // 定时任务失败未读(attentionKind 缺失,由 urgency context 注入)同样是 error 档
     expect(resolve({
       sessionId: 'session-1',
@@ -81,6 +94,18 @@ describe('sidebar right status priority', () => {
       isRunning: true,
       hasAttentionNotification: true,
     })).toBe('error');
+    expect(projectSidebarSessionActivity({
+      sessionId: 'session-1',
+      liveActivity: { phase: 'running' },
+      attentionKind: undefined,
+      isUrgentFromContext: true,
+      isRunning: false,
+      hasAttentionNotification: false,
+    })).toMatchObject({
+      phase: 'error',
+      attention: true,
+      currentTurnActive: true,
+    });
     // automation failure urgency is durable outside the notification store:
     // after restart, unread expiry or acknowledgement it must still stay red.
     expect(resolve({

@@ -4,23 +4,36 @@ import { projectSessionActivity, sessionWorkflowFromTitle } from '../sessionActi
 
 describe('session activity projection', () => {
   it('uses the lifecycle priority error > waiting > running > completed > idle', () => {
-    expect(projectSessionActivity({ sessionId: 's', running: true }).phase).toBe('running');
+    expect(projectSessionActivity({ sessionId: 's', running: true })).toMatchObject({
+      phase: 'running',
+      currentTurnActive: true,
+    });
     expect(
       projectSessionActivity({ sessionId: 's', running: true, waitingForUser: true }).phase,
     ).toBe('needs-interaction');
-    expect(
-      projectSessionActivity({
-        sessionId: 's',
-        running: true,
-        waitingForUser: true,
-        terminal: 'error',
-      }).phase,
-    ).toBe('error');
+    expect(projectSessionActivity({
+      sessionId: 's',
+      running: true,
+      waitingForUser: true,
+      terminal: 'error',
+    })).toMatchObject({
+      phase: 'error',
+      currentTurnActive: true,
+    });
+    expect(projectSessionActivity({
+      sessionId: 's',
+      livePhase: 'running',
+      terminal: 'error',
+    })).toMatchObject({
+      phase: 'error',
+      currentTurnActive: true,
+    });
     expect(projectSessionActivity({ sessionId: 's', terminal: 'error' }).phase).toBe('error');
     expect(projectSessionActivity({ sessionId: 's', terminal: 'completed' }).phase).toBe(
       'completed',
     );
     expect(projectSessionActivity({ sessionId: 's' }).phase).toBe('idle');
+    expect(projectSessionActivity({ sessionId: 's' }).currentTurnActive).toBe(false);
   });
 
   it('lifts known and unknown title workflow states without rewriting the title', () => {

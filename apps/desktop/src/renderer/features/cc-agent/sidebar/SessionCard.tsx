@@ -178,7 +178,7 @@ export function SessionCard({
     isRunning,
     hasAttentionNotification,
   });
-  const leftIconRunning = sessionActivity.phase === 'running';
+  const leftIconRunning = sessionActivity.currentTurnActive === true;
   const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
