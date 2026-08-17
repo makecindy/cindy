@@ -8430,6 +8430,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           untrackPersistedOrcaPreVendorInput(clientId);
         }
       };
+      const acquireTrackedOriginVendorDispatchLease = acquireOriginVendorDispatchLease
+        ? async () => {
+            const release = await acquireOriginVendorDispatchLease();
+            // Session.onDispatching runs before the provider acquires this
+            // lease. Keep the exact cleanup item visible to end_team until the
+            // cross-process lease makes a terminal commit impossible.
+            untrackPersistedOrcaPreVendorInput(clientId);
+            return release;
+          }
+        : undefined;
 
       let live = maker.getSession(targetSessionId);
       if (live) {
@@ -8530,10 +8540,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             {
               planMode: false,
               onAccepted: persistUserMessage,
-              acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
+              acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,
               onDispatching: () => {
                 assertOrcaQueueOriginActive(origin);
-                untrackPersistedOrcaPreVendorInput(clientId);
                 dispatchAgentIslandUserPrompt(targetSessionId);
               },
             },
@@ -8647,10 +8656,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           {
             planMode: false,
             onAccepted: persistUserMessage,
-            acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
+            acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,
             onDispatching: () => {
               assertOrcaQueueOriginActive(origin);
-              untrackPersistedOrcaPreVendorInput(clientId);
               dispatchAgentIslandUserPrompt(targetSessionId);
             },
           },

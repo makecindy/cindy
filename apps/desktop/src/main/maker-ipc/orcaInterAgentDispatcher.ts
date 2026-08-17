@@ -527,8 +527,9 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             deps.acquireVendorDispatchLease(params.teamId),
           beforeVendorDispatch: () => {
             deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId);
-            deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId);
           },
+          onVendorDispatchLeaseAcquired: () =>
+            deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId),
           onConfirmedUndispatched: () =>
             deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId),
           onRewindFailed: (error) =>
@@ -677,6 +678,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     onPersisted?: () => void | Promise<void>;
     acquireVendorDispatchLease?: SessionSendOptions['acquireVendorDispatchLease'];
     beforeVendorDispatch?: () => void;
+    onVendorDispatchLeaseAcquired?: () => void;
     onConfirmedUndispatched?: () => void;
     onRewindFailed?: (error: unknown) => void | Promise<void>;
   },
@@ -692,11 +694,17 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
         try {
           const acquisition = originalAcquireVendorDispatchLease();
           if (acquisition instanceof Promise) {
-            return acquisition.catch((err) => {
-              terminalTransitionPending = isPendingOrcaTeamTransitionError(err);
-              throw err;
-            });
+            return acquisition
+              .then((release) => {
+                params.onVendorDispatchLeaseAcquired?.();
+                return release;
+              })
+              .catch((err) => {
+                terminalTransitionPending = isPendingOrcaTeamTransitionError(err);
+                throw err;
+              });
           }
+          params.onVendorDispatchLeaseAcquired?.();
           return acquisition;
         } catch (err) {
           terminalTransitionPending = isPendingOrcaTeamTransitionError(err);

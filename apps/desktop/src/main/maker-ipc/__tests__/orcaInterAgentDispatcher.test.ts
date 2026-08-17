@@ -65,9 +65,9 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
   const liveSession = createLiveSession(async (_message, opts) => {
     order.push('send-called');
     await opts?.onAccepted?.();
+    opts?.onDispatching?.();
     const releaseVendorDispatchLease = await opts?.acquireVendorDispatchLease?.();
     try {
-      opts?.onDispatching?.();
       order.push('vendor-released');
       return { accepted: true };
     } finally {
@@ -217,6 +217,50 @@ describe('Orca lead/worker dispatcher', () => {
     ]);
     expect(acquireVendorDispatchLease).toHaveBeenCalledWith('team-1');
     expect(leaseRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps cleanup tracking until the provider dispatch lease is acquired', async () => {
+    const leaseEntered = deferredVoid();
+    const allowLease = deferredVoid();
+    const releaseLease = vi.fn();
+    const lifecycle: string[] = [];
+    const h = createHarness({
+      trackPersistedUserMessageBeforeVendorDispatch: vi.fn(() => {
+        lifecycle.push('tracked');
+      }),
+      untrackPersistedUserMessageBeforeVendorDispatch: vi.fn(() => {
+        lifecycle.push('untracked');
+      }),
+      acquireVendorDispatchLease: vi.fn(async () => {
+        lifecycle.push('lease-entered');
+        leaseEntered.resolve();
+        await allowLease.promise;
+        lifecycle.push('lease-acquired');
+        return releaseLease;
+      }),
+    });
+
+    const dispatch = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Retain cleanup intent across lease acquisition',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'cleanup-lease-race-test' },
+    });
+
+    await leaseEntered.promise;
+    expect(lifecycle).toEqual(['tracked', 'lease-entered']);
+
+    allowLease.resolve();
+    await expect(dispatch).resolves.toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(lifecycle).toEqual([
+      'tracked',
+      'lease-entered',
+      'lease-acquired',
+      'untracked',
+    ]);
+    expect(releaseLease).toHaveBeenCalledOnce();
   });
 
   it('retains the team reservation and exposes direct accepted settlement to end_team', async () => {
