@@ -1098,6 +1098,7 @@ describe('统一面板 · 会话内选中收藏要真正应用', () => {
         uid,
         wireModelId: 'gpt-5.5',
         engine: 'codex',
+        providerId: 'xd',
       });
     });
   });
@@ -1169,6 +1170,7 @@ describe('统一面板 · 会话内选中收藏要真正应用', () => {
         uid,
         wireModelId: 'gpt-5.6',
         engine: 'codex',
+        providerId: 'openai',
       });
     });
   });
@@ -1575,6 +1577,7 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
       uid,
       wireModelId: 'gpt-5.5',
       engine: 'codex',
+      providerId: 'xd',
     });
   });
 

@@ -866,7 +866,15 @@ interface ModelSelectorContentProps {
    * 事务返回非 false 后自行记录,不经本回调)。
    */
   onSessionFavoriteAnchorChange?: (
-    anchor: { uid: string; wireModelId: string; engine: 'cc' | 'codex' | 'pi' } | null,
+    anchor: {
+      uid: string;
+      wireModelId: string;
+      engine: 'cc' | 'codex' | 'pi';
+      /** 选中时的显式来源。来源也是锚点身份的一部分:同 wire id 同引擎、仅来源不同的
+       *  配置是两份配置,少了它,别的窗口把会话来源从 A 切到 B 后,面板仍在 A 的收藏上
+       *  打勾(2026-08-17 review)。 */
+      providerId: string;
+    } | null,
   ) => void;
   /**
    * 统一面板的**选中直通**(M5 新会话接线)。传入后,联合列表里的每一次行选中都原样交给
@@ -1918,6 +1926,7 @@ function ModelSelectorContentView({
           uid: args.config.favoriteUid,
           wireModelId: args.wireModelId,
           engine: args.config.engine,
+          providerId: args.providerId,
         }
       : null;
     // 「正在跑的是哪个引擎」以会话形态给的那一个为准(已确认的会话引擎);没有会话形态的

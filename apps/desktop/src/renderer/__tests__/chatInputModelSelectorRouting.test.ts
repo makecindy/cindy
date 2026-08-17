@@ -154,9 +154,15 @@ describe('ChatInput model source switching wiring', () => {
     // 只在事务真成功后才记。
     expect(block).toContain('if (applied) {');
     expect(block).toContain('setSessionFavoriteAnchor(');
-    // 快照取事务后的目标值(targetAgent / modelId 都是这次切过去的那一份)。
-    expect(block).toContain(
-      '{ uid: favoriteUid, wireModelId: modelId, engine: agentKindToVendor(targetAgent) }',
+    // 快照取事务后的目标值(targetAgent / modelId / providerId 都是这次切过去的那一份)。
+    expect(block).toContain('uid: favoriteUid,');
+    expect(block).toContain('wireModelId: modelId,');
+    expect(block).toContain('engine: agentKindToVendor(targetAgent),');
+    expect(block).toContain('providerId,');
+    // 派生校验必须比对来源:仅来源被切走(wire id / 引擎不变)时锚点失效
+    // (2026-08-17 review:跨窗口 / 外部 patch 切来源后不得继续勾旧来源的收藏)。
+    expect(chatInputSource).toContain(
+      'sessionFavoriteAnchor.providerId === activeProviderId &&',
     );
   });
 

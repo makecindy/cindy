@@ -1661,6 +1661,10 @@ export function ChatInput({
     /** 选中时会话落下的 wire model id(≠ 收藏条目里的归一化行 id,见草稿侧同名快照的说明)。 */
     wireModelId: string;
     engine: 'cc' | 'codex' | 'pi';
+    /** 选中时的显式来源 —— 来源也是锚点身份的一部分:同 wire id 同引擎、仅来源不同是两份
+     *  配置。别的窗口 / 外部 patch 把会话来源从 A 切到 B 后,缺这一维会让面板继续在 A 的
+     *  收藏上打勾,编辑/删除它还会误回落到 A 的默认(2026-08-17 review)。 */
+    providerId: string;
   } | null>(null);
   // 换会话 = 换一份「当前选了什么」:上一条会话的锚点绝不能跟过去(新会话恰好同模型同引擎时
   // 会在一条不相干的收藏上打勾)。
@@ -6108,7 +6112,12 @@ export function ChatInput({
         if (applied) {
           setSessionFavoriteAnchor(
             favoriteUid
-              ? { uid: favoriteUid, wireModelId: modelId, engine: agentKindToVendor(targetAgent) }
+              ? {
+                  uid: favoriteUid,
+                  wireModelId: modelId,
+                  engine: agentKindToVendor(targetAgent),
+                  providerId,
+                }
               : null,
           );
         }
@@ -6150,6 +6159,11 @@ export function ChatInput({
   const effectiveSelectedFavoriteUid = sessionId
     ? sessionFavoriteAnchor &&
       sessionFavoriteAnchor.wireModelId === activeModel &&
+      // 来源同为锚点身份(2026-08-17 review):仅来源被切走(跨窗口 / 外部 patch,wire id
+      // 与引擎都没变)时锚点必须失效,否则面板继续勾旧来源的收藏。activeProviderId 为
+      // null = 会话跟随默认路由,与显式来源的锚点永不相等 —— 语义正确:锚点记录的是
+      // 一次显式来源选择。
+      sessionFavoriteAnchor.providerId === activeProviderId &&
       (composerEngineMarkVendor === null || sessionFavoriteAnchor.engine === composerEngineMarkVendor)
       ? sessionFavoriteAnchor.uid
       : null

@@ -588,8 +588,14 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
   const drafts = new Map<string, Draft>();
   const order: string[] = [];
 
-  const isKeptRow = (providerId: string, wireId: string): boolean =>
+  // kept 判定**绑定枚举引擎**(2026-08-17 review):keepModel.modelId 是 kept agent 自己的
+  // wire id,只允许在 kept agent 那一轮、由它自己的行点亮。不绑 agent 时,别的引擎恰好有一条
+  // id 与之相等的目录条目(桥接壳 / 撞名商品)就会把同一逻辑行标成 kept,随后 keptAgent 让
+  // kept agent 那一格跳过来源校验 —— 而那一格的 wire id 从未匹配过当前配置,providerId 为
+  // null(跟随默认路由)的会话尤其容易放进来一个点了会改道或失败的错来源候选。
+  const isKeptRow = (agent: AgentKind, providerId: string, wireId: string): boolean =>
     keepModel !== undefined &&
+    keepModel.agent === agent &&
     keepModel.modelId === wireId &&
     (keepModel.providerId === null || keepModel.providerId === providerId);
 
@@ -619,7 +625,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     for (const row of rows) {
       const keyModelId = unifiedModelKeyId(row.id);
       const key = entryKey(row.sourceProviderId, keyModelId);
-      const kept = isKeptRow(row.sourceProviderId, row.id);
+      const kept = isKeptRow(agent, row.sourceProviderId, row.id);
       const hit = drafts.get(key);
       if (hit) {
         if (!hit.agents.includes(agent)) hit.agents.push(agent);

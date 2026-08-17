@@ -948,6 +948,31 @@ describe('unifiedModelEntries', () => {
     expect(Object.keys(row?.capabilities ?? {})).toEqual(['codex']);
   });
 
+  it('kept 判定绑定枚举引擎:其它引擎撞名 wire id 不把行标成 kept(2026-08-17 review)', () => {
+    // cc 是 kept agent(当前配置的 wire id 是 'gpt-x');本供应商 codex 恰有一条 id 相同的
+    // 目录条目,cc 侧则是桥接壳 'chatgpt/gpt-x'(归一化后合并为同一行)。kept 不绑引擎时,
+    // codex 那一轮会把整行点亮,cc 格随之跳过来源校验 —— 当前来源解析对显式来源的短路让
+    // 误标暂不可达坏输出,但正确性不该依赖那条短路。绑定后 kept 只能由 cc 自己的行
+    // (wire id 恰为 'gpt-x')点亮;本形状下两格照常各自走完校验。
+    const collision = view({
+      id: 'xd',
+      models: {
+        'claude-code': [m('chatgpt/gpt-x')],
+        codex: [m('gpt-x')],
+      },
+    });
+    const entries = unifiedModelEntries({
+      providers: [collision],
+      isVisible: alwaysVisible,
+      scope: 'session',
+      keepModel: { providerId: null, modelId: 'gpt-x', agent: 'claude-code' },
+    });
+    const row = find(entries, 'xd', 'gpt-x');
+    expect(row?.candidates).toEqual(['claude-code', 'codex']);
+    expect(row?.capabilities['claude-code']?.wireModelId).toBe('chatgpt/gpt-x');
+    expect(row?.capabilities.codex?.wireModelId).toBe('gpt-x');
+  });
+
   it('选中行豁免:其它引擎的副本本身可正常路由时,仍是合法候选(反向用例)', () => {
     // 与上一条唯一的差别:cc / pi 的副本是**健康**的。它们靠自己走完准入 + 来源校验进候选,
     // 不需要豁免 —— 收窄豁免不该顺手砍掉真正能用的引擎。
