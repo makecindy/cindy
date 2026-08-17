@@ -11,12 +11,28 @@
  * (violet / blue / amber / graphite) are members of the new hue family, so old
  * rows resolve without any data migration. Anything unrecognized is hashed into
  * a stable hue instead of collapsing every legacy Bot onto one color.
+ *
+ * One exception to "flat tint + emoji": the official Cindy mark. `avatar` may
+ * hold a `cindy://avatar/…` sentinel instead of a grapheme, which resolves to
+ * bundled Cindy artwork. The namespace is reserved — auto-assignment never mints
+ * one, so an official-looking Bot is always an explicit template or user choice.
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { useTranslation } from 'react-i18next';
 
+import cindyOfficialAvatarSrc from '@/assets/cindy-avatar-account.png';
 import { cn } from '@/lib/utils';
+import {
+  CINDY_AVATAR_SCHEME_PREFIX,
+  CINDY_OFFICIAL_AVATAR,
+  isCindyOfficialAvatar,
+} from './botAvatarIdentity';
+
+// The sentinel lives in an asset-free leaf module (see botAvatarIdentity.ts) but
+// stays part of this module's public surface: UI code imports the whole avatar
+// vocabulary from BotAvatar.
+export { CINDY_AVATAR_SCHEME_PREFIX, CINDY_OFFICIAL_AVATAR, isCindyOfficialAvatar };
 
 /** Registered hue family. Order is stable — hash assignment depends on it. */
 export const BOT_AVATAR_HUES = [
@@ -32,6 +48,9 @@ export const BOT_AVATAR_HUES = [
 ] as const;
 
 export type BotAvatarHue = (typeof BOT_AVATAR_HUES)[number];
+
+/** Bundled artwork for {@link CINDY_OFFICIAL_AVATAR}. */
+export const CINDY_OFFICIAL_AVATAR_SRC = cindyOfficialAvatarSrc;
 
 /**
  * Curated emoji set: assistant / tool / nature / interstellar, deliberately
@@ -152,17 +171,27 @@ export interface BotAvatarProps {
 
 export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
   const emoji = (bot.avatar ?? '').trim();
+  const official = isCindyOfficialAvatar(emoji);
   return (
     <span
       aria-hidden
       className={cn(
-        'inline-flex shrink-0 select-none items-center justify-center rounded-full leading-none',
+        'inline-flex shrink-0 select-none items-center justify-center overflow-hidden rounded-full leading-none',
         SIZE_CLASSES[size],
         className,
       )}
+      // Kept even for the official mark: the hue is what shows through while the
+      // bundled image decodes, so the avatar never flashes white.
       style={{ backgroundColor: botAvatarHueToken(bot.avatarColor) }}
     >
-      {emoji ? (
+      {official ? (
+        <img
+          src={CINDY_OFFICIAL_AVATAR_SRC}
+          alt=""
+          draggable={false}
+          className="pointer-events-none h-full w-full select-none rounded-full object-cover"
+        />
+      ) : emoji ? (
         <span>{emoji}</span>
       ) : (
         <span className="font-medium text-[var(--text-primary)]">{botAvatarInitial(bot.name)}</span>
@@ -199,6 +228,7 @@ export function BotAvatarPicker({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const hue = useMemo(() => normalizeBotAvatarHue(avatarColor), [avatarColor]);
+  const officialSelected = isCindyOfficialAvatar(avatar);
 
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
@@ -230,6 +260,28 @@ export function BotAvatarPicker({
             {t('bots.avatarPicker.emojiLabel')}
           </p>
           <div className="grid grid-cols-8 gap-0.5">
+            {/* The official Cindy mark leads the grid; same cell geometry and
+                selected state as an emoji, only the glyph is artwork. */}
+            <button
+              type="button"
+              onClick={() => onChange({ hue, emoji: CINDY_OFFICIAL_AVATAR })}
+              aria-pressed={officialSelected}
+              aria-label={t('bots.avatarPicker.official')}
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+                officialSelected
+                  ? 'bg-[var(--surface-chip)]'
+                  : 'hover:bg-[var(--surface-hover)]',
+              )}
+            >
+              <img
+                src={CINDY_OFFICIAL_AVATAR_SRC}
+                alt=""
+                aria-hidden
+                draggable={false}
+                className="pointer-events-none h-6 w-6 select-none rounded-full object-cover"
+              />
+            </button>
             {BOT_AVATAR_EMOJIS.map((item) => (
               <button
                 key={item}

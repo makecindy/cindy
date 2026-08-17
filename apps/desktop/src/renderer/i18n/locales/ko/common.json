@@ -5454,7 +5454,7 @@
         "assistant": {
           "title": "일반 어시스턴트",
           "summary": "장기 정체성과 전용 메모리를 가지며 기본으로 다른 작업을 관찰하지 않습니다.",
-          "defaultName": "내 어시스턴트",
+          "defaultName": "Cindy",
           "defaultDescription": "필요할 때 기능과 메시지 채널을 추가할 수 있는 장기 개인 어시스턴트입니다."
         },
         "custom": {
@@ -5488,6 +5488,7 @@
     "close": "닫기",
     "avatarPicker": {
       "open": "아바타 변경",
+      "official": "Cindy 공식 아바타",
       "emojiLabel": "이모지",
       "hueLabel": "색상",
       "hint": "이모지와 배경색을 선택하면 목록에서 이 Bot을 쉽게 알아볼 수 있습니다."

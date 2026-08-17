@@ -1,4 +1,7 @@
 import type { BotAvatarHue } from './BotAvatar';
+// Imported from the leaf module, not from BotAvatar.tsx: this file is also loaded
+// by plain-Node tooling that cannot resolve the bundled portrait asset.
+import { CINDY_OFFICIAL_AVATAR } from './botAvatarIdentity';
 import type { BotCapabilities } from './botStore';
 
 export type BotTemplateId = 'control' | 'pr-steward' | 'assistant';
@@ -64,8 +67,10 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
   },
   {
     id: 'assistant',
-    avatar: '✨',
-    avatarColor: 'amber',
+    // The standard assistant *is* Cindy, so it ships with the official mark and
+    // the brand name. The hue behind it only shows while the image decodes.
+    avatar: CINDY_OFFICIAL_AVATAR,
+    avatarColor: 'graphite',
     nameKey: 'bots.createWizard.templates.assistant.defaultName',
     descriptionKey: 'bots.createWizard.templates.assistant.defaultDescription',
     identitySource: [

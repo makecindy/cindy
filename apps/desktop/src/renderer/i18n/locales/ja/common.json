@@ -5454,7 +5454,7 @@
         "assistant": {
           "title": "通常アシスタント",
           "summary": "長期的な ID と専用メモリを持ち、既定では他のタスクを監視しません。",
-          "defaultName": "マイアシスタント",
+          "defaultName": "Cindy",
           "defaultDescription": "必要に応じて機能とメッセージチャンネルを追加できる長期アシスタントです。"
         },
         "custom": {
@@ -5488,6 +5488,7 @@
     "close": "閉じる",
     "avatarPicker": {
       "open": "アバターを変更",
+      "official": "Cindy 公式アバター",
       "emojiLabel": "絵文字",
       "hueLabel": "色",
       "hint": "絵文字と背景色を選ぶと、一覧でこの Bot を見分けやすくなります。"

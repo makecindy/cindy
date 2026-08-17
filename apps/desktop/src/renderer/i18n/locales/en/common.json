@@ -5456,7 +5456,7 @@
         "assistant": {
           "title": "Assistant",
           "summary": "Keeps a persistent identity and private memory without observing other tasks by default.",
-          "defaultName": "My assistant",
+          "defaultName": "Cindy",
           "defaultDescription": "A persistent personal assistant with capabilities and message Channels you can add later."
         },
         "custom": {
@@ -5490,6 +5490,7 @@
     "close": "Close",
     "avatarPicker": {
       "open": "Change Avatar",
+      "official": "Official Cindy avatar",
       "emojiLabel": "Emoji",
       "hueLabel": "Color",
       "hint": "Pick an emoji and a color so this Bot is easy to spot in the list."

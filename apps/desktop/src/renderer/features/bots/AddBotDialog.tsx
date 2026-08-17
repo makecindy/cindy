@@ -10,6 +10,8 @@ import { addBotProfileAndWait, type BotProfile } from './botStore';
 import {
   botAvatarAssignment,
   BotAvatarPicker,
+  CINDY_OFFICIAL_AVATAR_SRC,
+  isCindyOfficialAvatar,
   type BotAvatarAssignment,
   type BotAvatarHue,
 } from './BotAvatar';
@@ -178,9 +180,21 @@ export function AddBotDialog({ open, onOpenChange, onCreated }: AddBotDialogProp
                     >
                       <span className="flex h-5 items-center justify-between gap-2">
                         {definition ? (
-                          <span className="text-16" aria-hidden>
-                            {definition.avatar}
-                          </span>
+                          isCindyOfficialAvatar(definition.avatar) ? (
+                            // A sentinel avatar is artwork, not a grapheme; painting
+                            // the raw string here would leak `cindy://avatar/…`.
+                            <img
+                              src={CINDY_OFFICIAL_AVATAR_SRC}
+                              alt=""
+                              aria-hidden
+                              draggable={false}
+                              className="pointer-events-none h-5 w-5 select-none rounded-full object-cover"
+                            />
+                          ) : (
+                            <span className="text-16" aria-hidden>
+                              {definition.avatar}
+                            </span>
+                          )
                         ) : (
                           <Plus size={16} className="text-[var(--text-secondary)]" aria-hidden />
                         )}

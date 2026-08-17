@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  BOT_AVATAR_EMOJIS,
+  CINDY_OFFICIAL_AVATAR,
+  isCindyOfficialAvatar,
+} from '../BotAvatar';
 import { BOT_TEMPLATES, getBotTemplate } from '../botTemplates';
 
 describe('Bot product templates', () => {
@@ -31,5 +36,18 @@ describe('Bot product templates', () => {
       autoSubscribeToTaskEvents: false,
       capabilities: { automation: false, sessionControlMode: 'none' },
     });
+  });
+
+  it('gives the standard assistant the official Cindy identity', () => {
+    const assistant = getBotTemplate('assistant');
+    expect(assistant.avatar).toBe(CINDY_OFFICIAL_AVATAR);
+    expect(assistant.nameKey).toBe('bots.createWizard.templates.assistant.defaultName');
+    // Only the standard assistant is Cindy herself; the control templates stay
+    // on curated emoji so users can tell a task-controlling Bot apart.
+    for (const template of BOT_TEMPLATES) {
+      if (template.id === 'assistant') continue;
+      expect(isCindyOfficialAvatar(template.avatar)).toBe(false);
+      expect(BOT_AVATAR_EMOJIS).toContain(template.avatar as (typeof BOT_AVATAR_EMOJIS)[number]);
+    }
   });
 });

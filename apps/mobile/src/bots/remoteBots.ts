@@ -21,6 +21,17 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/**
+ * Desktop may store a `cindy://avatar/…` sentinel that resolves to bundled
+ * artwork there. Mobile's Bot list is read-only text, so it degrades to the
+ * generic Bot emoji instead of rendering a scheme it cannot resolve.
+ */
+function avatar(value: unknown): string {
+  const raw = text(value);
+  if (raw.trim().toLowerCase().startsWith('cindy://avatar/')) return '🤖';
+  return raw || '🤖';
+}
+
 function status(value: unknown): RemoteBotLifecycleStatus {
   return value === 'active'
     || value === 'paused'
@@ -52,7 +63,7 @@ export function normalizeRemoteBotProfiles(value: unknown): RemoteBotProfile[] {
       id,
       name,
       description: text(item.description),
-      avatar: text(item.avatar) || '🤖',
+      avatar: avatar(item.avatar),
       avatarColor: text(item.avatarColor),
       status: status(item.status),
       currentVersion: Number.isInteger(item.currentVersion) && Number(item.currentVersion) > 0

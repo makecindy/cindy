@@ -54,6 +54,27 @@ describe('remote Bots projection', () => {
     expect(rows.every((row) => !remoteBotCanOpen(row))).toBe(true);
   });
 
+  it('degrades Desktop avatar sentinels to the generic Bot emoji', () => {
+    // Mobile's Bot list renders `avatar` as text, so a `cindy://avatar/…` value
+    // (bundled artwork on Desktop) must not reach the screen as a raw scheme.
+    const rows = normalizeRemoteBotProfiles([
+      { id: 'a', name: 'Cindy', avatar: 'cindy://avatar/official' },
+      { id: 'b', name: 'Future', avatar: '  CINDY://AVATAR/next  ' },
+      { id: 'c', name: 'Missing', avatar: '' },
+      { id: 'd', name: 'Wrong type', avatar: 42 },
+      { id: 'e', name: 'Emoji', avatar: '🚀' },
+      { id: 'f', name: 'Not the namespace', avatar: 'cindy://media/official' },
+    ]);
+    expect(rows.map((row) => row.avatar)).toEqual([
+      '🤖',
+      '🤖',
+      '🤖',
+      '🤖',
+      '🚀',
+      'cindy://media/official',
+    ]);
+  });
+
   it('recognizes old Desktop capability rejection without swallowing other failures', () => {
     expect(isRemoteBotsUnsupported(Object.assign(new Error('old'), { code: 'CHANNEL_NOT_ALLOWED' }))).toBe(true);
     expect(isRemoteBotsUnsupported('DEVICE_LINK_CHANNEL_NOT_ALLOWED')).toBe(true);

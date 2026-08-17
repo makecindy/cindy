@@ -19,7 +19,7 @@ vi.mock('../botStore', () => ({
 }));
 
 import { AddBotDialog } from '../AddBotDialog';
-import { BOT_AVATAR_EMOJIS, BOT_AVATAR_HUES } from '../BotAvatar';
+import { BOT_AVATAR_EMOJIS, BOT_AVATAR_HUES, CINDY_OFFICIAL_AVATAR } from '../BotAvatar';
 import { getBotTemplate } from '../botTemplates';
 
 function renderDialog() {
@@ -65,9 +65,43 @@ describe('AddBotDialog', () => {
 
     fireEvent.click(screen.getByText('bots.createWizard.templates.assistant.title'));
     expect(nameInput().value).toBe('bots.createWizard.templates.assistant.defaultName');
+    // The standard assistant carries the official Cindy mark: the trigger shows
+    // the bundled artwork, never the raw `cindy://avatar/…` sentinel as text.
+    const trigger = screen.getByRole('button', { name: 'bots.avatarPicker.open' });
+    expect(trigger.querySelector('img')?.getAttribute('src')).toContain('cindy-avatar-account');
+    expect(trigger.textContent).not.toContain('cindy://');
+
+    fireEvent.click(screen.getByText('bots.createWizard.templates.prSteward.title'));
     expect(
       screen.getByRole('button', { name: 'bots.avatarPicker.open' }).textContent,
-    ).toContain(getBotTemplate('assistant').avatar);
+    ).toContain(getBotTemplate('pr-steward').avatar);
+  });
+
+  it('never paints the avatar sentinel as text on a template card', () => {
+    renderDialog();
+
+    // The dialog lives in a portal, so assert against the whole document.
+    expect(document.body.textContent).not.toContain('cindy://');
+    const card = screen
+      .getByText('bots.createWizard.templates.assistant.title')
+      .closest('button') as HTMLButtonElement;
+    expect(card.querySelector('img')?.getAttribute('src')).toContain('cindy-avatar-account');
+  });
+
+  it('submits the official avatar for the standard assistant template', async () => {
+    renderDialog();
+
+    fireEvent.click(screen.getByText('bots.createWizard.templates.assistant.title'));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.createWizard.submit' }));
+
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
+    const payload = mocks.addBotProfileAndWait.mock.calls[0][0];
+    expect(payload).toMatchObject({
+      name: 'bots.createWizard.templates.assistant.defaultName',
+      avatar: CINDY_OFFICIAL_AVATAR,
+      avatarColor: getBotTemplate('assistant').avatarColor,
+    });
+    expect(payload.eventSubscription).toBeUndefined();
   });
 
   it('keeps the identity field collapsed for templates and required for the blank card', () => {

@@ -5454,7 +5454,7 @@
         "assistant": {
           "title": "普通助理",
           "summary": "拥有长期身份与独立记忆，不默认观察或控制其它任务。",
-          "defaultName": "我的助理",
+          "defaultName": "Cindy",
           "defaultDescription": "一个可长期使用、按需挂载能力和消息通道的个人助理。"
         },
         "custom": {
@@ -5488,6 +5488,7 @@
     "close": "关闭",
     "avatarPicker": {
       "open": "更换头像",
+      "official": "Cindy 官方头像",
       "emojiLabel": "表情",
       "hueLabel": "颜色",
       "hint": "选一个表情和底色，列表里更容易认出这个 Bot。"

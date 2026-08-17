@@ -15,9 +15,11 @@ import {
   BOT_AVATAR_HUES,
   BotAvatar,
   BotAvatarPicker,
+  CINDY_OFFICIAL_AVATAR,
   botAvatarAssignment,
   botAvatarInitial,
   botAvatarHueToken,
+  isCindyOfficialAvatar,
   normalizeBotAvatarHue,
 } from '../BotAvatar';
 
@@ -70,6 +72,41 @@ describe('Bot avatar auto assignment', () => {
     expect(hues.size).toBeGreaterThan(3);
     expect(emojis.size).toBeGreaterThan(3);
   });
+
+  it('never hands out the official Cindy mark by itself', () => {
+    // The official portrait must stay an explicit template or user choice; an
+    // auto-named Bot may not look like Cindy itself.
+    for (let index = 0; index < 200; index += 1) {
+      expect(isCindyOfficialAvatar(botAvatarAssignment(`bot-${index}`).emoji)).toBe(false);
+    }
+  });
+});
+
+describe('Cindy official avatar sentinel', () => {
+  it('reserves the whole cindy://avatar/ namespace, not just the exact value', () => {
+    expect(CINDY_OFFICIAL_AVATAR).toBe('cindy://avatar/official');
+    expect(isCindyOfficialAvatar(CINDY_OFFICIAL_AVATAR)).toBe(true);
+    expect(isCindyOfficialAvatar('  cindy://avatar/official  ')).toBe(true);
+    expect(isCindyOfficialAvatar('CINDY://AVATAR/Official')).toBe(true);
+    // A value minted by a newer client still renders as official artwork rather
+    // than being painted on screen as if it were an emoji.
+    expect(isCindyOfficialAvatar('cindy://avatar/future-mark')).toBe(true);
+  });
+
+  it('rejects everything outside the namespace', () => {
+    for (const value of [
+      '',
+      '   ',
+      '🤖',
+      'cindy://avatar',
+      'cindy://media/official',
+      'https://example.com/cindy://avatar/official',
+      null,
+      undefined,
+    ]) {
+      expect(isCindyOfficialAvatar(value)).toBe(false);
+    }
+  });
 });
 
 describe('BotAvatar rendering', () => {
@@ -93,6 +130,30 @@ describe('BotAvatar rendering', () => {
     expect(botAvatarInitial('  发布助手')).toBe('发');
     expect(botAvatarInitial('')).toBe('?');
   });
+
+  it('renders bundled artwork for the official sentinel and never the raw string', () => {
+    const { container } = render(
+      <BotAvatar
+        bot={{ name: 'Cindy', avatar: CINDY_OFFICIAL_AVATAR, avatarColor: 'graphite' }}
+        size="lg"
+      />,
+    );
+    const mark = container.firstElementChild as HTMLElement;
+    const image = mark.querySelector('img') as HTMLImageElement;
+    expect(image).toBeTruthy();
+    expect(image.getAttribute('src')).toContain('cindy-avatar-account');
+    // Circle-cropped, filling the mark: same silhouette as an emoji avatar.
+    expect(mark.className).toContain('rounded-full');
+    expect(mark.className).toContain('overflow-hidden');
+    expect(image.className).toContain('object-cover');
+    expect(image.className).toContain('h-full');
+    // The hue stays behind the image, so it never flashes white while decoding,
+    // and the mark keeps the same a11y shape as the emoji version.
+    expect(mark.getAttribute('style')).toContain('var(--bot-avatar-graphite-bg)');
+    expect(mark.getAttribute('aria-hidden')).toBe('true');
+    expect(image.getAttribute('alt')).toBe('');
+    expect(mark.textContent).toBe('');
+  });
 });
 
 describe('BotAvatarPicker', () => {
@@ -113,5 +174,50 @@ describe('BotAvatarPicker', () => {
       screen.getByRole('button', { name: 'bots.chooseAvatarColor:{"color":"pink"}' }),
     );
     expect(onChange).toHaveBeenLastCalledWith({ emoji: '🚀', hue: 'pink' });
+  });
+
+  it('offers the official Cindy mark as the first cell of the grid', () => {
+    const onChange = vi.fn();
+    render(<BotAvatarPicker name="Nova" avatar="🚀" avatarColor="teal" onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.avatarPicker.open' }));
+
+    const official = screen.getByRole('button', { name: 'bots.avatarPicker.official' });
+    const firstEmoji = screen.getByRole('button', {
+      name: `bots.chooseAvatar:${JSON.stringify({ avatar: BOT_AVATAR_EMOJIS[0] })}`,
+    });
+    // First cell of the emoji grid, and it renders artwork instead of a glyph.
+    expect(official.parentElement).toBe(firstEmoji.parentElement);
+    expect(official.parentElement?.firstElementChild).toBe(official);
+    expect(official.querySelector('img')?.getAttribute('src')).toContain('cindy-avatar-account');
+    expect(official.textContent).toBe('');
+    // Same selected-state treatment as an emoji cell.
+    expect(official.getAttribute('aria-pressed')).toBe('false');
+    expect(official.className).toContain('h-8 w-8');
+    expect(official.className).toContain('rounded-lg');
+
+    fireEvent.click(official);
+    // Picking the official mark keeps the current hue, exactly like an emoji.
+    expect(onChange).toHaveBeenLastCalledWith({ emoji: CINDY_OFFICIAL_AVATAR, hue: 'teal' });
+  });
+
+  it('marks the official cell pressed and shows the artwork on the trigger when selected', () => {
+    render(
+      <BotAvatarPicker
+        name="Cindy"
+        avatar={CINDY_OFFICIAL_AVATAR}
+        avatarColor="graphite"
+        onChange={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'bots.avatarPicker.open' });
+    expect(trigger.querySelector('img')).toBeTruthy();
+    expect(trigger.textContent).toBe('');
+
+    fireEvent.click(trigger);
+    const official = screen.getByRole('button', { name: 'bots.avatarPicker.official' });
+    expect(official.getAttribute('aria-pressed')).toBe('true');
+    expect(official.className).toContain('bg-[var(--surface-chip)]');
   });
 });

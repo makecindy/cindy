@@ -22,6 +22,7 @@ import type {
   UpdateBotAutomationInput,
 } from '../../../shared/botAutomation';
 import { DEFAULT_BOT_AUTOMATION_EXECUTION_POLICY } from '../../../shared/botAutomation';
+import { BotAvatar } from './BotAvatar';
 import { useBotProfiles, type BotProfile } from './botStore';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 
@@ -112,7 +113,10 @@ function AutomationPolicyFields({
             return (
               <label key={candidate.id} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-11 text-[var(--text-secondary)]">
                 <input type="checkbox" checked={checked} onChange={() => onChange({ ...draft, allowedDelegateBotIds: checked ? draft.allowedDelegateBotIds.filter((id) => id !== candidate.id) : [...draft.allowedDelegateBotIds, candidate.id] })} />
-                <span>{candidate.avatar} {candidate.name}</span>
+                {/* Shared mark instead of raw `avatar` text: a Bot on the
+                    official Cindy avatar stores a sentinel, not a grapheme. */}
+                <BotAvatar bot={candidate} size="sm" className="h-4 w-4 text-11" />
+                <span>{candidate.name}</span>
               </label>
             );
           })}
