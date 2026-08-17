@@ -1306,7 +1306,14 @@
         "title": "xAI",
         "subtitle": "Grok 模型 · SuperGrok 订阅直连",
         "modelLabel": "Grok 模型",
-        "billingLabel": "SuperGrok 订阅直连"
+        "billingLabel": "SuperGrok 订阅直连",
+        "asset": {
+          "weeklyTitle": "每周限额",
+          "weeklyUsed": "{{percent}}% 已使用",
+          "resetsAt": "{{at}} 重置",
+          "productLine": "{{product}} {{percent}}%",
+          "openUsage": "打开 Grok 用量页面"
+        }
       },
       "xd": {
         "title": "Cindy AI",
@@ -4371,11 +4378,19 @@
       "second": "秒"
     },
     "openProxyUsage": "打开浏览器查看完整用量看板",
-    "openXaiUsage": "打开 xAI 账户页面",
+    "openXaiUsage": "打开 Grok 用量页面",
     "xai": {
       "requestsLine": "限流(请求)：剩余 {{remaining}}/{{limit}}",
       "tokensLine": "限流(token)：剩余 {{remaining}}/{{limit}}",
-      "noQuotaDetail": "xAI 未提供订阅配额明细，此处仅显示价值估算"
+      "noQuotaDetail": "暂未获取到 SuperGrok 周用量，此处仅显示价值估算",
+      "weeklyLabel": "周限",
+      "windowSegment": "{{label}} 剩余 {{remaining}}",
+      "windowLine": "{{label}} 剩余 {{remaining}}(已用 {{used}})",
+      "planLine": "套餐 {{plan}}",
+      "resetAt": "{{at}} 重置",
+      "productLine": "{{product}} {{percent}}",
+      "extraCreditsLine": "额外点数 {{amount}}",
+      "accountWeeklyHint": "账号周用量，不是本任务配额"
     },
     "dailyLimitLabel": "今日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "本周期 {{spend}}/{{limit}}",

@@ -5802,6 +5802,8 @@ interface ElectronAPI {
           } | null,
         ) => void,
       ) => () => void;
+      getXaiSubscription: () => Promise<unknown | null>;
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void) => () => void;
     };
 
     /* ── 跨 Agent 工作区互转（双向，5 项独立判断；进度 step 通过 push 流转）── */

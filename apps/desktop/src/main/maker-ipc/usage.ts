@@ -11,6 +11,7 @@ import path from 'node:path';
 
 import type { Maker } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
   readClaudeAccountUsageSnapshot,
@@ -22,6 +23,12 @@ import {
   fetchClaudeSubscriptionUsageSnapshot,
 } from '../usage/claudeSubscriptionUsage.js';
 import { createClaudeSubscriptionUsageReader } from '../usage/claudeSubscriptionUsageRefresh.js';
+import {
+  XaiSubscriptionUsageRateLimitedError,
+  XaiSubscriptionUsageUnauthorizedError,
+  fetchXaiSubscriptionUsageSnapshot,
+} from '../usage/xaiSubscriptionUsage.js';
+import { createXaiSubscriptionUsageReader } from '../usage/xaiSubscriptionUsageRefresh.js';
 import { createCodexAccountUsageSnapshotReader } from '../usage/codexAccountUsageRefresh.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
@@ -33,14 +40,19 @@ import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistor
 import {
   clearClaudeSubscriptionUsageSnapshot,
   clearCodexAccountUsageSnapshot,
+  clearXaiSubscriptionUsageSnapshot,
   readAgentTodayUsage,
   readClaudeSubscriptionUsageSnapshot,
   readCodexAccountUsageSnapshot,
+  readXaiSubscriptionUsageSnapshot,
   recordClaudeSubscriptionUsageSnapshot,
   recordCodexAccountUsageSnapshot,
+  recordXaiSubscriptionUsageSnapshot,
 } from '../usageBroadcaster.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { readClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { setClaudeRateLimitHeadersListener } from '../maker-host/claude-rate-limit-headers-observer.js';
 import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.js';
 
@@ -165,6 +177,49 @@ export function syncClaudeSubscriptionUsageForAuthChange(): void {
   });
 }
 
+async function readXaiCredentialsInfo(): Promise<{ accessToken: string } | null> {
+  if (!hasGrokOAuthLogin()) return null;
+  try {
+    const accessToken = await getGrokAccessToken();
+    return accessToken ? { accessToken } : null;
+  } catch {
+    return null;
+  }
+}
+
+const xaiSubscriptionUsageReader = createXaiSubscriptionUsageReader({
+  readCredentials: readXaiCredentialsInfo,
+  fetchSnapshot: (credentials) =>
+    fetchXaiSubscriptionUsageSnapshot({
+      accessToken: credentials.accessToken,
+      fetchFn: outboundFetch,
+    }),
+  recordSnapshot: recordXaiSubscriptionUsageSnapshot,
+  clearSnapshot: clearXaiSubscriptionUsageSnapshot,
+  readCachedSnapshot: readXaiSubscriptionUsageSnapshot,
+  now: () => Date.now(),
+  isUnauthorizedError: (err) => err instanceof XaiSubscriptionUsageUnauthorizedError,
+  isRateLimitedError: (err) => err instanceof XaiSubscriptionUsageRateLimitedError,
+  onRefreshError: (err) => {
+    log.warn(
+      'xAI subscription usage refresh failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  },
+});
+
+/** SuperGrok 周用量:turn-done 钩子,节流 / 退避 / 未登录 no-op 都在 reader 内。 */
+export function triggerXaiSubscriptionUsageRefresh(): void {
+  xaiSubscriptionUsageReader.triggerRefresh();
+}
+
+/** SuperGrok 登录 / 登出 / 换号后强制同步(先清再拉)。调用方应 await 后再广播连接态。 */
+export function syncXaiSubscriptionUsageForAuthChange(): Promise<void> {
+  return xaiSubscriptionUsageReader.syncForCredentialChange().catch(() => {
+    /* reader 内部已把错误交给 onRefreshError */
+  });
+}
+
 const readCodexAccountUsageSnapshotWithWebRefresh = createCodexAccountUsageSnapshotReader({
   readAccessToken: () => desktopCodexAuthAdapter.getAccessToken(),
   readAccountId: () => desktopCodexAuthAdapter.getAccountId(),
@@ -218,6 +273,10 @@ export function registerMakerUsageIpc(maker: Maker): void {
       desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => codexRateLimitResetService.read()),
     consumeCodexRateLimitReset: codexRateLimitResetService.consume,
     readClaudeSubscriptionUsageSnapshot: () => claudeSubscriptionUsageReader.read(),
+    readXaiSubscriptionUsageSnapshot: () => xaiSubscriptionUsageReader.read(),
+    assertTrustedSender: (event) => {
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    },
     readClaudeAccountUsageSnapshot,
     triggerClaudeAccountUsageRefresh,
     readModelPricing: getGatewayModelPricing,

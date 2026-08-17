@@ -311,6 +311,8 @@ export const MAKER_INVOKE = {
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
+  // SuperGrok 账号周用量 (cli-chat-proxy settings + billing?format=credits)
+  USAGE_XAI_SUBSCRIPTION: 'maker:usage:xai-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
   // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。

@@ -465,7 +465,10 @@ import {
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
 import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
-import { clearXaiRateLimitSnapshot } from './usageBroadcaster.js';
+import {
+  clearXaiRateLimitSnapshot,
+  clearXaiSubscriptionUsageSnapshot,
+} from './usageBroadcaster.js';
 import {
   ensureAnthropicCompatProxyReady,
   disposeAnthropicCompatProxy,
@@ -632,6 +635,7 @@ import { registerMakerStatusIpc } from './maker-ipc/status.js';
 import {
   registerMakerUsageIpc,
   syncClaudeSubscriptionUsageForAuthChange,
+  syncXaiSubscriptionUsageForAuthChange,
 } from './maker-ipc/usage.js';
 import { prewarmModelPricing } from './usage/modelPricing.js';
 import { registerMakerBinaryVersionIpc } from './maker-ipc/binary-version.js';
@@ -3774,7 +3778,11 @@ const registerIpcHandlers = () => {
     clearXaiDiscoveredModels();
     clearXaiMediaModels();
     clearXaiRateLimitSnapshot();
-    broadcastXaiAuthStateChanged();
+    void (async () => {
+      await clearXaiSubscriptionUsageSnapshot();
+      await syncXaiSubscriptionUsageForAuthChange();
+      broadcastXaiAuthStateChanged();
+    })();
   });
 
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用
@@ -3785,6 +3793,9 @@ const registerIpcHandlers = () => {
     const result = await runGrokOAuthLogin();
     if (result.ok) {
       resetProviderModelAutoRefreshCooldowns('xai');
+      // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
+      // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
+      await clearXaiSubscriptionUsageSnapshot();
       // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
       // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
       clearXaiDiscoveredModels();
@@ -3796,6 +3807,7 @@ const registerIpcHandlers = () => {
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
       clearXaiRateLimitSnapshot();
+      await syncXaiSubscriptionUsageForAuthChange();
       broadcastXaiAuthStateChanged();
       void refreshXaiModelsFromHttp();
       void refreshProviderModelsManually('xai').catch((error) => {
@@ -3811,6 +3823,7 @@ const registerIpcHandlers = () => {
     try {
       logoutGrok();
       resetProviderModelAutoRefreshCooldowns('xai');
+      await clearXaiSubscriptionUsageSnapshot();
       clearXaiDiscoveredModels();
       clearXaiMediaModels();
     } catch (err) {
@@ -3822,6 +3835,7 @@ const registerIpcHandlers = () => {
     // 登出后同步广播给其它窗口,让已挂载的 useProviders 立刻重拉连接态;
     // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
     clearXaiRateLimitSnapshot();
+    await syncXaiSubscriptionUsageForAuthChange();
     broadcastXaiAuthStateChanged();
     return { authorized: hasGrokOAuthLogin() };
   });

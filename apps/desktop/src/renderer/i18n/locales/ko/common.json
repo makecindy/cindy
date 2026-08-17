@@ -1306,7 +1306,14 @@
         "title": "xAI",
         "subtitle": "Grok 모델 · SuperGrok 구독 직접 연결",
         "modelLabel": "Grok 모델",
-        "billingLabel": "SuperGrok 구독 직접 연결"
+        "billingLabel": "SuperGrok 구독 직접 연결",
+        "asset": {
+          "weeklyTitle": "주간 한도",
+          "weeklyUsed": "{{percent}}% 사용됨",
+          "resetsAt": "{{at}} 초기화",
+          "productLine": "{{product}} {{percent}}%",
+          "openUsage": "Grok 사용량 페이지 열기"
+        }
       },
       "xd": {
         "title": "Cindy AI",
@@ -4371,11 +4378,19 @@
       "second": "초"
     },
     "openProxyUsage": "브라우저에서 전체 사용량 대시보드 열기",
-    "openXaiUsage": "xAI 계정 페이지 열기",
+    "openXaiUsage": "Grok 사용량 페이지 열기",
     "xai": {
       "requestsLine": "속도 제한(요청): 남음 {{remaining}}/{{limit}}",
       "tokensLine": "속도 제한(토큰): 남음 {{remaining}}/{{limit}}",
-      "noQuotaDetail": "xAI는 구독 잔여량 세부 정보를 제공하지 않아 가치 추정치만 표시됩니다"
+      "noQuotaDetail": "SuperGrok 주간 사용량을 가져오지 못해 가치 추정치만 표시됩니다",
+      "weeklyLabel": "주간",
+      "windowSegment": "{{label}} 남음 {{remaining}}",
+      "windowLine": "{{label}} 남음 {{remaining}}(사용 {{used}})",
+      "planLine": "플랜 {{plan}}",
+      "resetAt": "{{at}} 초기화",
+      "productLine": "{{product}} {{percent}}",
+      "extraCreditsLine": "추가 크레딧 {{amount}}",
+      "accountWeeklyHint": "계정 주간 사용량이며 이 작업의 할당량이 아닙니다"
     },
     "dailyLimitLabel": "오늘 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "주기 {{spend}}/{{limit}}",

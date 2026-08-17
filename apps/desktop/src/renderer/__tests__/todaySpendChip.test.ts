@@ -45,11 +45,11 @@ describe('TodaySpendChip dashboard routing', () => {
 
   it('routes Codex/CC/Pi subscription providers to their account usage pages and keeps gateway routes local', () => {
     expect(source).toContain('https://chatgpt.com/codex/settings/usage');
-    expect(source).toContain('https://accounts.x.ai');
+    expect(source).toContain('https://grok.com');
     expect(source).toContain('https://claude.ai/settings/usage');
     // 网关 / 托管账号这一路 URL 落到 null(点击无跳转);其余三路指向各自公开看板。
     expect(source).toMatch(
-      /usesXaiQuotaForm\s*\?\s*XAI_ACCOUNT_URL\s*:\s*isCodexOauth \|\| isChatgptBridge\s*\?\s*CODEX_USAGE_DASHBOARD_URL\s*:\s*isClaudeSubscription\s*\?\s*CLAUDE_USAGE_DASHBOARD_URL\s*:\s*null/,
+      /usesXaiQuotaForm\s*\?\s*XAI_USAGE_DASHBOARD_URL\s*:\s*isCodexOauth \|\| isChatgptBridge\s*\?\s*CODEX_USAGE_DASHBOARD_URL\s*:\s*isClaudeSubscription\s*\?\s*CLAUDE_USAGE_DASHBOARD_URL\s*:\s*null/,
     );
     expect(source).toContain('todaySpend.openCodexUsage');
     expect(source).toContain('todaySpend.openXaiUsage');
@@ -68,19 +68,23 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("providerId === 'openai'");
     expect(source).toContain("providerId === 'xai'");
     expect(source).toContain('const isSubscriptionBridge = isChatgptBridge || isXaiBridge;');
-    // bridge 只在匹配其内建来源时成立；显式自定义供应商优先于模型前缀。
+    // ChatGPT 仍要前缀;xAI 显式选中供应商即可(Pi 模型是 grok-4.6,没有 xai/ 前缀)。
     expect(source).toContain("(providerId == null || providerId === 'openai')");
-    expect(source).toContain("(providerId == null || providerId === 'xai')");
+    expect(source).toContain('providerId == null && isXaiPrefixedModel');
     expect(source).toContain('useClaudeAccountUsage(usesGatewayQuota)');
     // gateway quota 对订阅 bridge 会话关闭;device-link 远程同样不读本机网关配额
     expect(source).toContain('&& !isDeviceLinkRemote');
-    // chatgpt bridge 复用 codex 订阅 chip 形态;xai bridge / codex xai model 走价值估算 + 尽力限流 tooltip
+    // chatgpt bridge 复用 codex 订阅 chip 形态;xai 走账号周用量 + 限流 tooltip
     expect(source).toContain('const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;');
     expect(source).toContain('const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;');
     expect(source).toContain('tooltipNode = buildXaiTooltipNode(');
+    expect(source).toContain('getXaiChipWindows(xaiSubscriptionUsage');
+    expect(source).toContain('const weekly = isXaiWeeklyUsageCurrent(usage, nowMs) ? usage : null;');
+    expect(source).toContain('useXaiSubscriptionUsage(usesXaiQuotaForm && !isAnyRemoteSession)');
     // 远程会话(SSH / device-link)抑制本机 xAI 限流快照读取
     expect(source).toContain('useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession)');
     expect(source).toContain('todaySpend.xai.noQuotaDetail');
+    expect(source).toContain('todaySpend.xai.accountWeeklyHint');
     // bridge 形态优先于 Claude 订阅形态(model 前缀决定实际消耗的额度);device-link 远程不读本机订阅余量
     expect(source).toContain(
       'isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote',
@@ -393,6 +397,8 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain(
       'if (isChatgptBridge) {\n' +
         '      requestCodexAccountRefresh();\n' +
+        '    } else if (usesXaiQuotaForm) {\n' +
+        '      requestXaiSubscriptionRefresh();\n' +
         '    } else if (isClaudeSubscription && !usesCodexQuotaForm) {\n' +
         '      requestClaudeSubscriptionRefresh();\n' +
         '    }',
@@ -400,6 +406,8 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain(
       'const hasPendingResetWindow = chipWindows.some((window) => window.resetPending);',
     );
+    expect(source).toContain('const xaiNeedsWeeklyRefresh = usesXaiQuotaForm');
+    expect(source).not.toContain('Boolean(xaiSubscriptionUsage)');
   });
 
   it('does not treat missing subscription credits as exhausted usage', () => {

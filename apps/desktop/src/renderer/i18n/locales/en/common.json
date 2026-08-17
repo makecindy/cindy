@@ -1306,7 +1306,14 @@
         "title": "xAI",
         "subtitle": "Grok models · SuperGrok subscription (direct)",
         "modelLabel": "Grok models",
-        "billingLabel": "SuperGrok subscription (direct)"
+        "billingLabel": "SuperGrok subscription (direct)",
+        "asset": {
+          "weeklyTitle": "Weekly limit",
+          "weeklyUsed": "{{percent}}% used",
+          "resetsAt": "Resets {{at}}",
+          "productLine": "{{product}} {{percent}}%",
+          "openUsage": "Open Grok usage"
+        }
       },
       "xd": {
         "title": "Cindy AI",
@@ -4373,11 +4380,19 @@
       "second": "s"
     },
     "openProxyUsage": "Open the full usage dashboard in your browser",
-    "openXaiUsage": "Open your xAI account page",
+    "openXaiUsage": "Open Grok usage page",
     "xai": {
       "requestsLine": "Rate limit (requests): {{remaining}}/{{limit}} left",
       "tokensLine": "Rate limit (tokens): {{remaining}}/{{limit}} left",
-      "noQuotaDetail": "xAI doesn't expose subscription quota details; only the estimated value is shown"
+      "noQuotaDetail": "SuperGrok weekly usage is unavailable; only the estimated value is shown",
+      "weeklyLabel": "Weekly",
+      "windowSegment": "{{label}} {{remaining}} left",
+      "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
+      "planLine": "Plan {{plan}}",
+      "resetAt": "Resets {{at}}",
+      "productLine": "{{product}} {{percent}}",
+      "extraCreditsLine": "Extra credits {{amount}}",
+      "accountWeeklyHint": "Account weekly usage, not this session's quota"
     },
     "dailyLimitLabel": "Today {{spend}}/{{limit}}",
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",

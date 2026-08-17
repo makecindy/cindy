@@ -1306,7 +1306,14 @@
         "title": "xAI",
         "subtitle": "Grok モデル · SuperGrok サブスク直結",
         "modelLabel": "Grok モデル",
-        "billingLabel": "SuperGrok サブスク直結"
+        "billingLabel": "SuperGrok サブスク直結",
+        "asset": {
+          "weeklyTitle": "週間上限",
+          "weeklyUsed": "{{percent}}% 使用済み",
+          "resetsAt": "{{at}} にリセット",
+          "productLine": "{{product}} {{percent}}%",
+          "openUsage": "Grok の使用量ページを開く"
+        }
       },
       "xd": {
         "title": "Cindy AI",
@@ -4371,11 +4378,19 @@
       "second": "秒"
     },
     "openProxyUsage": "ブラウザで完全な使用量ダッシュボードを開く",
-    "openXaiUsage": "xAI アカウントページを開く",
+    "openXaiUsage": "Grok の使用量ページを開く",
     "xai": {
       "requestsLine": "レート制限（リクエスト）: 残り {{remaining}}/{{limit}}",
       "tokensLine": "レート制限（トークン）: 残り {{remaining}}/{{limit}}",
-      "noQuotaDetail": "xAI はサブスクリプションクォータの詳細を提供していないため、価値の推定のみ表示します"
+      "noQuotaDetail": "SuperGrok の週間使用量を取得できないため、価値の推定のみ表示します",
+      "weeklyLabel": "週間",
+      "windowSegment": "{{label}} 残り {{remaining}}",
+      "windowLine": "{{label}} 残り {{remaining}}（使用 {{used}}）",
+      "planLine": "プラン {{plan}}",
+      "resetAt": "{{at}} にリセット",
+      "productLine": "{{product}} {{percent}}",
+      "extraCreditsLine": "追加クレジット {{amount}}",
+      "accountWeeklyHint": "アカウントの週間使用量であり、このセッションのクォータではありません"
     },
     "dailyLimitLabel": "本日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
