@@ -47,6 +47,11 @@ type OrcaDuplicateTeamReconciliationHandler = (
 ) => void | Promise<void>;
 
 let duplicateTeamReconciliationHandler: OrcaDuplicateTeamReconciliationHandler | null = null;
+const reconciledCancelledTeamIdsByClient = new WeakMap<object, Set<string>>();
+const cancelledTeamReconciliationByClient = new WeakMap<
+  object,
+  Map<string, Promise<void>>
+>();
 
 /**
  * Inject the process-local queue cleanup owned by maker-ipc.  The store emits
@@ -57,6 +62,79 @@ export function setOrcaDuplicateTeamReconciliationHandler(
   handler: OrcaDuplicateTeamReconciliationHandler | null,
 ): void {
   duplicateTeamReconciliationHandler = handler;
+}
+
+/**
+ * A committed cancelled team is also the durable retry marker for queue cleanup.
+ * The duplicate read may have crashed or rejected after its terminal write, so a
+ * later read must be able to reconstruct the complete worker-session scope from
+ * SQLite even though only the kept team remains active.
+ */
+async function reconcilePersistedCancelledTeamsForLead(
+  leadSessionId: string,
+  keptTeamId: string,
+): Promise<void> {
+  const handler = duplicateTeamReconciliationHandler;
+  if (!handler) return;
+
+  const client = getDbClient();
+  let inFlightByLead = cancelledTeamReconciliationByClient.get(client);
+  if (!inFlightByLead) {
+    inFlightByLead = new Map();
+    cancelledTeamReconciliationByClient.set(client, inFlightByLead);
+  }
+  const existing = inFlightByLead.get(leadSessionId);
+  if (existing) return existing;
+
+  const run = (async () => {
+    let reconciledTeamIds = reconciledCancelledTeamIdsByClient.get(client);
+    if (!reconciledTeamIds) {
+      reconciledTeamIds = new Set();
+      reconciledCancelledTeamIdsByClient.set(client, reconciledTeamIds);
+    }
+    const cancelledRows = await client.drizzle
+      .select({ id: orcaTeams.id })
+      .from(orcaTeams)
+      .where(
+        and(
+          eq(orcaTeams.leadSessionId, leadSessionId),
+          eq(orcaTeams.status, 'cancelled'),
+        ),
+      )
+      .orderBy(desc(orcaTeams.updatedAt), desc(orcaTeams.createdAt));
+    const staleTeamIds = cancelledRows
+      .map((team) => team.id)
+      .filter((teamId) => !reconciledTeamIds.has(teamId));
+    if (staleTeamIds.length === 0) return;
+
+    const staleWorkerRows = await client.drizzle
+      .select({ sessionId: orcaWorkers.sessionId })
+      .from(orcaWorkers)
+      .where(inArray(orcaWorkers.teamId, staleTeamIds));
+    const staleWorkerSessionIds = [
+      ...new Set(staleWorkerRows.map((worker) => worker.sessionId)),
+    ];
+    await handler({
+      leadSessionId,
+      keptTeamId,
+      staleTeamIds,
+      staleWorkerSessionIds,
+    });
+    for (const teamId of staleTeamIds) reconciledTeamIds.add(teamId);
+    log.warn('reconciled persisted cancelled orca teams', {
+      leadSessionId,
+      keptTeamId,
+      staleTeamIds,
+      staleWorkerSessionIds,
+    });
+  })();
+  const tracked = run.finally(() => {
+    if (inFlightByLead?.get(leadSessionId) === tracked) {
+      inFlightByLead.delete(leadSessionId);
+    }
+  });
+  inFlightByLead.set(leadSessionId, tracked);
+  return tracked;
 }
 
 export interface OrcaWorkerRecord {
@@ -202,6 +280,11 @@ export async function getActiveTeamByLead(
   const latest = rows[0];
   if (!latest) return null;
 
+  // Retry any earlier duplicate cancellation whose process-local cleanup did
+  // not finish. Successful ids are cached per DB client; failures stay absent
+  // from the cache and are reconstructed from SQLite on the next read.
+  await reconcilePersistedCancelledTeamsForLead(leadSessionId, latest.id);
+
   // 罕见: 同一 lead 出现多个 active team(partial unique 约束缺失 / drift 时)。
   // 高频路径(0 或 1 个 team)走上面的纯 async select, 不付 worker 事务开销;
   // 只有真出现重复时才走原子的 cancelStaleTeams 兜底, 仅取消本次预读并 fenced
@@ -211,16 +294,14 @@ export async function getActiveTeamByLead(
   //  需要原子性的多语句写必须走命名事务, 见 client/tx/types.ts。)
   if (rows.length > 1) {
     const staleTeamIds = rows.slice(1).map((team) => team.id);
-    // reconciliation 的完整作用域必须在终态写入前采集。否则事务提交后这里若因
-    // DB worker 重启而查询失败，下一次读取只剩 kept team，永远无法重建旧 team
-    // 对应的 queue/recovery 清理范围。
-    const staleWorkerRows = await db
+    // Fail before the irreversible terminal write when the durable cleanup
+    // scope cannot even be read. The rows are queried again after commit so a
+    // later retry can reconstruct them; this preflight is an integrity gate,
+    // not a second in-memory source of truth.
+    await db
       .select({ sessionId: orcaWorkers.sessionId })
       .from(orcaWorkers)
       .where(inArray(orcaWorkers.teamId, staleTeamIds));
-    const staleWorkerSessionIds = [
-      ...new Set(staleWorkerRows.map((worker) => worker.sessionId)),
-    ];
     const terminalTransitions = staleTeamIds.map((teamId) =>
       orcaTeamTerminalFence.begin(teamId),
     );
@@ -239,12 +320,7 @@ export async function getActiveTeamByLead(
     for (const transition of terminalTransitions) {
       orcaTeamTerminalFence.commit(transition);
     }
-    await duplicateTeamReconciliationHandler?.({
-      leadSessionId,
-      keptTeamId: latest.id,
-      staleTeamIds,
-      staleWorkerSessionIds,
-    });
+    await reconcilePersistedCancelledTeamsForLead(leadSessionId, latest.id);
     log.warn('cancelled stale duplicate active orca teams', {
       leadSessionId,
       keptTeamId: latest.id,
