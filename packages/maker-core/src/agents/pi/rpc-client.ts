@@ -396,7 +396,10 @@ export class PiRpcProcess {
         if (this.pending.get(id) !== entry) return;
         this.pending.delete(id);
         const error = new PiRpcRequestTimeoutError(entry.commandType, entry.timeoutMs);
-        entry.rejectSubmitted(error);
+        // Refreshing the response idle window does not transfer ownership of
+        // the local transport boundary. A timeout still cannot cancel a
+        // backpressured write, so submitted must remain pending until the raw
+        // transport promise settles (or a correlated response proves receipt).
         entry.reject(error);
       }, entry.timeoutMs);
     }

@@ -210,6 +210,39 @@ describe('PiRpcProcess response envelope validation', () => {
     }
   });
 
+  it('keeps submission pending when a refreshed response timeout beats a stalled write', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, emitLine, drain } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+      const pending = proc.requestWithSubmission(
+        { type: 'prompt', message: 'blocked during compaction' },
+        {
+          timeoutMs: 100,
+          submissionTimeoutMs: null,
+          refreshTimeoutOnEvent: (event) => event.type === 'compaction_start',
+        },
+      );
+      const submissionSettled = vi.fn();
+      void pending.submitted.then(submissionSettled, submissionSettled);
+      const responseTimedOut = expect(pending.response).rejects.toThrow(
+        'pi rpc timeout after 100ms: prompt',
+      );
+
+      await vi.advanceTimersByTimeAsync(90);
+      emitLine(JSON.stringify({ type: 'compaction_start', reason: 'threshold' }));
+      await vi.advanceTimersByTimeAsync(100);
+      await responseTimedOut;
+      expect(submissionSettled).not.toHaveBeenCalled();
+
+      drain();
+      await expect(pending.submitted).resolves.toBeUndefined();
+      expect(submissionSettled).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('unmatched response (late/wrong id) is dropped with a warn, not resolved', async () => {
     const { transport, emitLine } = makeFakeTransport();
     const { proc, logger } = makeProc({ transport });
