@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   mkdirSync,
   mkdtempSync,
+  promises as fsPromises,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -1461,6 +1462,23 @@ describe('Maker Pi runtime skill status', () => {
       });
       expect(initial.skills[0]).toMatchObject({ runtimeStatus: 'loaded' });
 
+      const realRealpath = fsPromises.realpath.bind(fsPromises);
+      let delayed = false;
+      vi.spyOn(fsPromises, 'realpath').mockImplementation(async (...args) => {
+        if (!delayed) {
+          delayed = true;
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        return realRealpath(...args);
+      });
+      const slowFilesystem = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(delayed).toBe(true);
+      expect(slowFilesystem.skills[0]).toMatchObject({ runtimeStatus: 'loaded' });
+      vi.restoreAllMocks();
+
       writeFileSync(path.join(sourcePath, 'assets', 'fixture.txt'), 'changed! asset\n');
       const changedAsset = await maker.listAgentSkills('pi', {
         workingDir: repoRoot,
@@ -1486,6 +1504,7 @@ describe('Maker Pi runtime skill status', () => {
       expect(replacedDirectory.skills[0]).toMatchObject({ runtimeStatus: 'discovered' });
       expect(replacedDirectory.errors?.[0]?.message).toContain('restart the session');
     } finally {
+      vi.restoreAllMocks();
       rmSync(root, { recursive: true, force: true });
     }
   });
