@@ -273,6 +273,7 @@ describe('maker SEND transaction', () => {
       'session-1',
       expect.objectContaining({ orcaTeamId: 'team-1' }),
       { sessionId: 'session-1', clientId: 'client-dispatch-marker' },
+      undefined,
     );
   });
 

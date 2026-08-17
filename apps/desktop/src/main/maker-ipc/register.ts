@@ -8014,7 +8014,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         : null;
     let originVendorDispatchCleanupTarget: { sessionId: string; clientId: string } | undefined;
     const acquireOriginVendorDispatchLease = orcaOriginTeamId
-      ? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId, originVendorDispatchCleanupTarget)
+      ? (intent?: 'initial' | 'retry-after-confirmed-rejection') =>
+          acquireOrcaTeamDispatchLease(
+            orcaOriginTeamId,
+            originVendorDispatchCleanupTarget,
+            intent,
+          )
       : undefined;
     if (!message) {
       return {
@@ -8461,11 +8466,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       };
       const acquireTrackedOriginVendorDispatchLease = orcaOriginTeamId
-        ? async () => {
+        ? async (intent?: 'initial' | 'retry-after-confirmed-rejection') => {
             const release = await acquireOrcaTeamDispatchLease(orcaOriginTeamId, {
               sessionId: targetSessionId,
               clientId,
-            });
+            }, intent);
             return async (
               outcome?: 'submitted' | 'accepted' | 'confirmed-undispatched',
             ) => {
@@ -10539,13 +10544,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDispatchDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
     isOrcaTeamInputActive: async (_sessionId, teamId) =>
       !isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId)),
-    acquireVendorDispatchLease: (_sessionId, sendOpts, cleanupTarget) => {
+    acquireVendorDispatchLease: (_sessionId, sendOpts, cleanupTarget, intent) => {
       const orcaTeamId =
         sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
           ? (sendOpts as { orcaTeamId?: unknown }).orcaTeamId
           : undefined;
       return typeof orcaTeamId === 'string'
-        ? acquireOrcaTeamDispatchLease(orcaTeamId, cleanupTarget)
+        ? acquireOrcaTeamDispatchLease(orcaTeamId, cleanupTarget, intent)
         : undefined;
     },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {

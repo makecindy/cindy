@@ -2952,8 +2952,12 @@ describe('CodexAgent reference directories', () => {
       workingDir: '/repo',
       extraDirs: ['/shared-retry'],
     });
+    const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
 
-    await handle.send({ type: 'user', content: 'retry after restart' });
+    await handle.send(
+      { type: 'user', content: 'retry after restart' },
+      { acquireVendorDispatchLease },
+    );
 
     const resumeCalls = host.request.mock.calls.filter(
       ([method]) => method === Method.ThreadResume,
@@ -2973,6 +2977,18 @@ describe('CodexAgent reference directories', () => {
       expect('permissions' in params).toBe(false);
       expect('sandboxPolicy' in params).toBe(false);
     }
+    const initialLease = (turnCalls[0] as unknown[])[2] as {
+      acquireSubmissionLease?: () => Promise<unknown>;
+    };
+    const retryLease = (turnCalls[1] as unknown[])[2] as {
+      acquireSubmissionLease?: () => Promise<unknown>;
+    };
+    expect(initialLease.acquireSubmissionLease).toBe(acquireVendorDispatchLease);
+    expect(retryLease.acquireSubmissionLease).not.toBe(acquireVendorDispatchLease);
+    await retryLease.acquireSubmissionLease?.();
+    expect(acquireVendorDispatchLease).toHaveBeenCalledWith(
+      'retry-after-confirmed-rejection',
+    );
     await handle.close();
   });
 
@@ -7166,9 +7182,16 @@ describe('CodexAgent MCP thread context hooks', () => {
             acquireSubmissionLease?: unknown;
           });
         expect(turnStartOptions).toHaveLength(2);
-        expect(turnStartOptions.every(
-          (options) => options.acquireSubmissionLease === acquireVendorDispatchLease,
-        )).toBe(true);
+        expect(turnStartOptions[0]?.acquireSubmissionLease).toBe(acquireVendorDispatchLease);
+        expect(turnStartOptions[1]?.acquireSubmissionLease).not.toBe(
+          acquireVendorDispatchLease,
+        );
+        await (turnStartOptions[1]?.acquireSubmissionLease as
+          | (() => Promise<unknown>)
+          | undefined)?.();
+        expect(acquireVendorDispatchLease).toHaveBeenCalledWith(
+          'retry-after-confirmed-rejection',
+        );
 
         await handle.close();
       } finally {

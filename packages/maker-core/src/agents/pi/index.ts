@@ -2810,17 +2810,19 @@ export class PiAgent extends BaseAgent {
             if (resp.command !== command.type) {
               throw new Error('pi prompt rejection response missing matching command');
             }
+            let cleanupSettlementError: unknown;
             if (typeof releaseVendorDispatchLease === 'function') {
               try {
                 await releaseVendorDispatchLease('confirmed-undispatched');
               } catch (error) {
-                deps.logger.warn('Pi explicit rejection cleanup settlement failed', {
-                  error: error instanceof Error ? error.message : String(error),
-                });
+                cleanupSettlementError = error;
               }
             }
             throw new TurnDispatchRejectedError(
               `pi prompt rejected before acceptance: ${resp.error ?? 'unknown'}`,
+              cleanupSettlementError === undefined
+                ? undefined
+                : { cause: cleanupSettlementError },
             );
           }
           providerAccepted = true;

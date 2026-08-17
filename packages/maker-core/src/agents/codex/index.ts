@@ -10088,6 +10088,18 @@ export class CodexAgent extends BaseAgent {
           ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
+        // Both stale-daemon recovery and the bounded overload retry are entered
+        // only after Codex has authoritatively rejected the previous turn/start.
+        // Tell the host-owned lease that this is an intentional replacement of
+        // the same logical prompt, rather than an unrelated replay of an
+        // ambiguous submitted row.
+        const acquireConfirmedRetrySubmissionLease =
+          sendOpts?.acquireVendorDispatchLease
+            ? () =>
+                sendOpts.acquireVendorDispatchLease?.(
+                  'retry-after-confirmed-rejection',
+                )
+            : undefined;
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
         activeTurnModel = mutableCatalogModel;
@@ -10331,7 +10343,7 @@ export class CodexAgent extends BaseAgent {
               // 且无人可解（review #844 codex P1）。与正常 turn/start 同款边界。
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-                acquireSubmissionLease: sendOpts?.acquireVendorDispatchLease,
+                acquireSubmissionLease: acquireConfirmedRetrySubmissionLease,
               });
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
               // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为
@@ -10525,7 +10537,7 @@ export class CodexAgent extends BaseAgent {
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
-                acquireSubmissionLease: sendOpts?.acquireVendorDispatchLease,
+                acquireSubmissionLease: acquireConfirmedRetrySubmissionLease,
               });
               markTurnConfigAccepted();
               adoptUnidentifiedDeadTurn(resp, initialStartSeq);

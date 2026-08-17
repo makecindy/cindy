@@ -224,6 +224,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   acquireVendorDispatchLease: (
     teamId: string,
     cleanupTarget?: { sessionId: string; clientId: string },
+    intent?: 'initial' | 'retry-after-confirmed-rejection',
   ) => Promise<OrcaVendorDispatchLeaseRelease>;
   /** Process-local last-moment fence for the DB-check-to-vendor race. */
   assertOrcaTeamActiveBeforeVendorDispatch?: (teamId: string) => void;
@@ -565,11 +566,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
               params.targetSessionId,
               cleanupItem,
             ),
-          acquireVendorDispatchLease: async () => {
+          acquireVendorDispatchLease: async (intent) => {
             const release = await deps.acquireVendorDispatchLease(params.teamId, {
               sessionId: params.targetSessionId,
               clientId,
-            });
+            }, intent);
             return async (outcome) => {
               if (outcome !== 'confirmed-undispatched') {
                 deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId);

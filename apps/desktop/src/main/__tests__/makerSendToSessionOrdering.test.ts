@@ -440,8 +440,9 @@ describe('sendToSession ordering', () => {
     );
     expect(block).toContain("origin?.kind === 'orca' && typeof origin.teamId === 'string'");
     expect(block).toContain(
-      '? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId, originVendorDispatchCleanupTarget)',
+      "? (intent?: 'initial' | 'retry-after-confirmed-rejection') =>",
     );
+    expect(block).toContain('originVendorDispatchCleanupTarget,\n            intent,');
     expect(block).toContain('orcaPreVendorCleanup: { teamId: orcaOriginTeamId }');
     expect(block).toContain('{ expectedOrcaTeamId: orcaOriginTeamId }');
     expect(persistBlock).toContain(

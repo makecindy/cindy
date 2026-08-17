@@ -34,6 +34,9 @@ export type OrcaTeamDispatchLeaseOutcome =
   | 'submitted'
   | 'accepted'
   | 'confirmed-undispatched';
+export type OrcaTeamDispatchLeaseIntent =
+  | 'initial'
+  | 'retry-after-confirmed-rejection';
 
 export interface OrcaTeamDispatchCleanupTarget {
   sessionId: string;
@@ -58,6 +61,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
   async acquire(
     teamId: string,
     cleanupTarget?: OrcaTeamDispatchCleanupTarget,
+    intent: OrcaTeamDispatchLeaseIntent = 'initial',
   ): Promise<OrcaTeamDispatchLeaseRelease> {
     let unlock!: () => void;
     const previous = this.tail;
@@ -120,7 +124,15 @@ export class OrcaTeamDispatchLeaseCoordinator {
           [cleanupTarget.sessionId, cleanupTarget.clientId],
         );
         if (cleanupRow?.teamId === teamId && cleanupRow.phase === 'submitted') {
-          throwOrcaDispatchUnconfirmed(teamId, cleanupTarget.clientId);
+          if (intent !== 'retry-after-confirmed-rejection') {
+            throwOrcaDispatchUnconfirmed(teamId, cleanupTarget.clientId);
+          }
+          // Codex can intentionally retry the same logical prompt after an
+          // authoritative pre-start rejection. Re-open that exact row only
+          // inside the new writer lease; a crash rolls this transaction back
+          // to submitted, while terminal writers remain excluded until the
+          // replacement request reaches its own submission boundary.
+          await this.markCleanupPreVendor(client, teamId, cleanupTarget);
         }
         if (cleanupRow?.teamId !== teamId) {
           throw new Error(
@@ -198,23 +210,30 @@ export class OrcaTeamDispatchLeaseCoordinator {
     });
     await previous;
 
-    let transactionOpen = false;
     try {
-      const client = await this.ensureClient();
-      await this.beginImmediate(client);
-      transactionOpen = true;
-      if (outcome === 'accepted') {
-        await this.clearCleanupMarker(client, teamId, cleanupTarget);
-      } else {
-        await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        let transactionOpen = false;
+        try {
+          const client = await this.ensureClient();
+          await this.beginImmediate(client);
+          transactionOpen = true;
+          if (outcome === 'accepted') {
+            await this.clearCleanupMarker(client, teamId, cleanupTarget);
+          } else {
+            await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
+          }
+          await this.execWithBusyRetry(client, 'COMMIT');
+          return;
+        } catch (error) {
+          lastError = error;
+          if (transactionOpen && this.client) {
+            await this.releaseTransaction(this.client.value);
+          }
+          if (attempt < 3) await delay(attempt * 10);
+        }
       }
-      await this.execWithBusyRetry(client, 'COMMIT');
-      transactionOpen = false;
-    } catch (error) {
-      if (transactionOpen && this.client) {
-        await this.releaseTransaction(this.client.value);
-      }
-      throw error;
+      throw lastError;
     } finally {
       unlock();
     }
@@ -308,6 +327,29 @@ export class OrcaTeamDispatchLeaseCoordinator {
     );
   }
 
+  private async markCleanupPreVendor(
+    client: IsolatedSqliteClient,
+    teamId: string,
+    cleanupTarget: OrcaTeamDispatchCleanupTarget,
+  ): Promise<void> {
+    await this.execWithBusyRetry(
+      client,
+      `UPDATE messages
+          SET agent_meta = json_set(
+                agent_meta,
+                '$.orcaPreVendorCleanup.phase',
+                'pre-vendor'
+              )
+        WHERE session_id = ?
+          AND client_id = ?
+          AND role = 'user'
+          AND rewind_at IS NULL
+          AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?
+          AND json_extract(agent_meta, '$.orcaPreVendorCleanup.phase') = 'submitted'`,
+      [cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
+    );
+  }
+
   private async releaseTransaction(client: IsolatedSqliteClient): Promise<void> {
     try {
       await client.exec('ROLLBACK');
@@ -353,8 +395,9 @@ const coordinator = new OrcaTeamDispatchLeaseCoordinator({
 export function acquireOrcaTeamDispatchLease(
   teamId: string,
   cleanupTarget?: OrcaTeamDispatchCleanupTarget,
+  intent?: OrcaTeamDispatchLeaseIntent,
 ): Promise<OrcaTeamDispatchLeaseRelease> {
-  return coordinator.acquire(teamId, cleanupTarget);
+  return coordinator.acquire(teamId, cleanupTarget, intent);
 }
 
 export function disposeOrcaTeamDispatchLeaseCoordinator(): Promise<void> {

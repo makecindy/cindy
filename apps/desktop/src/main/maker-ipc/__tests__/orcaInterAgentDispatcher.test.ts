@@ -222,7 +222,7 @@ describe('Orca lead/worker dispatcher', () => {
     expect(acquireVendorDispatchLease).toHaveBeenCalledWith('team-1', {
       sessionId: 'target-session',
       clientId: 'client-1',
-    });
+    }, undefined);
     expect(leaseRelease).toHaveBeenCalledWith('submitted');
   });
 

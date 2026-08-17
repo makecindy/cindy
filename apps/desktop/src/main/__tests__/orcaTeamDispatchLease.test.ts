@@ -187,7 +187,12 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
       message: expect.stringContaining('ORCA_MESSAGE_ALREADY_SUBMITTED'),
     });
 
-    await release('accepted');
+    const retryRelease = await coordinator.acquire('team-sent', {
+      sessionId: 'session-1',
+      clientId: 'client-sent',
+    }, 'retry-after-confirmed-rejection');
+    await retryRelease('submitted');
+    await retryRelease('accepted');
 
     expect(await setup.queryOne(
       `SELECT rewind_at AS rewindAt,
@@ -238,6 +243,46 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
               json_extract(agent_meta, '$.orcaPreVendorCleanup.phase') AS phase
          FROM messages WHERE id = 'row-rejected'`,
     )).toEqual({ rewindAt: expect.any(Number), phase: 'submitted' });
+  });
+
+  it('retries the whole submitted-row settlement before surfacing a cleanup failure', async () => {
+    const options = await createClientOptions();
+    const transient = new Error('isolated client write failed once');
+    let tombstoneAttempts = 0;
+    const client: IsolatedSqliteClient = {
+      queryOne: async <T = unknown>(sql: string): Promise<T | undefined> => {
+        if (sql.includes('SELECT status FROM orca_teams')) {
+          return { status: 'active' } as T;
+        }
+        if (sql.includes("json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId')")) {
+          return { teamId: 'team-settle-retry', phase: 'pre-vendor' } as T;
+        }
+        return { ok: 1 } as T;
+      },
+      exec: vi.fn(async (sql: string) => {
+        if (sql.includes('SET rewind_at = ?')) {
+          tombstoneAttempts += 1;
+          if (tombstoneAttempts === 1) throw transient;
+        }
+        return { changes: 1, lastInsertRowid: 0 };
+      }),
+      dispose: vi.fn(async () => {}),
+    };
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => client,
+      getTerminalFenceState: () => 'open',
+    });
+
+    const release = await coordinator.acquire('team-settle-retry', {
+      sessionId: 'session-1',
+      clientId: 'client-settle-retry',
+    });
+    await release('submitted');
+    await release('confirmed-undispatched');
+
+    expect(tombstoneAttempts).toBe(2);
+    expect(client.exec).toHaveBeenCalledWith('ROLLBACK');
   });
 
   it('retries transient SQLite contention while committing submitted state', async () => {

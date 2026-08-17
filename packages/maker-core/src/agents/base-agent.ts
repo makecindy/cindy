@@ -1322,6 +1322,9 @@ export type VendorDispatchLeaseOutcome =
   | 'submitted'
   | 'accepted'
   | 'confirmed-undispatched';
+export type VendorDispatchLeaseIntent =
+  | 'initial'
+  | 'retry-after-confirmed-rejection';
 export type VendorDispatchLeaseRelease = (
   outcome?: VendorDispatchLeaseOutcome,
 ) => void | Promise<void>;
@@ -1355,7 +1358,7 @@ export interface SendOptions {
    * Providers acquire only after preparation/startup, then release as soon as
    * the request is queued into their local SDK/process transport.
    */
-  acquireVendorDispatchLease?: () =>
+  acquireVendorDispatchLease?: (intent?: VendorDispatchLeaseIntent) =>
     | void
     | VendorDispatchLeaseRelease
     | Promise<VendorDispatchLeaseRelease>;

@@ -199,6 +199,7 @@ export interface MakerSendTransactionDeps {
     sessionId: string,
     sendOpts: unknown,
     cleanupTarget?: { sessionId: string; clientId: string },
+    intent?: 'initial' | 'retry-after-confirmed-rejection',
   ) =>
     | void
     | ((outcome?: 'submitted' | 'accepted' | 'confirmed-undispatched') => void | Promise<void>)
@@ -1105,13 +1106,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : undefined,
           ...(orcaTeamId && deps.acquireVendorDispatchLease
             ? {
-                acquireVendorDispatchLease: () =>
+                acquireVendorDispatchLease: (intent) =>
                   deps.acquireVendorDispatchLease?.(
                     sessionId,
                     finalFenceSendOpts,
                     persistUserMessage
                       ? { sessionId, clientId: persistUserMessage.clientId }
                       : undefined,
+                    intent,
                   ),
               }
             : {}),

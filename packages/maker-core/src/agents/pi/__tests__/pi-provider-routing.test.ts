@@ -1623,6 +1623,42 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('preserves a Pi rejection while exposing failed durable cleanup as its cause', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') {
+        return { command: 'prompt', success: false, error: 'policy rejected prompt' };
+      }
+      return { success: true, data: {} };
+    };
+    const cleanupFailure = new Error('cleanup database unavailable');
+    const leaseOutcomes: string[] = [];
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-rejection-cleanup-failure',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send(
+      { type: 'user', content: 'continue the goal' },
+      {
+        acquireVendorDispatchLease: async () => async (outcome) => {
+          leaseOutcomes.push(String(outcome));
+          if (outcome === 'confirmed-undispatched') throw cleanupFailure;
+        },
+      },
+    )).rejects.toMatchObject({
+      name: 'TurnDispatchRejectedError',
+      code: 'TURN_DISPATCH_REJECTED',
+      cause: cleanupFailure,
+    });
+    expect(leaseOutcomes).toEqual(['submitted', 'confirmed-undispatched']);
+    await handle.close();
+  });
+
   it.each([
     ['missing command', { success: false, error: 'prompt rejected before acceptance' }],
     [
