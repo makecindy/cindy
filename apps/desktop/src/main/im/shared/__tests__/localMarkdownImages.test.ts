@@ -256,13 +256,13 @@ describe('materializeLocalMarkdownImages', () => {
     const workingDir = await makeTempRoot();
     const acceptedPath = path.join(
       workingDir,
-      `${'('.repeat(32)}accepted${')'.repeat(32)}.png`,
+      `depth-${'('.repeat(32)}accepted${')'.repeat(32)}.png`,
     );
     const rejectedPath = path.join(
       workingDir,
-      `${'('.repeat(33)}rejected${')'.repeat(33)}.png`,
+      `depth-${'('.repeat(33)}rejected${')'.repeat(33)}.png`,
     );
-    const sequentialPath = path.join(workingDir, `${'()'.repeat(33)}sequential.png`);
+    const sequentialPath = path.join(workingDir, `depth-${'()'.repeat(33)}sequential.png`);
     const mediaAbsPath = path.join(workingDir, 'media-store.png');
     await fs.writeFile(acceptedPath, PNG_BYTES);
     await fs.writeFile(rejectedPath, PNG_BYTES);
