@@ -160,12 +160,12 @@ describe('classifyBuiltinToolForAutoReview — Windows 盘符路径边界', () =
 
 describe('classifyBuiltinToolForAutoReview — Bash 只读命令放行', () => {
   it('常见只读命令 auto-approve', () => {
-    for (const c of ['ls -la', 'cat package.json', 'pwd', 'grep -rn foo src', 'rg TODO', 'wc -l x', 'head -5 f', 'echo hi']) {
+    for (const c of ['ls -la', 'cat package.json', 'pwd', 'grep -rn foo src --include="[b]ook.ts"', 'rg TODO', 'wc -l x', 'head -5 f', 'echo hi']) {
       expect(verdict('Bash', { command: c })).toBe('auto-approve');
     }
   });
   it('git 只读子命令 auto-approve', () => {
-    for (const c of ['git status', 'git log --oneline', 'git diff HEAD', 'git show abc', 'git branch', 'git config --get user.name']) {
+    for (const c of ['git status', 'git log --oneline', 'git diff --stat', 'git show HEAD:README.md', 'git branch', 'git config --get user.name']) {
       expect(verdict('Bash', { command: c })).toBe('auto-approve');
     }
   });

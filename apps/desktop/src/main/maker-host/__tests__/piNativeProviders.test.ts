@@ -458,6 +458,78 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     }
   });
 
+  it('publishes SuperGrok catalog models missing from this PI binary as catalog additions', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xai = catalog.providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models.pi?.some((model) => model.id === 'grok-4.6')).toBe(true);
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBeUndefined();
+
+    const { providers } = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([
+        ['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-completions')]])],
+      ]),
+      new Map([['xai', new Set(['grok-4.5'])]]),
+    );
+
+    const xaiProvider = providers.find((provider) => provider.id === 'xai');
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      id: 'grok-4.6',
+      wireId: 'grok-4.6',
+      catalogAddition: true,
+      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    });
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.api).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
+  });
+
+  it('does not mark SuperGrok models as catalog additions when the PI probe is unavailable', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    expect(catalog.providers.find((provider) => provider.id === 'xai')?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBeUndefined();
+
+    const { providers } = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+    );
+
+    const xaiProvider = providers.find((provider) => provider.id === 'xai');
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.catalogAddition).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
+  });
+
+  it('does not mark SuperGrok models as catalog additions when the probe has no xAI baseline', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+
+    const { providers } = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([
+        ['anthropic', new Map([['claude-opus-5', piBundledModel('claude-opus-5', 'anthropic-messages')]])],
+      ]),
+    );
+
+    const xaiProvider = providers.find((provider) => provider.id === 'xai');
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.catalogAddition).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
+  });
+
+  it('does not mark SuperGrok models as catalog additions when list-models still has the id', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+
+    const { providers } = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([
+        ['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-completions')]])],
+      ]),
+      new Map([['xai', new Set(['grok-4.5', 'grok-4.6'])]]),
+    );
+
+    const xaiProvider = providers.find((provider) => provider.id === 'xai');
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.catalogAddition).toBeUndefined();
+  });
+
   it('namespaces only colliding BYOM runtime ids and preserves their persisted source ids', () => {
     const collisions: Array<[string, string]> = [];
     const merged = mergePiNativeProviderResults(

@@ -80,23 +80,23 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
 
 describe('classifyShellCommand — 只读放行', () => {
   it('常见只读命令 / git 只读 / curl GET', () => {
-    for (const c of ['ls -la', 'cat f', 'grep -rn x .', 'rg TODO', 'git status', 'git log', 'curl -sS https://x.com', 'env FOO=1 ls', 'timeout 5 grep x f']) {
+    for (const c of ['ls -la', 'cat f', 'grep -rn x . --include="[b]ook.ts"', 'rg TODO', 'git status', 'git log', 'curl -sS https://x.com', 'env FOO=1 ls', 'timeout 5 grep x f']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });
   it('git 全局目录选项后仍识别工作区内的真实只读子命令', () => {
     for (const c of [
       'git -C /repo status',
-      'git -C /repo show HEAD',
+      'git -C /repo show HEAD:README.md',
       'git -C/repo log --oneline',
-      'git --namespace=review -C /repo diff HEAD',
+      'git --namespace=review -C /repo diff --stat',
     ]) {
       expect(classifyShellCommand(c, roots), c).toBe('auto-approve');
     }
   });
-  it('子命令自身的 -c 参数不被当作危险全局选项', () => {
-    for (const c of ['git diff -c', 'git show -c']) {
-      expect(classifyShellCommand(c, roots), c).toBe('auto-approve');
+  it('子命令自身的 -c 参数不被当作危险全局选项，内容输出仍进入凭证门', () => {
+    for (const c of ['git diff -c -- README.md', 'git show -c']) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
     }
   });
   it('git 仓库路径选项只放行工作区内的静态路径', () => {
@@ -526,10 +526,10 @@ describe('reviewAction / classifyShellCommand — agent OAuth 凭证文件', () 
 });
 
 describe('classifyShellCommand — git --output 写文件 / curl SSRF 改路由 / wget 一律升级', () => {
-  it('git diff --output 写文件(无 shell >)→ prompt;普通 git diff 仍放行', () => {
+  it('git diff --output 写文件(无 shell >)→ prompt;metadata-only diff 仍放行', () => {
     expect(classifyShellCommand('git diff --output ~/.bashrc HEAD^ HEAD', roots)).toBe('prompt');
     expect(classifyShellCommand('git diff --output=/tmp/x HEAD', roots)).toBe('prompt');
-    expect(classifyShellCommand('git diff HEAD', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git diff --stat -- README.md', roots)).toBe('auto-approve');
   });
   it('curl 改路由 flag(--resolve/--connect-to/--unix-socket/-x/--proxy)→ prompt(SSRF 绕过)', () => {
     for (const c of [
@@ -575,11 +575,11 @@ describe('classifyShellCommand — procfs / 短选项绕过 / 反斜杠 / git RC
   it('反斜杠转义拆分 flag(find -ex\\ec)去转义后命中', () => {
     expect(classifyShellCommand("find . -ex\\ec sh -c 'x' {} +", roots)).toBe('prompt');
   });
-  it('git --ext-diff / 内联 -c(core.pager/diff.external)→ prompt(RCE);普通 git diff 仍放行', () => {
+  it('git --ext-diff / 内联 -c(core.pager/diff.external)→ prompt(RCE);metadata-only diff 仍放行', () => {
     expect(classifyShellCommand('git diff --ext-diff', roots)).toBe('prompt');
     expect(classifyShellCommand('git -c core.pager=evil show HEAD', roots)).toBe('prompt');
     expect(classifyShellCommand('git -c diff.external=evil diff', roots)).toBe('prompt');
-    expect(classifyShellCommand('git diff HEAD', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git diff --stat -- README.md', roots)).toBe('auto-approve');
   });
 });
 
@@ -778,10 +778,10 @@ describe('复审第三批:env 注入 / 显式路径 / file:// / 缩写 IP / git 
     // 反例:公网十进制不误伤(0251 之外的规范公网)。
     expect(classifyShellCommand('curl http://93.184.216.34/', roots)).toBe('auto-approve');
   });
-  it('git cat-file --filters/--textconv 跑 filter(RCE)→ prompt;cat-file -p 只读放行', () => {
+  it('git cat-file --filters/--textconv 跑 filter(RCE)→ prompt;显式普通对象路径仍放行', () => {
     expect(classifyShellCommand('git cat-file --filters HEAD:path', roots)).toBe('prompt');
     expect(classifyShellCommand('git cat-file --textconv HEAD:path', roots)).toBe('prompt');
-    expect(classifyShellCommand('git cat-file -p HEAD', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git cat-file -p HEAD:README.md', roots)).toBe('auto-approve');
   });
 });
 
@@ -860,8 +860,8 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     for (const c of ['git grep --open-files-in-pager=./payload pattern', 'git grep -O./payload pattern']) {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
     }
-    // 反例:普通 git grep 仍放行。
-    expect(classifyShellCommand('git grep pattern', roots)).toBe('auto-approve');
+    // 反例:files-only git grep 仍放行。
+    expect(classifyShellCommand('git grep -l pattern', roots)).toBe('auto-approve');
   });
 
   it('git 子命令前内联 config 的等号形式(--config-env=…)升级 —— 防 core.pager RCE', () => {
@@ -1016,7 +1016,7 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     expect(classifyShellCommand('{c..c}at notes.txt', roots)).toBe('prompt');
     // 反例:位置参数里的 brace 只影响文件名 → 不升级;find 占位符 {} 不算展开。
     expect(classifyShellCommand('ls dir/{a,b}', roots)).toBe('auto-approve');
-    expect(classifyShellCommand('grep -rn foo src/{a,b}', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('grep -rn foo src/{a,b} --include="[b]ook.ts"', roots)).toBe('auto-approve');
     expect(classifyShellCommand('find . -maxdepth 0 -print', roots)).toBe('auto-approve'); // {} 占位符另测,这里确认普通 find 放行
   });
 
@@ -4124,7 +4124,7 @@ describe('伪设备白名单:静音重定向不得打断(实机语料探针发�
 
   it('日常命令语料整体不被硬拦(尽量不打扰的回归护栏)', () => {
     for (const c of [
-      'ls -la', 'git status', 'cat package.json', 'grep -rn TODO src',
+      'ls -la', 'git status', 'cat package.json', 'grep -rn TODO src --include="[b]ook.ts"',
       'pnpm install', 'npx tsc --noEmit', 'rm -rf node_modules', 'rm -rf build',
       'git add .', 'git commit -m "fix: x"', 'git push origin feature/x',
       'env NODE_ENV=test npx vitest run', 'timeout 60 pnpm test', 'nohup pnpm dev',

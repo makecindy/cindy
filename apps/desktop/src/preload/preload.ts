@@ -640,6 +640,7 @@ const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-chan
 const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
 const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
 const fanOutMakerUsageClaudeSubscription = createIpcFanOut('usage:claude-subscription-changed'); // Claude 订阅余量
+const fanOutMakerUsageXaiSubscription = createIpcFanOut('usage:xai-subscription-changed'); // SuperGrok 周用量
 // 跨 Agent 工作区互转 — 转换进度 push (per step)
 const fanOutCrossAgentStep = createIpcFanOut('maker:cross-agent:step');
 // Scheduler (Phase 4) — 4 个 SchedulerEvent 类型 ('fired'|'completed'|'failed'|'changed')
@@ -6189,6 +6190,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),
+    /** 输入框推荐提示词:turn 结束后预测用户下一步输入(turn 完成 → 调 IPC → 返回预测文本)。 */
+    predictNextPrompt: (request: {
+      sessionId: string;
+      agentKind: 'claude-code' | 'codex' | 'pi';
+      messages: Array<{ role: string; content: string }>;
+      workingDir?: string;
+      turnGen: number;
+    }): Promise<{ prompt: string | null }> =>
+      ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>
@@ -6289,6 +6299,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Claude 订阅账号余量 (5h/周/分模型窗口, cached-first, main 侧按需后台刷新)。 */
       getClaudeSubscription: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:claude-subscription'),
+      getXaiSubscription: (): Promise<unknown | null> =>
+        ipcRenderer.invoke('maker:usage:xai-subscription'),
       /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:model-pricing-v2'),
@@ -6312,6 +6324,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onXaiRateLimitChanged: fanOutMakerUsageXaiRateLimit,
       /** Claude 订阅余量推送 (端点后台刷新 / proxy 旁路 headers 更新时推送)。 */
       onClaudeSubscriptionChanged: fanOutMakerUsageClaudeSubscription,
+      onXaiSubscriptionChanged: fanOutMakerUsageXaiSubscription,
     },
 
     // ── Scheduler (Phase 4) ────────────────────────────────────────────────

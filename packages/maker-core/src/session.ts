@@ -54,6 +54,7 @@ import {
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
 } from './agents/base-agent.js';
+import { formatManagedImageReferences } from './agents/shared/managed-image-reference.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -240,6 +241,29 @@ function redactNestedStrings(value: unknown, onChange: () => void): unknown {
     copy[key] = redactNestedStrings(child, onChange);
   }
   return copy;
+}
+
+/**
+ * Vision bridging replaces image blocks before the provider adapter sees them.
+ * Preserve the Host-managed attachment identities as ordinary per-turn text,
+ * without exposing them to the external vision backend or changing image bytes.
+ */
+function appendManagedImageReferences(
+  source: UserMessage,
+  bridged: UserMessage,
+): UserMessage {
+  const references = formatManagedImageReferences(source.content);
+  if (!references) return bridged;
+  if (typeof bridged.content === 'string') {
+    return {
+      ...bridged,
+      content: bridged.content ? `${bridged.content}\n${references}` : references,
+    };
+  }
+  return {
+    ...bridged,
+    content: [...bridged.content, { type: 'text', text: references }],
+  };
 }
 
 export interface SessionSendOptions extends SendOptions {
@@ -676,7 +700,7 @@ export class Session {
         signal,
         sessionId: this.id,
       });
-      if (bridged.applied) return bridged.message;
+      if (bridged.applied) return appendManagedImageReferences(msg, bridged.message);
       if (bridged.note) {
         // 无论 applied 与否，note（fallback 生效 / 视觉桥不可用）都上报，避免静默。
         this.logger.info('vision bridge note', { sessionId: this.id, note: bridged.note });

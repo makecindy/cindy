@@ -91,7 +91,7 @@ import type { SessionMoveTarget } from '../sessionMoveTarget';
 /** 设备段折叠/对话组折叠共用的段 key:本机段 'local',远程段用 deviceId。 */
 const deviceSectionKey = (deviceId: string | null) => deviceId ?? 'local';
 
-// 优先级排序的「看的时候钉住、离开后再落到已看过最前」是模块生命周期内的展示态,
+// 优先级排序的「看的时候钉住;只有从完成未读切走才置顶」是模块生命周期内的展示态,
 // 不落盘。放模块级而不是组件 ref:ProjectsSection 重挂(含 React Strict Mode
 // 双挂)不能丢掉正在看的档位,否则看的过程中会跳到其余档。
 export const viewedPriorityHold: ViewedPriorityHoldState = {
@@ -153,7 +153,7 @@ export interface ProjectsSectionProps {
   activeSessionId?: string;
   /**
    * 当前注视中的任务(files 路由下 activeSessionId 为空,回落到被浏览文件所属任务)。
-   * 优先级排序用它钉住打开时的档位,离开后再落到已看过最前。
+   * 优先级排序用它钉住打开时的档位;只有从完成未读切走才置顶。
    */
   viewedSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
@@ -809,7 +809,7 @@ export function ProjectsSection({
               const sectionCollapsed = collapsedDevices.has(key);
               return (
                 <div key={key} className="flex flex-col gap-1">
-                  {/* 设备分组头:可折叠,在线状态点(绿/灰)+ 名称 + 条数。 */}
+                  {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
                   <button
                     type="button"
                     onClick={() => toggleDeviceSection(key)}
@@ -831,13 +831,12 @@ export function ProjectsSection({
                     )}
                     <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
                     <span className="min-w-0 truncate text-xs font-medium">{name}</span>
-                    <span
-                      aria-hidden
-                      className={cn(
-                        'size-1.5 shrink-0 rounded-full',
-                        online ? 'bg-[var(--card-status-done)]' : 'bg-[var(--text-tertiary)]',
-                      )}
-                    />
+                    {!online && (
+                      <span
+                        aria-hidden
+                        className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                      />
+                    )}
                     {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
                           (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
                           段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}
