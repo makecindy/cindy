@@ -188,8 +188,8 @@ export interface CcMeta {
     durationMs: number;
   };
 
-  /** Durable host-only marker for an Orca user row that has not reached provider submission. */
-  orcaPreVendorCleanup?: { teamId: string };
+  /** Durable host-only settlement marker for an Orca user row crossing provider submission. */
+  orcaPreVendorCleanup?: { teamId: string; phase?: 'pre-vendor' | 'submitted' };
 }
 
 /**

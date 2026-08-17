@@ -27,7 +27,7 @@ const defaultLog = createLogger('maker-ipc');
 
 type OrcaInterAgentDispatchMode = 'dispatched' | 'queued';
 type OrcaVendorDispatchLeaseRelease = (
-  outcome?: 'submitted' | 'confirmed-undispatched',
+  outcome?: 'submitted' | 'accepted' | 'confirmed-undispatched',
 ) => void | Promise<void>;
 
 function stripIpcErrorPrefix(message: string): string {

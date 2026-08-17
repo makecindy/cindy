@@ -1318,7 +1318,10 @@ export interface StartSessionOptions {
  * Session.send / handle.send 的可选附加项。
  * 缺省 / 不识别字段必须安全忽略。
  */
-export type VendorDispatchLeaseOutcome = 'submitted' | 'confirmed-undispatched';
+export type VendorDispatchLeaseOutcome =
+  | 'submitted'
+  | 'accepted'
+  | 'confirmed-undispatched';
 export type VendorDispatchLeaseRelease = (
   outcome?: VendorDispatchLeaseOutcome,
 ) => void | Promise<void>;

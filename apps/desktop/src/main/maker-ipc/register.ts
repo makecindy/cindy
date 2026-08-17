@@ -8466,7 +8466,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               sessionId: targetSessionId,
               clientId,
             });
-            return async (outcome?: 'submitted' | 'confirmed-undispatched') => {
+            return async (
+              outcome?: 'submitted' | 'accepted' | 'confirmed-undispatched',
+            ) => {
               if (outcome !== 'confirmed-undispatched') {
                 // Stop exposing the row to same-process terminal snapshots
                 // before the cross-process writer lease is released.

@@ -30,7 +30,10 @@ export interface OrcaTeamDispatchLeaseDeps {
   getTerminalFenceState(teamId: string): OrcaTeamTerminalFenceState;
 }
 
-export type OrcaTeamDispatchLeaseOutcome = 'submitted' | 'confirmed-undispatched';
+export type OrcaTeamDispatchLeaseOutcome =
+  | 'submitted'
+  | 'accepted'
+  | 'confirmed-undispatched';
 
 export interface OrcaTeamDispatchCleanupTarget {
   sessionId: string;
@@ -99,8 +102,15 @@ export class OrcaTeamDispatchLeaseCoordinator {
         throw new Error(`ORCA_TEAM_INACTIVE: team ${teamId} has already ended`);
       }
       if (cleanupTarget) {
-        const cleanupRow = await client.queryOne<{ teamId: string | null }>(
-          `SELECT json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') AS teamId
+        const cleanupRow = await client.queryOne<{
+          teamId: string | null;
+          phase: string | null;
+        }>(
+          `SELECT json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') AS teamId,
+                  COALESCE(
+                    json_extract(agent_meta, '$.orcaPreVendorCleanup.phase'),
+                    'pre-vendor'
+                  ) AS phase
              FROM messages
             WHERE session_id = ?
               AND client_id = ?
@@ -109,6 +119,9 @@ export class OrcaTeamDispatchLeaseCoordinator {
             LIMIT 1`,
           [cleanupTarget.sessionId, cleanupTarget.clientId],
         );
+        if (cleanupRow?.teamId === teamId && cleanupRow.phase === 'submitted') {
+          throwOrcaDispatchUnconfirmed(teamId, cleanupTarget.clientId);
+        }
         if (cleanupRow?.teamId !== teamId) {
           throw new Error(
             `ORCA_TEAM_INACTIVE: team ${teamId} pre-vendor row is no longer dispatchable`,
@@ -118,7 +131,12 @@ export class OrcaTeamDispatchLeaseCoordinator {
 
       let released = false;
       return async (outcome: OrcaTeamDispatchLeaseOutcome = 'submitted') => {
-        if (released) return;
+        if (released) {
+          if (cleanupTarget && outcome !== 'submitted') {
+            await this.settleSubmittedCleanupTarget(teamId, cleanupTarget, outcome);
+          }
+          return;
+        }
         released = true;
         try {
           if (outcome === 'confirmed-undispatched' && cleanupTarget) {
@@ -127,11 +145,18 @@ export class OrcaTeamDispatchLeaseCoordinator {
             // instance can only commit end_team after this durable rewind.
             await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
             await this.execWithBusyRetry(client, 'COMMIT');
-          } else if (outcome === 'submitted' && cleanupTarget) {
+          } else if (outcome === 'accepted' && cleanupTarget) {
+            await this.clearCleanupMarker(client, teamId, cleanupTarget);
+            await this.execWithBusyRetry(client, 'COMMIT');
+          } else if (cleanupTarget) {
             await this.execWithBusyRetry(
               client,
               `UPDATE messages
-                  SET agent_meta = json_remove(agent_meta, '$.orcaPreVendorCleanup')
+                  SET agent_meta = json_set(
+                        agent_meta,
+                        '$.orcaPreVendorCleanup.phase',
+                        'submitted'
+                      )
                 WHERE session_id = ?
                   AND client_id = ?
                   AND role = 'user'
@@ -158,6 +183,40 @@ export class OrcaTeamDispatchLeaseCoordinator {
       }
       unlock();
       throw error;
+    }
+  }
+
+  private async settleSubmittedCleanupTarget(
+    teamId: string,
+    cleanupTarget: OrcaTeamDispatchCleanupTarget,
+    outcome: Exclude<OrcaTeamDispatchLeaseOutcome, 'submitted'>,
+  ): Promise<void> {
+    let unlock!: () => void;
+    const previous = this.tail;
+    this.tail = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
+    await previous;
+
+    let transactionOpen = false;
+    try {
+      const client = await this.ensureClient();
+      await this.beginImmediate(client);
+      transactionOpen = true;
+      if (outcome === 'accepted') {
+        await this.clearCleanupMarker(client, teamId, cleanupTarget);
+      } else {
+        await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
+      }
+      await this.execWithBusyRetry(client, 'COMMIT');
+      transactionOpen = false;
+    } catch (error) {
+      if (transactionOpen && this.client) {
+        await this.releaseTransaction(this.client.value);
+      }
+      throw error;
+    } finally {
+      unlock();
     }
   }
 
@@ -231,6 +290,24 @@ export class OrcaTeamDispatchLeaseCoordinator {
     );
   }
 
+  private async clearCleanupMarker(
+    client: IsolatedSqliteClient,
+    teamId: string,
+    cleanupTarget: OrcaTeamDispatchCleanupTarget,
+  ): Promise<void> {
+    await this.execWithBusyRetry(
+      client,
+      `UPDATE messages
+          SET agent_meta = json_remove(agent_meta, '$.orcaPreVendorCleanup')
+        WHERE session_id = ?
+          AND client_id = ?
+          AND role = 'user'
+          AND rewind_at IS NULL
+          AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
+      [cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
+    );
+  }
+
   private async releaseTransaction(client: IsolatedSqliteClient): Promise<void> {
     try {
       await client.exec('ROLLBACK');
@@ -289,4 +366,12 @@ function isSqliteBusy(error: unknown): boolean {
     error instanceof Error &&
     ('code' in error ? error.code === 'SQLITE_BUSY' : /database is locked/i.test(error.message))
   );
+}
+
+function throwOrcaDispatchUnconfirmed(teamId: string, clientId: string): never {
+  const error = new Error(
+    `ORCA_MESSAGE_ALREADY_SUBMITTED: team ${teamId} message ${clientId} may already be executing`,
+  ) as Error & { code?: string };
+  error.code = 'TURN_DISPATCH_UNCONFIRMED';
+  throw error;
 }

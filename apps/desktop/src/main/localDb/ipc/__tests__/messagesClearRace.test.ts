@@ -146,7 +146,9 @@ describe('message persistence clear boundary', () => {
     insert.run('pending-row', 'pending-client', 'pending', JSON.stringify({
       orcaPreVendorCleanup: { teamId: 'team-1' },
     }));
-    insert.run('submitted-row', 'submitted-client', 'submitted', JSON.stringify({}));
+    insert.run('submitted-row', 'submitted-client', 'submitted', JSON.stringify({
+      orcaPreVendorCleanup: { teamId: 'team-1', phase: 'submitted' },
+    }));
 
     await expect(rewindOrcaPreVendorCleanupRows('team-1', ['s1'])).resolves.toEqual([
       { sessionId: 's1', clientId: 'pending-client' },
@@ -157,6 +159,35 @@ describe('message persistence clear boundary', () => {
       { clientId: 'pending-client', rewindAt: expect.any(Number) },
       { clientId: 'submitted-client', rewindAt: null },
     ]);
+  });
+
+  it('does not redispatch an idempotent Orca row already marked submitted', async () => {
+    sqlite.prepare("INSERT INTO orca_teams (id, status) VALUES (?, 'active')").run('team-1');
+    sqlite.prepare(
+      `INSERT INTO messages
+        (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at)
+       VALUES (?, ?, 's1', 'user', ?, ?, 100, NULL)`,
+    ).run(
+      'submitted-row',
+      'submitted-client',
+      'submitted',
+      JSON.stringify({
+        orcaPreVendorCleanup: { teamId: 'team-1', phase: 'submitted' },
+      }),
+    );
+
+    await expect(createMessage('s1', {
+      clientId: 'submitted-client',
+      role: 'user',
+      content: 'retry',
+      agentMeta: { orcaPreVendorCleanup: { teamId: 'team-1' } },
+    }, { expectedOrcaTeamId: 'team-1' })).rejects.toMatchObject({
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      message: expect.stringContaining('ORCA_MESSAGE_ALREADY_SUBMITTED'),
+    });
+    expect(sqlite.prepare(
+      'SELECT rewind_at AS rewindAt FROM messages WHERE id = ?',
+    ).get('submitted-row')).toEqual({ rewindAt: null });
   });
 
   it('uses an atomic clear-token guard for optimistic inserts', async () => {

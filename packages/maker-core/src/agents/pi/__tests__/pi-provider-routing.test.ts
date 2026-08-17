@@ -1605,12 +1605,21 @@ describe('Pi provider-aware model routing', () => {
       workingDir: cwd,
       model: 'local-model',
     });
+    const leaseOutcomes: string[] = [];
 
-    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
-      name: 'TurnDispatchRejectedError',
-      code: 'TURN_DISPATCH_REJECTED',
-      message: 'pi prompt rejected before acceptance: prompt rejected before acceptance',
-    });
+    await expect(handle.send(
+      { type: 'user', content: 'continue the goal' },
+      {
+        acquireVendorDispatchLease: async () => (outcome) => {
+          leaseOutcomes.push(String(outcome));
+        },
+      },
+    )).rejects.toMatchObject({
+        name: 'TurnDispatchRejectedError',
+        code: 'TURN_DISPATCH_REJECTED',
+        message: 'pi prompt rejected before acceptance: prompt rejected before acceptance',
+      });
+    expect(leaseOutcomes).toEqual(['submitted', 'confirmed-undispatched']);
     await handle.close();
   });
 
@@ -1826,6 +1835,7 @@ describe('Pi provider-aware model routing', () => {
       'acquire',
       'rpc',
       'release:submitted',
+      'release:accepted',
       'transcript',
     ]);
     await handle.close();

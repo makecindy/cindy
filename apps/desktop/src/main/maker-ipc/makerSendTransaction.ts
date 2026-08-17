@@ -201,8 +201,11 @@ export interface MakerSendTransactionDeps {
     cleanupTarget?: { sessionId: string; clientId: string },
   ) =>
     | void
-    | ((outcome?: 'submitted' | 'confirmed-undispatched') => void | Promise<void>)
-    | Promise<(outcome?: 'submitted' | 'confirmed-undispatched') => void | Promise<void>>;
+    | ((outcome?: 'submitted' | 'accepted' | 'confirmed-undispatched') => void | Promise<void>)
+    | Promise<
+        (outcome?: 'submitted' | 'accepted' | 'confirmed-undispatched') =>
+          void | Promise<void>
+      >;
   /** Durable active-team check for queued Orca traffic, before any rehydrate side effect. */
   isOrcaTeamInputActive?: (sessionId: string, teamId: string) => Promise<boolean>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;

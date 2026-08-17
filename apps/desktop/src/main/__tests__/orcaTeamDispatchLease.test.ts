@@ -136,7 +136,7 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     expect(terminalSettled).toBe(true);
   });
 
-  it('commits marker removal when the local provider transport accepted the row', async () => {
+  it('persists submitted state until provider acceptance clears the marker', async () => {
     const options = await createClientOptions();
     const setup = await trackedClient(options);
     await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
@@ -174,12 +174,73 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     expect(await setup.queryOne(
       `SELECT rewind_at AS rewindAt,
               json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') AS teamId,
+              json_extract(agent_meta, '$.orcaPreVendorCleanup.phase') AS phase,
+              json_extract(agent_meta, '$.uuid') AS uuid
+         FROM messages WHERE id = 'row-sent'`,
+    )).toEqual({ rewindAt: null, teamId: 'team-sent', phase: 'submitted', uuid: 'u1' });
+
+    await expect(coordinator.acquire('team-sent', {
+      sessionId: 'session-1',
+      clientId: 'client-sent',
+    })).rejects.toMatchObject({
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      message: expect.stringContaining('ORCA_MESSAGE_ALREADY_SUBMITTED'),
+    });
+
+    await release('accepted');
+
+    expect(await setup.queryOne(
+      `SELECT rewind_at AS rewindAt,
+              json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') AS teamId,
               json_extract(agent_meta, '$.uuid') AS uuid
          FROM messages WHERE id = 'row-sent'`,
     )).toEqual({ rewindAt: null, teamId: null, uuid: 'u1' });
   });
 
-  it('retries transient SQLite contention while committing submitted marker removal', async () => {
+  it('tombstones a submitted row when the provider later explicitly rejects it', async () => {
+    const options = await createClientOptions();
+    const setup = await trackedClient(options);
+    await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    await setup.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        agent_meta TEXT,
+        rewind_at INTEGER
+      )
+    `);
+    await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-rejected', 'active')");
+    await setup.exec(`
+      INSERT INTO messages (id, session_id, client_id, role, agent_meta, rewind_at)
+      VALUES (
+        'row-rejected', 'session-1', 'client-rejected', 'user',
+        '{"orcaPreVendorCleanup":{"teamId":"team-rejected"}}', NULL
+      )
+    `);
+    const leaseClient = await trackedLeaseClient(options);
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => leaseClient,
+      getTerminalFenceState: () => 'open',
+    });
+
+    const release = await coordinator.acquire('team-rejected', {
+      sessionId: 'session-1',
+      clientId: 'client-rejected',
+    });
+    await release('submitted');
+    await release('confirmed-undispatched');
+
+    expect(await setup.queryOne(
+      `SELECT rewind_at AS rewindAt,
+              json_extract(agent_meta, '$.orcaPreVendorCleanup.phase') AS phase
+         FROM messages WHERE id = 'row-rejected'`,
+    )).toEqual({ rewindAt: expect.any(Number), phase: 'submitted' });
+  });
+
+  it('retries transient SQLite contention while committing submitted state', async () => {
     const options = await createClientOptions();
     const busy = Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
     let markerAttempts = 0;
@@ -195,7 +256,7 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
         return { ok: 1 } as T;
       },
       exec: vi.fn(async (sql: string) => {
-        if (sql.includes("SET agent_meta = json_remove")) {
+        if (sql.includes("SET agent_meta = json_set")) {
           markerAttempts += 1;
           if (markerAttempts === 1) throw busy;
         }

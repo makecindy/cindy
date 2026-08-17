@@ -2810,11 +2810,29 @@ export class PiAgent extends BaseAgent {
             if (resp.command !== command.type) {
               throw new Error('pi prompt rejection response missing matching command');
             }
+            if (typeof releaseVendorDispatchLease === 'function') {
+              try {
+                await releaseVendorDispatchLease('confirmed-undispatched');
+              } catch (error) {
+                deps.logger.warn('Pi explicit rejection cleanup settlement failed', {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
             throw new TurnDispatchRejectedError(
               `pi prompt rejected before acceptance: ${resp.error ?? 'unknown'}`,
             );
           }
           providerAccepted = true;
+          if (typeof releaseVendorDispatchLease === 'function') {
+            try {
+              await releaseVendorDispatchLease('accepted');
+            } catch (error) {
+              deps.logger.warn('Pi accepted dispatch cleanup settlement failed', {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
           await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
         } catch (err) {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表

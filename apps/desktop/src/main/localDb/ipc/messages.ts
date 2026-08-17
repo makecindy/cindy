@@ -61,6 +61,27 @@ type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
 type DataOwnerBroadcastScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>;
 
+function hasReusableOrcaPreVendorMarker(
+  row: MessageRow | undefined,
+  expectedTeamId: string,
+): boolean {
+  if (!row?.agentMeta) return false;
+  try {
+    const marker = (JSON.parse(row.agentMeta) as AgentMeta).orcaPreVendorCleanup;
+    return marker?.teamId === expectedTeamId && marker.phase !== 'submitted';
+  } catch {
+    return false;
+  }
+}
+
+function throwOrcaSubmittedMessageConflict(teamId: string, clientId: string): never {
+  const error = new Error(
+    `ORCA_MESSAGE_ALREADY_SUBMITTED: team ${teamId} message ${clientId} may already be executing`,
+  ) as Error & { code?: string };
+  error.code = 'TURN_DISPATCH_UNCONFIRMED';
+  throw error;
+}
+
 function captureOwnerBroadcastScope(): DataOwnerBroadcastScope | null {
   try {
     const capture = broadcastTap.captureDataOwnerBroadcastScope;
@@ -1071,6 +1092,10 @@ export async function rewindOrcaPreVendorCleanupRows(
         AND rewind_at IS NULL
         AND session_id IN (${placeholders})
         AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?
+        AND COALESCE(
+              json_extract(agent_meta, '$.orcaPreVendorCleanup.phase'),
+              'pre-vendor'
+            ) = 'pre-vendor'
       RETURNING session_id AS sessionId, client_id AS clientId`,
     [Date.now(), ...uniqueSessionIds, teamId],
   );
@@ -1438,6 +1463,8 @@ export async function createMessage(
           existingAfterGuard &&
           actual === expected &&
           orcaTeamActive &&
+          (!orcaGuarded ||
+            hasReusableOrcaPreVendorMarker(existingAfterGuard, expectedOrcaTeamId!)) &&
           existingAfterGuard.rewindAt === null &&
           (expected === null || existingAfterGuard.createdAt > expected)
         ) {
@@ -1455,6 +1482,9 @@ export async function createMessage(
           throw new Error(
             `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
           );
+        }
+        if (existingAfterGuard && orcaGuarded) {
+          throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
         }
         throw new Error('Message insert skipped without a clear-boundary change');
       }
@@ -1490,13 +1520,20 @@ export async function createMessage(
           .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
           .limit(1);
         const orcaTeamActive = await isExpectedOrcaTeamActive();
-        if (existingAfterGuard?.rewindAt === null && orcaTeamActive) {
+        if (
+          existingAfterGuard?.rewindAt === null &&
+          orcaTeamActive &&
+          hasReusableOrcaPreVendorMarker(existingAfterGuard, expectedOrcaTeamId!)
+        ) {
           return messageToCamel(existingAfterGuard);
         }
         if (!orcaTeamActive) {
           throw new Error(
             `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
           );
+        }
+        if (existingAfterGuard) {
+          throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
         }
         throw new Error('Message insert skipped without an Orca lifecycle change');
       }
@@ -1522,6 +1559,8 @@ export async function createMessage(
         existingAfterError &&
         actual === expected &&
         orcaTeamActive &&
+        (!orcaGuarded ||
+          hasReusableOrcaPreVendorMarker(existingAfterError, expectedOrcaTeamId!)) &&
         existingAfterError.rewindAt === null &&
         (expected === null || existingAfterError.createdAt > expected)
       ) {
@@ -1540,10 +1579,15 @@ export async function createMessage(
           `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
         );
       }
+      if (existingAfterError && orcaGuarded) {
+        throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
+      }
     } else if (orcaGuarded && !(await isExpectedOrcaTeamActive())) {
       throw new Error(
         `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
       );
+    } else if (orcaGuarded && after[0]) {
+      throwOrcaSubmittedMessageConflict(expectedOrcaTeamId!, body.clientId);
     } else if (after.length > 0) {
       return messageToCamel(after[0]);
     }
