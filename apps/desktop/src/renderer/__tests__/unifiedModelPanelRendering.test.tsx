@@ -423,6 +423,42 @@ describe('统一面板 · 会话内形态', () => {
     // codex 那条目录条目的默认档是 high。
     expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high');
   });
+
+  /**
+   * 引擎口径分裂 = 跨引擎**待切换意图期**(2026-08-17 review):ChatInput 在意图登记后把
+   * `currentAgent` 换成意图目标,而 vendorKey(→ liveAgentKind)仍是旧引擎。面板的
+   * live / keep / pinned 必须统一采用 sessionAgent —— 混用会把意图中的目标模型画成旧
+   * 引擎:三元组显示旧引擎、浮层摆出旧引擎的档位集合(cc 有 medium),而意图期的深度 /
+   * Fast 回调按**目标**引擎(codex 无 medium)校验,用户点的档位被静默回落。
+   */
+  it('sessionAgent 与 liveAgentKind 分裂(意图期)时以 sessionAgent 为准解析选中行与浮层', async () => {
+    const onEffortChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter,
+      // 旧引擎身份:vendorKey 在真切换落地前仍是 cc → liveAgentKind='claude-code'。
+      vendorKey: 'cc',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange,
+    });
+    // 选中行在(keepModel 按目标引擎命中)且三元组按目标引擎(Codex)显示。
+    const row = rowFor('GPT-5.5');
+    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(row.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Codex');
+    // 浮层档位集合是 codex 那格(low/high):low 右移一格直接到 high,不经过 cc 才有的
+    // medium;live 回调收到的就是目标引擎真实支持的档。
+    await act(async () => {
+      fireEvent.pointerEnter(row);
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+  });
 });
 
 /**

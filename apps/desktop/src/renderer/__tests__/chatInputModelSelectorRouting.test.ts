@@ -151,6 +151,22 @@ describe('ChatInput model source switching wiring', () => {
   });
 
   /**
+   * 待切换意图期的引擎口径(2026-08-17 review):跨引擎意图登记后、真切换落地前,
+   * activeModel / activeEffort / fastMode / activeProviderId 展示的全是意图目标值,统一面板
+   * 的 currentAgent 必须同口径取**意图目标** —— 钉在旧 vendorKey 会让浮层摆出旧引擎的
+   * 档位集合,而意图期的回调(performAgentSwitch(intent.target, …))按目标能力校验,
+   * 用户点的档位被静默回落。
+   */
+  it('prefers the pending switch intent target as the unified panel session agent', () => {
+    expect(chatInputSource).toContain(
+      'const intentTargetAgent = agentSwitchIntent?.target ?? null;',
+    );
+    expect(chatInputSource).toContain(
+      'const currentAgent = intentTargetAgent ?? vendorKeyToAgentKind(vendorKey);',
+    );
+  });
+
+  /**
    * 会话收藏锚点的记录口径(2026-08-17 review 第三轮 G4 + 第四轮 K3)。
    * 两条都得锁住:**真成功才记**(取消 / 事务失败时这次选择根本没发生),以及**记的是入参
    * 里的 uid + 事务后的目标值** —— 跨引擎编辑一条收藏会连带换引擎与 wire id,拿旧值记会让

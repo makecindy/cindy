@@ -316,8 +316,11 @@ export function UnifiedModelPanel({
   const predicatesRef = useRef({ isVisible, excludeProvider, excludeModel });
   predicatesRef.current = { isVisible, excludeProvider, excludeModel };
   const agentsKey = agents ? agents.join(',') : 'all';
-  // 「正在用的引擎」的单一口径:会话内以 sessionAgent 为准(已确认的会话引擎;liveAgentKind
-  // 在元数据未到时可能回退成 cc),草稿才用 liveAgentKind(= 草稿 vendor)。选中行豁免
+  // 「正在用的引擎」的单一口径:会话内以 sessionAgent 为准(已确认的会话引擎 ⊕ **待切换
+  // 意图目标** —— 调用方 ChatInput 在跨引擎意图登记后把 currentAgent 换成意图目标,
+  // 2026-08-17 review:意图期内 selected.modelId / effort / fast 全是目标值,引擎口径不跟上
+  // 会把目标模型画成旧引擎、浮层摆出旧引擎档位而回调写目标引擎;liveAgentKind 在元数据
+  // 未到时可能回退成 cc),草稿才用 liveAgentKind(= 草稿 vendor)。选中行豁免
   // (keepModel.agent)、isLiveRow 与选中行的 forceEngine 必须用**同一个**口径,否则强制显示
   // 出来的引擎反而让 isLiveRow 判不中(2026-08-14 测试当场抓到)。
   const liveEngineAgent = sessionAgent ?? liveAgentKind;

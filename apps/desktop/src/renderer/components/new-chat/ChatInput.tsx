@@ -6059,7 +6059,7 @@ export function ChatInput({
   // 旧的两步分段(先切引擎 tab、再选模型)在统一面板下不渲染,取而代之的是
   // 「同引擎视图默认 + 显式跨引擎入口 + 行浮层引擎胶囊」。**执行链路一个字没变**:
   // 跨引擎选中仍然是 confirmAgentBrowseSwitch(同一份确认与「不再提示」偏好)
-  // → performAgentSwitch(意图登记、上下文容量护栏、fastMode 不跨引擎带入,全在那边)。
+  // → performAgentSwitch(意图登记与上下文容量护栏全在那边)。
   //
   // Fast 与 effort 同规则:面板交出来的 `fast` 是按**目标引擎**解析并过完能力门控的值
   // (行记忆 / 收藏副本 / 恢复推荐的显式关),那是用户看着点下去的配置,显式传进
@@ -6072,10 +6072,21 @@ export function ChatInput({
   // `modelId` 在契约上**已经是目标引擎的 wire model id**(面板按
   // `capabilities[targetAgent].wireModelId` 交出来)。这里对它零加工直接进切换事务 ——
   // 任何"顺手归一化 / 加前缀"都会让 SET_MODEL 落一个目标引擎目录里不存在的 id。
+  //
+  // `currentAgent` = **待切换意图目标优先**(2026-08-17 review):跨引擎意图登记后、真切换
+  // 落地前,activeModel / activeEffort / fastMode / activeProviderId 展示的全是意图目标值,
+  // 面板的 live / keep / pinned 引擎必须用同一口径 —— 仍取旧 vendorKey 会把意图中的目标
+  // 模型画成旧引擎:浮层摆出旧引擎的档位集合,而意图期的深度 / Fast 回调
+  // (performAgentSwitch(intent.target, …))按**目标**能力校验,用户选的旧引擎档位被静默
+  // 回落。写侧本就全部落在意图目标上(performModelChange / performProviderChange /
+  // handleEffortChange / handleFastModeChange 的意图分支),这里只是让显示端对齐;
+  // composerEngineMarkVendor / 锚点派生校验早已同口径。意图清除(发送后 patched 回流)时
+  // vendorKey 收敛成同一个值,口径无缝交回。
+  const intentTargetAgent = agentSwitchIntent?.target ?? null;
   const sessionEngineFilter = useMemo(() => {
     if (!unifiedModelPanelEnabled) return undefined;
     if (!sessionId || !vendorKey || remoteHostId || !sessionAgentSwitchSupported) return undefined;
-    const currentAgent = vendorKeyToAgentKind(vendorKey);
+    const currentAgent = intentTargetAgent ?? vendorKeyToAgentKind(vendorKey);
     if (!currentAgent) return undefined;
     return {
       currentAgent,
@@ -6140,6 +6151,7 @@ export function ChatInput({
     unifiedModelPanelEnabled,
     sessionId,
     vendorKey,
+    intentTargetAgent,
     remoteHostId,
     sessionAgentSwitchSupported,
     confirmAgentBrowseSwitch,
