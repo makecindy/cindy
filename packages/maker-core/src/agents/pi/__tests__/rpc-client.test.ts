@@ -74,6 +74,20 @@ describe('PiRpcProcess response envelope validation', () => {
     await expect(pending.response).resolves.toMatchObject({ success: true });
   });
 
+  it('rejects submission when the RPC timeout beats a stalled transport write', async () => {
+    const { transport } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.requestWithSubmission(
+      { type: 'prompt', message: 'blocked' },
+      { timeoutMs: 5 },
+    );
+
+    await Promise.all([
+      expect(pending.submitted).rejects.toThrow('pi rpc timeout after 5ms: prompt'),
+      expect(pending.response).rejects.toThrow('pi rpc timeout after 5ms: prompt'),
+    ]);
+  });
+
   it('resolves a well-formed response (success boolean + matching command)', async () => {
     const { transport, emitLine } = makeFakeTransport();
     const { proc } = makeProc({ transport });

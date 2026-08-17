@@ -86,6 +86,8 @@ export class PiRpcProcess {
   private pending = new Map<string, {
     resolve: (resp: PiRpcResponse) => void;
     reject: (err: Error) => void;
+    resolveSubmitted: () => void;
+    rejectSubmitted: (err: Error) => void;
     timer: NodeJS.Timeout;
     /** 发送命令的 type —— 响应 envelope 校验用(轮 40-w4-t4 CRITICAL)。 */
     commandType: string;
@@ -157,31 +159,48 @@ export class PiRpcProcess {
       return { submitted: failed, response: failed };
     }
 
-    let submitted!: Promise<void>;
+    let resolveSubmitted!: () => void;
+    let rejectSubmitted!: (error: Error) => void;
+    const submitted = new Promise<void>((resolve, reject) => {
+      resolveSubmitted = resolve;
+      rejectSubmitted = reject;
+    });
     const response = new Promise<PiRpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`pi rpc timeout after ${timeoutMs}ms: ${String(command.type)}`));
+        if (!this.pending.delete(id)) return;
+        const error = new Error(
+          `pi rpc timeout after ${timeoutMs}ms: ${String(command.type)}`,
+        );
+        rejectSubmitted(error);
+        reject(error);
       }, timeoutMs);
       this.pending.set(id, {
         resolve,
         reject,
+        resolveSubmitted,
+        rejectSubmitted,
         timer,
         commandType: typeof command.type === 'string' ? command.type : '',
       });
+      let transportSubmission: Promise<void>;
       try {
-        submitted = this.transport.writeLine(payload);
+        transportSubmission = this.transport.writeLine(payload);
       } catch (error) {
-        submitted = Promise.reject(error);
+        transportSubmission = Promise.reject(error);
       }
-      submitted.catch((err: unknown) => {
-        const entry = this.pending.get(id);
-        if (entry) {
-          clearTimeout(entry.timer);
-          this.pending.delete(id);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
+      void transportSubmission.then(
+        () => resolveSubmitted(),
+        (err: unknown) => {
+          const error = err instanceof Error ? err : new Error(String(err));
+          rejectSubmitted(error);
+          const entry = this.pending.get(id);
+          if (entry) {
+            clearTimeout(entry.timer);
+            this.pending.delete(id);
+            reject(error);
+          }
+        },
+      );
     });
     return { submitted, response };
   }
@@ -260,6 +279,9 @@ export class PiRpcProcess {
       const id = typeof resp.id === 'string' ? resp.id : undefined;
       const entry = id ? this.pending.get(id) : undefined;
       if (id && entry) {
+        // A response proves Pi received the command even if a custom transport
+        // has not settled its local write callback yet.
+        entry.resolveSubmitted();
         // 轮 40-w4-t4 CRITICAL:response envelope 集中校验 —— success 必须是
         // boolean;command 若存在必须匹配该 pending request 的 command.type。
         // 否则畸形/语义失败的响应会被调用方当成成功(如 get_state 失败被
@@ -304,6 +326,7 @@ export class PiRpcProcess {
   private failAllPending(err: Error): void {
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
+      entry.rejectSubmitted(err);
       entry.reject(err);
     }
     this.pending.clear();

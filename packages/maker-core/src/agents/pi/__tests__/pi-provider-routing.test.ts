@@ -1636,6 +1636,31 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('releases the dispatch lease when Pi transport submission rejects', async () => {
+    captured.submissionHandler = async (command) => {
+      if (command.type === 'prompt') throw new Error('pi rpc timeout after 5ms: prompt');
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'submission-timeout-lease',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+    const order: string[] = [];
+
+    await expect(handle.send(
+      { type: 'user', content: 'blocked' },
+      {
+        acquireVendorDispatchLease: async () => {
+          order.push('acquire');
+          return () => order.push('release');
+        },
+      },
+    )).rejects.toThrow('pi rpc timeout after 5ms: prompt');
+    expect(order).toEqual(['acquire', 'release']);
+    await handle.close();
+  });
+
   it('closes the Pi process if tightening a persisted Full-access file fails', async () => {
     const fsp = await import('node:fs');
     const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));

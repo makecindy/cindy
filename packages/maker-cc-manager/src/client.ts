@@ -70,6 +70,7 @@ export class RpcClientError extends Error {
 interface PendingEntry {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
+  resolveSubmitted: () => void;
   rejectSubmitted: (err: Error) => void;
   timer?: NodeJS.Timeout;
 }
@@ -176,12 +177,15 @@ export class RpcClient {
       const entry: PendingEntry = {
         resolve: resolve as (v: unknown) => void,
         reject,
+        resolveSubmitted,
         rejectSubmitted,
       };
       if (opts.timeoutMs && opts.timeoutMs > 0) {
         entry.timer = setTimeout(() => {
           if (this.pending.delete(id)) {
-            reject(new Error(`RPC ${method} timed out after ${opts.timeoutMs}ms`));
+            const error = new Error(`RPC ${method} timed out after ${opts.timeoutMs}ms`);
+            rejectSubmitted(error);
+            reject(error);
           }
         }, opts.timeoutMs);
       }
@@ -395,6 +399,9 @@ export class RpcClient {
     }
     this.pending.delete(msg.id);
     if (entry.timer) clearTimeout(entry.timer);
+    // A correlated response proves the request crossed the transport even if
+    // a custom Duplex has not invoked its write callback yet.
+    entry.resolveSubmitted();
     if (msg.error) {
       entry.reject(new RpcClientError(msg.error));
     } else {
