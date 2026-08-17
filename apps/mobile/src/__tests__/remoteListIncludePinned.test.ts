@@ -17,7 +17,7 @@ describe('mobile remote session bootstrap', () => {
 
     expect(detailSource).toContain('scheduleEventSnapshot.scheduleListVersion === 0');
     expect(detailSource).toContain('scheduleEventSnapshot.unreadClearVersion === 0');
-    expect(detailSource).toContain('{ force: true }');
+    expect(detailSource).toContain('{ force: true, scopeKey }');
     expect(detailSource).toContain('scheduleEventSnapshot.scheduleListVersion,');
     expect(detailSource).toContain('scheduleEventSnapshot.unreadClearVersion,');
   });

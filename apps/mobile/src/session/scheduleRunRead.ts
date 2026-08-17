@@ -25,7 +25,10 @@ export async function markSessionScheduleRunsRead(
   sessionId: string,
 ): Promise<string[]> {
   if (!sessionId) return [];
-  const index = await loadSessionScheduleIndex(maker, { throwOnTransientRunListError: true });
+  const index = await loadSessionScheduleIndex(maker, {
+    throwOnTransientRunListError: true,
+    sessionIds: [sessionId],
+  });
   const unreadRunIds = index.get(sessionId)?.unreadRunIds ?? [];
   if (unreadRunIds.length === 0) return [];
   // 单个永久失败不阻塞其它 run;瞬态失败需要抛出,让外层 retry 重新探测并补标。

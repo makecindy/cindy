@@ -128,6 +128,12 @@ export interface RemoteScheduleRun {
   id: string;
   scheduleId: string;
   sessionId?: string;
+  /** Compact sidebar snapshot row that only records session ownership. */
+  associationOnly?: boolean;
+  /** Only scheduler-created sessions may use an association to survive a later target rebind. */
+  schedulerGeneratedAssociation?: boolean;
+  /** Aggregate binding status retained when compact emits one association per session. */
+  associationAllSchedulesStopped?: boolean;
   firedAt?: RemoteTimestamp;
   finishedAt?: RemoteTimestamp;
   status: RemoteScheduleRunStatus;

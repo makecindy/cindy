@@ -221,15 +221,32 @@ const SCHEDULER_DDL = [
   `,
 ];
 
-function createStorageHarness() {
+interface CapturedQuery {
+  query: string;
+  params: unknown[];
+}
+
+function createStorageHarness(queryLog?: CapturedQuery[]) {
   const sqlite = new Database(':memory:');
   sqlite.pragma('foreign_keys = ON');
   for (const statement of SCHEDULER_DDL) sqlite.exec(statement);
 
-  const db = drizzle(sqlite, { schema }) as SchedulerDrizzleDb;
+  const db = drizzle(sqlite, {
+    schema,
+    ...(queryLog ? {
+      logger: {
+        logQuery(query: string, params: unknown[]) {
+          queryLog.push({ query, params });
+        },
+      },
+    } : {}),
+  }) as SchedulerDrizzleDb;
   return {
     close: () => sqlite.close(),
     db,
+    explain: (captured: CapturedQuery) => sqlite
+      .prepare(`EXPLAIN QUERY PLAN ${captured.query}`)
+      .all(...captured.params) as Array<{ detail: string }>,
     storage: new DrizzleScheduleStorage(() => db),
   };
 }
@@ -491,6 +508,185 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       const full = await harness.storage.listSidebarIndexRuns();
       expect(full).toHaveLength(1282);
       expect(full.some((run) => run.associationOnly === true)).toBe(false);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('bounds old compact requests before reading a 10k binding table and scopes new requests', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-10k-bindings', name: '10k bindings' });
+    const tieSchedule = baseSchedule({
+      id: 'zz-sch-10k-tie',
+      name: 'tie winner',
+      status: 'paused',
+    });
+    try {
+      await harness.storage.insert(schedule);
+      await harness.storage.insert(tieSchedule);
+      harness.db.run(sql`
+        WITH RECURSIVE numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM numbers WHERE value < 10000
+        )
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        SELECT 'bound-session-' || value, 'generated ' || value, 'scheduler', value, value
+        FROM numbers
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+        SELECT ${schedule.id}, id, updated_at FROM sessions WHERE id LIKE 'bound-session-%'
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+        VALUES (${tieSchedule.id}, 'bound-session-1', 1)
+      `);
+
+      const legacyCompact = await harness.storage.listSidebarIndexRuns({ compact: true });
+      expect(legacyCompact).toHaveLength(200);
+      expect(legacyCompact.every((run) => run.associationOnly === true)).toBe(true);
+      expect(legacyCompact.some((run) => run.sessionId === 'bound-session-10000')).toBe(true);
+      expect(legacyCompact.some((run) => run.sessionId === 'bound-session-1')).toBe(false);
+
+      const requested = Array.from({ length: 200 }, (_, index) => `bound-session-${index + 1}`);
+      const scoped = await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: requested,
+      });
+      expect(scoped).toHaveLength(200);
+      expect(new Set(scoped.map((run) => run.sessionId))).toEqual(new Set(requested));
+      expect(scoped.find((run) => run.sessionId === 'bound-session-1')).toMatchObject({
+        scheduleId: tieSchedule.id,
+        associationAllSchedulesStopped: false,
+      });
+      await expect(harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: Array.from({ length: 201 }, (_, index) => `too-many-${index}`),
+      })).rejects.toThrow(/exceeds 200/);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('uses window ranking for a deterministic top 50 from 10k unread runs', async () => {
+    const queryLog: CapturedQuery[] = [];
+    const harness = createStorageHarness(queryLog);
+    const schedule = baseSchedule({ id: 'sch-window-10k', name: 'window 10k' });
+    try {
+      await harness.storage.insert(schedule);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES ('sess-window-10k', 'window history', 'scheduler', 1, 1)
+      `);
+      harness.db.run(sql`
+        WITH RECURSIVE numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM numbers WHERE value < 10000
+        )
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status)
+        SELECT 'window-unread-' || value, ${schedule.id}, 'sess-window-10k', value, 'failed'
+        FROM numbers
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status)
+        VALUES
+          ('window-running-old', ${schedule.id}, 'sess-window-10k', 10001, 'running'),
+          ('window-running-new', ${schedule.id}, 'sess-window-10k', 10002, 'running')
+      `);
+
+      queryLog.length = 0;
+      const compact = await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: ['sess-window-10k'],
+      });
+      const unread = compact.filter((run) => run.status === 'failed');
+      const running = compact.filter((run) => run.status === 'running');
+      expect(unread).toHaveLength(50);
+      expect(unread.map((run) => run.runId)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `window-unread-${10000 - index}`),
+      );
+      expect(running.map((run) => run.runId)).toEqual(['window-running-new']);
+
+      const rankedRunQuery = queryLog.find(({ query }) => query.includes('compact_ranked_runs'));
+      expect(rankedRunQuery).toBeDefined();
+      expect(rankedRunQuery?.query.toLowerCase()).toContain('row_number() over');
+      const plan = harness.explain(rankedRunQuery!);
+      expect(plan.some(({ detail }) => /co-routine compact_ranked_runs/i.test(detail))).toBe(true);
+      expect(plan.some(({ detail }) => /correlated scalar subquery/i.test(detail))).toBe(false);
+    } finally {
+      harness.close();
+    }
+  }, 30_000);
+
+  it('keeps only valid compact bindings and recognizes strict legacy-generated sessions', async () => {
+    const harness = createStorageHarness();
+    const legacy = baseSchedule({ id: 'sch-legacy-binding', name: 'legacy binding', status: 'paused' });
+    const nonLegacy = baseSchedule({ id: 'sch-prefix-not-legacy', name: 'not legacy' });
+    const stale = baseSchedule({ id: 'sch-stale-manual', name: 'stale manual' });
+    const current = baseSchedule({
+      id: 'sch-current-manual',
+      name: 'current manual',
+      status: 'paused',
+    });
+    try {
+      await harness.storage.insert(legacy);
+      await harness.storage.insert(nonLegacy);
+      await harness.storage.insert(stale);
+      await harness.storage.insert(current);
+      enableLegacySessionFallback(harness, legacy.id);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-old-prefix', '[Schedule] legacy binding', 'desktop', 1, 1),
+          ('sess-fake-prefix', '[Schedule] not legacy', 'desktop', 1, 1),
+          ('sess-lower-prefix', '[schedule] legacy binding', 'desktop', 1, 1),
+          ('sess-generated-source', 'generated without prefix', 'scheduler', 1, 1),
+          ('sess-ordinary', 'ordinary desktop', 'desktop', 1, 1)
+      `);
+      harness.db.run(sql`
+        UPDATE schedules SET target_session_id = 'sess-ordinary'
+        WHERE id = ${current.id}
+      `);
+      harness.db.run(sql`
+        INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+        VALUES
+          (${legacy.id}, 'sess-old-prefix', 10),
+          (${nonLegacy.id}, 'sess-fake-prefix', 10),
+          (${legacy.id}, 'sess-lower-prefix', 10),
+          (${stale.id}, 'sess-generated-source', 10),
+          (${stale.id}, 'sess-ordinary', 20),
+          (${current.id}, 'sess-ordinary', 10)
+      `);
+
+      const compact = await harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: [
+          'sess-old-prefix',
+          'sess-fake-prefix',
+          'sess-lower-prefix',
+          'sess-generated-source',
+          'sess-ordinary',
+        ],
+      });
+      expect(compact.map((run) => run.sessionId).sort()).toEqual([
+        'sess-generated-source',
+        'sess-old-prefix',
+        'sess-ordinary',
+      ]);
+      expect(compact.find((run) => run.sessionId === 'sess-old-prefix')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(compact.find((run) => run.sessionId === 'sess-generated-source')).toMatchObject({
+        schedulerGeneratedAssociation: true,
+      });
+      expect(compact.find((run) => run.sessionId === 'sess-ordinary')).toMatchObject({
+        scheduleId: current.id,
+        associationAllSchedulesStopped: true,
+      });
+      expect(compact.find((run) => run.sessionId === 'sess-ordinary')?.schedulerGeneratedAssociation)
+        .toBeUndefined();
     } finally {
       harness.close();
     }
@@ -1509,7 +1705,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         INSERT INTO sessions (
           id, title, source, workspace_kind, working_dir, created_at, updated_at, total_cost_usd
         ) VALUES (
-          'sess-legacy-owner', '[Schedule] weekly summary', 'scheduler', 'project', '/repo',
+          'sess-legacy-owner', '[Schedule] weekly summary', 'desktop', 'project', '/repo',
           ${legacySchedule.createdAt + 1}, ${legacySchedule.createdAt + 2}, 4.25
         )
       `);
@@ -1522,6 +1718,17 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         }),
       ]);
       await expect(harness.storage.listRuns(duplicate.id)).resolves.toEqual([]);
+      await expect(harness.storage.listSidebarIndexRuns({
+        compact: true,
+        sessionIds: ['sess-legacy-owner'],
+      })).resolves.toEqual([
+        expect.objectContaining({
+          scheduleId: legacySchedule.id,
+          sessionId: 'sess-legacy-owner',
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+        }),
+      ]);
       await expect(harness.storage.listSidebarIndexRuns()).resolves.toEqual([
         expect.objectContaining({
           scheduleId: legacySchedule.id,

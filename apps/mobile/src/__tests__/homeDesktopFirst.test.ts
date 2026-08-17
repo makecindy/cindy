@@ -215,7 +215,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('loadDeviceIdentityCache()');
     expect(source).toContain('reconcileDeviceIdentities(');
     expect(source).toContain('saveDeviceIdentityCache(result.cache)');
-    expect(source).toContain('loadDeviceSessionScheduleIndex(deviceId, invoke)');
+    expect(source).toContain('loadDeviceSessionScheduleIndex(deviceId, invoke, sessionIds)');
     expect(source).toContain('replaceSessionScheduleIndexEntries(');
     expect(source).toContain("invoke<unknown[]>(device.deviceId, 'maker:list-active', [])");
     expect(source).toContain('if (isOptionalActiveSessionSnapshotError(err)) return null;');

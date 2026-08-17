@@ -23,7 +23,14 @@ vi.mock('../../agent-island/service.js', () => ({
   getAgentIslandService: () => null,
 }));
 
-import { __resetReadinessForTest, registerScheduleHandlers, setSchedulerReady } from '../schedule';
+import {
+  __resetReadinessForTest,
+  parseCompactSidebarIndexRequest,
+  registerScheduleHandlers,
+  serializeCompactSidebarIndexRuns,
+  setSchedulerReady,
+} from '../schedule';
+import { isIpcErrorCode } from '../../../shared/ipc-errors';
 
 beforeEach(() => {
   h.ipcHandle.mockClear();
@@ -73,7 +80,7 @@ describe('schedule sidebar index compact IPC', () => {
           readAt: fullRow.readAt,
         },
       ],
-      inflightRunIds: ['running-1'],
+      inflightRunIds: [],
     });
     expect(storage.listSidebarIndexRuns).toHaveBeenLastCalledWith({ compact: true });
 
@@ -82,5 +89,37 @@ describe('schedule sidebar index compact IPC', () => {
       inflightRunIds: ['running-1'],
     });
     expect(storage.listSidebarIndexRuns).toHaveBeenLastCalledWith();
+  });
+
+  it('strictly validates, deduplicates and caps compact session IDs', () => {
+    expect(parseCompactSidebarIndexRequest({
+      compact: true,
+      sessionIds: ['a', 'a', 'b'],
+    })).toEqual({ compact: true, sessionIds: ['a', 'b'] });
+    expect(() => parseCompactSidebarIndexRequest({ compact: true, sessionIds: 'a' }))
+      .toThrow(/sessionIds must be an array/);
+    expect(() => parseCompactSidebarIndexRequest({
+      compact: true,
+      sessionIds: Array.from({ length: 201 }, (_, index) => `s-${index}`),
+    })).toThrow(/at most 200/);
+    expect(() => parseCompactSidebarIndexRequest({
+      compact: true,
+      sessionIds: ['x'.repeat(513)],
+    })).toThrow(/at most 512/);
+  });
+
+  it('rejects the complete UTF-8 snapshot instead of returning a partial result', () => {
+    expect(isIpcErrorCode('PAYLOAD_TOO_LARGE')).toBe(true);
+    const huge = {
+      runId: `run-${'中\\"'.repeat(200)}`,
+      scheduleId: 'schedule-1',
+      scheduleName: 'Daily',
+      scheduleStatus: 'active',
+      sessionId: 'session-1',
+      firedAt: 1,
+      status: 'success',
+    } as const;
+    expect(() => serializeCompactSidebarIndexRuns([huge], 256)).toThrow(/PAYLOAD_TOO_LARGE/);
+    expect(() => serializeCompactSidebarIndexRuns([huge], 4_096)).not.toThrow();
   });
 });

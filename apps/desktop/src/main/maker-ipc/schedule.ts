@@ -259,6 +259,50 @@ export function isCompactSidebarIndexRequest(value: unknown): boolean {
   return Boolean(value && typeof value === 'object' && (value as { compact?: unknown }).compact === true);
 }
 
+export const COMPACT_SIDEBAR_MAX_SESSION_IDS = 200;
+export const COMPACT_SIDEBAR_MAX_SESSION_ID_LENGTH = 512;
+export const COMPACT_SIDEBAR_RESPONSE_BYTE_CAP = 512 * 1024;
+
+export interface CompactSidebarIndexRequest {
+  compact: true;
+  /** undefined is the compatibility shape sent by older Mobile builds. */
+  sessionIds?: string[];
+}
+
+export function parseCompactSidebarIndexRequest(value: unknown): CompactSidebarIndexRequest | null {
+  if (!isCompactSidebarIndexRequest(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (body.sessionIds === undefined) return { compact: true };
+  if (!Array.isArray(body.sessionIds)) {
+    throwIpcError('INVALID_PARAMS', 'sessionIds must be an array');
+  }
+  if (body.sessionIds.length > COMPACT_SIDEBAR_MAX_SESSION_IDS) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      `sessionIds must contain at most ${COMPACT_SIDEBAR_MAX_SESSION_IDS} items`,
+    );
+  }
+  const sessionIds: string[] = [];
+  const seen = new Set<string>();
+  for (const sessionId of body.sessionIds) {
+    if (
+      typeof sessionId !== 'string'
+      || sessionId.length === 0
+      || sessionId.length > COMPACT_SIDEBAR_MAX_SESSION_ID_LENGTH
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `each sessionId must be a non-empty string of at most ${COMPACT_SIDEBAR_MAX_SESSION_ID_LENGTH} characters`,
+      );
+    }
+    if (!seen.has(sessionId)) {
+      seen.add(sessionId);
+      sessionIds.push(sessionId);
+    }
+  }
+  return { compact: true, sessionIds };
+}
+
 export function toCompactSidebarIndexRun(run: ScheduleSidebarIndexRun) {
   return {
     runId: run.runId,
@@ -266,9 +310,38 @@ export function toCompactSidebarIndexRun(run: ScheduleSidebarIndexRun) {
     ...(run.sessionId === undefined ? {} : { sessionId: run.sessionId }),
     firedAt: run.firedAt,
     ...(run.associationOnly === undefined ? {} : { associationOnly: run.associationOnly }),
+    ...(run.schedulerGeneratedAssociation === undefined
+      ? {}
+      : { schedulerGeneratedAssociation: run.schedulerGeneratedAssociation }),
+    ...(run.associationAllSchedulesStopped === undefined
+      ? {}
+      : { associationAllSchedulesStopped: run.associationAllSchedulesStopped }),
     status: run.status,
     ...(run.readAt === undefined ? {} : { readAt: run.readAt }),
   };
+}
+
+export function serializeCompactSidebarIndexRuns(
+  runs: readonly ScheduleSidebarIndexRun[],
+  byteCap = COMPACT_SIDEBAR_RESPONSE_BYTE_CAP,
+): { runs: ReturnType<typeof toCompactSidebarIndexRun>[]; inflightRunIds: [] } {
+  const prioritized = [...runs].sort((left, right) => {
+    const priority = (run: ScheduleSidebarIndexRun) =>
+      run.associationOnly === true ? 0 : run.status === 'running' ? 1 : 2;
+    return priority(left) - priority(right) || right.firedAt - left.firedAt;
+  });
+  const snapshot = {
+    runs: prioritized.map(toCompactSidebarIndexRun),
+    inflightRunIds: [] as [],
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8');
+  if (bytes > byteCap) {
+    throwIpcError(
+      'PAYLOAD_TOO_LARGE',
+      `compact sidebar index is ${bytes} bytes (limit ${byteCap})`,
+    );
+  }
+  return snapshot;
 }
 
 /**
@@ -601,12 +674,16 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   // 不一致并安排一次重查,所以这里不为它忙等重采样。
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_SIDEBAR_INDEX_RUNS, async (_e, request: unknown) =>
     withScheduler(async ({ storage, scheduler }) => {
-      const compact = isCompactSidebarIndexRequest(request);
-      const runs = compact
-        ? await storage.listSidebarIndexRuns({ compact: true })
-        : await storage.listSidebarIndexRuns();
+      const compact = parseCompactSidebarIndexRequest(request);
+      if (compact) {
+        const runs = await storage.listSidebarIndexRuns({
+          compact: true,
+          ...(compact.sessionIds === undefined ? {} : { sessionIds: compact.sessionIds }),
+        });
+        return serializeCompactSidebarIndexRuns(runs);
+      }
       return {
-        runs: compact ? runs.map(toCompactSidebarIndexRun) : runs,
+        runs: await storage.listSidebarIndexRuns(),
         inflightRunIds: scheduler.listInflightRunIds(),
       };
     }),

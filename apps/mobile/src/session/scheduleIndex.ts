@@ -7,9 +7,12 @@ import type { RemoteScheduleRun } from '@/scheduler/types';
 import { buildSessionScheduleIndex, type RemoteSessionScheduleInfo } from '@/session/sessionList';
 
 const SCHEDULE_INDEX_RUN_LIMIT = 50;
+const COMPACT_SIDEBAR_SESSION_BATCH_SIZE = 200;
 
 type LoadSessionScheduleIndexOptions = {
   throwOnTransientRunListError?: boolean;
+  /** Current Mobile list scope; compact transport chunks it into batches of at most 200. */
+  sessionIds?: readonly string[];
   /**
    * 该目标设备当前是否熔断 open(实时查询)。最后一项 listRuns 的超时恰好把
    * 熔断打开时,catch 到的还是原始 INVOKE_TIMEOUT 而非快速失败码——只按错误码
@@ -23,14 +26,63 @@ export async function loadSessionScheduleIndex(
   options: LoadSessionScheduleIndexOptions = {},
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
   const schedules = normalizeScheduleList(await maker.schedule.list());
+  const requestedSessionIds = options.sessionIds === undefined
+    ? undefined
+    : [...new Set(options.sessionIds)];
   if (typeof maker.schedule.listSidebarIndexRuns === 'function') {
     try {
-      const pairs = scheduleRunsByScheduleFromSidebarSnapshot(
-        await maker.schedule.listSidebarIndexRuns(),
-      );
+      const scopes: Array<readonly string[] | undefined> = requestedSessionIds === undefined
+        ? [undefined]
+        : requestedSessionIds.length === 0
+          ? [[]]
+          : Array.from(
+              { length: Math.ceil(requestedSessionIds.length / COMPACT_SIDEBAR_SESSION_BATCH_SIZE) },
+              (_, index) => requestedSessionIds.slice(
+                index * COMPACT_SIDEBAR_SESSION_BATCH_SIZE,
+                (index + 1) * COMPACT_SIDEBAR_SESSION_BATCH_SIZE,
+              ),
+            );
+      const mergedPairs = new Map<string, RemoteScheduleRun[]>();
+      let valid = true;
+      const loadCompactScope = async (
+        scope: readonly string[] | undefined,
+      ): Promise<Map<string, RemoteScheduleRun[]> | null> => {
+        try {
+          return scheduleRunsByScheduleFromSidebarSnapshot(
+            await maker.schedule.listSidebarIndexRuns!(scope),
+          );
+        } catch (error) {
+          // A pathological 200-session batch can still exceed the conservative
+          // Desktop budget. Bisect it before using the much heavier 1+N fallback.
+          if (isPayloadTooLargeError(error) && scope && scope.length > 1) {
+            const middle = Math.ceil(scope.length / 2);
+            const left = await loadCompactScope(scope.slice(0, middle));
+            const right = await loadCompactScope(scope.slice(middle));
+            if (!left || !right) return null;
+            const merged = new Map(left);
+            for (const [scheduleId, runs] of right) {
+              merged.set(scheduleId, [...(merged.get(scheduleId) ?? []), ...runs]);
+            }
+            return merged;
+          }
+          throw error;
+        }
+      };
+      for (const scope of scopes) {
+        const pairs = await loadCompactScope(scope);
+        if (!pairs) {
+          valid = false;
+          break;
+        }
+        for (const [scheduleId, runs] of pairs) {
+          mergedPairs.set(scheduleId, [...(mergedPairs.get(scheduleId) ?? []), ...runs]);
+        }
+      }
       // Older Desktop builds already expose this channel but omit firedAt. A malformed
       // snapshot therefore means "unsupported shape", not an empty schedule index.
-      if (pairs) return buildSessionScheduleIndex(schedules, pairs);
+      if (valid) {
+        return buildSessionScheduleIndex(schedules, mergedPairs, requestedSessionIds);
+      }
     } catch (error) {
       if (!isSidebarIndexUnsupportedError(error)) throw error;
     }
@@ -61,13 +113,14 @@ export async function loadSessionScheduleIndex(
     }
     pairs.push([schedule.id, runs] as const);
   }
-  return buildSessionScheduleIndex(schedules, new Map(pairs));
+  return buildSessionScheduleIndex(schedules, new Map(pairs), requestedSessionIds);
 }
 
 function scheduleRunsByScheduleFromSidebarSnapshot(
   value: unknown,
 ): Map<string, RemoteScheduleRun[]> | null {
   if (!value || typeof value !== 'object') return null;
+  if ((value as { truncated?: unknown }).truncated === true) return null;
   const rawRuns = (value as { runs?: unknown }).runs;
   if (!Array.isArray(rawRuns)) return null;
   const bySchedule = new Map<string, RemoteScheduleRun[]>();
@@ -81,6 +134,15 @@ function scheduleRunsByScheduleFromSidebarSnapshot(
       || typeof row.firedAt !== 'number'
       || !Number.isFinite(row.firedAt)
       || (row.sessionId !== undefined && typeof row.sessionId !== 'string')
+      || (row.associationOnly !== undefined && typeof row.associationOnly !== 'boolean')
+      || (
+        row.schedulerGeneratedAssociation !== undefined
+        && typeof row.schedulerGeneratedAssociation !== 'boolean'
+      )
+      || (
+        row.associationAllSchedulesStopped !== undefined
+        && typeof row.associationAllSchedulesStopped !== 'boolean'
+      )
       || (row.readAt !== undefined && typeof row.readAt !== 'number')
     ) {
       return null;
@@ -89,6 +151,9 @@ function scheduleRunsByScheduleFromSidebarSnapshot(
       id: row.runId,
       scheduleId: row.scheduleId,
       sessionId: row.sessionId,
+      associationOnly: row.associationOnly,
+      schedulerGeneratedAssociation: row.schedulerGeneratedAssociation,
+      associationAllSchedulesStopped: row.associationAllSchedulesStopped,
       firedAt: row.firedAt,
       status: row.status,
       readAt: row.readAt,
@@ -105,7 +170,12 @@ function isSidebarIndexUnsupportedError(error: unknown): boolean {
   return (
     hasRemoteErrorMarker(error, 'CHANNEL_NOT_ALLOWED')
     || hasRemoteErrorMarker(error, 'DEVICE_LINK_CHANNEL_NOT_ALLOWED')
+    || hasRemoteErrorMarker(error, 'PAYLOAD_TOO_LARGE')
   );
+}
+
+function isPayloadTooLargeError(error: unknown): boolean {
+  return hasRemoteErrorMarker(error, 'PAYLOAD_TOO_LARGE');
 }
 
 /**
@@ -134,10 +204,14 @@ interface ScheduleIndexThrottleEntry {
   failedTransient: boolean;
   /** 失败原因是目标设备离线(DEVICE_OFFLINE);仅该设备 presence 恢复时失效。 */
   failedOffline: boolean;
+  /** Session scope that produced this result; different scopes must never share TTL. */
+  scopeKey: string;
+  generation: number;
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
 const scheduleIndexInvalidationVersions = new Map<string, number>();
+const scheduleIndexRequestGenerations = new Map<string, number>();
 
 /**
  * 错误标记匹配:优先结构化 code,兜底 message 文本(review:mobile 各处的
@@ -177,11 +251,18 @@ function isDeviceOfflineError(error: unknown): boolean {
 export function loadSessionScheduleIndexThrottled(
   key: string,
   load: () => Promise<Map<string, RemoteSessionScheduleInfo>>,
-  options: { force?: boolean; ttlMs?: number; failureTtlMs?: number; now?: () => number } = {},
+  options: {
+    force?: boolean;
+    ttlMs?: number;
+    failureTtlMs?: number;
+    now?: () => number;
+    scopeKey?: string;
+  } = {},
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlMs ?? SCHEDULE_INDEX_THROTTLE_TTL_MS;
   const failureTtlMs = options.failureTtlMs ?? SCHEDULE_INDEX_FAILURE_TTL_MS;
+  const scopeKey = options.scopeKey ?? '';
   const existing = scheduleIndexThrottleEntries.get(key);
   if (!options.force && existing) {
     // 熔断恢复旁路(review P1):DEVICE_UNRESPONSIVE 负缓存的存在意义是「open
@@ -193,12 +274,18 @@ export function loadSessionScheduleIndexThrottled(
       existing.failedAt !== null
       && existing.failedUnresponsive
       && !unresponsiveDevicesStore.has(key);
-    const withinTtl = existing.failedAt !== null
-      ? now() - existing.failedAt < failureTtlMs
-      : now() - existing.at < ttlMs;
-    if (withinTtl && !failedUnresponsiveButRecovered) return existing.promise;
+    if (existing.failedAt !== null) {
+      const withinFailureTtl = now() - existing.failedAt < failureTtlMs;
+      // Failure backpressure is device-wide: changing the visible session subset
+      // must not punch through an offline/unresponsive negative cache.
+      if (withinFailureTtl && !failedUnresponsiveButRecovered) return existing.promise;
+    } else if (existing.scopeKey === scopeKey && now() - existing.at < ttlMs) {
+      return existing.promise;
+    }
   }
   const promise = load();
+  const generation = (scheduleIndexRequestGenerations.get(key) ?? 0) + 1;
+  scheduleIndexRequestGenerations.set(key, generation);
   const entry: ScheduleIndexThrottleEntry = {
     at: now(),
     promise,
@@ -206,6 +293,8 @@ export function loadSessionScheduleIndexThrottled(
     failedUnresponsive: false,
     failedTransient: false,
     failedOffline: false,
+    scopeKey,
+    generation,
   };
   scheduleIndexThrottleEntries.set(key, entry);
   promise.then(
@@ -285,15 +374,37 @@ export function getScheduleIndexInvalidationVersion(deviceId: string): number {
 export function resetScheduleIndexThrottleForTesting(): void {
   scheduleIndexThrottleEntries.clear();
   scheduleIndexInvalidationVersions.clear();
+  scheduleIndexRequestGenerations.clear();
 }
 
 export function loadDeviceSessionScheduleIndex(
   deviceId: string,
   invoke: RemoteInvoke,
+  sessionIds?: readonly string[],
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
   return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }), {
     isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
+    sessionIds,
   });
+}
+
+/** Stable, collision-free cache discriminator for a bounded set of session IDs. */
+export function sessionScheduleIndexScopeKey(sessionIds: readonly string[]): string {
+  return JSON.stringify([...new Set(sessionIds)].sort());
+}
+
+/** Reject a completion from an older scope after the same device starts a newer load. */
+export function getScheduleIndexRequestGeneration(deviceId: string): number {
+  return scheduleIndexRequestGenerations.get(deviceId) ?? 0;
+}
+
+export function isScheduleIndexRequestCurrent(
+  deviceId: string,
+  scopeKey: string,
+  generation: number,
+): boolean {
+  const entry = scheduleIndexThrottleEntries.get(deviceId);
+  return entry?.scopeKey === scopeKey && entry.generation === generation;
 }
 
 export function invalidateRunningSessionScheduleEntries(

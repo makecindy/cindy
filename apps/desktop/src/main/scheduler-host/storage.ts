@@ -14,7 +14,7 @@
  *   - snake↔camel 全部走 `localDb/mapper.ts`，本文件不写字段转换代码。
  */
 
-import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { eq, desc, and, isNull, isNotNull, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
@@ -60,6 +60,8 @@ export interface ScheduleSidebarIndexRun {
   sessionId?: string;
   firedAt: number;
   associationOnly?: boolean;
+  schedulerGeneratedAssociation?: boolean;
+  associationAllSchedulesStopped?: boolean;
   status: ScheduleRun['status'];
   readAt?: number;
 }
@@ -172,7 +174,8 @@ interface LegacyScheduleSessionAlias {
 const LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] ';
 const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
 const PERSISTED_SESSION_BINDING_RUN_ID_PREFIX = 'schedule-session-binding:';
-const COMPACT_UNREAD_RUN_LIMIT_PER_SCHEDULE = 50;
+const COMPACT_UNREAD_RUN_LIMIT_PER_SESSION = 50;
+export const COMPACT_SIDEBAR_SESSION_LIMIT = 200;
 
 const UNREAD_TERMINAL_RUN_STATUSES: ScheduleRun['status'][] = [
   'success',
@@ -192,8 +195,8 @@ function legacyScheduleTitle(name: string): string {
 
 function legacyTitleWhere() {
   return and(
-    eq(sessions.source, 'scheduler'),
-    sql`${sessions.title} LIKE ${`${LEGACY_SCHEDULE_TITLE_PREFIX}%`}`,
+    sql`substr(${sessions.title}, 1, ${LEGACY_SCHEDULE_TITLE_PREFIX.length}) = ${LEGACY_SCHEDULE_TITLE_PREFIX}`,
+    sql`length(trim(substr(${sessions.title}, ${LEGACY_SCHEDULE_TITLE_PREFIX.length + 1}))) > 0`,
   );
 }
 
@@ -325,23 +328,6 @@ function legacyRunFromSession(
     // so old imported history does not create new attention dots.
     readAt: finishedAt,
   };
-}
-
-function limitCompactRealRuns(
-  runs: ScheduleSidebarIndexRun[],
-): ScheduleSidebarIndexRun[] {
-  const running = runs.filter((run) => run.status === 'running');
-  const unread = runs
-    .filter((run) => run.status !== 'running')
-    .sort((left, right) => right.firedAt - left.firedAt);
-  const unreadCounts = new Map<string, number>();
-  const limitedUnread = unread.filter((run) => {
-    const count = unreadCounts.get(run.scheduleId) ?? 0;
-    if (count >= COMPACT_UNREAD_RUN_LIMIT_PER_SCHEDULE) return false;
-    unreadCounts.set(run.scheduleId, count + 1);
-    return true;
-  });
-  return [...running, ...limitedUnread];
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
@@ -610,67 +596,219 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
   /**
    * Sidebar 聚合索引用的轻量 run 列表：
    * - 默认 full 模式返回所有带 sessionId 的真实 run，供 Desktop 本地历史计数与归组。
-   * - compact 模式始终为每个持久绑定返回 associationOnly 项，再只追加全部 running 与
-   *   每个 schedule 最新 50 条未读真实 run，避免设备链路把无上限历史装进单个响应。
+   * - compact 模式为每个请求会话返回最新有效 associationOnly 项，再只追加最新一条
+   *   running 与 50 条未读真实 run；两类都在 SQL window 子查询中先排名后截取。
+   *   scheduler/严格 legacy 会话保留历史绑定，普通手动会话只认当前 targetSessionId。
    * - 两种模式都包含未被现代绑定覆盖的 legacy association；associationOnly 项只表达
    *   归属，不计入真实运行历史。
    */
   async listSidebarIndexRuns(
-    options: { compact?: boolean } = {},
+    options: { compact?: boolean; sessionIds?: readonly string[] } = {},
   ): Promise<ScheduleSidebarIndexRun[]> {
     const db = this.getDb();
+    let compactSessionIds: string[] | undefined;
+    if (options.compact) {
+      if (options.sessionIds !== undefined) {
+        if (options.sessionIds.length > COMPACT_SIDEBAR_SESSION_LIMIT) {
+          throw new Error(
+            `compact sessionIds exceeds ${COMPACT_SIDEBAR_SESSION_LIMIT}`,
+          );
+        }
+        compactSessionIds = [...new Set(options.sessionIds)];
+      } else {
+        // Compatibility for older Mobile builds which only sent `{ compact: true }`.
+        // Bound the implicit scope before touching bindings/runs: compact must never
+        // turn into an all-history query merely because the caller predates sessionIds.
+        compactSessionIds = (await db
+          .select({ id: sessions.id })
+          .from(sessions)
+          .orderBy(desc(sessions.updatedAt))
+          .limit(COMPACT_SIDEBAR_SESSION_LIMIT))
+          .map((row) => row.id);
+      }
+      if (compactSessionIds.length === 0) return [];
+    }
     // 先读绑定、后读真实 run：若两次查询之间刚插入 run，较新的真实 run 查询能
     // 压掉合成项，避免短暂把 running/unread 状态覆盖成已读终态。
-    const bindingRows = await db
-      .select({
-        scheduleId: schedules.id,
-        scheduleName: schedules.name,
-        scheduleStatus: schedules.status,
-        scheduleSource: schedules.source,
-        nextFireAt: schedules.nextFireAt,
-        workingDir: schedules.workingDir,
-        projectConfigId: schedules.projectConfigId,
-        sessionId: scheduleSessionBindings.sessionId,
-        lastRunAt: scheduleSessionBindings.lastRunAt,
-      })
-      .from(scheduleSessionBindings)
-      .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id));
-    const rows = await db
-      .select({
-        runId: scheduleRuns.id,
-        scheduleId: schedules.id,
-        scheduleName: schedules.name,
-        scheduleStatus: schedules.status,
-        scheduleSource: schedules.source,
-        nextFireAt: schedules.nextFireAt,
-        workingDir: schedules.workingDir,
-        projectConfigId: schedules.projectConfigId,
-        sessionId: scheduleRuns.sessionId,
-        firedAt: scheduleRuns.firedAt,
-        status: scheduleRuns.status,
-        readAt: scheduleRuns.readAt,
-      })
-      .from(scheduleRuns)
-      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-      .where(
-        options.compact
-          ? or(
-              eq(scheduleRuns.status, 'running'),
-              and(
-                isNull(scheduleRuns.readAt),
-                inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
-              ),
-            )
-          : or(
-              isNotNull(scheduleRuns.sessionId),
-              and(
-                isNull(scheduleRuns.readAt),
-                inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
-              ),
+    const bindingRows = options.compact
+      ? await (() => {
+          const generatedAssociation = or(
+            eq(sessions.source, 'scheduler'),
+            and(
+              legacyTitleWhere(),
+              eq(schedules.legacySessionFallback, true),
             ),
-      );
+          );
+          const validAssociation = or(
+            generatedAssociation,
+            eq(schedules.targetSessionId, scheduleSessionBindings.sessionId),
+          );
+          const rankedBindings = db
+            .select({
+              scheduleId: sql<string>`${schedules.id}`.as('binding_schedule_id'),
+              scheduleName: sql<string>`${schedules.name}`.as('binding_schedule_name'),
+              scheduleStatus:
+                sql<Schedule['status']>`${schedules.status}`.as('schedule_status'),
+              scheduleSource: sql<string | null>`${schedules.source}`.as('binding_schedule_source'),
+              nextFireAt: sql<number | null>`${schedules.nextFireAt}`.as('binding_next_fire_at'),
+              workingDir: sql<string | null>`${schedules.workingDir}`.as('binding_working_dir'),
+              projectConfigId: sql<string | null>`${schedules.projectConfigId}`.as('binding_project_config_id'),
+              sessionId: sql<string>`${scheduleSessionBindings.sessionId}`.as('binding_session_id'),
+              sessionSource: sql<string>`${sessions.source}`.as('binding_session_source'),
+              lastRunAt: sql<number>`${scheduleSessionBindings.lastRunAt}`.as('binding_last_run_at'),
+              schedulerGeneratedAssociation:
+                sql<number>`CASE WHEN ${generatedAssociation} THEN 1 ELSE 0 END`.as(
+                  'scheduler_generated_association',
+                ),
+              associationAllSchedulesStopped:
+                sql<number>`CASE WHEN max(CASE WHEN ${schedules.status} NOT IN ('paused', 'expired') THEN 1 ELSE 0 END) over (partition by ${scheduleSessionBindings.sessionId}) = 0 THEN 1 ELSE 0 END`.as(
+                  'association_all_schedules_stopped',
+                ),
+              associationRank:
+                sql<number>`row_number() over (partition by ${scheduleSessionBindings.sessionId} order by ${scheduleSessionBindings.lastRunAt} desc, ${scheduleSessionBindings.scheduleId} desc)`.as(
+                  'association_rank',
+                ),
+            })
+            .from(scheduleSessionBindings)
+            .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id))
+            .innerJoin(sessions, eq(scheduleSessionBindings.sessionId, sessions.id))
+            .where(and(
+              inArray(scheduleSessionBindings.sessionId, compactSessionIds ?? []),
+              validAssociation,
+            ))
+            .as('compact_ranked_bindings');
+          return db
+            .select({
+              scheduleId: rankedBindings.scheduleId,
+              scheduleName: rankedBindings.scheduleName,
+              scheduleStatus: rankedBindings.scheduleStatus,
+              scheduleSource: rankedBindings.scheduleSource,
+              nextFireAt: rankedBindings.nextFireAt,
+              workingDir: rankedBindings.workingDir,
+              projectConfigId: rankedBindings.projectConfigId,
+              sessionId: rankedBindings.sessionId,
+              sessionSource: rankedBindings.sessionSource,
+              lastRunAt: rankedBindings.lastRunAt,
+              schedulerGeneratedAssociation: rankedBindings.schedulerGeneratedAssociation,
+              associationAllSchedulesStopped: rankedBindings.associationAllSchedulesStopped,
+            })
+            .from(rankedBindings)
+            .where(eq(rankedBindings.associationRank, 1));
+        })()
+      : (await db
+          .select({
+            scheduleId: schedules.id,
+            scheduleName: schedules.name,
+            scheduleStatus: schedules.status,
+            scheduleSource: schedules.source,
+            nextFireAt: schedules.nextFireAt,
+            workingDir: schedules.workingDir,
+            projectConfigId: schedules.projectConfigId,
+            sessionId: scheduleSessionBindings.sessionId,
+            sessionSource: sessions.source,
+            lastRunAt: scheduleSessionBindings.lastRunAt,
+          })
+          .from(scheduleSessionBindings)
+          .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id))
+          .innerJoin(sessions, eq(scheduleSessionBindings.sessionId, sessions.id)))
+          .map((row) => ({
+            ...row,
+            schedulerGeneratedAssociation: 0,
+            associationAllSchedulesStopped: null,
+          }));
+    const rows = options.compact
+      ? await (() => {
+          const category = sql<string>`CASE WHEN ${scheduleRuns.status} = 'running' THEN 'running' ELSE 'unread' END`;
+          const rankedRuns = db
+            .select({
+              runId: sql<string>`${scheduleRuns.id}`.as('ranked_run_id'),
+              scheduleId: sql<string>`${schedules.id}`.as('ranked_schedule_id'),
+              scheduleName: sql<string>`${schedules.name}`.as('ranked_schedule_name'),
+              scheduleStatus:
+                sql<Schedule['status']>`${schedules.status}`.as('schedule_status'),
+              scheduleSource: sql<string | null>`${schedules.source}`.as('ranked_schedule_source'),
+              nextFireAt: sql<number | null>`${schedules.nextFireAt}`.as('ranked_next_fire_at'),
+              workingDir: sql<string | null>`${schedules.workingDir}`.as('ranked_working_dir'),
+              projectConfigId: sql<string | null>`${schedules.projectConfigId}`.as('ranked_project_config_id'),
+              sessionId: sql<string | null>`${scheduleRuns.sessionId}`.as('ranked_session_id'),
+              firedAt: sql<number>`${scheduleRuns.firedAt}`.as('ranked_fired_at'),
+              status: sql<ScheduleRun['status']>`${scheduleRuns.status}`.as('run_status'),
+              readAt: sql<number | null>`${scheduleRuns.readAt}`.as('ranked_read_at'),
+              category: category.as('run_category'),
+              categoryRank:
+                sql<number>`row_number() over (partition by ${scheduleRuns.sessionId}, ${category} order by ${scheduleRuns.firedAt} desc, ${scheduleRuns.id} desc)`.as(
+                  'category_rank',
+                ),
+            })
+            .from(scheduleRuns)
+            .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+            .where(and(
+              inArray(scheduleRuns.sessionId, compactSessionIds ?? []),
+              or(
+                eq(scheduleRuns.status, 'running'),
+                and(
+                  isNull(scheduleRuns.readAt),
+                  inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
+                ),
+              ),
+            ))
+            .as('compact_ranked_runs');
+          return db
+            .select({
+              runId: rankedRuns.runId,
+              scheduleId: rankedRuns.scheduleId,
+              scheduleName: rankedRuns.scheduleName,
+              scheduleStatus: rankedRuns.scheduleStatus,
+              scheduleSource: rankedRuns.scheduleSource,
+              nextFireAt: rankedRuns.nextFireAt,
+              workingDir: rankedRuns.workingDir,
+              projectConfigId: rankedRuns.projectConfigId,
+              sessionId: rankedRuns.sessionId,
+              firedAt: rankedRuns.firedAt,
+              status: rankedRuns.status,
+              readAt: rankedRuns.readAt,
+            })
+            .from(rankedRuns)
+            .where(or(
+              and(eq(rankedRuns.category, 'running'), lte(rankedRuns.categoryRank, 1)),
+              and(
+                eq(rankedRuns.category, 'unread'),
+                lte(rankedRuns.categoryRank, COMPACT_UNREAD_RUN_LIMIT_PER_SESSION),
+              ),
+            ))
+            .orderBy(
+              sql`${rankedRuns.sessionId}`,
+              sql`${rankedRuns.category}`,
+              desc(rankedRuns.firedAt),
+              desc(rankedRuns.runId),
+            );
+        })()
+      : await db
+          .select({
+            runId: scheduleRuns.id,
+            scheduleId: schedules.id,
+            scheduleName: schedules.name,
+            scheduleStatus: schedules.status,
+            scheduleSource: schedules.source,
+            nextFireAt: schedules.nextFireAt,
+            workingDir: schedules.workingDir,
+            projectConfigId: schedules.projectConfigId,
+            sessionId: scheduleRuns.sessionId,
+            firedAt: scheduleRuns.firedAt,
+            status: scheduleRuns.status,
+            readAt: scheduleRuns.readAt,
+          })
+          .from(scheduleRuns)
+          .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+          .where(or(
+            isNotNull(scheduleRuns.sessionId),
+            and(
+              isNull(scheduleRuns.readAt),
+              inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
+            ),
+          ));
 
-    const allIndexedRuns = rows.map((row) => ({
+    const indexedRuns = rows.map((row) => ({
       runId: row.runId,
       scheduleId: row.scheduleId,
       scheduleName: row.scheduleName,
@@ -684,10 +822,6 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: row.status,
       readAt: row.readAt ?? undefined,
     }));
-    const indexedRuns = options.compact
-      ? limitCompactRealRuns(allIndexedRuns)
-      : allIndexedRuns;
-
     const realRunBindings = new Set(
       indexedRuns
         .map((run) =>
@@ -713,6 +847,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         sessionId: row.sessionId,
         firedAt: row.lastRunAt,
         associationOnly: true,
+        ...(options.compact && row.schedulerGeneratedAssociation === 1
+          ? { schedulerGeneratedAssociation: true }
+          : {}),
+        ...(options.compact
+          ? { associationAllSchedulesStopped: row.associationAllSchedulesStopped === 1 }
+          : {}),
         status: 'success',
         readAt: Math.max(1, row.lastRunAt),
       }));
@@ -732,7 +872,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         updatedAt: sessions.updatedAt,
       })
       .from(sessions)
-      .where(legacyTitleWhere());
+      .where(
+        compactSessionIds
+          ? and(legacyTitleWhere(), inArray(sessions.id, compactSessionIds))
+          : legacyTitleWhere(),
+      );
     const legacyRuns: ScheduleSidebarIndexRun[] = [];
 
     for (const session of legacySessions) {
@@ -760,6 +904,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         sessionId: session.id,
         firedAt: session.updatedAt,
         associationOnly: true,
+        ...(options.compact ? {
+          schedulerGeneratedAssociation: true,
+          associationAllSchedulesStopped:
+            schedule.status === 'paused' || schedule.status === 'expired',
+        } : {}),
         status: 'success',
         // Legacy rows have no schedule_runs.read_at. Treat them as read so old
         // history can group under the real schedule without creating new dots.
