@@ -63,6 +63,7 @@ import {
   type ClaudeSessionBillingRoute,
 } from './claude-session-route-registry.js';
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
+import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
@@ -304,12 +305,14 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (pendingRoute) return pendingRoute;
 
     const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    const applyExclusiveReroute = shouldApplyExclusiveProviderReroute(
+      selectedProviderId,
+      getActiveCatalog().providers,
+    );
     const explicitCustomProvider =
       !!selectedProviderId
       && selectedProviderId !== 'xai'
-      && selectedProviderId !== 'xd'
-      && selectedProviderId !== 'anthropic'
-      && selectedProviderId !== 'openai';
+      && !applyExclusiveReroute;
 
     // ⓪ 订阅直连翻译:model 带 `chatgpt/` / `xai/` 前缀 → 交给本地 responses handler
     //    (localHandler 插槽,进程内直调,不多一跳;它把 Anthropic Messages ↔ OpenAI Responses
@@ -319,14 +322,13 @@ export function createModelRoutingTransform(): RoutingTransform {
     //    放在最前:优先级高于 per-session 供应商与 spawn 默认路由。
     //    ⚠ 本分支是订阅直连的**唯一注册点**:整块摘掉 = 订阅前缀请求 passthrough 到默认上游
     //    (预期 400/502,fail-open),不需要 revert 其它代码。
-    // 内置非 xAI 来源上的裸 Grok 不能偷走 SuperGrok 额度,否则会话仍记着 anthropic/openai/xd。
+    // 非自定义、非 xAI 来源上的裸 Grok 不能偷走 SuperGrok 额度。
     if (
       !piSessionId
       && isExclusiveXaiModelId(wireModel)
       && !wireModel.startsWith(XAI_MODEL_PREFIX)
-      && (selectedProviderId === 'xd'
-        || selectedProviderId === 'anthropic'
-        || selectedProviderId === 'openai')
+      && selectedProviderId
+      && applyExclusiveReroute
     ) {
       return refuseExclusiveXaiDefaultGateway(wireModel);
     }

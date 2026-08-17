@@ -37,6 +37,7 @@ import {
   checkModelRoute,
   materializeExclusiveProviderRoute,
   resolveLenientRoute,
+  shouldApplyExclusiveProviderReroute,
   type ModelRouteGuardOptions,
   type ModelRouteVerdict,
 } from './model-route-guard.js';
@@ -209,6 +210,12 @@ export async function pinExclusiveSessionProvider(
   }
   const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
   return exclusive.kind === 'pin' ? exclusive.providerId : undefined;
+}
+
+export function shouldApplyExclusiveProviderRerouteLive(
+  providerId: string | null | undefined,
+): boolean {
+  return shouldApplyExclusiveProviderReroute(providerId, getActiveCatalog().providers);
 }
 
 /**

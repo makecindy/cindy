@@ -467,13 +467,21 @@ describe('materializeExclusiveProviderRoute', () => {
     const catalog = {
       providers: [
         provider('xd', [model('claude-opus-5')]),
+        provider('anthropic', [model('claude-opus-5')]),
+        provider('openai', [model('gpt-5.5')]),
+        provider('gemini', [model('gemini-3-flash')]),
         {
           ...provider('xai', [model('xai/grok-4.5')]),
           agents: ['claude-code', 'pi'],
         },
       ],
     } as Catalog;
-    return buildRegistry(catalog, connected);
+    return buildRegistry(catalog, {
+      anthropic: true,
+      openai: true,
+      gemini: true,
+      ...connected,
+    });
   }
 
   it('Claude/GPT 双来源保持 keep,不打断默认队列', () => {
@@ -524,19 +532,49 @@ describe('materializeExclusiveProviderRoute', () => {
   it('网关风格 x-ai/ 与自定义供应商不占用独占门', () => {
     expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'x-ai/grok-4.6', null))
       .toEqual({ kind: 'keep' });
-    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'grok-4.6', 'my-litellm'))
+    const mixed = {
+      providers: [
+        provider('xd', [model('claude-opus-5')]),
+        {
+          ...provider('xai', [model('xai/grok-4.5')]),
+          agents: ['claude-code', 'pi'],
+        },
+        provider('gemini', [model('gemini-3-flash')]),
+        provider('my-litellm', [model('grok-4.6')], 'user'),
+      ],
+    } as Catalog;
+    const mixedViews = buildRegistry(mixed, {
+      xd: true,
+      xai: true,
+      gemini: true,
+      'my-litellm': true,
+    });
+    expect(materializeExclusiveProviderRoute(mixedViews, 'claude-code', 'grok-4.6', 'my-litellm'))
+      .toEqual({ kind: 'keep' });
+    expect(materializeExclusiveProviderRoute(mixedViews, 'claude-code', 'grok-4.6', 'gemini'))
+      .toEqual({ kind: 'pin', providerId: 'xai' });
+    expect(materializeExclusiveProviderRoute(mixedViews, 'claude-code', 'grok-4.6', 'unknown-vendor'))
       .toEqual({ kind: 'keep' });
   });
 
   it('SET_MODEL undefined 保持当前 custom 来源,不会改绑 xAI', () => {
     expect(resolveSetModelGuardProviderId(undefined, 'my-litellm')).toBe('my-litellm');
-    expect(resolveExclusiveSetModelReroute(undefined, 'my-litellm', 'xai')).toBeUndefined();
+    expect(resolveExclusiveSetModelReroute(
+      undefined,
+      'my-litellm',
+      'xai',
+      true,
+      [{ id: 'my-litellm', source: 'user' }],
+    )).toBeUndefined();
     expect(resolveExclusiveSetModelReroute(undefined, null, 'xai')).toBe('xai');
     expect(resolveExclusiveSetModelReroute(undefined, 'anthropic', 'xai')).toBe('xai');
     expect(resolveExclusiveSetModelReroute('anthropic', 'anthropic', 'xai')).toBe('xai');
     expect(resolveExclusiveSetModelReroute('xd', null, 'xai')).toBe('xai');
     expect(shouldApplyExclusiveProviderReroute('anthropic')).toBe(true);
-    expect(shouldApplyExclusiveProviderReroute('my-litellm')).toBe(false);
+    expect(shouldApplyExclusiveProviderReroute('gemini')).toBe(true);
+    expect(shouldApplyExclusiveProviderReroute('my-litellm', [{ id: 'my-litellm', source: 'user' }])).toBe(false);
+    expect(shouldApplyExclusiveProviderReroute('gemini', [{ id: 'gemini', source: 'builtin' }])).toBe(true);
+    expect(shouldApplyExclusiveProviderReroute('unknown-vendor', [{ id: 'gemini', source: 'builtin' }])).toBe(false);
     expect(resolveExclusiveSetModelReroute(null, 'my-litellm', 'xai')).toBe('xai');
   });
 
@@ -548,6 +586,8 @@ describe('materializeExclusiveProviderRoute', () => {
         undefined,
         resolveCurrentSetModelProviderId(false, null, 'my-litellm'),
         'xai',
+        true,
+        [{ id: 'my-litellm', source: 'user' }],
       ),
     ).toBeUndefined();
     expect(resolveExclusiveSetModelReroute(undefined, null, 'xai', false)).toBeUndefined();

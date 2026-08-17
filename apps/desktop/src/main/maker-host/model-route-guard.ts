@@ -80,7 +80,7 @@ export function materializeExclusiveProviderRoute(
       && provider.agents.includes(agent),
   );
   if (!xai) {
-    return providerId && !shouldApplyExclusiveProviderReroute(providerId) && providerId !== 'xai'
+    return providerId && !shouldApplyExclusiveProviderReroute(providerId, views) && providerId !== 'xai'
       ? { kind: 'keep' }
       : { kind: 'reject' };
   }
@@ -92,7 +92,7 @@ export function materializeExclusiveProviderRoute(
     return { kind: 'reject' };
   }
   if (providerId === 'xai') return { kind: 'keep' };
-  if (providerId && !shouldApplyExclusiveProviderReroute(providerId)) return { kind: 'keep' };
+  if (providerId && !shouldApplyExclusiveProviderReroute(providerId, views)) return { kind: 'keep' };
   return { kind: 'pin', providerId: 'xai' };
 }
 
@@ -119,35 +119,38 @@ export function resolveExclusiveSetModelReroute(
   currentProviderId: string | null,
   rerouteProviderId: string | undefined,
   currentKnown = true,
+  views?: readonly Pick<ProviderView, 'id' | 'source'>[],
 ): string | null | undefined {
   if (!rerouteProviderId) return requestedProviderId;
   if (!currentKnown) return requestedProviderId;
   if (requestedProviderId === null) return rerouteProviderId;
   if (
     typeof requestedProviderId === 'string'
-    && shouldApplyExclusiveProviderReroute(requestedProviderId)
+    && shouldApplyExclusiveProviderReroute(requestedProviderId, views)
   ) {
     return rerouteProviderId;
   }
   if (
     requestedProviderId === undefined
-    && shouldApplyExclusiveProviderReroute(currentProviderId)
+    && shouldApplyExclusiveProviderReroute(currentProviderId, views)
   ) {
     return rerouteProviderId;
   }
   return requestedProviderId;
 }
 
-/** 内置非 xAI 来源上的独占 Grok 应改绑 SuperGrok;自定义供应商除外。 */
+/** 非用户自定义来源上的独占 Grok 应改绑 SuperGrok。按 catalog source 判定,不维护 ID 名单。 */
 export function shouldApplyExclusiveProviderReroute(
   providerId: string | null | undefined,
+  views?: readonly Pick<ProviderView, 'id' | 'source'>[],
 ): boolean {
-  return (
-    !providerId
-    || providerId === 'xd'
-    || providerId === 'anthropic'
-    || providerId === 'openai'
-  );
+  if (!providerId) return true;
+  if (providerId === 'xai') return false;
+  if (!views) return true;
+  const source = views.find((provider) => provider.id === providerId)?.source;
+  if (source === 'user') return false;
+  if (source) return true;
+  return false;
 }
 
 export interface ModelRouteGuardOptions {

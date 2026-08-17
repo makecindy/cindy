@@ -765,11 +765,11 @@ import {
   resolveCurrentSetModelProviderId,
   resolveExclusiveSetModelReroute,
   resolveSetModelGuardProviderId,
-  shouldApplyExclusiveProviderReroute,
 } from '../maker-host/model-route-guard.js';
 import {
   pinExclusiveSessionProvider,
   resolveLenientSessionRoute,
+  shouldApplyExclusiveProviderRerouteLive,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
 import { setClaudeProxySessionIdResolver } from '../maker-host/anthropic-compat-proxy-host.js';
@@ -6492,10 +6492,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (!verifiedResume) {
         const reroute = await assertModelRouteUsable(o.agentKind, o.model, o.providerId ?? null);
-        if (reroute && shouldApplyExclusiveProviderReroute(o.providerId)) {
+        if (reroute && shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
           o.providerId = reroute;
         }
-      } else if (shouldApplyExclusiveProviderReroute(o.providerId)) {
+      } else if (shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
         const pin = await pinExclusiveSessionProvider(
           o.agentKind,
           o.model,
@@ -12882,6 +12882,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               currentProviderId,
               reroute,
               persistedProviderKnown,
+              getActiveCatalog().providers,
             );
           }
         }
