@@ -2497,6 +2497,11 @@
       },
       "toggleAria": "질문 내비게이션 레일 전환"
     },
+    "promptRecommendation": {
+      "label": "입력창 추천 프롬프트",
+      "description": "답변이 끝나면 입력창에 예측된 다음 프롬프트를 표시합니다. Tab 키로 입력할 수 있습니다.",
+      "toggleAria": "추천 프롬프트 전환"
+    },
     "collaboration": {
       "loading": "협업 설정을 불러오는 중…",
       "title": "협업",
@@ -3494,7 +3499,10 @@
             "copied": "가이드를 클립보드에 복사했습니다.",
             "copyFailed": "복사에 실패했습니다. 다시 시도하세요."
           }
-        }
+        },
+        "conflict": "사용 불가",
+        "conflictAria": "{{name}}에 플러그인 식별자 충돌이 있습니다",
+        "conflictDescription": "이 플러그인 식별자는 이미 사용 중이므로 현재 설치할 수 없습니다"
       },
       "reapproval": {
         "badge": "권한 재확인 필요",

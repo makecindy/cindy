@@ -260,6 +260,8 @@ export const MAKER_INVOKE = {
   AUTO_TITLE: 'maker:auto-title',
   // 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(读 DB 素材,失败返 null)
   REGENERATE_TITLE: 'maker:regenerate-title',
+  /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
+  PREDICT_PROMPT: 'maker:predict-prompt',
   HELP_ASK: 'maker:help:ask',
   /**
    * Help-assistant 反馈草稿 (Phase 1):用户对某条回答不满时,点 👎 → 弹小表单 →

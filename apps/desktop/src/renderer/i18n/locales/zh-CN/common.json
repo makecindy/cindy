@@ -2497,6 +2497,11 @@
       },
       "toggleAria": "切换提问导航条"
     },
+    "promptRecommendation": {
+      "label": "输入框推荐提示词",
+      "description": "AI 回复结束后，输入框会显示预测的后续提示词，按 Tab 键可快速填入。",
+      "toggleAria": "切换输入框推荐提示词"
+    },
     "collaboration": {
       "loading": "正在加载协同设置…",
       "title": "协同",
@@ -3494,7 +3499,10 @@
             "copied": "指南已复制到剪贴板。",
             "copyFailed": "复制失败，请重试。"
           }
-        }
+        },
+        "conflict": "暂不可用",
+        "conflictAria": "{{name}} 存在插件标识冲突",
+        "conflictDescription": "插件标识已被占用，当前无法安装"
       },
       "reapproval": {
         "badge": "需要重新确认权限",

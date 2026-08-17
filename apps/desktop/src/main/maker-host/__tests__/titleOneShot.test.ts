@@ -425,6 +425,70 @@ describe('generateTitleViaProviderResult — 手动重命名失败语义', () =>
 
 });
 
+describe('generateTitleViaProviderResult — beforeDispatch 派发紧前复查', () => {
+  it('beforeDispatch 返回 true → 照常派发,并收到 (sessionId, agentKind)', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '标题' }] },
+    }));
+    const beforeDispatch = vi.fn(async () => true);
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-bd', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+        beforeDispatch,
+      },
+    );
+
+    expect(result).toEqual({ status: 'ok', title: '标题' });
+    // 复查发生在凭证到手、请求发出的紧前,并收到本次 one-shot 的解析口径。
+    expect(beforeDispatch).toHaveBeenCalledWith({ sessionId: 's-bd', agentKind: 'claude-code', providerId: 'anthropic' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('beforeDispatch 返回 false → 派发紧前中止,不发付费请求', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-bd-fail', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+        beforeDispatch: async () => false,
+      },
+    );
+
+    expect(result).toEqual({ status: 'failed' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('未注入 beforeDispatch(标题场景)→ 不复查,行为不变', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '标题' }] },
+    }));
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-no-bd', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+      },
+    );
+
+    expect(result).toEqual({ status: 'ok', title: '标题' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────
 
 describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
