@@ -86,6 +86,26 @@ describe('sidebar right status priority', () => {
       currentTurnActive: true,
     });
     expect(resolveSidebarRightStatus(runningWithStaleError)).toBe('error');
+    // device-link 镜像可以同时保留 stale error 与新一轮运行 facet；本地
+    // isRunning 对远程会话恒 false，仍须让左侧 vendor mark 保持呼吸。
+    const remoteRunningWithStaleError = projectSidebarSessionActivity({
+      sessionId: 'remote-session',
+      liveActivity: {
+        phase: 'error',
+        currentTurnActive: true,
+        source: 'live',
+      },
+      attentionKind: undefined,
+      isUrgentFromContext: true,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(remoteRunningWithStaleError).toMatchObject({
+      phase: 'error',
+      attention: true,
+      currentTurnActive: true,
+    });
+    expect(resolveSidebarRightStatus(remoteRunningWithStaleError)).toBe('error');
     // 定时任务失败未读(attentionKind 缺失,由 urgency context 注入)同样是 error 档
     expect(resolve({
       sessionId: 'session-1',

@@ -18,6 +18,7 @@ export interface SidebarRightStatusInput {
     currentActionSummary?: string | null;
     interactionKind?: string;
     attention?: boolean;
+    currentTurnActive?: boolean;
     startedAtMs?: number | null;
     lastActivityAtMs?: number | null;
     source?: SessionActivitySnapshot['source'];
@@ -54,7 +55,7 @@ export function projectSidebarSessionActivity({
     title,
     source: liveActivity?.source ?? 'fallback',
     livePhase: liveActivity?.phase ?? null,
-    running: isRunning,
+    running: isRunning || liveActivity?.currentTurnActive === true,
     waitingForUser: awaitingAttention,
     terminal: errorAttention ? 'error' : doneAttention ? 'completed' : null,
     startedAtMs: liveActivity?.startedAtMs,
