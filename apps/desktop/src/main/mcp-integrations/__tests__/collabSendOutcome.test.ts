@@ -265,6 +265,24 @@ describe('collab send outcome semantics', () => {
     });
   });
 
+  it('preserves an unconfirmed provider-acceptance outcome without calling it pre-dispatch', async () => {
+    const unconfirmed = new Error('provider response lost') as Error & { code?: string };
+    unconfirmed.code = 'TURN_DISPATCH_UNCONFIRMED';
+
+    await expect(
+      resolveCollabDispatchResult(() => Promise.reject(unconfirmed), collabMeta()),
+    ).resolves.toMatchObject({
+      dispatched: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        accepted: false,
+        code: 'SEND_FAILED',
+        dispatchUnconfirmed: true,
+        message: expect.stringContaining('provider acceptance is unconfirmed'),
+      },
+    });
+  });
+
   it('logs required ownership fields without prompt text, full messages, tokens, or file contents', async () => {
     const err = new Error('PROMPT_SECRET full user message TOKEN_VALUE file body') as Error & { code?: string };
     err.code = 'SESSION_RUNNING';

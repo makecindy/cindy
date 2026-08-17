@@ -3550,7 +3550,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.setOrcaTeamInputActive(true);
     h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
 
-    h.coordinator.retainPersistedOrcaCleanupRecovery(
+    await h.coordinator.retainPersistedOrcaCleanupRecovery(
       sid,
       item,
       new Error('database busy'),
@@ -3568,6 +3568,36 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.hasKnownClientId(sid, item.clientId)).toBe(false);
     expect(latestSnapshotItems(h.persistQueueSnapshot)).toHaveLength(0);
     expect(h.isOrcaTeamInputActive).not.toHaveBeenCalled();
+  });
+
+  it('waits for direct-send cleanup recovery snapshot persistence before returning', async () => {
+    const h = createHarness();
+    const sid = 'direct-cleanup-durable-handoff';
+    const item = makeOrcaItem('orca-direct-durable', 'undelivered report', 'team-active');
+    const snapshotPersisted = deferred<void>();
+
+    await h.coordinator.ensureQueueRestored(sid);
+    h.persistQueueSnapshot.mockClear();
+    h.persistQueueSnapshot.mockImplementationOnce(() => snapshotPersisted.promise);
+    let retainSettled = false;
+    const retain = h.coordinator
+      .retainPersistedOrcaCleanupRecovery(sid, item, new Error('database busy'))
+      .then(() => {
+        retainSettled = true;
+      });
+
+    await vi.waitFor(() => expect(h.persistQueueSnapshot).toHaveBeenCalledOnce());
+    expect(retainSettled).toBe(false);
+    expect(latestSnapshotItems(h.persistQueueSnapshot)).toEqual([
+      expect.objectContaining({
+        clientId: item.clientId,
+        mainSnapshotRecoveryKind: 'active-turn-cleanup',
+      }),
+    ]);
+
+    snapshotPersisted.resolve();
+    await retain;
+    expect(retainSettled).toBe(true);
   });
 
   it('holds the Orca pre-vendor reservation until a queued send settles', async () => {

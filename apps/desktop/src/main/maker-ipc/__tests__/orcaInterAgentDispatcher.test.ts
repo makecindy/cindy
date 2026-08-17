@@ -566,6 +566,50 @@ describe('Orca lead/worker dispatcher', () => {
     expect(rollback).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves the direct row and accepted state when provider acceptance is unconfirmed', async () => {
+    const accepted = vi.fn(() => {
+      h.order.push('accepted');
+    });
+    const rollback = vi.fn(() => {
+      h.order.push('rollback');
+    });
+    const unconfirmed = new Error('provider response lost') as Error & { code?: string };
+    unconfirmed.code = 'TURN_DISPATCH_UNCONFIRMED';
+    const h = createHarness({
+      getLiveSession: vi.fn(() =>
+        createLiveSession(async (_message, opts) => {
+          h.order.push('send-called');
+          await opts?.onAccepted?.();
+          throw unconfirmed;
+        })
+      ),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Possibly accepted work',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'unconfirmed-direct-test' },
+      onAccepted: accepted,
+      onAcceptedRollback: rollback,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SEND_FAILED',
+        dispatchUnconfirmed: true,
+      },
+    });
+    expect(h.order).toEqual(['send-called', 'db', 'change-set', 'accepted']);
+    expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
+    expect(h.deps.rewindPersistedUserMessage).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
   it('rewinds the persisted direct user row when the final team fence cancels dispatch', async () => {
     const accepted = vi.fn();
     const rollback = vi.fn();
@@ -620,6 +664,7 @@ describe('Orca lead/worker dispatcher', () => {
 
   it('returns a direct dispatch failure when the final-fence row rewind fails', async () => {
     const rollback = vi.fn();
+    const cleanupPersisted = deferredVoid();
     const h = createHarness({
       getLiveSession: vi.fn(() =>
         createLiveSession(async (_message, opts) => {
@@ -634,9 +679,11 @@ describe('Orca lead/worker dispatcher', () => {
       rewindPersistedUserMessage: vi.fn(async () => {
         throw new Error('database busy');
       }),
+      retainPersistedUserMessageCleanup: vi.fn(() => cleanupPersisted.promise),
     });
 
-    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+    let dispatchSettled = false;
+    const dispatch = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
       teamId: 'team-1',
       rawContent: 'Stale direct report',
@@ -644,7 +691,17 @@ describe('Orca lead/worker dispatcher', () => {
       senderLabel: 'Worker',
       meta: { source: 'orca', context: 'final-fence-rewind-failure-test' },
       onAcceptedRollback: rollback,
+    }).then((result) => {
+      dispatchSettled = true;
+      return result;
     });
+    await vi.waitFor(() =>
+      expect(h.deps.retainPersistedUserMessageCleanup).toHaveBeenCalledOnce()
+    );
+    expect(dispatchSettled).toBe(false);
+
+    cleanupPersisted.resolve();
+    const result = await dispatch;
 
     expect(result).toMatchObject({
       ok: false,

@@ -8407,7 +8407,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         } catch (error) {
           if (orcaCleanupRecoveryItem) {
-            inputCoordinator.retainPersistedOrcaCleanupRecovery(
+            await inputCoordinator.retainPersistedOrcaCleanupRecovery(
               targetSessionId,
               orcaCleanupRecoveryItem,
               error,

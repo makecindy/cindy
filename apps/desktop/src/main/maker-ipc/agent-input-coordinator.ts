@@ -516,7 +516,8 @@ export interface AgentInputCoordinatorDeps {
   hasPendingCredentialSwitch?: (sessionId: string) => boolean;
   /**
    * 排队输入崩溃恢复(issue #761)。persistQueueSnapshot:队列内容变化时覆盖写
-   * 快照(items 为空 = 删行),实现方自行 fire-and-forget + 保序,绝不阻塞派发;
+   * 快照(items 为空 = 删行),普通迁移 fire-and-forget；direct cleanup recovery
+   * 会显式等待这一 Promise，确保唯一清理凭据在返回前已进入耐久存储。
    * loadQueueSnapshot:ensureQueueRestored 懒恢复时读回。两者要么都注入要么都不注入。
    */
   persistQueueSnapshot?: (
@@ -928,6 +929,10 @@ export class AgentInputCoordinator {
   private readonly restoreAttempted = new Set<string>();
   private readonly queueRestorePromises = new Map<string, Promise<void>>();
   private readonly lastQueueSnapshotJson = new Map<string, string>();
+  private readonly queueSnapshotPersistPromises = new Map<
+    string,
+    { json: string; promise: Promise<void>; token: symbol }
+  >();
   /**
    * 自动重试项在真正 vendor dispatch 前仍可被 Stop / 新消息 / ghost block 丢弃。
    * 这段窗口里 `performRetryLastError` 已清掉原 recovery，按 clone clientId 暂存回滚信息，
@@ -1356,14 +1361,15 @@ export class AgentInputCoordinator {
    * deliberately separate from UI Retry recovery and cannot be abandoned by a
    * later user message.
    */
-  retainPersistedOrcaCleanupRecovery(
+  async retainPersistedOrcaCleanupRecovery(
     sessionId: string,
     item: AgentInputQueuedMessage,
     error: unknown,
-  ): void {
+  ): Promise<void> {
     if (resolveOrcaQueueItemTeamId(item) === null) {
       throw new Error('cannot retain cleanup recovery for a non-Orca queue item');
     }
+    await this.ensureQueueRestored(sessionId);
     const state = this.getState(sessionId);
     const existing = state.activeTurnCleanupRecoveryItem;
     if (existing && existing.clientId !== item.clientId) {
@@ -1374,7 +1380,7 @@ export class AgentInputCoordinator {
     state.activeTurnCleanupRecoveryItem = item;
     state.error = errorMessage(error);
     state.stickyError = null;
-    this.emit(sessionId);
+    await this.emitAndWaitForQueueSnapshot(sessionId);
     this.scheduleDrain(sessionId, 'direct-orca-cleanup-recovery');
   }
 
@@ -3280,6 +3286,11 @@ export class AgentInputCoordinator {
     this.maybePersistQueueSnapshot(sessionId);
   }
 
+  private async emitAndWaitForQueueSnapshot(sessionId: string): Promise<void> {
+    this.deps.emitProjection(this.getProjection(sessionId));
+    await this.persistQueueSnapshot(sessionId);
+  }
+
   /**
    * 计算应持久化的快照内容:pendingQueue + 已离队但尚未跨过 DB 持久化边界的
    * activeTurn.item + 尚未完成 DB rewind 的 cleanup recovery。active item 覆盖
@@ -3311,23 +3322,46 @@ export class AgentInputCoordinator {
   }
 
   private maybePersistQueueSnapshot(sessionId: string): void {
-    if (!this.deps.persistQueueSnapshot) return;
+    void this.persistQueueSnapshot(sessionId).catch(() => undefined);
+  }
+
+  private persistQueueSnapshot(sessionId: string): Promise<void> {
+    if (!this.deps.persistQueueSnapshot) return Promise.resolve();
     // 未恢复前不写:此时内存态还是空壳,覆盖写会把崩溃前的快照静默删掉。
-    if (!this.restoredQueueSessions.has(sessionId)) return;
+    if (!this.restoredQueueSessions.has(sessionId)) return Promise.resolve();
     const state = this.states.get(sessionId);
-    if (!state) return;
+    if (!state) return Promise.resolve();
     const items = this.computeQueueSnapshotItems(state);
     const json = JSON.stringify(items);
-    if (this.lastQueueSnapshotJson.get(sessionId) === json) return;
+    if (this.lastQueueSnapshotJson.get(sessionId) === json) {
+      const inFlight = this.queueSnapshotPersistPromises.get(sessionId);
+      return inFlight?.json === json ? inFlight.promise : Promise.resolve();
+    }
     this.lastQueueSnapshotJson.set(sessionId, json);
-    const result = this.deps.persistQueueSnapshot(sessionId, items);
-    if (result && typeof (result as Promise<void>).catch === 'function') {
-      (result as Promise<void>).catch(() => {
+    let result: void | Promise<void>;
+    try {
+      result = this.deps.persistQueueSnapshot(sessionId, items);
+    } catch (error) {
+      if (this.lastQueueSnapshotJson.get(sessionId) === json) {
+        this.lastQueueSnapshotJson.delete(sessionId);
+      }
+      return Promise.reject(error);
+    }
+    const token = Symbol('queue-snapshot-persist');
+    const promise = Promise.resolve(result)
+      .catch((error) => {
         if (this.lastQueueSnapshotJson.get(sessionId) === json) {
           this.lastQueueSnapshotJson.delete(sessionId);
         }
+        throw error;
+      })
+      .finally(() => {
+        if (this.queueSnapshotPersistPromises.get(sessionId)?.token === token) {
+          this.queueSnapshotPersistPromises.delete(sessionId);
+        }
       });
-    }
+    this.queueSnapshotPersistPromises.set(sessionId, { json, promise, token });
+    return promise;
   }
 
   private toProjection(sessionId: string, state: SessionInputState): AgentInputProjection {

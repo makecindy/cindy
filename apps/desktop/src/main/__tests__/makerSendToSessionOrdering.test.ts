@@ -436,16 +436,16 @@ describe('sendToSession ordering', () => {
       'userMessagePersisted = true;',
     );
     expect(rewindBlock).toContain(
-      'inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+      'await inputCoordinator.retainPersistedOrcaCleanupRecovery(',
     );
     expectOrder(
       rewindBlock,
       'await enqueueDurableWrite(',
-      'inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+      'await inputCoordinator.retainPersistedOrcaCleanupRecovery(',
     );
     expectOrder(
       rewindBlock,
-      'inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+      'await inputCoordinator.retainPersistedOrcaCleanupRecovery(',
       'throw error;',
     );
     expect(resumedBranch).toContain(

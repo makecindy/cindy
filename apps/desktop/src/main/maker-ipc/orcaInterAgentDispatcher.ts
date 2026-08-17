@@ -51,6 +51,12 @@ function isPendingOrcaTeamTransitionError(err: unknown): boolean {
   return stripIpcErrorPrefix(thrownMessage(err)).startsWith('ORCA_TEAM_TERMINATING:');
 }
 
+function isUnconfirmedCollabDispatchOutcome(
+  outcome: CollabDispatchFailureOutcome,
+): boolean {
+  return outcome.kind === 'host-send' && outcome.dispatchUnconfirmed === true;
+}
+
 /** Orca lead/worker 派发结果，保留底层 dispatch outcome 供 MCP/IPC 区分排队、直发和失败根因。 */
 export type DispatchOrcaInterAgentMessageResult =
   | {
@@ -401,7 +407,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       dispatchOutcome: CollabDispatchFailureOutcome,
       retryAfterTerminalTransition = false,
     ): Promise<DispatchOrcaInterAgentMessageAttemptResult> => {
-      if (acceptedDidRun) {
+      if (acceptedDidRun && !isUnconfirmedCollabDispatchOutcome(dispatchOutcome)) {
         await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);
       }
       return {
@@ -707,10 +713,12 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     }),
     { source, context },
   );
-  if (turnChangeSetStarted && !result.dispatched) {
+  const confirmedUndispatched =
+    !result.dispatched && !isUnconfirmedCollabDispatchOutcome(result.dispatchOutcome);
+  if (turnChangeSetStarted && confirmedUndispatched) {
     deps.abortDirectTurnChangeSet(session.id);
   }
-  if (userMessagePersisted && !result.dispatched) {
+  if (userMessagePersisted && confirmedUndispatched) {
     try {
       await deps.rewindPersistedUserMessage(session.id, clientId);
     } catch (err) {
