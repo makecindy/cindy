@@ -750,9 +750,9 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   const originalAcquireVendorDispatchLease = params.acquireVendorDispatchLease;
   const acquireVendorDispatchLease: SessionSendOptions['acquireVendorDispatchLease'] =
     originalAcquireVendorDispatchLease
-      ? () => {
+      ? (intent) => {
         try {
-          const acquisition = originalAcquireVendorDispatchLease();
+          const acquisition = originalAcquireVendorDispatchLease(intent);
           if (acquisition instanceof Promise) {
             return acquisition.catch((err) => {
               terminalTransitionPending = isPendingOrcaTeamTransitionError(err);

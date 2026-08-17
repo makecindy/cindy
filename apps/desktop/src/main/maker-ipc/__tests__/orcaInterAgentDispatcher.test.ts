@@ -226,6 +226,37 @@ describe('Orca lead/worker dispatcher', () => {
     expect(leaseRelease).toHaveBeenCalledWith('submitted');
   });
 
+  it('forwards confirmed-rejection retry intent across the live-direct adapter', async () => {
+    const leaseRelease = vi.fn();
+    const acquireVendorDispatchLease = vi.fn(async () => leaseRelease);
+    const liveSession = createLiveSession(async (_message, opts) => {
+      const release = await opts?.acquireVendorDispatchLease?.(
+        'retry-after-confirmed-rejection',
+      );
+      await release?.('submitted');
+      return { accepted: true };
+    });
+    const h = createHarness({
+      getLiveSession: vi.fn(() => liveSession),
+      acquireVendorDispatchLease,
+    });
+
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Retry after an authoritative rejection',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'confirmed-rejection-retry-test' },
+    })).resolves.toMatchObject({ ok: true, mode: 'dispatched' });
+
+    expect(acquireVendorDispatchLease).toHaveBeenCalledWith(
+      'team-1',
+      { sessionId: 'target-session', clientId: 'client-1' },
+      'retry-after-confirmed-rejection',
+    );
+  });
+
   it('preserves a confirmed-undispatched result when rewind finalization transiently fails', async () => {
     const finalizePersistedUserMessageRewind = vi
       .fn<() => Promise<void>>()
