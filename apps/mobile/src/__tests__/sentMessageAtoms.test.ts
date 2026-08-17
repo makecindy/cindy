@@ -88,4 +88,12 @@ describe('sent message atoms', () => {
       [{ start, end: start + 'private payload'.length, display: 'Pasted text (1 line)' }],
     ))).toBe('before Pasted text (1 line) after');
   });
+
+  it('projects Pi runtime /skill: chips to the human slash label', () => {
+    expect(sentInlineTokensDisplayText(buildSentInlineTokens(
+      '/skill:git follow-up',
+      [],
+      [{ start: 0, end: 10 }],
+    ))).toBe('/git follow-up');
+  });
 });

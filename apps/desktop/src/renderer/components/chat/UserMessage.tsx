@@ -26,6 +26,10 @@ import {
   Target,
 } from 'lucide-react';
 import { readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
+import {
+  projectSlashCommandsInText,
+  slashCommandDisplayLabel,
+} from '@cindy/maker-shared/composer-palette';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
@@ -472,7 +476,8 @@ function looksLikePath(ref: string): boolean {
  * noise like `/1312312`.
  */
 function looksLikeCommand(word: string): boolean {
-  return /^[a-zA-Z][a-zA-Z0-9_-]{0,29}$/.test(word);
+  const display = word.replace(/^skill:/i, '');
+  return /^[a-zA-Z][a-zA-Z0-9_-]{0,29}$/.test(display);
 }
 
 /**
@@ -526,11 +531,12 @@ function renderContentWithoutPastedText(
     // Check for /command at line start — only if it looks like a real command
     const slashMatch = line.match(/^\/(\S+)/);
     if (renderLegacySlashCommands && slashMatch && looksLikeCommand(slashMatch[1])) {
+      const slashLabel = slashCommandDisplayLabel(`/${slashMatch[1]}`);
       nodes.push(
         <InlineReferenceChip
           key={`s-${li}`}
-          label={`/${slashMatch[1]}`}
-          tooltip={`/${slashMatch[1]}`}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />,
       );
@@ -857,11 +863,12 @@ export function renderContent(
   const useLegacySlashHeuristic = slashCommandRanges === undefined;
   return tokens.map((token, index) => {
     if (token.kind === 'slash') {
+      const slashLabel = slashCommandDisplayLabel(token.text);
       return (
         <InlineReferenceChip
           key={`slash-chip-${index}`}
-          label={token.text}
-          tooltip={token.text}
+          label={slashLabel}
+          tooltip={slashLabel}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />
       );
@@ -1139,7 +1146,9 @@ export function UserMessage({
   // copy text per V1.2: original text + (if files) "\n\n附件：a.md, b.md"
   // ghost-summon-card:copy 给用户的是"他自己的话"(剥离机器追加段);
   // 追加段原文在卡片展开区可查可选中。
-  const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
+  const copyBody = projectSlashCommandsInText(
+    quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody,
+  );
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;

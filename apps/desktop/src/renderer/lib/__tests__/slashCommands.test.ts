@@ -162,7 +162,7 @@ describe('Pi project skill availability', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo' }))).toBe(false);
   });
 
-  it('keeps the palette label while invoking Pi skills by their runtime command name', () => {
+  it('keeps the palette / composer label while invoking Pi skills by their runtime command name', () => {
     const loaded = skill({
       name: 'demo',
       scope: 'repo',

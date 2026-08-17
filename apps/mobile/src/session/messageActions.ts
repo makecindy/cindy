@@ -1,5 +1,6 @@
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import { projectSlashCommandsInText } from '@cindy/maker-shared/composer-palette';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { i18n } from '@/i18n';
 import {
@@ -25,9 +26,10 @@ type ClipboardNavigator = {
 };
 
 export function buildMobileMessageCopyText(message: NormalizedRemoteMessage): string {
-  const body = message.quotesEncoded
+  const rawBody = message.quotesEncoded
     ? stripChatQuoteMarkerLines(message.body)
     : message.body;
+  const body = projectSlashCommandsInText(rawBody);
   const parts = [body];
   if (message.secondaryBody) parts.push(message.secondaryBody);
   const attachments = message.attachments?.map((item) => item.name).filter(Boolean) ?? [];

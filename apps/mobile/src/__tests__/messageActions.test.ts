@@ -84,6 +84,12 @@ describe('messageActions', () => {
     expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'user' })).toBe(false);
   });
 
+  it('projects Pi runtime /skill: aliases when copying a user message', () => {
+    expect(buildMobileMessageCopyText(normalizedMessage({
+      body: '/skill:git follow-up review',
+    }))).toBe('/git follow-up review');
+  });
+
   it('builds desktop-compatible copy text with attachment names', () => {
     expect(buildMobileMessageCopyText(normalizedMessage({
       body: 'Please inspect this.',

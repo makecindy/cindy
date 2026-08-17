@@ -44,8 +44,8 @@ export function slashCommandInvocationName(command: UnifiedCommand): string {
 }
 
 /**
- * Palette selection already inserts runtimeCommandName. Apply the same mapping
- * to a matching command that the user typed or pasted directly before send.
+ * Palette / composer keep the human name (`/git`). Rewrite only at dispatch so
+ * Pi receives the runtime alias (`/skill:git`) without leaking it into the UI.
  */
 export function rewriteAgentSkillInvocationForDispatch(
   message: string,

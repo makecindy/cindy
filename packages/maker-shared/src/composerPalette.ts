@@ -97,6 +97,37 @@ export function insertSlashCommand(
   return `${text.slice(0, trigger.from)}/${command.name} `;
 }
 
+/** Pi runtime invocation is `/skill:name`. Display layer always shows `/name`. */
+const PI_SKILL_RUNTIME_TOKEN_RE = /^\/skill:(\S+)$/i;
+const PI_SKILL_RUNTIME_IN_TEXT_RE = /(^|\n)\/skill:(\S+)/gi;
+const PI_SKILL_RUNTIME_PREFIX = 'skill:';
+
+/** Project a stored slash token (`/skill:git` or `/git`) to the human label. */
+export function slashCommandDisplayLabel(commandText: string): string {
+  const match = commandText.match(PI_SKILL_RUNTIME_TOKEN_RE);
+  return match ? `/${match[1]}` : commandText;
+}
+
+/** Project every line-start `/skill:name` in a message body to `/name`. */
+export function projectSlashCommandsInText(text: string): string {
+  return text.replace(PI_SKILL_RUNTIME_IN_TEXT_RE, '$1/$2');
+}
+
+/**
+ * Length of the hidden `skill:` run after `/` when the visible token is a Pi
+ * runtime alias. Zero when the document already uses the human name.
+ */
+export function slashCommandRuntimePrefixLength(
+  commandText: string,
+  command: { name?: string; runtimeCommandName?: string },
+): number {
+  const runtime = command.runtimeCommandName?.trim();
+  if (!runtime || !runtime.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return 0;
+  const body = commandText.startsWith('/') ? commandText.slice(1) : commandText;
+  if (body.toLowerCase() !== runtime.toLowerCase()) return 0;
+  return PI_SKILL_RUNTIME_PREFIX.length;
+}
+
 export function insertAtResource(
   text: string,
   trigger: ComposerTrigger,

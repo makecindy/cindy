@@ -6,7 +6,10 @@ import {
   insertAtResource,
   insertSlashCommand,
   mergeSlashCommands,
+  projectSlashCommandsInText,
   serializeAtResource,
+  slashCommandDisplayLabel,
+  slashCommandRuntimePrefixLength,
 } from '../composerPalette.js';
 
 describe('shared composer palette model', () => {
@@ -97,5 +100,26 @@ describe('shared composer palette model', () => {
       .toBe('@.claude/agents/reviewer.md');
     expect(serializeAtResource({ type: 'file', name: 'design notes.md', relPath: 'docs/design notes.md' }))
       .toBe('@"docs/design notes.md"');
+  });
+
+  it('projects Pi runtime /skill: aliases to the human slash label', () => {
+    expect(slashCommandDisplayLabel('/skill:git')).toBe('/git');
+    expect(slashCommandDisplayLabel('/git')).toBe('/git');
+    expect(slashCommandDisplayLabel('/compact')).toBe('/compact');
+    expect(projectSlashCommandsInText(['/skill:git follow-up', '/skill:help'].join('\n'))).toBe(
+      ['/git follow-up', '/help'].join('\n'),
+    );
+    expect(
+      slashCommandRuntimePrefixLength('/skill:git', {
+        name: 'git',
+        runtimeCommandName: 'skill:git',
+      }),
+    ).toBe(6);
+    expect(
+      slashCommandRuntimePrefixLength('/git', {
+        name: 'git',
+        runtimeCommandName: 'skill:git',
+      }),
+    ).toBe(0);
   });
 });
