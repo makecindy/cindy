@@ -1,134 +1,58 @@
+/**
+ * Bot Automation tab — list-first, like a system scheduled-task list.
+ *
+ * Shape: a header with one "New" button, then the routines themselves (name +
+ * plain-language schedule + on/off + Run now + status dot; click a row for its
+ * detail and run history). Creating one asks two questions — what to do and
+ * when — and everything else (project, delivery, run limits, notes space, time
+ * zone) sits behind Advanced with a working default, so a routine can be
+ * created without opening it. The IPC payload shape is unchanged; the defaults
+ * live in `automationForm.ts`.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Archive,
   CalendarClock,
   ChevronDown,
   ChevronRight,
-  CirclePause,
-  CirclePlay,
   ExternalLink,
+  LoaderCircle,
   Pencil,
   Paperclip,
+  Play,
   Plus,
   RefreshCcw,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import type {
-  BotAutomation,
-  BotAutomationExecutionPolicy,
-  BotAutomationRun,
-  CreateBotAutomationInput,
-  UpdateBotAutomationInput,
-} from '../../../shared/botAutomation';
-import { DEFAULT_BOT_AUTOMATION_EXECUTION_POLICY } from '../../../shared/botAutomation';
+import type { BotAutomation, BotAutomationRun } from '../../../shared/botAutomation';
+import {
+  AUTOMATION_TEMPLATES,
+  SCHEDULE_MODES,
+  automationFormValueFrom,
+  automationSubmission,
+  canSubmitAutomationForm,
+  defaultDurableNoteNamespace,
+  describeAutomationSchedule,
+  emptyAutomationFormValue,
+  suggestAutomationName,
+  type AutomationFormValue,
+  type AutomationPolicyDraft,
+  type AutomationSubmission,
+} from './automationForm';
 import { BotAvatar } from './BotAvatar';
 import { useBotProfiles, type BotProfile } from './botStore';
+import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 
-type ScheduleMode = 'manual' | 'daily' | 'interval' | 'cron';
+type ProjectBindings = NonNullable<BotProfile['projectBindings']>;
+type ChannelRoutes = NonNullable<BotProfile['routes']>;
 
-interface AutomationPolicyDraft {
-  timeoutMinutes: number;
-  budgetTokens: string;
-  maxDelegationDepth: number;
-  delegateTargetMode: BotAutomationExecutionPolicy['delegateTargetMode'];
-  allowedDelegateBotIds: string[];
-}
-
-function policyDraft(policy: BotAutomationExecutionPolicy): AutomationPolicyDraft {
-  return {
-    timeoutMinutes: Math.max(1, Math.round(policy.timeoutMs / 60_000)),
-    budgetTokens: policy.budgetTokens === null ? '' : String(policy.budgetTokens),
-    maxDelegationDepth: policy.maxDelegationDepth,
-    delegateTargetMode: policy.delegateTargetMode,
-    allowedDelegateBotIds: policy.allowedDelegateBotIds,
-  };
-}
-
-function executionPolicyFromDraft(draft: AutomationPolicyDraft): BotAutomationExecutionPolicy {
-  const parsedBudget = Number(draft.budgetTokens);
-  return {
-    timeoutMs: Math.max(1, Math.floor(draft.timeoutMinutes)) * 60_000,
-    budgetTokens: draft.budgetTokens.trim() && Number.isSafeInteger(parsedBudget) && parsedBudget > 0
-      ? parsedBudget
-      : null,
-    maxDelegationDepth: Math.max(1, Math.min(5, Math.floor(draft.maxDelegationDepth))),
-    delegateTargetMode: draft.delegateTargetMode,
-    allowedDelegateBotIds: draft.delegateTargetMode === 'allowlist'
-      ? draft.allowedDelegateBotIds
-      : [],
-  };
-}
-
-function AutomationPolicyFields({
-  draft,
-  onChange,
-  bots,
-  currentBotId,
-}: {
-  draft: AutomationPolicyDraft;
-  onChange: (draft: AutomationPolicyDraft) => void;
-  bots: BotProfile[];
-  currentBotId: string;
-}) {
-  const { t } = useTranslation();
-  const delegateBots = bots.filter((candidate) => candidate.id !== currentBotId && candidate.enabled);
-  return (
-    <div className="mt-3 rounded-xl bg-[var(--surface-chip)] p-3">
-      <p className="text-11 font-medium text-[var(--text-primary)]">
-        {t('bots.automations.executionPolicy')}
-      </p>
-      <p className="mt-1 text-11 leading-5 text-[var(--text-tertiary)]">
-        {t('bots.automations.executionPolicyDescription')}
-      </p>
-      <div className="mt-3 grid gap-3 md:grid-cols-3">
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-          {t('bots.automations.timeoutMinutes')}
-          <input type="number" min={1} max={1440} value={draft.timeoutMinutes} onChange={(event) => onChange({ ...draft, timeoutMinutes: Number(event.target.value) })} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" />
-        </label>
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-          {t('bots.automations.budgetTokens')}
-          <input inputMode="numeric" value={draft.budgetTokens} onChange={(event) => onChange({ ...draft, budgetTokens: event.target.value.replace(/\D/g, '') })} placeholder={t('bots.automations.unlimited')} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" />
-        </label>
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-          {t('bots.automations.maxDelegationDepth')}
-          <input type="number" min={1} max={5} value={draft.maxDelegationDepth} onChange={(event) => onChange({ ...draft, maxDelegationDepth: Number(event.target.value) })} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" />
-        </label>
-      </div>
-      <label className="mt-3 flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-        {t('bots.automations.delegateTargets')}
-        <select value={draft.delegateTargetMode} onChange={(event) => onChange({ ...draft, delegateTargetMode: event.target.value as AutomationPolicyDraft['delegateTargetMode'], allowedDelegateBotIds: event.target.value === 'allowlist' ? draft.allowedDelegateBotIds : [] })} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]">
-          <option value="none">{t('bots.automations.delegateNone')}</option>
-          <option value="allowlist">{t('bots.automations.delegateAllowlist')}</option>
-          <option value="all-active">{t('bots.automations.delegateAllActive')}</option>
-        </select>
-      </label>
-      {draft.delegateTargetMode === 'allowlist' ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {delegateBots.length === 0 ? (
-            <span className="text-11 text-[var(--text-tertiary)]">{t('bots.automations.noDelegateBots')}</span>
-          ) : delegateBots.map((candidate) => {
-            const checked = draft.allowedDelegateBotIds.includes(candidate.id);
-            return (
-              <label key={candidate.id} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-11 text-[var(--text-secondary)]">
-                <input type="checkbox" checked={checked} onChange={() => onChange({ ...draft, allowedDelegateBotIds: checked ? draft.allowedDelegateBotIds.filter((id) => id !== candidate.id) : [...draft.allowedDelegateBotIds, candidate.id] })} />
-                {/* Shared mark instead of raw `avatar` text: a Bot on the
-                    official Cindy avatar stores a sentinel, not a grapheme. */}
-                <BotAvatar bot={candidate} size="sm" className="h-4 w-4 text-11" />
-                <span>{candidate.name}</span>
-              </label>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function localTimezone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-}
+const INPUT_CLASS =
+  'h-9 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]';
+const FIELD_CLASS = 'flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]';
 
 function readError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -148,16 +72,11 @@ function statusTone(status: string): string {
   return 'text-[var(--text-secondary)]';
 }
 
-function modeForAutomation(automation: BotAutomation): ScheduleMode {
-  if (automation.manual) return 'manual';
-  if (automation.intervalMs) return 'interval';
-  return /^\d{1,2} \d{1,2} \* \* \*$/.test(automation.cronExpr) ? 'daily' : 'cron';
-}
-
-function dailyTimeForAutomation(automation: BotAutomation): string {
-  const match = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(automation.cronExpr);
-  if (!match) return '09:00';
-  return `${match[2]!.padStart(2, '0')}:${match[1]!.padStart(2, '0')}`;
+/** Status dot fill mirrors `statusTone`, reusing the same registered tokens. */
+function statusDotClass(status: string): string {
+  if (status === 'active') return 'bg-[var(--status-success)]';
+  if (status === 'error') return 'bg-[var(--text-danger)]';
+  return 'bg-[var(--text-tertiary)]';
 }
 
 function RunHistory({
@@ -234,7 +153,7 @@ function RunHistory({
   }
 
   return (
-    <div className="mt-3 flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
+    <div className="mt-2 flex flex-col gap-2">
       {runs.map((run) => (
         <div key={run.id} className="rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -321,157 +240,378 @@ function RunHistory({
   );
 }
 
-function AutomationEditForm({
-  automation,
+function ScheduleModePicker({
+  mode,
+  onChange,
+}: {
+  mode: AutomationFormValue['mode'];
+  onChange: (mode: AutomationFormValue['mode']) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="radiogroup"
+      aria-label={t('bots.automations.whenToRun')}
+      className="inline-flex items-center gap-1 rounded-full border border-[var(--border-default)] p-1"
+    >
+      {SCHEDULE_MODES.map((candidate) => (
+        <button
+          key={candidate}
+          type="button"
+          role="radio"
+          aria-checked={mode === candidate}
+          onClick={() => onChange(candidate)}
+          className={cn(
+            'h-7 rounded-full px-3 text-11 transition-colors',
+            mode === candidate
+              ? 'bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
+              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+          )}
+        >
+          {t(`bots.automations.mode.${candidate}`)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AutomationAdvancedFields({
+  value,
+  onChange,
   projects,
   routes,
   bots,
   currentBotId,
-  onSaved,
-  onCancel,
 }: {
-  automation: BotAutomation;
-  projects: NonNullable<BotProfile['projectBindings']>;
-  routes: NonNullable<BotProfile['routes']>;
+  value: AutomationFormValue;
+  onChange: (patch: Partial<AutomationFormValue>) => void;
+  projects: ProjectBindings;
+  routes: ChannelRoutes;
   bots: BotProfile[];
   currentBotId: string;
-  onSaved: () => Promise<void>;
-  onCancel: () => void;
 }) {
   const { t } = useTranslation();
-  const [name, setName] = useState(automation.name);
-  const [prompt, setPrompt] = useState(automation.prompt);
-  const [mode, setMode] = useState<ScheduleMode>(() => modeForAutomation(automation));
-  const [dailyTime, setDailyTime] = useState(() => dailyTimeForAutomation(automation));
-  const [intervalMinutes, setIntervalMinutes] = useState(
-    Math.max(1, Math.round((automation.intervalMs ?? 60 * 60_000) / 60_000)),
+  const policy = value.policy;
+  const updatePolicy = (patch: Partial<AutomationPolicyDraft>) =>
+    onChange({ policy: { ...policy, ...patch } });
+  const delegateBots = bots.filter(
+    (candidate) => candidate.id !== currentBotId && candidate.enabled,
   );
-  const [cronExpr, setCronExpr] = useState(automation.cronExpr);
-  const [timezone, setTimezone] = useState(automation.timezone);
-  const [projectBindingId, setProjectBindingId] = useState(automation.projectBindingId ?? '');
-  const [targetRouteId, setTargetRouteId] = useState(automation.targetRouteId ?? '');
-  const [durableNoteNamespace, setDurableNoteNamespace] = useState(
-    automation.durableNoteNamespace ?? '',
-  );
-  const [executionPolicy, setExecutionPolicy] = useState<AutomationPolicyDraft>(() =>
-    policyDraft(automation.executionPolicy),
-  );
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const save = async () => {
-    if (!name.trim() || !prompt.trim()) return;
-    setSaving(true);
-    setError(null);
-    try {
-      let cadence: Pick<
-        UpdateBotAutomationInput,
-        'cronExpr' | 'recurring' | 'manual' | 'intervalMs'
-      >;
-      if (mode === 'manual') {
-        cadence = {
-          cronExpr: automation.cronExpr || '0 0 * * *',
-          recurring: false,
-          manual: true,
-          intervalMs: undefined,
-        };
-      } else if (mode === 'daily') {
-        const [hour, minute] = dailyTime.split(':').map(Number);
-        cadence = {
-          cronExpr: `${minute || 0} ${hour || 0} * * *`,
-          recurring: true,
-          manual: false,
-          intervalMs: undefined,
-        };
-      } else if (mode === 'interval') {
-        cadence = {
-          cronExpr: automation.cronExpr || '0 * * * *',
-          recurring: true,
-          manual: false,
-          intervalMs: Math.max(1, intervalMinutes) * 60_000,
-        };
-      } else {
-        cadence = {
-          cronExpr: cronExpr.trim(),
-          recurring: true,
-          manual: false,
-          intervalMs: undefined,
-        };
-      }
-      await window.electronAPI.maker.botAutomations.update(automation.id, {
-        name: name.trim(),
-        prompt: prompt.trim(),
-        timezone: timezone.trim() || 'UTC',
-        ...cadence,
-        projectBindingId: projectBindingId || null,
-        targetRouteId: targetRouteId || null,
-        durableNoteNamespace: durableNoteNamespace.trim() || null,
-        executionPolicy: executionPolicyFromDraft(executionPolicy),
-      });
-      await onSaved();
-    } catch (cause) {
-      setError(readError(cause));
-      return;
-    } finally {
-      setSaving(false);
-    }
-    onCancel();
-  };
+  const namespacePlaceholder =
+    defaultDurableNoteNamespace(value.name.trim() || suggestAutomationName(value.prompt)) ?? '';
 
   return (
-    <div className="mt-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3">
+    <div className="mt-3 rounded-xl bg-[var(--surface-chip)] p-3">
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-          {t('bots.automations.name')}
-          <input value={name} onChange={(event) => setName(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" />
+        <label className={FIELD_CLASS}>
+          {t('bots.automations.project')}
+          <select
+            value={value.projectBindingId}
+            onChange={(event) => onChange({ projectBindingId: event.target.value })}
+            className={INPUT_CLASS}
+          >
+            <option value="">{t('bots.automations.defaultProject')}</option>
+            {projects.map((item) => (
+              <option key={item.id} value={item.id}>{item.workingDir}</option>
+            ))}
+          </select>
         </label>
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-          {t('bots.automations.schedule')}
-          <select value={mode} onChange={(event) => setMode(event.target.value as ScheduleMode)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]">
-            <option value="manual">{t('bots.automations.manual')}</option>
-            <option value="daily">{t('bots.automations.daily')}</option>
-            <option value="interval">{t('bots.automations.interval')}</option>
-            <option value="cron">Cron</option>
+        <label className={FIELD_CLASS}>
+          {t('bots.automations.deliveryRoute')}
+          <select
+            value={value.targetRouteId}
+            onChange={(event) => onChange({ targetRouteId: event.target.value })}
+            className={INPUT_CLASS}
+          >
+            <option value="">{t('bots.automations.canonicalTask')}</option>
+            {routes.map((item) => (
+              <option key={item.id} value={item.id}>{item.routeKey}</option>
+            ))}
           </select>
         </label>
       </div>
-      <label className="mt-3 flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-        {t('bots.automations.instruction')}
-        <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-12 text-[var(--text-primary)]" />
+      <label className={cn(FIELD_CLASS, 'mt-3')}>
+        {t('bots.automations.timezone')}
+        <input
+          value={value.timezone}
+          onChange={(event) => onChange({ timezone: event.target.value })}
+          className={INPUT_CLASS}
+        />
       </label>
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
-        {mode === 'daily' ? (
-          <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.dailyTime')}<input type="time" value={dailyTime} onChange={(event) => setDailyTime(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" /></label>
-        ) : mode === 'interval' ? (
-          <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.intervalMinutes')}<input type="number" min={1} value={intervalMinutes} onChange={(event) => setIntervalMinutes(Number(event.target.value))} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" /></label>
-        ) : mode === 'cron' ? (
-          <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">Cron<input value={cronExpr} onChange={(event) => setCronExpr(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 font-mono text-12 text-[var(--text-primary)]" /></label>
-        ) : <div />}
-        {mode !== 'manual' ? (
-          <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.timezone')}<input value={timezone} onChange={(event) => setTimezone(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" /></label>
-        ) : null}
-      </div>
+      <label className={cn(FIELD_CLASS, 'mt-3')}>
+        {t('bots.automations.noteNamespace')}
+        <input
+          value={value.durableNoteNamespace}
+          placeholder={namespacePlaceholder}
+          onChange={(event) => onChange({ durableNoteNamespace: event.target.value })}
+          className={INPUT_CLASS}
+        />
+        <span className="text-[var(--text-tertiary)]">{t('bots.automations.noteNamespaceHint')}</span>
+      </label>
+
+      <p className="mt-4 text-11 font-medium text-[var(--text-primary)]">
+        {t('bots.automations.executionPolicy')}
+      </p>
+      <p className="mt-1 text-11 leading-5 text-[var(--text-tertiary)]">
+        {t('bots.automations.executionPolicyDescription')}
+      </p>
       <div className="mt-3 grid gap-3 md:grid-cols-3">
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.project')}<select value={projectBindingId} onChange={(event) => setProjectBindingId(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-11 text-[var(--text-primary)]"><option value="">{t('bots.automations.defaultProject')}</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.workingDir}</option>)}</select></label>
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.deliveryRoute')}<select value={targetRouteId} onChange={(event) => setTargetRouteId(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-11 text-[var(--text-primary)]"><option value="">{t('bots.automations.canonicalTask')}</option>{routes.map((item) => <option key={item.id} value={item.id}>{item.routeKey}</option>)}</select></label>
-        <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.noteNamespace')}<input value={durableNoteNamespace} onChange={(event) => setDurableNoteNamespace(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-11 text-[var(--text-primary)]" /></label>
+        <label className={FIELD_CLASS}>
+          {t('bots.automations.timeoutMinutes')}
+          <input
+            type="number"
+            min={1}
+            max={1440}
+            value={policy.timeoutMinutes}
+            onChange={(event) => updatePolicy({ timeoutMinutes: Number(event.target.value) })}
+            className={INPUT_CLASS}
+          />
+        </label>
+        <label className={FIELD_CLASS}>
+          {t('bots.automations.budgetTokens')}
+          <input
+            inputMode="numeric"
+            value={policy.budgetTokens}
+            placeholder={t('bots.automations.unlimited')}
+            onChange={(event) => updatePolicy({ budgetTokens: event.target.value.replace(/\D/g, '') })}
+            className={INPUT_CLASS}
+          />
+        </label>
+        <label className={FIELD_CLASS}>
+          {t('bots.automations.maxDelegationDepth')}
+          <input
+            type="number"
+            min={1}
+            max={5}
+            value={policy.maxDelegationDepth}
+            onChange={(event) => updatePolicy({ maxDelegationDepth: Number(event.target.value) })}
+            className={INPUT_CLASS}
+          />
+        </label>
       </div>
-      <AutomationPolicyFields
-        draft={executionPolicy}
-        onChange={setExecutionPolicy}
-        bots={bots}
-        currentBotId={currentBotId}
-      />
-      {error ? <p className="mt-3 text-11 text-[var(--text-danger)]">{error}</p> : null}
-      <div className="mt-3 flex justify-end gap-2">
-        <button type="button" disabled={saving} onClick={onCancel} className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">{t('bots.cancel')}</button>
-        <button type="button" disabled={saving || !name.trim() || !prompt.trim()} onClick={() => void save()} className="h-8 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-11 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50">{saving ? t('bots.automations.saving') : t('bots.save')}</button>
+      <label className={cn(FIELD_CLASS, 'mt-3')}>
+        {t('bots.automations.delegateTargets')}
+        <select
+          value={policy.delegateTargetMode}
+          onChange={(event) =>
+            updatePolicy({
+              delegateTargetMode: event.target.value as AutomationPolicyDraft['delegateTargetMode'],
+              allowedDelegateBotIds:
+                event.target.value === 'allowlist' ? policy.allowedDelegateBotIds : [],
+            })
+          }
+          className={INPUT_CLASS}
+        >
+          <option value="none">{t('bots.automations.delegateNone')}</option>
+          <option value="allowlist">{t('bots.automations.delegateAllowlist')}</option>
+          <option value="all-active">{t('bots.automations.delegateAllActive')}</option>
+        </select>
+      </label>
+      {policy.delegateTargetMode === 'allowlist' ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {delegateBots.length === 0 ? (
+            <span className="text-11 text-[var(--text-tertiary)]">
+              {t('bots.automations.noDelegateBots')}
+            </span>
+          ) : delegateBots.map((candidate) => {
+            const checked = policy.allowedDelegateBotIds.includes(candidate.id);
+            return (
+              <label
+                key={candidate.id}
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-11 text-[var(--text-secondary)]"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() =>
+                    updatePolicy({
+                      allowedDelegateBotIds: checked
+                        ? policy.allowedDelegateBotIds.filter((id) => id !== candidate.id)
+                        : [...policy.allowedDelegateBotIds, candidate.id],
+                    })
+                  }
+                />
+                {/* Shared mark instead of raw `avatar` text: a Bot on the
+                    official Cindy avatar stores a sentinel, not a grapheme. */}
+                <BotAvatar bot={candidate} size="sm" className="h-4 w-4 text-11" />
+                <span>{candidate.name}</span>
+              </label>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AutomationForm({
+  initial,
+  submitLabel,
+  submittingLabel,
+  fallbackCronExpr,
+  projects,
+  routes,
+  bots,
+  currentBotId,
+  onSubmit,
+  onCancel,
+}: {
+  initial: AutomationFormValue;
+  submitLabel: string;
+  submittingLabel: string;
+  fallbackCronExpr?: string;
+  projects: ProjectBindings;
+  routes: ChannelRoutes;
+  bots: BotProfile[];
+  currentBotId: string;
+  onSubmit: (submission: AutomationSubmission) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [value, setValue] = useState<AutomationFormValue>(initial);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const update = (patch: Partial<AutomationFormValue>) =>
+    setValue((current) => ({ ...current, ...patch }));
+
+  // On success both call sites close the form, so `submitting` is only cleared
+  // on failure — the form stays disabled while it is being torn down.
+  const submit = async () => {
+    const submission = automationSubmission(value, { fallbackCronExpr });
+    if (!submission) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit(submission);
+    } catch (cause) {
+      setError(readError(cause));
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-xl border border-[var(--border-default)] p-4">
+      <label className={FIELD_CLASS}>
+        <span className="text-12 font-medium text-[var(--text-primary)]">
+          {t('bots.automations.whatToDo')}
+        </span>
+        <textarea
+          value={value.prompt}
+          onChange={(event) => update({ prompt: event.target.value })}
+          rows={3}
+          placeholder={t('bots.automations.whatToDoPlaceholder')}
+          className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-12 leading-5 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]"
+        />
+      </label>
+
+      <div className="mt-4 flex flex-col gap-2">
+        <span className="text-12 font-medium text-[var(--text-primary)]">
+          {t('bots.automations.whenToRun')}
+        </span>
+        <div className="flex flex-wrap items-end gap-3">
+          <ScheduleModePicker mode={value.mode} onChange={(mode) => update({ mode })} />
+          {value.mode === 'daily' ? (
+            <label className={FIELD_CLASS}>
+              {t('bots.automations.dailyTime')}
+              <input
+                type="time"
+                value={value.dailyTime}
+                onChange={(event) => update({ dailyTime: event.target.value })}
+                className={INPUT_CLASS}
+              />
+            </label>
+          ) : null}
+          {value.mode === 'interval' ? (
+            <label className={FIELD_CLASS}>
+              {t('bots.automations.intervalMinutes')}
+              <input
+                type="number"
+                min={1}
+                value={value.intervalMinutes}
+                onChange={(event) => update({ intervalMinutes: Number(event.target.value) })}
+                className={cn(INPUT_CLASS, 'w-28')}
+              />
+            </label>
+          ) : null}
+          {value.mode === 'cron' ? (
+            <label className={FIELD_CLASS}>
+              {t('bots.automations.cronExpr')}
+              <input
+                value={value.cronExpr}
+                onChange={(event) => update({ cronExpr: event.target.value })}
+                className={cn(INPUT_CLASS, 'w-44 font-mono')}
+              />
+            </label>
+          ) : null}
+        </div>
+        <p className="text-11 leading-5 text-[var(--text-tertiary)]">
+          {value.mode === 'manual'
+            ? t('bots.automations.manualHint')
+            : value.mode === 'cron'
+              ? t('bots.automations.cronHint')
+              : t('bots.automations.timezoneHint', { timezone: value.timezone })}
+        </p>
+      </div>
+
+      <label className={cn(FIELD_CLASS, 'mt-4 max-w-sm')}>
+        {t('bots.automations.name')}
+        <input
+          value={value.name}
+          placeholder={suggestAutomationName(value.prompt) || t('bots.automations.nameAuto')}
+          onChange={(event) => update({ name: event.target.value })}
+          className={INPUT_CLASS}
+        />
+      </label>
+
+      <button
+        type="button"
+        aria-expanded={advancedOpen}
+        onClick={() => setAdvancedOpen((current) => !current)}
+        className="mt-4 inline-flex items-center gap-1.5 text-11 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+      >
+        {advancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        {t('bots.automations.advanced')}
+        <span className="text-[var(--text-tertiary)]">{t('bots.automations.advancedHint')}</span>
+      </button>
+      {advancedOpen ? (
+        <AutomationAdvancedFields
+          value={value}
+          onChange={update}
+          projects={projects}
+          routes={routes}
+          bots={bots}
+          currentBotId={currentBotId}
+        />
+      ) : null}
+
+      {error ? (
+        <p className="mt-3 break-words text-11 text-[var(--text-danger)] [overflow-wrap:anywhere]">{error}</p>
+      ) : null}
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onCancel}
+          className="h-9 rounded-full px-4 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+        >
+          {t('bots.cancel')}
+        </button>
+        <button
+          type="button"
+          disabled={submitting || !canSubmitAutomationForm(value)}
+          onClick={() => void submit()}
+          className="inline-flex h-9 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-4 text-12 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"
+        >
+          {submitting ? submittingLabel : submitLabel}
+        </button>
       </div>
     </div>
   );
 }
 
-function AutomationCard({
+function AutomationRow({
   automation,
   projects,
   routes,
@@ -482,8 +622,8 @@ function AutomationCard({
   onOpenTask,
 }: {
   automation: BotAutomation;
-  projects: NonNullable<BotProfile['projectBindings']>;
-  routes: NonNullable<BotProfile['routes']>;
+  projects: ProjectBindings;
+  routes: ChannelRoutes;
   currentProfileVersion: number;
   bots: BotProfile[];
   currentBotId: string;
@@ -493,7 +633,7 @@ function AutomationCard({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [busy, setBusy] = useState<'pause' | 'resume' | 'run' | 'archive' | null>(null);
+  const [busy, setBusy] = useState<'toggle' | 'run' | 'archive' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const act = async (kind: NonNullable<typeof busy>, action: () => Promise<unknown>) => {
@@ -509,63 +649,137 @@ function AutomationCard({
     }
   };
 
+  const schedule = describeAutomationSchedule(automation);
+  const statusLabel = t(`bots.automations.status.${automation.status}`);
+  const running = automation.activeRunCount > 0;
+  const enabled = automation.status === 'active';
+
   return (
-    <div className="rounded-xl border border-[var(--border-default)] p-4">
-      <div className="flex items-start justify-between gap-3">
-        <button type="button" onClick={() => setExpanded((value) => !value)} className="flex min-w-0 items-start gap-2 text-left">
-          {expanded ? <ChevronDown className="mt-0.5 shrink-0" size={14} /> : <ChevronRight className="mt-0.5 shrink-0" size={14} />}
+    <div className="rounded-xl border border-[var(--border-default)]">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          {expanded ? (
+            <ChevronDown className="shrink-0 text-[var(--text-tertiary)]" size={14} />
+          ) : (
+            <ChevronRight className="shrink-0 text-[var(--text-tertiary)]" size={14} />
+          )}
           <span className="min-w-0">
-            <span className="block truncate text-13 font-medium text-[var(--text-primary)]">{automation.name}</span>
-            <span className="mt-1 block text-11 text-[var(--text-tertiary)]">
-              {automation.manual
-                ? t('bots.automations.manual')
-                : automation.intervalMs
-                  ? t('bots.automations.everyMinutes', { count: Math.round(automation.intervalMs / 60_000) })
-                  : `${automation.cronExpr} · ${automation.timezone}`}
+            <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
+              {automation.name}
+            </span>
+            <span className="mt-0.5 block truncate text-11 text-[var(--text-tertiary)]">
+              {t(schedule.key, schedule.params)}
             </span>
           </span>
         </button>
-        <span className={statusTone(automation.status)}>{t(`bots.automations.status.${automation.status}`)}</span>
-      </div>
-      <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-11 leading-5 text-[var(--text-secondary)]">{automation.prompt}</p>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-11 text-[var(--text-tertiary)]">
-        <span>{t('bots.automations.nextRun')}: {formatTime(automation.nextFireAt)}</span>
-        <span>{t('bots.automations.nextProfileVersion', { version: currentProfileVersion })}</span>
-        <span>{t('bots.automations.activeRuns', { count: automation.activeRunCount })}</span>
-      </div>
-      {error ? <p className="mt-3 text-11 text-[var(--text-danger)]">{error}</p> : null}
-      <div className="mt-3 flex flex-wrap justify-end gap-2">
-        <button type="button" disabled={busy !== null || automation.activeRunCount > 0} onClick={() => setEditing((value) => !value)} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-          <Pencil size={13} /> {t('bots.automations.edit')}
-        </button>
-        {automation.status === 'active' ? (
-          <button type="button" disabled={busy !== null} onClick={() => void act('pause', () => window.electronAPI.maker.botAutomations.pause(automation.id))} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-            <CirclePause size={13} /> {t('bots.automations.pause')}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {running ? (
+            <LoaderCircle
+              size={13}
+              className="animate-spin text-[var(--text-secondary)] motion-reduce:animate-none"
+              aria-label={t('bots.automations.activeRuns', { count: automation.activeRunCount })}
+            />
+          ) : (
+            <span
+              role="img"
+              aria-label={statusLabel}
+              title={statusLabel}
+              className={cn('h-2 w-2 rounded-full', statusDotClass(automation.status))}
+            />
+          )}
+          <button
+            type="button"
+            disabled={busy !== null || !enabled}
+            onClick={() =>
+              void act('run', () => window.electronAPI.maker.botAutomations.runNow(automation.id))
+            }
+            className="inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
+          >
+            <Play size={12} />
+            {t('bots.automations.runNow')}
           </button>
-        ) : automation.status === 'paused' || automation.status === 'error' ? (
-          <button type="button" disabled={busy !== null} onClick={() => void act('resume', () => window.electronAPI.maker.botAutomations.resume(automation.id))} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-            <CirclePlay size={13} /> {t('bots.automations.resume')}
-          </button>
-        ) : null}
-        <button type="button" disabled={busy !== null || automation.status !== 'active'} onClick={() => void act('run', () => window.electronAPI.maker.botAutomations.runNow(automation.id))} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-          <CirclePlay size={13} /> {t('bots.automations.runNow')}
-        </button>
-        <button type="button" disabled={busy !== null || automation.activeRunCount > 0} onClick={() => void act('archive', () => window.electronAPI.maker.botAutomations.delete(automation.id))} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-          <Archive size={13} /> {t('bots.automations.archive')}
-        </button>
+          <Switch
+            checked={enabled}
+            disabled={busy !== null}
+            aria-label={t('bots.automations.enableRoutine')}
+            onCheckedChange={(next) =>
+              void act('toggle', () =>
+                next
+                  ? window.electronAPI.maker.botAutomations.resume(automation.id)
+                  : window.electronAPI.maker.botAutomations.pause(automation.id),
+              )
+            }
+          />
+        </div>
       </div>
-      {editing ? (
-        <AutomationEditForm
-          automation={automation}
-          projects={projects}
-          routes={routes}
-          bots={bots}
-          currentBotId={currentBotId}
-          onSaved={onChanged}
-          onCancel={() => setEditing(false)}
-        />
+
+      {expanded ? (
+        <div className="border-t border-[var(--border-default)] px-3 pb-3 pt-3">
+          <p className="whitespace-pre-wrap break-words text-11 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+            {automation.prompt}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-11 text-[var(--text-tertiary)]">
+            <span>{t('bots.automations.nextRun')}: {formatTime(automation.nextFireAt)}</span>
+            <span>
+              {t('bots.automations.lastRun')}: {formatTime(automation.lastFinishedAt ?? automation.lastFiredAt)}
+            </span>
+            <span>{t('bots.automations.timezone')}: {automation.timezone}</span>
+            <span>{t('bots.automations.nextProfileVersion', { version: currentProfileVersion })}</span>
+          </div>
+          {error ? (
+            <p className="mt-3 break-words text-11 text-[var(--text-danger)] [overflow-wrap:anywhere]">{error}</p>
+          ) : null}
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              disabled={busy !== null || automation.activeRunCount > 0}
+              onClick={() => setEditing((current) => !current)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+            >
+              <Pencil size={13} /> {t('bots.automations.edit')}
+            </button>
+            <button
+              type="button"
+              disabled={busy !== null || automation.activeRunCount > 0}
+              onClick={() =>
+                void act('archive', () =>
+                  window.electronAPI.maker.botAutomations.delete(automation.id),
+                )
+              }
+              className="inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+            >
+              <Archive size={13} /> {t('bots.automations.archive')}
+            </button>
+          </div>
+          {editing ? (
+            <AutomationForm
+              initial={automationFormValueFrom(automation)}
+              submitLabel={t('bots.save')}
+              submittingLabel={t('bots.automations.saving')}
+              fallbackCronExpr={automation.cronExpr}
+              projects={projects}
+              routes={routes}
+              bots={bots}
+              currentBotId={currentBotId}
+              onSubmit={async (submission) => {
+                await window.electronAPI.maker.botAutomations.update(automation.id, submission);
+                await onChanged();
+                setEditing(false);
+              }}
+              onCancel={() => setEditing(false)}
+            />
+          ) : null}
+          <p className="mt-4 text-11 font-medium text-[var(--text-primary)]">
+            {t('bots.automations.runHistory')}
+          </p>
+          <RunHistory automation={automation} onOpenTask={onOpenTask} />
+        </div>
       ) : null}
-      {expanded ? <RunHistory automation={automation} onOpenTask={onOpenTask} /> : null}
     </div>
   );
 }
@@ -586,23 +800,21 @@ export function BotAutomationSettings({
   const [automations, setAutomations] = useState<BotAutomation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState('');
-  const [prompt, setPrompt] = useState('');
-  const [mode, setMode] = useState<ScheduleMode>('manual');
-  const [dailyTime, setDailyTime] = useState('09:00');
-  const [intervalMinutes, setIntervalMinutes] = useState(60);
-  const [cronExpr, setCronExpr] = useState('0 9 * * *');
-  const [timezone, setTimezone] = useState(localTimezone);
-  const [projectBindingId, setProjectBindingId] = useState('');
-  const [targetRouteId, setTargetRouteId] = useState('');
-  const [durableNoteNamespace, setDurableNoteNamespace] = useState('');
-  const [executionPolicy, setExecutionPolicy] = useState<AutomationPolicyDraft>(() =>
-    policyDraft(DEFAULT_BOT_AUTOMATION_EXECUTION_POLICY),
-  );
+  const [draft, setDraft] = useState<AutomationFormValue | null>(null);
 
-  const activeProjects = useMemo(() => (bot.projectBindings ?? []).filter((item) => item.status === 'active'), [bot.projectBindings]);
-  const activeRoutes = useMemo(() => (bot.routes ?? []).filter((item) => item.status === 'active'), [bot.routes]);
+  const canCreate = enabled && trusted;
+  const activeProjects = useMemo(
+    () => (bot.projectBindings ?? []).filter((item) => item.status === 'active'),
+    [bot.projectBindings],
+  );
+  const activeRoutes = useMemo(
+    () => (bot.routes ?? []).filter((item) => item.status === 'active'),
+    [bot.routes],
+  );
+  const visibleAutomations = useMemo(
+    () => automations.filter((item) => item.status !== 'archived'),
+    [automations],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -623,113 +835,124 @@ export function BotAutomationSettings({
     });
   }, [bot.id, load]);
 
-  const create = async () => {
-    if (!name.trim() || !prompt.trim()) return;
-    setCreating(true);
-    setError(null);
-    try {
-      let schedule: Pick<CreateBotAutomationInput, 'cronExpr' | 'recurring' | 'manual' | 'intervalMs'>;
-      if (mode === 'manual') {
-        schedule = { cronExpr: '0 0 * * *', recurring: false, manual: true };
-      } else if (mode === 'daily') {
-        const [hour, minute] = dailyTime.split(':').map(Number);
-        schedule = { cronExpr: `${minute || 0} ${hour || 0} * * *`, recurring: true, manual: false };
-      } else if (mode === 'interval') {
-        schedule = { cronExpr: '0 * * * *', recurring: true, manual: false, intervalMs: Math.max(1, intervalMinutes) * 60_000 };
-      } else {
-        schedule = { cronExpr: cronExpr.trim(), recurring: true, manual: false };
-      }
-      await window.electronAPI.maker.botAutomations.create({
-        botId: bot.id,
-        name: name.trim(),
-        prompt: prompt.trim(),
-        timezone: timezone.trim() || 'UTC',
-        ...schedule,
-        projectBindingId: projectBindingId || null,
-        targetRouteId: targetRouteId || null,
-        durableNoteNamespace: durableNoteNamespace.trim() || null,
-        executionPolicy: executionPolicyFromDraft(executionPolicy),
-      });
-      setName('');
-      setPrompt('');
-      setDurableNoteNamespace('');
-      await load();
-    } catch (cause) {
-      setError(readError(cause));
-    } finally {
-      setCreating(false);
-    }
-  };
-
   return (
     <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-      <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-        <CalendarClock size={16} />
-        {t('bots.automations.title')}
-      </div>
-      <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{t('bots.automations.description')}</p>
-      {!enabled ? (
-        <p className="mt-4 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-tertiary)]">{t('bots.automations.enableFirst')}</p>
-      ) : !trusted ? (
-        <p className="mt-4 rounded-xl bg-[var(--warning-bg-soft)] px-3 py-3 text-12 text-[var(--warning-fg)]">{t('bots.automations.trustedRequired')}</p>
-      ) : null}
-
-      {enabled && trusted ? (
-        <div className="mt-4 rounded-xl border border-[var(--border-default)] p-4">
-          <p className="text-12 font-medium text-[var(--text-primary)]">{t('bots.automations.addTitle')}</p>
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-              {t('bots.automations.name')}
-              <input value={name} onChange={(event) => setName(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]" />
-            </label>
-            <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-              {t('bots.automations.schedule')}
-              <select value={mode} onChange={(event) => setMode(event.target.value as ScheduleMode)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]">
-                <option value="manual">{t('bots.automations.manual')}</option>
-                <option value="daily">{t('bots.automations.daily')}</option>
-                <option value="interval">{t('bots.automations.interval')}</option>
-                <option value="cron">Cron</option>
-              </select>
-            </label>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+            <CalendarClock size={16} />
+            {t('bots.automations.title')}
           </div>
-          <label className="mt-3 flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">
-            {t('bots.automations.instruction')}
-            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]" />
-          </label>
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            {mode === 'daily' ? (
-              <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.dailyTime')}<input type="time" value={dailyTime} onChange={(event) => setDailyTime(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" /></label>
-            ) : mode === 'interval' ? (
-              <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.intervalMinutes')}<input type="number" min={1} value={intervalMinutes} onChange={(event) => setIntervalMinutes(Number(event.target.value))} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" /></label>
-            ) : mode === 'cron' ? (
-              <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">Cron<input value={cronExpr} onChange={(event) => setCronExpr(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 font-mono text-12 text-[var(--text-primary)]" /></label>
-            ) : <div />}
-            {mode !== 'manual' ? (
-              <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.timezone')}<input value={timezone} onChange={(event) => setTimezone(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)]" /></label>
-            ) : null}
-          </div>
-          <div className="mt-3 grid gap-3 md:grid-cols-3">
-            <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.project')}<select value={projectBindingId} onChange={(event) => setProjectBindingId(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-11 text-[var(--text-primary)]"><option value="">{t('bots.automations.defaultProject')}</option>{activeProjects.map((item) => <option key={item.id} value={item.id}>{item.workingDir}</option>)}</select></label>
-            <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.deliveryRoute')}<select value={targetRouteId} onChange={(event) => setTargetRouteId(event.target.value)} className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-11 text-[var(--text-primary)]"><option value="">{t('bots.automations.canonicalTask')}</option>{activeRoutes.map((item) => <option key={item.id} value={item.id}>{item.routeKey}</option>)}</select></label>
-            <label className="flex flex-col gap-1.5 text-11 text-[var(--text-secondary)]">{t('bots.automations.noteNamespace')}<input value={durableNoteNamespace} onChange={(event) => setDurableNoteNamespace(event.target.value)} placeholder="daily-report" className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-11 text-[var(--text-primary)]" /></label>
-          </div>
-          <AutomationPolicyFields
-            draft={executionPolicy}
-            onChange={setExecutionPolicy}
-            bots={bots}
-            currentBotId={bot.id}
-          />
-          <div className="mt-4 flex justify-end">
-            <button type="button" disabled={creating || !name.trim() || !prompt.trim()} onClick={() => void create()} className="inline-flex h-8 items-center gap-2 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-11 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"><Plus size={13} />{creating ? t('bots.automations.creating') : t('bots.automations.create')}</button>
-          </div>
+          <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+            {t('bots.automations.description')}
+          </p>
         </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
+            aria-label={t('bots.automations.refresh')}
+          >
+            <RefreshCcw size={14} className={loading ? 'animate-spin motion-reduce:animate-none' : undefined} />
+          </button>
+          {canCreate ? (
+            <button
+              type="button"
+              onClick={() => setDraft((current) => (current ? null : emptyAutomationFormValue()))}
+              className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--accent-cta-bg)] px-4 text-12 font-medium text-[var(--accent-pure-cta-fg)]"
+            >
+              <Plus size={13} />
+              {t('bots.automations.newRoutine')}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {!enabled ? (
+        <p className="mt-4 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-tertiary)]">
+          {t('bots.automations.enableFirst')}
+        </p>
+      ) : !trusted ? (
+        <p className="mt-4 rounded-xl bg-[var(--warning-bg-soft)] px-3 py-3 text-12 text-[var(--warning-fg)]">
+          {t('bots.automations.trustedRequired')}
+        </p>
       ) : null}
 
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <p className="text-12 font-medium text-[var(--text-primary)]">{t('bots.automations.listTitle')}</p>
-        <button type="button" onClick={() => void load()} className="rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]" aria-label={t('bots.automations.refresh')}><RefreshCcw size={14} /></button>
-      </div>
-      {loading ? <p className="mt-3 text-12 text-[var(--text-tertiary)]">{t('bots.automations.loading')}</p> : error ? <p className="mt-3 text-12 text-[var(--text-danger)]">{error}</p> : automations.filter((item) => item.status !== 'archived').length === 0 ? <p className="mt-3 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-tertiary)]">{t('bots.automations.empty')}</p> : <div className="mt-3 flex flex-col gap-3">{automations.filter((item) => item.status !== 'archived').map((automation) => <AutomationCard key={automation.id} automation={automation} projects={activeProjects} routes={activeRoutes} currentProfileVersion={bot.currentVersion ?? automation.createdWithProfileVersion} bots={bots} currentBotId={bot.id} onChanged={load} onOpenTask={onOpenTask} />)}</div>}
+      {canCreate && draft ? (
+        <AutomationForm
+          initial={draft}
+          submitLabel={t('bots.automations.create')}
+          submittingLabel={t('bots.automations.creating')}
+          projects={activeProjects}
+          routes={activeRoutes}
+          bots={bots}
+          currentBotId={bot.id}
+          onSubmit={async (submission) => {
+            await window.electronAPI.maker.botAutomations.create({
+              botId: bot.id,
+              ...submission,
+            });
+            setDraft(null);
+            await load();
+          }}
+          onCancel={() => setDraft(null)}
+        />
+      ) : null}
+
+      {loading ? (
+        <p className="mt-4 text-12 text-[var(--text-tertiary)]">{t('bots.automations.loading')}</p>
+      ) : error ? (
+        <p className="mt-4 break-words text-12 text-[var(--text-danger)] [overflow-wrap:anywhere]">{error}</p>
+      ) : visibleAutomations.length > 0 ? (
+        <div className="mt-4 flex flex-col gap-2">
+          {visibleAutomations.map((automation) => (
+            <AutomationRow
+              key={automation.id}
+              automation={automation}
+              projects={activeProjects}
+              routes={activeRoutes}
+              currentProfileVersion={bot.currentVersion ?? automation.createdWithProfileVersion}
+              bots={bots}
+              currentBotId={bot.id}
+              onChanged={load}
+              onOpenTask={onOpenTask}
+            />
+          ))}
+        </div>
+      ) : draft ? null : (
+        <div className="mt-4 rounded-xl border border-dashed border-[var(--border-default)] px-4 py-5">
+          <p className="text-12 leading-5 text-[var(--text-secondary)]">
+            {t('bots.automations.empty')}
+          </p>
+          {canCreate ? (
+            <>
+              <p className="mt-3 text-11 text-[var(--text-tertiary)]">
+                {t('bots.automations.templates.hint')}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {AUTOMATION_TEMPLATES.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() =>
+                      setDraft(
+                        emptyAutomationFormValue({
+                          ...template.value,
+                          prompt: t(`bots.automations.templates.${template.id}.prompt`),
+                        }),
+                      )
+                    }
+                    className="rounded-full border border-[var(--border-default)] px-3 py-1.5 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  >
+                    {t(`bots.automations.templates.${template.id}.name`)}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
     </section>
   );
 }

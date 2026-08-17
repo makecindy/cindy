@@ -5677,21 +5677,21 @@
       }
     },
     "inbox": {
-      "title": "タスクイベント受信箱",
-      "description": "他のタスクの完了、失敗、判断待ちを購読します。Bot は永続受信箱から起動し、現在の状態を確認してから自身の結果を接続済みチャンネルへ送ります。",
+      "title": "他のタスクを見る",
+      "description": "他のタスクの動きを購読します。完了、失敗、判断待ちになると、この Bot が自動で起きて対応し、結果を接続済みのメッセージチャネルへ送ります。",
       "defaultSubscriptionName": "タスク結果と判断待ち",
-      "watchTaskStates": "タスク状態を自動監視",
+      "watchTaskStates": "他のタスクを自動で見る",
       "saving": "保存中…",
       "pending": "待機中",
       "processing": "処理中",
       "failed": "要確認",
-      "timeline": "イベントタイムライン",
-      "ruleSummary": "完了、失敗、判断待ち、検収待ち、総合管理待ちを監視します。",
-      "pausedSummary": "タスクイベントの自動監視は一時停止中です。",
+      "timeline": "最近の動き",
+      "ruleSummary": "タスクが完了・失敗したとき、または判断待ち・検収待ち・総合管理待ちのときに、この Bot に通知します。",
+      "pausedSummary": "オフ: この Bot は他のタスクの動きを引き受けません。",
       "refresh": "タスクイベントを更新",
       "loading": "タスクイベントを読み込み中…",
-      "emptyWatching": "監視中です。該当する新しいイベントがここに表示され、この Bot を起動します。",
-      "emptyPaused": "監視を有効にすると、この Bot に永続タスクイベント受信箱が追加されます。",
+      "emptyWatching": "オンです。他のタスクで何か起きるとここに表示され、この Bot を起こします。",
+      "emptyPaused": "上のスイッチをオンにすると、他のタスクの完了・失敗・判断待ちをこの Bot が引き受けます。",
       "loadFailed": "タスクイベントを読み込めませんでした。",
       "saveFailed": "タスクイベント購読を保存できませんでした。",
       "retryFailed": "このタスクイベントを再試行できませんでした。",
@@ -5715,7 +5715,7 @@
         "session": {
           "state": {
             "transition": "タスク状態が遷移しました",
-            "guardian-anomaly": "監視ハートビートが異常を検出しました"
+            "guardian-anomaly": "タスクが止まっているようです"
           },
           "turn": {
             "completed": "タスクのターンが完了しました",
@@ -5790,16 +5790,10 @@
     },
     "automations": {
       "title": "Bot 自動化",
-      "description": "定期または手動の Routine を作成し、実行タスク、結果、worktree、配信状態を確認します。",
+      "description": "この Bot が自分で実行する Routine。スケジュール、または「今すぐ実行」で動きます。",
       "enableFirst": "先に能力設定で自動化を有効にして Profile を保存してください。",
       "trustedRequired": "無人実行は承認を待てません。「信頼された操作」を選択して保存してください。",
-      "addTitle": "Routine を追加",
       "name": "名前",
-      "schedule": "実行方法",
-      "instruction": "実行ごとの指示",
-      "manual": "手動実行のみ",
-      "daily": "毎日",
-      "interval": "固定間隔",
       "dailyTime": "毎日の実行時刻",
       "intervalMinutes": "間隔（分）",
       "timezone": "タイムゾーン",
@@ -5807,20 +5801,16 @@
       "defaultProject": "Bot の既定プロジェクト",
       "deliveryRoute": "結果の配信先",
       "canonicalTask": "Bot のメインタスク",
-      "noteNamespace": "永続状態の名前空間",
+      "noteNamespace": "メモ領域",
       "create": "Routine を作成",
       "creating": "作成中…",
-      "listTitle": "Routine",
-      "empty": "自動化 Routine はまだありません。",
+      "empty": "Routine はまだありません。Routine は、この Bot が自分で実行する 1 つの指示です。",
       "loading": "自動化を読み込み中…",
       "refresh": "自動化を更新",
-      "pause": "一時停止",
-      "resume": "再開",
       "runNow": "今すぐ実行",
       "archive": "アーカイブ",
       "nextRun": "次回実行",
       "activeRuns": "{{count}} 件実行中",
-      "everyMinutes": "{{count}} 分ごと",
       "noRuns": "実行履歴はまだありません。",
       "worktree": "Worktree",
       "delivery": "配信",
@@ -5830,8 +5820,8 @@
       "edit": "編集",
       "saving": "保存中…",
       "nextProfileVersion": "次回は Profile v{{version}} を使用",
-      "executionPolicy": "実行境界",
-      "executionPolicyDescription": "各実行では時間、予算、Bot 間の協力権限が固定されます。",
+      "executionPolicy": "実行の上限",
+      "executionPolicyDescription": "この Routine の実行は、常にこの上限の範囲内で行われます。",
       "timeoutMinutes": "最大実行時間（分）",
       "budgetTokens": "Token 予算",
       "unlimited": "無制限",
@@ -5873,7 +5863,49 @@
       "outputArtifacts": "出力成果物 {{count}} 件",
       "retryDuplicateTitle": "再配信するとメッセージが重複する可能性があります",
       "retryDuplicateDescription": "このチャンネルでは安全に途中から再開できません。配信済みの本文または添付ファイル {{count}} 件が再送される可能性があります。",
-      "retryDuplicateConfirm": "それでも再配信"
+      "retryDuplicateConfirm": "それでも再配信",
+      "newRoutine": "新規",
+      "whatToDo": "何をしますか？",
+      "whatToDoPlaceholder": "例：昨日終わった作業をまとめて、短い進捗サマリーを書く。",
+      "whenToRun": "いつ実行しますか？",
+      "mode": {
+        "manual": "手動",
+        "daily": "毎日",
+        "interval": "間隔",
+        "cron": "カスタム"
+      },
+      "manualHint": "「今すぐ実行」を押したときだけ実行されます。",
+      "cronExpr": "Cron 式",
+      "cronHint": "5 項目の cron 式。例：0 9 * * 1-5 は平日 09:00。",
+      "timezoneHint": "時刻は {{timezone}} で計算します。",
+      "nameAuto": "指示から自動で付ける",
+      "advanced": "詳細",
+      "advancedHint": "プロジェクト、配信先、実行の上限、タイムゾーン",
+      "noteNamespaceHint": "この Routine が実行のあいだ自分のメモを置く場所です。",
+      "scheduleSummary": {
+        "manual": "手動のみ",
+        "daily": "毎日 {{time}}",
+        "interval": "{{count}} 分ごと",
+        "cron": "Cron: {{expr}}"
+      },
+      "lastRun": "前回の実行",
+      "runHistory": "実行履歴",
+      "enableRoutine": "この Routine をオンにする",
+      "templates": {
+        "hint": "例から始める:",
+        "dailyDigest": {
+          "name": "毎日 9:00 · 昨日の進捗をまとめる",
+          "prompt": "昨日終わった作業をまとめて、短い進捗サマリーを書く。"
+        },
+        "inboxTriage": {
+          "name": "1 時間ごと · 受信箱を整理",
+          "prompt": "受信箱を確認して、新しい内容を短い ToDo リストにまとめる。"
+        },
+        "weeklyReport": {
+          "name": "毎週金曜 17:00 · 今週のまとめ",
+          "prompt": "今週終わったことを短くまとめる。"
+        }
+      }
     },
     "permissionsLabel": "権限モード",
     "permissionAsk": "実行前に確認",

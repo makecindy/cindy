@@ -20,6 +20,7 @@ import {
   type BotInboxStatus,
 } from '../../../shared/botSessionEvents';
 import type { BotProfile } from './botStore';
+import { Switch } from '@/components/ui/switch';
 
 const CONTROL_SUBSCRIPTION_PREFIX = 'bot-control-events:';
 
@@ -119,31 +120,34 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
           </p>
         </div>
         <label className="flex shrink-0 items-center gap-2 text-12 text-[var(--text-secondary)]">
-          <input
-            type="checkbox"
+          <Switch
             checked={watching}
             disabled={saving || bot.status !== 'active'}
-            onChange={(event) => void setWatching(event.target.checked)}
-            className="h-4 w-4 rounded border-[var(--border-default)] accent-[var(--accent-cta-bg)]"
+            onCheckedChange={(next) => void setWatching(next)}
+            aria-label={t('bots.inbox.watchTaskStates')}
           />
           {saving ? t('bots.inbox.saving') : t('bots.inbox.watchTaskStates')}
         </label>
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <div className="rounded-lg bg-[var(--surface)] px-3 py-2">
-          <span className="block text-10 text-[var(--text-tertiary)]">{t('bots.inbox.pending')}</span>
-          <span className="mt-1 block text-16 font-medium text-[var(--text-primary)]">{pendingCount}</span>
+      {/* Three zeroes are noise before anything has arrived — the counts only
+          appear once there is something to count. */}
+      {items.length > 0 ? (
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="rounded-lg bg-[var(--surface)] px-3 py-2">
+            <span className="block text-10 text-[var(--text-tertiary)]">{t('bots.inbox.pending')}</span>
+            <span className="mt-1 block text-16 font-medium text-[var(--text-primary)]">{pendingCount}</span>
+          </div>
+          <div className="rounded-lg bg-[var(--surface)] px-3 py-2">
+            <span className="block text-10 text-[var(--text-tertiary)]">{t('bots.inbox.processing')}</span>
+            <span className="mt-1 block text-16 font-medium text-[var(--text-primary)]">{processingCount}</span>
+          </div>
+          <div className="rounded-lg bg-[var(--surface)] px-3 py-2">
+            <span className="block text-10 text-[var(--text-tertiary)]">{t('bots.inbox.failed')}</span>
+            <span className="mt-1 block text-16 font-medium text-[var(--text-primary)]">{failedCount}</span>
+          </div>
         </div>
-        <div className="rounded-lg bg-[var(--surface)] px-3 py-2">
-          <span className="block text-10 text-[var(--text-tertiary)]">{t('bots.inbox.processing')}</span>
-          <span className="mt-1 block text-16 font-medium text-[var(--text-primary)]">{processingCount}</span>
-        </div>
-        <div className="rounded-lg bg-[var(--surface)] px-3 py-2">
-          <span className="block text-10 text-[var(--text-tertiary)]">{t('bots.inbox.failed')}</span>
-          <span className="mt-1 block text-16 font-medium text-[var(--text-primary)]">{failedCount}</span>
-        </div>
-      </div>
+      ) : null}
 
       <div className="mt-4 flex items-center justify-between gap-3">
         <div>
@@ -158,14 +162,18 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
           aria-label={t('bots.inbox.refresh')}
         >
-          <RefreshCcw size={14} className={loading ? 'animate-spin' : undefined} />
+          <RefreshCcw
+            size={14}
+            className={loading ? 'animate-spin motion-reduce:animate-none' : undefined}
+          />
         </button>
       </div>
 
       {error ? <p className="mt-3 break-words text-11 text-[var(--text-danger)] [overflow-wrap:anywhere]" role="alert">{error}</p> : null}
       {loading ? (
         <div className="mt-4 flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
-          <LoaderCircle size={13} className="animate-spin" /> {t('bots.inbox.loading')}
+          <LoaderCircle size={13} className="animate-spin motion-reduce:animate-none" />{' '}
+          {t('bots.inbox.loading')}
         </div>
       ) : items.length === 0 ? (
         <div className="mt-4 rounded-xl border border-dashed border-[var(--border-default)] px-4 py-5 text-12 leading-5 text-[var(--text-secondary)]">
@@ -180,7 +188,7 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
                 <div className="flex items-start gap-3">
                   <StatusIcon
                     size={15}
-                    className={item.status === 'processing' ? 'mt-0.5 shrink-0 animate-spin text-[var(--text-secondary)]' : item.status === 'failed' ? 'mt-0.5 shrink-0 text-[var(--text-danger)]' : 'mt-0.5 shrink-0 text-[var(--text-tertiary)]'}
+                    className={item.status === 'processing' ? 'mt-0.5 shrink-0 animate-spin text-[var(--text-secondary)] motion-reduce:animate-none' : item.status === 'failed' ? 'mt-0.5 shrink-0 text-[var(--text-danger)]' : 'mt-0.5 shrink-0 text-[var(--text-tertiary)]'}
                     aria-label={t(`bots.inbox.status.${item.status}`)}
                   />
                   <div className="min-w-0 flex-1">
@@ -222,7 +230,10 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
                         className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
                         aria-label={t('bots.inbox.retry')}
                       >
-                        <RotateCcw size={13} className={retryingId === item.id ? 'animate-spin' : undefined} />
+                        <RotateCcw
+                          size={13}
+                          className={retryingId === item.id ? 'animate-spin motion-reduce:animate-none' : undefined}
+                        />
                       </button>
                     ) : null}
                     <button
