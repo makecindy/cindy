@@ -9,7 +9,8 @@ import {
   type WorkLouderCodexTaskOption,
 } from '../../shared/workLouderCodex.js';
 
-const TASK_OPTION_LIMIT = 100;
+export const WORKLOUDER_CODEX_TASK_OPTION_LIMIT = 100;
+const TASK_OPTION_LIMIT = WORKLOUDER_CODEX_TASK_OPTION_LIMIT;
 
 export interface WorkLouderCodexTaskSlotRow {
   id: string;
@@ -70,6 +71,7 @@ export interface WorkLouderCodexTaskCatalogInput {
   title: string | null;
   pinnedAt: number | null;
   userSendAt: number | null;
+  sidebarOrder?: number;
 }
 
 /**
@@ -93,7 +95,18 @@ export function buildWorkLouderCodexTaskCatalog(
       pinnedAt: row.pinnedAt,
       userSendAt: row.userSendAt,
     }));
-  const sidebar = catalogRows.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(toTaskOption);
+  const byId = new Map(catalogRows.map((row) => [row.id, row] as const));
+  const visibleOrder = rows
+    .filter((row) => row.sidebarOrder !== undefined)
+    .toSorted((left, right) => (left.sidebarOrder ?? 0) - (right.sidebarOrder ?? 0));
+  const sidebarSource =
+    visibleOrder.length > 0
+      ? visibleOrder.flatMap((item) => {
+          const row = byId.get(item.id);
+          return row ? [row] : [];
+        })
+      : catalogRows;
+  const sidebar = sidebarSource.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(toTaskOption);
   const lastSent = sortLastSentRows(catalogRows)
     .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
     .map(toTaskOption);

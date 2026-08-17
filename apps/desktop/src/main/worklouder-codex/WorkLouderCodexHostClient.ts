@@ -43,6 +43,8 @@ export interface WorkLouderCodexHostClientDeps {
   log: WorkLouderCodexLoggerLike;
   connectTimeoutMs?: number;
   disposeTimeoutMs?: number;
+  /** How long a connection must stay up before the crash budget resets. */
+  stableConnectionMs?: number;
 }
 
 /**
@@ -55,6 +57,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private connectWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private consecutiveCrashes = 0;
+  private stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus: 'connected' | 'not-detected' | 'error' | null = null;
   private disposed = false;
   private unavailableLogged = false;
@@ -309,7 +312,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.lastStatus = message.status;
     this.updateConnectionStatus(message.status);
     if (message.status === 'connected') {
-      this.consecutiveCrashes = 0;
+      this.armStableConnection();
       this.deps.log.info('Codex Micro lighting connected');
     } else if (message.status === 'not-detected') {
       this.deps.log.debug('Codex Micro lighting device not detected');
@@ -321,6 +324,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private handleExit(child: WorkLouderCodexChildLike, code: number): void {
     if (this.child !== child) return;
     this.clearConnectWatchdog();
+    this.clearStableConnection();
     this.child = null;
     this.lastStatus = null;
     if (this.disposed) {
@@ -385,8 +389,24 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.connectWatchdogTimer = null;
   }
 
+  private armStableConnection(): void {
+    this.clearStableConnection();
+    this.stableConnectionTimer = setTimeout(() => {
+      this.stableConnectionTimer = null;
+      this.consecutiveCrashes = 0;
+    }, this.deps.stableConnectionMs ?? 10_000);
+    this.stableConnectionTimer.unref?.();
+  }
+
+  private clearStableConnection(): void {
+    if (!this.stableConnectionTimer) return;
+    clearTimeout(this.stableConnectionTimer);
+    this.stableConnectionTimer = null;
+  }
+
   private completeDispose(child: WorkLouderCodexChildLike): void {
     this.clearConnectWatchdog();
+    this.clearStableConnection();
     if (this.disposeTimer) {
       clearTimeout(this.disposeTimer);
       this.disposeTimer = null;

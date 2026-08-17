@@ -59,6 +59,22 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
     expect(catalog.sidebar.map((task) => task.id)).toEqual(['older', 'never', 'newer']);
   });
 
+  it('keeps last-sent on the full catalog when only some rows are visible', () => {
+    const catalog = buildWorkLouderCodexTaskCatalog([
+      { id: 'hidden-new', title: 'Hidden but recent', pinnedAt: null, userSendAt: 3_000 },
+      {
+        id: 'visible-old',
+        title: 'Visible older',
+        pinnedAt: null,
+        userSendAt: 1_000,
+        sidebarOrder: 0,
+      },
+    ]);
+
+    expect(catalog.sidebar.map((task) => task.id)).toEqual(['visible-old']);
+    expect(catalog.lastSent.map((task) => task.id)).toEqual(['hidden-new', 'visible-old']);
+  });
+
   it('keeps an untitled task addressable instead of dropping it', () => {
     const catalog = buildWorkLouderCodexTaskCatalog([
       { id: 'blank', title: null, pinnedAt: null, userSendAt: null },

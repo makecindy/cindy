@@ -75,6 +75,8 @@ export interface InputDevicePublishedTask {
   pinnedAt: number | null;
   /** Last time the user sent a message, in unix ms. Null if they never have. */
   userSendAt: number | null;
+  /** 0-based order among currently visible sidebar rows. Absent when hidden. */
+  sidebarOrder?: number;
 }
 
 export function isInputDeviceCommandId(value: unknown): value is InputDeviceCommandId {

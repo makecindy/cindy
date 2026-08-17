@@ -174,6 +174,20 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(() => ipc.publishTasks(EVENT, 'nope')).toThrow();
     expect(() => ipc.publishTasks(EVENT, [{ id: '', title: 'x', pinnedAt: null }])).toThrow();
     expect(() => ipc.publishTasks(EVENT, [{ id: 'a', title: 5, pinnedAt: null }])).toThrow();
+    expect(() =>
+      ipc.publishTasks(EVENT, [{ id: 'a', title: 'x'.repeat(513), pinnedAt: null, userSendAt: null }]),
+    ).toThrow('title is too long');
+    expect(() =>
+      ipc.publishTasks(
+        EVENT,
+        Array.from({ length: 101 }, (_, index) => ({
+          id: `task-${index}`,
+          title: 'x',
+          pinnedAt: null,
+          userSendAt: null,
+        })),
+      ),
+    ).toThrow('too long');
     expect(publishTasks).not.toHaveBeenCalled();
   });
 

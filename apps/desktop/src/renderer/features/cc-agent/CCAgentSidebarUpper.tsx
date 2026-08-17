@@ -629,28 +629,27 @@ export function CCAgentSidebarUpper() {
   const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
     const renderedIds = getVisibleSidebarSessionIds();
-    // 空列表也要上报:换机器、折叠或搜索把可见行清掉时,旧映射必须让位,
-    // 否则 AG 键还会打开上一份已经看不见的任务。
+    const sidebarOrder = new Map(renderedIds.map((id, index) => [id, index] as const));
+    // 空可见列表也要上报:换机器、折叠或搜索把可见行清掉时,侧栏映射必须让位,
+    // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
+    // / 优先 / 自定义不能被折叠裁掉。
     const byId = new Map(
       [...visibleSessionsWithRemote, ...remoteProjectSessions].map((session) => [
         session.id,
         session,
       ]),
     );
-    const tasks = renderedIds.flatMap((id) => {
-      const session = byId.get(id);
-      if (!session) return [];
-      // 渲染端存 ISO 字符串,键盘那边按毫秒排最近发送。
+    const tasks = [...byId.values()].slice(0, 100).map((session) => {
       const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
       const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
-      return [
-        {
-          id: session.id,
-          title: session.title ?? null,
-          pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
-          userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
-        },
-      ];
+      const order = sidebarOrder.get(session.id);
+      return {
+        id: session.id,
+        title: session.title ?? null,
+        pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
+        userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
+        ...(order === undefined ? {} : { sidebarOrder: order }),
+      };
     });
     // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
     const key = JSON.stringify(tasks);
@@ -676,7 +675,12 @@ export function CCAgentSidebarUpper() {
         publishSidebarTasks();
       });
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'hidden', 'aria-hidden'],
+    });
     return () => {
       observer.disconnect();
       if (frame !== null) cancelAnimationFrame(frame);

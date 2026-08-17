@@ -299,4 +299,41 @@ describe('WorkLouderCodexHostClient', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not reset the crash budget on a connection that dies immediately', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = Array.from({ length: 7 }, () => new FakeChild());
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const log = logger();
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log,
+        stableConnectionMs: 10_000,
+      });
+      const frame = createWorkLouderCodexLightingFrame([
+        {
+          sessionId: 'session-1',
+          phase: 'running',
+          compactDetail: '',
+          attention: false,
+        },
+      ]);
+      client.update(frame);
+
+      for (let index = 0; index < 6; index += 1) {
+        children[index].emit('message', { kind: 'state', status: 'connected' });
+        children[index].emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(Math.min(10_000, 500 * 2 ** index));
+      }
+
+      expect(fork).toHaveBeenCalledTimes(6);
+      expect(log.error).toHaveBeenCalledWith(
+        'Codex Micro lighting host repeatedly crashed; disabled until restart',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

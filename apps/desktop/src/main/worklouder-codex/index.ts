@@ -133,6 +133,7 @@ export function registerWorkLouderCodexInputDevice(): void {
     },
     resumeTaskSlots: () => workLouderCodexLightingController.resumeTaskSlots(),
     suspendTaskSlots: () => {
+      rendererTaskCatalog = null;
       workLouderCodexLightingController.suspendTaskSlots();
     },
     dispose: () => workLouderCodexLightingController.dispose(),

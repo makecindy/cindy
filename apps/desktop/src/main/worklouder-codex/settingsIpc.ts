@@ -18,6 +18,7 @@ import {
   type WorkLouderCodexPublishedTask,
   type WorkLouderCodexState,
 } from '../../shared/workLouderCodex.js';
+import { WORKLOUDER_CODEX_TASK_OPTION_LIMIT } from './taskSlots.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 const SETTING_KEYS = [
@@ -275,6 +276,9 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
       if (!Array.isArray(value)) {
         throwIpcError('INVALID_PARAMS', 'Work Louder Codex task list must be an array');
       }
+      if (value.length > WORKLOUDER_CODEX_TASK_OPTION_LIMIT) {
+        throwIpcError('INVALID_PARAMS', 'Work Louder Codex task list is too long');
+      }
       const tasks: WorkLouderCodexPublishedTask[] = value.map((item) => {
         const row = requireRecord(item, 'Work Louder Codex task must be an object');
         if (typeof row.id !== 'string' || row.id.length === 0 || row.id.length > 256) {
@@ -282,6 +286,9 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
         }
         if (row.title !== null && typeof row.title !== 'string') {
           throwIpcError('INVALID_PARAMS', 'Work Louder Codex task title is invalid');
+        }
+        if (typeof row.title === 'string' && row.title.length > 512) {
+          throwIpcError('INVALID_PARAMS', 'Work Louder Codex task title is too long');
         }
         if (
           row.pinnedAt !== null &&
@@ -296,11 +303,20 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
         ) {
           throwIpcError('INVALID_PARAMS', 'Work Louder Codex task userSendAt is invalid');
         }
+        if (
+          row.sidebarOrder !== undefined &&
+          (typeof row.sidebarOrder !== 'number' ||
+            !Number.isInteger(row.sidebarOrder) ||
+            row.sidebarOrder < 0)
+        ) {
+          throwIpcError('INVALID_PARAMS', 'Work Louder Codex task sidebarOrder is invalid');
+        }
         return {
           id: row.id,
-          title: typeof row.title === 'string' ? row.title.slice(0, 512) : null,
+          title: typeof row.title === 'string' ? row.title : null,
           pinnedAt: typeof row.pinnedAt === 'number' ? row.pinnedAt : null,
           userSendAt: typeof row.userSendAt === 'number' ? row.userSendAt : null,
+          ...(typeof row.sidebarOrder === 'number' ? { sidebarOrder: row.sidebarOrder } : {}),
         };
       });
       deps.publishTasks(tasks);
