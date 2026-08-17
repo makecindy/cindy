@@ -202,6 +202,10 @@ export interface AgentInputSendOpts {
   expectedClearBoundaryMs?: number | null;
   /** Main-owned input generation captured before async preparation. */
   expectedInputGeneration?: number;
+  /** Main-owned Session identity for a control-plane same-turn steer. */
+  expectedTurnSession?: object;
+  /** Main-owned maker-core turn generation for a control-plane same-turn steer. */
+  expectedTurnGeneration?: number;
   persistUserMessage?: {
     clientId: string;
     content: string;
@@ -264,6 +268,8 @@ export interface AgentInputCoordinatorDeps {
   isTurnRunning: (sessionId: string) => boolean;
   /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
   getTurnGeneration?: (sessionId: string) => number | null;
+  /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
+  getTurnSessionIdentity?: (sessionId: string) => object | null;
   /**
    * Reconcile the host's live session/tracker view after an abort or a
    * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
@@ -726,6 +732,11 @@ type PersistAcceptedUserMessageResult = 'persisted' | 'stale' | 'failed';
 function isNoActiveTurnError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /\[NO_ACTIVE_TURN\]|no active .*turn|has no active turn/i.test(msg);
+}
+
+function isStaleTurnError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\[STALE_TURN\]/i.test(msg);
 }
 
 /**
@@ -1684,8 +1695,18 @@ export class AgentInputCoordinator {
       touchUserSend?: boolean;
       /** 控制面插话不允许在 turn 结束竞态下退化成下一轮普通输入。 */
       fallbackToTurn?: boolean;
+      /** 控制面初检捕获的 live Session 对象，防 session id 被新实例复用。 */
+      expectedTurnSession?: object;
+      /** 控制面初检捕获的 maker-core turn generation。 */
+      expectedTurnGeneration?: number;
     },
   ): Promise<boolean> {
+    const matchesExpectedTurn = () =>
+      (opts?.expectedTurnSession === undefined ||
+        this.deps.getTurnSessionIdentity?.(sessionId) === opts.expectedTurnSession) &&
+      (opts?.expectedTurnGeneration === undefined ||
+        this.deps.getTurnGeneration?.(sessionId) === opts.expectedTurnGeneration);
+    if (!matchesExpectedTurn()) return false;
     const state = this.getState(sessionId);
     // Capture the clear boundary before any screening/reference/steer await.  The
     // live state may advance when `/clear` wins the race; this turn must retain
@@ -1817,10 +1838,27 @@ export class AgentInputCoordinator {
         item,
       );
       const cur = this.getState(sessionId);
+      const ownsCurrentRequest = this.isCurrentSteerRequest(
+        cur,
+        item.clientId,
+        steerGeneration,
+        steerRequestToken,
+      );
       if (
-        !this.isCurrentSteerRequest(cur, item.clientId, steerGeneration, steerRequestToken)
+        !ownsCurrentRequest ||
+        !matchesExpectedTurn()
       ) {
         // stop/close/clearSession 赢在筛查期间:steer 事务已被取消,静默放弃。
+        if (
+          ownsCurrentRequest &&
+          this.clearSteeringMarker(cur, item.clientId, {
+            generation: steerGeneration,
+            token: steerRequestToken,
+          })
+        ) {
+          this.clearDirectSteeringItem(cur, item.clientId);
+          this.emit(sessionId);
+        }
         this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
         return false;
       }
@@ -1870,6 +1908,20 @@ export class AgentInputCoordinator {
 
     try {
       const referenceContexts = await this.resolveReferenceContexts(item);
+      if (!matchesExpectedTurn()) {
+        const latest = this.getState(sessionId);
+        if (
+          this.clearSteeringMarker(latest, item.clientId, {
+            generation: steerGeneration,
+            token: steerRequestToken,
+          })
+        ) {
+          this.clearDirectSteeringItem(latest, item.clientId);
+          this.emit(sessionId);
+        }
+        this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
+        return false;
+      }
       item.persistedContent = attachSessionReferenceMetadata(
         item.persistedContent,
         referenceContexts,
@@ -1880,6 +1932,12 @@ export class AgentInputCoordinator {
         signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
         expectedClearBoundaryMs: steerClearBoundaryMs,
         expectedInputGeneration: steerGeneration,
+        ...(opts?.expectedTurnSession !== undefined
+          ? { expectedTurnSession: opts.expectedTurnSession }
+          : {}),
+        ...(opts?.expectedTurnGeneration !== undefined
+          ? { expectedTurnGeneration: opts.expectedTurnGeneration }
+          : {}),
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
       });
@@ -1905,6 +1963,14 @@ export class AgentInputCoordinator {
         token: steerRequestToken,
       });
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
+
+      if (isStaleTurnError(err)) {
+        if (markerStillPresent) {
+          this.clearDirectSteeringItem(latest, item.clientId);
+          this.emit(sessionId);
+        }
+        return false;
+      }
 
       if (isNoActiveTurnError(err)) {
         if (!markerStillPresent) {

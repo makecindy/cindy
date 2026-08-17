@@ -9896,11 +9896,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
       });
     },
-    steerQueuedMessage: async (sessionId, item) => {
+    steerQueuedMessage: async (sessionId, item, expectedTurn) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
       return inputCoordinator.steer(sessionId, item, {
         touchUserSend: true,
         fallbackToTurn: false,
+        expectedTurnSession: expectedTurn.session,
+        expectedTurnGeneration: expectedTurn.turnGeneration,
       });
     },
     getQueueSnapshot: async (sessionId) => {
@@ -10441,11 +10443,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ): Promise<void> => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     await assertReviewExternalInputAllowed(sessionId);
-    const sess = maker.getSession(sessionId);
-    if (!sess) {
-      log.warn('steer: session not running', { sessionId });
-      throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} is not running`);
-    }
+    const so = (sendOpts ?? {}) as {
+      messageUuid?: string;
+      userName?: string;
+      signal?: AbortSignal;
+      /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
+      fromMobileClient?: boolean;
+      expectedClearBoundaryMs?: number | null;
+      expectedInputGeneration?: number;
+      expectedTurnSession?: object;
+      expectedTurnGeneration?: number;
+    };
+    const readCurrentSteerSession = () => {
+      const current = maker.getSession(sessionId);
+      if (!current) {
+        log.warn('steer: session not running', { sessionId });
+        throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} is not running`);
+      }
+      if (
+        (so.expectedTurnSession !== undefined && current !== so.expectedTurnSession) ||
+        (so.expectedTurnGeneration !== undefined &&
+          current.getTurnGeneration() !== so.expectedTurnGeneration)
+      ) {
+        throw new Error(`[STALE_TURN] Session ${sessionId} changed turns before steer delivery`);
+      }
+      return current;
+    };
+    let sess = readCurrentSteerSession();
     log.info('steer: invoked', {
       sessionId,
       agentKind: sess.agentKind,
@@ -10482,19 +10506,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       activeAfterNormalize: sess.isTurnRunning(),
       ...summarizeIpcUserMessage(normalized),
     });
+    sess = readCurrentSteerSession();
     if (!sess.isTurnRunning()) {
       throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
     }
     const meta = await maker.getSessionMeta(sessionId).catch(() => null);
-    const so = (sendOpts ?? {}) as {
-      messageUuid?: string;
-      userName?: string;
-      signal?: AbortSignal;
-      /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
-      fromMobileClient?: boolean;
-      expectedClearBoundaryMs?: number | null;
-      expectedInputGeneration?: number;
-    };
+    sess = readCurrentSteerSession();
     // 手机说明同样只进 wire payload(steer 路径不落库用户消息,天然不污染原话)。
     // 两个来源都要认:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
     const steerNote =
@@ -10513,6 +10530,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputClearBoundary(sessionId, precondition.expected);
       }
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
+      sess = readCurrentSteerSession();
       await sess.steer(steerPayload as never, {
         logTitle: meta?.title,
         messageUuid: so.messageUuid,
@@ -11214,6 +11232,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
+    getTurnSessionIdentity: (sessionId) => getStableSessionForTurnBoundary(sessionId) ?? null,
     reconcileTurnIdle: (sessionId) => {
       // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止
       // 但终态事件丢失时，都走同一条收口路径。

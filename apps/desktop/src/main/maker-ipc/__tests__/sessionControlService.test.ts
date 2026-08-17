@@ -7,6 +7,14 @@ import {
   sessionQueueOriginForDispatcher,
 } from '../sessionControlService.js';
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function item(origin?: AgentInputQueuedMessage['origin']): AgentInputQueuedMessage {
   return {
     clientId: 'queued-1',
@@ -59,6 +67,7 @@ function setup(opts?: {
     agentKind: 'codex' as const,
     capabilities: { sameTurnSteer: { supported: opts?.steerSupported ?? true } },
     isTurnRunning: vi.fn(() => opts?.running ?? true),
+    getTurnGeneration: vi.fn(() => 3),
     requestGracefulStop: vi.fn(async () => ({
       status: 'waiting-for-safe-point' as const,
       turnGeneration: 3,
@@ -158,7 +167,7 @@ describe('session control domain service', () => {
   });
 
   it('steers only a live supported turn and never falls back after a terminal race', async () => {
-    const { deps, service } = setup();
+    const { deps, live, service } = setup();
     await expect(
       service.steerSession({
         callerSessionId: 'caller',
@@ -173,6 +182,11 @@ describe('session control domain service', () => {
       queuedMessageId: 'steer-1',
       message: 'urgent',
     });
+    expect(deps.steerQueuedMessage).toHaveBeenCalledWith(
+      'target',
+      expect.objectContaining({ clientId: 'steer-1' }),
+      { session: live, turnGeneration: 3 },
+    );
 
     await expect(
       setup({ running: false }).service.steerSession({
@@ -198,6 +212,46 @@ describe('session control domain service', () => {
         message: 'urgent',
       }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'NO_ACTIVE_TURN' });
+  });
+
+  it('rejects when the original turn changes while the control message is being built', async () => {
+    const generationRace = setup();
+    const generationGate = deferred<AgentInputQueuedMessage>();
+    generationRace.deps.createQueuedMessage.mockImplementationOnce(() => generationGate.promise);
+    const generationResult = generationRace.service.steerSession({
+      callerSessionId: 'caller',
+      targetSessionId: 'target',
+      message: 'urgent',
+    });
+    while (generationRace.deps.createQueuedMessage.mock.calls.length === 0) {
+      await Promise.resolve();
+    }
+    generationRace.live.getTurnGeneration.mockReturnValue(4);
+    generationGate.resolve(item());
+    await expect(generationResult).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'NO_ACTIVE_TURN',
+    });
+    expect(generationRace.deps.steerQueuedMessage).not.toHaveBeenCalled();
+
+    const replacementRace = setup();
+    const replacement = {
+      ...replacementRace.live,
+      isTurnRunning: vi.fn(() => true),
+      getTurnGeneration: vi.fn(() => 3),
+    };
+    replacementRace.deps.createQueuedMessage.mockImplementationOnce(async () => {
+      replacementRace.deps.getLiveSession.mockReturnValue(replacement);
+      return item();
+    });
+    await expect(
+      replacementRace.service.steerSession({
+        callerSessionId: 'caller',
+        targetSessionId: 'target',
+        message: 'urgent',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'NO_ACTIVE_TURN' });
+    expect(replacementRace.deps.steerQueuedMessage).not.toHaveBeenCalled();
   });
 
   it('merges canonical activity with live stop control without hard-abort semantics', async () => {

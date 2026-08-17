@@ -144,6 +144,8 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   if (
     !('fromMobileClient' in opts) &&
     !('expectedInputGeneration' in opts) &&
+    !('expectedTurnSession' in opts) &&
+    !('expectedTurnGeneration' in opts) &&
     !('inputAbortSignal' in opts) &&
     !('signal' in opts)
   ) {
@@ -152,6 +154,8 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   const {
     fromMobileClient: _ignoredMobile,
     expectedInputGeneration: _ignoredGeneration,
+    expectedTurnSession: _ignoredTurnSession,
+    expectedTurnGeneration: _ignoredTurnGeneration,
     inputAbortSignal: _ignoredAbortSignal,
     signal: _ignoredSignal,
     ...rest

@@ -170,6 +170,7 @@ function createHarness(opts?: {
 }) {
   let running = false;
   let turnGeneration = 0;
+  let turnSessionIdentity: object = {};
   let pendingInteraction = false;
   let agentKind: AgentInputCreateOpts['agentKind'] | null = 'claude-code';
   const projections: AgentInputProjection[] = [];
@@ -285,6 +286,7 @@ function createHarness(opts?: {
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     getTurnGeneration: () => turnGeneration,
+    getTurnSessionIdentity: () => turnSessionIdentity,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
     getAgentKind: () => agentKind,
@@ -361,6 +363,12 @@ function createHarness(opts?: {
     },
     setTurnGeneration(value: number) {
       turnGeneration = value;
+    },
+    getTurnSessionIdentity() {
+      return turnSessionIdentity;
+    },
+    setTurnSessionIdentity(value: object) {
+      turnSessionIdentity = value;
     },
     setPendingInteraction(value: boolean) {
       pendingInteraction = value;
@@ -4928,6 +4936,86 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
 });
 
 describe('AgentInputCoordinator steer transaction', () => {
+  it('rejects a control steer when screening crosses into a new turn generation', async () => {
+    const h = createHarness();
+    const sid = 'control-steer-screening-turn-race';
+    const verdict = deferred<{ action: 'allow' }>();
+    h.setRunning(true);
+    h.setScreenUserMessage(vi.fn(() => verdict.promise));
+
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-control', 'urgent'), {
+      fallbackToTurn: false,
+      expectedTurnSession: h.getTurnSessionIdentity(),
+      expectedTurnGeneration: 0,
+    });
+    await flush();
+    h.setTurnGeneration(1);
+    verdict.resolve({ action: 'allow' });
+
+    await expect(steerPromise).resolves.toBe(false);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+  });
+
+  it('rejects a control steer when reference resolution crosses into a replacement Session', async () => {
+    const h = createHarness();
+    const sid = 'control-steer-reference-session-race';
+    const references = deferred<[]>();
+    const expectedSession = h.getTurnSessionIdentity();
+    h.setRunning(true);
+    h.resolveSessionReferences.mockImplementationOnce(() => references.promise);
+
+    const steerPromise = h.coordinator.steer(
+      sid,
+      makeItem('q-control', 'urgent', {
+        sessionRefs: [{ sessionId: 'referenced-session' }],
+      }),
+      {
+        fallbackToTurn: false,
+        expectedTurnSession: expectedSession,
+        expectedTurnGeneration: 0,
+      },
+    );
+    await flush();
+    h.setTurnSessionIdentity({});
+    references.resolve([]);
+
+    await expect(steerPromise).resolves.toBe(false);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+  });
+
+  it('does not reconcile the replacement turn when the final identity fence rejects delivery', async () => {
+    const h = createHarness();
+    const sid = 'control-steer-final-identity-race';
+    const expectedSession = h.getTurnSessionIdentity();
+    h.setRunning(true);
+    h.steerToAgent.mockRejectedValueOnce(
+      new Error('[STALE_TURN] Session changed turns before steer delivery'),
+    );
+
+    await expect(
+      h.coordinator.steer(sid, makeItem('q-control', 'urgent'), {
+        fallbackToTurn: false,
+        expectedTurnSession: expectedSession,
+        expectedTurnGeneration: 0,
+      }),
+    ).resolves.toBe(false);
+
+    expect(h.steerToAgent).toHaveBeenCalledWith(
+      sid,
+      { type: 'user', content: 'urgent' },
+      expect.objectContaining({
+        expectedTurnSession: expectedSession,
+        expectedTurnGeneration: 0,
+      }),
+    );
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
   it('shows a direct steer only while delivery remains reversible', async () => {
     const h = createHarness();
     const sid = 'inspection-direct-steer';

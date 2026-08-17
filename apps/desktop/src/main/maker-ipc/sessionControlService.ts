@@ -43,8 +43,14 @@ export interface SessionControlLiveSession {
   agentKind: AgentKind;
   capabilities: { sameTurnSteer: { supported: boolean } };
   isTurnRunning(): boolean;
+  getTurnGeneration(): number;
   requestGracefulStop(): Promise<SessionGracefulStopResult>;
   getTurnControlSnapshot(): SessionTurnControlSnapshot;
+}
+
+export interface SessionSteerTurnIdentity {
+  session: SessionControlLiveSession;
+  turnGeneration: number;
 }
 
 export interface SessionControlServiceDeps {
@@ -58,7 +64,11 @@ export interface SessionControlServiceDeps {
     queuedMessageId: string;
     message: string;
   }): Promise<AgentInputQueuedMessage>;
-  steerQueuedMessage(sessionId: string, item: AgentInputQueuedMessage): Promise<boolean>;
+  steerQueuedMessage(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    expectedTurn: SessionSteerTurnIdentity,
+  ): Promise<boolean>;
   getQueueSnapshot(sessionId: string): Promise<{
     pendingQueue: AgentInputQueuedMessage[];
     consumingClientIds: string[];
@@ -147,14 +157,31 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
           message: `agent ${live.agentKind} does not support same-turn steer`,
         };
       }
+      const turnGeneration = live.getTurnGeneration();
       const queuedMessageId = deps.createId();
       const item = await deps.createQueuedMessage({
         ...params,
         queuedMessageId,
       });
-      const accepted = await deps.steerQueuedMessage(params.targetSessionId, item);
+      const current = deps.getLiveSession(params.targetSessionId);
+      if (
+        current !== live ||
+        !current.isTurnRunning() ||
+        current.getTurnGeneration() !== turnGeneration
+      ) {
+        return {
+          ok: false,
+          errorCode: 'NO_ACTIVE_TURN',
+          message: `session ${params.targetSessionId} changed turns before steer was accepted`,
+        };
+      }
+      const expectedTurn = { session: live, turnGeneration };
+      const accepted = await deps.steerQueuedMessage(params.targetSessionId, item, expectedTurn);
       if (!accepted) {
-        return live.isTurnRunning()
+        const latest = deps.getLiveSession(params.targetSessionId);
+        return latest === live &&
+          latest.isTurnRunning() &&
+          latest.getTurnGeneration() === turnGeneration
           ? {
               ok: false,
               errorCode: 'DELIVERY_FAILED',
