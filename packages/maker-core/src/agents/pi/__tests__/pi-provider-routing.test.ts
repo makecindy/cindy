@@ -937,6 +937,64 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('restores a retired OpenAI context profile through its native subscription provider', async () => {
+    const resolver = vi.fn(async () => ({
+      providers: [{
+        id: 'openai-codex',
+        sourceProviderId: 'openai',
+        name: 'OpenAI (ChatGPT)',
+        baseUrl: 'http://127.0.0.1:9',
+        inheritModels: true,
+        models: [{
+          id: 'chatgpt/gpt-5.6-sol[1m]',
+          wireId: 'gpt-5.6-sol[1m]',
+          catalogAddition: true,
+        }],
+      }],
+      env: {},
+    }));
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'ChatGPT', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: { availableModels: [] },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: resolver,
+      resolvePiRuntimeModelDescriptor: () => ({
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        displayName: 'GPT-5.6-Sol (1M · Higher usage)',
+        contextWindow: 1_000_000,
+        efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+        defaultEffort: 'medium',
+      }),
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'historical-openai-profile-resume',
+      resumeSessionId: 'pi-sdk-session-openai-profile',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      providerId: 'openai',
+    });
+
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'openai',
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      resumeSessionId: 'pi-sdk-session-openai-profile',
+    }));
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'openai-codex']);
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'gpt-5.6-sol[1m]']);
+    await handle.close();
+  });
+
   it('keeps built-in gateway reasoning when a same-id non-reasoning BYOM empties the flat effort intersection', async () => {
     const resolver = vi.fn((_providerId: string | null | undefined, modelId: string) => {
       if (modelId !== 'shared-model') return null;

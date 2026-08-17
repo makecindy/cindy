@@ -22,7 +22,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
-import { PiAgent, type AgentDeps, type AuthAdapter, type AuthState } from '@cindy/maker-core';
+import {
+  PiAgent,
+  type AgentDeps,
+  type AuthAdapter,
+  type AuthState,
+  type ModelDescriptor,
+} from '@cindy/maker-core';
 import type {
   AgentRuntimeConfig,
   AuthAdapterOptions,
@@ -67,7 +73,12 @@ import {
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
-import { getActiveCatalog, resolveXdPiGatewayWireProtocol } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  getLocalCatalogOverridesSnapshot,
+  resolveXdPiGatewayWireProtocol,
+} from './active-catalog.js';
+import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
 
 const log = createLogger('pi-host');
 
@@ -454,6 +465,7 @@ export function buildPiSubscriptionNativeProviders(
   endpoint: string,
   bundledModelsByProvider?: PiBundledModelCatalog,
   listedModelIdsByProvider?: PiListedModelIds,
+  retainedOpenAiModel?: ModelDescriptor | null,
 ): PiNativeProvidersResult {
   const providers: PiNativeProviderSpec[] = [];
   const env: Record<string, string> = {
@@ -467,7 +479,32 @@ export function buildPiSubscriptionNativeProviders(
     stripPrefix?: string,
   ): void => {
     const source = catalog.providers.find((provider) => provider.id === sourceProviderId);
-    const models = source?.models.pi ?? [];
+    const models = [...(source?.models.pi ?? [])];
+    if (
+      sourceProviderId === 'openai' &&
+      retainedOpenAiModel?.id.startsWith('chatgpt/') &&
+      !models.some((model) => model.id === retainedOpenAiModel.id)
+    ) {
+      // A retired context profile is intentionally absent from the public Pi catalog, but a
+      // persisted session still needs the exact alias in the ChatGPT native provider. Keeping the
+      // alias here preserves both its canonical identity and its subscription endpoint; it remains
+      // private to this one resume and never re-enters availableModels.
+      models.push({
+        id: retainedOpenAiModel.id,
+        name: retainedOpenAiModel.displayName,
+        contextWindow: retainedOpenAiModel.contextWindow,
+        ...(retainedOpenAiModel.maxOutputTokens !== undefined
+          ? { maxOutput: retainedOpenAiModel.maxOutputTokens }
+          : {}),
+        efforts: [...retainedOpenAiModel.efforts],
+        defaultEffort: retainedOpenAiModel.defaultEffort,
+        ...(retainedOpenAiModel.supportsFastMode !== undefined
+          ? { supportsFastMode: retainedOpenAiModel.supportsFastMode }
+          : {}),
+        status: 'retired',
+        defaultEnabled: false,
+      });
+    }
     if (models.length === 0) return;
     providers.push({
       id: piProviderId,
@@ -1220,10 +1257,18 @@ export async function resolvePiNativeProviders(ctx: {
   const bundledModels = piBinaryPath ? await readPiBundledModels(piBinaryPath) : null;
   let subscriptions: PiNativeProvidersResult = { providers: [], env: {} };
   if (!ctx?.remoteHostId && isAnthropicCompatProxyHandleReady()) {
+    const retainedOpenAiModel =
+      ctx.resumeSessionId && ctx.providerId === 'openai'
+        ? resolvePiRuntimeModelDescriptor(getActiveCatalog(), 'openai', ctx.model, {
+            localOverrides: getLocalCatalogOverridesSnapshot(),
+          })
+        : null;
     subscriptions = buildPiSubscriptionNativeProviders(
       getActiveCatalog(),
       getClaudeEndpoint(),
       bundledModels ?? undefined,
+      undefined,
+      retainedOpenAiModel,
     );
   }
   let configs: CustomProviderConfig[] = [];
