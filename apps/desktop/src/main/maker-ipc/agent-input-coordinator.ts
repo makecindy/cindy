@@ -272,6 +272,8 @@ export interface AgentInputCoordinatorDeps {
   getSdkSessionId: (sessionId: string) => Promise<string | undefined>;
   /** Keep a terminal Orca fence from being evicted during async pre-vendor hooks. */
   reserveOrcaTeamPreVendorDispatch?: (teamId: string) => () => void;
+  /** Shared-DB lifecycle check used before an Orca recovery is allowed to block drain. */
+  isOrcaTeamInputActive?: (teamId: string) => Promise<boolean>;
   /** Read a bounded, durable progress snapshot before a retry is re-enqueued. */
   getRecoveryContextSnapshot?: (
     sessionId: string,
@@ -3338,6 +3340,7 @@ export class AgentInputCoordinator {
 
   private async drain(sessionId: string, reason: string): Promise<void> {
     const state = this.getState(sessionId);
+    if (await this.discardInactiveOrcaRecovery(sessionId, state)) return;
     const compact = this.getDrainableCompact(sessionId, state);
     if (compact) {
       state.pendingCompacts = state.pendingCompacts.slice(1);
@@ -3686,6 +3689,52 @@ export class AgentInputCoordinator {
       this.activeTurnSettlements.delete(active);
       resolveActiveSettlement();
     }
+  }
+
+  private async discardInactiveOrcaRecovery(
+    sessionId: string,
+    state: SessionInputState,
+  ): Promise<boolean> {
+    const recovery = state.recovery;
+    if (!recovery || !this.deps.isOrcaTeamInputActive) return false;
+    const item = recovery.kind === 'active-turn'
+      ? recovery.item
+      : state.pendingQueue.find((queued) => queued.clientId === recovery.clientId);
+    const teamId = item?.origin?.kind === 'orca' ? item.origin.teamId : undefined;
+    if (!teamId) return false;
+
+    let active: boolean;
+    try {
+      active = await this.deps.isOrcaTeamInputActive(teamId);
+    } catch (error) {
+      // Unknown lifecycle must preserve the recovery. A later wake/drain will
+      // retry instead of deleting a message while the shared DB is unavailable.
+      log.debug('Orca recovery lifecycle recheck failed; keeping recovery', {
+        sessionId,
+        teamId,
+        error: errorMessage(error),
+      });
+      return false;
+    }
+    if (active) return false;
+    const latest = this.getState(sessionId);
+    if (latest !== state || latest.recovery !== recovery) return false;
+
+    const discarded = await this.discardQueuedItemsWhere(
+      sessionId,
+      (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === teamId,
+    );
+    log.info('discarded inactive cross-instance Orca recovery before queue drain', {
+      sessionId,
+      teamId,
+      recoveryKind: recovery.kind,
+      ...discarded,
+    });
+    return (
+      discarded.pendingDiscarded > 0 ||
+      discarded.activeCancelled ||
+      discarded.recoveryDiscarded
+    );
   }
 
   private handleSendNotDispatched(

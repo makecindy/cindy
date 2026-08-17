@@ -213,6 +213,10 @@ function createHarness(opts?: {
   const reserveOrcaTeamPreVendorDispatch = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['reserveOrcaTeamPreVendorDispatch']>
   >(() => vi.fn());
+  let orcaTeamInputActive = true;
+  const isOrcaTeamInputActive = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['isOrcaTeamInputActive']>
+  >(async () => orcaTeamInputActive);
   const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(
     () => false,
   );
@@ -321,6 +325,7 @@ function createHarness(opts?: {
     getAgentKind: () => agentKind,
     getSdkSessionId,
     reserveOrcaTeamPreVendorDispatch,
+    isOrcaTeamInputActive,
     hasAssistantProgressAfter: (sessionId, userClientId) =>
       hasAssistantProgressAfter
         ? hasAssistantProgressAfter(sessionId, userClientId)
@@ -370,6 +375,7 @@ function createHarness(opts?: {
     abortSession,
     getSdkSessionId,
     reserveOrcaTeamPreVendorDispatch,
+    isOrcaTeamInputActive,
     reconcileTurnIdle,
     beforeDispatchUserTurn,
     onUndispatchedUserTurn,
@@ -404,6 +410,9 @@ function createHarness(opts?: {
     },
     setAgentKind(value: AgentInputCreateOpts['agentKind'] | null) {
       agentKind = value;
+    },
+    setOrcaTeamInputActive(value: boolean) {
+      orcaTeamInputActive = value;
     },
     setHasPendingCredentialSwitch(fn: (() => boolean) | null) {
       hasPendingCredentialSwitch = fn;
@@ -3409,6 +3418,69 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining({ clientId: 'orca-old' }),
     );
+  });
+
+  it('rechecks shared lifecycle and removes a cross-instance queue-head recovery before drain', async () => {
+    const h = createHarness();
+    const sid = 'cross-instance-orca-queue-head-recovery';
+    h.sendToAgent.mockResolvedValueOnce(
+      hostSendFailure('WORKDIR_MISSING', 'temporary host preparation failure'),
+    );
+
+    h.coordinator.enqueue(sid, makeOrcaItem('orca-old', 'old report', 'team-old'));
+    await flush();
+    expect(latestProjection(h.projections).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'orca-old',
+    });
+
+    h.setOrcaTeamInputActive(false);
+    h.coordinator.enqueue(sid, makeOrcaItem('orca-new', 'new report', 'team-new'));
+    await flush();
+
+    expect(h.isOrcaTeamInputActive).toHaveBeenCalledWith('team-old');
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+    );
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'new report' });
+    expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
+  it('rechecks shared lifecycle and removes a cross-instance active-turn recovery before drain', async () => {
+    const h = createHarness();
+    const sid = 'cross-instance-orca-active-turn-recovery';
+    const old = makeOrcaItem('orca-old', 'old accepted report', 'team-old');
+
+    h.coordinator.enqueue(sid, old);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'provider stopped');
+    await flush();
+    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item: old });
+
+    h.setOrcaTeamInputActive(false);
+    h.coordinator.enqueue(
+      sid,
+      makeItem('scheduler-next', 'scheduled follow-up', {
+        origin: {
+          kind: 'scheduler',
+          scheduleId: 'schedule-next',
+          scheduleName: 'Next task',
+        },
+      }),
+    );
+    await flush();
+
+    expect(h.isOrcaTeamInputActive).toHaveBeenCalledWith('team-old');
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(sid, 'orca-old');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'scheduled follow-up',
+    });
+    expect(latestProjection(h.projections).recovery).toBeNull();
   });
 
   it('holds the Orca pre-vendor reservation until a queued send settles', async () => {

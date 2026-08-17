@@ -5216,16 +5216,24 @@ export class ClaudeCodeAgent extends BaseAgent {
             parent_tool_use_id: null,
             ...(sendOpts?.messageUuid ? { uuid: sendOpts.messageUuid } : {}),
           };
-          const accepted = inputQueue.push(sdkInput);
-          if (!accepted) {
-            // close() can win while content conversion is still preparing files or
-            // images. Renderer now treats send resolve as "agent accepted"; so a
-            // closed input queue must reject just like steer, otherwise queue rows
-            // get persisted and removed even though Claude never received them.
-            throw new Error('Claude input queue is closed');
+          const releaseVendorDispatchLease =
+            await sendOpts?.acquireVendorDispatchLease?.();
+          let accepted = false;
+          try {
+            accepted = inputQueue.push(sdkInput);
+            if (!accepted) {
+              // close() can win while content conversion is still preparing files or
+              // images. Renderer now treats send resolve as "agent accepted"; so a
+              // closed input queue must reject just like steer, otherwise queue rows
+              // get persisted and removed even though Claude never received them.
+              throw new Error('Claude input queue is closed');
+            }
+          } finally {
+            if (typeof releaseVendorDispatchLease === 'function') {
+              await releaseVendorDispatchLease();
+            }
           }
           userInputAccepted = true;
-          if (sendOpts?.onProviderAccepted) await sendOpts.onProviderAccepted();
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
           setAutoReviewIntent(message.content);
           replayableUserInput = sdkInput;

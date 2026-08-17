@@ -1,21 +1,17 @@
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { app } from 'electron';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { createLogger } from './logger.js';
+import type { CreateDbClientOptions } from './localDb/client/DbClient.js';
 import {
-  createWorkerDbClient,
-  type CreateDbClientOptions,
-  type DbClient,
-} from './localDb/client/DbClient.js';
+  createIsolatedSqliteClient,
+  type IsolatedSqliteClient,
+} from './localDb/client/IsolatedSqliteClient.js';
 import { getCurrentDbClientUserId } from './localDb/client/current.js';
-import {
-  resolveBetterSqliteModuleEntry,
-  resolveBetterSqliteNativeBinding,
-} from './localDb/betterSqliteFactory.js';
-import { getDrizzleDir } from './localDb/migrate.js';
-import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader.js';
+import { resolveBetterSqliteNativeBinding } from './localDb/betterSqliteFactory.js';
 
 const log = createLogger('orca-team-dispatch-lease');
 
@@ -26,19 +22,19 @@ interface OrcaTeamDispatchDbScope {
 
 export interface OrcaTeamDispatchLeaseDeps {
   resolveScope(): OrcaTeamDispatchDbScope | null;
-  createClient(options: CreateDbClientOptions): Promise<DbClient>;
+  createClient(options: CreateDbClientOptions): Promise<IsolatedSqliteClient>;
 }
 
 export type OrcaTeamDispatchLeaseRelease = () => Promise<void>;
 
 /**
- * Serializes the short provider-acceptance boundary through a dedicated SQLite
+ * Serializes the short local provider-submission boundary through a dedicated SQLite
  * connection. BEGIN IMMEDIATE is understood by old Cindy versions too, so a
  * legacy terminal UPDATE cannot commit between the active check and vendor send.
  */
 export class OrcaTeamDispatchLeaseCoordinator {
   private tail: Promise<void> = Promise.resolve();
-  private client: { scopeKey: string; value: DbClient } | null = null;
+  private client: { scopeKey: string; value: IsolatedSqliteClient } | null = null;
 
   constructor(private readonly deps: OrcaTeamDispatchLeaseDeps) {}
 
@@ -53,7 +49,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
     let transactionOpen = false;
     try {
       const client = await this.ensureClient();
-      await client.exec('BEGIN IMMEDIATE');
+      await this.beginImmediate(client);
       transactionOpen = true;
       const row = await client.queryOne<{ status: string }>(
         'SELECT status FROM orca_teams WHERE id = ? LIMIT 1',
@@ -93,7 +89,7 @@ export class OrcaTeamDispatchLeaseCoordinator {
     }
   }
 
-  private async ensureClient(): Promise<DbClient> {
+  private async ensureClient(): Promise<IsolatedSqliteClient> {
     const scope = this.deps.resolveScope();
     if (!scope) {
       throw new Error('ORCA_TEAM_DISPATCH_DB_UNAVAILABLE: no active database owner');
@@ -111,7 +107,20 @@ export class OrcaTeamDispatchLeaseCoordinator {
     return value;
   }
 
-  private async releaseTransaction(client: DbClient): Promise<void> {
+  private async beginImmediate(client: IsolatedSqliteClient): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      try {
+        await client.exec('BEGIN IMMEDIATE');
+        return;
+      } catch (error) {
+        if (!isSqliteBusy(error) || Date.now() >= deadline) throw error;
+        await delay(10);
+      }
+    }
+  }
+
+  private async releaseTransaction(client: IsolatedSqliteClient): Promise<void> {
     try {
       await client.exec('ROLLBACK');
     } catch (error) {
@@ -142,17 +151,14 @@ function resolveCurrentScope(): OrcaTeamDispatchDbScope | null {
     options: {
       userId,
       dbPath,
-      drizzleDir: getDrizzleDir(),
-      sqliteVecExtPath: resolveSqliteVecExtPath(),
       nativeBinding: resolveBetterSqliteNativeBinding(),
-      betterSqliteModulePath: resolveBetterSqliteModuleEntry(),
     },
   };
 }
 
 const coordinator = new OrcaTeamDispatchLeaseCoordinator({
   resolveScope: resolveCurrentScope,
-  createClient: createWorkerDbClient,
+  createClient: createIsolatedSqliteClient,
 });
 
 export function acquireOrcaTeamDispatchLease(
@@ -163,4 +169,11 @@ export function acquireOrcaTeamDispatchLease(
 
 export function disposeOrcaTeamDispatchLeaseCoordinator(): Promise<void> {
   return coordinator.dispose();
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ('code' in error ? error.code === 'SQLITE_BUSY' : /database is locked/i.test(error.message))
+  );
 }

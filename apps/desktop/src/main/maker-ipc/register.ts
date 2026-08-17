@@ -11073,6 +11073,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return meta?.sdkSessionId;
     },
     reserveOrcaTeamPreVendorDispatch,
+    isOrcaTeamInputActive: async (teamId) =>
+      !isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId)),
     // Coordinator steer/drain persistence must use the same FIFO writer and
     // auto-resume bookkeeping as direct maker sends.  Keeping one writer also
     // preserves message ordering when a clear-race rewind follows the insert.

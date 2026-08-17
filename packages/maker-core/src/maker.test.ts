@@ -1763,13 +1763,15 @@ describe('Session turn send guard', () => {
     expect(calls).toEqual(['accepted', 'dispatching', 'vendor']);
   });
 
-  it('holds the host vendor-dispatch lease through handle.send and awaits release', async () => {
+  it('forwards the host vendor-dispatch lease so the provider owns the narrow submission boundary', async () => {
     const calls: string[] = [];
     const handle = createHandle({ id: 'thread-1' });
     handle.send = vi.fn(async (_message, opts) => {
       calls.push('vendor');
-      await opts?.onProviderAccepted?.();
-      calls.push('post-accept');
+      const release = await opts?.acquireVendorDispatchLease?.();
+      calls.push('submitted');
+      if (typeof release === 'function') await release();
+      calls.push('post-submit');
     });
     const session = new Session({
       id: 'session-1',
@@ -1794,11 +1796,12 @@ describe('Session turn send guard', () => {
 
     expect(calls).toEqual([
       'accepted',
-      'acquire',
       'dispatching',
       'vendor',
+      'acquire',
+      'submitted',
       'release',
-      'post-accept',
+      'post-submit',
     ]);
   });
 

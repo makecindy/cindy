@@ -41,6 +41,16 @@ const noopLogger: Logger = {
   child: () => noopLogger,
 };
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('Pi provider-aware model routing', () => {
   let agentHome = '';
 
@@ -1047,11 +1057,15 @@ describe('Pi provider-aware model routing', () => {
 
   it('reports the stable Pi user entry id after prompt acceptance', async () => {
     let promptAccepted = false;
+    const promptResponse = deferred<void>();
+    const acceptanceOrder: string[] = [];
     captured.requestHandler = async (command) => {
       if (command.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
       }
       if (command.type === 'prompt') {
+        acceptanceOrder.push('rpc');
+        await promptResponse.promise;
         promptAccepted = true;
         return { success: true, data: {} };
       }
@@ -1076,17 +1090,23 @@ describe('Pi provider-aware model routing', () => {
       workingDir: cwd,
       model: 'local-model',
     });
-    const acceptanceOrder: string[] = [];
-    const onProviderAccepted = vi.fn(() => acceptanceOrder.push('provider'));
     const onTranscriptUserEntry = vi.fn(() => acceptanceOrder.push('transcript'));
-    await handle.send(
+    const sending = handle.send(
       { type: 'user', content: 'new' },
-      { onProviderAccepted, onTranscriptUserEntry },
+      {
+        acquireVendorDispatchLease: async () => {
+          acceptanceOrder.push('acquire');
+          return () => acceptanceOrder.push('release');
+        },
+        onTranscriptUserEntry,
+      },
     );
-    expect(onProviderAccepted).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(acceptanceOrder).toEqual(['acquire', 'rpc', 'release']));
+    promptResponse.resolve(undefined);
+    await sending;
     expect(onTranscriptUserEntry).toHaveBeenCalledOnce();
     expect(onTranscriptUserEntry).toHaveBeenCalledWith('new-user');
-    expect(acceptanceOrder).toEqual(['provider', 'transcript']);
+    expect(acceptanceOrder).toEqual(['acquire', 'rpc', 'release', 'transcript']);
     await handle.close();
   });
 

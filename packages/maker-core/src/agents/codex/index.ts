@@ -10345,8 +10345,8 @@ export class CodexAgent extends BaseAgent {
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
             timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+            acquireSubmissionLease: sendOpts?.acquireVendorDispatchLease,
           });
-          if (sendOpts?.onProviderAccepted) await sendOpts.onProviderAccepted();
           markTurnConfigAccepted();
           adoptUnidentifiedDeadTurn(resp, initialStartSeq);
           if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start')) {
@@ -10438,8 +10438,8 @@ export class CodexAgent extends BaseAgent {
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+                acquireSubmissionLease: sendOpts?.acquireVendorDispatchLease,
               });
-              if (sendOpts?.onProviderAccepted) await sendOpts.onProviderAccepted();
               markTurnConfigAccepted();
               adoptUnidentifiedDeadTurn(resp, initialStartSeq);
               if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start retry')) {

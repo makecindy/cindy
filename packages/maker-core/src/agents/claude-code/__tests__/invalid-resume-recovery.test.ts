@@ -215,6 +215,30 @@ afterEach(async () => {
 });
 
 describe('Claude invalid-resume recovery', () => {
+  it('releases the host dispatch lease immediately after the SDK input queue accepts the message', async () => {
+    const h = await startHarness({
+      transcriptExists: false,
+      onInvalidResumeSession: undefined,
+    });
+    const order: string[] = [];
+
+    await h.handle.send(
+      { type: 'user', content: 'lease boundary' },
+      {
+        acquireVendorDispatchLease: async () => {
+          order.push('acquire');
+          return () => order.push('release');
+        },
+      },
+    );
+
+    expect(order).toEqual(['acquire', 'release']);
+    await vi.waitFor(() => expect(h.consumedInputs[0]).toHaveLength(1));
+    await h.handle.close();
+    h.streams[0].end();
+    await h.collected;
+  });
+
   it('preflight missing clears the old id and starts fresh before any turn is sent', async () => {
     const clear = vi.fn(async () => true);
     const h = await startHarness({

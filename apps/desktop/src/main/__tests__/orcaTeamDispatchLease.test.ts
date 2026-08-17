@@ -5,10 +5,14 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createWorkerDbClient, type DbClient } from '../localDb/client/DbClient.js';
+import {
+  createIsolatedSqliteClient,
+  type IsolatedSqliteClient,
+} from '../localDb/client/IsolatedSqliteClient.js';
 import { OrcaTeamDispatchLeaseCoordinator } from '../orcaTeamDispatchLease.js';
 
 describe('OrcaTeamDispatchLeaseCoordinator', () => {
-  const disposables: DbClient[] = [];
+  const disposables: Array<Pick<DbClient, 'dispose'>> = [];
   const tempDirs: string[] = [];
 
   afterEach(async () => {
@@ -34,13 +38,21 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     return client;
   }
 
+  async function trackedLeaseClient(
+    options: Awaited<ReturnType<typeof createClientOptions>>,
+  ): Promise<IsolatedSqliteClient> {
+    const client = await createIsolatedSqliteClient(options);
+    disposables.push(client);
+    return client;
+  }
+
   it('blocks a legacy terminal UPDATE until provider dispatch releases the SQLite lease', async () => {
     const options = await createClientOptions();
     const setup = await trackedClient(options);
     await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
     await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-1', 'active')");
 
-    const leaseClient = await trackedClient(options);
+    const leaseClient = await trackedLeaseClient(options);
     const legacyClient = await trackedClient(options);
     const coordinator = new OrcaTeamDispatchLeaseCoordinator({
       resolveScope: () => ({ key: 'owner-1', options }),
@@ -72,7 +84,7 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     const setup = await trackedClient(options);
     await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
     await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-ended', 'completed')");
-    const leaseClient = await trackedClient(options);
+    const leaseClient = await trackedLeaseClient(options);
     const coordinator = new OrcaTeamDispatchLeaseCoordinator({
       resolveScope: () => ({ key: 'owner-1', options }),
       createClient: async () => leaseClient,

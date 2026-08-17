@@ -84,7 +84,7 @@ import {
   buildReviewReadGrants,
 } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
-import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
+import { PiRpcProcess, type PiRpcEvent, type PiRpcResponse } from './rpc-client.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
 import {
   assembleApprovedPiProjectResources,
@@ -1962,12 +1962,21 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           rejectIfCancelled(sendOpts, 'send');
-          const resp = await proc.request(command);
+          const releaseVendorDispatchLease =
+            await sendOpts?.acquireVendorDispatchLease?.();
+          let responsePromise: Promise<PiRpcResponse>;
+          try {
+            responsePromise = proc.request(command);
+          } finally {
+            if (typeof releaseVendorDispatchLease === 'function') {
+              await releaseVendorDispatchLease();
+            }
+          }
+          const resp = await responsePromise;
           if (!resp.success) {
             throw new Error(`pi prompt rejected: ${resp.error ?? 'unknown'}`);
           }
           providerAccepted = true;
-          if (sendOpts?.onProviderAccepted) await sendOpts.onProviderAccepted();
           await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
         } catch (err) {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表

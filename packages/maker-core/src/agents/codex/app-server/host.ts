@@ -26,7 +26,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
-import { AppServerClient } from './client.js';
+import { AppServerClient, type SubmittedAppServerRequest } from './client.js';
 import type { Transport } from './transport.js';
 import {
   Method,
@@ -694,7 +694,13 @@ export class AppServerHost {
   async request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: {
+      timeoutMs?: number;
+      acquireSubmissionLease?: () =>
+        | void
+        | (() => void | Promise<void>)
+        | Promise<() => void | Promise<void>>;
+    },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
@@ -728,12 +734,64 @@ export class AppServerHost {
       if (remaining <= 0) {
         throw new Error(`app-server startup (for ${method}) consumed the entire ${opts.timeoutMs}ms timeout budget`);
       }
-      if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-      return this.client.request<R>(method, params, { ...opts, timeoutMs: remaining });
+      return this.requestAfterStarted<R>(
+        method,
+        params,
+        remaining,
+        opts.acquireSubmissionLease,
+      );
     }
     await started;
-    if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-    return this.client.request<R>(method, params, opts);
+    return this.requestAfterStarted<R>(
+      method,
+      params,
+      undefined,
+      opts?.acquireSubmissionLease,
+    );
+  }
+
+  private async requestAfterStarted<R>(
+    method: string,
+    params: unknown,
+    timeoutMs: number | undefined,
+    acquireSubmissionLease:
+      | (() =>
+          | void
+          | (() => void | Promise<void>)
+          | Promise<() => void | Promise<void>>)
+      | undefined,
+  ): Promise<R> {
+    const client = this.client;
+    if (!client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+
+    const acquired = await acquireSubmissionLease?.();
+    const release = typeof acquired === 'function' ? acquired : undefined;
+    let pending: SubmittedAppServerRequest<R> | undefined;
+    let response!: Promise<R>;
+    try {
+      pending = client.requestWithSubmission<R>(
+        method,
+        params,
+        timeoutMs === undefined ? undefined : { timeoutMs },
+      );
+      response = pending.response;
+      // Release after bytes enter the local OS / websocket buffer. A response
+      // can legitimately race ahead in test/in-process transports and proves
+      // an equally strong acceptance boundary.
+      await Promise.race([
+        pending.submitted,
+        pending.response.then(() => undefined),
+      ]);
+    } catch (error) {
+      // Both promises carry transport write failures. The thrown branch owns
+      // the error; consume the twin rejection to avoid an unhandled promise.
+      void pending?.submitted.catch(() => undefined);
+      void pending?.response.catch(() => undefined);
+      throw error;
+    } finally {
+      await release?.();
+    }
+    return response;
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */

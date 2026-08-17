@@ -116,6 +116,57 @@ class NotificationTransport implements Transport {
   }
 }
 
+class ManualResponseTransport implements Transport {
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+  readonly lines: string[] = [];
+
+  async writeLine(line: string): Promise<void> {
+    this.lines.push(line);
+    const message = JSON.parse(line) as { id?: unknown; method?: string };
+    if (message.id == null || message.method !== 'initialize') return;
+    this.emit({
+      id: message.id,
+      result: {
+        userAgent: 'mock-codex/test',
+        codexHome: '/tmp/codex-home',
+        platformOs: 'linux',
+      },
+    });
+  }
+
+  respond(method: string, result: unknown): void {
+    const request = this.lines
+      .map((line) => JSON.parse(line) as { id?: unknown; method?: string })
+      .find((message) => message.method === method);
+    if (request?.id == null) throw new Error(`request not found: ${method}`);
+    this.emit({ id: request.id, result });
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  onStderr(_handler: StderrHandler): () => void {
+    return () => {};
+  }
+
+  async close(reason = 'test close'): Promise<void> {
+    for (const handler of this.closeHandlers) handler({ reason });
+  }
+
+  private emit(message: unknown): void {
+    const line = JSON.stringify(message);
+    for (const handler of this.lineHandlers) handler(line);
+  }
+}
+
 describe('AppServerHost assistant text delta routing', () => {
   it('subscribes to dedicated agentMessage deltas and routes them to the owning thread', async () => {
     const transport = new NotificationTransport();
@@ -226,6 +277,55 @@ const logger: Logger = {
 };
 
 describe('AppServerHost.request startup timeout', () => {
+  it('holds a submission lease only through the local transport write, not the provider response', async () => {
+    const transport = new ManualResponseTransport();
+    const order: string[] = [];
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    const request = host.request('turn/start', {}, {
+      acquireSubmissionLease: async () => {
+        order.push('acquire');
+        return () => order.push('release');
+      },
+    });
+    const settled = vi.fn();
+    void request.then(settled, settled);
+
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release']));
+    expect(
+      transport.lines.some((line) => JSON.parse(line).method === 'turn/start'),
+    ).toBe(true);
+    expect(settled).not.toHaveBeenCalled();
+
+    transport.respond('turn/start', { turn: { id: 'turn-1' } });
+    await expect(request).resolves.toEqual({ turn: { id: 'turn-1' } });
+    await host.shutdown();
+  });
+
+  it('releases the submission lease when request construction fails synchronously', async () => {
+    const host = new AppServerHost({
+      createTransport: () => new ManualResponseTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    const release = vi.fn();
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+
+    await expect(
+      host.request('turn/start', circular, {
+        acquireSubmissionLease: async () => release,
+      }),
+    ).rejects.toThrow(/circular/i);
+    expect(release).toHaveBeenCalledTimes(1);
+
+    await host.shutdown();
+  });
+
   it('bounds a hung ensureStarted by the caller-provided timeoutMs (greptile R6 P1)', async () => {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 — 调用方显式
     // 给的 timeoutMs 必须同样覆盖启动路径, 否则「关键 RPC 加超时」形同虚设。

@@ -256,14 +256,6 @@ export interface SessionSendOptions extends SendOptions {
    */
   onAccepted?: () => void | Promise<void>;
   /**
-   * Acquire a host-owned lease around the irreversible provider send only.
-   * The returned release hook runs after handle.send settles and is awaited.
-   */
-  acquireVendorDispatchLease?: () =>
-    | void
-    | (() => void | Promise<void>)
-    | Promise<() => void | Promise<void>>;
-  /**
    * vendor dispatch 前最后一个同步边界。用于让 host 在底层可能产生新 turn
    * callback 之前，精确切换自己的 turn-scoped 状态。
    */
@@ -428,7 +420,6 @@ export class Session {
       afterTurnReserved,
       beforeProviderStart,
       onAccepted,
-      acquireVendorDispatchLease,
       onDispatching,
       ...handleOpts
     } = opts ?? {};
@@ -543,38 +534,17 @@ export class Session {
         typeof handleOpts.turnAttemptToken === 'number' ? handleOpts.turnAttemptToken : null;
       originInstalled = true;
       this.startEventLoopIfNeeded();
-      let releaseVendorDispatchLease: (() => void | Promise<void>) | undefined;
-      let vendorDispatchLeaseReleased = false;
-      const releaseVendorDispatch = async (): Promise<void> => {
-        if (vendorDispatchLeaseReleased) return;
-        vendorDispatchLeaseReleased = true;
-        await releaseVendorDispatchLease?.();
-      };
       try {
-        if (acquireVendorDispatchLease) {
-          const acquiredVendorDispatchLease = await acquireVendorDispatchLease();
-          releaseVendorDispatchLease =
-            typeof acquiredVendorDispatchLease === 'function'
-              ? acquiredVendorDispatchLease
-              : undefined;
-          const cancelledAfterDispatchLease = finishCancelledBeforeDispatch();
-          if (cancelledAfterDispatchLease !== null) return cancelledAfterDispatchLease;
-        }
         onDispatching?.();
         await this.handle.send(msg, {
           ...handleOpts,
           signal: reservation.abortController.signal,
-          ...(releaseVendorDispatchLease
-            ? { onProviderAccepted: releaseVendorDispatch }
-            : {}),
         });
       } catch (e) {
         if (reservation.cancelled) {
           return { accepted: false, reason: 'cancelled-before-dispatch' };
         }
         throw e;
-      } finally {
-        await releaseVendorDispatch();
       }
       if (reservation.cancelled) {
         return { accepted: false, reason: 'cancelled-before-dispatch' };
