@@ -3,6 +3,47 @@ import type { Session } from '@/lib/ccAgent.types';
 import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
 import { sessionActivityMs } from './dateSessionGrouping';
 import { groupSessions, projectIdentityKeyForSession } from './projectGrouping';
+import { isProjectHidden } from './sidebarProjectVisibility';
+
+type SidebarProjectRestoreHandler = (projectKey: string) => Promise<boolean>;
+
+let sidebarProjectRestoreHandler: SidebarProjectRestoreHandler | null = null;
+
+function findMatchingProjectKey(
+  projectKey: string,
+  candidates: ReadonlySet<string>,
+  localPlatform: string,
+): string | null {
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (comparisonKey == null) return null;
+  return (
+    Array.from(candidates).find(
+      (candidate) => projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
+    ) ?? null
+  );
+}
+
+/**
+ * The sidebar owns both the hidden-project snapshot and the active Project
+ * filter. Creation routes live in a sibling React tree, so they delegate the
+ * restore transaction here instead of duplicating those two pieces of state.
+ */
+export function registerSidebarProjectRestoreHandler(
+  handler: SidebarProjectRestoreHandler,
+): () => void {
+  sidebarProjectRestoreHandler = handler;
+  return () => {
+    if (sidebarProjectRestoreHandler === handler) sidebarProjectRestoreHandler = null;
+  };
+}
+
+export function requestSidebarProjectRestore(projectKey: string): Promise<boolean> {
+  const handler = sidebarProjectRestoreHandler;
+  if (!handler) {
+    return Promise.reject(new Error('Sidebar project restore handler is unavailable'));
+  }
+  return handler(projectKey);
+}
 
 type RestoreVendorPredicate = (session: Pick<Session, 'agentKind'>) => boolean;
 
@@ -84,18 +125,49 @@ export async function restoreHiddenProjectIfPresent({
     return false;
   }
 
-  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
-  const currentProjectKey =
-    comparisonKey == null
-      ? null
-      : Array.from(getCurrentProjectKeys()).find(
-          (candidate) =>
-            projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
-        ) ?? null;
+  const currentProjectKey = findMatchingProjectKey(
+    projectKey,
+    getCurrentProjectKeys(),
+    localPlatform,
+  );
   if (currentProjectKey == null) return false;
 
   // A restored project must also be admitted by an explicit Project filter.
   // This operation is idempotent, unlike the user-facing filter toggle.
   ensureProjectIncluded(currentProjectKey);
+  return true;
+}
+
+interface RestoreSelectedHiddenProjectOptions {
+  projectKey: string;
+  hiddenProjectKeys: ReadonlySet<string>;
+  setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
+  getCurrentProjectKeys: () => ReadonlySet<string>;
+  ensureProjectIncluded: (projectKey: string) => void;
+  localPlatform: string;
+}
+
+/**
+ * Restore a project explicitly selected from the new-task folder picker.
+ *
+ * Unlike the old sidebar "New Project" action, selection must continue into
+ * the draft after restoring. The chosen path itself is therefore the future
+ * project key even when the restored project currently has no visible tasks.
+ */
+export async function restoreSelectedHiddenProject({
+  projectKey,
+  hiddenProjectKeys,
+  setProjectHidden,
+  getCurrentProjectKeys,
+  ensureProjectIncluded,
+  localPlatform,
+}: RestoreSelectedHiddenProjectOptions): Promise<boolean> {
+  const wasHidden = isProjectHidden(projectKey, hiddenProjectKeys, localPlatform);
+  const hiddenStateChanged = await setProjectHidden(projectKey, false);
+  if (!hiddenStateChanged && !wasHidden) return false;
+
+  ensureProjectIncluded(
+    findMatchingProjectKey(projectKey, getCurrentProjectKeys(), localPlatform) ?? projectKey,
+  );
   return true;
 }

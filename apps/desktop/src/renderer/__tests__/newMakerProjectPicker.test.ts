@@ -136,6 +136,26 @@ describe('Shared create project picker', () => {
     expect(body).toContain('finally {');
   });
 
+  it('restores a hidden local project before applying the selected folder to the draft', () => {
+    const handlerStart = newMakerDraftRouteSource.indexOf(
+      'const handleModePickerSelect = useCallback(',
+    );
+    const handlerEnd = newMakerDraftRouteSource.indexOf(
+      'const handleWtEnabledChange = useCallback(',
+      handlerStart,
+    );
+    const handler = newMakerDraftRouteSource.slice(handlerStart, handlerEnd);
+
+    expect(handler).toContain("source !== 'dialogue' && !effectiveDeviceLinkDeviceId");
+    expect(handler).toContain('await requestSidebarProjectRestore(localProjectKey)');
+    expect(handler).toContain('selectionSeq !== modePickerSelectionSeqRef.current');
+    expect(handler.indexOf('await requestSidebarProjectRestore(localProjectKey)')).toBeLessThan(
+      handler.indexOf("handleWorkingDirChange(source === 'dialogue' ? null : path)"),
+    );
+    expect(sidebarUpperSource).toContain('registerSidebarProjectRestoreHandler((projectKey) =>');
+    expect(sidebarUpperSource).toContain('restoreSelectedHiddenProject({');
+  });
+
   it('keeps dialogue outside of the project group in the picker menu', () => {
     const topHeadingIndex = folderPickerPopoverSource.indexOf(
       "t('newChat.folderPicker.dialogueOrSelectProject')",

@@ -149,7 +149,9 @@ import {
 } from './lib/sidebarProjectVisibility';
 import {
   collectRestorableProjectKeys,
+  registerSidebarProjectRestoreHandler,
   restoreHiddenProjectIfPresent,
+  restoreSelectedHiddenProject,
 } from './lib/sidebarProjectRestore';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
@@ -409,6 +411,31 @@ export function CCAgentSidebarUpper() {
   );
   const projectAliases = useProjectAliases();
   const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
+  const restorableSelectionProjectKeys = useMemo(
+    () => new Set(searchProjectGroups.projects.map((project) => project.projectKey)),
+    [searchProjectGroups.projects],
+  );
+  const restorableSelectionProjectKeysRef = useRef(restorableSelectionProjectKeys);
+  restorableSelectionProjectKeysRef.current = restorableSelectionProjectKeys;
+  useLayoutEffect(
+    () =>
+      registerSidebarProjectRestoreHandler((projectKey) =>
+        restoreSelectedHiddenProject({
+          projectKey,
+          hiddenProjectKeys,
+          setProjectHidden: hiddenProjects.setProjectHidden,
+          getCurrentProjectKeys: () => restorableSelectionProjectKeysRef.current,
+          ensureProjectIncluded: filter.ensureProjectIncluded,
+          localPlatform,
+        }),
+      ),
+    [
+      filter.ensureProjectIncluded,
+      hiddenProjectKeys,
+      hiddenProjects.setProjectHidden,
+      localPlatform,
+    ],
+  );
   const visibleSearchProjects = useMemo(
     () => visibleSidebarProjects(searchProjectGroups.projects, hiddenProjectKeys, localPlatform),
     [searchProjectGroups.projects, hiddenProjectKeys, localPlatform],

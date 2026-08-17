@@ -242,6 +242,8 @@ import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
+import { normalizeProjectKey } from './lib/projectGrouping';
+import { requestSidebarProjectRestore } from './lib/sidebarProjectRestore';
 
 const log = createLogger('NewMakerDraftRoute');
 const IS_MAC_PLATFORM = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
@@ -2541,6 +2543,13 @@ export function NewMakerDraftRoute() {
     setDevicePickerOpen(open);
     if (open) setFolderPickerOpen(false);
   }, []);
+  const modePickerSelectionSeqRef = useRef(0);
+  useEffect(
+    () => () => {
+      modePickerSelectionSeqRef.current += 1;
+    },
+    [],
+  );
   /**
    * 选中的设备真正从可选列表里消失时(对方撤销「允许被控」/ 本机关掉对它的控制 / 解除配对),
    * 把草稿收敛回本机。
@@ -2605,13 +2614,38 @@ export function NewMakerDraftRoute() {
    * picker 里列的项目必然属于当前设备,path 直接写进 draft 即可。
    */
   const handleModePickerSelect = useCallback(
-    (path: string, source: FolderPickerSelectSource) => {
+    async (path: string, source: FolderPickerSelectSource) => {
+      const selectionSeq = ++modePickerSelectionSeqRef.current;
       // 与设备 pill 同款保护:发送已在途时那次调用的闭包持有旧工作区,draft 却会可见地切到
       // 新的 —— 会话建在旧工作区里,而用户刚选的那个又被 create 后的重置清掉。
       if (sendInFlightRef.current) return;
+      // 本机项目可能曾被用户「从侧栏移除」:任务和 workingDir 仍在,但 hidden overlay
+      // 会把它们投影到「对话」。旧段头「新建项目」按钮会在重选目录时解除隐藏；按钮移除后
+      // 创建页必须接过这条恢复路径。远程项目由各自设备维护可见性,纯对话也没有项目可恢复。
+      if (source !== 'dialogue' && !effectiveDeviceLinkDeviceId) {
+        const localProjectKey = normalizeProjectKey(path);
+        if (localProjectKey?.startsWith('local:')) {
+          try {
+            await requestSidebarProjectRestore(localProjectKey);
+          } catch (err) {
+            log.warn('[new-maker] restore selected project failed', err);
+            toast.error(t('ccAgent.sidebar.createProjectFailed'));
+            return;
+          }
+          // 恢复 IPC 在途时用户仍可能通过快捷键发送或切到另一台设备。此时不能把旧的本机
+          // 选择写回新目标；保留当前草稿,让用户在最新设备语境下重新选择。
+          if (
+            selectionSeq !== modePickerSelectionSeqRef.current ||
+            sendInFlightRef.current ||
+            (getDraft().deviceLinkDeviceId ?? null) !== null
+          ) {
+            return;
+          }
+        }
+      }
       handleWorkingDirChange(source === 'dialogue' ? null : path);
     },
-    [handleWorkingDirChange],
+    [effectiveDeviceLinkDeviceId, handleWorkingDirChange, t],
   );
 
   // 用户点击 checkbox 是唯一改动路径。本地草稿直接写工作端偏好;
