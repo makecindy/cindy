@@ -424,6 +424,11 @@ export interface AgentInputCoordinatorDeps {
    */
   /** Technical or policy rejection before vendor dispatch. */
   onRejectedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  /**
+   * 用户消息已落库、但 vendor 派发失败时补一条可重试的 error 行。
+   * 没有这条，聊天里只剩用户气泡、没有红条，重试入口也不稳定。
+   */
+  persistTerminalSendError?: (sessionId: string, message: string) => void;
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -3758,24 +3763,15 @@ export class AgentInputCoordinator {
       }
       latest.error = errorMessage(err);
       latest.stickyError = null;
-      const piImageCapabilityRejected = isPiImageInputUnsupportedError(err);
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
       const schedulerOrigin = this.setActiveTurnRecovery(latest, head) === 'dropped-scheduler';
-      if (schedulerOrigin) {
-        // 摘掉 recovery 就**必须**一并放掉 activeTurn。isDispatchBoundaryBusy 只要
-        // activeTurn 非空就判忙,而这条 active-turn recovery 原本是唯一能清掉它的入口
-        // (用户 Retry / clearError)—— 现在没有了,不主动清就等于把会话永久钉在"有活跃
-        // turn":之后所有用户与调度消息全部积压到 coordinator 被重置
-        // (review #944 第十轮 P1)。
-        latest.activeTurn = null;
-      } else if (piImageCapabilityRejected) {
-        // Pi 图片能力拒绝发生在 vendor RPC 之前，不会再有 terminal event 来释放 activeTurn；
-        // 已持久化的用户行仍保留 active-turn recovery，供用户切换到视觉模型后重试。
-        latest.activeTurn = null;
-      }
+      // 已落库的派发失败必须立刻放开边界。否则 coordinator 会一直占着 activeTurn,
+      // 下一轮被 dispatch-boundary-busy 挡住,界面上只剩用户气泡、没有红条、也不能重试。
+      latest.activeTurn = null;
       this.notifyRejectedUserTurn(sessionId, head);
       this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
+      this.persistTerminalSendError(sessionId, latest.error);
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
@@ -3878,6 +3874,7 @@ export class AgentInputCoordinator {
         ...logFields,
       },
     );
+    if (!cancelledByUserBoundary) this.persistTerminalSendError(sessionId, message);
     this.emit(sessionId);
     // activeTurn 上面已置空,但队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带
     // 唤醒,scheduler 这条没有 recovery、没有人点,必须自己唤一次(review #944 第十轮 P1)。
@@ -5014,6 +5011,18 @@ export class AgentInputCoordinator {
       log.warn('onRejectedUserTurn failed', {
         sessionId,
         clientId: item.clientId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  private persistTerminalSendError(sessionId: string, message: string): void {
+    if (!message.trim()) return;
+    try {
+      this.deps.persistTerminalSendError?.(sessionId, message);
+    } catch (err) {
+      log.warn('persistTerminalSendError failed', {
+        sessionId,
         error: errorMessage(err),
       });
     }

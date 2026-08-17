@@ -272,6 +272,9 @@ function createHarness(opts?: {
   const onRejectedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onRejectedUserTurn']>>(
     () => {},
   );
+  const persistTerminalSendError = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['persistTerminalSendError']>
+  >(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
@@ -284,6 +287,7 @@ function createHarness(opts?: {
     onUserEnqueue,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
+    persistTerminalSendError,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     getTurnGeneration: () => turnGeneration,
@@ -358,6 +362,7 @@ function createHarness(opts?: {
     onUserEnqueue,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
+    persistTerminalSendError,
     supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
@@ -3768,6 +3773,12 @@ describe('AgentInputCoordinator send transaction', () => {
       expect.objectContaining(first),
       'failed',
     );
+    expect(h.persistTerminalSendError).toHaveBeenCalledWith(sid, 'turn/start failed');
+
+    h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(latestProjection(h.projections).error).toBeNull();
   });
 
   it('dispatches new text after a persisted Pi image capability rejection', async () => {

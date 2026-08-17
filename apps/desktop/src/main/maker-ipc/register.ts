@@ -4324,25 +4324,38 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             : 'idle';
         if (overflowClaim === 'claimed') {
           const overflowErrorData = attributedEvent.data;
+          const surfaceOverflowFailure = (): void => {
+            const stashed = overflowSuppressedBroadcasts.get(session.id);
+            overflowSuppressedBroadcasts.delete(session.id);
+            if (stashed) {
+              broadcastToAllWindows(MAKER_PUSH.EVENT, stashed);
+              handleAgentIslandEventAfterBroadcast(session, stashed.event);
+            }
+            onTurnErrorEvent(
+              session.id,
+              overflowErrorData as {
+                message?: unknown;
+                reason?: unknown;
+                sdkError?: unknown;
+              } | null,
+              eventAgentMeta,
+            );
+          };
           void contextOverflowRolloverHolder
             ?.tryRecover(session.id, overflowErrorData)
             .then((recovered) => {
-              const stashed = overflowSuppressedBroadcasts.get(session.id);
-              overflowSuppressedBroadcasts.delete(session.id);
-              if (recovered) return;
-              if (stashed) {
-                broadcastToAllWindows(MAKER_PUSH.EVENT, stashed);
-                handleAgentIslandEventAfterBroadcast(session, stashed.event);
+              if (recovered) {
+                overflowSuppressedBroadcasts.delete(session.id);
+                return;
               }
-              onTurnErrorEvent(
-                session.id,
-                overflowErrorData as {
-                  message?: unknown;
-                  reason?: unknown;
-                  sdkError?: unknown;
-                } | null,
-                eventAgentMeta,
-              );
+              surfaceOverflowFailure();
+            })
+            .catch((error) => {
+              log.warn('context overflow rollover rejected', {
+                sessionId: session.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              surfaceOverflowFailure();
             });
         } else if (overflowClaim === 'in-flight') {
           // 同一 turn 的重复终态 error：继续压住，避免污染历史。
@@ -11835,6 +11848,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // undispatched discard skip finalizeSuppressedError.
       if (item.autoResume) return;
       autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);
+    },
+    persistTerminalSendError: (sessionId, message) => {
+      onTurnErrorEvent(sessionId, { message }, null);
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
