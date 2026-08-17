@@ -81,6 +81,22 @@ describe('sidebar right status priority', () => {
       isRunning: true,
       hasAttentionNotification: true,
     })).toBe('error');
+    // automation failure urgency is durable outside the notification store:
+    // after restart, unread expiry or acknowledgement it must still stay red.
+    expect(resolve({
+      sessionId: 'session-1',
+      attentionKind: undefined,
+      isUrgentFromContext: true,
+      isRunning: false,
+      hasAttentionNotification: false,
+    })).toBe('error');
+    expect(resolve({
+      sessionId: 'session-1',
+      attentionKind: 'done',
+      isUrgentFromContext: true,
+      isRunning: false,
+      hasAttentionNotification: false,
+    })).toBe('error');
     // awaiting(ask-user / 权限 / 计划审阅)压过 running,但低于 error
     expect(resolve({
       sessionId: 'session-1',

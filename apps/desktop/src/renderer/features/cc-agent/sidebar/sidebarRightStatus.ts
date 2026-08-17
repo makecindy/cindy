@@ -61,7 +61,10 @@ export function projectSidebarSessionActivity({
     lastActivityAtMs: liveActivity?.lastActivityAtMs,
     currentActionSummary: liveActivity?.currentActionSummary ?? null,
     interactionKind: liveActivity?.interactionKind,
-    attention: liveActivity?.attention === true || hasAttentionNotification,
+    // Automation failure urgency intentionally lives outside the regular
+    // attention-notification store. Preserve it in the canonical projection so
+    // restart/expiry/acknowledgement cannot erase the existing red error state.
+    attention: liveActivity?.attention === true || hasAttentionNotification || isUrgentFromContext,
   });
 }
 
