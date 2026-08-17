@@ -5877,6 +5877,21 @@ export class CodexAgent extends BaseAgent {
     let upstreamIdleRemainingMs = 0;
     /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
     let upstreamIdleSliceStartedAt = 0;
+    /** 主 turn 可见活动的单调代次；防止 stop 失败后的迟到恢复覆盖期间新装的 watchdog。 */
+    let watchdogActivityVersion = 0;
+    function captureWatchdogRemainingMs(
+      timer: ReturnType<typeof setTimeout> | null,
+      remainingMs: number,
+      sliceStartedAt: number,
+    ): number | null {
+      if (!timer && remainingMs <= 0) return null;
+      if (!timer || sliceStartedAt <= 0 || remainingMs <= 0) return Math.max(0, remainingMs);
+      const slice = Math.min(remainingMs, CODEX_UPSTREAM_IDLE_SLICE_MS);
+      const elapsed = Math.max(0, Date.now() - sliceStartedAt);
+      // 与分片回调保持相同的 suspend 语义：超长壁钟间隔不计入“清醒等待”额度。
+      if (elapsed > slice + CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS) return remainingMs;
+      return Math.max(0, remainingMs - elapsed);
+    }
     function clearUpstreamIdle(): void {
       if (upstreamIdleTimer) {
         clearTimeout(upstreamIdleTimer);
@@ -5918,6 +5933,13 @@ export class CodexAgent extends BaseAgent {
       // 工具执行 / 等审批期间 ball 不在上游,不计 idle 配额。
       if (pendingToolItemIds.size > 0) return;
       upstreamIdleRemainingMs = upstreamIdleTimeoutMs;
+      armUpstreamIdleSlice();
+    }
+    function restoreUpstreamIdle(remainingMs: number): void {
+      if (upstreamIdleTimer || upstreamIdleRemainingMs > 0) return;
+      if (upstreamIdleTimeoutMs <= 0 || closed || !isTurnInFlight) return;
+      if (pendingToolItemIds.size > 0) return;
+      upstreamIdleRemainingMs = Math.max(1, Math.min(remainingMs, upstreamIdleTimeoutMs));
       armUpstreamIdleSlice();
     }
     /**
@@ -6071,6 +6093,27 @@ export class CodexAgent extends BaseAgent {
       reconnectStallTurnId = turnId;
       reconnectStallTurnGeneration = turnStartGeneration;
       reconnectStallRemainingMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
+      armReconnectStallSlice();
+    }
+    function restoreReconnectStall(
+      turnId: string,
+      turnGeneration: number,
+      remainingMs: number,
+    ): void {
+      if (reconnectStallTimer || reconnectStallRemainingMs > 0) return;
+      if (
+        closed ||
+        reconnectStallCleanupTurnId !== null ||
+        !isTurnInFlight ||
+        currentTurnId !== turnId ||
+        turnStartGeneration !== turnGeneration
+      ) return;
+      reconnectStallTurnId = turnId;
+      reconnectStallTurnGeneration = turnGeneration;
+      reconnectStallRemainingMs = Math.max(
+        1,
+        Math.min(remainingMs, CODEX_RECONNECT_STALL_TIMEOUT_MS),
+      );
       armReconnectStallSlice();
     }
 
@@ -6331,6 +6374,7 @@ export class CodexAgent extends BaseAgent {
       // 子代理卡帧只是"子线程有进展",不代表主 turn 还活着 —— 不参与静默计时与
       // reconnect 恢复判定,否则主 turn 哑火时会被子代理的心跳一直掩盖(review)。
       if (!emittingDescendantUpdate && ev.turnScope !== 'background') {
+        watchdogActivityVersion += 1;
         upstreamIdleLastEventType = ev.type;
         upstreamIdleLastEventAt = Date.now();
         armUpstreamIdle();
@@ -10905,27 +10949,53 @@ export class CodexAgent extends BaseAgent {
           throw new Error('Codex host is stale');
         }
         const turnId = currentTurnId;
-        const hadReconnectWatchdog =
-          reconnectStallTurnId === turnId &&
-          (reconnectStallTimer !== null || reconnectStallRemainingMs > 0);
+        const upstreamIdleRemainingAtStop = captureWatchdogRemainingMs(
+          upstreamIdleTimer,
+          upstreamIdleRemainingMs,
+          upstreamIdleSliceStartedAt,
+        );
+        const reconnectRemainingAtStop = reconnectStallTurnId === turnId
+          ? captureWatchdogRemainingMs(
+              reconnectStallTimer,
+              reconnectStallRemainingMs,
+              reconnectStallSliceStartedAt,
+            )
+          : null;
+        const reconnectGenerationAtStop = reconnectStallTurnGeneration;
+        let watchdogActivityVersionAtStop = 0;
         let watchdogsRestored = false;
         const restoreWatchdogsIfStillRunning = (): void => {
           if (
             watchdogsRestored ||
             closed ||
             !isTurnInFlight ||
-            currentTurnId !== turnId
+            currentTurnId !== turnId ||
+            watchdogActivityVersion !== watchdogActivityVersionAtStop
           ) {
             return;
           }
           watchdogsRestored = true;
-          armUpstreamIdle();
-          if (hadReconnectWatchdog) armReconnectStall(turnId);
+          if (upstreamIdleRemainingAtStop === null) {
+            // turn/start 已受理但 started 通知尚未到达时可能尚未起表；保留原有失败兜底。
+            armUpstreamIdle();
+          } else {
+            restoreUpstreamIdle(upstreamIdleRemainingAtStop);
+          }
+          if (reconnectRemainingAtStop !== null) {
+            restoreReconnectStall(
+              turnId,
+              reconnectGenerationAtStop,
+              reconnectRemainingAtStop,
+            );
+          }
         };
         turnInterruptOrigins.set(turnId, { source: 'user-stop' });
-        resetUpstreamIdleForTurnEnd();
         dismissAllPending('turn_interrupted', 'deny');
         dismissPendingUserInputForTurn(turnId, 'turn_interrupted');
+        // dismiss 会同步发布本地 interaction 投影；它不是 provider 进展，不能把刚捕获的
+        // 剩余 deadline 重置为满额。先让这些本地事件收口，再统一清表并锁存活动代次。
+        resetUpstreamIdleForTurnEnd();
+        watchdogActivityVersionAtStop = watchdogActivityVersion;
         try {
           const interruptRequest = host.request(Method.TurnInterrupt, { threadId, turnId });
           await new Promise<void>((resolve, reject) => {

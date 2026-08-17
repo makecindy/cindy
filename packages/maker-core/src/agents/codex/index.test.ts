@@ -21160,11 +21160,25 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
       const handle = await startIdleSession(agent, 'session-stop-rejected-watchdog');
       const seen = collectEvents(handle);
       await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-stop-rejected' },
+      } as never);
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 10_000);
 
       await expect(handle.requestGracefulStop?.()).rejects.toThrow('interrupt rejected');
       expect(handle.isTurnRunning?.()).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(interruptAttempts).toBe(1);
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+
+      await vi.advanceTimersByTimeAsync(2);
       expect(interruptAttempts).toBeGreaterThanOrEqual(2);
       expect(seen).toContainEqual(expect.objectContaining({
         type: 'error',
@@ -21193,6 +21207,13 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
       const handle = await startIdleSession(agent, 'session-stop-timeout-watchdog');
       const seen = collectEvents(handle);
       await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-stop-timeout' },
+      } as never);
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 15_000);
 
       const controller = new AbortController();
       const stop = handle.requestGracefulStop?.({ signal: controller.signal });
@@ -21200,7 +21221,69 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
       await expect(stop).rejects.toThrow('confirmation timed out');
       expect(handle.isTurnRunning?.()).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(interruptAttempts).toBe(1);
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+
+      await vi.advanceTimersByTimeAsync(2);
+      expect(interruptAttempts).toBeGreaterThanOrEqual(2);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('graceful stop 失败期间的新 provider 活动保留新 deadline,不恢复旧快照', async () => {
+    vi.useFakeTimers();
+    try {
+      const interrupt = deferred<void>();
+      const agent = new CodexAgent(createDeps());
+      let interruptAttempts = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-stop-new-activity' } };
+        if (method === Method.TurnInterrupt) {
+          interruptAttempts += 1;
+          if (interruptAttempts === 1) return interrupt.promise;
+          return {};
+        }
+        return undefined;
+      });
+      const handle = await startIdleSession(agent, 'session-stop-new-activity');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-stop-new-activity' },
+      } as never);
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 10_000);
+
+      const stop = handle.requestGracefulStop?.();
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-stop-new-activity',
+        item: { type: 'agentMessage', id: 'still-working', text: 'still working' },
+      } as never);
+      interrupt.reject(new Error('interrupt rejected'));
+      await expect(stop).rejects.toThrow('interrupt rejected');
+
+      // 旧快照只剩 10s；新 provider 活动应建立完整 60s deadline。
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(interruptAttempts).toBe(1);
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 10_000);
       expect(interruptAttempts).toBeGreaterThanOrEqual(2);
       expect(seen).toContainEqual(expect.objectContaining({
         type: 'error',
@@ -21840,10 +21923,81 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         error: { message: 'Reconnecting... 1/5' },
         willRetry: true,
       } as never);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS - 20_000);
 
       await expect(handle.requestGracefulStop?.()).rejects.toThrow('interrupt rejected');
-      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      await vi.advanceTimersByTimeAsync(19_999);
 
+      expect(interruptAttempts).toBe(1);
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
+
+      await vi.advanceTimersByTimeAsync(2);
+
+      expect(interruptAttempts).toBeGreaterThanOrEqual(2);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('graceful stop 确认超时后恢复 reconnect watchdog 的剩余 deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let interruptAttempts = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-reconnect-stop-timeout' } };
+        if (method === Method.TurnInterrupt) {
+          interruptAttempts += 1;
+          if (interruptAttempts === 1) return new Promise<never>(() => undefined);
+          return {};
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-stop-timeout',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const seen: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) seen.push(event);
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-reconnect-stop-timeout' },
+      } as never);
+      handlers.error?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-reconnect-stop-timeout',
+        error: { message: 'Reconnecting... 1/5' },
+        willRetry: true,
+      } as never);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS - 25_000);
+
+      const controller = new AbortController();
+      const stop = handle.requestGracefulStop?.({ signal: controller.signal });
+      controller.abort();
+      await expect(stop).rejects.toThrow('confirmation timed out');
+      await vi.advanceTimersByTimeAsync(24_999);
+
+      expect(interruptAttempts).toBe(1);
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
+
+      await vi.advanceTimersByTimeAsync(2);
       expect(interruptAttempts).toBeGreaterThanOrEqual(2);
       expect(seen).toContainEqual(expect.objectContaining({
         type: 'error',
