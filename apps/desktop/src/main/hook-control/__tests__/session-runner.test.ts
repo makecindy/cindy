@@ -91,6 +91,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
+    MAIN_OWNED_SEND_CONTEXT: actual.MAIN_OWNED_SEND_CONTEXT,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
@@ -305,6 +306,7 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
@@ -711,7 +713,22 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(session.send.mock.calls[0][0]).toMatchObject({
       content: `hello\n\n${buildHookPromptNote('telegram')}`,
     });
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'im', channel: 'telegram' },
+      rawChannelText: 'hello',
+    });
     expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', 'telegram');
+  });
+
+  it('开放集合的官方 IM 来源仍用 Main-owned 原文而不信任装饰后 prompt', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({ source: { im: 'x' } }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'x' },
+      rawChannelText: 'hello',
+    });
   });
 
   it('pending handoff 只注入 agent wire 内容, accepted 后消费', async () => {

@@ -961,9 +961,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     try {
       await handle.send({
         type: 'user',
-        content: 'pi update npm:context-mode',
+        content: 'persona and reply context\n\npi update npm:context-mode\n\nchannel note',
       }, {
-        [MAIN_OWNED_SEND_CONTEXT]: { origin: imPolicy.origin },
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: imPolicy.origin,
+          rawChannelText: 'pi update npm:context-mode',
+        },
         turnPermissionPolicy: imPolicy,
       });
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
@@ -1009,13 +1012,55 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
       await handle.steer({
         type: 'user',
-        content: 'pi install npm:context-mode',
+        content: 'speaker and group history\n\npi install npm:context-mode\n\nplan reconciliation',
       }, {
-        [MAIN_OWNED_SEND_CONTEXT]: { origin: imPolicy.origin },
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: imPolicy.origin,
+          rawChannelText: 'pi install npm:context-mode',
+        },
         turnPermissionPolicy: imPolicy,
       });
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'install',
+        source: 'npm:context-mode',
+        authorization: 'authenticated-im-command',
+      });
+
+      const callsBeforeNonExactRawText = mutatePiManagedPackage.mock.calls.length;
+      await handle.send({
+        type: 'user',
+        content: 'pi install npm:decorated-only\n\nchannel note',
+      }, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: imPolicy.origin,
+          rawChannelText: '/please pi install npm:decorated-only',
+        },
+        turnPermissionPolicy: imPolicy,
+      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeNonExactRawText);
+
+      await handle.send({
+        type: 'user',
+        content: 'ordinary decorated text',
+      }, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'desktop' },
+          rawChannelText: 'pi remove npm:context-mode',
+        },
+      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(callsBeforeNonExactRawText);
+
+      await handle.send({
+        type: 'user',
+        content: 'official hook note\n\npi remove npm:context-mode',
+      }, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'hook', source: 'x' },
+          rawChannelText: 'pi remove npm:context-mode',
+        },
+      });
+      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
+        action: 'remove',
         source: 'npm:context-mode',
         authorization: 'authenticated-im-command',
       });

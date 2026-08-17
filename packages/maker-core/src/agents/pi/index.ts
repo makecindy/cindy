@@ -63,13 +63,13 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentDeps,
   type AgentSessionHandle,
+  type MainOwnedSendContext,
   type PiExtraSpawnConfig,
   type PiExtensionUiStrings,
   type PiNativeModelSpec,
   type PiNativeProviderSpec,
   type SendOptions,
   type StartSessionOptions,
-  type TurnPermissionOrigin,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import {
@@ -2659,10 +2659,15 @@ export class PiAgent extends BaseAgent {
     const routeManagedPackageCommand = async (
       text: string,
       imageCount: number,
-      mainOwnedOrigin?: TurnPermissionOrigin,
+      mainOwnedContext?: MainOwnedSendContext,
     ): Promise<{ text: string; accepted: boolean }> => {
       if (!allowPiPackageManagement || imageCount > 0) return { text, accepted: false };
-      const command = parsePiManagedPackageCommand(text);
+      const authenticatedChannelCommand = mainOwnedContext?.origin.kind === 'im'
+        || mainOwnedContext?.origin.kind === 'hook';
+      const commandText = authenticatedChannelCommand
+        ? mainOwnedContext.rawChannelText
+        : text;
+      const command = commandText === undefined ? undefined : parsePiManagedPackageCommand(commandText);
       if (!command) return { text, accepted: false };
       const uiStrings = resolvePiExtensionUiStrings(this.deps);
       let outcome: PiManagedPackageCommandOutcome;
@@ -2676,7 +2681,7 @@ export class PiAgent extends BaseAgent {
             result: await this.deps.mutatePiManagedPackage!({
               action: command.action,
               source: resolvedSource,
-              authorization: mainOwnedOrigin?.kind === 'im'
+              authorization: authenticatedChannelCommand
                 ? 'authenticated-im-command'
                 : 'local-desktop-command',
             }),
@@ -3224,7 +3229,7 @@ export class PiAgent extends BaseAgent {
           const managedPackageRoute = await routeManagedPackageCommand(
             text,
             images.length,
-            sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.origin,
+            sendOpts?.[MAIN_OWNED_SEND_CONTEXT],
           );
           text = managedPackageRoute.text;
           // Starting a host-owned package mutation is this transaction's
@@ -3376,7 +3381,7 @@ export class PiAgent extends BaseAgent {
         const managedPackageRoute = await routeManagedPackageCommand(
           text,
           images.length,
-          sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.origin,
+          sendOpts?.[MAIN_OWNED_SEND_CONTEXT],
         );
         text = managedPackageRoute.text;
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');

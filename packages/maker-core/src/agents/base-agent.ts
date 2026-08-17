@@ -1377,6 +1377,8 @@ export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
 
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
+  /** Main-authenticated user text before channel/persona/context decoration. */
+  readonly rawChannelText?: string;
 }
 
 /**

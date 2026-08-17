@@ -1059,6 +1059,7 @@ export function createTurnRunner(
         // fabricated by Renderer/device-link structured-clone input.
         [MAIN_OWNED_SEND_CONTEXT]: {
           origin: { kind: 'im', channel, taskId: item.turn.userMessageId ?? undefined },
+          rawChannelText: item.text,
         },
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         beforeProviderStart: async () => {

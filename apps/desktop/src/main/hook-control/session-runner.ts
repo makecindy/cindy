@@ -33,10 +33,12 @@ import path from 'node:path';
 
 import { app, BrowserWindow } from 'electron';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
   PermissionMode,
+  TurnPermissionOrigin,
   UserContentBlock,
   UserMessage,
 } from '@cindy/maker-core';
@@ -108,6 +110,23 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+
+type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
+
+function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
+  switch (value) {
+    case 'feishu':
+    case 'discord':
+    case 'slack':
+    case 'wechat':
+    case 'telegram':
+    case 'dingtalk':
+    case 'wecom':
+      return { kind: 'im', channel: value as MainOwnedImChannel };
+    default:
+      return value ? { kind: 'hook', source: value } : null;
+  }
+}
 
 /**
  * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
@@ -991,9 +1010,18 @@ export function createMakerHookSessionRunner(deps: {
         const outgoingMessage: UserMessage = planReconcileNote
           ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
           : withHandoff;
+        const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          ...(trustedChannelOrigin
+            ? {
+                [MAIN_OWNED_SEND_CONTEXT]: {
+                  origin: trustedChannelOrigin,
+                  rawChannelText: req.prompt,
+                },
+              }
+            : {}),
           afterTurnReserved: () => {
             // 只取 lease, 不动权限档(用户配的就是最终档)。取在预约之后:
             // 忙的 Desktop 轮次已在 send 预约阶段被拒, 轮到这里就是本轮的世界。

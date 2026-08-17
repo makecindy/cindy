@@ -173,7 +173,9 @@ function canonicalPiRuntimePath(value: string): string {
   }
 }
 
-const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 250;
+// Windows hosted runners can exceed 250 ms even for a three-entry skill tree.
+// Keep the palette check bounded without downgrading an unchanged snapshot.
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 1_000;
 const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET = 2_048;
 
 async function fingerprintPiProjectSkillForPalette(
