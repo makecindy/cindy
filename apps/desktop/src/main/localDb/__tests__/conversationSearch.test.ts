@@ -24,13 +24,16 @@ describe('conversationSearch source invariants', () => {
     );
   });
 
-  it('uses schedule run associations when an instance title omits the automation name', () => {
+  it('uses authoritative valid bindings when an instance title omits the automation name', () => {
     expect(conversationSearchSource).toContain(
       'fetchScheduleNamesBySessionId(sessionIdsWithoutTitleMatch)',
     );
     expect(conversationSearchSource).toContain(
       'bestScheduleNameMatch(scheduleNamesBySessionId.get(row.id), query)',
     );
+    expect(conversationSearchSource).toContain('validScheduleSessionBindingWhere()');
+    expect(conversationSearchSource).toContain('.from(scheduleSessionBindings)');
+    expect(conversationSearchSource).not.toContain('scheduleRuns');
   });
 
   // 返回给 renderer 的 summary 仍是原始存储值:投影只发生在匹配 / 渲染那一刻,

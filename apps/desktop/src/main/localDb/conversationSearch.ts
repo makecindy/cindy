@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, ne, or } from 'drizzle-orm';
 
 import type {
   ConversationSearchAgentFilter,
@@ -17,11 +17,11 @@ import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getDbClient } from './client/current.js';
 import {
   messages,
-  scheduleRuns,
   scheduleSessionBindings,
   schedules,
   sessions,
 } from './schema.js';
+import { validScheduleSessionBindingWhere } from './scheduleSessionBindingPolicy.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import {
@@ -116,9 +116,8 @@ export async function searchConversations(
   const titleMatches = sessionRows
     .map((row, index) => {
       const displayTitleMatch = displayTitleMatches.get(row.id) ?? null;
-      // 自定义实例标题可以完全不含自动化名称。持久绑定是稳定身份，schedule_runs
-      // 只补迁移前/短暂兼容数据；不按同名或旧 [Schedule] 前缀猜测，避免删除后
-      // 重建同名任务发生误命中。
+      // 自定义实例标题可以完全不含自动化名称。迁移 0094 已将历史关联回填到
+      // 持久绑定表，并由 trigger 持续维护；这里不扫描 run 历史，也不按同名猜测。
       const scheduleNameMatch = displayTitleMatch
         ? null
         : bestScheduleNameMatch(scheduleNamesBySessionId.get(row.id), query);
@@ -323,30 +322,20 @@ async function fetchScheduleNamesBySessionId(sessionIds: string[]): Promise<Map<
 
   for (let offset = 0; offset < sessionIds.length; offset += SCHEDULE_NAME_LOOKUP_CHUNK_SIZE) {
     const chunk = sessionIds.slice(offset, offset + SCHEDULE_NAME_LOOKUP_CHUNK_SIZE);
-    const [runRows, bindingRows] = await Promise.all([
-      db
-        .select({
-          sessionId: scheduleRuns.sessionId,
-          scheduleName: schedules.name,
-        })
-        .from(scheduleRuns)
-        .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(and(
-          isNotNull(scheduleRuns.sessionId),
-          inArray(scheduleRuns.sessionId, chunk),
-        )),
-      db
-        .select({
-          sessionId: scheduleSessionBindings.sessionId,
-          scheduleName: schedules.name,
-        })
-        .from(scheduleSessionBindings)
-        .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id))
-        .where(inArray(scheduleSessionBindings.sessionId, chunk)),
-    ]);
+    const bindingRows = await db
+      .select({
+        sessionId: scheduleSessionBindings.sessionId,
+        scheduleName: schedules.name,
+      })
+      .from(scheduleSessionBindings)
+      .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id))
+      .innerJoin(sessions, eq(scheduleSessionBindings.sessionId, sessions.id))
+      .where(and(
+        inArray(scheduleSessionBindings.sessionId, chunk),
+        validScheduleSessionBindingWhere(),
+      ));
 
-    for (const row of [...runRows, ...bindingRows]) {
-      if (!row.sessionId) continue;
+    for (const row of bindingRows) {
       const names = namesBySessionId.get(row.sessionId) ?? [];
       if (!names.includes(row.scheduleName)) names.push(row.scheduleName);
       namesBySessionId.set(row.sessionId, names);

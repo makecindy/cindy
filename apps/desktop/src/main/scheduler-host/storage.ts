@@ -29,6 +29,12 @@ import {
   sessions,
 } from '../localDb/schema';
 import {
+  LEGACY_SCHEDULE_TITLE_PREFIX,
+  schedulerGeneratedScheduleSessionBindingWhere,
+  strictLegacyScheduleTitleWhere,
+  validScheduleSessionBindingWhere,
+} from '../localDb/scheduleSessionBindingPolicy.js';
+import {
   scheduleToCamel,
   scheduleCreateToRow,
   schedulePatchToRow,
@@ -171,7 +177,6 @@ interface LegacyScheduleSessionAlias {
   workingDir?: string | null;
 }
 
-const LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] ';
 const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
 const PERSISTED_SESSION_BINDING_RUN_ID_PREFIX = 'schedule-session-binding:';
 const COMPACT_UNREAD_RUN_LIMIT_PER_SESSION = 50;
@@ -191,13 +196,6 @@ function toScheduleSource(value: string | null): Schedule['source'] | undefined 
 
 function legacyScheduleTitle(name: string): string {
   return `${LEGACY_SCHEDULE_TITLE_PREFIX}${name}`;
-}
-
-function legacyTitleWhere() {
-  return and(
-    sql`substr(${sessions.title}, 1, ${LEGACY_SCHEDULE_TITLE_PREFIX.length}) = ${LEGACY_SCHEDULE_TITLE_PREFIX}`,
-    sql`length(trim(substr(${sessions.title}, ${LEGACY_SCHEDULE_TITLE_PREFIX.length + 1}))) > 0`,
-  );
 }
 
 function legacyScheduleNameFromSessionTitle(title: string): string | null {
@@ -632,17 +630,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     // 压掉合成项，避免短暂把 running/unread 状态覆盖成已读终态。
     const bindingRows = options.compact
       ? await (() => {
-          const generatedAssociation = or(
-            eq(sessions.source, 'scheduler'),
-            and(
-              legacyTitleWhere(),
-              eq(schedules.legacySessionFallback, true),
-            ),
-          );
-          const validAssociation = or(
-            generatedAssociation,
-            eq(schedules.targetSessionId, scheduleSessionBindings.sessionId),
-          );
+          const generatedAssociation = schedulerGeneratedScheduleSessionBindingWhere();
+          const validAssociation = validScheduleSessionBindingWhere();
           const rankedBindings = db
             .select({
               scheduleId: sql<string>`${schedules.id}`.as('binding_schedule_id'),
@@ -874,8 +863,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .from(sessions)
       .where(
         compactSessionIds
-          ? and(legacyTitleWhere(), inArray(sessions.id, compactSessionIds))
-          : legacyTitleWhere(),
+          ? and(strictLegacyScheduleTitleWhere(), inArray(sessions.id, compactSessionIds))
+          : strictLegacyScheduleTitleWhere(),
       );
     const legacyRuns: ScheduleSidebarIndexRun[] = [];
 
@@ -947,7 +936,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         totalCostUsd: sessions.totalCostUsd,
       })
       .from(sessions)
-      .where(legacyTitleWhere());
+      .where(strictLegacyScheduleTitleWhere());
 
     const legacySessionScheduleIds = new Map<string, string>();
     const scanSessionIds = new Set(linkedSessionIds);
@@ -1478,7 +1467,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         updatedAt: sessions.updatedAt,
       })
       .from(sessions)
-      .where(and(legacyTitleWhere(), inArray(sessions.title, titles)));
+      .where(and(strictLegacyScheduleTitleWhere(), inArray(sessions.title, titles)));
 
     return rows
       .filter((row) => {
@@ -1529,7 +1518,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       })
       .from(scheduleRuns)
       .innerJoin(sessions, eq(scheduleRuns.sessionId, sessions.id))
-      .where(and(eq(scheduleRuns.scheduleId, schedule.id), legacyTitleWhere()));
+      .where(and(eq(scheduleRuns.scheduleId, schedule.id), strictLegacyScheduleTitleWhere()));
 
     for (const row of linkedRows) {
       const name = legacyScheduleNameFromSessionTitle(row.title);
@@ -1607,7 +1596,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .from(scheduleRuns)
       .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
       .innerJoin(sessions, eq(scheduleRuns.sessionId, sessions.id))
-      .where(legacyTitleWhere())
+      .where(strictLegacyScheduleTitleWhere())
       .orderBy(desc(scheduleRuns.firedAt), desc(schedules.updatedAt));
 
     const linkedKeys = new Set<string>();

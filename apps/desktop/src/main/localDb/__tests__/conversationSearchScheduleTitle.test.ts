@@ -77,12 +77,15 @@ function createHarness(): Harness {
     );
     CREATE TABLE schedules (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL
+      name TEXT NOT NULL,
+      target_session_id TEXT,
+      legacy_session_fallback INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE schedule_runs (
       id TEXT PRIMARY KEY,
       schedule_id TEXT NOT NULL,
-      session_id TEXT
+      session_id TEXT,
+      fired_at INTEGER NOT NULL
     );
     CREATE TABLE schedule_session_bindings (
       schedule_id TEXT NOT NULL,
@@ -90,11 +93,64 @@ function createHarness(): Harness {
       last_run_at INTEGER NOT NULL,
       PRIMARY KEY (schedule_id, session_id)
     );
+    CREATE TRIGGER schedule_runs_bind_session_after_insert
+    AFTER INSERT ON schedule_runs
+    WHEN NEW.session_id IS NOT NULL
+    BEGIN
+      INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+      VALUES (NEW.schedule_id, NEW.session_id, NEW.fired_at)
+      ON CONFLICT(schedule_id, session_id) DO UPDATE SET
+        last_run_at = MAX(schedule_session_bindings.last_run_at, excluded.last_run_at);
+    END;
+    CREATE TRIGGER schedule_runs_bind_session_after_update
+    AFTER UPDATE OF schedule_id, session_id, fired_at ON schedule_runs
+    WHEN NEW.session_id IS NOT NULL
+    BEGIN
+      INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+      VALUES (NEW.schedule_id, NEW.session_id, NEW.fired_at)
+      ON CONFLICT(schedule_id, session_id) DO UPDATE SET
+        last_run_at = MAX(schedule_session_bindings.last_run_at, excluded.last_run_at);
+    END;
   `);
   const client = { drizzle: drizzle(sqlite, { schema }) } as unknown as DbClient;
   setCurrentDbClient(client, 'test-user');
   activeHarness = { sqlite, client };
   return activeHarness;
+}
+
+function insertSchedule(
+  sqlite: Database.Database,
+  id: string,
+  name: string,
+  targetSessionId: string | null = null,
+  legacySessionFallback = false,
+): void {
+  sqlite
+    .prepare(
+      `INSERT INTO schedules
+        (id, name, target_session_id, legacy_session_fallback)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .run(id, name, targetSessionId, legacySessionFallback ? 1 : 0);
+}
+
+function insertRun(
+  sqlite: Database.Database,
+  id: string,
+  scheduleId: string,
+  sessionId: string,
+  firedAt = 100,
+): void {
+  sqlite
+    .prepare(
+      'INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at) VALUES (?, ?, ?, ?)',
+    )
+    .run(id, scheduleId, sessionId, firedAt);
+}
+
+async function searchResultSessionIds(query: string): Promise<string[]> {
+  const result = await searchConversations({ query, semanticMode: 'keyword' });
+  return result.results.map((item) => item.session.id).sort();
 }
 
 function insertSession(
@@ -138,12 +194,8 @@ describe('conversation search schedule title association', () => {
     const instanceTitle = '2026-08-10 deploy a1b2c3d4';
     insertSession(sqlite, 'session-template', instanceTitle, 'scheduler');
     insertSession(sqlite, 'unlinked-session', 'Manual deployment', 'scheduler');
-    sqlite
-      .prepare('INSERT INTO schedules (id, name) VALUES (?, ?)')
-      .run('schedule-nightly-deploy', 'Nightly deployment');
-    sqlite
-      .prepare('INSERT INTO schedule_runs (id, schedule_id, session_id) VALUES (?, ?, ?)')
-      .run('run-template', 'schedule-nightly-deploy', 'session-template');
+    insertSchedule(sqlite, 'schedule-nightly-deploy', 'Nightly deployment');
+    insertRun(sqlite, 'run-template', 'schedule-nightly-deploy', 'session-template');
 
     const byInstanceTitle = await searchConversations({
       query: 'a1b2c3d4',
@@ -172,18 +224,12 @@ describe('conversation search schedule title association', () => {
   it('keeps automation-name search after the visible run history is deleted', async () => {
     const { sqlite } = createHarness();
     insertSession(sqlite, 'session-retained-binding', '2026-08-10 a1b2c3d4', 'scheduler');
-    sqlite
-      .prepare('INSERT INTO schedules (id, name) VALUES (?, ?)')
-      .run('schedule-retained-binding', 'Retained automation');
-    sqlite
-      .prepare('INSERT INTO schedule_runs (id, schedule_id, session_id) VALUES (?, ?, ?)')
-      .run('run-to-delete', 'schedule-retained-binding', 'session-retained-binding');
-    sqlite
-      .prepare(
-        'INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at) VALUES (?, ?, ?)',
-      )
-      .run('schedule-retained-binding', 'session-retained-binding', 100);
+    insertSchedule(sqlite, 'schedule-retained-binding', 'Retained automation');
+    insertRun(sqlite, 'run-to-delete', 'schedule-retained-binding', 'session-retained-binding');
     sqlite.prepare('DELETE FROM schedule_runs WHERE id = ?').run('run-to-delete');
+    // Search reads only the authoritative binding table. Dropping the run-history
+    // table makes an accidental fallback query fail loudly instead of hiding in data setup.
+    sqlite.exec('DROP TABLE schedule_runs');
 
     const result = await searchConversations({
       query: 'retained automation',
@@ -199,6 +245,100 @@ describe('conversation search schedule title association', () => {
         }),
         titleMatchIndices: [],
       }),
+    ]);
+  });
+
+  it('excludes a stale ordinary binding after the target session changes', async () => {
+    const { sqlite } = createHarness();
+    insertSession(sqlite, 'ordinary-a', 'Former manual target');
+    insertSession(sqlite, 'ordinary-b', 'Current manual target');
+    insertSchedule(sqlite, 'schedule-rebound', 'Rebound ordinary automation', 'ordinary-a');
+    insertRun(sqlite, 'run-ordinary-a', 'schedule-rebound', 'ordinary-a', 100);
+    sqlite
+      .prepare('UPDATE schedules SET target_session_id = ? WHERE id = ?')
+      .run('ordinary-b', 'schedule-rebound');
+    insertRun(sqlite, 'run-ordinary-b', 'schedule-rebound', 'ordinary-b', 200);
+
+    expect(await searchResultSessionIds('rebound ordinary automation')).toEqual(['ordinary-b']);
+  });
+
+  it('keeps a scheduler-generated historical binding after the target changes', async () => {
+    const { sqlite } = createHarness();
+    insertSession(sqlite, 'generated-a', 'Historical generated instance', 'scheduler');
+    insertSession(sqlite, 'generated-current-b', 'Current manual instance');
+    insertSchedule(sqlite, 'schedule-generated-history', 'Generated history automation', 'generated-a');
+    insertRun(sqlite, 'run-generated-a', 'schedule-generated-history', 'generated-a', 100);
+    sqlite
+      .prepare('UPDATE schedules SET target_session_id = ? WHERE id = ?')
+      .run('generated-current-b', 'schedule-generated-history');
+    insertRun(
+      sqlite,
+      'run-generated-current-b',
+      'schedule-generated-history',
+      'generated-current-b',
+      200,
+    );
+
+    expect(await searchResultSessionIds('generated history automation')).toEqual([
+      'generated-a',
+      'generated-current-b',
+    ]);
+  });
+
+  it('keeps strict legacy generated history when the schedule allows legacy fallback', async () => {
+    const { sqlite } = createHarness();
+    insertSession(sqlite, 'legacy-a', '[Schedule] historical generated key');
+    insertSession(sqlite, 'legacy-current-b', 'Current legacy target');
+    insertSchedule(
+      sqlite,
+      'schedule-legacy-history',
+      'Strict legacy automation',
+      'legacy-a',
+      true,
+    );
+    insertRun(sqlite, 'run-legacy-a', 'schedule-legacy-history', 'legacy-a', 100);
+    sqlite
+      .prepare('UPDATE schedules SET target_session_id = ? WHERE id = ?')
+      .run('legacy-current-b', 'schedule-legacy-history');
+    insertRun(
+      sqlite,
+      'run-legacy-current-b',
+      'schedule-legacy-history',
+      'legacy-current-b',
+      200,
+    );
+
+    expect(await searchResultSessionIds('strict legacy automation')).toEqual([
+      'legacy-a',
+      'legacy-current-b',
+    ]);
+  });
+
+  it('excludes a legacy-looking stale binding when fallback is disabled', async () => {
+    const { sqlite } = createHarness();
+    insertSession(sqlite, 'prefix-only-a', '[Schedule] historical generated key');
+    insertSession(sqlite, 'prefix-current-b', 'Current prefix target');
+    insertSchedule(
+      sqlite,
+      'schedule-prefix-disabled',
+      'Disabled prefix automation',
+      'prefix-only-a',
+      false,
+    );
+    insertRun(sqlite, 'run-prefix-only-a', 'schedule-prefix-disabled', 'prefix-only-a', 100);
+    sqlite
+      .prepare('UPDATE schedules SET target_session_id = ? WHERE id = ?')
+      .run('prefix-current-b', 'schedule-prefix-disabled');
+    insertRun(
+      sqlite,
+      'run-prefix-current-b',
+      'schedule-prefix-disabled',
+      'prefix-current-b',
+      200,
+    );
+
+    expect(await searchResultSessionIds('disabled prefix automation')).toEqual([
+      'prefix-current-b',
     ]);
   });
 });
