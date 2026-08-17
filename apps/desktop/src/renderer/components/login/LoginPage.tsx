@@ -409,6 +409,19 @@ export function LoginPage() {
     setIdentifierFormatError(null);
   }, [loginState?.step]);
 
+  // 进入 verification-code 即起算 42s(含 AuthContext 自动发码、手机号提交)。
+  // 只认运行中的 step 沿,不认首帧注入(harness 直接挂验证码页仍保持可点重发)。
+  // 已在验证码页的重发成功仍走 dispatchRequestCode 的 arm。
+  const previousLoginStepRef = useRef(loginState?.step);
+  useEffect(() => {
+    const previous = previousLoginStepRef.current;
+    const step = loginState?.step;
+    previousLoginStepRef.current = step;
+    if (step === 'verification-code' && previous !== 'verification-code' && previous != null) {
+      armResendCountdown();
+    }
+  }, [loginState?.step, armResendCountdown]);
+
   const errorMessage = useMemo(() => {
     if (!errorCode) return null;
     return t(`login.errors.${errorCode}`, {

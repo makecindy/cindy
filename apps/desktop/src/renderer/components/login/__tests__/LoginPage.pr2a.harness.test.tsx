@@ -63,6 +63,11 @@ function scenarioClient(scenario: string, region: 'cn' | 'global' = 'cn') {
   });
 }
 
+async function identifierState(scenario = 'providers:both') {
+  const providers = await scenarioClient(scenario).getProviders();
+  return reduceAuthFlow(null, { type: 'providers-loaded', providers });
+}
+
 async function methodChoiceState(scenario: string, email = 'user@example-corp.com') {
   const methods = await scenarioClient(scenario).discover(email);
   return reduceAuthFlow(null, { type: 'discovery-loaded', email, methods });
@@ -235,6 +240,19 @@ describe('verification-code', () => {
     const spin = screen.getByRole('status');
     expect(spin.className).toContain('animate-spin');
     expect(spin.className).toContain('motion-reduce:animate-none');
+  });
+
+  it('identifier → verification-code 自动起算 42s(含 AuthContext 自动发码路径)', async () => {
+    const view = mount(await identifierState());
+    expect(screen.queryByTestId('login-resend-countdown')).toBeNull();
+    loginHook.value = {
+      ...loginHook.value,
+      loginState: await verificationState(),
+    };
+    view.rerender(<LoginPage />);
+    expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
+      'login.resendCountdown#42',
+    );
   });
 
   it('重发成功重置 / 失败保持(dispatch 返回值驱动 arm)', async () => {

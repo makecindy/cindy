@@ -245,11 +245,59 @@ describe('pi translator', () => {
     translatePiEvent(ev({ type: 'auto_retry_end', success: true }), queue, ctx);
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
 
-    const errors = events.filter((event) => event.type === 'error');
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.data).toMatchObject({ isTerminal: false, willRetry: true });
+    // 第一次自动重试保持静默：一次抖动就恢复时不该闪红色错误条。
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
     expect((events.find((event) => event.type === 'done')?.data as { result?: string }).result)
       .toBe('Recovered answer');
+  });
+
+  it('maps later Pi auto-retries onto the shared overload retry protocol', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_start',
+        attempt: 2,
+        maxAttempts: 3,
+        errorMessage: 'HTTP status 529: overloaded',
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        source: 'pi',
+        data: expect.objectContaining({
+          message: 'HTTP status 529: overloaded (auto-retry 2/3)',
+          isTerminal: false,
+          willRetry: true,
+          reason: 'upstream-overload',
+          errorStatus: 529,
+        }),
+      }),
+    ]);
+  });
+
+  it('keeps unclassified Pi auto-retries silent instead of reusing the overload marker', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_start',
+        attempt: 2,
+        maxAttempts: 3,
+        errorMessage: 'provider 500 from upstream',
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
   });
 
   it('does not duplicate a terminal error after Pi auto-retry is exhausted', () => {

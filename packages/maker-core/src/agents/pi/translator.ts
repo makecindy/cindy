@@ -23,6 +23,11 @@ import {
 } from '@cindy/maker-shared/error-redaction';
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import {
+  UPSTREAM_OVERLOAD_REASON,
+  formatOverloadRetryMessage,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
@@ -271,6 +276,24 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
     ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
   };
+}
+
+function parsePiAutoRetryProgress(
+  event: PiRpcEvent,
+): { attempt: number; maxAttempts: number } | null {
+  const attempt = event.attempt;
+  const maxAttempts = event.maxAttempts;
+  if (
+    typeof attempt !== 'number'
+    || typeof maxAttempts !== 'number'
+    || !Number.isSafeInteger(attempt)
+    || !Number.isSafeInteger(maxAttempts)
+    || attempt < 1
+    || maxAttempts < attempt
+  ) {
+    return null;
+  }
+  return { attempt, maxAttempts };
 }
 
 function toolResultFullText(result: unknown): string {
@@ -571,16 +594,33 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_start': {
+      // 走 CC/Codex 同一套 `(auto-retry N/M)` 跨 agent 协议。这个后缀在 mobile /
+      // Telegram 投影里**只表示过载**，不能拿去编码未分类 5xx —— 否则手机会把普通
+      // 供应商故障显示成「模型服务繁忙」。
+      //
+      // 第 1 次不透出：单次抖动 pi 一次重试就过，提示只会闪一下徒增噪音
+      // （与 claude-code translator 的 api_retry 防噪口径一致）。
+      // 未分类错误同样静默：渠道 / 手机没有对应本地化契约，CC 也只透过载类。
+      const progress = parsePiAutoRetryProgress(event);
+      if (!progress || progress.attempt < 2) return;
       const sdkError = typeof event.errorMessage === 'string'
         ? redactSensitiveText(event.errorMessage)
         : undefined;
+      const rawMessage = (sdkError && sdkError.trim())
+        || ctx.pendingAssistantError?.message
+        || '';
+      const signals = extractNonSecretErrorSignals(rawMessage);
+      const errorStatus = ctx.pendingAssistantError?.errorStatus ?? signals.errorStatus;
+      if (parseOverloadError(rawMessage, errorStatus) === null) return;
       queue.push({
         type: 'error',
         data: {
-          message: `Transient provider error, retrying (${String(event.attempt)}/${String(event.maxAttempts)})…`,
+          message: formatOverloadRetryMessage(rawMessage, progress.attempt, progress.maxAttempts),
           isTerminal: false,
           willRetry: true,
-          sdkError,
+          reason: UPSTREAM_OVERLOAD_REASON,
+          ...(sdkError ? { sdkError } : {}),
+          ...(errorStatus !== undefined ? { errorStatus } : {}),
         },
         source: 'pi',
       });
