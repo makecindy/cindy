@@ -42,6 +42,14 @@ const PI_BINARY = path.join(
   process.platform === 'win32' ? 'pi.exe' : 'pi',
 );
 const piAvailable = existsSync(PI_BINARY);
+// Keep these inequalities explicit: startup must finish before the persistent
+// stream closes, while a tool call may take longer than startup and still fit
+// inside the normal request budget. The margins must survive a loaded Windows
+// root suite, where a 50 ms startup budget is only a scheduler race.
+const REMOTE_SSE_STARTUP_TIMEOUT_MS = 2_000;
+const REMOTE_SSE_TOOL_DELAY_MS = 2_500;
+const REMOTE_SSE_STREAM_HOLD_MS = 5_000;
+const REMOTE_SSE_REQUEST_TIMEOUT_MS = 10_000;
 
 const noopLogger: Logger = {
   trace: () => {},
@@ -296,8 +304,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             }],
           };
         } else if (body.method === 'tools/call') {
-          // 超过 50ms startup budget 后才回工具结果，证明探测完成后切回长 request budget。
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          // 超过 startup budget 后才回工具结果，证明探测完成后切回长 request budget。
+          await new Promise((resolve) => setTimeout(resolve, REMOTE_SSE_TOOL_DELAY_MS));
           const text = body.params?.arguments?.text;
           echoCalls.push({ text });
           result = { content: [{ type: 'text', text: `ECHO[${String(text)}]` }] };
@@ -308,7 +316,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         res.write(`event: message\r\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\r\n\r\n`);
         // 合法 Streamable HTTP server 可在返回当前 response 后继续保持 SSE 流；client
         // 必须在 event 到达时返回并取消流，而不是等待这里结束。
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise((resolve) => setTimeout(resolve, REMOTE_SSE_STREAM_HOLD_MS));
         if (!res.destroyed && !res.writableEnded) res.end();
         return;
       }
@@ -423,8 +431,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                     authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0',
                     'x-api-key': 'CINDY_PI_REMOTE_MCP_SECRET_1',
                   },
-                  startupTimeoutMs: 50,
-                  requestTimeoutMs: 1_000,
+                  startupTimeoutMs: REMOTE_SSE_STARTUP_TIMEOUT_MS,
+                  requestTimeoutMs: REMOTE_SSE_REQUEST_TIMEOUT_MS,
                 },
               }],
             },

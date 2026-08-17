@@ -19,15 +19,51 @@ import { ScriptScheduleRunner, type ScriptCapabilityBroker } from '../script-run
 
 const PYTHON_CLIENT_DIR = fileURLToPath(new URL('../python-client/', import.meta.url));
 
-function detectPython(): string | null {
-  for (const cmd of ['python', 'python3']) {
+interface PythonRuntime {
+  executable: string;
+  commandToken: string;
+}
+
+function pythonCandidates(): string[] {
+  if (process.platform !== 'win32') return ['python3', 'python'];
+  const candidates: string[] = [];
+  for (const command of ['python', 'python3']) {
+    const found = spawnSync('where.exe', [command], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+    });
+    if (found.status !== 0) continue;
+    candidates.push(...found.stdout.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean));
+  }
+  return [...new Set(candidates)];
+}
+
+function detectPython(): PythonRuntime | null {
+  for (const executable of pythonCandidates()) {
     try {
-      const probe = spawnSync(cmd, ['-c', 'import sys; sys.stdout.write("cindy-python-probe")'], {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 10_000,
-      });
-      if (probe.status === 0 && probe.stdout === 'cindy-python-probe') return cmd;
+      // protocol.py / maker_client.py 是 Python 3 客户端。Windows PATH 上可能同时
+      // 有可执行简单 `-c` 的 Python 2、商店 stub 和真正的 Python 3；只探 PATH
+      // 首项或“能启动”会错误选中前两者，随后把 Python 3 类型注解/UTF-8 源码
+      // 报成协议回归。枚举候选并锁主版本，测试真实可用的 Python 3。
+      const probe = spawnSync(
+        executable,
+        [
+          '-c',
+          'import sys; assert sys.version_info[0] >= 3; sys.stdout.write("cindy-python-probe")',
+        ],
+        {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 10_000,
+        },
+      );
+      if (probe.status === 0 && probe.stdout === 'cindy-python-probe') {
+        return {
+          executable,
+          commandToken: /\s/u.test(executable) ? `"${executable}"` : executable,
+        };
+      }
     } catch {
       // try next candidate
     }
@@ -111,7 +147,7 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
     })}\n`;
     const runClient = (env: NodeJS.ProcessEnv): Record<string, unknown> => {
       const probe = spawnSync(
-        PYTHON!,
+        PYTHON!.executable,
         ['-c', 'from protocol import DuplexClient\nDuplexClient().emit_complete("ok")'],
         {
           cwd: tmp,
@@ -143,7 +179,7 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       logger: { info: logInfo, warn: vi.fn(), error: vi.fn() },
     });
     const ctx: FireContext = { runId: 'run-1', firedAt: Date.now(), signal: new AbortController().signal };
-    const result = await runner.fire(schedule(`${PYTHON} demo.py`), ctx);
+    const result = await runner.fire(schedule(`${PYTHON!.commandToken} demo.py`), ctx);
 
     // jira.read 已授予且响应含中文 + 转义引号(锁 UTF-8 编码链路)
     expect(result.resultText).toContain('jira ok');
@@ -180,7 +216,7 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       logger: { info: logInfo, warn: vi.fn(), error: vi.fn() },
     });
     const ctx: FireContext = { runId: 'run-2', firedAt: Date.now(), signal: new AbortController().signal };
-    const result = await runner.fire(schedule(`${PYTHON} noisy.py`), ctx);
+    const result = await runner.fire(schedule(`${PYTHON!.commandToken} noisy.py`), ctx);
 
     expect(result.resultText).toBe('ok=DING-1');
     const completedLog = logInfo.mock.calls.find((c) => String(c[0]).includes('script completed'));
@@ -217,9 +253,9 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       },
     };
     const runner = new ScriptScheduleRunner({ broker, logger: {} });
-    const sched = schedule(`${PYTHON} adf_comment.py`);
+    const sched = schedule(`${PYTHON!.commandToken} adf_comment.py`);
     sched.scriptConfig = {
-      command: `${PYTHON} adf_comment.py`,
+      command: `${PYTHON!.commandToken} adf_comment.py`,
       capabilities: ['jira.read', 'jira.comment'],
       timeoutMs: 30_000,
     };
