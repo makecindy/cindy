@@ -48,7 +48,11 @@ import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLo
 import { agentOptionOf } from './agentOptions';
 import type { SelectableVendor } from '@/lib/agentVendors';
 import { FastModeToggle } from './FastModeToggle';
-import { UnifiedModelPanel, type UnifiedModelPanelProps } from './UnifiedModelPanel';
+import {
+  UnifiedModelPanel,
+  type UnifiedModelPanelProps,
+  type UnifiedSelectedRow,
+} from './UnifiedModelPanel';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
 import {
@@ -591,11 +595,17 @@ interface ModelSelectorProps {
    * 三者都不传 → 单栏纯列表(无供应商分段),选行只 onModelChange(老入口 / CreateWorkerPopover)。
    */
   currentProviderId?: string | null;
+  /**
+   * 返回值(若有)= **这次选择真的应用了没有**(`false` / 抛错 = 没应用;返回 void 的调用方
+   * 视为应用了)。统一面板的会话路径靠它决定要不要记收藏锚点 —— 取消上下文容量确认、
+   * 远程写穿失败、settingsLocked 都会走到 `false` 那一支(2026-08-17 review 第五轮 M4);
+   * 其余调用方照旧无视返回值。
+   */
   onProviderChange?: (
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
-  ) => void;
+  ) => void | boolean | Promise<void | boolean>;
   onNavigateToProviders?: () => void;
   /**
    * 会话显式选中的来源已断开(由 ChatInput 按 sessionId / deviceLink scoping 计算,见
@@ -774,11 +784,12 @@ interface ModelSelectorContentProps {
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
   overlayContentClassName?: string;
   currentProviderId?: string | null;
+  /** 语义同 ModelSelectorProps.onProviderChange(含返回值口径)。 */
   onProviderChange?: (
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
-  ) => void;
+  ) => void | boolean | Promise<void | boolean>;
   onNavigateToProviders?: () => void;
   /**
    * 可选「跟随会话」行(opt-in)。仅 scheduler 的 heartbeat(绑定会话)任务传入:
@@ -1752,13 +1763,19 @@ function ModelSelectorContentView({
   }, [sections, flatModels, modelId, activeSourceId]);
 
   // ── 行选择 ───────────────────────────────────────────────────────────────
+  /**
+   * 返回值 = **这次选择真的应用了没有**,原样透传自 `onProviderChange`
+   * (`false` / 抛错 = 没应用;返回 void 视为应用了 —— 与 `onCrossEngineSelect` 同一条约定)。
+   * 统一面板的会话路径靠它决定要不要记收藏锚点(2026-08-17 review 第五轮 M4);
+   * 其余调用点照旧无视返回值,行为一个字没变。
+   */
   const handleRowSelect = (
     providerId: string | null,
     id: string,
     dismiss = true,
     effortOverride?: Effort,
-  ) => {
-    if (interactionDisabled) return;
+  ): void | boolean | Promise<void | boolean> => {
+    if (interactionDisabled) return false;
     const dismissAfterSelection = () => {
       if (!dismiss) return;
       closeOptionsPanel();
@@ -1796,11 +1813,16 @@ function ModelSelectorContentView({
       // A selected row can be the effective fallback for a stale explicit
       // provider.  Repair that route before opening its configuration, but do
       // not persist the row's derived/default effort just by opening the card.
+      let reselectApplied: void | boolean | Promise<void | boolean> = undefined;
       if (reselectEmitsChange) {
         if (sections && providerId) {
           const needsProviderRepair = !!currentProviderId && currentProviderId !== providerId;
           if (!opensConfiguration || needsProviderRepair) {
-            onProviderChange?.(providerId, id, opensConfiguration ? undefined : reconciledEffort);
+            reselectApplied = onProviderChange?.(
+              providerId,
+              id,
+              opensConfiguration ? undefined : reconciledEffort,
+            );
           }
         } else if (!opensConfiguration) {
           onModelChange(id);
@@ -1815,15 +1837,109 @@ function ModelSelectorContentView({
       // 显式值(IM 工作目录偏好),这时点当前行的语义是「把继承值钉成显式值」,必须照常回调,
       // 否则用户点了没反应、之后上游默认一变这条偏好就被静默改掉。
       dismissAfterSelection();
-      return;
+      return reselectApplied;
     }
     if (sections && providerId) {
       // 原子切 provider+model+effort; effort 由目标来源行的 catalog/记忆统一解析。
-      onProviderChange?.(providerId, id, reconciledEffort);
-    } else {
-      onModelChange(id);
+      const applied = onProviderChange?.(providerId, id, reconciledEffort);
+      dismissAfterSelection();
+      return applied;
     }
+    onModelChange(id);
     dismissAfterSelection();
+  };
+
+  /**
+   * 归一「这次实时写入真的落下去了没有」:只有明确的 `false` 与抛错算失败,返回 void 的
+   * 调用方视为落了 —— 与统一面板 `useUnifiedRowActions.runLive` 逐字同一条约定。
+   */
+  const runLiveWrite = async (
+    call: () => void | boolean | Promise<void | boolean>,
+  ): Promise<boolean> => {
+    try {
+      return (await call()) !== false;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * 把一份行配置的**深度 + Fast**应用到正在跑的这一份上(来源 / 模型 / 引擎都没变,差的只有
+   * 这两格)。
+   *
+   * 两笔要么都落、要么回滚:第二笔失败时用同一条实时通道把第一笔写回原值,绝不留下
+   * 「新深度 + 旧 Fast」这个用户从没选过的组合(口径与 useUnifiedRowActions.applyDefaultsLive
+   * 一致,2026-08-17 review 第五轮 M1)。回滚本身也失败时两侧都脏,但**锚点不记、面板不收**,
+   * 用户重试整段即可。与当前值相同的那一格不写(省掉一次可能失败的往返)。
+   */
+  const applyLiveRowConfig = async (
+    targetEffort: Effort | undefined,
+    targetFast: boolean,
+  ): Promise<boolean> => {
+    const previousEffort = effort;
+    let effortWritten = false;
+    if (targetEffort && targetEffort !== previousEffort) {
+      if (!(await runLiveWrite(() => onEffortChange(targetEffort)))) return false;
+      effortWritten = true;
+    }
+    if (onFastModeChange && targetFast !== (fastMode ?? false)) {
+      const fastChange = onFastModeChange;
+      if (!(await runLiveWrite(() => fastChange(targetFast)))) {
+        if (effortWritten) await runLiveWrite(() => onEffortChange(previousEffort));
+        return false;
+      }
+    }
+    return true;
+  };
+
+  /**
+   * 统一面板在**已建会话**里选中一行(跨引擎行在 selectRow 里就改道 `onCrossEngineSelect`,
+   * 到不了这里)。两件事必须收在这一条上:
+   *
+   *   · **同来源 + 同模型 + 同引擎、只有深度 / Fast 不同的收藏**(2026-08-17 review 第五轮 M3):
+   *     按 (来源, 模型) 判重的 handleRowSelect 会把它当成「点了当前行」直接收起 —— 界面勾上
+   *     这条收藏,任务却还在旧配置上跑。这类行改为把副本的深度 / Fast 当一次实时应用,
+   *     两笔都落才算选中(失败不记锚点、不收面板,与跨引擎被取消同一条待遇)。
+   *   · **锚点只在选择真的应用之后才记**(M4):handleRowSelect → onProviderChange →
+   *     performProviderChange 的取消(上下文容量确认)/ 远程写穿失败 / settingsLocked 出口都
+   *     返回 false,此前那个结果被丢掉,于是会话还在旧配置上跑、面板已经勾了新收藏。
+   *     `await` 之后再记同时保住既有顺序(G4:单引擎链路内部会按新的 (来源, 模型) 收敛调用方
+   *     状态,先记锚点会被它顺手清掉)。
+   */
+  const applyUnifiedSessionSelect = async (args: {
+    providerId: string;
+    /** 该行生效引擎的 **wire model id**(选择链路唯一可发送的 id)。 */
+    wireModelId: string;
+    effort: Effort | undefined;
+    config: UnifiedSelectedRow;
+  }): Promise<void> => {
+    const anchor = args.config.favoriteUid
+      ? {
+          uid: args.config.favoriteUid,
+          wireModelId: args.wireModelId,
+          engine: args.config.engine,
+        }
+      : null;
+    // 「正在跑的是哪个引擎」以会话形态给的那一个为准(已确认的会话引擎);没有会话形态的
+    // 入口回落 currentAgentKind —— 与列表行三元组同一个口径,不另推一份。
+    const liveAgentKind = sessionEngineFilter?.currentAgent ?? currentAgentKind;
+    if (
+      anchor &&
+      isSelectedRow(args.providerId, args.wireModelId) &&
+      liveAgentKind !== null &&
+      vendorKeyToAgentKind(args.config.engine) === liveAgentKind
+    ) {
+      if (!(await applyLiveRowConfig(args.effort, args.config.fast))) return;
+      onSessionFavoriteAnchorChange?.(anchor);
+      closeOptionsPanel();
+      onDismiss?.();
+      return;
+    }
+    const applied = await Promise.resolve(
+      handleRowSelect(args.providerId, args.wireModelId, true, args.effort),
+    ).catch(() => false);
+    if (applied === false) return;
+    onSessionFavoriteAnchorChange?.(anchor);
   };
   // ── hover / focus 浮层目标 ───────────────────────────────────────────────
   const editingModel: RowModel | null = useMemo(() => {
@@ -2587,17 +2703,34 @@ function ModelSelectorContentView({
             }
             // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
             // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
-            handleRowSelect(providerId, id, true, rowEffortValue);
-            // ★ 收藏锚点必须**在选择应用之后**回传(2026-08-17 review 第三轮 G4):单引擎链路
-            // (handleRowSelect → onProviderChange)只认 (来源, 模型),会把这一行是不是一条
-            // 收藏这件事丢掉。丢了之后重开面板选中的是模型行而不是刚用的那条收藏,「删除
-            // 选中收藏回落默认」在会话内也永远走不到。放在 handleRowSelect 之后是刻意的:
-            // 那条链路内部会按新的 (来源, 模型) 收敛调用方状态,先记锚点会被它顺手清掉。
-            onSessionFavoriteAnchorChange?.(
-              rowConfig.favoriteUid
-                ? { uid: rowConfig.favoriteUid, wireModelId: id, engine: rowConfig.engine }
-                : null,
-            );
+            // 「同模型不同配置的收藏」与「锚点只在真的应用后才记」两件事收在
+            // applyUnifiedSessionSelect 里(见其头注,M3 / M4)。
+            void applyUnifiedSessionSelect({
+              providerId,
+              wireModelId: id,
+              effort: rowEffortValue,
+              config: rowConfig,
+            });
+          }}
+          onSelectedFavoriteAnchorClear={(providerId, id, rowEffort, rowConfig) => {
+            // 用户在**同模型的普通模型行**上改了实时深度 / Fast:正在跑的配置已经不再等于那份
+            // 收藏副本(2026-08-17 review 第五轮 M2)。这里只清锚点 —— 模型 / 引擎一个字没变,
+            // 不是一次行选择,**刻意不收面板**(用户还在浮层里继续调)。
+            const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
+            if (onUnifiedSelect) {
+              // 草稿:锚点由这条直通链路的 favoriteUid 承载(草稿层没有第二个清锚入口),
+              // 原样把当前 (来源, 模型, 引擎) 连同刚改完的深度 / Fast 重写一遍并置空 uid。
+              onUnifiedSelect({
+                providerId,
+                modelId: id,
+                ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                engine: rowConfig.engine,
+                fast: rowConfig.fast,
+                favoriteUid: null,
+              });
+              return;
+            }
+            onSessionFavoriteAnchorChange?.(null);
           }}
           {...(onEffortChange ? { onEffortChangeLive: onEffortChange } : {})}
           {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}

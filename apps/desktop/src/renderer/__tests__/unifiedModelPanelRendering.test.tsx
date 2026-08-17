@@ -813,6 +813,368 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
 });
 
 /**
+ * 两笔实时写入的**原子性**(2026-08-17 review 第五轮 M1)。恢复推荐 / 删选中收藏的同引擎路径
+ * 要连写深度与 Fast:此前第二笔失败只是返回 false 走「不清存储」,可第一笔已经落到正在跑的
+ * 那一份上 —— 任务当场变成「推荐深度 + 旧 Fast」这个用户从没选过的组合,与保留下来的
+ * override / 收藏再度分离。现在第二笔失败要把第一笔按进入前的实时值写回去。
+ */
+describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
+  async function openFlyoutFor(name: string): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor(name));
+    });
+    return await screen.findByTestId('unified-model-config-flyout');
+  }
+
+  it('恢复推荐:Fast 写入失败 → 已落下的深度被写回原值,存储照旧不清', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn(async () => false);
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange,
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    // 第一笔写推荐档 high,第二笔关 Fast 失败 → 第一笔按进入前的实时深度 low 回滚。
+    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+  });
+
+  it('回滚本身也失败:两侧都脏,但存储仍然不清(行为明确,用户重试整段)', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    let effortCalls = 0;
+    const onEffortChange = vi.fn(() => {
+      effortCalls += 1;
+      // 第一笔成功、回滚那一笔失败(隧道断了 / 本地持久化失败)。
+      return effortCalls === 1 ? undefined : false;
+    });
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange: vi.fn(() => false),
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    // 回滚失败不改变结论:这次「恢复推荐」没成功,override / 记忆一律原样留着。
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+  });
+
+  it('两笔都成功不触发回滚(成功路径回归)', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    const onEffortChange = vi.fn(async () => true);
+    renderPanel({
+      vendorKey: 'codex',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange: vi.fn(async () => true),
+    });
+    const flyout = await openFlyoutFor('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    await waitFor(() => {
+      expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    });
+    expect(onEffortChange.mock.calls).toEqual([['high']]);
+  });
+});
+
+/**
+ * 在**同模型的普通模型行**上改实时配置要清掉收藏锚点(2026-08-17 review 第五轮 M2)。
+ * isLiveRow 只比 (来源, 模型, 引擎),选中一条收藏时同模型的模型行同样判成 live 行:用户在
+ * 那一行的浮层里改深度 / Fast,写的是正在跑的那一份,而锚点校验不看深度 / Fast —— 收藏行
+ * 继续打勾、配置却已经不是它了,之后删这条收藏还会被误判成「删的是正在用的那一份」。
+ */
+describe('统一面板 · 改模型行的实时配置后收藏不再选中', () => {
+  /** 同一个模型同时有收藏行与模型行时,`rowFor` 会撞两条 —— 这里只取非收藏区的那一条。 */
+  function modelRowFor(name: string): HTMLElement {
+    for (const group of screen.getAllByRole('group').slice(1)) {
+      const hit = within(group).queryByText(name);
+      if (hit) return hit.closest('[data-unified-anchor]') as HTMLElement;
+    }
+    throw new Error(`model row not found: ${name}`);
+  }
+  async function openModelRowFlyout(name: string): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.pointerEnter(modelRowFor(name));
+    });
+    return await screen.findByTestId('unified-model-config-flyout');
+  }
+
+  it('草稿:改模型行深度 → 经既有直通链路把 favoriteUid 置空(面板不收起)', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onUnifiedSelect = vi.fn();
+    const onEffortChange = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'low',
+      onEffortChange,
+    });
+    const flyout = await openModelRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    await waitFor(() => {
+      expect(onUnifiedSelect).toHaveBeenCalledWith({
+        providerId: 'xd',
+        modelId: 'gpt-5.5',
+        effort: 'high',
+        engine: 'codex',
+        fast: false,
+        favoriteUid: null,
+      });
+    });
+    // 这不是一次行选择:收藏本身一个字不动,浮层与列表都还在。
+    expect(listModelFavorites()[0]?.effort).toBe('low');
+    expect(screen.queryByTestId('unified-model-config-flyout')).not.toBeNull();
+  });
+
+  it('会话:改模型行 Fast → 回传空锚点', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onFastModeChange = vi.fn();
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+      onFastModeChange,
+      onSessionFavoriteAnchorChange,
+    });
+    const flyout = await openModelRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-fast-toggle]') as HTMLElement);
+    });
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
+    await waitFor(() => {
+      expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith(null);
+    });
+    expect(listModelFavorites()[0]?.fast).toBeUndefined();
+  });
+
+  it('实时写入失败 → 锚点原样保留(没改成配置就没有分家)', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(() => false),
+      onSessionFavoriteAnchorChange,
+    });
+    const flyout = await openModelRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+  });
+
+  it('收藏行自己的编辑不清锚(回归保护:那是「编辑选中的这一条」)', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onEffortChange: vi.fn(),
+      onSessionFavoriteAnchorChange,
+    });
+    const favoriteRow = within(screen.getAllByRole('group')[0])
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.pointerEnter(favoriteRow);
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.effort).toBe('high');
+    });
+    expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 会话内选中「同来源 + 同模型 + 同引擎、只有深度 / Fast 不同」的收藏(2026-08-17 review
+ * 第五轮 M3),以及**锚点只在选择真的应用之后才记**(M4)。前者此前被按 (来源, 模型) 判重的
+ * handleRowSelect 当成「点了当前行」直接收起 —— 界面勾上收藏,任务还是旧配置;后者此前把
+ * 异步选择的结果丢掉,取消 / 失败时面板照样勾上新收藏。
+ */
+describe('统一面板 · 会话内选中收藏要真正应用', () => {
+  function favoriteRowFor(name: string): HTMLElement {
+    return within(screen.getAllByRole('group')[0])
+      .getByText(name)
+      .closest('[data-unified-anchor]') as HTMLElement;
+  }
+
+  it('同模型不同配置的收藏:深度 / Fast 经实时回调应用,锚点随后记下', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'high',
+      fast: true,
+    });
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: false,
+      onEffortChange,
+      onFastModeChange,
+      onSessionFavoriteAnchorChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteRowFor('GPT-5.5'));
+    });
+    // 模型这一维无事可做 → 不走单引擎选择链路,差的两格按实时通道写下去。
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
+    await waitFor(() => {
+      expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith({
+        uid,
+        wireModelId: 'gpt-5.5',
+        engine: 'codex',
+      });
+    });
+  });
+
+  it('同模型不同配置的收藏:实时写入失败 → 不记锚点', async () => {
+    addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'high',
+      fast: true,
+    });
+    const onFastModeChange = vi.fn(() => false);
+    const onEffortChange = vi.fn();
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: false,
+      onEffortChange,
+      onFastModeChange,
+      onSessionFavoriteAnchorChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteRowFor('GPT-5.5'));
+    });
+    // Fast 那笔没落 → 深度回滚回 low,锚点一个字不记。
+    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+  });
+
+  it('换模型的选择被拒(取消 / 写穿失败)→ 不记锚点', async () => {
+    addModelFavorite({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' });
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onProviderChange: vi.fn(async () => false),
+      onSessionFavoriteAnchorChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteRowFor('GPT-5.6'));
+    });
+    await waitFor(() => {
+      expect(onSessionFavoriteAnchorChange).not.toHaveBeenCalled();
+    });
+  });
+
+  it('换模型的选择成功 → 记下这条收藏的锚点', async () => {
+    const uid = addModelFavorite({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' });
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      onProviderChange: vi.fn(async () => true),
+      onSessionFavoriteAnchorChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteRowFor('GPT-5.6'));
+    });
+    await waitFor(() => {
+      expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith({
+        uid,
+        wireModelId: 'gpt-5.6',
+        engine: 'codex',
+      });
+    });
+  });
+});
+
+/**
  * 编辑**当前选中的**收藏要同步 live(2026-08-17 review 第三轮 G3)。此前收藏行的深度 / Fast
  * 只更新收藏 store 就返回:行上显示新档、锚点仍打勾,实际提交却还是旧配置。
  */

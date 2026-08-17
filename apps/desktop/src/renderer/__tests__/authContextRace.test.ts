@@ -45,6 +45,19 @@ describe('AuthContext auth-state races', () => {
     }
   });
 
+  it('repartitions the unified-picker stores on local-mode boundaries too', () => {
+    // 本地模式进出同样是一次 dataOwnerId 切换,而它们不经 applyIncomingState ——
+    // 漏接两个新 setter 会让本地模式读写上一个身份的收藏 / 引擎 override(2026-08-17
+    // review 第五轮 M5)。行为断言在 authContextSessionBoundary.test.tsx。
+    for (const entry of ['const enterLocalMode = useCallback', 'const exitLocalMode = useCallback']) {
+      const start = source.indexOf(entry);
+      expect(start).toBeGreaterThan(-1);
+      const block = source.slice(start, source.indexOf('[runDataOwnerBoundary]', start));
+      expect(block).toContain('setModelEnginePrefsOwner(state.dataOwnerId);');
+      expect(block).toContain('setModelFavoritesOwner(state.dataOwnerId);');
+    }
+  });
+
   it('ignores initialize results after a newer pushed auth event', () => {
     expect(source).toContain('authStateVersionRef.current += 1;');
     expect(source).toContain('authStateVersionRef.current !== initializeVersion');

@@ -49,6 +49,14 @@ export interface UnifiedRowActionsOptions {
   interactionDisabled: boolean;
   /** 这一行是不是当前会话 / 草稿正在用的那一行(来源 + 模型 + 引擎都对上)。 */
   isLiveRow: (entry: UnifiedModelEntry, config: UnifiedRowConfig) => boolean;
+  /**
+   * 正在跑的那一份的**实时深度**(会话 = live effort;草稿 = 调用方派生的同一个值 ——
+   * 与 `onEffortChangeLive` 写的是同一个格子)。
+   *
+   * 只用于**回滚**:两笔实时写入(深度 + Fast)里第二笔失败时,拿它把第一笔写回原值
+   * (见 applyDefaultsLive)。拿不到 = 没有可回滚的原值,那一路按注释里的说明处理。
+   */
+  liveEffort?: Effort | undefined;
   modelMemory?: ModelMemoryAccessors | undefined;
   /**
    * live 选中行改深度。返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;
@@ -68,6 +76,21 @@ export interface UnifiedRowActionsOptions {
     effort: Effort | '',
     config: UnifiedSelectedRow,
   ) => void;
+  /**
+   * 清掉「当前选中的收藏」锚点 —— 用户在**同模型的普通模型行**上改了实时深度 / Fast 时用
+   * (2026-08-17 review 第五轮 M2)。入参形状与 `onSelect` 逐字相同(同一份 `favoriteUid: null`
+   * 的整行配置),但语义**不是一次行选择**:模型 / 引擎一个字没变,只是正在跑的配置已经不再
+   * 等于那份收藏副本了。调用方因此**不要**收起面板 —— 用户还在浮层里调档。
+   * 不注入(flat 选择器 / 没有锚点概念的入口)= 不做清锚,行为与改动前一致。
+   */
+  onSelectedFavoriteAnchorClear?:
+    | ((
+        providerId: string,
+        modelId: string,
+        effort: Effort | '',
+        config: UnifiedSelectedRow,
+      ) => void)
+    | undefined;
   sessionEngineFilter?:
     | {
         currentAgent: AgentKind;
@@ -156,10 +179,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const {
     interactionDisabled,
     isLiveRow,
+    liveEffort,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,
     onSelect,
+    onSelectedFavoriteAnchorClear,
     sessionEngineFilter,
     sessionAgent,
     resolveEngineConfig,
@@ -212,13 +237,31 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    *
    * 两笔**串行且遇错即停**:深度没写成时不该顺手把 Fast 关掉 —— 那会留下一个用户从没选过的
    * 「旧档 + 无 Fast」组合;直接放弃则整件事一点没动,用户重试即可。
+   *
+   * ★ 第二笔失败要**回滚第一笔**(2026-08-17 review 第五轮 M1)。此前只是返回 false:深度已经
+   * 落到正在跑的那一份上、Fast 没落,而调用方按「没成功」把存储原样留着 —— 任务当场变成
+   * 「推荐深度 + 旧 Fast」这个用户从没选过的组合,与保留下来的 override / 收藏再度分离。
+   * 回滚走同一条 live 通道(拿进入前的实时深度快照写回去),两笔因此要么都落、要么都不落。
+   *
+   * 回滚本身也可能失败(隧道断了 / 持久化失败):此时两侧都脏,但**存储仍未清**,面板与
+   * 记忆里的还是原配置,用户重试整段即可 —— 所以照旧返回 false,绝不把它当成功收尾。
    */
   const applyDefaultsLive = async (effort: Effort | null): Promise<boolean> => {
+    // 快照必须在第一笔写出去之前取:它就是 onEffortChangeLive 写的那个格子的原值。
+    const previousEffort = liveEffort ?? null;
+    let effortWritten = false;
     if (effort && onEffortChangeLive) {
       if (!(await runLive(() => onEffortChangeLive(effort)))) return false;
+      // 目标值与原值相同 = 这一笔什么都没改,不需要回滚(也就不必在意有没有快照)。
+      effortWritten = previousEffort !== null && previousEffort !== effort;
     }
     if (onFastModeChangeLive) {
-      if (!(await runLive(() => onFastModeChangeLive(false)))) return false;
+      if (!(await runLive(() => onFastModeChangeLive(false)))) {
+        if (effortWritten && previousEffort && onEffortChangeLive) {
+          await runLive(() => onEffortChangeLive(previousEffort));
+        }
+        return false;
+      }
     }
     return true;
   };
@@ -310,6 +353,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    *
    * 顺序与 G2 一致:**live 真写成了才**落收藏 store 的这次编辑 —— 写穿失败时收藏原样保留,
    * 不留「收藏行写着新档、任务还在旧档」的半套状态。
+   *
+   * 这里的 `live` 恒是**一笔**写入(改的是哪一格就写哪一格:深度 / Fast;引擎编辑传 null),
+   * 所以不存在 applyDefaultsLive 那种「第一笔落了、第二笔没落」的中间态,不需要回滚
+   * (2026-08-17 review 第五轮 M1 同族核对)。要在这里加第二笔时,必须一并把回滚补上。
    */
   const applySelectedFavoriteEdit = (args: {
     anchor: UnifiedAnchor;
@@ -355,6 +402,37 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       rowModelId: args.anchor.modelId,
     });
     args.commit();
+  };
+
+  /**
+   * 在**普通模型行**上改了实时配置之后,把「当前选中的收藏」锚点清掉
+   * (2026-08-17 review 第五轮 M2)。
+   *
+   * 病根:`isLiveRow` 只比 (来源, 模型, 引擎) —— 选中一条收藏时,同一个模型的**模型行**同样
+   * 判成 live 行。用户在那一行的浮层里改深度 / Fast,写的是正在跑的那一份,可
+   * `selectedFavoriteUid` 纹丝不动:锚点校验(会话侧比 wire id + 引擎、草稿侧同构)不看深度 /
+   * Fast,于是收藏行继续打勾、配置却已经不是它了;之后删这条收藏还会被误判成「删的是正在用的
+   * 那一份」而触发一次多余的回落。
+   *
+   * 清锚交出去的是**这次改完之后**的整行配置(`favoriteUid: null`),形状与选中一行逐字相同:
+   * 草稿侧靠它走既有的 favoriteUid 通道置空,会话侧等价于 `onSessionFavoriteAnchorChange(null)`。
+   * 收藏行自己的编辑(fav 锚点)不走这里 —— 那是「编辑选中的那条收藏」,锚点必须保住。
+   */
+  const clearFavoriteAnchorForLiveRow = (
+    anchor: UnifiedAnchor,
+    target: UnifiedRowConfig,
+  ): void => {
+    onSelectedFavoriteAnchorClear?.(
+      anchor.providerId,
+      target.wireModelId ?? anchor.modelId,
+      target.effort ?? '',
+      {
+        engine: target.engine,
+        fast: target.fast,
+        favoriteUid: null,
+        rowModelId: anchor.modelId,
+      },
+    );
   };
 
   const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, entry, config, engine) => {
@@ -451,6 +529,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       return;
     }
     if (isLiveRow(entry, config) && onEffortChangeLive) {
+      // 当前选中的是一条收藏,而用户改的是**同模型的普通模型行** → 写成功后清锚点
+      // (见 clearFavoriteAnchorForLiveRow 的头注)。顺序与本文件其它入口一致:先应用、后落状态。
+      if (selectedFavoriteUid && onSelectedFavoriteAnchorClear) {
+        void runLive(() => onEffortChangeLive(effort)).then((applied) => {
+          if (applied) clearFavoriteAnchorForLiveRow(anchor, { ...config, effort });
+        });
+        return;
+      }
       // 选中行的深度是会话实时状态,交给调用方持久化(与旧版 handleEditEffort 同语义)。
       onEffortChangeLive(effort);
       return;
@@ -488,6 +574,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       return;
     }
     if (isLiveRow(entry, config) && onFastModeChangeLive) {
+      // 同 applyEffort:改的是**普通模型行**的实时 Fast,而当前选中的是一条收藏 → 写成功后清锚点。
+      if (selectedFavoriteUid && onSelectedFavoriteAnchorClear) {
+        void runLive(() => onFastModeChangeLive(enabled)).then((applied) => {
+          if (applied) clearFavoriteAnchorForLiveRow(anchor, { ...config, fast: enabled });
+        });
+        return;
+      }
       // 选中行的 Fast 必须等调用方持久化成功后再由上层同步草稿;这里绝不预写 modelMemory
       // (device-link 远程失败会污染被控端草稿 —— 与旧版同一条禁令)。
       void onFastModeChangeLive(enabled);

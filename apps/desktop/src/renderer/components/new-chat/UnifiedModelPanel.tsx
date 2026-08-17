@@ -204,6 +204,20 @@ export interface UnifiedModelPanelProps {
    */
   onEffortChangeLive?: (effort: Effort) => void | boolean | Promise<void | boolean>;
   /**
+   * 清掉当前选中的**收藏锚点**:用户在同模型的**普通模型行**上改了实时深度 / Fast 之后,
+   * 正在跑的配置已经不再是那份收藏副本了(2026-08-17 review 第五轮 M2)。
+   *
+   * 入参形状与 `onSelect` 逐字相同(整行配置 + `favoriteUid: null`),但它**不是一次行选择**:
+   * 模型 / 引擎一个字没变,调用方**不要**因此收起面板(用户还在浮层里调档)。草稿把它接到
+   * 既有的 favoriteUid 直通链路上,会话等价于 `onSessionFavoriteAnchorChange(null)`。
+   */
+  onSelectedFavoriteAnchorClear?: (
+    providerId: string,
+    modelId: string,
+    effort: Effort | '',
+    config: UnifiedSelectedRow,
+  ) => void;
+  /**
    * live 选中行改 Fast —— 必须等调用方持久化成功,不预写记忆(device-link 写穿失败会污染
    * 被控端草稿)。返回值语义同 `onEffortChangeLive`。
    */
@@ -251,6 +265,7 @@ export function UnifiedModelPanel({
   sessionEngineFilter,
   followSession,
   onSelect,
+  onSelectedFavoriteAnchorClear,
   onEffortChangeLive,
   onFastModeChangeLive,
   panelElement,
@@ -668,10 +683,14 @@ export function UnifiedModelPanel({
   } = useUnifiedRowActions({
     interactionDisabled,
     isLiveRow,
+    // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值 —— 与 configOf 里
+    // 「选中行读 live 值」取的是同一个格子(见 useUnifiedRowActions.liveEffort)。
+    liveEffort: selectedEffort,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,
     onSelect,
+    onSelectedFavoriteAnchorClear,
     sessionEngineFilter,
     sessionAgent,
     // 「假设引擎 override = engine」的行配置:目标引擎的 wire id / 深度记忆 / Fast 记忆
