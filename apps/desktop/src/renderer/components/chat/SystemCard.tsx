@@ -52,7 +52,8 @@ interface SystemCardProps {
     | 'review'
     | 'auto-resume'
     | 'auto-resume-pending'
-    | 'agent-switch';
+    | 'agent-switch'
+    | 'context-rebuild';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -1133,6 +1134,68 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
+function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
+  const reason = data?.reason === 'pi-prompt-timeout' ? 'timeout' : 'overflow';
+  const label = t(
+    reason === 'timeout'
+      ? 'chat.systemCard.contextRebuild.labelTimeout'
+      : 'chat.systemCard.contextRebuild.labelOverflow',
+  );
+
+  return (
+    <div className="w-full select-none py-2" role="separator" aria-label={label}>
+      <div className="flex w-full items-center gap-3">
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+        <button
+          type="button"
+          onClick={() => handoff && setExpanded((v) => !v)}
+          className={cn(
+            'flex min-w-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)]',
+            'bg-background/50 px-2.5 py-1 text-11 text-muted-foreground',
+            handoff && 'cursor-pointer hover:bg-[var(--msg-tool-card-bg)]',
+          )}
+          aria-expanded={expanded}
+          title={handoff ? t('chat.systemCard.contextRebuild.toggleHint') : undefined}
+        >
+          <RefreshCw size={12} className="shrink-0" />
+          <span>{label}</span>
+          {handoff && (
+            <ChevronRight
+              size={12}
+              className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
+            />
+          )}
+        </button>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+      </div>
+      <Collapse open={expanded && !!handoff}>
+        {handoff ? (
+          <div
+            className={cn(
+              'mx-auto mt-2 max-w-full rounded-[10px] border border-[var(--msg-tool-card-border)]',
+              'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
+            )}
+          >
+            <div className="mb-1.5 text-11 font-medium text-muted-foreground">
+              {t(
+                isEnglishSourceHandoff(handoff)
+                  ? 'chat.systemCard.contextRebuild.handoffTitleEnglishSource'
+                  : 'chat.systemCard.contextRebuild.handoffTitle',
+              )}
+            </div>
+            <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-12 leading-[1.55] text-[var(--msg-tool-text)]">
+              {handoff}
+            </pre>
+          </div>
+        ) : null}
+      </Collapse>
+    </div>
+  );
+}
+
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',
   'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
@@ -1240,6 +1303,8 @@ export function SystemCard({
       return <AutoResumeActionRow state="live" info={readAutoResumeInfo(data)} />;
     case 'agent-switch':
       return <AgentSwitchCard data={data} />;
+    case 'context-rebuild':
+      return <ContextRebuildCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':

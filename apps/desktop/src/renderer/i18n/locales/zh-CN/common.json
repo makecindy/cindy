@@ -7315,6 +7315,13 @@
         "handoffTitleEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文(不计入对话记录，仅在此展示)",
         "resumedBadge": "已续接原任务"
       },
+      "contextRebuild": {
+        "labelOverflow": "已整理上下文并继续",
+        "labelTimeout": "原生会话无响应，已换窗继续",
+        "toggleHint": "查看交接内容",
+        "handoffTitle": "交接内容——换窗时发送给新原生会话的上下文摘要(不计入对话记录，仅在此展示)",
+        "handoffTitleEnglishSource": "交接内容——换窗时发送给新原生会话的上下文摘要，原文为英文(不计入对话记录，仅在此展示)"
+      },
       "review": {
         "running": "正在审查当前成果",
         "completed": "审查完成",

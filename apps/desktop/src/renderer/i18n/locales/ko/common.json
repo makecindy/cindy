@@ -7315,6 +7315,13 @@
         "handoffTitleEnglishSource": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "resumedBadge": "세션 재개됨"
       },
+      "contextRebuild": {
+        "labelOverflow": "컨텍스트를 정리하고 계속합니다",
+        "labelTimeout": "네이티브 세션이 응답하지 않아 새 창에서 계속합니다",
+        "toggleHint": "인계 내용 보기",
+        "handoffTitle": "인계 내용——창을 바꿀 때 새 네이티브 세션에 보낸 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
+        "handoffTitleEnglishSource": "인계 내용——창을 바꿀 때 새 네이티브 세션에 보낸 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)"
+      },
       "review": {
         "running": "현재 결과물을 검토하는 중",
         "completed": "검토 완료",

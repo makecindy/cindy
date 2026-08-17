@@ -478,7 +478,8 @@ export interface ChatMessage {
      * 派生、重开会话仍在;这条只活在退避那几秒,补发一发出就撤掉。
      */
     | 'auto-resume-pending'
-    | 'agent-switch';
+    | 'agent-switch'
+    | 'context-rebuild';
   systemCardData?: Record<string, unknown>;
   /** FP-3: plan_review message fields */
   planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
@@ -15378,6 +15379,25 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(errorProviderId ? { errorProviderId } : {}),
         // interrupted-turn-resume:「忽略」的持久化标记(updateContent 写入)。
         ...(c.dismissed === true ? { errorDismissed: true } : {}),
+      };
+    }
+    // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
+    const contextRebuild =
+      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
+        ? (m.agentMeta as { contextRebuild?: unknown }).contextRebuild
+        : undefined;
+    if (contextRebuild && typeof contextRebuild === 'object') {
+      const c = contextRebuild as Record<string, unknown>;
+      return {
+        clientId: m.clientId,
+        role: 'assistant' as const,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'context-rebuild' as const,
+        systemCardData: {
+          reason: typeof c.reason === 'string' ? c.reason : 'context-overflow',
+          handoff: typeof c.handoff === 'string' ? c.handoff : '',
+        },
       };
     }
     // session-agent-switch:引擎切换边界行 → 'agent-switch' system card(与

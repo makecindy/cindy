@@ -2232,6 +2232,9 @@ export async function listMessagesForAgentHandoff(
         // 非法 JSON 视为无 meta
       }
     }
+    if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
+      return null;
+    }
     return {
       clientId: r.clientId,
       role: r.role,
@@ -2240,7 +2243,7 @@ export async function listMessagesForAgentHandoff(
       agentMeta,
       toolUseId: r.toolUseId ?? null,
     };
-  });
+  }).filter((row): row is NonNullable<typeof row> => row !== null);
 }
 
 /** Phase 2:目标引擎的停泊原生会话(由最近一次"它离场"的边界行派生)。 */

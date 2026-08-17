@@ -7318,6 +7318,13 @@
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "resumedBadge": "session resumed"
       },
+      "contextRebuild": {
+        "labelOverflow": "Context reorganized, continuing",
+        "labelTimeout": "Native session unresponsive, continued in a new window",
+        "toggleHint": "View handoff context",
+        "handoffTitle": "Handoff — the context summary sent to the new native session (not part of the chat transcript; shown only here)",
+        "handoffTitleEnglishSource": "Handoff — the context summary sent to the new native session (not part of the chat transcript; shown only here)"
+      },
       "review": {
         "running": "Reviewing current work",
         "completed": "Review complete",

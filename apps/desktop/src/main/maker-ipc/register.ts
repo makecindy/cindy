@@ -10857,6 +10857,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sdkSessionId: null,
         updatedAt: new Date(updatedAt).toISOString(),
       });
+      await createDbMessage(sessionId, {
+        clientId: `context-rebuild-card:${createId()}`,
+        role: 'assistant',
+        content: '',
+        agentKind: 'pi',
+        agentMeta: {
+          contextRebuild: {
+            reason: meta.reason,
+            handoff,
+          },
+        } as AgentMeta,
+      });
     },
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
