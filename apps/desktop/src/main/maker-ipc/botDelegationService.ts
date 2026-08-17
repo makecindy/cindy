@@ -9,6 +9,8 @@ import { getDbClient } from '../localDb/client/current.js';
 import type { BotsFinishDelegationResult } from '../localDb/client/tx/types.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace.js';
+import { createBotCanonicalSession } from '../localDb/ipc/bots.js';
+import { createMessage } from '../localDb/ipc/messages.js';
 import { sessionCreateToRow } from '../localDb/mapper.js';
 import {
   botAutomationLinks,
@@ -29,6 +31,7 @@ import {
   sessions,
 } from '../localDb/schema.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
+import { createLogger } from '../logger.js';
 import { resolveBusinessSessionId } from '../sessionIds.js';
 import { registerBotDelegationParentCancellation } from './botDelegationLifecycle.js';
 import type {
@@ -62,6 +65,7 @@ const MAX_OBJECTIVE_CHARS = 12_000;
 const MAX_RESULT_CHARS = 12_000;
 const MAX_RETRY_DELAY_MS = 60_000;
 const messageRowid = sql<number>`"messages"."rowid"`;
+const log = createLogger('bot-delegation');
 
 function schedulePerTaskWorkspaceReclaim(sessionId: string): void {
   void import('./botWorkspaceRuntime.js')
@@ -117,6 +121,13 @@ export interface BotDelegationServiceDeps {
   archiveSession?: (sessionId: string) => Promise<void>;
   closeSession?: (sessionId: string) => Promise<void>;
   broadcastSessionCreated?: (sessionId: string) => void;
+  persistTimelineMessage?: (params: {
+    sessionId: string;
+    clientId: string;
+    role: 'user' | 'assistant';
+    content: string;
+    createdAt?: number;
+  }) => Promise<void>;
   onChanged?: (payload: BotDelegationChangedPayload) => void;
   now?: () => number;
   createId?: () => string;
@@ -380,6 +391,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const now = deps.now ?? Date.now;
   const createId = deps.createId ?? randomUUID;
   const maxActiveChildren = Math.max(1, deps.maxActiveChildren ?? DEFAULT_MAX_ACTIVE_CHILDREN);
+  const persistTimelineMessage = deps.persistTimelineMessage ?? (async (params) => {
+    await createMessage(params.sessionId, {
+      clientId: params.clientId,
+      role: params.role,
+      content: params.content,
+      agentKind: null,
+      createdAt: params.createdAt,
+    });
+  });
 
   const clearTimer = (delegationId: string): void => {
     const timer = timers.get(delegationId);
@@ -577,6 +597,125 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     return result;
   };
 
+  const ensureTargetCanonicalSession = async (target: {
+    id: string;
+    currentVersion: number;
+    canonicalSessionId: string | null;
+  }): Promise<BotDelegationResult<{ sessionId: string }>> => {
+    const db = getDbClient().drizzle;
+    let expectedCanonicalSessionId = target.canonicalSessionId;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (expectedCanonicalSessionId) {
+        const [current] = await db
+          .select({
+            status: sessions.status,
+            source: sessions.source,
+            botId: botSessionLinks.botId,
+            role: botSessionLinks.role,
+          })
+          .from(sessions)
+          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+          .where(eq(sessions.id, expectedCanonicalSessionId))
+          .limit(1);
+        if (
+          current?.status === 'active'
+          && current.source === 'bot'
+          && current.botId === target.id
+          && current.role === 'canonical'
+        ) {
+          return { ok: true, sessionId: expectedCanonicalSessionId };
+        }
+        const replacement = await createBotCanonicalSession({
+          botId: target.id,
+          expectedCanonicalSessionId,
+          expectedProfileVersion: target.currentVersion,
+          recoverMissingOnly: current === undefined,
+        });
+        if (replacement.created) deps.broadcastSessionCreated?.(replacement.canonicalSessionId);
+        expectedCanonicalSessionId = replacement.canonicalSessionId;
+        continue;
+      }
+      const created = await createBotCanonicalSession({
+        botId: target.id,
+        expectedCanonicalSessionId: null,
+        expectedProfileVersion: target.currentVersion,
+      });
+      if (created.created) deps.broadcastSessionCreated?.(created.canonicalSessionId);
+      expectedCanonicalSessionId = created.canonicalSessionId;
+    }
+    return {
+      ok: false,
+      errorCode: 'TARGET_CANONICAL_UNAVAILABLE',
+      message: '目标 Bot 的主任务正在变化，请稍后重试委派',
+    };
+  };
+
+  const requesterDisplayName = async (botId: string): Promise<string> => {
+    const db = getDbClient().drizzle;
+    const [profile] = await db
+      .select({ displayName: botProfiles.displayName })
+      .from(botProfiles)
+      .where(eq(botProfiles.id, botId))
+      .limit(1);
+    return profile?.displayName || botId;
+  };
+
+  const projectTargetRequest = async (row: Pick<DelegationRow,
+    'id' | 'requestingBotId' | 'objective' | 'permissionSnapshotJson' | 'createdAt'
+  >): Promise<void> => {
+    const plan = parseBotDelegationPlanSnapshot(row.permissionSnapshotJson);
+    if (!plan?.targetCanonicalSessionId) return;
+    const requesterName = await requesterDisplayName(row.requestingBotId);
+    await persistTimelineMessage({
+      sessionId: plan.targetCanonicalSessionId,
+      clientId: `bot-delegation-target-request:${row.id}`,
+      role: 'user',
+      content: [
+        `[来自 ${requesterName} 的 Bot 委派]`,
+        row.objective,
+        `委派记录：${row.id}`,
+      ].join('\n\n'),
+      createdAt: row.createdAt,
+    });
+  };
+
+  const projectTargetResult = async (row: Pick<DelegationRow,
+    | 'id'
+    | 'requestingBotId'
+    | 'objective'
+    | 'childSessionId'
+    | 'status'
+    | 'resultSummary'
+    | 'lastError'
+    | 'permissionSnapshotJson'
+    | 'completedAt'
+  >): Promise<void> => {
+    const plan = parseBotDelegationPlanSnapshot(row.permissionSnapshotJson);
+    if (!plan?.targetCanonicalSessionId || isActiveDelegation(row.status)) return;
+    const requesterName = await requesterDisplayName(row.requestingBotId);
+    const statusLabel = row.status === 'completed'
+      ? '已完成'
+      : row.status === 'cancelled'
+        ? '已取消'
+        : row.status === 'timed-out'
+          ? '已超时'
+          : '失败';
+    await persistTimelineMessage({
+      sessionId: plan.targetCanonicalSessionId,
+      clientId: `bot-delegation-target-result:${row.id}`,
+      role: 'assistant',
+      content: [
+        `[Bot 委派${statusLabel}]`,
+        `来源：${requesterName}`,
+        `任务：${row.objective}`,
+        row.resultSummary ? `结果：\n${row.resultSummary}` : '',
+        row.lastError ? `错误：${row.lastError}` : '',
+        row.childSessionId ? `完整执行任务：${row.childSessionId}` : '',
+      ].filter(Boolean).join('\n\n'),
+      createdAt: row.completedAt ?? undefined,
+    });
+  };
+
   const deliverCompletion = async (params: {
     id: string;
     requestingBotId: string;
@@ -708,6 +847,20 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           .catch(() => undefined);
         await deps.closeSession?.(updated.childSessionId).catch(() => undefined);
         schedulePerTaskWorkspaceReclaim(updated.childSessionId);
+      }
+      const [terminalRow] = await db
+        .select()
+        .from(botDelegations)
+        .where(eq(botDelegations.id, updated.id))
+        .limit(1);
+      if (terminalRow) {
+        await projectTargetResult(terminalRow).catch((error) => {
+          log.warn('failed to project Bot delegation result into target canonical task', {
+            delegationId: terminalRow.id,
+            targetBotId: terminalRow.targetBotId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       }
     }
     return updated;
@@ -1852,6 +2005,19 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       field: 'artifact_refs',
     });
     if (!artifactRefs.ok) return artifactRefs;
+    let targetCanonical: BotDelegationResult<{ sessionId: string }>;
+    try {
+      targetCanonical = await ensureTargetCanonicalSession(target);
+    } catch (error) {
+      return {
+        ok: false,
+        errorCode: 'TARGET_CANONICAL_UNAVAILABLE',
+        message: error instanceof Error
+          ? `无法准备目标 Bot 的主任务：${error.message}`
+          : '无法准备目标 Bot 的主任务',
+      };
+    }
+    if (!targetCanonical.ok) return targetCanonical;
     const delegationId = createId();
     const childSessionId = resolveBusinessSessionId(undefined);
     const createdAt = now();
@@ -1869,6 +2035,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       version: 1,
       createdAt,
       targetBotId: target.id,
+      targetCanonicalSessionId: targetCanonical.sessionId,
       target: {
         profileVersion: target.currentVersion,
         agentKind: botAgentKind(config),
@@ -1913,6 +2080,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         targetConfigured: config.permissions === 'trusted' ? 'trusted' : 'ask',
       },
     };
+    const permissionSnapshotJson = JSON.stringify(plan);
     const childRow = {
       ...sessionCreateToRow(
         childSessionId,
@@ -1971,7 +2139,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           objective,
           contextRefsJson: JSON.stringify(contextRefs.refs),
           artifactRefsJson: JSON.stringify(artifactRefs.refs),
-          permissionSnapshotJson: JSON.stringify(plan),
+          permissionSnapshotJson,
           lineageJson: JSON.stringify([...lineage, target.id]),
           targetProfileVersion: target.currentVersion,
           depth: parentDepth + 1,
@@ -1998,6 +2166,43 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     }
 
     deps.broadcastSessionCreated?.(childSessionId);
+    try {
+      await projectTargetRequest({
+        id: delegationId,
+        requestingBotId: caller.botId,
+        objective,
+        permissionSnapshotJson,
+        createdAt,
+      });
+    } catch (error) {
+      const lastError = `TARGET_TIMELINE_PERSIST_FAILED: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      const changed = await updateTerminal({
+        delegationId,
+        status: 'failed',
+        lastError,
+        abortChild: true,
+      });
+      if (changed) {
+        await deliverCompletion({
+          id: delegationId,
+          requestingBotId: caller.botId,
+          targetBotId: target.id,
+          parentSessionId: input.callerSessionId,
+          childSessionId,
+          objective,
+          status: 'failed',
+          lastError,
+          permissionSnapshotJson,
+        });
+      }
+      return {
+        ok: false,
+        errorCode: 'TARGET_TIMELINE_PERSIST_FAILED',
+        message: '委派未启动：无法把请求记录到目标 Bot 的主任务',
+      };
+    }
     scheduleTimeout(delegationId, deadlineAt);
     const dispatchResult = await attemptDispatch(delegationId);
     return {
@@ -2355,16 +2560,33 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         id: botDelegations.id,
         status: botDelegations.status,
         requestingBotId: botDelegations.requestingBotId,
+        targetBotId: botDelegations.targetBotId,
         parentSessionId: botDelegations.parentSessionId,
         childSessionId: botDelegations.childSessionId,
         objective: botDelegations.objective,
         contextRefsJson: botDelegations.contextRefsJson,
         artifactRefsJson: botDelegations.artifactRefsJson,
         permissionSnapshotJson: botDelegations.permissionSnapshotJson,
+        createdAt: botDelegations.createdAt,
       })
       .from(botDelegations)
       .where(inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES]));
     for (const row of rows) {
+      try {
+        await projectTargetRequest(row);
+      } catch (error) {
+        const lastError = `TARGET_TIMELINE_PERSIST_FAILED: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        const changed = await updateTerminal({
+          delegationId: row.id,
+          status: 'failed',
+          lastError,
+          abortChild: true,
+        });
+        if (changed) await deliverCompletion({ ...row, status: 'failed', lastError });
+        continue;
+      }
       const deadlineAt = readDeadline(row.permissionSnapshotJson);
       if (deadlineAt !== null) scheduleTimeout(row.id, deadlineAt);
       if (row.status === 'queued' || row.status === 'waiting') {
@@ -2372,6 +2594,38 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         continue;
       }
       if (row.status === 'running') await resumeRunningDelegation(row.id);
+    }
+    const terminalRows = await db
+      .select({ delegation: botDelegations })
+      .from(botDelegations)
+      .leftJoin(
+        messages,
+        and(
+          eq(
+            messages.sessionId,
+            sql<string>`json_extract(${botDelegations.permissionSnapshotJson}, '$.targetCanonicalSessionId')`,
+          ),
+          eq(
+            messages.clientId,
+            sql<string>`'bot-delegation-target-result:' || ${botDelegations.id}`,
+          ),
+        ),
+      )
+      .where(
+        and(
+          inArray(botDelegations.status, ['completed', 'failed', 'cancelled', 'timed-out']),
+          isNull(messages.id),
+          sql`json_type(${botDelegations.permissionSnapshotJson}, '$.targetCanonicalSessionId') = 'text'`,
+        ),
+      );
+    for (const { delegation: row } of terminalRows) {
+      await projectTargetResult(row).catch((error) => {
+        log.warn('failed to restore Bot delegation result in target canonical task', {
+          delegationId: row.id,
+          targetBotId: row.targetBotId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     }
     if (deps.enqueueDelivery) {
       const missingCompletions = await db

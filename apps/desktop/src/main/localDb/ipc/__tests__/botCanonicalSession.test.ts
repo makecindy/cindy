@@ -18,6 +18,7 @@ import {
   botSessionLinks,
   botWorkspaceAttachments,
   botWorkspaceLeases,
+  messages,
   sessions,
 } from '../../schema';
 
@@ -56,6 +57,9 @@ vi.mock('electron', () => ({
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       h.handlers.set(channel, handler);
     }),
+  },
+  BrowserWindow: {
+    getAllWindows: vi.fn(() => []),
   },
 }));
 vi.mock('../../client/current', () => ({
@@ -187,6 +191,20 @@ function createDb(): void {
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER
     );
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY NOT NULL,
+      client_id TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      tool_use_id TEXT,
+      agent_meta TEXT,
+      agent_kind TEXT,
+      created_at INTEGER NOT NULL,
+      rewind_at INTEGER
+    );
+    CREATE UNIQUE INDEX uniq_messages_session_client ON messages(session_id, client_id);
+    CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
     CREATE TABLE bot_profiles (
       id TEXT PRIMARY KEY NOT NULL,
       display_name TEXT NOT NULL,
@@ -434,6 +452,7 @@ function createDb(): void {
       botProjectBindings,
       botWorkspaceLeases,
       botWorkspaceAttachments,
+      messages,
     },
   });
   h.db = rawDb;
@@ -2228,32 +2247,60 @@ describe('Bot canonical Session lifecycle', () => {
       expect(delegated).toMatchObject({
         ok: true,
         delegationId: 'delegation-1',
-        childSessionId: 'session-2',
+        childSessionId: 'session-3',
         targetBotId: 'bot-2',
         depth: 1,
         status: 'running',
       });
+      expect(
+        h.sqlite!.prepare('SELECT canonical_session_id FROM bot_profiles WHERE id = ?').pluck().get(
+          'bot-2',
+        ),
+      ).toBe('session-2');
       expect(broadcastSessionCreated).toHaveBeenCalledWith('session-2');
+      expect(broadcastSessionCreated).toHaveBeenCalledWith('session-3');
       expect(
         h
           .sqlite!.prepare(
             'SELECT source, parent_session_id AS parentSessionId, agent_kind AS agentKind FROM sessions WHERE id = ?',
           )
-          .get('session-2'),
+          .get('session-3'),
       ).toEqual({ source: 'bot', parentSessionId: 'session-1', agentKind: 'codex' });
       expect(
         h
           .sqlite!.prepare(
             'SELECT bot_id AS botId, role, route_key AS routeKey FROM bot_session_links WHERE session_id = ?',
           )
-          .get('session-2'),
+          .get('session-3'),
       ).toEqual({ botId: 'bot-2', role: 'route', routeKey: 'delegation:delegation-1' });
+      expect(
+        h.sqlite!.prepare(`SELECT role, content FROM messages
+          WHERE session_id = 'session-2' ORDER BY created_at, rowid`).all(),
+      ).toEqual([
+        {
+          role: 'user',
+          content: expect.stringContaining('Research the release compatibility matrix.'),
+        },
+      ]);
+      await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-2',
+        expectedCanonicalSessionId: 'session-2',
+        expectedProfileVersion: 1,
+      });
+      expect(
+        h.sqlite!.prepare('SELECT canonical_session_id FROM bot_profiles WHERE id = ?').pluck().get(
+          'bot-2',
+        ),
+      ).toBe('session-4');
+      expect(
+        h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').pluck().get('session-2'),
+      ).toBe('archived');
 
       h.sqlite!.prepare('UPDATE sessions SET total_token_usage = 900 WHERE id = ?').run(
-        'session-2',
+        'session-3',
       );
       await service.settleSession({
-        childSessionId: 'session-2',
+        childSessionId: 'session-3',
         outcome: 'done',
         resultText: 'All supported clients remain compatible.',
       });
@@ -2274,24 +2321,109 @@ describe('Bot canonical Session lifecycle', () => {
           message: expect.stringContaining('All supported clients remain compatible.'),
         }),
       );
-      expect(archiveSession).toHaveBeenCalledWith('session-2');
-      expect(closeSession).toHaveBeenCalledWith('session-2');
+      expect(archiveSession).toHaveBeenCalledWith('session-3');
+      expect(closeSession).toHaveBeenCalledWith('session-3');
       expect(
-        h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').pluck().get('session-2'),
+        h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').pluck().get('session-3'),
       ).toBe('archived');
       expect(
         h
           .sqlite!.prepare('SELECT role FROM bot_session_links WHERE session_id = ?')
           .pluck()
-          .get('session-2'),
+          .get('session-3'),
       ).toBe('history');
+      expect(
+        h.sqlite!.prepare(`SELECT role, content FROM messages
+          WHERE session_id = 'session-2' ORDER BY created_at, rowid`).all(),
+      ).toEqual([
+        {
+          role: 'user',
+          content: expect.stringContaining('Research the release compatibility matrix.'),
+        },
+        {
+          role: 'assistant',
+          content: expect.stringContaining('All supported clients remain compatible.'),
+        },
+      ]);
+      expect(
+        h.sqlite!.prepare('SELECT count(*) FROM messages WHERE session_id = ?').pluck().get(
+          'session-4',
+        ),
+      ).toBe(0);
+      await service.settleSession({
+        childSessionId: 'session-3',
+        outcome: 'done',
+        resultText: 'Duplicate completion must not append another result.',
+      });
+      expect(
+        h.sqlite!.prepare(`SELECT count(*) FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+          'bot-delegation-target-result:delegation-1',
+        ),
+      ).toBe(1);
       await expect(
         service.delegateToBot({
-          callerSessionId: 'session-2',
+          callerSessionId: 'session-3',
           targetBotId: 'bot-1',
           objective: 'A historical task must not start new work.',
         }),
       ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('keeps a failed delegation visible in the target Bot canonical task', async () => {
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    await invoke('local-db:bots:create', {
+      id: 'bot-2',
+      name: 'Research Bot',
+      capabilities: { harness: 'pi', model: 'grok-4.5', permissions: 'ask' },
+    });
+    const service = createBotDelegationService({
+      dispatch: vi.fn(
+        async (params: { targetSessionId: string; onAccepted?: () => Promise<void> | void }) => {
+          await params.onAccepted?.();
+          return {
+            ok: true as const,
+            targetSessionId: params.targetSessionId,
+            wakeKind: 'already-active' as const,
+          };
+        },
+      ),
+      abortSession: vi.fn(async () => undefined),
+      createId: () => 'delegation-failed-visible',
+      now: () => 1_500,
+    });
+    try {
+      const delegated = await service.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-2',
+        objective: 'Investigate a deliberately failing task.',
+      });
+      expect(delegated).toMatchObject({ ok: true, childSessionId: 'session-3' });
+      await service.settleSession({
+        childSessionId: 'session-3',
+        outcome: 'error',
+        error: 'The dependency was unavailable.',
+      });
+      expect(
+        h.sqlite!.prepare(`SELECT role, content FROM messages
+          WHERE session_id = 'session-2' ORDER BY created_at, rowid`).all(),
+      ).toEqual([
+        {
+          role: 'user',
+          content: expect.stringContaining('Investigate a deliberately failing task.'),
+        },
+        {
+          role: 'assistant',
+          content: expect.stringContaining('The dependency was unavailable.'),
+        },
+      ]);
     } finally {
       service.dispose();
     }
@@ -2425,18 +2557,18 @@ describe('Bot canonical Session lifecycle', () => {
         timeoutMs: 120_000,
       })).resolves.toMatchObject({
         ok: true,
-        childSessionId: 'session-2',
+        childSessionId: 'session-3',
         depth: 1,
         deadlineAt: 61_000,
       });
       await expect(service.delegateToBot({
-        callerSessionId: 'session-2',
+        callerSessionId: 'session-3',
         targetBotId: 'bot-3',
         objective: 'A nested Automation delegation must not exceed max depth.',
       })).resolves.toMatchObject({ ok: false, errorCode: 'MAX_DEPTH' });
 
-      h.sqlite!.prepare('UPDATE sessions SET total_token_usage = 50 WHERE id = ?').run('session-2');
-      await expect(service.enforceBudgetForSession('session-2', 50)).resolves.toBe(true);
+      h.sqlite!.prepare('UPDATE sessions SET total_token_usage = 50 WHERE id = ?').run('session-3');
+      await expect(service.enforceBudgetForSession('session-3', 50)).resolves.toBe(true);
       expect(h.sqlite!.prepare(
         'SELECT status, error_message AS errorMessage FROM bot_automation_runs WHERE id = ?',
       ).get('automation-run-1')).toMatchObject({
@@ -2488,7 +2620,7 @@ describe('Bot canonical Session lifecycle', () => {
           contextRefs: ['docs/release.md'],
           artifactRefs: ['docs/result.md'],
         }),
-      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-2' });
+      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-3' });
 
       const snapshot = parseBotDelegationPlanSnapshot(
         h
@@ -2499,6 +2631,7 @@ describe('Bot canonical Session lifecycle', () => {
       expect(snapshot).not.toBeNull();
       expect(snapshot).toMatchObject({
         version: 1,
+        targetCanonicalSessionId: 'session-2',
         workspace: {
           workingDir: '/repo/shared',
           workspacePolicy: 'none',
@@ -2514,7 +2647,7 @@ describe('Bot canonical Session lifecycle', () => {
         "UPDATE bot_project_bindings SET working_dir = '/repo/changed', updated_at = 5000 WHERE bot_id = 'bot-2'",
       ).run();
       const opts = {
-        id: 'session-2',
+        id: 'session-3',
         agentKind: 'pi' as const,
         workingDir: '/tmp/placeholder',
         workspaceKind: 'dialogue' as const,
@@ -2626,7 +2759,7 @@ describe('Bot canonical Session lifecycle', () => {
           targetBotId: 'bot-2',
           objective: 'Remain bounded to this parent task.',
         }),
-      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-2' });
+      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-3' });
       await invoke('local-db:bots:create-canonical-session', {
         botId: 'bot-1',
         expectedCanonicalSessionId: 'session-1',
@@ -2638,10 +2771,16 @@ describe('Bot canonical Session lifecycle', () => {
           'delegation-parent-renew',
         ),
       ).toBe('cancelled');
-      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').pluck().get('session-2')).toBe(
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').pluck().get('session-3')).toBe(
         'archived',
       );
-      expect(abortSession).toHaveBeenCalledWith('session-2');
+      expect(abortSession).toHaveBeenCalledWith('session-3');
+      expect(
+        h.sqlite!.prepare(`SELECT content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+          'bot-delegation-target-result:delegation-parent-renew',
+        ),
+      ).toContain('已取消');
     } finally {
       service.dispose();
     }
@@ -2678,10 +2817,10 @@ describe('Bot canonical Session lifecycle', () => {
         objective: 'Prepare research.',
         maxDepth: 2,
       });
-      expect(first).toMatchObject({ ok: true, childSessionId: 'session-2' });
+      expect(first).toMatchObject({ ok: true, childSessionId: 'session-3' });
       await expect(
         service.delegateToBot({
-          callerSessionId: 'session-2',
+          callerSessionId: 'session-3',
           targetBotId: 'bot-1',
           objective: 'Send the same work back.',
           maxDepth: 2,
@@ -2690,15 +2829,21 @@ describe('Bot canonical Session lifecycle', () => {
 
       await expect(service.cancelDelegation('session-1', 'delegation-1')).resolves.toMatchObject({
         ok: true,
-        childSessionId: 'session-2',
+        childSessionId: 'session-3',
       });
-      expect(abortSession).toHaveBeenCalledWith('session-2');
+      expect(abortSession).toHaveBeenCalledWith('session-3');
       expect(
         h
           .sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?')
           .pluck()
           .get('delegation-1'),
       ).toBe('cancelled');
+      expect(
+        h.sqlite!.prepare(`SELECT content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+          'bot-delegation-target-result:delegation-1',
+        ),
+      ).toContain('已取消');
     } finally {
       service.dispose();
     }
@@ -2746,11 +2891,11 @@ describe('Bot canonical Session lifecycle', () => {
           maxDepth: 2,
           budgetTokens: 1_000,
         }),
-      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-2', depth: 1 });
+      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-3', depth: 1 });
 
       await expect(
         service.delegateToBot({
-          callerSessionId: 'session-2',
+          callerSessionId: 'session-3',
           targetBotId: 'bot-3',
           objective: 'Try to exceed the parent budget.',
           maxDepth: 5,
@@ -2760,13 +2905,13 @@ describe('Bot canonical Session lifecycle', () => {
 
       await expect(
         service.delegateToBot({
-          callerSessionId: 'session-2',
+          callerSessionId: 'session-3',
           targetBotId: 'bot-3',
           objective: 'Use a bounded child budget.',
           maxDepth: 5,
           budgetTokens: 500,
         }),
-      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-3', depth: 2 });
+      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-5', depth: 2 });
       expect(
         h
           .sqlite!.prepare('SELECT budget_tokens AS budgetTokens FROM bot_delegations WHERE id = ?')
@@ -2775,7 +2920,7 @@ describe('Bot canonical Session lifecycle', () => {
 
       await expect(
         service.delegateToBot({
-          callerSessionId: 'session-3',
+          callerSessionId: 'session-5',
           targetBotId: 'bot-4',
           objective: 'Try to raise the inherited max depth.',
           maxDepth: 5,
@@ -2821,9 +2966,9 @@ describe('Bot canonical Session lifecycle', () => {
         targetBotId: 'bot-2',
         objective: 'Prepare a durable result.',
       });
-      expect(delegated).toMatchObject({ ok: true, childSessionId: 'session-2' });
+      expect(delegated).toMatchObject({ ok: true, childSessionId: 'session-3' });
       await service.settleSession({
-        childSessionId: 'session-2',
+        childSessionId: 'session-3',
         outcome: 'done',
         resultText: 'Result survives a temporarily unavailable parent.',
       });
@@ -3687,7 +3832,7 @@ describe('Bot canonical Session lifecycle', () => {
           targetBotId: 'bot-2',
           objective: 'Resume after restart.',
         }),
-      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-2' });
+      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-3' });
     } finally {
       first.dispose();
     }
@@ -3720,7 +3865,7 @@ describe('Bot canonical Session lifecycle', () => {
       await restored.restore();
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
-          targetSessionId: 'session-2',
+          targetSessionId: 'session-3',
           clientId: 'bot-delegation-start:delegation-restore',
         }),
       );
@@ -3747,6 +3892,19 @@ describe('Bot canonical Session lifecycle', () => {
           }),
         }),
       );
+      expect(
+        h.sqlite!.prepare(`SELECT content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+          'bot-delegation-target-result:delegation-restore',
+        ),
+      ).toContain('Recovered result.');
+      await restored.restore();
+      expect(
+        h.sqlite!.prepare(`SELECT count(*) FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+          'bot-delegation-target-result:delegation-restore',
+        ),
+      ).toBe(1);
     } finally {
       restored.dispose();
     }
@@ -3785,7 +3943,7 @@ describe('Bot canonical Session lifecycle', () => {
           targetBotId: 'bot-2',
           objective: 'Continue after a host restart.',
         }),
-      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-2', status: 'running' });
+      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-3', status: 'running' });
     } finally {
       first.dispose();
     }
@@ -3793,7 +3951,7 @@ describe('Bot canonical Session lifecycle', () => {
       `
       UPDATE sessions
       SET active_turn_started_at = 31000, last_turn_ended_at = 30000
-      WHERE id = 'session-2'
+      WHERE id = 'session-3'
     `,
     ).run();
 
@@ -3811,7 +3969,7 @@ describe('Bot canonical Session lifecycle', () => {
       await restored.restore();
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
-          targetSessionId: 'session-2',
+          targetSessionId: 'session-3',
           clientId: 'bot-delegation-resume:delegation-running-restart:31000',
           message: expect.stringContaining('Continue after a host restart.'),
         }),
@@ -3875,13 +4033,19 @@ describe('Bot canonical Session lifecycle', () => {
     try {
       await restored.restore();
       expect(dispatch).not.toHaveBeenCalled();
-      expect(abortSession).toHaveBeenCalledWith('session-2');
+      expect(abortSession).toHaveBeenCalledWith('session-3');
       expect(
         h.sqlite!
           .prepare('SELECT status FROM bot_delegations WHERE id = ?')
           .pluck()
           .get('delegation-expired-restart'),
       ).toBe('timed-out');
+      expect(
+        h.sqlite!.prepare(`SELECT content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+          'bot-delegation-target-result:delegation-expired-restart',
+        ),
+      ).toContain('已超时');
     } finally {
       restored.dispose();
     }

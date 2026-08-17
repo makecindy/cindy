@@ -114,6 +114,13 @@ export interface BotDelegationPlanSnapshot {
   version: 1;
   createdAt: number;
   targetBotId: string;
+  /**
+   * The target Bot task that received the human-visible delegation transcript.
+   * It is frozen at creation so a later Renew never splits the request and
+   * result across two tasks. Optional for rows created before this projection
+   * was introduced.
+   */
+  targetCanonicalSessionId?: string;
   target: BotDelegationCapabilitySnapshot;
   workspace: BotDelegationWorkspaceSnapshot | null;
   access: {
@@ -180,6 +187,13 @@ export function parseBotDelegationPlanSnapshot(
     || !isRecord(access)
     || !isRecord(limits)
     || !isRecord(permission)
+  ) return null;
+  if (
+    parsed.targetCanonicalSessionId !== undefined
+    && (
+      typeof parsed.targetCanonicalSessionId !== 'string'
+      || parsed.targetCanonicalSessionId.length === 0
+    )
   ) return null;
   if (completionTarget !== undefined) {
     if (
