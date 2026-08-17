@@ -887,6 +887,36 @@ describe('Pi package executable-code boundary', () => {
     expect(lockRuntime.maxActive).toBe(1);
   });
 
+  it('rejects a stale disable after another shared-userData instance removes the package', async () => {
+    const { source } = await createPackage();
+    const installedList = runtime.listOutput;
+    const firstStore = await import('../pi-package-store.js');
+    await expect(firstStore.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source }],
+    });
+
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+    runtime.listOutcomes = [
+      { stdout: installedList, exitCode: 0 },
+      { stdout: '', exitCode: 0 },
+    ];
+    await mutateAuthorized(secondStore, { action: 'remove', source });
+    runtime.listOutput = '';
+
+    await expect(firstStore.mutatePiPackage({
+      action: 'set-enabled',
+      source,
+      enabled: false,
+    })).rejects.toThrow(/not installed/);
+
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([]);
+  });
+
   it('re-inspects approval state under the shared lock before staging a session snapshot', async () => {
     const { root, source } = await createPackage();
     const firstStore = await import('../pi-package-store.js');
@@ -932,6 +962,7 @@ describe('Pi package executable-code boundary', () => {
     const listener = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
 
+    runtime.listOutcomes = [{ stdout: runtime.listOutput, exitCode: 0 }];
     runtime.exitCode = 1;
     runtime.stderr = 'update failed';
     await expect(mutateAuthorized(store, { action: 'update', source })).rejects.toThrow(

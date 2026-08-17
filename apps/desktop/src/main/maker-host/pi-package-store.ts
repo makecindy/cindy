@@ -1812,17 +1812,19 @@ export async function mutatePiPackage(
   }
   let mutationMayHaveChangedState = false;
   return enqueueMutation(async () => {
-    // A list/runtime resource read that started before this mutation may still
-    // be walking package files. Let it finish before Pi rewrites the install
-    // tree; new reads already wait on mutationTail and cannot enter here.
-    await inspectionPromise?.catch(() => undefined);
+    // Every mutation starts from one fresh projection acquired after the
+    // shared cross-process lock. A packaged/dev/--passive peer may have
+    // installed, removed, updated, or changed approval state since this
+    // process populated its cache; no mutation may persist decisions derived
+    // from that lock-external snapshot.
+    const inspectedBeforeMutation = await inspectAllPackagesFreshUnderMutationLock();
     let affectedSource: string | undefined;
     if (request.action === 'install') {
       mutationMayHaveChangedState = true;
       // Reinstalling an existing source can replace executable code. Revoke
       // before invoking Pi so even a partially failed install cannot inherit a
       // stale approval on the next runtime.
-      const previous = await findAffectedInspectedPackage(await inspectAllPackages(), source);
+      const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       await revokeExtensionApproval([
         ...sourceAliases(source),
         ...(previous ? sourceAliases(previous.rawSource) : []),
@@ -1838,7 +1840,7 @@ export async function mutatePiPackage(
       ]);
     } else if (request.action === 'remove') {
       mutationMayHaveChangedState = true;
-      const previous = await findAffectedInspectedPackage(await inspectAllPackages(), source);
+      const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       await runPiPackageCommand([
         'remove',
         mutationCommandSource(source, previous),
@@ -1860,7 +1862,7 @@ export async function mutatePiPackage(
       });
     } else if (request.action === 'update') {
       mutationMayHaveChangedState = true;
-      const previous = await findAffectedInspectedPackage(await inspectAllPackages(), source);
+      const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       await revokeExtensionApproval([
         ...sourceAliases(source),
         ...(previous ? sourceAliases(previous.rawSource) : []),
@@ -1882,10 +1884,7 @@ export async function mutatePiPackage(
       ]);
     } else if (request.action === 'set-enabled') {
       if (typeof request.enabled !== 'boolean') throw new Error('enabled must be a boolean');
-      const inspected = request.enabled
-        ? await inspectAllPackagesFreshUnderMutationLock()
-        : await inspectAllPackages();
-      const target = await findAffectedInspectedPackage(inspected, source);
+      const target = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       if (!target) throw new Error('Pi package is not installed');
       affectedSource = target.rawSource;
       const state = await readState();
