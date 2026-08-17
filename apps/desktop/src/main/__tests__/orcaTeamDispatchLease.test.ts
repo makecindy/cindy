@@ -90,13 +90,17 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
         session_id TEXT NOT NULL,
         client_id TEXT NOT NULL,
         role TEXT NOT NULL,
+        agent_meta TEXT,
         rewind_at INTEGER
       )
     `);
     await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-failed', 'active')");
     await setup.exec(`
-      INSERT INTO messages (id, session_id, client_id, role, rewind_at)
-      VALUES ('row-failed', 'session-1', 'client-failed', 'user', NULL)
+      INSERT INTO messages (id, session_id, client_id, role, agent_meta, rewind_at)
+      VALUES (
+        'row-failed', 'session-1', 'client-failed', 'user',
+        '{"orcaPreVendorCleanup":{"teamId":"team-failed"}}', NULL
+      )
     `);
 
     const leaseClient = await trackedLeaseClient(options);
@@ -130,6 +134,127 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
       ),
     ).toEqual({ rewindAt: expect.any(Number) });
     expect(terminalSettled).toBe(true);
+  });
+
+  it('commits marker removal when the local provider transport accepted the row', async () => {
+    const options = await createClientOptions();
+    const setup = await trackedClient(options);
+    await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    await setup.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        agent_meta TEXT,
+        rewind_at INTEGER
+      )
+    `);
+    await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-sent', 'active')");
+    await setup.exec(`
+      INSERT INTO messages (id, session_id, client_id, role, agent_meta, rewind_at)
+      VALUES (
+        'row-sent', 'session-1', 'client-sent', 'user',
+        '{"uuid":"u1","orcaPreVendorCleanup":{"teamId":"team-sent"}}', NULL
+      )
+    `);
+    const leaseClient = await trackedLeaseClient(options);
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => leaseClient,
+      getTerminalFenceState: () => 'open',
+    });
+
+    const release = await coordinator.acquire('team-sent', {
+      sessionId: 'session-1',
+      clientId: 'client-sent',
+    });
+    await release('submitted');
+
+    expect(await setup.queryOne(
+      `SELECT rewind_at AS rewindAt,
+              json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') AS teamId,
+              json_extract(agent_meta, '$.uuid') AS uuid
+         FROM messages WHERE id = 'row-sent'`,
+    )).toEqual({ rewindAt: null, teamId: null, uuid: 'u1' });
+  });
+
+  it('tombstones a marked row when another instance already ended the team', async () => {
+    const options = await createClientOptions();
+    const setup = await trackedClient(options);
+    await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    await setup.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        agent_meta TEXT,
+        rewind_at INTEGER
+      )
+    `);
+    await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-ended', 'completed')");
+    await setup.exec(`
+      INSERT INTO messages (id, session_id, client_id, role, agent_meta, rewind_at)
+      VALUES (
+        'row-late', 'session-1', 'client-late', 'user',
+        '{"orcaPreVendorCleanup":{"teamId":"team-ended"}}', NULL
+      )
+    `);
+    const leaseClient = await trackedLeaseClient(options);
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => leaseClient,
+      getTerminalFenceState: () => 'open',
+    });
+
+    await expect(coordinator.acquire('team-ended', {
+      sessionId: 'session-1',
+      clientId: 'client-late',
+    })).rejects.toThrow('ORCA_TEAM_INACTIVE: team team-ended has already ended');
+    expect(await setup.queryOne(
+      'SELECT rewind_at AS rewindAt FROM messages WHERE id = ?',
+      ['row-late'],
+    )).toEqual({ rewindAt: expect.any(Number) });
+  });
+
+  it('tombstones a marked row when the local terminal fence already won', async () => {
+    const options = await createClientOptions();
+    const setup = await trackedClient(options);
+    await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    await setup.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        agent_meta TEXT,
+        rewind_at INTEGER
+      )
+    `);
+    await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-local-ended', 'active')");
+    await setup.exec(`
+      INSERT INTO messages (id, session_id, client_id, role, agent_meta, rewind_at)
+      VALUES (
+        'row-local-late', 'session-1', 'client-local-late', 'user',
+        '{"orcaPreVendorCleanup":{"teamId":"team-local-ended"}}', NULL
+      )
+    `);
+    const leaseClient = await trackedLeaseClient(options);
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => leaseClient,
+      getTerminalFenceState: () => 'terminal',
+    });
+
+    await expect(coordinator.acquire('team-local-ended', {
+      sessionId: 'session-1',
+      clientId: 'client-local-late',
+    })).rejects.toThrow('ORCA_TEAM_INACTIVE: team team-local-ended has already ended');
+    expect(await setup.queryOne(
+      'SELECT rewind_at AS rewindAt FROM messages WHERE id = ?',
+      ['row-local-late'],
+    )).toEqual({ rewindAt: expect.any(Number) });
   });
 
   it('fails closed before provider dispatch when the durable team is no longer active', async () => {

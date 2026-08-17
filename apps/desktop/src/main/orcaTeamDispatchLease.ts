@@ -73,6 +73,11 @@ export class OrcaTeamDispatchLeaseCoordinator {
         [teamId],
       );
       if (row?.status !== 'active') {
+        if (cleanupTarget) {
+          await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
+          await client.exec('COMMIT');
+          transactionOpen = false;
+        }
         throw new Error(`ORCA_TEAM_INACTIVE: team ${teamId} has already ended`);
       }
       // BEGIN IMMEDIATE protects against durable terminal writers, but an
@@ -86,7 +91,29 @@ export class OrcaTeamDispatchLeaseCoordinator {
         );
       }
       if (fenceState === 'terminal') {
+        if (cleanupTarget) {
+          await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
+          await client.exec('COMMIT');
+          transactionOpen = false;
+        }
         throw new Error(`ORCA_TEAM_INACTIVE: team ${teamId} has already ended`);
+      }
+      if (cleanupTarget) {
+        const cleanupRow = await client.queryOne<{ teamId: string | null }>(
+          `SELECT json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') AS teamId
+             FROM messages
+            WHERE session_id = ?
+              AND client_id = ?
+              AND role = 'user'
+              AND rewind_at IS NULL
+            LIMIT 1`,
+          [cleanupTarget.sessionId, cleanupTarget.clientId],
+        );
+        if (cleanupRow?.teamId !== teamId) {
+          throw new Error(
+            `ORCA_TEAM_INACTIVE: team ${teamId} pre-vendor row is no longer dispatchable`,
+          );
+        }
       }
 
       let released = false;
@@ -98,14 +125,18 @@ export class OrcaTeamDispatchLeaseCoordinator {
             // Tombstone the exact accepted row in the same BEGIN IMMEDIATE
             // transaction that excluded terminal writers. Another Cindy
             // instance can only commit end_team after this durable rewind.
+            await this.tombstoneCleanupTarget(client, teamId, cleanupTarget);
+            await client.exec('COMMIT');
+          } else if (outcome === 'submitted' && cleanupTarget) {
             await client.exec(
               `UPDATE messages
-                  SET rewind_at = ?
+                  SET agent_meta = json_remove(agent_meta, '$.orcaPreVendorCleanup')
                 WHERE session_id = ?
                   AND client_id = ?
                   AND role = 'user'
-                  AND rewind_at IS NULL`,
-              [Date.now(), cleanupTarget.sessionId, cleanupTarget.clientId],
+                  AND rewind_at IS NULL
+                  AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
+              [cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
             );
             await client.exec('COMMIT');
           } else {
@@ -172,6 +203,23 @@ export class OrcaTeamDispatchLeaseCoordinator {
         await delay(10);
       }
     }
+  }
+
+  private async tombstoneCleanupTarget(
+    client: IsolatedSqliteClient,
+    teamId: string,
+    cleanupTarget: OrcaTeamDispatchCleanupTarget,
+  ): Promise<void> {
+    await client.exec(
+      `UPDATE messages
+          SET rewind_at = ?
+        WHERE session_id = ?
+          AND client_id = ?
+          AND role = 'user'
+          AND rewind_at IS NULL
+          AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?`,
+      [Date.now(), cleanupTarget.sessionId, cleanupTarget.clientId, teamId],
+    );
   }
 
   private async releaseTransaction(client: IsolatedSqliteClient): Promise<void> {

@@ -175,6 +175,7 @@ import {
   broadcastMessageDeleted,
   commitMessageDeletion,
   createMessage as createDbMessage,
+  rewindOrcaPreVendorCleanupRows,
   rewindPersistedUserMessageAfterClear,
   findParkedEngineSession,
   getMessageDeletionTarget,
@@ -8011,8 +8012,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       origin?.kind === 'orca' && typeof origin.teamId === 'string'
         ? origin.teamId
         : null;
+    let originVendorDispatchCleanupTarget: { sessionId: string; clientId: string } | undefined;
     const acquireOriginVendorDispatchLease = orcaOriginTeamId
-      ? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId)
+      ? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId, originVendorDispatchCleanupTarget)
       : undefined;
     if (!message) {
       return {
@@ -8220,6 +8222,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         }
         const clientId = createId();
+        originVendorDispatchCleanupTarget = { sessionId: session.id, clientId };
         createdPreviewSessionId = session.id;
         createdPreviewClientId = clientId;
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {
@@ -8234,7 +8237,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               clientId,
               role: 'user',
               content: persistedContent ?? message,
-            });
+              ...(orcaOriginTeamId
+                ? { agentMeta: { orcaPreVendorCleanup: { teamId: orcaOriginTeamId } } }
+                : {}),
+            }, orcaOriginTeamId ? { expectedOrcaTeamId: orcaOriginTeamId } : undefined);
             // F4: send_to_session 的 create 分支也建了一条用户可见新会话(有 title + 落了 user
             // 消息),同属"新建会话需同步所有窗侧栏"的 purpose。广播跟 user row 持久化
             // 保持同一个 accepted 边界,避免后续 handle.send 失败时侧栏漏刷新。
@@ -8402,7 +8408,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clientId,
           role: 'user',
           content: persistedContent ?? message,
-        });
+          ...(orcaOriginTeamId
+            ? { agentMeta: { orcaPreVendorCleanup: { teamId: orcaOriginTeamId } } }
+            : {}),
+        }, orcaOriginTeamId ? { expectedOrcaTeamId: orcaOriginTeamId } : undefined);
         userMessagePersisted = true;
         if (orcaCleanupRecoveryItem) {
           trackPersistedOrcaPreVendorInput(targetSessionId, orcaCleanupRecoveryItem);
@@ -9464,6 +9473,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Do not wait after the terminal write: a crash in that gap would strand a
     // late persisted row without durable cleanup intent.
     await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);
+    await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds);
     await prepareOrcaTeamCleanupIntents(input);
   }
 
@@ -9473,6 +9483,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }): Promise<void> {
     await discardOrcaTeamQueuedInputs(input);
     await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);
+    await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds);
 
     // A direct attempt may finish after the first invalidation pass. If it
     // remained before onDispatching, adopt and rewind its exact row now that
@@ -10439,8 +10450,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : message;
         // session-agent-switch:user 行逐行 stamp 当前引擎(见 messages.agent_kind 注释)。
         const agentKind = getSessionDbAgentKind(sessionId);
+        const orcaPreVendorCleanup = message.agentMeta?.orcaPreVendorCleanup;
+        const expectedOrcaTeamId =
+          orcaPreVendorCleanup && typeof orcaPreVendorCleanup.teamId === 'string'
+            ? orcaPreVendorCleanup.teamId
+            : undefined;
         const scopedOpts = {
           ...(opts ?? {}),
+          ...(expectedOrcaTeamId ? { expectedOrcaTeamId } : {}),
           // Keep a committed user row durable across an owner switch, while
           // preventing createMessage from relabelling its broadcast to the
           // next owner after the media-ref await.
@@ -10501,13 +10518,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDispatchDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
     isOrcaTeamInputActive: async (_sessionId, teamId) =>
       !isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId)),
-    acquireVendorDispatchLease: (_sessionId, sendOpts) => {
+    acquireVendorDispatchLease: (_sessionId, sendOpts, cleanupTarget) => {
       const orcaTeamId =
         sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
           ? (sendOpts as { orcaTeamId?: unknown }).orcaTeamId
           : undefined;
       return typeof orcaTeamId === 'string'
-        ? acquireOrcaTeamDispatchLease(orcaTeamId)
+        ? acquireOrcaTeamDispatchLease(orcaTeamId, cleanupTarget)
         : undefined;
     },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {

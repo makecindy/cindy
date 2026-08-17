@@ -187,6 +187,9 @@ export interface CcMeta {
     exitCode: number | null;
     durationMs: number;
   };
+
+  /** Durable host-only marker for an Orca user row that has not reached provider submission. */
+  orcaPreVendorCleanup?: { teamId: string };
 }
 
 /**

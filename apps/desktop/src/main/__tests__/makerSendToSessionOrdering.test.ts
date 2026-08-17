@@ -330,6 +330,9 @@ describe('sendToSession ordering', () => {
     expect(source).toContain(
       'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);',
     );
+    expect(source).toContain(
+      'await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds);',
+    );
     expect(source).toContain('const remainingDirectItems = persistedOrcaPreVendorInputsForTeam(');
   });
 
@@ -436,7 +439,11 @@ describe('sendToSession ordering', () => {
       'let orcaCleanupRecoveryItem: AgentInputQueuedMessage | null = null;',
     );
     expect(block).toContain("origin?.kind === 'orca' && typeof origin.teamId === 'string'");
-    expect(block).toContain('? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId)');
+    expect(block).toContain(
+      '? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId, originVendorDispatchCleanupTarget)',
+    );
+    expect(block).toContain('orcaPreVendorCleanup: { teamId: orcaOriginTeamId }');
+    expect(block).toContain('{ expectedOrcaTeamId: orcaOriginTeamId }');
     expect(persistBlock).toContain(
       'orcaCleanupRecoveryItem = await buildSendToSessionQueuedMessage({',
     );

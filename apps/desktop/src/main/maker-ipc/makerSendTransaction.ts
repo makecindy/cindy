@@ -178,6 +178,7 @@ export interface MakerSendTransactionDeps {
     opts?: {
       shouldBroadcast?: () => boolean;
       expectedClearBoundaryMs?: number | null;
+      expectedOrcaTeamId?: string;
     },
   ): Promise<unknown>;
   /** Hide a user row that lost a clear race after accepted persistence. */
@@ -197,6 +198,7 @@ export interface MakerSendTransactionDeps {
   acquireVendorDispatchLease?: (
     sessionId: string,
     sendOpts: unknown,
+    cleanupTarget?: { sessionId: string; clientId: string },
   ) =>
     | void
     | ((outcome?: 'submitted' | 'confirmed-undispatched') => void | Promise<void>)
@@ -1063,13 +1065,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                           ? { recoveryCheckpoint: persistUserMessage.recoveryCheckpoint }
                           : {}),
                         ...(persistUserMessage.origin ? { origin: persistUserMessage.origin } : {}),
+                        ...(orcaTeamId
+                          ? { orcaPreVendorCleanup: { teamId: orcaTeamId } }
+                          : {}),
                         // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
                         // 对齐,renderer 据此渲染"由自动化任务发送"标签。
                         ...(so.origin ? { origin: so.origin } : {}),
                       },
                     },
                     persistUserMessage.shouldBroadcast ||
-                      persistUserMessage.expectedClearBoundaryMs !== undefined
+                      persistUserMessage.expectedClearBoundaryMs !== undefined ||
+                      orcaTeamId
                       ? {
                           ...(persistUserMessage.shouldBroadcast
                             ? { shouldBroadcast: persistUserMessage.shouldBroadcast }
@@ -1079,6 +1085,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                                 expectedClearBoundaryMs: persistUserMessage.expectedClearBoundaryMs,
                               }
                             : {}),
+                          ...(orcaTeamId ? { expectedOrcaTeamId: orcaTeamId } : {}),
                         }
                       : undefined,
                   );
@@ -1096,7 +1103,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(orcaTeamId && deps.acquireVendorDispatchLease
             ? {
                 acquireVendorDispatchLease: () =>
-                  deps.acquireVendorDispatchLease?.(sessionId, finalFenceSendOpts),
+                  deps.acquireVendorDispatchLease?.(
+                    sessionId,
+                    finalFenceSendOpts,
+                    persistUserMessage
+                      ? { sessionId, clientId: persistUserMessage.clientId }
+                      : undefined,
+                  ),
               }
             : {}),
           onDispatching: () => {

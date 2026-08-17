@@ -259,6 +259,21 @@ describe('maker SEND transaction', () => {
       'vendor-send',
       'lease-release',
     ]);
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        clientId: 'client-dispatch-marker',
+        agentMeta: expect.objectContaining({
+          orcaPreVendorCleanup: { teamId: 'team-1' },
+        }),
+      }),
+      expect.objectContaining({ expectedOrcaTeamId: 'team-1' }),
+    );
+    expect(deps.acquireVendorDispatchLease).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ orcaTeamId: 'team-1' }),
+      { sessionId: 'session-1', clientId: 'client-dispatch-marker' },
+    );
   });
 
   it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {

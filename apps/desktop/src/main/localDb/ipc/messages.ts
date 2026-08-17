@@ -1056,6 +1056,34 @@ export async function rewindPersistedUserMessageAfterClear(
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }
 
+/** Conditionally rewind only explicit, still-pre-vendor Orca cleanup markers. */
+export async function rewindOrcaPreVendorCleanupRows(
+  teamId: string,
+  sessionIds: string[],
+): Promise<Array<{ sessionId: string; clientId: string }>> {
+  const uniqueSessionIds = [...new Set(sessionIds)];
+  if (uniqueSessionIds.length === 0) return [];
+  const placeholders = uniqueSessionIds.map(() => '?').join(', ');
+  const rows = await getDbClient().query<{ sessionId: string; clientId: string }>(
+    `UPDATE messages
+        SET rewind_at = ?
+      WHERE role = 'user'
+        AND rewind_at IS NULL
+        AND session_id IN (${placeholders})
+        AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?
+      RETURNING session_id AS sessionId, client_id AS clientId`,
+    [Date.now(), ...uniqueSessionIds, teamId],
+  );
+  await Promise.all(
+    rows.map(({ sessionId, clientId }) =>
+      rewindPersistedUserMessageAfterClear(sessionId, clientId, {
+        finalizeAlreadyRewound: true,
+      }),
+    ),
+  );
+  return rows;
+}
+
 export async function dismissErrorMessage(
   sessionId: string,
   clientId: string,
@@ -1308,6 +1336,8 @@ export async function createMessage(
      * durable user row.
      */
     expectedClearBoundaryMs?: number | null;
+    /** Atomically require this Orca team to remain active while inserting the row. */
+    expectedOrcaTeamId?: string;
     /**
      * Owner scope captured before an async main-side write.  A stale scope
      * must not broadcast a row into the next signed-in owner.
@@ -1319,6 +1349,16 @@ export async function createMessage(
   const db = dbClient.drizzle;
   const guarded = opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
   const expected = guarded ? opts?.expectedClearBoundaryMs : undefined;
+  const expectedOrcaTeamId = opts?.expectedOrcaTeamId;
+  const orcaGuarded = typeof expectedOrcaTeamId === 'string';
+  const isExpectedOrcaTeamActive = async (): Promise<boolean> => {
+    if (!orcaGuarded) return true;
+    const row = await dbClient.queryOne<{ status: string }>(
+      'SELECT status FROM orca_teams WHERE id = ? LIMIT 1',
+      [expectedOrcaTeamId],
+    );
+    return row?.status === 'active';
+  };
   if (
     guarded &&
     expected !== null &&
@@ -1330,7 +1370,7 @@ export async function createMessage(
   // The unguarded API keeps its historical fast idempotency read. Guarded
   // optimistic sends must skip it: a pre-clear row can otherwise be returned
   // before the compare-and-set boundary is checked.
-  if (!guarded) {
+  if (!guarded && !orcaGuarded) {
     const existing = await db
       .select()
       .from(messages)
@@ -1360,6 +1400,10 @@ export async function createMessage(
            FROM sessions AS s
           WHERE s.id = ?
             AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1)
+            AND (? IS NULL OR EXISTS (
+                  SELECT 1 FROM orca_teams AS t
+                   WHERE t.id = ? AND t.status = 'active'
+                ))
          ON CONFLICT(session_id, client_id) DO NOTHING`,
         [
           insertRow.id,
@@ -1373,6 +1417,8 @@ export async function createMessage(
           insertRow.createdAt,
           sessionId,
           expected,
+          expectedOrcaTeamId ?? null,
+          expectedOrcaTeamId ?? null,
         ],
       );
       if (inserted.changes === 0) {
@@ -1387,9 +1433,11 @@ export async function createMessage(
           .where(eq(sessions.id, sessionId))
           .limit(1);
         const actual = sessionAfterGuard?.clearedAt ?? null;
+        const orcaTeamActive = await isExpectedOrcaTeamActive();
         if (
           existingAfterGuard &&
           actual === expected &&
+          orcaTeamActive &&
           existingAfterGuard.rewindAt === null &&
           (expected === null || existingAfterGuard.createdAt > expected)
         ) {
@@ -1403,7 +1451,54 @@ export async function createMessage(
             { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
           );
         }
+        if (!orcaTeamActive) {
+          throw new Error(
+            `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+          );
+        }
         throw new Error('Message insert skipped without a clear-boundary change');
+      }
+    } else if (orcaGuarded) {
+      const inserted = await dbClient.exec(
+        `INSERT INTO messages (
+           id, client_id, session_id, role, content, tool_use_id,
+           agent_meta, agent_kind, created_at
+         )
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (
+                  SELECT 1 FROM orca_teams AS t
+                   WHERE t.id = ? AND t.status = 'active'
+                )
+         ON CONFLICT(session_id, client_id) DO NOTHING`,
+        [
+          insertRow.id,
+          insertRow.clientId,
+          insertRow.sessionId,
+          insertRow.role,
+          insertRow.content,
+          insertRow.toolUseId,
+          insertRow.agentMeta,
+          insertRow.agentKind,
+          insertRow.createdAt,
+          expectedOrcaTeamId,
+        ],
+      );
+      if (inserted.changes === 0) {
+        const [existingAfterGuard] = await db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+          .limit(1);
+        const orcaTeamActive = await isExpectedOrcaTeamActive();
+        if (existingAfterGuard?.rewindAt === null && orcaTeamActive) {
+          return messageToCamel(existingAfterGuard);
+        }
+        if (!orcaTeamActive) {
+          throw new Error(
+            `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+          );
+        }
+        throw new Error('Message insert skipped without an Orca lifecycle change');
       }
     } else {
       await db.insert(messages).values(insertRow);
@@ -1422,9 +1517,11 @@ export async function createMessage(
         .limit(1);
       const actual = sessionAfterError?.clearedAt ?? null;
       const existingAfterError = after[0];
+      const orcaTeamActive = await isExpectedOrcaTeamActive();
       if (
         existingAfterError &&
         actual === expected &&
+        orcaTeamActive &&
         existingAfterError.rewindAt === null &&
         (expected === null || existingAfterError.createdAt > expected)
       ) {
@@ -1438,6 +1535,15 @@ export async function createMessage(
           { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
         );
       }
+      if (!orcaTeamActive) {
+        throw new Error(
+          `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+        );
+      }
+    } else if (orcaGuarded && !(await isExpectedOrcaTeamActive())) {
+      throw new Error(
+        `ORCA_TEAM_INACTIVE: team ${expectedOrcaTeamId} ended before user message persistence`,
+      );
     } else if (after.length > 0) {
       return messageToCamel(after[0]);
     }

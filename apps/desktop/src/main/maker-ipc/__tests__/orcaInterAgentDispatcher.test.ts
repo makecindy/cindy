@@ -180,7 +180,8 @@ describe('Orca lead/worker dispatcher', () => {
       clientId: 'client-1',
       role: 'user',
       content: '{"orcaSource":"lead","content":"Implement feature"}',
-    });
+      agentMeta: { orcaPreVendorCleanup: { teamId: 'team-1' } },
+    }, { expectedOrcaTeamId: 'team-1' });
     expect(h.liveSession.send).toHaveBeenCalledWith(
       {
         type: 'user',

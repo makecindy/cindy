@@ -189,7 +189,13 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   ) => Promise<OrcaInterAgentSendToSessionInternalResult>;
   createDbMessage: (
     sessionId: string,
-    message: { clientId: string; role: 'user'; content: string },
+    message: {
+      clientId: string;
+      role: 'user';
+      content: string;
+      agentMeta?: { orcaPreVendorCleanup: { teamId: string } };
+    },
+    opts?: { expectedOrcaTeamId?: string },
   ) => Promise<unknown>;
   rewindPersistedUserMessage: (sessionId: string, clientId: string) => Promise<void>;
   finalizePersistedUserMessageRewind: (
@@ -519,6 +525,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         // fail before creating a row that would have no crash recovery shape.
         const cleanupItem = await buildQueuedMessage();
         const result = await sendPersistedUserMessageToSession(deps, {
+          teamId: params.teamId,
           session: live,
           dbContent: persistedContent,
           agentMessage: { type: 'user', content: agentMessageText },
@@ -692,6 +699,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 async function sendPersistedUserMessageToSession<TSessionMeta>(
   deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
   params: {
+    teamId: string;
     session: PersistedUserMessageSession;
     dbContent: string;
     agentMessage: UserMessage;
@@ -739,6 +747,9 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           clientId,
           role: 'user',
           content: dbContent,
+          agentMeta: { orcaPreVendorCleanup: { teamId: params.teamId } },
+        }, {
+          expectedOrcaTeamId: params.teamId,
         });
         userMessagePersisted = true;
         await params.onPersisted?.();

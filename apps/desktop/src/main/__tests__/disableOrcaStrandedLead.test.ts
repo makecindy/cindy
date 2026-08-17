@@ -88,7 +88,7 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('waits for ingress settlement before persisting cleanup intent and terminal commit', () => {
+  it('waits for ingress settlement and durable marker cleanup before terminal commit', () => {
     const helperAt = registerSource.indexOf(
       'async function prepareOrcaTeamTerminalCommit',
     );
@@ -98,6 +98,10 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     );
     const helperPreparedAt = registerSource.indexOf(
       'await prepareOrcaTeamCleanupIntents(input)',
+      helperAt,
+    );
+    const durableSweepAt = registerSource.indexOf(
+      'await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds)',
       helperAt,
     );
     const endedAt = registerSource.indexOf("await markTeamEnded(team.id, 'completed', {");
@@ -117,7 +121,8 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
 
     expect(helperAt).toBeGreaterThan(-1);
     expect(waitedAt).toBeGreaterThan(helperAt);
-    expect(helperPreparedAt).toBeGreaterThan(waitedAt);
+    expect(durableSweepAt).toBeGreaterThan(waitedAt);
+    expect(helperPreparedAt).toBeGreaterThan(durableSweepAt);
     expect(endedAt).toBeGreaterThan(-1);
     expect(preparedAt).toBeGreaterThan(endedAt);
     expect(rollbackAt).toBeGreaterThan(preparedAt);
