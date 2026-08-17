@@ -113,6 +113,10 @@ import {
   type QuotaHoverCardSessionUsage,
   type QuotaHoverCardTurnUsage,
 } from './QuotaHoverCard';
+import {
+  effectiveQuotaSeverity,
+  type QuotaSeverity,
+} from './QuotaBar';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -355,6 +359,8 @@ function toEpochMs(epochSeconds: number | null | undefined): number | null {
  */
 interface ChipWindowSegment extends ChipWindowSlot {
   label: string;
+  /** Claude 窗口的服务端告警级别；Codex 窗口无此信号。 */
+  serverSeverity?: string | null;
   /**
    * 倒计时已过点、快照还停在上个周期 —— 悬念期: 段显示「重置中…」(呼吸省略号)
    * 而不是僵住的旧百分比, 新快照落地时由重置滚动动画揭晓。
@@ -652,6 +658,7 @@ function getClaudeChipWindows(
       key: 'claude-5h',
       label: countdown ?? '5h',
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
+      serverSeverity: fiveHour.severity,
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
     });
@@ -672,6 +679,7 @@ function getClaudeChipWindows(
       key: weekly.modelDisplayName ? `claude-weekly:${weekly.modelDisplayName}` : 'claude-weekly:total',
       label,
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
+      serverSeverity: weekly.window.severity,
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
     });
@@ -991,6 +999,92 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
       <span className="tabular-nums">{seg}</span>
     </React.Fragment>
   ));
+}
+
+/** Claude 额度段的非颜色严重度文案；普通段无需额外读出。 */
+function getClaudeQuotaSeverityLabel(
+  severity: QuotaSeverity,
+  t: TFunction,
+): string | null {
+  if (severity === 'normal') return null;
+  return t(
+    severity === 'warn'
+      ? 'todaySpend.claude.limitWarning'
+      : 'todaySpend.claude.limitRejected',
+  );
+}
+
+/** Claude 订阅额度段合并本地利用率与服务端等级着色，不影响相邻窗口与会话金额。 */
+function renderClaudeQuotaSegment(
+  content: React.ReactNode,
+  visibleText: string,
+  usedPercent: number,
+  serverSeverity: string | null | undefined,
+  t: TFunction,
+): React.ReactNode {
+  const severity = effectiveQuotaSeverity(usedPercent, serverSeverity);
+  const colorClass = severity === 'warn'
+    ? 'text-[var(--quota-bar-warn)]'
+    : severity === 'crit'
+      ? 'text-[var(--quota-bar-crit)]'
+      : undefined;
+  // 普通段沿用可见文字，只有告警段补充非颜色信号；严重级必须与警告级读出不同语义。
+  const severityLabel = getClaudeQuotaSeverityLabel(severity, t);
+  const ariaLabel = severityLabel ? `${visibleText} ${severityLabel}` : undefined;
+
+  // 红色段不叠加呼吸圆点(2026-08-05 维护者产品结论:避免视觉噪音);
+  // 非颜色信号由 aria-label 的等级文案承担。
+  return (
+    <span
+      aria-label={ariaLabel}
+      data-quota-severity={severity}
+      className={colorClass}
+    >
+      {content}
+    </span>
+  );
+}
+
+const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
+  normal: 0,
+  warn: 1,
+  crit: 2,
+};
+
+/**
+ * 整 chip 兜底告警的等级：被拒直接视为严重告警；其余窗口分别合并本地利用率
+ * 与服务端 severity 后取最高等级。非窗口信号触发的告警按警告级处理。
+ */
+function getClaudeSubscriptionAlertSeverity(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): QuotaSeverity {
+  if (!isClaudeSubscriptionAlerting(snapshot, modelId)) return 'normal';
+  // rateLimitStatus 可能来自脏的持久化/IPC 快照;非字符串按缺失处理。
+  const rawRateLimitStatus = snapshot?.rateLimitStatus;
+  if (
+    typeof rawRateLimitStatus === 'string'
+    && rawRateLimitStatus.trim().toLowerCase() === 'rejected'
+  ) return 'crit';
+
+  const sessionWindows: Array<ClaudeUsageWindow | null | undefined> = [
+    snapshot?.fiveHour,
+    snapshot?.sevenDay,
+    matchScopedWindowForModel(snapshot?.scoped, modelId),
+  ];
+  const highestWindowSeverity = sessionWindows.reduce<QuotaSeverity>(
+    (highestSeverity, window) => {
+      if (typeof window?.utilization !== 'number' || !Number.isFinite(window.utilization)) {
+        return highestSeverity;
+      }
+      const severity = effectiveQuotaSeverity(window.utilization, window.severity);
+      return QUOTA_SEVERITY_RANK[severity] > QUOTA_SEVERITY_RANK[highestSeverity]
+        ? severity
+        : highestSeverity;
+    },
+    'normal',
+  );
+  return highestWindowSeverity === 'normal' ? 'warn' : highestWindowSeverity;
 }
 
 interface TodaySpendChipProps {
@@ -1375,9 +1469,21 @@ export function TodaySpendChip({
   const windowSlotB = chipWindows[1] ?? null;
   const rollupA = useQuotaResetRollup(windowSlotA);
   const rollupB = useQuotaResetRollup(windowSlotB);
+  const usesClaudeQuotaChipSegments = isClaudeSubscription && !usesCodexQuotaForm;
   // 窗口段元素登记表(key → span): 撒花锚点用, 段消失时由 ref 回调置 null。
   const segmentElsRef = React.useRef<Record<string, HTMLSpanElement | null>>({});
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
+    const renderWindowContent = (content: React.ReactNode, visibleText: string) => (
+      usesClaudeQuotaChipSegments
+        ? renderClaudeQuotaSegment(
+            content,
+            visibleText,
+            100 - window.remainingPercent,
+            window.serverSeverity,
+            t,
+          )
+        : content
+    );
     if (window.resetPending) {
       // 悬念期: 倒计时已归零、新快照未落地 —— 旧百分比已失真, 换成「重置中…」,
       // 呼吸省略号 (HTML span + opacity, 仅悬念期挂载; motion-safe = 尊重
@@ -1385,8 +1491,13 @@ export function TodaySpendChip({
       // 动画从 0% 跳到新值揭晓。
       return (
         <React.Fragment key={window.key}>
-          {t('todaySpend.resetPendingSegment', { label: window.label })}
-          <span className="motion-safe:animate-pulse">…</span>
+          {renderWindowContent(
+            <>
+              {t('todaySpend.resetPendingSegment', { label: window.label })}
+              <span className="motion-safe:animate-pulse">…</span>
+            </>,
+            `${t('todaySpend.resetPendingSegment', { label: window.label })}…`,
+          )}
         </React.Fragment>
       );
     }
@@ -1407,7 +1518,7 @@ export function TodaySpendChip({
           segmentElsRef.current[window.key] = el;
         }}
       >
-        {text}
+        {renderWindowContent(text, text)}
       </span>
     );
   });
@@ -1608,20 +1719,63 @@ export function TodaySpendChip({
     }
   }
 
-  // Claude 订阅告警态: 影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped) 任一逼近 /
-  // 打满, 或 headers 报 rejected → chip 变 error 色 (语义豁免色, 跨主题一致)。
-  // 其它模型的周限吃紧不染红 —— chip 上没有那一段, 红了也无从解释 (见
-  // isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
-  const claudeSubscriptionAlerting = isClaudeSubscription
-    && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
+  // Claude 订阅有告警窗口段时由该段独立着色，避免把其它段与会话金额一起染红；
+  // 告警来自未展示窗口或 rejected 时，仍保留整 chip 告警兜底。
+  const claudeSubscriptionAlertSeverity = isClaudeSubscription
+    ? getClaudeSubscriptionAlertSeverity(claudeSubscriptionUsage, modelId)
+    : 'normal';
+  const visibleClaudeQuotaSeverity = usesClaudeQuotaChipSegments
+    ? chipWindows.reduce<QuotaSeverity>((highestSeverity, window) => {
+        const severity = effectiveQuotaSeverity(
+          100 - window.remainingPercent,
+          window.serverSeverity,
+        );
+        return QUOTA_SEVERITY_RANK[severity] > QUOTA_SEVERITY_RANK[highestSeverity]
+          ? severity
+          : highestSeverity;
+      }, 'normal')
+    : 'normal';
+  const showClaudeSubscriptionFallbackAlert =
+    QUOTA_SEVERITY_RANK[visibleClaudeQuotaSeverity]
+      < QUOTA_SEVERITY_RANK[claudeSubscriptionAlertSeverity];
+  // button 自身的 aria-label 会覆盖后代段落的 accessible name；把每个升级段使用的
+  // 同一份严重度文案提升到 trigger，确保读屏仍能听见 warn / crit 的区别。
+  // 兜底告警（隐藏窗口告警 / rejected 状态）只染色不加段落，等级文案也要并入名称。
+  const triggerAccessibleName = usageDashboardLabel
+    ? [
+        usageDashboardLabel,
+        ...(usesClaudeQuotaChipSegments
+          ? chipWindows
+              .map((window) => getClaudeQuotaSeverityLabel(
+                effectiveQuotaSeverity(
+                  100 - window.remainingPercent,
+                  window.serverSeverity,
+                ),
+                t,
+              ))
+              .filter((label): label is string => label !== null)
+          : []),
+        ...(showClaudeSubscriptionFallbackAlert
+          ? [getClaudeQuotaSeverityLabel(claudeSubscriptionAlertSeverity, t)]
+              .filter((label): label is string => label !== null)
+          : []),
+      ].join(' ')
+    : null;
+  // 隐藏窗口 / 状态告警的整 chip 兜底也保留最终等级：
+  // warn 用琥珀色，crit 才用红色，与可见额度段共用语义 token。
+  const claudeSubscriptionFallbackToneClass = showClaudeSubscriptionFallbackAlert
+    ? claudeSubscriptionAlertSeverity === 'warn'
+      ? 'text-[var(--quota-bar-warn)] hover:text-[var(--quota-bar-warn)]'
+      : 'text-[var(--quota-bar-crit)] hover:text-[var(--quota-bar-crit)]'
+    : null;
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
     'inline-flex h-5 shrink-0 items-center',
     'text-12 font-medium leading-none tabular-nums',
-    claudeSubscriptionAlerting
-      ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
+    claudeSubscriptionFallbackToneClass
+      ? claudeSubscriptionFallbackToneClass
       // 不可点(网关账号)时不加 hover 变色,避免暗示可交互。
       : cn('text-[var(--msg-tool-card-chevron)]', isDashboardClickable && 'hover:text-foreground'),
     'border-0 bg-transparent p-0 m-0',
@@ -1672,7 +1826,7 @@ export function TodaySpendChip({
                   closeQuotaPopoverImmediately();
                 }}
                 className={buttonClass}
-                aria-label={usageDashboardLabel ?? undefined}
+                aria-label={triggerAccessibleName ?? undefined}
               >
                 {labelNode}
               </button>
@@ -1744,7 +1898,7 @@ export function TodaySpendChip({
               type="button"
               onClick={handleClick}
               className={buttonClass}
-              aria-label={usageDashboardLabel ?? undefined}
+              aria-label={triggerAccessibleName ?? undefined}
             >
               {labelNode}
             </button>

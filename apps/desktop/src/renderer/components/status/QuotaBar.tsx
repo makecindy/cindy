@@ -32,6 +32,38 @@ export function quotaSeverity(usedPercent: number): QuotaSeverity {
   return 'normal';
 }
 
+const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
+  normal: 0,
+  warn: 1,
+  crit: 2,
+};
+
+/**
+ * 非字符串按缺失处理；字符串空值或 normal 才是无告警，未知非空值至少保留为 warn。
+ * 与共享告警谓词“任何非 normal severity 均告警”保持一致，避免上游新增级别被静默降级。
+ */
+function serverQuotaSeverity(value: unknown): QuotaSeverity {
+  if (typeof value !== 'string') return 'normal';
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === 'normal') return 'normal';
+  if (normalized === 'warning') return 'warn';
+  const parts = normalized.split(/[^a-z]+/).filter(Boolean);
+  if (parts.includes('exceeded') || parts.includes('critical')) return 'crit';
+  return 'warn';
+}
+
+/** 本地利用率与服务端告警等级取更严重者，作为窗口的最终等级。 */
+export function effectiveQuotaSeverity(
+  usedPercent: number,
+  serverSeverity: unknown,
+): QuotaSeverity {
+  const localSeverity = quotaSeverity(usedPercent);
+  const upstreamSeverity = serverQuotaSeverity(serverSeverity);
+  return QUOTA_SEVERITY_RANK[upstreamSeverity] > QUOTA_SEVERITY_RANK[localSeverity]
+    ? upstreamSeverity
+    : localSeverity;
+}
+
 const FILL_COLOR_CLASSES: Record<QuotaSeverity, string> = {
   normal: 'bg-[var(--quota-bar-fill)]',
   warn: 'bg-[var(--quota-bar-warn)]',
