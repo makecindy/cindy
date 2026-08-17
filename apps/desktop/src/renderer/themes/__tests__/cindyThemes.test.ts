@@ -70,6 +70,30 @@ function parseRgb(v: string): RGB {
   return [parts[0], parts[1], parts[2]];
 }
 
+function parseCssColor(v: string | undefined): { rgb: RGB; alpha: number } {
+  if (!v) throw new Error('empty color literal');
+  const t = v.trim();
+  const hsl = t.match(
+    /^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%(?:\s*\/\s*(0|1|0?\.\d+))?$/,
+  );
+  if (hsl) {
+    return {
+      rgb: hslToRgb(parseFloat(hsl[1]), parseFloat(hsl[2]), parseFloat(hsl[3])),
+      alpha: hsl[4] === undefined ? 1 : parseFloat(hsl[4]),
+    };
+  }
+  const rgb = t.match(/^rgba?\(([^)]+)\)$/);
+  if (rgb) {
+    const parts = rgb[1].split(',').map((x) => parseFloat(x));
+    return {
+      rgb: [parts[0], parts[1], parts[2]],
+      alpha: parts[3] === undefined ? 1 : parts[3],
+    };
+  }
+  if (t === 'transparent') return { rgb: [0, 0, 0], alpha: 0 };
+  return { rgb: toRgb(t), alpha: 1 };
+}
+
 /** 把任意 CSS 色值归一成 RGB(hex / HSL 三元组 / rgb() / rgba())。 */
 function toRgb(v: string | undefined): RGB {
   if (!v) throw new Error("empty color literal");
@@ -95,15 +119,9 @@ function luminance(rgb: RGB): number {
   return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2];
 }
 
-function compositeHslOver(foreground: string | undefined, background: string | undefined): RGB {
-  const match = foreground?.match(
-    /^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%\s*\/\s*(0|1|0?\.\d+)$/,
-  );
-  if (!match) throw new Error(`bad translucent HSL: ${foreground}`);
-  const fg = hslToRgb(parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3]));
-  const bg = toRgb(background);
-  const alpha = parseFloat(match[4]);
-  return fg.map((channel, index) => Math.round(channel * alpha + bg[index] * (1 - alpha))) as RGB;
+function compositeOver(foreground: string | undefined, background: RGB): RGB {
+  const { rgb, alpha } = parseCssColor(foreground);
+  return rgb.map((channel, index) => channel * alpha + background[index] * (1 - alpha)) as RGB;
 }
 
 function rgbContrast(c1: RGB, c2: RGB): number {
@@ -456,15 +474,29 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     const draftLight = colorRegistry.resolveDefault('sidebar-draft-indicator', 'light') ?? '';
     const draftDarkAlias = colorRegistry.resolveDefault('sidebar-draft-indicator', 'dark') ?? '';
     const awaitingDark = colorRegistry.resolveDefault('card-status-awaiting', 'dark') ?? '';
-    const lightHover = compositeHslOver(light['sidebar-item-hover'], light['sidebar']);
-    const darkHover = compositeHslOver(dark['sidebar-item-hover'], dark['sidebar']);
 
-    expect(draftLight).toBe('#0D8178');
+    expect(draftLight).toBe('#0B726B');
     expect(draftDarkAlias).toBe('var(--card-status-awaiting)');
-    expect(contrast(draftLight, light['sidebar']), 'light 草稿铅笔×侧栏').toBeGreaterThanOrEqual(3);
-    expect(contrast(awaitingDark, dark['sidebar']), 'dark 草稿铅笔×侧栏').toBeGreaterThanOrEqual(3);
-    expect(rgbContrast(toRgb(draftLight), lightHover), 'light 草稿铅笔×悬停行').toBeGreaterThanOrEqual(3);
-    expect(rgbContrast(toRgb(awaitingDark), darkHover), 'dark 草稿铅笔×悬停行').toBeGreaterThanOrEqual(3);
+    for (const [name, colors, draft] of [
+      ['light', light, draftLight],
+      ['dark', dark, awaitingDark],
+    ] as const) {
+      for (const [wallpaperName, wallpaper] of [
+        ['black wallpaper', '#000000'],
+        ['white wallpaper', '#FFFFFF'],
+      ] as const) {
+        const sidebar = compositeOver(colors['surface-translucent-sidebar'], toRgb(wallpaper));
+        const hover = compositeOver(colors['sidebar-item-hover'], sidebar);
+        expect(
+          rgbContrast(toRgb(draft), sidebar),
+          `${name} 草稿铅笔×侧栏(${wallpaperName})`,
+        ).toBeGreaterThanOrEqual(3);
+        expect(
+          rgbContrast(toRgb(draft), hover),
+          `${name} 草稿铅笔×悬停行(${wallpaperName})`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
   });
 });
 
