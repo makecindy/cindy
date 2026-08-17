@@ -151,8 +151,8 @@ describe('account provider readiness wiring', () => {
     expect(unchangedReturn).toBeGreaterThan(unchangedEnsure);
     expect(bootstrapSource).toContain('shouldKeepPendingReadinessStart');
     expect(bootstrapSource).toContain('shouldClearCatalogAfterJoiningPreviousScope');
-    expect(bootstrapSource).toContain(
-      'handle.isLive() &&\n          accountProviderReadinessBarrier.isCurrentAdoptable()',
+    expect(bootstrapSource).toMatch(
+      /handle\.isLive\(\)\s*&&\s*accountProviderReadinessBarrier\.isCurrentAdoptable\(\)/,
     );
 
     expect(bootstrapSource).toContain(
