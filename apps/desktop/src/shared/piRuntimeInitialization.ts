@@ -1,7 +1,4 @@
-import type {
-  CustomProviderRuntimeConfig,
-  ProviderRuntimeModelConfig,
-} from '@cindy/model-providers';
+import type { ProviderRuntimeModelConfig } from '@cindy/model-providers';
 
 export function savedCustomProviderModelShape(
   model: ProviderRuntimeModelConfig,
@@ -26,22 +23,5 @@ export function savedCustomProviderModelShape(
             : {}),
         }
       : {}),
-  };
-}
-
-export function derivePiRuntimeFromClaudeRuntime(
-  runtime: CustomProviderRuntimeConfig,
-): CustomProviderRuntimeConfig | null {
-  if (runtime.requestPath?.trim()) return null;
-  if (runtime.wireProtocol && runtime.wireProtocol !== 'anthropic-messages') return null;
-
-  return {
-    baseUrl: runtime.baseUrl,
-    wireProtocol: 'anthropic-messages',
-    models: runtime.models.map((model) => savedCustomProviderModelShape(model, false)),
-    ...(runtime.headers && Object.keys(runtime.headers).length > 0
-      ? { headers: { ...runtime.headers } }
-      : {}),
-    ...(runtime.modelsUrl ? { modelsUrl: runtime.modelsUrl } : {}),
   };
 }

@@ -710,15 +710,6 @@ function wireProtocolToPiApi(wp: ProviderWireProtocol): PiNativeApi {
   }
 }
 
-function piApiFromDeclaredWireProtocol(
-  wireProtocol: ProviderWireProtocol | undefined,
-): 'anthropic-messages' | 'openai-responses' | undefined {
-  if (wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses') {
-    return wireProtocol;
-  }
-  return undefined;
-}
-
 /**
  * Inspect the protocol already known by the exact bundled PI build. This helper
  * is intentionally global and therefore only suitable for diagnostics/tests;
@@ -1167,6 +1158,13 @@ export async function buildXaiPiNativeProvider(
   };
 }
 
+export function resolvePiCindyGatewayModelApi(
+  _selectedProviderId: string | null | undefined,
+  modelId: string,
+): 'anthropic-messages' | 'openai-responses' | null | undefined {
+  return resolveXdPiGatewayWireProtocol(modelId);
+}
+
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
 export async function resolvePiNativeProviders(ctx: {
   workingDir: string;
@@ -1375,16 +1373,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
-    resolvePiGatewayModelApi: (providerId, modelId) => {
-      const source = providerId?.trim();
-      // 本地订阅走上面的 PI 原生 provider；cindy 块只是同一会话切回 Gateway 时的备用块。
-      // 即使订阅与 XD 共享 model id，也不能借用 XD v3 的协议字段。
-      if (source && source !== 'cindy' && source !== 'xd') {
-        const provider = getActiveCatalog().providers.find((candidate) => candidate.id === source);
-        return piApiFromDeclaredWireProtocol(provider?.routing.pi?.wireProtocol);
-      }
-      return resolveXdPiGatewayWireProtocol(modelId);
-    },
+    // `cindy` is the gateway fallback block even when the session starts on a subscription or
+    // BYOM provider. Its model protocol must therefore come from the exact XD model, never from
+    // the currently selected provider's endpoint default.
+    resolvePiGatewayModelApi: resolvePiCindyGatewayModelApi,
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
     resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,

@@ -50,7 +50,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   ProviderLogoMark: () => null,
 }));
 
-import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
+import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
 import { createCustomProvider } from '@/lib/customProviders';
 
 const anthropicProvider = {
@@ -215,6 +215,17 @@ const claudeRequestPathPreset = {
   },
 };
 
+const claudeOnlyPreset = {
+  id: 'claude-only',
+  name: 'Claude Only',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://claude-only.example/anthropic',
+      models: [{ id: 'claude-only-model', name: 'Claude Only Model' }],
+    },
+  },
+};
+
 function renderWizard(presetId: string) {
   return render(
     React.createElement(AddProviderWizard, {
@@ -242,6 +253,7 @@ beforeEach(() => {
           piReasoningPreset,
           explicitPiPreset,
           claudeRequestPathPreset,
+          claudeOnlyPreset,
         ],
       })),
       // 列模型失败场景兜底(Greptile P1 回归):官方 API 预设必须靠推荐模型仍可完成。
@@ -256,6 +268,12 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  it('官方 API 入口逐一显式声明 Pi 协议，不依赖 Claude runtime 派生', () => {
+    expect(OFFICIAL_API_PRESETS.anthropic?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
+    expect(OFFICIAL_API_PRESETS.openai?.runtimes.pi?.wireProtocol).toBe('openai-responses');
+    expect(OFFICIAL_API_PRESETS.xai?.runtimes.pi?.wireProtocol).toBe('openai-chat');
+  });
+
   it('presets 载入后直达表单步:名称预填预设名,出现 API Key 输入', async () => {
     renderWizard('deepseek');
 
@@ -317,7 +335,7 @@ describe('AddProviderWizard — preset 直达', () => {
       expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
     );
     expect(screen.getByDisplayValue('Anthropic API')).not.toBeNull();
-    expect(screen.getAllByText(/api\.anthropic\.com/)).toHaveLength(2);
+    expect(screen.getAllByText(/api\.anthropic\.com/)).toHaveLength(3);
   });
 
   it('官方 API 预设:列模型失败 → 第三步仍有推荐模型预勾,可完成(Greptile P1 回归)', async () => {
@@ -480,6 +498,24 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(config.runtimes['claude-code']).toMatchObject({
       requestPath: '/tenant/acme/messages',
     });
+    expect(config.runtimes.pi).toBeUndefined();
+    expect(keys.pi).toBeUndefined();
+  });
+
+  it('缺少显式 Pi runtime 的预设不会从 Claude runtime 静默派生', async () => {
+    renderWizard('claude-only');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Claude Only')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('Claude Only Model')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes['claude-code']?.models).toEqual([
+      { id: 'claude-only-model', name: 'Claude Only Model' },
+    ]);
     expect(config.runtimes.pi).toBeUndefined();
     expect(keys.pi).toBeUndefined();
   });

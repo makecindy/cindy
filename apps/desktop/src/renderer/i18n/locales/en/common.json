@@ -1405,6 +1405,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
+          "google": "Google Generative AI",
           "help": "Inherit uses the provider protocol above. Override only when this model needs a different protocol.",
           "ariaLabel": "Model protocol for {{model}}"
         },

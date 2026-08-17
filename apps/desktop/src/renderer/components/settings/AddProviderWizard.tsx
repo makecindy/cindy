@@ -31,7 +31,6 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
-import { derivePiRuntimeFromClaudeRuntime } from '@/../shared/piRuntimeInitialization';
 
 import {
   isLoopbackProviderUrl,
@@ -159,8 +158,16 @@ const ANTHROPIC_API_MODELS = [
   { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
   { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
 ];
+const OPENAI_API_MODELS = [
+  { id: 'gpt-5.5', name: 'GPT-5.5' },
+  { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
+];
+const XAI_API_MODELS = [
+  { id: 'grok-4.5', name: 'Grok 4.5' },
+  { id: 'grok-4.3', name: 'Grok 4.3' },
+];
 
-const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
+export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
   anthropic: {
     id: 'anthropic-api',
     name: 'Anthropic API',
@@ -181,6 +188,11 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
         baseUrl: 'https://api.anthropic.com',
         models: ANTHROPIC_API_MODELS,
       },
+      pi: {
+        wireProtocol: 'anthropic-messages',
+        baseUrl: 'https://api.anthropic.com',
+        models: ANTHROPIC_API_MODELS,
+      },
     },
   },
   openai: {
@@ -190,10 +202,12 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
     runtimes: {
       codex: {
         baseUrl: 'https://api.openai.com/v1',
-        models: [
-          { id: 'gpt-5.5', name: 'GPT-5.5' },
-          { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
-        ],
+        models: OPENAI_API_MODELS,
+      },
+      pi: {
+        baseUrl: 'https://api.openai.com/v1',
+        wireProtocol: 'openai-responses',
+        models: OPENAI_API_MODELS,
       },
     },
   },
@@ -205,10 +219,12 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
       codex: {
         baseUrl: 'https://api.x.ai/v1',
         wireProtocol: 'openai-chat',
-        models: [
-          { id: 'grok-4.5', name: 'Grok 4.5' },
-          { id: 'grok-4.3', name: 'Grok 4.3' },
-        ],
+        models: XAI_API_MODELS,
+      },
+      pi: {
+        baseUrl: 'https://api.x.ai/v1',
+        wireProtocol: 'openai-chat',
+        models: XAI_API_MODELS,
       },
     },
   },
@@ -921,14 +937,6 @@ export function AddProviderWizard({
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();
           if (k) keys[agent] = k;
-        }
-      }
-      const claudeRuntime = runtimes['claude-code'];
-      if (!preset.runtimes.pi && !runtimes.pi && claudeRuntime) {
-        const piRuntime = derivePiRuntimeFromClaudeRuntime(claudeRuntime);
-        if (piRuntime) {
-          runtimes.pi = piRuntime;
-          if (keys['claude-code']) keys.pi = keys['claude-code'];
         }
       }
       if (Object.keys(runtimes).length === 0) {

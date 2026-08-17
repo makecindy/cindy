@@ -425,6 +425,37 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenUrl).toBe('https://api.deepseek.com/chat/completions');
   });
 
+  it('Pi 的常用 Chat 默认仍显式进入 saved 探测，不误走 /responses', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'pi-chat',
+        name: 'Pi Chat',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://pi-chat.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'chat-model', name: 'Chat Model' }],
+          },
+        },
+      }),
+    ]);
+    setDiagnosticsKeyReader(() => 'pi-chat-key');
+
+    expect(resolveSavedProbeSpec('pi-chat', 'pi').wireProtocol).toBe('openai-chat');
+    let seenUrl = '';
+    await testProviderConnection(
+      { kind: 'saved', providerId: 'pi-chat', agent: 'pi' },
+      async (url) => {
+        seenUrl = String(url);
+        return new Response('data: [DONE]\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    );
+    expect(seenUrl).toBe('https://pi-chat.example/v1/chat/completions');
+  });
+
   it('仅选择 glm-5.3 时 saved 探测使用模型级 Responses 路由', async () => {
     setCustomProviders([
       buildUserProvider({

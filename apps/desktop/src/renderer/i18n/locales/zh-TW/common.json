@@ -1405,6 +1405,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
+          "google": "Google Generative AI",
           "help": "繼承預設會使用上方供應商協定；僅在該模型需要不同協定時覆寫。",
           "ariaLabel": "{{model}} 的模型協定"
         },

@@ -1405,6 +1405,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
+          "google": "Google Generative AI",
           "help": "継承すると上のプロバイダープロトコルを使用します。このモデルだけ別のプロトコルが必要な場合に上書きします。",
           "ariaLabel": "{{model}} のモデルプロトコル"
         },

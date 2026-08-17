@@ -45,6 +45,44 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('materializes the legacy Pi Messages protocol only for the exact Claude endpoint', () => {
+    const legacy = {
+      ...VALID_PRESET,
+      id: 'legacy-pi-messages',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://provider.example/anthropic/',
+          models: [{ id: 'm', name: 'M' }],
+        },
+        pi: {
+          baseUrl: 'https://provider.example/anthropic',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    };
+    expect(sanitizePresets([legacy])[0]?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
+
+    const differentEndpoint = {
+      ...legacy,
+      id: 'unconfigured-pi',
+      runtimes: {
+        ...legacy.runtimes,
+        pi: { ...legacy.runtimes.pi, baseUrl: 'https://provider.example/v1' },
+      },
+    };
+    expect(sanitizePresets([differentEndpoint])[0]?.runtimes.pi?.wireProtocol).toBeUndefined();
+
+    const explicit = {
+      ...legacy,
+      id: 'explicit-pi',
+      runtimes: {
+        ...legacy.runtimes,
+        pi: { ...legacy.runtimes.pi, wireProtocol: 'openai-responses' as const },
+      },
+    };
+    expect(sanitizePresets([explicit])[0]?.runtimes.pi?.wireProtocol).toBe('openai-responses');
+  });
+
   it('preserves valid per-model piApi only for supported PI protocol names', () => {
     const valid = {
       ...VALID_PRESET,

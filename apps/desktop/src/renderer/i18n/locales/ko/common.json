@@ -1405,6 +1405,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
+          "google": "Google Generative AI",
           "help": "상속하면 위의 제공자 프로토콜을 사용합니다. 이 모델에 다른 프로토콜이 필요할 때만 재정의하세요.",
           "ariaLabel": "{{model}} 모델 프로토콜"
         },

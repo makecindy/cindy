@@ -365,6 +365,7 @@ const PI_MODEL_PROTOCOL_OPTIONS: readonly {
   { value: 'anthropic-messages', labelKey: 'settings.providers.custom.modelProtocol.messages' },
   { value: 'openai-completions', labelKey: 'settings.providers.custom.modelProtocol.chat' },
   { value: 'openai-responses', labelKey: 'settings.providers.custom.modelProtocol.responses' },
+  { value: 'google-generative-ai', labelKey: 'settings.providers.custom.modelProtocol.google' },
 ];
 
 export function PiModelProtocolDropdown({

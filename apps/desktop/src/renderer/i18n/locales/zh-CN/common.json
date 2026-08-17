@@ -1405,6 +1405,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
+          "google": "Google Generative AI",
           "help": "继承默认会使用上方供应商协议；仅在该模型需要不同协议时覆盖。",
           "ariaLabel": "{{model}} 的模型协议"
         },

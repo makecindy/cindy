@@ -2,14 +2,12 @@
  * BYOM host 解析 —— 自定义 provider(pi runtime)→ pi 原生 provider spec + env。
  * 覆盖:wire protocol → pi api 映射、apiKey/none/oauth 三态、缺 key 跳过、env key 名。
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
-
-import { derivePiRuntimeFromClaudeRuntime } from '../../../shared/piRuntimeInitialization.js';
 
 vi.mock('../grok-oauth-login.js', () => ({
   hasGrokOAuthLogin: () => true,
@@ -39,8 +37,10 @@ import {
   readPiBundledModels,
   resolvePiBundledApiByModelId,
   resolvePiBundledModelById,
+  resolvePiCindyGatewayModelApi,
   type PiBundledModelInfo,
 } from '../pi-host.js';
+import { setXdGatewayModels } from '../active-catalog.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
@@ -64,6 +64,34 @@ const piBundledModel = (
   contextWindow: 272_000,
   maxTokens: 128_000,
   ...over,
+});
+
+afterEach(() => {
+  setXdGatewayModels([]);
+});
+
+describe('resolvePiCindyGatewayModelApi', () => {
+  it('uses the exact XD model protocol even while the session is on a BYOM provider', () => {
+    setXdGatewayModels([
+      {
+        id: 'gateway-messages',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
+      },
+      {
+        id: 'gateway-responses',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+    ]);
+
+    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gateway-messages')).toBe(
+      'anthropic-messages',
+    );
+    expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gateway-responses')).toBe(
+      'openai-responses',
+    );
+  });
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
@@ -740,40 +768,6 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       cost: bundled.cost,
       compat: bundled.compat,
     });
-  });
-
-  it('turns a Claude-derived wizard runtime and copied Pi key into a callable native provider', () => {
-    const derived = derivePiRuntimeFromClaudeRuntime({
-      baseUrl: 'https://api.example/anthropic',
-      headers: { 'x-tenant': 'acme' },
-      models: [{ id: 'model-a', name: 'Model A', contextWindow: 100_000 }],
-    });
-    expect(derived).not.toBeNull();
-
-    const { providers, env } = buildPiNativeProvidersFromConfigs(
-      [
-        {
-          id: 'wizard-provider',
-          name: 'Wizard Provider',
-          auth: { method: 'apiKey' },
-          runtimes: { pi: derived! },
-        },
-      ],
-      (providerId, agent) =>
-        providerId === 'wizard-provider' && agent === 'pi' ? 'wizard-secret' : null,
-    );
-
-    expect(providers).toHaveLength(1);
-    expect(providers[0]).toMatchObject({
-      id: 'wizard-provider',
-      name: 'Wizard Provider',
-      baseUrl: 'https://api.example/anthropic',
-      api: 'anthropic-messages',
-      models: [{ id: 'model-a', name: 'Model A', contextWindow: 100_000 }],
-    });
-    expect(env[providers[0].apiKeyEnvVar!]).toBe('wizard-secret');
-    expect(providers[0].headers?.['x-tenant']).toMatch(/^\$CINDY_PI_KEY_/);
-    expect(Object.values(env)).toContain('acme');
   });
 
   it('maps each explicitly configured wire protocol to the Pi API form', () => {

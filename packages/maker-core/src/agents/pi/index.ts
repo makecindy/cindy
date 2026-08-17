@@ -836,6 +836,8 @@ export class PiAgent extends BaseAgent {
       [PI_PROVIDER_ID]: {
         name: 'Cindy AI',
         baseUrl: endpoint ?? 'http://127.0.0.1:0',
+        // Structural provider default for Pi's models.json schema only. Every selectable Cindy
+        // gateway model above carries its authoritative model-level api from Model Access v3.
         api: 'anthropic-messages',
         apiKey: `$${PI_API_KEY_ENV}`,
         // 本地 loopback compat proxy 用 session headers 做订阅 OAuth 注入;远端打真上游

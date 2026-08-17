@@ -29,7 +29,7 @@ vi.mock('../../maker-host/index.js', () => ({
   getMakerIfReady: mockGetMakerIfReady,
 }));
 
-import { cleanupRemotePiDaemonsOnHost } from '../index.js';
+import { buildRemotePiQuickTestModelsJson, cleanupRemotePiDaemonsOnHost } from '../index.js';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 function makeHost(id: string): RemoteHost {
@@ -53,6 +53,24 @@ function makeSession(sessionId: string, ageMs = 60_000, lastActivityMs = 2_000_0
     isAttached: false,
   };
 }
+
+describe('buildRemotePiQuickTestModelsJson', () => {
+  it.each([
+    ['https://gateway.example', 'https://gateway.example/v1'],
+    ['https://gateway.example/v1/', 'https://gateway.example/v1'],
+  ])('uses the XD Pi Responses API root for %s', (endpoint, expectedBaseUrl) => {
+    expect(JSON.parse(buildRemotePiQuickTestModelsJson(endpoint))).toEqual({
+      providers: {
+        cindy: {
+          baseUrl: expectedBaseUrl,
+          api: 'openai-responses',
+          apiKey: '$CINDY_PI_API_KEY',
+          models: [{ id: 'dummy-quick', name: 'Quick Test' }],
+        },
+      },
+    });
+  });
+});
 
 describe('cleanupRemotePiDaemonsOnHost (real function)', () => {
   const host = makeHost('test-host');

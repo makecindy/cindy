@@ -389,6 +389,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
       'settings.providers.custom.modelProtocol.messages',
       'settings.providers.custom.modelProtocol.chat',
       'settings.providers.custom.modelProtocol.responses',
+      'settings.providers.custom.modelProtocol.google',
     ]) {
       expect(await screen.findByRole('menuitemradio', { name: optionName })).not.toBeNull();
     }
