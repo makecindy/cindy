@@ -1,0 +1,1 @@
+ALTER TABLE `schedules` ADD `active_claim_run_id` text;

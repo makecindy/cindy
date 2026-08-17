@@ -15,9 +15,97 @@ export interface ScheduleStorage {
    * 时,把 nextFireAt 置空并返回更新后的行;否则(已被另一实例认领 / 已被改期 /
    * 已暂停删除)不做任何修改并返回 null,调用方据此放弃本次触发。
    * 认领后的 nextFireAt 由引擎在 run 结束时按 recurring 语义重排;进程中途崩溃
-   * 留下的空 nextFireAt 由任一实例下次 start() 的归一逻辑重新排期。
+   * 留下的空 nextFireAt 由僵尸 run 清扫后的归一逻辑重新排期。
    */
   claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null>;
+
+  /**
+   * 原子认领一次自动触发并写入对应的 running run。多实例启动归一会用
+   * running run 判断 nextFireAt=NULL 是否代表"另一个实例正在执行";因此
+   * claim 与 running 行必须同事务可见,不能先清 nextFireAt 再晚些 insertRun。
+   * 实现同时把 schedules.activeClaimRunId 写成 run.id 作为"这条 running run
+   * 是自动 claim owner"的标记;手动 runNow 可更新 lastFiredAt,但不能覆盖 claim
+   * 标记。自动 claim 不能提前写 lastFiredAt,否则崩溃的一次性任务会被当成已消费。
+   */
+  claimDueFireAndInsertRun(
+    id: string,
+    expectedNextFireAt: number,
+    run: ScheduleRun,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Return IDs for currently running rows on one schedule. Startup and stale-run
+   * cleanup use this only for legacy rows that predate activeClaimRunId.
+   */
+  listRunningRunIds(scheduleId: string): Promise<string[]>;
+
+  /**
+   * Complete a deferred automatic claim in one conditional write. The update must
+   * only clear the active claim marker that belongs to `claimRunId`.
+   */
+  rescheduleDeferredAutomaticClaim(
+    id: string,
+    claimRunId: string,
+    retryAt: number,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Complete an automatic claim while only allowing `claimRunId` to clear the
+   * active claim marker or publish a new nextFireAt. Terminal timing/status
+   * fields may still land for a stale owner so one-shot runs are not revived by
+   * a concurrent stale-claim replan.
+   */
+  completeAutomaticClaim(
+    id: string,
+    claimRunId: string,
+    firedAt: number,
+    patch: Partial<Pick<Schedule, 'lastFinishedAt' | 'nextFireAt' | 'status'>>,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Normalize an active schedule whose automatic claim marker is still the same
+   * orphan candidate observed by the scheduler. The implementation must be a
+   * compare-and-swap so a finishing owner cannot interleave between the startup
+   * running-row check and the re-arm write.
+   */
+  normalizeOrphanedAutomaticClaim(
+    id: string,
+    expectedActiveClaimRunId: string | undefined,
+    nextFireAt: number,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Finish a deferred runNow while atomically preserving a live automatic claim
+   * if one appeared after runNow read the schedule snapshot. `deferredFiredAt`
+   * is the optimistic manual timestamp written by this deferred run; restore the
+   * snapshot only while lastFiredAt still equals that value.
+   */
+  deferRunNowWithLiveClaimGuard(
+    id: string,
+    previousLastFiredAt: number | undefined,
+    deferredFiredAt: number,
+    retryAt: number,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Pause a schedule while atomically preserving a live automatic claim if its
+   * activeClaimRunId points at a running row at the moment the pause commits.
+   */
+  pauseWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Resume a schedule while atomically preserving a live automatic claim if its
+   * activeClaimRunId still points at a running row. This prevents a remote owner
+   * completing between a separate hasRunningRuns() read and the resume update.
+   */
+  resumeWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+    nextFireAt: number,
+  ): Promise<Schedule | null>;
 
   insertRun(run: ScheduleRun): Promise<ScheduleRun>;
   updateRun(id: string, patch: Partial<ScheduleRun>): Promise<ScheduleRun | null>;
@@ -66,5 +154,5 @@ export interface ScheduleStorage {
    * 不能用 listRuns 的历史展示查询——它带条数上限，活跃 claim run 被更新的
    * runNow/终态行挤出窗口时会漏判（codex review P2）。
    */
-  hasRunningRuns(scheduleId?: string): Promise<boolean>;
+  hasRunningRuns(scheduleId?: string, opts?: { runId?: string }): Promise<boolean>;
 }

@@ -100,16 +100,138 @@ class InMemoryStorage implements ScheduleStorage {
     return [];
   }
   async touchRunHeartbeats(): Promise<void> {}
-  async hasRunningRuns(scheduleId?: string): Promise<boolean> {
+  async hasRunningRuns(scheduleId?: string, opts?: { runId?: string }): Promise<boolean> {
     return [...this.runs.values()].some(
-      (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
+      (r) =>
+        r.status === 'running' &&
+        (scheduleId === undefined || r.scheduleId === scheduleId) &&
+        (opts?.runId === undefined || r.id === opts.runId),
     );
+  }
+  async listRunningRunIds(scheduleId: string): Promise<string[]> {
+    return [...this.runs.values()]
+      .filter((r) => r.status === 'running' && r.scheduleId === scheduleId)
+      .sort((a, b) => b.firedAt - a.firedAt)
+      .map((r) => r.id);
+  }
+  async rescheduleDeferredAutomaticClaim(
+    id: string,
+    claimRunId: string,
+    retryAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.activeClaimRunId !== claimRunId) return null;
+    ex.nextFireAt = retryAt;
+    ex.activeClaimRunId = undefined;
+    return { ...ex };
+  }
+  async completeAutomaticClaim(
+    id: string,
+    claimRunId: string,
+    firedAt: number,
+    patch: Partial<Pick<Schedule, 'lastFinishedAt' | 'nextFireAt' | 'status'>>,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex) return null;
+    const ownsClaim = ex.activeClaimRunId === claimRunId;
+    const merged: Schedule = {
+      ...ex,
+      ...patch,
+      nextFireAt: ownsClaim && Object.prototype.hasOwnProperty.call(patch, 'nextFireAt')
+        ? patch.nextFireAt
+        : ex.nextFireAt,
+      activeClaimRunId: ownsClaim ? undefined : ex.activeClaimRunId,
+    };
+    if ((ex.lastFiredAt ?? Number.NEGATIVE_INFINITY) <= firedAt) {
+      merged.lastFiredAt = firedAt;
+    }
+    this.schedules.set(id, merged);
+    return { ...merged };
+  }
+  async deferRunNowWithLiveClaimGuard(
+    id: string,
+    previousLastFiredAt: number | undefined,
+    deferredFiredAt: number,
+    retryAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex) return null;
+    const liveClaimId =
+      ex.activeClaimRunId !== undefined &&
+      await this.hasRunningRuns(id, { runId: ex.activeClaimRunId })
+        ? ex.activeClaimRunId
+        : undefined;
+    if (ex.lastFiredAt === deferredFiredAt) {
+      ex.lastFiredAt = previousLastFiredAt;
+    }
+    if (liveClaimId === undefined) {
+      ex.nextFireAt = retryAt;
+    }
+    ex.activeClaimRunId = liveClaimId;
+    return { ...ex };
+  }
+  async normalizeOrphanedAutomaticClaim(
+    id: string,
+    expectedActiveClaimRunId: string | undefined,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.status !== 'active' || ex.nextFireAt !== undefined) return null;
+    if (ex.activeClaimRunId !== expectedActiveClaimRunId) return null;
+    ex.nextFireAt = nextFireAt;
+    ex.activeClaimRunId = undefined;
+    return { ...ex };
+  }
+  async pauseWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex) return null;
+    const liveClaimId =
+      ex.activeClaimRunId !== undefined &&
+      await this.hasRunningRuns(id, { runId: ex.activeClaimRunId })
+        ? ex.activeClaimRunId
+        : undefined;
+    ex.status = 'paused';
+    ex.updatedAt = updatedAt;
+    ex.activeClaimRunId = liveClaimId;
+    return { ...ex };
+  }
+  async resumeWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+    nextFireAt: number,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex) return null;
+    const liveClaim =
+      ex.activeClaimRunId !== undefined &&
+      await this.hasRunningRuns(id, { runId: ex.activeClaimRunId });
+    ex.status = 'active';
+    ex.updatedAt = updatedAt;
+    ex.nextFireAt = liveClaim ? undefined : nextFireAt;
+    if (!liveClaim) ex.activeClaimRunId = undefined;
+    return { ...ex };
   }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
+    return { ...ex };
+  }
+  async claimDueFireAndInsertRun(
+    id: string,
+    expectedNextFireAt: number,
+    run: ScheduleRun,
+  ): Promise<Schedule | null> {
+    if (run.scheduleId !== id) throw new Error('run.scheduleId must match scheduleId');
+    const ex = this.schedules.get(id);
+    if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
+    ex.nextFireAt = undefined;
+    ex.activeClaimRunId = run.id;
+    this.runs.set(run.id, { ...run });
     return { ...ex };
   }
 }

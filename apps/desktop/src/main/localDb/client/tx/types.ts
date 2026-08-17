@@ -8,6 +8,12 @@ export type DbTxName =
   | 'embedding.commit'
   | 'embedding.recordFailures'
   | 'embedding.enqueue'
+  | 'scheduler.claimDueFireAndInsertRun'
+  | 'scheduler.completeAutomaticClaim'
+  | 'scheduler.normalizeOrphanedAutomaticClaim'
+  | 'scheduler.deferRunNowWithLiveClaimGuard'
+  | 'scheduler.pauseWithLiveClaimGuard'
+  | 'scheduler.resumeWithLiveClaimGuard'
   | 'orca.reserveWorkerCreation'
   | 'orca.renewWorkerCreationReservation'
   | 'orca.releaseWorkerCreationReservation'
@@ -187,6 +193,66 @@ export interface EmbeddingEnqueueArgs {
     modelId: string;
     vecTable: string;
   }>;
+}
+
+export interface SchedulerClaimDueFireAndInsertRunArgs {
+  scheduleId: string;
+  expectedNextFireAt: number;
+  run: {
+    id: string;
+    scheduleId: string;
+    sessionId?: string | null;
+    firedAt: number;
+    finishedAt?: number | null;
+    status: string;
+    errorMsg?: string | null;
+    costUsd?: number | null;
+    estimatedValueUsd?: number | null;
+    costAmount?: number | null;
+    estimatedValueAmount?: number | null;
+    costCurrency?: 'CNY' | 'USD' | null;
+    costIsApproximate?: boolean | number | null;
+    costAttribution?: string | null;
+    resultText?: string | null;
+    preRunHookResult?: string | null;
+    readAt?: number | null;
+    heartbeatAt?: number | null;
+  };
+}
+
+export interface SchedulerResumeWithLiveClaimGuardArgs {
+  scheduleId: string;
+  updatedAt: number;
+  nextFireAt: number;
+}
+
+export interface SchedulerCompleteAutomaticClaimArgs {
+  scheduleId: string;
+  claimRunId: string;
+  firedAt: number;
+  patch: {
+    lastFinishedAt?: number | null;
+    nextFireAt?: number | null;
+    status?: string;
+  };
+}
+
+export interface SchedulerDeferRunNowWithLiveClaimGuardArgs {
+  scheduleId: string;
+  previousLastFiredAt?: number | null;
+  deferredFiredAt: number;
+  retryAt: number;
+}
+
+export interface SchedulerNormalizeOrphanedAutomaticClaimArgs {
+  scheduleId: string;
+  expectedActiveClaimRunId?: string | null;
+  nextFireAt: number;
+}
+
+export interface SchedulerPauseWithLiveClaimGuardArgs {
+  scheduleId: string;
+  updatedAt: number;
 }
 
 /**
@@ -746,6 +812,12 @@ export type DbTxArgsByName = {
   'embedding.commit': EmbeddingCommitArgs;
   'embedding.recordFailures': EmbeddingRecordFailuresArgs;
   'embedding.enqueue': EmbeddingEnqueueArgs;
+  'scheduler.claimDueFireAndInsertRun': SchedulerClaimDueFireAndInsertRunArgs;
+  'scheduler.completeAutomaticClaim': SchedulerCompleteAutomaticClaimArgs;
+  'scheduler.normalizeOrphanedAutomaticClaim': SchedulerNormalizeOrphanedAutomaticClaimArgs;
+  'scheduler.deferRunNowWithLiveClaimGuard': SchedulerDeferRunNowWithLiveClaimGuardArgs;
+  'scheduler.pauseWithLiveClaimGuard': SchedulerPauseWithLiveClaimGuardArgs;
+  'scheduler.resumeWithLiveClaimGuard': SchedulerResumeWithLiveClaimGuardArgs;
   'orca.reserveWorkerCreation': OrcaReserveWorkerCreationArgs;
   'orca.renewWorkerCreationReservation': OrcaRenewWorkerCreationReservationArgs;
   'orca.releaseWorkerCreationReservation': OrcaReleaseWorkerCreationReservationArgs;
@@ -791,6 +863,12 @@ export type DbTxResultByName = {
   'embedding.commit': undefined;
   'embedding.recordFailures': { failCount: number };
   'embedding.enqueue': { inserted: number; skipped: number };
+  'scheduler.claimDueFireAndInsertRun': boolean;
+  'scheduler.completeAutomaticClaim': boolean;
+  'scheduler.normalizeOrphanedAutomaticClaim': boolean;
+  'scheduler.deferRunNowWithLiveClaimGuard': boolean;
+  'scheduler.pauseWithLiveClaimGuard': boolean;
+  'scheduler.resumeWithLiveClaimGuard': boolean;
   'orca.reserveWorkerCreation': OrcaReserveWorkerCreationResult;
   'orca.renewWorkerCreationReservation': boolean;
   'orca.releaseWorkerCreationReservation': undefined;

@@ -889,6 +889,7 @@ async function attemptStartScheduler(): Promise<void> {
     const scheduler = await startScheduler({
       maker,
       getDb: () => getDbClient().drizzle,
+      getDbClient: () => getDbClient(),
       getMainWindow: () => mainWindowRef,
       feishuIm,
       logger: createSchedulerLogger('scheduler-host'),

@@ -53,6 +53,18 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return embeddingRecordFailures(db, txArgs);
     case 'embedding.enqueue':
       return embeddingEnqueue(db, txArgs);
+    case 'scheduler.claimDueFireAndInsertRun':
+      return schedulerClaimDueFireAndInsertRun(db, txArgs);
+    case 'scheduler.completeAutomaticClaim':
+      return schedulerCompleteAutomaticClaim(db, txArgs);
+    case 'scheduler.normalizeOrphanedAutomaticClaim':
+      return schedulerNormalizeOrphanedAutomaticClaim(db, txArgs);
+    case 'scheduler.deferRunNowWithLiveClaimGuard':
+      return schedulerDeferRunNowWithLiveClaimGuard(db, txArgs);
+    case 'scheduler.pauseWithLiveClaimGuard':
+      return schedulerPauseWithLiveClaimGuard(db, txArgs);
+    case 'scheduler.resumeWithLiveClaimGuard':
+      return schedulerResumeWithLiveClaimGuard(db, txArgs);
     case 'orca.reserveWorkerCreation':
       return orcaReserveWorkerCreation(db, txArgs);
     case 'orca.renewWorkerCreationReservation':
@@ -1675,6 +1687,262 @@ function orcaReserveWorkerCreation(db: Database.Database, args: unknown): unknow
       (id, team_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`)
       .run(reservationId, teamId, label, now, expiresAt);
     return { ok: true, occupiedSlotsBefore };
+  })();
+}
+
+function schedulerClaimDueFireAndInsertRun(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.claimDueFireAndInsertRun args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const expectedNextFireAt = expectNumber(payload.expectedNextFireAt, 'expectedNextFireAt');
+  const run = asRecord(payload.run, 'run');
+  const runScheduleId = expectString(run.scheduleId, 'run.scheduleId');
+  if (runScheduleId !== scheduleId) {
+    throw invalidArgs('run.scheduleId must match scheduleId');
+  }
+
+  return db.transaction(() => {
+    const claim = db.prepare(
+      `UPDATE schedules
+       SET next_fire_at = NULL,
+           active_claim_run_id = ?
+       WHERE id = ? AND status = 'active' AND next_fire_at = ?`,
+    ).run(
+      expectString(run.id, 'run.id'),
+      scheduleId,
+      expectedNextFireAt,
+    );
+    if (claim.changes === 0) return false;
+
+    db.prepare(
+      `INSERT INTO schedule_runs (
+        id, schedule_id, session_id, fired_at, finished_at, status, error_msg,
+        cost_usd, estimated_value_usd, cost_amount, estimated_value_amount,
+        cost_currency, cost_is_approximate, cost_attribution, result_text,
+        pre_run_hook_result, read_at, heartbeat_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      expectString(run.id, 'run.id'),
+      runScheduleId,
+      nullableString(run.sessionId),
+      expectNumber(run.firedAt, 'run.firedAt'),
+      nullableNumber(run.finishedAt),
+      expectString(run.status, 'run.status'),
+      nullableString(run.errorMsg),
+      run.costUsd == null ? 0 : expectNumber(run.costUsd, 'run.costUsd'),
+      run.estimatedValueUsd == null
+        ? 0
+        : expectNumber(run.estimatedValueUsd, 'run.estimatedValueUsd'),
+      run.costAmount == null ? 0 : expectNumber(run.costAmount, 'run.costAmount'),
+      run.estimatedValueAmount == null
+        ? 0
+        : expectNumber(run.estimatedValueAmount, 'run.estimatedValueAmount'),
+      nullableString(run.costCurrency),
+      run.costIsApproximate === true || run.costIsApproximate === 1 ? 1 : 0,
+      nullableString(run.costAttribution) ?? 'exact',
+      nullableString(run.resultText),
+      nullableString(run.preRunHookResult),
+      nullableNumber(run.readAt),
+      nullableNumber(run.heartbeatAt),
+    );
+    return true;
+  })();
+}
+
+function schedulerCompleteAutomaticClaim(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.completeAutomaticClaim args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const claimRunId = expectString(payload.claimRunId, 'claimRunId');
+  const firedAt = expectNumber(payload.firedAt, 'firedAt');
+  const patch = asRecord(payload.patch, 'patch');
+  const hasPatch = (key: string) => Object.prototype.hasOwnProperty.call(patch, key);
+
+  return db.transaction(() => {
+    const setClauses = [
+      `last_fired_at = CASE
+        WHEN last_fired_at IS NULL OR last_fired_at <= ? THEN ?
+        ELSE last_fired_at
+      END`,
+      `active_claim_run_id = CASE
+        WHEN active_claim_run_id = ? THEN NULL
+        ELSE active_claim_run_id
+      END`,
+    ];
+    const params: unknown[] = [firedAt, firedAt, claimRunId];
+
+    if (hasPatch('lastFinishedAt')) {
+      setClauses.push('last_finished_at = ?');
+      params.push(nullableNumber(patch.lastFinishedAt));
+    }
+    if (hasPatch('nextFireAt')) {
+      setClauses.push(`next_fire_at = CASE
+        WHEN active_claim_run_id = ? THEN ?
+        ELSE next_fire_at
+      END`);
+      params.push(claimRunId, nullableNumber(patch.nextFireAt));
+    }
+    if (hasPatch('status')) {
+      setClauses.push('status = ?');
+      params.push(expectString(patch.status, 'patch.status'));
+    }
+
+    const result = db
+      .prepare(`UPDATE schedules SET ${setClauses.join(', ')} WHERE id = ?`)
+      .run(...params, scheduleId);
+    return result.changes > 0;
+  })();
+}
+
+function schedulerDeferRunNowWithLiveClaimGuard(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.deferRunNowWithLiveClaimGuard args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const previousLastFiredAt = nullableNumber(payload.previousLastFiredAt);
+  const deferredFiredAt = expectNumber(payload.deferredFiredAt, 'deferredFiredAt');
+  const retryAt = expectNumber(payload.retryAt, 'retryAt');
+
+  return db.transaction(() => {
+    const row = db
+      .prepare('SELECT active_claim_run_id FROM schedules WHERE id = ? LIMIT 1')
+      .get(scheduleId) as { active_claim_run_id?: unknown } | undefined;
+    if (!row) return false;
+    const activeClaimRunId =
+      typeof row.active_claim_run_id === 'string' ? row.active_claim_run_id : null;
+    const liveClaim =
+      activeClaimRunId !== null &&
+      db
+        .prepare(
+          "SELECT 1 FROM schedule_runs WHERE id = ? AND schedule_id = ? AND status = 'running' LIMIT 1",
+        )
+        .get(activeClaimRunId, scheduleId) !== undefined;
+
+    const result = liveClaim
+      ? db
+          .prepare(
+            `UPDATE schedules
+             SET last_fired_at = CASE
+                   WHEN last_fired_at = ? THEN ?
+                   ELSE last_fired_at
+                 END,
+                 active_claim_run_id = ?
+             WHERE id = ?`,
+          )
+          .run(deferredFiredAt, previousLastFiredAt, activeClaimRunId, scheduleId)
+      : db
+          .prepare(
+            `UPDATE schedules
+             SET last_fired_at = CASE
+                   WHEN last_fired_at = ? THEN ?
+                   ELSE last_fired_at
+                 END,
+                 next_fire_at = ?,
+                 active_claim_run_id = NULL
+             WHERE id = ?`,
+          )
+          .run(deferredFiredAt, previousLastFiredAt, retryAt, scheduleId);
+    return result.changes > 0;
+  })();
+}
+
+function schedulerNormalizeOrphanedAutomaticClaim(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.normalizeOrphanedAutomaticClaim args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const expectedActiveClaimRunId = nullableString(payload.expectedActiveClaimRunId);
+  const nextFireAt = expectNumber(payload.nextFireAt, 'nextFireAt');
+  const claimPredicate =
+    expectedActiveClaimRunId === null
+      ? 'active_claim_run_id IS NULL'
+      : 'active_claim_run_id = ?';
+  const params =
+    expectedActiveClaimRunId === null
+      ? [nextFireAt, scheduleId]
+      : [nextFireAt, scheduleId, expectedActiveClaimRunId];
+  const result = db
+    .prepare(
+      `UPDATE schedules
+       SET next_fire_at = ?,
+           active_claim_run_id = NULL
+       WHERE id = ?
+         AND status = 'active'
+         AND next_fire_at IS NULL
+         AND ${claimPredicate}`,
+    )
+    .run(...params);
+  return result.changes > 0;
+}
+
+function schedulerPauseWithLiveClaimGuard(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.pauseWithLiveClaimGuard args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+
+  return db.transaction(() => {
+    const row = db
+      .prepare('SELECT active_claim_run_id FROM schedules WHERE id = ? LIMIT 1')
+      .get(scheduleId) as { active_claim_run_id?: unknown } | undefined;
+    if (!row) return false;
+    const activeClaimRunId =
+      typeof row.active_claim_run_id === 'string' ? row.active_claim_run_id : null;
+    const liveClaim =
+      activeClaimRunId !== null &&
+      db
+        .prepare(
+          "SELECT 1 FROM schedule_runs WHERE id = ? AND schedule_id = ? AND status = 'running' LIMIT 1",
+        )
+        .get(activeClaimRunId, scheduleId) !== undefined;
+
+    const result = db
+      .prepare(
+        `UPDATE schedules
+         SET status = 'paused',
+             updated_at = ?,
+             active_claim_run_id = ?
+         WHERE id = ?`,
+      )
+      .run(
+        updatedAt,
+        liveClaim ? activeClaimRunId : null,
+        scheduleId,
+      );
+    return result.changes > 0;
+  })();
+}
+
+function schedulerResumeWithLiveClaimGuard(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.resumeWithLiveClaimGuard args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const nextFireAt = expectNumber(payload.nextFireAt, 'nextFireAt');
+
+  return db.transaction(() => {
+    const row = db
+      .prepare('SELECT active_claim_run_id FROM schedules WHERE id = ? LIMIT 1')
+      .get(scheduleId) as { active_claim_run_id?: unknown } | undefined;
+    if (!row) return false;
+    const activeClaimRunId =
+      typeof row.active_claim_run_id === 'string' ? row.active_claim_run_id : null;
+    const liveClaim =
+      activeClaimRunId !== null &&
+      db
+        .prepare(
+          "SELECT 1 FROM schedule_runs WHERE id = ? AND schedule_id = ? AND status = 'running' LIMIT 1",
+        )
+        .get(activeClaimRunId, scheduleId) !== undefined;
+
+    const result = db
+      .prepare(
+        `UPDATE schedules
+         SET status = 'active',
+             updated_at = ?,
+             next_fire_at = ?,
+             active_claim_run_id = ?
+         WHERE id = ?`,
+      )
+      .run(
+        updatedAt,
+        liveClaim ? null : nextFireAt,
+        liveClaim ? activeClaimRunId : null,
+        scheduleId,
+      );
+    return result.changes > 0;
   })();
 }
 

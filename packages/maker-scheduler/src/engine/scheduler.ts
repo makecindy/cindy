@@ -488,10 +488,46 @@ export class Scheduler extends EventEmitter {
         this.activeSchedules.set(current.id, current);
         continue;
       }
+      // Empty nextFireAt can mean either "needs startup normalization" or
+      // "another instance owns an automatic claim". Compute first so manual /
+      // one-shot schedules that cannot be re-armed do not pay a running-run
+      // query, then preserve only a live automatic owner.
+      const claimRunId =
+        current.nextFireAt === undefined && next !== undefined
+          ? await this.findLiveClaimRunId(current)
+          : undefined;
+      if (
+        current.nextFireAt === undefined &&
+        next !== undefined &&
+        claimRunId !== undefined
+      ) {
+        if (current.activeClaimRunId === undefined) {
+          current = (await this.storage.update(current.id, { activeClaimRunId: claimRunId })) ?? current;
+        }
+        this.activeSchedules.set(current.id, current);
+        continue;
+      }
       if (next !== current.nextFireAt) {
-        const updated = await this.storage.update(current.id, { nextFireAt: next });
-        if (updated) current = updated;
-        else current = { ...current, nextFireAt: next };
+        if (current.nextFireAt === undefined && next !== undefined) {
+          const updated = await this.storage.normalizeOrphanedAutomaticClaim(
+            current.id,
+            current.activeClaimRunId,
+            next,
+          );
+          if (updated) {
+            current = updated;
+          } else {
+            const fresh = await this.storage.get(current.id);
+            if (fresh) current = fresh;
+          }
+        } else {
+          const updated = await this.storage.update(current.id, {
+            nextFireAt: next,
+            activeClaimRunId: undefined,
+          });
+          if (updated) current = updated;
+          else current = { ...current, nextFireAt: next, activeClaimRunId: undefined };
+        }
       }
       this.activeSchedules.set(current.id, current);
     }
@@ -666,22 +702,30 @@ export class Scheduler extends EventEmitter {
   }
 
   private async fireOneInner(schedule: Schedule, runId: string): Promise<void> {
-    // 跨进程互斥:先在 DB 对这次触发做原子认领(CAS:nextFireAt 必须仍等于本进程
-    // 内存里看到的值)。dev / release 双开共用同一 DB 时两边引擎会同时判定"到点
-    // 了",只有认领成功的一方真正执行;失败方刷新内存副本后放弃,保证同一次到点
-    // 只跑一次。认领把 nextFireAt 置空(运行期间无下次排期),结束时按 recurring
-    // 语义重排;若进程运行中途崩溃,任一实例下次 start() 的归一会重新排期。
-    // ⚠️ 已知窄窗口:空 nextFireAt 同时承担"in-flight 认领"和"崩溃残留"两种语义,
-    // start() 归一无法区分——另一实例在本实例长 run 期间启动,会把认领标记重排回
-    // 可触发时间,该任务可能被并发跑一次。根治需给认领加租约字段(claim owner +
-    // 心跳续期,follow-up);过渡期双开场景建议其中一端开 passive 模式让位。
+    // 跨进程互斥:自动触发必须把 schedule 认领(CAS 清 nextFireAt)与 running run
+    // 写入放在同一个 storage 原子操作里。否则另一实例恰好在两次写之间启动时,
+    // 会把"已认领但还没 run 行"误判成崩溃残留并重新排期,长跑任务仍可能重复执行。
+    const firedAt = this.clock.now();
+    const initialRun: ScheduleRun = {
+      id: runId,
+      scheduleId: schedule.id,
+      firedAt,
+      status: 'running',
+      // Script 不产生 agent token，零费用是确定值；agent 费用在 turn done 后异步归因。
+      costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
+      heartbeatAt: firedAt,
+    };
     if (schedule.nextFireAt !== undefined) {
       let claimed: Schedule | null;
       try {
-        claimed = await this.storage.claimDueFire(schedule.id, schedule.nextFireAt);
+        claimed = await this.storage.claimDueFireAndInsertRun(
+          schedule.id,
+          schedule.nextFireAt,
+          initialRun,
+        );
       } catch (err) {
         // DB 竞争(如另一进程持写锁)拿不到结论 → 原样放回内存,下个 tick 重试。
-        this.logger?.warn?.('scheduler: claimDueFire errored, retry next tick', {
+        this.logger?.warn?.('scheduler: claimDueFireAndInsertRun errored, retry next tick', {
           scheduleId: schedule.id,
           error: String(err),
         });
@@ -701,9 +745,9 @@ export class Scheduler extends EventEmitter {
       schedule = claimed;
       // The CAS protects the fire time, not the rest of the row. Another
       // instance can therefore change cron metadata while retaining the same
-      // nextFireAt and still return its new row here. Validate the claimed
-      // source of truth before creating a run so that 30-second cache windows
-      // cannot execute a newly malformed schedule once.
+      // nextFireAt and still return its new row here. Validate the claimed source
+      // of truth so 30-second cache windows cannot keep executing a malformed
+      // schedule.
       try {
         computeNextFireAt(schedule, this.clock.now());
         this.invalidScheduleIds.delete(schedule.id);
@@ -713,26 +757,20 @@ export class Scheduler extends EventEmitter {
           scheduleId: schedule.id,
           error: String(err),
         });
+        await this.storage.update(schedule.id, { activeClaimRunId: undefined });
+        await this.storage.deleteRun(runId);
+        this.activeSchedules.delete(schedule.id);
+        return;
+      }
+    } else {
+      try {
+        await this.storage.insertRun(initialRun);
+      } catch (err) {
+        this.logger?.error?.('insertRun failed', err);
         return;
       }
     }
     this.updateInflightAttempt(runId, 'persisting');
-    const firedAt = this.clock.now();
-    const initialRun: ScheduleRun = {
-      id: runId,
-      scheduleId: schedule.id,
-      firedAt,
-      status: 'running',
-      // Script 不产生 agent token，零费用是确定值；agent 费用在 turn done 后异步归因。
-      costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
-      heartbeatAt: firedAt,
-    };
-    try {
-      await this.storage.insertRun(initialRun);
-    } catch (err) {
-      this.logger?.error?.('insertRun failed', err);
-      return;
-    }
     // stop() 竞态守卫(codex review P1):前置 await(claimDueFire/insertRun)期间
     // stop() 会清掉 attempt,且此时还没有 controller 可 abort 本 continuation。恢复后
     // attempt 已不在账就不得再登记 controller/索引——悬挂登记会让停机后同实例的每次
@@ -827,7 +865,12 @@ export class Scheduler extends EventEmitter {
       }
       this.silencedRuns.delete(runId);
       const retryAt = finishedAt + (deferRetryMs ?? 60_000);
-      const updated = await this.storage.update(schedule.id, { nextFireAt: retryAt });
+      const updated =
+        (await this.storage.rescheduleDeferredAutomaticClaim(
+          schedule.id,
+          runId,
+          retryAt,
+        )) ?? (await this.storage.get(schedule.id));
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
       }
@@ -953,6 +996,15 @@ export class Scheduler extends EventEmitter {
     // agent 调 schedule_update 自适应降档改 cron）。用 fire 时刻的快照重排会把
     // 刚改好的新节奏覆盖回旧值。行已不存在时回退快照（storage.update 是 no-op）。
     const current = (await this.storage.get(schedule.id)) ?? schedule;
+    const completeAutomaticClaim = async (
+      patch: Partial<Pick<Schedule, 'lastFinishedAt' | 'nextFireAt' | 'status'>>,
+    ): Promise<Schedule | null> => {
+      const updated = await this.storage.completeAutomaticClaim(schedule.id, runId, firedAt, patch);
+      if (updated === null) {
+        return await this.storage.get(schedule.id);
+      }
+      return updated;
+    };
     if (current.recurring) {
       // intervalMs 模式：finishedAt + N（时间已经走到 finishedAt，不需要再 max(now,...)）。
       // cron 模式：保持原行为，从 finishedAt 找下一个壁钟槽位。
@@ -960,8 +1012,7 @@ export class Scheduler extends EventEmitter {
         current.intervalMs !== undefined
           ? finishedAt + current.intervalMs
           : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone);
-      const updated = await this.storage.update(schedule.id, {
-        lastFiredAt: firedAt,
+      const updated = await completeAutomaticClaim({
         lastFinishedAt: finishedAt,
         nextFireAt: next,
       });
@@ -974,13 +1025,11 @@ export class Scheduler extends EventEmitter {
       // 不覆盖 'paused'，只补 timing 字段；行已删（delete 豁免场景）storage.update
       // 是 no-op，直接写 'expired' 也安全。
       if (current.status === 'paused') {
-        await this.storage.update(schedule.id, {
-          lastFiredAt: firedAt,
+        await completeAutomaticClaim({
           lastFinishedAt: finishedAt,
         });
       } else {
-        await this.storage.update(schedule.id, {
-          lastFiredAt: firedAt,
+        await completeAutomaticClaim({
           lastFinishedAt: finishedAt,
           status: 'expired',
           nextFireAt: undefined,
@@ -1121,10 +1170,12 @@ export class Scheduler extends EventEmitter {
       // schedule.lastFiredAt。否则:① 顺延却显示成"已触发",违背"顺延不留可见记录";
       // ② 对 recurring=false 的 Once 任务,lastFiredAt 一旦落地,重启时
       // computeNextFireAt 会因 lastFiredAt 已设而返回 undefined → 顺延的重试被吞掉。
-      const updated = await this.storage.update(schedule.id, {
-        nextFireAt: retryAt,
-        lastFiredAt: schedule.lastFiredAt,
-      });
+      const updated = await this.storage.deferRunNowWithLiveClaimGuard(
+        schedule.id,
+        schedule.lastFiredAt,
+        firedAt,
+        retryAt,
+      );
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(updated.id, updated);
       }
@@ -1465,7 +1516,7 @@ export class Scheduler extends EventEmitter {
     // exemptRunId:调用方自己所在的 run(agent 在任务内 pause 自己的 schedule)不 abort,
     // 让它自然跑完 —— 语义与豁免理由见 abortInflightAndWait。
     await this.abortInflightAndWait(id, opts?.exemptRunId);
-    const updated = await this.storage.update(id, { status: 'paused', updatedAt: this.clock.now() });
+    const updated = await this.storage.pauseWithLiveClaimGuard(id, this.clock.now());
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
@@ -1491,11 +1542,7 @@ export class Scheduler extends EventEmitter {
       existing.intervalMs !== undefined
         ? now + existing.intervalMs
         : nextCronOrMonthlyFire(existing.cronExpr, now, existing.timezone);
-    const updated = await this.storage.update(id, {
-      status: 'active',
-      updatedAt: now,
-      nextFireAt: next,
-    });
+    const updated = await this.storage.resumeWithLiveClaimGuard(id, now, next);
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.set(id, updated);
@@ -1717,19 +1764,38 @@ export class Scheduler extends EventEmitter {
       if (!schedule || schedule.status !== 'active') return;
       // nextFireAt 仍在 = 悬置的不是认领(如 runNow 僵尸),排期没坏,不动。
       if (schedule.nextFireAt !== undefined) return;
-      // 该 schedule 仍有 running 行(如清的是 runNow 僵尸、cron 认领正被另一活
-      // 实例执行)→ 不抢排,等执行方 fireOne 收口时按 recurring 语义重排。
-      // 必须用无上限的状态查询:listRuns 带展示上限,活跃 claim run 被更新的
-      // runNow/终态行挤出窗口会漏判并误补排(codex review P2)。
-      if (await this.storage.hasRunningRuns(scheduleId)) return;
+      // 该 schedule 仍有 live automatic claim → 不抢排,等执行方 fireOne 收口时按
+      // recurring 语义重排。手动 runNow 的 running 行不能阻止崩溃认领补排。
+      const claimRunId = await this.findLiveClaimRunId(schedule);
+      if (claimRunId !== undefined) {
+        if (schedule.activeClaimRunId === undefined) {
+          const updated = await this.storage.update(scheduleId, { activeClaimRunId: claimRunId });
+          if (updated && updated.status === 'active') {
+            this.activeSchedules.set(scheduleId, updated);
+          }
+        }
+        return;
+      }
       // manual / 已消耗的一次性任务 computeNextFireAt 返回 undefined → 与 start()
       // 归一同款:保持无排期,不强行续命。
       const next = computeNextFireAt(schedule, now);
-      if (next === undefined) return;
-      const updated = await this.storage.update(scheduleId, { nextFireAt: next });
+      if (next === undefined) {
+        if (schedule.activeClaimRunId !== undefined) {
+          await this.storage.update(scheduleId, { activeClaimRunId: undefined });
+        }
+        return;
+      }
+      const updated = await this.storage.normalizeOrphanedAutomaticClaim(
+        scheduleId,
+        schedule.activeClaimRunId,
+        next,
+      );
       // 内存副本同步跟上,不等下一轮 30s DB 同步。
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(scheduleId, updated);
+      } else if (!updated) {
+        const fresh = await this.storage.get(scheduleId);
+        if (fresh && fresh.status === 'active') this.activeSchedules.set(scheduleId, fresh);
       }
       this.logger?.info?.('scheduler: rescheduled orphaned claim after sweep', {
         scheduleId,
@@ -2066,6 +2132,17 @@ export class Scheduler extends EventEmitter {
     if (signal.aborted) return true;
     if ((schedule.executionMode ?? 'agent') === 'script') return false;
     return runError !== undefined && /abort/i.test(runError);
+  }
+
+  private async findLiveClaimRunId(schedule: Schedule): Promise<string | undefined> {
+    if (schedule.activeClaimRunId !== undefined) {
+      return await this.storage.hasRunningRuns(schedule.id, { runId: schedule.activeClaimRunId })
+        ? schedule.activeClaimRunId
+        : undefined;
+    }
+    if (schedule.lastFiredAt !== undefined) return undefined;
+    const runningRunIds = await this.storage.listRunningRunIds(schedule.id);
+    return runningRunIds.length === 1 ? runningRunIds[0] : undefined;
   }
 
   /** 注册一次 fire 的 controller(fireOne/runNow 顶部调用)。两个 map 都要写。 */
