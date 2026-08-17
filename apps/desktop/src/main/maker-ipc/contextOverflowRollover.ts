@@ -42,6 +42,21 @@ export function isContextOverflowErrorData(data: unknown): boolean {
   );
 }
 
+const PI_PROMPT_RPC_TIMEOUT_RE = /pi rpc timeout after \d+ms: prompt\b/i;
+
+export function isPiPromptRpcTimeoutError(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].some(
+    (value) => typeof value === 'string' && PI_PROMPT_RPC_TIMEOUT_RE.test(value),
+  );
+}
+
+/** PI 原生会话已经无法继续：超限，或 prompt RPC 超时（巨大 jsonl resume 卡死）。 */
+export function shouldRebuildPiNativeSession(data: unknown): boolean {
+  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data);
+}
+
 function isSyntheticUser(message: OverflowSourceMessage): boolean {
   if (message.role !== 'user') return false;
   return extractPlainText(message.content).startsWith(SYNTHETIC_TRIGGER_PREFIX);
@@ -184,7 +199,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   const inFlight = new Set<string>();
 
   const runRecover = async (sessionId: string, errorData: unknown): Promise<boolean> => {
-    if (!isContextOverflowErrorData(errorData)) return false;
+    if (!shouldRebuildPiNativeSession(errorData)) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;

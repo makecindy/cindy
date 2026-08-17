@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  isPiPromptRpcTimeoutError,
   persistedUserContentToWireMessage,
   planContextOverflowRollover,
+  shouldRebuildPiNativeSession,
   type OverflowSourceMessage,
 } from '../contextOverflowRollover';
 
@@ -37,6 +39,23 @@ describe('isContextOverflowErrorData', () => {
     expect(isContextOverflowErrorData({ message: 'Rate limit exceeded: too many tokens per minute' })).toBe(
       false,
     );
+  });
+});
+
+describe('shouldRebuildPiNativeSession', () => {
+  it('treats a PI prompt RPC timeout as an unhealthy native session', () => {
+    expect(
+      isPiPromptRpcTimeoutError({ message: 'pi rpc timeout after 30000ms: prompt' }),
+    ).toBe(true);
+    expect(shouldRebuildPiNativeSession({ message: 'pi rpc timeout after 30000ms: prompt' })).toBe(
+      true,
+    );
+  });
+
+  it('does not rebuild on other PI RPC timeouts', () => {
+    expect(
+      shouldRebuildPiNativeSession({ message: 'pi rpc timeout after 30000ms: set_model' }),
+    ).toBe(false);
   });
 });
 

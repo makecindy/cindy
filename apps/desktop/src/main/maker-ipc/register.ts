@@ -702,8 +702,8 @@ import {
 } from './agentHandoff.js';
 import {
   createContextOverflowRollover,
-  isContextOverflowErrorData,
   persistedUserContentToWireMessage,
+  shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
@@ -4188,7 +4188,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         !session.remoteHostId &&
         event.type === 'error' &&
         isTerminalTurnErrorEvent(event) &&
-        isContextOverflowErrorData(event.data);
+        shouldRebuildPiNativeSession(event.data);
       if (suppressOverflowBroadcast) {
         overflowSuppressedBroadcasts.set(session.id, {
           sessionId: session.id,
@@ -4319,7 +4319,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
           !autoResumeSuppressesPersist &&
-          isContextOverflowErrorData(attributedEvent.data)
+          shouldRebuildPiNativeSession(attributedEvent.data)
             ? (contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
             : 'idle';
         if (overflowClaim === 'claimed') {
