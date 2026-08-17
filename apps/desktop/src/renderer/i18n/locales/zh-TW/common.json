@@ -5509,6 +5509,11 @@
     },
     "cancel": "取消",
     "save": "儲存",
+    "autosave": {
+      "saving": "正在儲存…",
+      "saved": "已儲存",
+      "retry": "重新儲存"
+    },
     "retry": "重試",
     "backToBot": "返回 Bot",
     "sessionLoadFailedTitle": "無法載入這個 Bot 任務",

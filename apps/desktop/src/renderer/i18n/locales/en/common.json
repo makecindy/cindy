@@ -5511,6 +5511,11 @@
     },
     "cancel": "Cancel",
     "save": "Save",
+    "autosave": {
+      "saving": "Saving…",
+      "saved": "Saved",
+      "retry": "Save Again"
+    },
     "retry": "Retry",
     "backToBot": "Back to Bot",
     "sessionLoadFailedTitle": "This Bot task could not be loaded",

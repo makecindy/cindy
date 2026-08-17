@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotProfile } from '../botStore';
 
@@ -182,20 +182,30 @@ function bot(overrides: Partial<BotProfile> = {}): BotProfile {
 
 function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'settings=1') {
   mocks.initialSearch = initialSearch;
-  return render(
+  const onBack = vi.fn();
+  const view = render(
     <BotSettings
       bot={bot(overrides)}
-      onBack={vi.fn()}
+      onBack={onBack}
       onRenew={vi.fn(async () => false)}
       onOpenSession={vi.fn()}
       renewing={false}
     />,
   );
+  return { ...view, onBack };
 }
+
+const defaultUpdateBotProfile = async (_id: string, patch: Record<string, unknown>) => ({
+  id: 'bot-1',
+  currentVersion: 1,
+  ...patch,
+});
 
 beforeEach(() => {
   mocks.navigate.mockReset();
-  mocks.updateBotProfile.mockClear();
+  mocks.updateBotProfile.mockReset();
+  // mockImplementation(Once) in the autosave suite must not leak into other tests.
+  mocks.updateBotProfile.mockImplementation(defaultUpdateBotProfile as never);
   mocks.initialSearch = '';
   mocks.currentSearch = '';
 });
@@ -243,27 +253,37 @@ describe('Bot settings nav grouping', () => {
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
   });
 
-  it('switches panels on click and keeps the save bar reachable from every tab', () => {
+  it('switches panels on click without any per-tab save affordance', () => {
     renderSettings();
 
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.channels' }));
     expect(screen.getByTestId('bot-route-settings')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'bots.save' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.capabilities' }));
     expect(screen.getByTestId('bot-capability-settings')).toBeTruthy();
     expect(screen.queryByTestId('bot-route-settings')).toBeNull();
-    expect(screen.getByRole('button', { name: 'bots.save' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.automation' }));
     expect(screen.getByTestId('bot-automation-settings')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'bots.save' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.notifications' }));
     expect(screen.getByTestId('bot-event-inbox-settings')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.projects' }));
     expect(screen.getByTestId('bot-project-settings')).toBeTruthy();
+  });
+
+  it('has no bottom save bar at all — settings persist on their own', () => {
+    renderSettings();
+
+    // Chris's report: "I had no idea I needed to save." The fix is that there is
+    // nothing to press, on any tab — so the bar must not come back.
+    expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.cancel' })).toBeNull();
+    for (const tab of ['channels', 'capabilities', 'automation', 'projects', 'advanced']) {
+      fireEvent.click(screen.getByRole('tab', { name: `bots.settingsNav.${tab}` }));
+      expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
+    }
   });
 
   it('updates the ?tab= URL param when a nav item is selected, for deep-linkability', () => {
@@ -310,5 +330,183 @@ describe('Bot settings archived-bot reachability', () => {
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
     expect(screen.getByTestId('bot-event-inbox-settings')).toBeTruthy();
+  });
+
+  it('never writes a profile update for an archived (read-only) Bot', () => {
+    const view = renderSettings({ status: 'archived' });
+    view.unmount();
+
+    // Autosave must not turn a read-only surface into a writer.
+    expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe('Bot settings autosave', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const advance = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  it('merges a typing burst into one profile update after the debounce window', async () => {
+    renderSettings();
+    const input = screen.getByDisplayValue('PR steward');
+
+    for (const value of ['PR stewar', 'PR stewa', 'PR stew', 'PR crew']) {
+      fireEvent.change(input, { target: { value } });
+      await advance(300);
+      expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+    }
+
+    await advance(1300);
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({ name: 'PR crew' });
+  });
+
+  it('saves a dropdown change without waiting out the text debounce', async () => {
+    renderSettings({}, 'settings=1&tab=capabilities');
+
+    fireEvent.change(screen.getByDisplayValue('bots.permissionAsk'), {
+      target: { value: 'trusted' },
+    });
+    await advance(0);
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      capabilities: expect.objectContaining({ permissions: 'trusted' }),
+    });
+  });
+
+  it('sends nothing when the page is only opened, or when an edit is reverted', async () => {
+    renderSettings();
+    await advance(3000);
+    expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+
+    const input = screen.getByDisplayValue('PR steward');
+    fireEvent.change(input, { target: { value: 'PR stewardz' } });
+    fireEvent.change(input, { target: { value: 'PR steward' } });
+    await advance(3000);
+    expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+  });
+
+  it('flushes a still-pending edit when the settings view unmounts', async () => {
+    const view = renderSettings();
+    fireEvent.change(screen.getByDisplayValue('Delivery steward'), {
+      target: { value: 'Reviews and merges' },
+    });
+
+    // Well inside the debounce window — the old UI would have dropped this.
+    view.unmount();
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      description: 'Reviews and merges',
+    });
+  });
+
+  it('flushes on blur so long identity prompts do not wait for the debounce', async () => {
+    renderSettings();
+    const textarea = screen.getByPlaceholderText('bots.identitySourcePlaceholder');
+    fireEvent.change(textarea, { target: { value: 'You review delivery PRs.' } });
+    fireEvent.blur(textarea);
+    await advance(0);
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      identitySource: 'You review delivery PRs.',
+    });
+  });
+
+  it('shows a saving indicator and then a transient saved mark', async () => {
+    let release: (() => void) | null = null;
+    mocks.updateBotProfile.mockImplementationOnce(async (_id, patch) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { id: 'bot-1', currentVersion: 1, ...patch } as never;
+    });
+
+    renderSettings();
+    fireEvent.change(screen.getByDisplayValue('PR steward'), { target: { value: 'PR crew' } });
+    await advance(1300);
+    expect(screen.getByText('bots.autosave.saving')).toBeTruthy();
+
+    await act(async () => {
+      release?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText('bots.autosave.saved')).toBeTruthy();
+
+    // "Saved" is a confirmation, not a permanent badge.
+    await advance(2500);
+    expect(screen.queryByText('bots.autosave.saved')).toBeNull();
+  });
+
+  it('surfaces a failure with a retry that re-sends the same change', async () => {
+    mocks.updateBotProfile.mockRejectedValueOnce(new Error('ipc down'));
+
+    renderSettings();
+    fireEvent.change(screen.getByDisplayValue('PR steward'), { target: { value: 'PR crew' } });
+    await advance(1300);
+
+    expect(screen.getByRole('alert').textContent).toContain('bots.profileApply.saveFailed');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.autosave.retry' }));
+    await advance(0);
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(mocks.updateBotProfile.mock.calls[1]?.[1]).toMatchObject({ name: 'PR crew' });
+    expect(screen.queryByRole('button', { name: 'bots.autosave.retry' })).toBeNull();
+  });
+
+  it('flushes before leaving for the chat, and stays put when that save fails', async () => {
+    mocks.updateBotProfile.mockRejectedValueOnce(new Error('ipc down'));
+    const view = renderSettings();
+    fireEvent.change(screen.getByDisplayValue('PR steward'), { target: { value: 'PR crew' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.backToChat' }));
+    await advance(0);
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(view.onBack).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toContain('bots.profileApply.saveFailed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.backToChat' }));
+    await advance(0);
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(view.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers the "apply to current task" prompt to the moment the user leaves', async () => {
+    // The canonical chat is on v1 while the save produces v2: the pre-existing
+    // renew prompt still fires — but only at the exit boundary, so a background
+    // autosave never throws a modal over someone who is mid-sentence.
+    mocks.updateBotProfile.mockImplementationOnce(async (_id, patch) => ({
+      id: 'bot-1',
+      currentVersion: 2,
+      ...patch,
+    }));
+
+    const view = renderSettings();
+    fireEvent.change(screen.getByDisplayValue('PR steward'), { target: { value: 'PR crew' } });
+    await advance(1300);
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('bots.profileApply.title')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.backToChat' }));
+    await advance(0);
+
+    expect(screen.getByText('bots.profileApply.title')).toBeTruthy();
+    expect(view.onBack).not.toHaveBeenCalled();
   });
 });

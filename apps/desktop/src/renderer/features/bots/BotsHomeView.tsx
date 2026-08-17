@@ -12,7 +12,6 @@ import {
   Plus,
   RefreshCcw,
   Sparkles,
-  Upload,
 } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -61,6 +60,8 @@ import {
   parseBotSettingsTab,
   type BotSettingsTabId,
 } from './botSettingsNav';
+import type { BotSettingsPayload } from './botSettingsAutosave';
+import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 
 function channelLabel(channel: BotChannel): string {
   return channel === 'local' ? 'Local Bot' : channel[0].toUpperCase() + channel.slice(1);
@@ -148,7 +149,15 @@ export function BotSettings({
               ? 'applied'
               : 'saved';
 
+  // 只在切到另一个 Bot 时重灌表单。自动保存下 `bot` 每次落库(以及失败回滚)都会
+  // 换一个新对象,若仍按对象身份重灌,用户在提交在途期间敲的字会被服务端快照盖掉,
+  // 失败回滚时更会把刚改的内容整批还原 —— 那是比「忘记点保存」更严重的丢字。
+  // 页面挂载期间本地 state 才是编辑权威;`bot.channels` / `bot.sessions` 等非表单
+  // 字段仍直接读 prop,保持实时。
+  const botIdentityRef = useRef(bot.id);
   useEffect(() => {
+    if (botIdentityRef.current === bot.id) return;
+    botIdentityRef.current = bot.id;
     setName(bot.name);
     setDescription(bot.description);
     setIdentitySource(bot.identitySource ?? '');
@@ -187,43 +196,76 @@ export function BotSettings({
     };
   }, [bot.id, t]);
 
-  const updateCapability = <K extends keyof BotCapabilities>(key: K, value: BotCapabilities[K]) =>
-    setCapabilities((current) => ({ ...current, [key]: value }));
+  // 自动保存不再走「点保存」的显式提交,但 Profile 版本落后于当前对话时的
+  // 「应用到当前对话」提示仍要给。判定逻辑与手动保存时完全一致,只把**呈现时机**
+  // 推到用户离开设置页那一刻(= 他原来会去点保存的那一刻):后台自动保存中途弹模态
+  // 会打断正在打字的人,那正是本次要消灭的那类体验。
+  const pendingApplyRef = useRef<{ currentVersion: number; activeVersion: number } | null>(null);
+  const activeVersionRef = useRef<number | undefined>(canonicalProjection?.profileVersion);
+  activeVersionRef.current = canonicalProjection?.profileVersion;
 
-  const [saving, setSaving] = useState(false);
-  const save = async () => {
-    const updated = await updateBotProfile(bot.id, {
-      name: name.trim() || bot.name,
-      description: description.trim(),
+  const commitProfile = useCallback(
+    async (payload: BotSettingsPayload) => {
+      const updated = await updateBotProfile(bot.id, payload);
+      const activeVersion = activeVersionRef.current;
+      if (
+        updated.currentVersion !== undefined &&
+        activeVersion !== undefined &&
+        updated.currentVersion > activeVersion
+      ) {
+        pendingApplyRef.current = {
+          currentVersion: updated.currentVersion,
+          activeVersion,
+        };
+      }
+    },
+    [bot.id],
+  );
+
+  const autosave = useBotSettingsAutosave({
+    draft: {
+      name,
+      description,
       identitySource,
       userContextSource,
       avatar,
       avatarColor,
       capabilities,
       skills: selectedSkills,
-    });
-    const activeVersion = canonicalProjection?.profileVersion;
-    if (
-      updated.currentVersion !== undefined &&
-      activeVersion !== undefined &&
-      updated.currentVersion > activeVersion
-    ) {
-      setProfileApplyError(null);
-      setProfileApplyPrompt({ currentVersion: updated.currentVersion, activeVersion });
-      return true;
-    }
-    return false;
+    },
+    fallbackName: bot.name,
+    // 归档 bot 的设置页是只读的(不渲染任何表单字段),自动保存不得为它引入写入。
+    enabled: bot.status !== 'archived',
+    commit: commitProfile,
+  });
+
+  const updateCapability = <K extends keyof BotCapabilities>(key: K, value: BotCapabilities[K]) => {
+    setCapabilities((current) => ({ ...current, [key]: value }));
+    autosave.onEdit('instant');
+  };
+  // 子编辑器(能力面板)的回写入口。它一次交互可能同时改 capabilities 与 skills,
+  // 两次 onEdit 走同一条合并通道,最终只发一次 IPC。
+  const applyCapabilities = (next: BotCapabilities) => {
+    setCapabilities(next);
+    autosave.onEdit('instant');
+  };
+  const applySelectedSkills = (next: string[]) => {
+    setSelectedSkills(next);
+    autosave.onEdit('instant');
   };
 
-  const saveAndContinue = () => {
-    setSaving(true);
+  const handleBack = () => {
     setProfileApplyError(null);
-    void save()
-      .then((needsApply) => {
-        if (!needsApply) onBack();
-      })
-      .catch(() => setProfileApplyError(t('bots.profileApply.saveFailed')))
-      .finally(() => setSaving(false));
+    void autosave.flush().then(() => {
+      if (autosave.isDirty()) return; // 保存失败:留在页面,状态条给出重试入口
+      const pendingApply = pendingApplyRef.current;
+      if (pendingApply) {
+        pendingApplyRef.current = null;
+        setProfileApplyPrompt(pendingApply);
+        return;
+      }
+      onBack();
+    });
   };
 
   const renewAndApplyProfile = () => {
@@ -394,7 +436,7 @@ export function BotSettings({
       <div className="shrink-0 px-8 pb-5 pt-8">
         <button
           type="button"
-          onClick={onBack}
+          onClick={handleBack}
           className="-ml-2 inline-flex w-fit items-center gap-2 rounded-lg px-2 py-1.5 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
         >
           <ArrowLeft size={15} />
@@ -402,11 +444,53 @@ export function BotSettings({
         </button>
         <header className="mt-3 flex items-center gap-3">
           <BotAvatar bot={{ ...bot, avatar, avatarColor }} size="lg" />
-          <div>
+          <div className="min-w-0">
             <p className="text-12 font-medium uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
               {t('bots.settings')}
             </p>
-            <h1 className="mt-1 text-24 font-medium text-[var(--text-primary)]">{bot.name}</h1>
+            <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h1 className="text-24 font-medium text-[var(--text-primary)]">{bot.name}</h1>
+              {/*
+                自动保存的可观测状态。空闲不显示 —— 常驻的「已保存」是噪音,不是信息。
+                失败才落到下一行,并自带重试入口。
+              */}
+              {autosave.status === 'saving' ? (
+                <span
+                  role="status"
+                  className="inline-flex select-none items-center gap-1.5 text-11 text-[var(--text-tertiary)]"
+                >
+                  <Spinner size={12} />
+                  {t('bots.autosave.saving')}
+                </span>
+              ) : autosave.status === 'saved' ? (
+                <span
+                  role="status"
+                  className="inline-flex select-none animate-fade-in items-center gap-1 text-11 text-[var(--text-tertiary)]"
+                >
+                  <Check size={12} />
+                  {t('bots.autosave.saved')}
+                </span>
+              ) : null}
+            </div>
+            {autosave.status === 'error' ? (
+              <p
+                className="mt-1 flex flex-wrap items-center gap-2 text-11 text-[var(--text-danger)]"
+                role="alert"
+              >
+                {t('bots.profileApply.saveFailed')}
+                <button
+                  type="button"
+                  onClick={() => void autosave.retry()}
+                  className="rounded-lg px-1.5 py-0.5 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                >
+                  {t('bots.autosave.retry')}
+                </button>
+              </p>
+            ) : profileApplyError ? (
+              <p className="mt-1 text-11 text-[var(--text-danger)]" role="alert">
+                {profileApplyError}
+              </p>
+            ) : null}
           </div>
         </header>
       </div>
@@ -457,6 +541,7 @@ export function BotSettings({
                     onChange={(next) => {
                       setAvatar(next.emoji);
                       setAvatarColor(next.hue);
+                      autosave.onEdit('instant');
                     }}
                   />
                   <p className="text-11 leading-4 text-[var(--text-tertiary)]">
@@ -468,7 +553,11 @@ export function BotSettings({
                     {t('bots.nameLabel')}
                     <input
                       value={name}
-                      onChange={(event) => setName(event.target.value)}
+                      onChange={(event) => {
+                        setName(event.target.value);
+                        autosave.onEdit('text');
+                      }}
+                      onBlur={() => void autosave.flush()}
                       className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
                     />
                   </label>
@@ -480,7 +569,11 @@ export function BotSettings({
                   {t('bots.descriptionLabel')}
                   <textarea
                     value={description}
-                    onChange={(event) => setDescription(event.target.value)}
+                    onChange={(event) => {
+                      setDescription(event.target.value);
+                      autosave.onEdit('text');
+                    }}
+                    onBlur={() => void autosave.flush()}
                     rows={3}
                     className="resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
                   />
@@ -489,7 +582,11 @@ export function BotSettings({
                   {t('bots.identitySourceLabel')}
                   <textarea
                     value={identitySource}
-                    onChange={(event) => setIdentitySource(event.target.value)}
+                    onChange={(event) => {
+                      setIdentitySource(event.target.value);
+                      autosave.onEdit('text');
+                    }}
+                    onBlur={() => void autosave.flush()}
                     placeholder={t('bots.identitySourcePlaceholder')}
                     rows={6}
                     className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
@@ -502,7 +599,11 @@ export function BotSettings({
                   {t('bots.userContextSourceLabel')}
                   <textarea
                     value={userContextSource}
-                    onChange={(event) => setUserContextSource(event.target.value)}
+                    onChange={(event) => {
+                      setUserContextSource(event.target.value);
+                      autosave.onEdit('text');
+                    }}
+                    onBlur={() => void autosave.flush()}
                     placeholder={t('bots.userContextSourcePlaceholder')}
                     rows={4}
                     className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
@@ -753,6 +854,7 @@ export function BotSettings({
                           fastMode: getDraft().fastModeByModel[prefs.model] === true,
                           skillMode: 'inherit',
                         }));
+                        autosave.onEdit('instant');
                       }}
                     />
                   </div>
@@ -776,14 +878,15 @@ export function BotSettings({
                       }
                       onModelChange={(model) => updateCapability('model', model)}
                       onEffortChange={(effort) => updateCapability('effort', effort)}
-                      onProviderChange={(providerId, model, effort) =>
+                      onProviderChange={(providerId, model, effort) => {
                         setCapabilities((current) => ({
                           ...current,
                           providerId,
                           model: model ?? current.model,
                           effort: effort || current.effort,
-                        }))
-                      }
+                        }));
+                        autosave.onEdit('instant');
+                      }}
                       onNavigateToProviders={() => navigate('/settings?tab=providers')}
                       unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
                     />
@@ -795,8 +898,8 @@ export function BotSettings({
                   selectedSkills={selectedSkills}
                   runtimeSnapshot={canonicalProjection?.runtimeSnapshot}
                   remoteHostId={selectedProject?.remoteHostId}
-                  onCapabilitiesChange={setCapabilities}
-                  onSelectedSkillsChange={setSelectedSkills}
+                  onCapabilitiesChange={applyCapabilities}
+                  onSelectedSkillsChange={applySelectedSkills}
                 />
                 <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
                   {t('bots.permissionsLabel')}
@@ -901,36 +1004,6 @@ export function BotSettings({
                 </section>
               </>
             ) : null}
-          </div>
-        </div>
-      </div>
-
-      <div className="shrink-0 border-t border-[var(--border-default)] px-8 py-3">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            {profileApplyError ? (
-              <p className="truncate text-12 text-[var(--text-danger)]" role="alert">
-                {profileApplyError}
-              </p>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 justify-end gap-2">
-            <button
-              type="button"
-              onClick={onBack}
-              className="h-9 rounded-lg px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-            >
-              {t('bots.cancel')}
-            </button>
-            <button
-              type="button"
-              onClick={saveAndContinue}
-              disabled={saving}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--accent-cta-bg)] px-3.5 text-12 font-medium text-[var(--accent-pure-cta-fg)] hover:opacity-90"
-            >
-              <Check size={15} />
-              {t('bots.save')}
-            </button>
           </div>
         </div>
       </div>
@@ -1283,6 +1356,9 @@ export function BotsHomeView() {
     return (
       <>
         <BotSettings
+          // 切到另一个 Bot 必须重挂:自动保存的基线、防抖计时与「未落即冲刷」都绑在
+          // 实例上,复用实例会让上一个 Bot 的待保存改动记在新 Bot 头上。
+          key={selectedBot.id}
           bot={selectedBot}
           onRenew={() => renewBotSession(selectedBot)}
           onOpenSession={(targetSessionId, searchJump) => {

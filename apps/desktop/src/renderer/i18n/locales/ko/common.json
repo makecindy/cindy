@@ -5509,6 +5509,11 @@
     },
     "cancel": "취소",
     "save": "저장",
+    "autosave": {
+      "saving": "저장 중…",
+      "saved": "저장됨",
+      "retry": "다시 저장"
+    },
     "retry": "다시 시도",
     "backToBot": "Bot으로 돌아가기",
     "sessionLoadFailedTitle": "이 Bot 작업을 불러올 수 없습니다",

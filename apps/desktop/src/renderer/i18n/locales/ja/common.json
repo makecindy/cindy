@@ -5509,6 +5509,11 @@
     },
     "cancel": "キャンセル",
     "save": "保存",
+    "autosave": {
+      "saving": "保存中…",
+      "saved": "保存しました",
+      "retry": "再保存"
+    },
     "retry": "再試行",
     "backToBot": "Bot に戻る",
     "sessionLoadFailedTitle": "この Bot タスクを読み込めませんでした",
