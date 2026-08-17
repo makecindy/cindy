@@ -1965,6 +1965,49 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(stableCitationBoundary(braceInQuote)).toBe(4);
     const braceComplete = 'abc :codex-file-citation{path="/tmp/a{b}.md"}';
     expect(stableCitationBoundary(braceComplete)).toBe(braceComplete.length);
+    expect(stableCitationBoundary('<|eo')).toBe(0);
+    expect(stableCitationBoundary('<')).toBe(0);
+    expect(stableCitationBoundary('  <|eos|>')).toBe(0);
+    expect(stableCitationBoundary('The token is <|eos|>')).toBe('The token is <|eos|>'.length);
+  });
+
+  it('agentMessage 流式按住独立停止符前缀,completed 后不留下可见泄漏', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const push = (phase: 'started' | 'updated' | 'completed', text: string): void => {
+      translateItemNotification(
+        phase,
+        {
+          threadId: 'thread-stop-token',
+          turnId: 'turn-stop-token',
+          item: { type: 'agentMessage', id: 'msg-stop-token', text },
+        },
+        q,
+        makeCtx(rt),
+      );
+    };
+
+    push('started', '<|eo');
+    push('updated', '<|eos|>');
+    push('completed', '<|eos|>');
+
+    const events = await collect(q);
+    const deltas = events
+      .filter((event) => event.type === 'text' && !(event.data as { isFinal: boolean }).isFinal)
+      .map((event) => (event.data as { text: string }).text);
+    expect(deltas.join('')).toBe('');
+    const final = events.find(
+      (event) => event.type === 'text' && (event.data as { isFinal: boolean }).isFinal,
+    );
+    expect((final?.data as { text: string } | undefined)?.text).toBe('');
+  });
+
+  it('finalizeCodexCitationText keeps a completed incomplete prefix as real text', async () => {
+    const { finalizeCodexCitationText } = await import('./translator.js');
+    expect(finalizeCodexCitationText('<')).toBe('<');
+    expect(finalizeCodexCitationText('<|eo')).toBe('<|eo');
+    expect(finalizeCodexCitationText('<|eos|>')).toBe('');
   });
 
   it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {

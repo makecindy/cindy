@@ -21,6 +21,11 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  holdStandaloneStopTokenDelta,
+  stripInternalWebCitations,
+  type StandaloneStopTokenHold,
+} from '@cindy/maker-shared/internal-citation';
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import {
@@ -87,6 +92,11 @@ export interface PiTranslateContext {
   /** contentIndex → 当前消息内的 thinking block 状态。 */
   thinkingBlocks: Map<number, PiThinkingBlock>;
   /**
+   * contentIndex → 独立停止符暂存。text_delta 可能把 `<|eos|>` 拆开，
+   * 必须按本块判定，不能和别的 text block 共用。
+   */
+  streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
+  /**
    * 本 turn 最后一条 assistant 消息的全文(每次非空 message_end 覆盖;agent_start 重置)。
    * 用于 agent_settled 的 done.data.result —— 与 CC/Codex 对齐:register.ts 的
    * will-assistant-message 出口钩子与 Orca worker 终态 finalText 都读 done.data.result,
@@ -135,6 +145,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     isStreaming: false,
     thinkingSeq: 0,
     thinkingBlocks: new Map(),
+    streamStopTokenByIndex: new Map(),
     finalAssistantText: '',
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
@@ -262,7 +273,10 @@ function applyDelegatedUsage(
 function assistantTextOf(message: PiAssistantMessage): string {
   const parts: string[] = [];
   for (const block of message.content ?? []) {
-    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const visible = stripInternalWebCitations(block.text);
+      if (visible.length > 0) parts.push(visible);
+    }
   }
   return parts.join('\n\n');
 }
@@ -359,6 +373,7 @@ export function translatePiEvent(
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
       ctx.subagentToolCalls.clear();
+      ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -368,6 +383,7 @@ export function translatePiEvent(
 
     case 'message_start': {
       ctx.thinkingBlocks.clear();
+      ctx.streamStopTokenByIndex.clear();
       startPiGenerationHeartbeat(ctx);
       return;
     }
@@ -711,7 +727,13 @@ function handleAssistantDelta(
   switch (delta.type) {
     case 'text_delta': {
       if (typeof delta.delta === 'string' && delta.delta.length > 0) {
-        queue.push({ type: 'text', data: { text: delta.delta, isFinal: false }, source: 'pi' });
+        const buffer = ctx.streamStopTokenByIndex.get(contentIndex)
+          ?? { pending: '', emitted: false };
+        const visible = holdStandaloneStopTokenDelta(buffer, delta.delta);
+        ctx.streamStopTokenByIndex.set(contentIndex, buffer);
+        if (visible && visible.length > 0) {
+          queue.push({ type: 'text', data: { text: visible, isFinal: false }, source: 'pi' });
+        }
       }
       return;
     }

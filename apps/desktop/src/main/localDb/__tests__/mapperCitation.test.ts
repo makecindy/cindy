@@ -28,4 +28,26 @@ describe('message mapper internal citation compatibility', () => {
       `用户引用 ${marker}`,
     );
   });
+
+  it('hides a persisted Grok stop token from history and previews', () => {
+    const row = {
+      id: 'message-eos',
+      clientId: 'client-eos',
+      sessionId: 'session-1',
+      role: 'assistant',
+      content: JSON.stringify('<|eos|>'),
+      toolUseId: null,
+      agentMeta: null,
+      agentKind: 'cc',
+      createdAt: 1,
+      rewindAt: null,
+    } as Parameters<typeof messageToCamel>[0];
+
+    expect(messageToCamel(row).content).toBe('');
+    expect(extractMessagePreview(JSON.stringify('<|eos|>'), 'assistant')).toBeNull();
+    expect(extractMessagePreview(JSON.stringify('The token is <|eos|>'), 'assistant')).toBe(
+      'The token is <|eos|>',
+    );
+    expect(extractMessagePreview(JSON.stringify('用户说 <|eos|>'), 'user')).toBe('用户说 <|eos|>');
+  });
 });

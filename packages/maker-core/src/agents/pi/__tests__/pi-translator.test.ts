@@ -160,6 +160,100 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('does not emit a leaked Grok stop token split across PI deltas', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '<|eo' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: 'answer' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 's|>' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '<|eos|>' },
+            { type: 'text', text: 'answer' },
+          ],
+          model: 'xai/grok-4.6',
+          stopReason: 'stop',
+        },
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'answer', isFinal: false }, source: 'pi' },
+      expect.objectContaining({
+        type: 'text',
+        data: { text: 'answer', isFinal: true, isFullText: true },
+        source: 'pi',
+      }),
+    ]);
+  });
+
+  it('does not emit a leaked Grok stop token split as a single-character prefix', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '<' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '|eos|>' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '<|eos|>' }],
+          model: 'xai/grok-4.6',
+          stopReason: 'stop',
+        },
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'text')).toEqual([]);
+  });
+
   it('surfaces a terminal provider error after Pi settles instead of staying in Working', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
