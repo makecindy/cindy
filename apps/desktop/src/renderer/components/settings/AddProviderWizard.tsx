@@ -206,6 +206,7 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
         baseUrl: 'https://api.x.ai/v1',
         wireProtocol: 'openai-chat',
         models: [
+          { id: 'grok-4.6', name: 'Grok 4.6' },
           { id: 'grok-4.5', name: 'Grok 4.5' },
           { id: 'grok-4.3', name: 'Grok 4.3' },
         ],

@@ -549,7 +549,7 @@ describe('本地 override(local 永远最高)', () => {
     expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toMatchObject({
       efforts: ['low', 'medium', 'high', 'xhigh'],
     });
-    expect(models('xai', 'pi').some((m) => m.id === 'grok-4.6')).toBe(false);
+    expect(models('xai', 'pi').some((m) => m.id === 'grok-4.1-fast')).toBe(false);
   });
 
   it('本地 perAgent 也在 bridge 目标端生效,且不能写展示/status 字段', () => {
