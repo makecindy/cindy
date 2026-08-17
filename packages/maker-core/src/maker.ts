@@ -306,6 +306,12 @@ interface CodexThreadClaimLease {
   release(): void;
 }
 
+interface FailedHandleCleanup {
+  handle: AgentSessionHandle;
+  promise: Promise<void> | null;
+  onCleaned?: () => void;
+}
+
 export class Maker {
   protected readonly agents: Partial<Record<AgentKind, BaseAgent>>;
   protected readonly storage: SessionStorage;
@@ -322,6 +328,15 @@ export class Maker {
     string,
     { promise: Promise<Session> }
   >();
+  /** All create paths, including anonymous ids, that may still publish or quarantine a handle. */
+  private readonly pendingSessionCreations = new Set<Promise<Session>>();
+  /** Once shutdown starts, no new handle may race past its creation barrier. */
+  private shutdownStarted = false;
+  /**
+   * startSession 已返回、但 Session 尚未发布时 cleanup 失败的 handle。后续同 id
+   * create 必须先把它确认关闭，不能丢失所有权后再 spawn 一个并存进程。
+   */
+  private readonly failedHandleCleanups = new Map<string, FailedHandleCleanup>();
   /**
    * Codex 0.145 会忽略已加载 thread 的 thread/resume.config。不同 Cindy task
    * 若同时复用同一 native thread，后启动者会继续使用前一 Session 的 MCP URL，
@@ -413,6 +428,28 @@ export class Maker {
     };
   }
 
+  private async retryFailedHandleCleanup(
+    sessionId: string,
+    expectedEntry?: FailedHandleCleanup,
+  ): Promise<void> {
+    const entry = this.failedHandleCleanups.get(sessionId);
+    if (!entry || (expectedEntry && entry !== expectedEntry)) return;
+    const cleanup = entry.promise ?? entry.handle.close();
+    entry.promise = cleanup;
+    try {
+      await cleanup;
+    } catch (error) {
+      if (this.failedHandleCleanups.get(sessionId) === entry && entry.promise === cleanup) {
+        entry.promise = null;
+      }
+      throw error;
+    }
+    if (this.failedHandleCleanups.get(sessionId) === entry) {
+      this.failedHandleCleanups.delete(sessionId);
+      entry.onCleaned?.();
+    }
+  }
+
   /**
    * 创建一个新会话。
    *
@@ -421,8 +458,27 @@ export class Maker {
    * 继续聊"以及多个后台入口同时恢复同一会话的场景。
    */
   async createSession(opts: CreateSessionOptions): Promise<Session> {
+    if (this.shutdownStarted) {
+      throw new Error('Maker is shutting down; refusing to create a new session');
+    }
+    const creation = this.createSessionWhileRunning(opts);
+    this.pendingSessionCreations.add(creation);
+    try {
+      return await creation;
+    } finally {
+      this.pendingSessionCreations.delete(creation);
+    }
+  }
+
+  private async createSessionWhileRunning(opts: CreateSessionOptions): Promise<Session> {
     if (!opts.id) {
       return this.createSessionOnce(opts);
+    }
+
+    // Any handle that failed cleanup before publication still owns this
+    // business id. Confirm its shutdown before checking/starting live state.
+    if (this.failedHandleCleanups.has(opts.id)) {
+      await this.retryFailedHandleCleanup(opts.id);
     }
 
     // 进程内已经活着或正在启动的 session, 直接复用 (避免 spawn 第二个 SDK)。
@@ -609,15 +665,24 @@ export class Maker {
       // 写失败时, 已启动的 agent handle(PI 远端 daemon session / CC / Codex)必须
       // close, 否则 PI 无 codexThreadClaim 时 handle 不关, 远端 pi-manager session/
       // MCP bridge 残留成「用户看不到、Maker 管不到」的半创建状态。
+      let cleanupFailed = false;
       try {
         await handle.close();
       } catch (closeError) {
+        cleanupFailed = true;
+        this.failedHandleCleanups.set(id, {
+          handle,
+          promise: null,
+          ...(codexThreadClaim
+            ? { onCleaned: () => codexThreadClaim?.release() }
+            : {}),
+        });
         this.logger.warn('failed to close agent handle after session storage failure', {
           sessionId: id,
           error: String(closeError),
         });
       }
-      if (codexThreadClaim) {
+      if (!cleanupFailed && codexThreadClaim) {
         codexThreadClaim.release();
       }
       throw error;
@@ -877,46 +942,79 @@ export class Maker {
    * 失败一律 swallow + 聚合日志, 不抛 (before-quit 阶段不能阻断退出流程)。
    */
   async shutdown(): Promise<void> {
-    // snapshot 必须先做 (status listener 在 close 完成后会从 activeSessions 删条目,
-    // 不 snapshot 则迭代到一半 Map mutate)。
-    const sessSnapshot = Array.from(this.activeSessions.values());
+    this.shutdownStarted = true;
     const agentEntries = Object.entries(this.agents);
-
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
 
-    // shutdown() calls detach() directly instead of closeSession(), so record
-    // the explicit cause before any asynchronous close callback can run. This
-    // prevents app exit from looking like an unexpected provider rebuild and
-    // accidentally preserving an automatic retry lease.
-    for (const session of sessSnapshot) {
-      if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
-    }
+    // Snapshot current sessions before the creation barrier. Existing local
+    // Claude/PI processes must start terminating immediately; a stuck startup
+    // must not consume the entire host quit window before their detach begins.
+    const initialSessionSnapshot = Array.from(this.activeSessions.values());
+    const initialSessionIdentities = new Set(initialSessionSnapshot);
+    const queueSessionDetaches = (
+      sessions: readonly Session[],
+      phase: 'initial' | 'late',
+    ): Array<Promise<void>> => {
+      for (const session of sessions) {
+        if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+      }
+      return sessions.map((session) =>
+        Promise.resolve()
+          .then(() => session.detach())
+          .catch((e) => {
+            errors.push({ kind: `session-${phase}`, name: session.id, error: e });
+          }),
+      );
+    };
 
-    // **agent.dispose 优先排队**: 微任务 ordering 不是强保证 (dispose 内部还有 await
-    // hostPromise 等 hop), 但先排队意味着 SIGTERM 那一步至少不会被 session-close
-    // 的工作排在后面。真正的 safety net 是下面 Promise.allSettled 永不抛 + lifecycle
-    // 6s 超时 (lifecycle.ts) — 即便某个 disposer hang, agent dispose 已经独立把
-    // SIGTERM 送进 event loop 了, 6s 内可靠送达。
-    // **同步抛防御**: 用 Promise.resolve().then 包一层, 防 dispose() 实现哪天换成
-    // sync function 然后同步抛 — 那种情况下裸 .catch() 自己也炸, 后续的 sessionCloses
-    // 根本来不及构造。
-    const agentDisposes = agentEntries.map(([kind, agent]) =>
+    // Queue agent-level process shutdown and the initial Session snapshot
+    // before waiting for session creation. PiAgent.dispose() owns its startup
+    // barrier; Session detach owns already-published local agent processes.
+    const initialAgentDisposes = agentEntries.map(([kind, agent]) =>
       Promise.resolve()
         .then(() => agent.dispose())
         .catch((e) => {
           errors.push({ kind: 'agent', name: kind, error: e });
         }),
     );
+    const initialSessionDetaches = queueSessionDetaches(initialSessionSnapshot, 'initial');
 
-    const sessionCloses = sessSnapshot.map((s) =>
-      Promise.resolve()
-        .then(() => s.detach())
+    // createSession registers its promise before yielding. Blocking new calls
+    // above makes this a stable barrier: after it settles, every handle started
+    // before shutdown is active, closed, or present in failedHandleCleanups.
+    const creationSnapshot = Array.from(this.pendingSessionCreations);
+    await Promise.allSettled(creationSnapshot);
+
+    const finalAgentDisposes = agentEntries.map(([kind, agent], index) =>
+      initialAgentDisposes[index]!
+        .then(() => agent.dispose())
         .catch((e) => {
-          errors.push({ kind: 'session', name: s.id, error: e });
+          errors.push({ kind: 'agent-final', name: kind, error: e });
         }),
     );
 
-    await Promise.allSettled([...agentDisposes, ...sessionCloses]);
+    // Only sessions published while the creation barrier was settling belong
+    // to the late pass. Identity filtering avoids detaching an initial Session
+    // twice when it remains in activeSessions until its first detach settles.
+    const lateSessionSnapshot = Array.from(this.activeSessions.values())
+      .filter((session) => !initialSessionIdentities.has(session));
+    const lateSessionDetaches = queueSessionDetaches(lateSessionSnapshot, 'late');
+    const failedHandleCleanupSnapshot = Array.from(this.failedHandleCleanups.entries());
+
+    const failedHandleCloses = failedHandleCleanupSnapshot.map(([sessionId, entry]) =>
+      Promise.resolve()
+        .then(() => this.retryFailedHandleCleanup(sessionId, entry))
+        .catch((e) => {
+          errors.push({ kind: 'unpublished-handle', name: sessionId, error: e });
+        }),
+    );
+
+    await Promise.allSettled([
+      ...initialSessionDetaches,
+      ...finalAgentDisposes,
+      ...failedHandleCloses,
+      ...lateSessionDetaches,
+    ]);
 
     if (errors.length > 0) {
       // Maker 没注入 logger; host 端 stdout 能看到 (before-quit 阶段, 不阻塞流程)

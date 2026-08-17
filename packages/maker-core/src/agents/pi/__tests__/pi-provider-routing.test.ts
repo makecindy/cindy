@@ -11,8 +11,17 @@ const captured = vi.hoisted(() => ({
   args: [] as string[],
   env: {} as Record<string, string | undefined>,
   requests: [] as Array<Record<string, unknown>>,
+  requestOptions: [] as Array<{
+    timeoutMs?: number;
+    refreshTimeoutOnEvent?: (event: { type: string }) => boolean;
+  } | undefined>,
   closes: 0,
-  requestHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown; error?: string }>),
+  requestHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<{
+    success: boolean;
+    command?: unknown;
+    data?: unknown;
+    error?: string;
+  }>),
 }));
 
 vi.mock('../transport.js', () => ({
@@ -38,23 +47,44 @@ vi.mock('../transport.js', () => ({
   attachJsonlReader: () => {},
 }));
 
-vi.mock('../rpc-client.js', () => ({
-  PiRpcProcess: class {
-    isClosed = false;
-    async request(command: Record<string, unknown>) {
-      captured.requests.push(command);
-      if (captured.requestHandler) return captured.requestHandler(command);
-      if (command.type === 'get_state') {
-        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
-      }
-      return { success: true, data: {} };
+vi.mock('../rpc-client.js', () => {
+  class PiRpcRequestTimeoutError extends Error {
+    readonly code = 'PI_RPC_TIMEOUT';
+    constructor(
+      readonly commandType: string,
+      readonly timeoutMs: number,
+    ) {
+      super(`pi rpc timeout after ${timeoutMs}ms: ${commandType}`);
+      this.name = 'PiRpcRequestTimeoutError';
     }
-    send(): void {}
-    async close(): Promise<void> { this.isClosed = true; captured.closes += 1; }
-  },
-}));
+  }
+  return {
+    PiRpcRequestTimeoutError,
+    PiRpcProcess: class {
+      isClosed = false;
+      async request(
+        command: Record<string, unknown>,
+        options?: {
+          timeoutMs?: number;
+          refreshTimeoutOnEvent?: (event: { type: string }) => boolean;
+        },
+      ) {
+        captured.requests.push(command);
+        captured.requestOptions.push(options);
+        if (captured.requestHandler) return captured.requestHandler(command);
+        if (command.type === 'get_state') {
+          return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+        }
+        return { success: true, data: {} };
+      }
+      send(): void {}
+      async close(): Promise<void> { this.isClosed = true; captured.closes += 1; }
+    },
+  };
+});
 
 import { PiAgent } from '../index.js';
+import { PiRpcRequestTimeoutError } from '../rpc-client.js';
 import type { AgentDeps } from '../../base-agent.js';
 import type { ModelDescriptor } from '../../../types/capabilities.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -82,6 +112,7 @@ describe('Pi provider-aware model routing', () => {
   beforeEach(() => {
     captured.args = [];
     captured.requests = [];
+    captured.requestOptions = [];
     captured.closes = 0;
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-provider-home-'));
@@ -1456,6 +1487,149 @@ describe('Pi provider-aware model routing', () => {
     ).rejects.toThrow(/failed to read image attachment/);
     // 未发送任何 prompt(失败在 dispatch 前)
     expect(captured.requests).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('waits through Pi preflight compaction when accepting a prompt', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-acceptance-budget',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await handle.send({ type: 'user', content: 'continue the goal' });
+
+    const promptIndex = captured.requests.findIndex((request) => request.type === 'prompt');
+    expect(promptIndex).toBeGreaterThanOrEqual(0);
+    expect(captured.requestOptions[promptIndex]).toMatchObject({ timeoutMs: 600_000 });
+    const refresh = captured.requestOptions[promptIndex]?.refreshTimeoutOnEvent;
+    expect(refresh?.({ type: 'compaction_start' })).toBe(true);
+    expect(refresh?.({ type: 'summarization_retry_scheduled' })).toBe(true);
+    expect(refresh?.({ type: 'agent_start' })).toBe(false);
+    await handle.close();
+  });
+
+  it('marks a true prompt acceptance timeout as an unconfirmed dispatch', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') {
+        throw new PiRpcRequestTimeoutError('prompt', 600_000);
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-acceptance-timeout',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchUnconfirmedError',
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+    });
+    await handle.close();
+  });
+
+  it.each([
+    ['transport close before response', new Error('pi process exited (code=null, signal=null)')],
+    ['unknown write result', new Error('write EPIPE')],
+    ['malformed response envelope', new Error('pi rpc: response for prompt missing boolean success')],
+  ])('marks %s after prompt request starts as an unconfirmed dispatch', async (_label, failure) => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') throw failure;
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: `prompt-unknown-${String(_label).replaceAll(' ', '-')}`,
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchUnconfirmedError',
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      cause: failure,
+    });
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('keeps an explicit prompt rejection as a confirmed undispatched error', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') {
+        return {
+          command: 'prompt',
+          success: false,
+          error: 'prompt rejected before acceptance',
+        };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-explicit-rejection',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchRejectedError',
+      code: 'TURN_DISPATCH_REJECTED',
+      message: 'pi prompt rejected before acceptance: prompt rejected before acceptance',
+    });
+    await handle.close();
+  });
+
+  it.each([
+    ['missing command', { success: false, error: 'prompt rejected before acceptance' }],
+    [
+      'non-string command',
+      { command: { type: 'prompt' }, success: false, error: 'prompt rejected before acceptance' },
+    ],
+    [
+      'mismatched command',
+      { command: 'steer', success: false, error: 'prompt rejected before acceptance' },
+    ],
+  ])('treats a rejected prompt response with %s as an unconfirmed dispatch', async (
+    label,
+    rejectionResponse,
+  ) => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return {
+          success: true,
+          data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === 'prompt') return rejectionResponse;
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: `prompt-rejection-${label.replaceAll(' ', '-')}`,
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+      name: 'TurnDispatchUnconfirmedError',
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      cause: expect.objectContaining({
+        message: 'pi prompt rejection response missing matching command',
+      }),
+    });
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
     await handle.close();
   });
 

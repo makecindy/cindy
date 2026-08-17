@@ -37,6 +37,18 @@ export interface PiRpcEvent {
   [key: string]: unknown;
 }
 
+export class PiRpcRequestTimeoutError extends Error {
+  readonly code = 'PI_RPC_TIMEOUT';
+
+  constructor(
+    public readonly commandType: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(`pi rpc timeout after ${timeoutMs}ms: ${commandType}`);
+    this.name = 'PiRpcRequestTimeoutError';
+  }
+}
+
 export interface PiRpcSpawnOptions {
   /** 已建立的字节流 transport(本地 stdio 或远端 ssh channel)。 */
   transport: PiTransport;
@@ -80,18 +92,18 @@ export class PiRpcProcess {
     resolve: (resp: PiRpcResponse) => void;
     reject: (err: Error) => void;
     timer: NodeJS.Timeout;
+    timeoutMs: number;
+    refreshTimeoutOnEvent?: (event: PiRpcEvent) => boolean;
     /** 发送命令的 type —— 响应 envelope 校验用(轮 40-w4-t4 CRITICAL)。 */
     commandType: string;
   }>();
   private closed = false;
   /**
-   * 轮 42 P2(codex-connector):close() 的幂等守卫单独跟踪 —— 与 closed(进程/通道
-   * 已死)分离。bridge 断链时 onClose 置 closed, 但**用户显式 close 仍未发生过**:
-   * 复用 closed 做 close() 守卫会让显式关闭直接 return, 跳过 killRemoteSession
-   * (它走独立 SSH RPC, 断链后仍能送达 daemon), 远端 pi 带凭证跑到 idle 回收。
-   * closeCalled 只在用户(或上层)显式 close 后置位, 保证 kill 一定执行一次。
+   * In-flight/successful close is shared. A failed close clears the gate so a
+   * later call can retry remote termination instead of reporting a false
+   * idempotent success while the old daemon session may still be alive.
    */
-  private closeCalled = false;
+  private closePromise: Promise<void> | null = null;
   private readonly logger: Logger;
 
   constructor(private readonly opts: PiRpcSpawnOptions) {
@@ -124,7 +136,13 @@ export class PiRpcProcess {
   /** 发送命令并等待同 id 响应。success:false 时同样 resolve(由调用方看 success/error)。 */
   async request(
     command: Record<string, unknown>,
-    { timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS }: { timeoutMs?: number } = {},
+    {
+      timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+      refreshTimeoutOnEvent,
+    }: {
+      timeoutMs?: number;
+      refreshTimeoutOnEvent?: (event: PiRpcEvent) => boolean;
+    } = {},
   ): Promise<PiRpcResponse> {
     if (this.isClosed) throw new Error('pi process already exited');
     const id = `c${this.nextRequestId++}`;
@@ -133,12 +151,15 @@ export class PiRpcProcess {
     return new Promise<PiRpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`pi rpc timeout after ${timeoutMs}ms: ${String(command.type)}`));
+        const commandType = typeof command.type === 'string' ? command.type : '';
+        reject(new PiRpcRequestTimeoutError(commandType, timeoutMs));
       }, timeoutMs);
       this.pending.set(id, {
         resolve,
         reject,
         timer,
+        timeoutMs,
+        refreshTimeoutOnEvent,
         commandType: typeof command.type === 'string' ? command.type : '',
       });
       this.transport.writeLine(payload).catch((err) => {
@@ -164,40 +185,46 @@ export class PiRpcProcess {
     });
   }
 
-  /** 优雅关闭:交给 transport(SIGTERM → 宽限期 → SIGKILL,或关 ssh channel)。幂等。 */
-  async close(): Promise<void> {
-    // 轮 21 H-2 幂等竞态:closeCalled 必须在任何 await 前置位 —— 否则并发 close()
-    // 都通过守卫、killRemoteSession RPC 发两次(daemon 模式)+ transport.close
-    // 跑两次。置位后 killRemoteSession/close 的失败不再影响幂等语义。
-    // 轮 42 P2:守卫用 closeCalled 而非 closed —— onClose(bridge 断链)已置 closed
-    // 时, 用户显式 close 仍必须执行 killRemoteSession(独立 SSH RPC 可送达 daemon)。
-    if (this.closeCalled) return;
-    this.closeCalled = true;
+  /** 优雅关闭:交给 transport(SIGTERM → 宽限期 → SIGKILL,或关 ssh channel)。 */
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    const attempt = this.performClose();
+    this.closePromise = attempt;
+    void attempt.catch(() => {
+      if (this.closePromise === attempt) this.closePromise = null;
+    });
+    return attempt;
+  }
+
+  private async performClose(): Promise<void> {
     this.closed = true;
     // daemon 模式:用户主动关会话 → 先杀远端 daemon 持有的 pi(对齐 CC/Codex daemon
     // 生命周期),再关 transport。顺序关键:先杀 pi 再关 channel,PiAgent 的 onExit
     // cleanup(configHome/perm)才发生在 pi 已死后 —— 否则 kill 失败而 cleanup 已删
     // configHome,daemon pi 继续跑会用已删文件(R2 生命周期 B3)。
-    // 轮 40-w4-t10 HIGH(修复的修复):kill 失败(SSH 断/daemon 不可达)时**仍必须
-    // 关 transport** —— 旧实现直接 throw 会跳过 transport.close, 把可恢复的关闭
-    // 失败变成永久半开(channel/daemon 继续存活, 重试因 closed 置位 no-op)。
-    // kill 失败只决定是否上浮错误, 不阻断底层收口。
+    // kill 失败时仍关 transport，但必须 reject；失败 gate 会被 close() 清掉，
+    // 后续可经独立 SSH RPC 真正重试 kill，不能第二次 close 伪成功。
     let killError: unknown = null;
     try {
       await this.transport.killRemoteSession?.();
     } catch (err) {
-      // 轮 40-w4-t7 HIGH:kill 失败时 pi 可能继续跑, 残留持凭证的远端 session。
-      // fail-closed:上浮错误, 让上层明确知道关闭未完成(daemon idle timeout 兜底)。
       killError = new Error(
         `pi killRemoteSession failed: ${err instanceof Error ? err.message : String(err)} — remote daemon session may still be running`,
       );
     }
+    let transportError: unknown = null;
     try {
       await this.transport.close();
-    } catch {
-      // transport.close 自身幂等且不抛;防御未来实现变更(自审轮 6 L-1 语义保留)。
+    } catch (err) {
+      transportError = err;
+    }
+    if (transportError) {
+      this.failAllPending(
+        transportError instanceof Error ? transportError : new Error(String(transportError)),
+      );
     }
     if (killError) throw killError;
+    if (transportError) throw transportError;
   }
 
   private handleStdoutLine(line: string): void {
@@ -264,7 +291,17 @@ export class PiRpcProcess {
       return;
     }
 
-    this.opts.onEvent(obj as PiRpcEvent);
+    const event = obj as PiRpcEvent;
+    for (const [id, entry] of this.pending) {
+      if (!entry.refreshTimeoutOnEvent?.(event)) continue;
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => {
+        if (this.pending.get(id) !== entry) return;
+        this.pending.delete(id);
+        entry.reject(new PiRpcRequestTimeoutError(entry.commandType, entry.timeoutMs));
+      }, entry.timeoutMs);
+    }
+    this.opts.onEvent(event);
   }
 
   private failAllPending(err: Error): void {
