@@ -9,8 +9,10 @@
  * 凭证路径的只读调用 / 未来新增内置工具。只读分支扫全部字符串入参判凭证,与 bridge
  * 同判定:bridge 升级上来的凭证读在 auto 档必须落弹窗,不能被 path 字段缺失反向放行。
  *
- * MCP 工具(`mcp__*`)一律走 `other`,由当前会话模型结合完整工具名/入参轻量诊断；
- * 本 adapter 不猜测各 server 的安全性。reviewer 缺失/失败仍由共享决策层 fail-closed。
+ * 第一方 durable `subagent` spawn 没有直接副作用,显式归为 session-state；子层具体工具调用
+ * 仍经 runner 回到父审批面。MCP 工具(`mcp__*`)一律走 `other`,由当前会话模型结合完整工具名 /
+ * 入参轻量诊断；本 adapter 不猜测各 server 的安全性。reviewer 缺失 / 失败仍由共享决策层
+ * fail-closed。
  */
 
 import {
@@ -19,6 +21,7 @@ import {
   type ReviewableAction,
   type ReviewVerdict,
 } from '../shared/auto-review.js';
+import { CINDY_SUBAGENT_TOOL_NAME } from './cindy-subagent-source.js';
 
 export type PiAutoReviewVerdict = ReviewVerdict;
 
@@ -92,6 +95,12 @@ function findCredentialLeaf(input: unknown, depth = 0): string | undefined {
 export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): ReviewableAction {
   const { toolName, input } = ctx;
 
+  if (toolName === CINDY_SUBAGENT_TOOL_NAME) {
+    // Spawn only creates a Cindy-managed durable child; it has no direct side effect itself.
+    // Defense in depth stays at the child boundary: every concrete Ask/Auto tool call is
+    // forwarded by the durable runner to this same parent approval surface for a fresh decision.
+    return { kind: 'session-state' };
+  }
   if (READ_ONLY_TOOLS.has(toolName)) {
     // 凭证特征可能落在任意字符串入参(grep 的 pattern、find 的表达式等),与 bridge
     // 的 touchesCredentialPath 同口径递归扫全字段;命中的字符串作为 path 交 core 判必问。
