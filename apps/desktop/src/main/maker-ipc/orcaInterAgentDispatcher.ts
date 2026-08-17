@@ -26,6 +26,9 @@ import { runAcceptedCallback, runAcceptedRollback } from './acceptedCallbackRunn
 const defaultLog = createLogger('maker-ipc');
 
 type OrcaInterAgentDispatchMode = 'dispatched' | 'queued';
+type OrcaVendorDispatchLeaseRelease = (
+  outcome?: 'submitted' | 'confirmed-undispatched',
+) => void | Promise<void>;
 
 function stripIpcErrorPrefix(message: string): string {
   const match = message.match(/^\[[^\]]+\]\s*(.*)$/);
@@ -189,6 +192,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     message: { clientId: string; role: 'user'; content: string },
   ) => Promise<unknown>;
   rewindPersistedUserMessage: (sessionId: string, clientId: string) => Promise<void>;
+  finalizePersistedUserMessageRewind: (
+    sessionId: string,
+    clientId: string,
+  ) => Promise<void>;
   retainPersistedUserMessageCleanup: (
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -210,7 +217,8 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   /** Cross-process lease held from the durable active check through provider acceptance. */
   acquireVendorDispatchLease: (
     teamId: string,
-  ) => Promise<() => void | Promise<void>>;
+    cleanupTarget?: { sessionId: string; clientId: string },
+  ) => Promise<OrcaVendorDispatchLeaseRelease>;
   /** Process-local last-moment fence for the DB-check-to-vendor race. */
   assertOrcaTeamActiveBeforeVendorDispatch?: (teamId: string) => void;
   isSessionRunningError: (err: unknown) => boolean;
@@ -523,13 +531,29 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
               params.targetSessionId,
               cleanupItem,
             ),
-          acquireVendorDispatchLease: () =>
-            deps.acquireVendorDispatchLease(params.teamId),
+          acquireVendorDispatchLease: async () => {
+            const release = await deps.acquireVendorDispatchLease(params.teamId, {
+              sessionId: params.targetSessionId,
+              clientId,
+            });
+            return async (outcome) => {
+              if (outcome !== 'confirmed-undispatched') {
+                deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId);
+                await release(outcome);
+                return;
+              }
+
+              await release(outcome);
+              deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId);
+              await deps.finalizePersistedUserMessageRewind(
+                params.targetSessionId,
+                clientId,
+              );
+            };
+          },
           beforeVendorDispatch: () => {
             deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId);
           },
-          onVendorDispatchLeaseAcquired: () =>
-            deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId),
           onConfirmedUndispatched: () =>
             deps.untrackPersistedUserMessageBeforeVendorDispatch(clientId),
           onRewindFailed: (error) =>
@@ -678,7 +702,6 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     onPersisted?: () => void | Promise<void>;
     acquireVendorDispatchLease?: SessionSendOptions['acquireVendorDispatchLease'];
     beforeVendorDispatch?: () => void;
-    onVendorDispatchLeaseAcquired?: () => void;
     onConfirmedUndispatched?: () => void;
     onRewindFailed?: (error: unknown) => void | Promise<void>;
   },
@@ -694,17 +717,11 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
         try {
           const acquisition = originalAcquireVendorDispatchLease();
           if (acquisition instanceof Promise) {
-            return acquisition
-              .then((release) => {
-                params.onVendorDispatchLeaseAcquired?.();
-                return release;
-              })
-              .catch((err) => {
-                terminalTransitionPending = isPendingOrcaTeamTransitionError(err);
-                throw err;
-              });
+            return acquisition.catch((err) => {
+              terminalTransitionPending = isPendingOrcaTeamTransitionError(err);
+              throw err;
+            });
           }
-          params.onVendorDispatchLeaseAcquired?.();
           return acquisition;
         } catch (err) {
           terminalTransitionPending = isPendingOrcaTeamTransitionError(err);

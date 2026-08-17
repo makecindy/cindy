@@ -80,6 +80,58 @@ describe('OrcaTeamDispatchLeaseCoordinator', () => {
     ).toEqual({ status: 'completed' });
   });
 
+  it('durably rewinds a confirmed-undispatched row before a terminal writer can commit', async () => {
+    const options = await createClientOptions();
+    const setup = await trackedClient(options);
+    await setup.exec('CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    await setup.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        rewind_at INTEGER
+      )
+    `);
+    await setup.exec("INSERT INTO orca_teams (id, status) VALUES ('team-failed', 'active')");
+    await setup.exec(`
+      INSERT INTO messages (id, session_id, client_id, role, rewind_at)
+      VALUES ('row-failed', 'session-1', 'client-failed', 'user', NULL)
+    `);
+
+    const leaseClient = await trackedLeaseClient(options);
+    const terminalClient = await trackedClient(options);
+    const coordinator = new OrcaTeamDispatchLeaseCoordinator({
+      resolveScope: () => ({ key: 'owner-1', options }),
+      createClient: async () => leaseClient,
+      getTerminalFenceState: () => 'open',
+    });
+
+    const release = await coordinator.acquire('team-failed', {
+      sessionId: 'session-1',
+      clientId: 'client-failed',
+    });
+    let terminalSettled = false;
+    const terminalWrite = terminalClient
+      .exec("UPDATE orca_teams SET status = 'completed' WHERE id = 'team-failed'")
+      .then(() => {
+        terminalSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(terminalSettled).toBe(false);
+
+    await release('confirmed-undispatched');
+    await terminalWrite;
+
+    expect(
+      await terminalClient.queryOne<{ rewindAt: number | null }>(
+        'SELECT rewind_at AS rewindAt FROM messages WHERE id = ?',
+        ['row-failed'],
+      ),
+    ).toEqual({ rewindAt: expect.any(Number) });
+    expect(terminalSettled).toBe(true);
+  });
+
   it('fails closed before provider dispatch when the durable team is no longer active', async () => {
     const options = await createClientOptions();
     const setup = await trackedClient(options);

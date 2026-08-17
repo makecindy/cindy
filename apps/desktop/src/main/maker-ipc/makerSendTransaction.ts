@@ -197,7 +197,10 @@ export interface MakerSendTransactionDeps {
   acquireVendorDispatchLease?: (
     sessionId: string,
     sendOpts: unknown,
-  ) => void | (() => void | Promise<void>) | Promise<() => void | Promise<void>>;
+  ) =>
+    | void
+    | ((outcome?: 'submitted' | 'confirmed-undispatched') => void | Promise<void>)
+    | Promise<(outcome?: 'submitted' | 'confirmed-undispatched') => void | Promise<void>>;
   /** Durable active-team check for queued Orca traffic, before any rehydrate side effect. */
   isOrcaTeamInputActive?: (sessionId: string, teamId: string) => Promise<boolean>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;

@@ -345,15 +345,15 @@ describe('AppServerHost.request startup timeout', () => {
     const request = host.request('turn/start', {}, {
       acquireSubmissionLease: async () => {
         order.push('acquire');
-        return () => {
-          order.push('release');
+        return (outcome) => {
+          order.push(`release:${outcome}`);
         };
       },
     });
     const settled = vi.fn();
     void request.then(settled, settled);
 
-    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release']));
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release:submitted']));
     expect(
       transport.lines.some((line) => JSON.parse(line).method === 'turn/start'),
     ).toBe(true);
@@ -383,7 +383,7 @@ describe('AppServerHost.request startup timeout', () => {
     expect(release).not.toHaveBeenCalled();
 
     transport.settleTurnStartWrite();
-    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(release).toHaveBeenCalledWith('submitted'));
     await host.shutdown();
   });
 
@@ -402,7 +402,7 @@ describe('AppServerHost.request startup timeout', () => {
         acquireSubmissionLease: async () => release,
       }),
     ).rejects.toThrow(/circular/i);
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith('confirmed-undispatched');
 
     await host.shutdown();
   });

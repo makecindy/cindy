@@ -59,6 +59,8 @@ import {
   type OneShotOptions,
   type SendOptions,
   type TurnPermissionPolicy,
+  type VendorDispatchLeaseOutcome,
+  type VendorDispatchLeaseRelease,
 } from '../base-agent.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
@@ -1414,7 +1416,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       uuid?: string;
     };
     type VendorDispatchLeaseAcquire = NonNullable<SendOptions['acquireVendorDispatchLease']>;
-    type VendorDispatchLeaseRelease = () => void | Promise<void>;
     const vendorDispatchLeaseAcquireByInput = new WeakMap<
       SdkUserInput,
       VendorDispatchLeaseAcquire
@@ -1427,21 +1428,24 @@ export class ClaudeCodeAgent extends BaseAgent {
       release: VendorDispatchLeaseRelease,
     ): void => {
       let released = false;
-      const releaseOnce = async (): Promise<void> => {
+      const releaseOnce = async (
+        outcome: VendorDispatchLeaseOutcome = 'submitted',
+      ): Promise<void> => {
         if (released) return;
         released = true;
         vendorDispatchLeaseByInput.delete(input);
         queuedVendorDispatchLeaseInputs.delete(input);
-        await release();
+        await release(outcome);
       };
       vendorDispatchLeaseByInput.set(input, releaseOnce);
     };
 
     const releaseVendorDispatchLeaseForInput = async (
       input: SdkUserInput,
+      outcome: VendorDispatchLeaseOutcome,
     ): Promise<void> => {
       const release = vendorDispatchLeaseByInput.get(input);
-      if (release) await release();
+      if (release) await release(outcome);
     };
 
     const releaseVendorDispatchLeaseAfterLocalHandoff = (input: SdkUserInput): void => {
@@ -1450,7 +1454,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // microtask checkpoint. A timer releases the writer lease only after
       // that handoff, without retaining it for the provider response.
       setTimeout(() => {
-        void releaseVendorDispatchLeaseForInput(input).catch((error: unknown) => {
+        void releaseVendorDispatchLeaseForInput(input, 'submitted').catch((error: unknown) => {
           log.warn('Claude vendor dispatch lease release after local handoff failed', {
             error: error instanceof Error ? error.message : String(error),
           });
@@ -1467,7 +1471,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         });
       }
       for (const input of inputs) {
-        void releaseVendorDispatchLeaseForInput(input).catch((error: unknown) => {
+        void releaseVendorDispatchLeaseForInput(input, 'confirmed-undispatched').catch((error: unknown) => {
           log.warn('Claude vendor dispatch lease release failed', {
             reason,
             error: error instanceof Error ? error.message : String(error),
@@ -3266,11 +3270,12 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // local transport submission and keep response handling intact.
                 void pending.response.catch(() => undefined);
                 await pending.submitted;
-                await releaseVendorDispatchLeaseForInput(msg);
+                await releaseVendorDispatchLeaseForInput(msg, 'submitted');
                 await pending.response;
               } else {
                 // Compatibility fallback for injected legacy test/host queries.
                 await remoteTransport.send(msg);
+                await releaseVendorDispatchLeaseForInput(msg, 'submitted');
               }
             } catch (e) {
               log.warn('cc remote: forwarding inputQueue → remoteQuery.send failed; closing remote query to surface aborted-turn', {
@@ -3285,7 +3290,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               break;
             } finally {
-              await releaseVendorDispatchLeaseForInput(msg);
+              await releaseVendorDispatchLeaseForInput(msg, 'confirmed-undispatched');
             }
           }
         })().catch(() => undefined);
@@ -4859,7 +4864,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // The original lease covered only the first provider submission. It may
           // still be awaiting its local-handoff release when invalid-resume recovery
           // starts, so settle it before acquiring a fresh lease for the replay.
-          await releaseVendorDispatchLeaseForInput(replayInput);
+          await releaseVendorDispatchLeaseForInput(replayInput, 'submitted');
           const reacquireVendorDispatchLease =
             vendorDispatchLeaseAcquireByInput.get(replayInput);
           const releaseVendorDispatchLease =
@@ -4872,7 +4877,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               throw new Error('fresh retry input queue rejected replay');
             }
           } catch (error) {
-            await releaseVendorDispatchLeaseForInput(replayInput);
+            await releaseVendorDispatchLeaseForInput(replayInput, 'confirmed-undispatched');
             throw error;
           }
           armUpstreamResponseIdle();
@@ -5481,7 +5486,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               throw new Error('Claude input queue is closed');
             }
           } catch (error) {
-            await releaseVendorDispatchLeaseForInput(sdkInput);
+            await releaseVendorDispatchLeaseForInput(sdkInput, 'confirmed-undispatched');
             throw error;
           }
           userInputAccepted = true;

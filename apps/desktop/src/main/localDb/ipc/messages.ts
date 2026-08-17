@@ -983,38 +983,45 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
+  options: { finalizeAlreadyRewound?: boolean } = {},
 ): Promise<void> {
   const ownerScope = captureOwnerBroadcastScope();
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
+  const filters = [
+    eq(messages.sessionId, sessionId),
+    eq(messages.clientId, clientId),
+    eq(messages.role, 'user'),
+  ];
+  if (!options.finalizeAlreadyRewound) filters.push(isNull(messages.rewindAt));
   const [row] = await db
-    .select({ id: messages.id, clientId: messages.clientId, content: messages.content })
+    .select({
+      id: messages.id,
+      clientId: messages.clientId,
+      content: messages.content,
+      rewindAt: messages.rewindAt,
+    })
     .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, clientId),
-        eq(messages.role, 'user'),
-        isNull(messages.rewindAt),
-      ),
-    )
+    .where(and(...filters))
     .limit(1);
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (!row) return;
 
-  const rewoundAt = Date.now();
-  const updated = await dbClient.exec(
-    `UPDATE messages
-        SET rewind_at = ?
-      WHERE session_id = ?
-        AND client_id = ?
-        AND role = 'user'
-        AND rewind_at IS NULL`,
-    [rewoundAt, sessionId, clientId],
-  );
+  const updated =
+    row.rewindAt === null
+      ? await dbClient.exec(
+          `UPDATE messages
+          SET rewind_at = ?
+        WHERE session_id = ?
+          AND client_id = ?
+          AND role = 'user'
+          AND rewind_at IS NULL`,
+          [Date.now(), sessionId, clientId],
+        )
+      : { changes: 0 };
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (updated.changes === 0) return;
+  if (updated.changes === 0 && !options.finalizeAlreadyRewound) return;
 
   const mediaCleanup = await Promise.allSettled(
     [...new Set([row.id, row.clientId])].map((refId) =>

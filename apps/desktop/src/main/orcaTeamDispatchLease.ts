@@ -30,7 +30,16 @@ export interface OrcaTeamDispatchLeaseDeps {
   getTerminalFenceState(teamId: string): OrcaTeamTerminalFenceState;
 }
 
-export type OrcaTeamDispatchLeaseRelease = () => Promise<void>;
+export type OrcaTeamDispatchLeaseOutcome = 'submitted' | 'confirmed-undispatched';
+
+export interface OrcaTeamDispatchCleanupTarget {
+  sessionId: string;
+  clientId: string;
+}
+
+export type OrcaTeamDispatchLeaseRelease = (
+  outcome?: OrcaTeamDispatchLeaseOutcome,
+) => Promise<void>;
 
 /**
  * Serializes the short local provider-submission boundary through a dedicated SQLite
@@ -43,7 +52,10 @@ export class OrcaTeamDispatchLeaseCoordinator {
 
   constructor(private readonly deps: OrcaTeamDispatchLeaseDeps) {}
 
-  async acquire(teamId: string): Promise<OrcaTeamDispatchLeaseRelease> {
+  async acquire(
+    teamId: string,
+    cleanupTarget?: OrcaTeamDispatchCleanupTarget,
+  ): Promise<OrcaTeamDispatchLeaseRelease> {
     let unlock!: () => void;
     const previous = this.tail;
     this.tail = new Promise<void>((resolve) => {
@@ -78,11 +90,35 @@ export class OrcaTeamDispatchLeaseCoordinator {
       }
 
       let released = false;
-      return async () => {
+      return async (outcome: OrcaTeamDispatchLeaseOutcome = 'submitted') => {
         if (released) return;
         released = true;
-        await this.releaseTransaction(client);
-        unlock();
+        try {
+          if (outcome === 'confirmed-undispatched' && cleanupTarget) {
+            // Tombstone the exact accepted row in the same BEGIN IMMEDIATE
+            // transaction that excluded terminal writers. Another Cindy
+            // instance can only commit end_team after this durable rewind.
+            await client.exec(
+              `UPDATE messages
+                  SET rewind_at = ?
+                WHERE session_id = ?
+                  AND client_id = ?
+                  AND role = 'user'
+                  AND rewind_at IS NULL`,
+              [Date.now(), cleanupTarget.sessionId, cleanupTarget.clientId],
+            );
+            await client.exec('COMMIT');
+          } else {
+            await this.releaseTransaction(client);
+          }
+        } catch (error) {
+          if (this.client?.value === client) {
+            await this.releaseTransaction(client);
+          }
+          throw error;
+        } finally {
+          unlock();
+        }
       };
     } catch (error) {
       if (transactionOpen && this.client) {
@@ -182,8 +218,9 @@ const coordinator = new OrcaTeamDispatchLeaseCoordinator({
 
 export function acquireOrcaTeamDispatchLease(
   teamId: string,
+  cleanupTarget?: OrcaTeamDispatchCleanupTarget,
 ): Promise<OrcaTeamDispatchLeaseRelease> {
-  return coordinator.acquire(teamId);
+  return coordinator.acquire(teamId, cleanupTarget);
 }
 
 export function disposeOrcaTeamDispatchLeaseCoordinator(): Promise<void> {

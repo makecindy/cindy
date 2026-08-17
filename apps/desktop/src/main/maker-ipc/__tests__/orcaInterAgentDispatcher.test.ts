@@ -71,7 +71,7 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
       order.push('vendor-released');
       return { accepted: true };
     } finally {
-      await releaseVendorDispatchLease?.();
+      await releaseVendorDispatchLease?.('submitted');
     }
   });
   const deps: OrcaInterAgentDispatcherDeps<TestSessionMeta> = {
@@ -98,6 +98,9 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     }),
     rewindPersistedUserMessage: vi.fn(async () => {
       order.push('rewind-user-row');
+    }),
+    finalizePersistedUserMessageRewind: vi.fn(async () => {
+      order.push('finalize-rewind');
     }),
     retainPersistedUserMessageCleanup: vi.fn(() => {}),
     trackPersistedUserMessageBeforeVendorDispatch: vi.fn(() => {}),
@@ -215,8 +218,11 @@ describe('Orca lead/worker dispatcher', () => {
       'vendor-released',
       'lease-release',
     ]);
-    expect(acquireVendorDispatchLease).toHaveBeenCalledWith('team-1');
-    expect(leaseRelease).toHaveBeenCalledTimes(1);
+    expect(acquireVendorDispatchLease).toHaveBeenCalledWith('team-1', {
+      sessionId: 'target-session',
+      clientId: 'client-1',
+    });
+    expect(leaseRelease).toHaveBeenCalledWith('submitted');
   });
 
   it('keeps cleanup tracking until the provider dispatch lease is acquired', async () => {

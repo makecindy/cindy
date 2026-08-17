@@ -239,8 +239,8 @@ describe('Claude invalid-resume recovery', () => {
       {
         acquireVendorDispatchLease: async () => {
           order.push('acquire');
-          return () => {
-            order.push('release');
+          return (outcome) => {
+            order.push(`release:${outcome}`);
           };
         },
       },
@@ -248,7 +248,7 @@ describe('Claude invalid-resume recovery', () => {
 
     expect(order).toEqual(['acquire']);
     allowPromptConsumption();
-    await vi.waitFor(() => expect(order).toEqual(['acquire', 'consume', 'release']));
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'consume', 'release:submitted']));
     expect(h.consumedInputs[0]).toHaveLength(1);
     await h.handle.close();
     h.streams[0].end();
@@ -272,6 +272,7 @@ describe('Claude invalid-resume recovery', () => {
 
     await h.handle.close();
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    expect(release).toHaveBeenCalledWith('confirmed-undispatched');
     h.streams[0].end();
     await h.collected;
   });
@@ -319,8 +320,8 @@ describe('Claude invalid-resume recovery', () => {
       {
         acquireVendorDispatchLease: async () => {
           order.push('acquire');
-          return () => {
-            order.push('release');
+          return (outcome) => {
+            order.push(`release:${outcome}`);
           };
         },
       },
@@ -331,7 +332,7 @@ describe('Claude invalid-resume recovery', () => {
     await handle.close();
     expect(order).toEqual(['acquire']);
     finishRemoteSubmission();
-    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release']));
+    await vi.waitFor(() => expect(order).toEqual(['acquire', 'release:submitted']));
     finishRemoteResponse();
     stream.end();
     await collected;

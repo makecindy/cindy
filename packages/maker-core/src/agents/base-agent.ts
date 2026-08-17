@@ -1318,6 +1318,11 @@ export interface StartSessionOptions {
  * Session.send / handle.send 的可选附加项。
  * 缺省 / 不识别字段必须安全忽略。
  */
+export type VendorDispatchLeaseOutcome = 'submitted' | 'confirmed-undispatched';
+export type VendorDispatchLeaseRelease = (
+  outcome?: VendorDispatchLeaseOutcome,
+) => void | Promise<void>;
+
 export interface SendOptions {
   /**
    * 当前 session 的展示 title (renderer / IPC 层在调 send 前查到的最新值)。
@@ -1349,8 +1354,8 @@ export interface SendOptions {
    */
   acquireVendorDispatchLease?: () =>
     | void
-    | (() => void | Promise<void>)
-    | Promise<() => void | Promise<void>>;
+    | VendorDispatchLeaseRelease
+    | Promise<VendorDispatchLeaseRelease>;
   /**
    * 当前用户的展示名 (host / renderer 在调 send 时提供)。仅用于 turn-start 时
    * push status event 的文案 — agent 拼成 "<userName> Just Wait ..." 让 UI 个人化;

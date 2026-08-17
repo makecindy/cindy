@@ -26,6 +26,10 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
+import type {
+  VendorDispatchLeaseOutcome,
+  VendorDispatchLeaseRelease,
+} from '../../base-agent.js';
 import { AppServerClient, type SubmittedAppServerRequest } from './client.js';
 import type { Transport } from './transport.js';
 import {
@@ -698,8 +702,8 @@ export class AppServerHost {
       timeoutMs?: number;
       acquireSubmissionLease?: () =>
         | void
-        | (() => void | Promise<void>)
-        | Promise<() => void | Promise<void>>;
+        | VendorDispatchLeaseRelease
+        | Promise<VendorDispatchLeaseRelease>;
     },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
@@ -757,8 +761,8 @@ export class AppServerHost {
     acquireSubmissionLease:
       | (() =>
           | void
-          | (() => void | Promise<void>)
-          | Promise<() => void | Promise<void>>)
+          | VendorDispatchLeaseRelease
+          | Promise<VendorDispatchLeaseRelease>)
       | undefined,
   ): Promise<R> {
     const client = this.client;
@@ -774,7 +778,7 @@ export class AppServerHost {
         timeoutMs === undefined ? undefined : { timeoutMs },
       );
     } catch (error) {
-      await release?.();
+      await release?.('confirmed-undispatched');
       throw error;
     }
 
@@ -790,13 +794,15 @@ export class AppServerHost {
       ),
     ]);
     const releaseAfterSubmission = (async () => {
+      let outcome: VendorDispatchLeaseOutcome = 'submitted';
       try {
         await submissionBoundary;
       } catch {
         // A transport write failure is also carried by response. Lease release
         // must still run, while the caller observes the original response error.
+        outcome = 'confirmed-undispatched';
       }
-      await release?.();
+      await release?.(outcome);
     })();
     void releaseAfterSubmission.catch((error) => {
       this.logger.warn('app-server submission lease release failed', {

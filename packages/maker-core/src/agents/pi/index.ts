@@ -2796,10 +2796,14 @@ export class PiAgent extends BaseAgent {
           void pendingRequest.response.catch(() => undefined);
           try {
             await pendingRequest.submitted;
-          } finally {
+          } catch (error) {
             if (typeof releaseVendorDispatchLease === 'function') {
-              await releaseVendorDispatchLease();
+              await releaseVendorDispatchLease('confirmed-undispatched');
             }
+            throw error;
+          }
+          if (typeof releaseVendorDispatchLease === 'function') {
+            await releaseVendorDispatchLease('submitted');
           }
           const resp = await pendingRequest.response;
           if (!resp.success) {

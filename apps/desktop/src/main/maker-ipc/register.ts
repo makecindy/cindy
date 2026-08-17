@@ -8430,14 +8430,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           untrackPersistedOrcaPreVendorInput(clientId);
         }
       };
-      const acquireTrackedOriginVendorDispatchLease = acquireOriginVendorDispatchLease
+      const acquireTrackedOriginVendorDispatchLease = orcaOriginTeamId
         ? async () => {
-            const release = await acquireOriginVendorDispatchLease();
-            // Session.onDispatching runs before the provider acquires this
-            // lease. Keep the exact cleanup item visible to end_team until the
-            // cross-process lease makes a terminal commit impossible.
-            untrackPersistedOrcaPreVendorInput(clientId);
-            return release;
+            const release = await acquireOrcaTeamDispatchLease(orcaOriginTeamId, {
+              sessionId: targetSessionId,
+              clientId,
+            });
+            return async (outcome?: 'submitted' | 'confirmed-undispatched') => {
+              if (outcome !== 'confirmed-undispatched') {
+                // Stop exposing the row to same-process terminal snapshots
+                // before the cross-process writer lease is released.
+                untrackPersistedOrcaPreVendorInput(clientId);
+                await release(outcome);
+                return;
+              }
+
+              // The lease release commits the exact rewind before another
+              // instance can commit end_team. Only then is local tracking safe
+              // to remove; media cleanup and broadcast may follow afterward.
+              await release(outcome);
+              untrackPersistedOrcaPreVendorInput(clientId);
+              await rewindPersistedUserMessageAfterClear(targetSessionId, clientId, {
+                finalizeAlreadyRewound: true,
+              });
+            };
           }
         : undefined;
 
@@ -9199,6 +9215,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rewindPersistedUserMessage: (sessionId, clientId) =>
       enqueueDurableWrite(`orca-direct-user-rewind:${sessionId}:${clientId}`, () =>
         rewindPersistedUserMessageAfterClear(sessionId, clientId),
+      ),
+    finalizePersistedUserMessageRewind: (sessionId, clientId) =>
+      enqueueDurableWrite(`orca-direct-user-rewind-finalize:${sessionId}:${clientId}`, () =>
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, {
+          finalizeAlreadyRewound: true,
+        }),
       ),
     retainPersistedUserMessageCleanup: (sessionId, item, error) =>
       inputCoordinator.retainPersistedOrcaCleanupRecovery(sessionId, item, error),

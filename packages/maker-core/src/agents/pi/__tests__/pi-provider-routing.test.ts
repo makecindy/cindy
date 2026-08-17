@@ -1806,8 +1806,8 @@ describe('Pi provider-aware model routing', () => {
       {
         acquireVendorDispatchLease: async () => {
           acceptanceOrder.push('acquire');
-          return () => {
-            acceptanceOrder.push('release');
+          return (outcome) => {
+            acceptanceOrder.push(`release:${outcome}`);
           };
         },
         onTranscriptUserEntry,
@@ -1815,12 +1815,19 @@ describe('Pi provider-aware model routing', () => {
     );
     await vi.waitFor(() => expect(acceptanceOrder).toEqual(['acquire', 'rpc']));
     promptSubmitted.resolve(undefined);
-    await vi.waitFor(() => expect(acceptanceOrder).toEqual(['acquire', 'rpc', 'release']));
+    await vi.waitFor(() =>
+      expect(acceptanceOrder).toEqual(['acquire', 'rpc', 'release:submitted']),
+    );
     promptResponse.resolve(undefined);
     await sending;
     expect(onTranscriptUserEntry).toHaveBeenCalledOnce();
     expect(onTranscriptUserEntry).toHaveBeenCalledWith('new-user');
-    expect(acceptanceOrder).toEqual(['acquire', 'rpc', 'release', 'transcript']);
+    expect(acceptanceOrder).toEqual([
+      'acquire',
+      'rpc',
+      'release:submitted',
+      'transcript',
+    ]);
     await handle.close();
   });
 
@@ -1842,8 +1849,8 @@ describe('Pi provider-aware model routing', () => {
         {
           acquireVendorDispatchLease: async () => {
             order.push('acquire');
-            return () => {
-              order.push('release');
+            return (outcome) => {
+              order.push(`release:${outcome}`);
             };
           },
         },
@@ -1853,7 +1860,7 @@ describe('Pi provider-aware model routing', () => {
       code: 'TURN_DISPATCH_UNCONFIRMED',
       cause: expect.objectContaining({ message: 'pi rpc timeout after 5ms: prompt' }),
     });
-    expect(order).toEqual(['acquire', 'release']);
+    expect(order).toEqual(['acquire', 'release:confirmed-undispatched']);
     await handle.close();
   });
 
