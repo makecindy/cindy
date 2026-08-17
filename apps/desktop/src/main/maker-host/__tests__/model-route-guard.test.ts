@@ -11,8 +11,12 @@ import { buildRegistry, type Catalog, type CatalogModel, type Provider } from '@
 
 import {
   checkModelRoute,
+  materializeExclusiveProviderRoute,
   pickEnabledFallbackModel,
+  resolveCurrentSetModelProviderId,
+  resolveExclusiveSetModelReroute,
   resolveLenientRoute,
+  resolveSetModelGuardProviderId,
 } from '../model-route-guard.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
@@ -454,5 +458,75 @@ describe('resolveLenientRoute(自动化直建会话的宽松降级)', () => {
     expect(
       resolveLenientRoute(views(), 'claude-code', 'claude-opus-5', null, { desiredEffort: 'max' }),
     ).toEqual({ model: 'claude-opus-5', providerId: null, degraded: false });
+  });
+});
+
+describe('materializeExclusiveProviderRoute', () => {
+  function xaiViews(connected: Record<string, boolean> = { xd: true, xai: true }) {
+    const catalog = {
+      providers: [
+        provider('xd', [model('claude-opus-5')]),
+        {
+          ...provider('xai', [model('xai/grok-4.5')]),
+          agents: ['claude-code', 'pi'],
+        },
+      ],
+    } as Catalog;
+    return buildRegistry(catalog, connected);
+  }
+
+  it('Claude/GPT 双来源保持 keep,不打断默认队列', () => {
+    expect(materializeExclusiveProviderRoute(views(), 'claude-code', 'claude-opus-5', null))
+      .toEqual({ kind: 'keep' });
+  });
+
+  it('裸 grok / xai/ 前缀在 xAI 已连接时钉死 xai', () => {
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'grok-4.6', null))
+      .toEqual({ kind: 'pin', providerId: 'xai' });
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'xai/grok-4.6', null))
+      .toEqual({ kind: 'pin', providerId: 'xai' });
+  });
+
+  it('显式 xd 或 xAI 未连接 → reject,不把 Grok 送进默认网关', () => {
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'grok-4.6', 'xd'))
+      .toEqual({ kind: 'reject' });
+    expect(materializeExclusiveProviderRoute(xaiViews({ xd: true, xai: false }), 'claude-code', 'grok-4.6', null))
+      .toEqual({ kind: 'reject' });
+  });
+
+  it('网关风格 x-ai/ 与自定义供应商不占用独占门', () => {
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'x-ai/grok-4.6', null))
+      .toEqual({ kind: 'keep' });
+    expect(materializeExclusiveProviderRoute(xaiViews(), 'claude-code', 'grok-4.6', 'my-litellm'))
+      .toEqual({ kind: 'keep' });
+  });
+
+  it('SET_MODEL undefined 保持当前 custom 来源,不会改绑 xAI', () => {
+    expect(resolveSetModelGuardProviderId(undefined, 'my-litellm')).toBe('my-litellm');
+    expect(resolveExclusiveSetModelReroute(undefined, 'my-litellm', 'xai')).toBeUndefined();
+    expect(resolveExclusiveSetModelReroute(undefined, null, 'xai')).toBe('xai');
+    expect(resolveExclusiveSetModelReroute(null, 'my-litellm', 'xai')).toBe('xai');
+  });
+
+  it('未 hydrate 时用 DB 持久来源,不把 custom 会话当成默认队列', () => {
+    expect(resolveCurrentSetModelProviderId(false, null, 'my-litellm')).toBe('my-litellm');
+    expect(resolveCurrentSetModelProviderId(true, null, 'my-litellm')).toBeNull();
+    expect(
+      resolveExclusiveSetModelReroute(
+        undefined,
+        resolveCurrentSetModelProviderId(false, null, 'my-litellm'),
+        'xai',
+      ),
+    ).toBeUndefined();
+    expect(resolveExclusiveSetModelReroute(undefined, null, 'xai', false)).toBeUndefined();
+  });
+
+  it('lenient 二次降级不会把独占 Grok 放成 providerId=null', () => {
+    const v = xaiViews({ xd: true, xai: false });
+    expect(resolveLenientRoute(v, 'claude-code', 'grok-4.6', 'xai')).toEqual({
+      model: 'claude-opus-5',
+      providerId: 'xd',
+      degraded: true,
+    });
   });
 });

@@ -794,7 +794,9 @@ describe('model:pick 持久化失败', () => {
       'openrouter',
     );
     expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', 'openrouter');
-    expect(live.setModel).toHaveBeenCalledWith('claude-sonnet-4-6');
+    expect(live.setModel).toHaveBeenCalledWith('claude-sonnet-4-6', {
+      providerId: 'openrouter',
+    });
     expect(live.setEffort).toHaveBeenNthCalledWith(1, 'high');
     expect(live.setEffort).toHaveBeenNthCalledWith(2, 'medium');
     expect(im.updateInteractiveCard).toHaveBeenCalledWith(
@@ -834,6 +836,9 @@ describe('model:pick 持久化失败', () => {
       null,
     );
     expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', null);
+    expect(live.setModel).toHaveBeenCalledWith('claude-sonnet-4-6', {
+      providerId: null,
+    });
   });
 });
 

@@ -35,6 +35,7 @@ import {
 } from './model-plane/modelPlanePolicy.js';
 import {
   checkModelRoute,
+  materializeExclusiveProviderRoute,
   resolveLenientRoute,
   type ModelRouteGuardOptions,
   type ModelRouteVerdict,
@@ -175,9 +176,39 @@ export async function verdictForModelRoute(
   } catch {
     const tombstoneVerdict = checkModelRoute([], agent, model, providerId, guardOptions);
     if (tombstoneVerdict.kind === 'reject') return tombstoneVerdict;
+    const exclusive = materializeExclusiveProviderRoute([], agent, model, providerId);
+    if (exclusive.kind === 'reject') {
+      return { kind: 'reject', reason: 'exclusive-source-unavailable' };
+    }
+    if (exclusive.kind === 'pin') return { kind: 'reroute', providerId: exclusive.providerId };
     return overrideOnlyVerdict(agent, model, providerId);
   }
-  return checkModelRoute(views, agent, model, providerId, guardOptions);
+  const disableVerdict = checkModelRoute(views, agent, model, providerId, guardOptions);
+  if (disableVerdict.kind === 'reject') return disableVerdict;
+  const providerAfterDisable =
+    disableVerdict.kind === 'reroute' ? disableVerdict.providerId : providerId;
+  const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerAfterDisable);
+  if (exclusive.kind === 'reject') {
+    return { kind: 'reject', reason: 'exclusive-source-unavailable' };
+  }
+  if (exclusive.kind === 'pin') return { kind: 'reroute', providerId: exclusive.providerId };
+  return disableVerdict;
+}
+
+/** Resume 旧会话:只钉死独占来源,不把停用轴 reject 套到已在跑的会话上。 */
+export async function pinExclusiveSessionProvider(
+  agent: AgentKind,
+  model: string,
+  providerId: string | null,
+): Promise<string | undefined> {
+  let views: ProviderView[];
+  try {
+    views = await listRouteGuardProviders();
+  } catch {
+    return undefined;
+  }
+  const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
+  return exclusive.kind === 'pin' ? exclusive.providerId : undefined;
 }
 
 /**
@@ -206,6 +237,13 @@ export async function resolveLenientSessionRoute(
     // 目录故障降级:override-only 保守裁决(同 overrideOnlyVerdict 语义)。命中即
     // 逐级丢弃;目录不可得时没有 pick 兜底可用,model 置空由调用方失败收口。
     if (!model) return { model, providerId, degraded: false };
+    const exclusive = materializeExclusiveProviderRoute([], agent, model, providerId);
+    if (exclusive.kind === 'reject') {
+      return { model: undefined, providerId: null, degraded: true };
+    }
+    if (exclusive.kind === 'pin') {
+      return { model, providerId: exclusive.providerId, degraded: false };
+    }
     if (checkModelRoute([], agent, model, providerId, guardOptions).kind === 'reject') {
       return { model: undefined, providerId: null, degraded: true };
     }

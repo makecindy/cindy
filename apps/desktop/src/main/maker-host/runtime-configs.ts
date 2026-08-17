@@ -9,7 +9,11 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
+import {
+  isExclusiveXaiModelId,
+  isModelDisabled,
+  isProviderDisabled,
+} from '@cindy/model-providers';
 
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -232,7 +236,6 @@ function resolveSubagentModelForRoute(
   const offering = getActiveCatalog().providers.filter((p) =>
     (p.models['claude-code'] ?? []).some((m) => m.id === saved),
   );
-  if (offering.length === 0) return saved; // 目录不认识 → 不新增拒绝面
   const copyDisabled = (id: string) =>
     isProviderDisabled(overrides, id) || isModelDisabled(overrides, id, saved);
   if (providerId !== undefined) {
@@ -247,10 +250,17 @@ function resolveSubagentModelForRoute(
       : implicitRouteId
         ? offering.find((p) => p.id === implicitRouteId)
         : undefined;
-    // 显式/映射来源不提供该模型(跨来源 subagent 覆写)或凭证形态未知:实际落点
-    // 不明,落到下方保守判。
     if (routeProvider) return copyDisabled(routeProvider.id) ? undefined : saved;
+    // 独占 Grok 不能跟着默认/非 xAI 父会话注入裸 id。
+    if (isExclusiveXaiModelId(saved) && providerId !== 'xai') return undefined;
+    // 显式父来源在目录里有该模型的其它拷贝,但本源不提供 → 不注入。
+    if (providerId && offering.length > 0) return undefined;
+    // 默认会话(providerId=null 且凭证形态未知)保持原保守口径:任一启用拷贝可用就保留覆写。
+    if (offering.length === 0) return saved;
+    const allDisabled = offering.every((p) => copyDisabled(p.id));
+    return allDisabled ? undefined : saved;
   }
+  if (offering.length === 0) return saved;
   const allDisabled = offering.every((p) => copyDisabled(p.id));
   return allDisabled ? undefined : saved;
 }

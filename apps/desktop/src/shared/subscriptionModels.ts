@@ -25,3 +25,8 @@ export function isSubscriptionDirectModel(model: string | null | undefined): boo
   if (!model) return false;
   return SUBSCRIPTION_DIRECT_MODEL_PREFIXES.some((prefix) => model.startsWith(prefix));
 }
+
+export {
+  isExclusiveXaiModelId,
+  isSubscriptionDirectRoute,
+} from '@cindy/model-providers';

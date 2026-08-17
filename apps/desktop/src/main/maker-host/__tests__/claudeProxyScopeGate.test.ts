@@ -177,6 +177,53 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     );
     expect(readClaudeSessionRoute('sess-grok')).toBe('gateway');
   });
+
+  it('裸 grok-4.6 不 fail-open 进默认网关,改走订阅桥或拒绝', async () => {
+    clearSessionProvider('sess-grok');
+    const transform = createModelRoutingTransform();
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ),
+    );
+    expect(decision?.localHandler).toEqual(expect.any(Function));
+    expect(decision).not.toEqual(expect.objectContaining({
+      headerOverride: expect.anything(),
+    }));
+  });
+
+  it('显式自定义供应商的裸 grok-4.6 不被 SuperGrok bridge 改写成 xai/', async () => {
+    setSessionProvider('sess-grok', 'my-litellm');
+    const transform = createModelRoutingTransform();
+    const parsedBody = { model: 'grok-4.6' };
+    const decision = await Promise.resolve(
+      transform(
+        parsedBody,
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ),
+    );
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({
+      parsedBody,
+      res: { writeHead, end },
+    } as never);
+    expect(parsedBody.model).toBe('grok-4.6');
+    expect(parsedBody.model.startsWith('xai/')).toBe(false);
+  });
+
+  it('网关风格 x-ai/grok-4.6 仍走默认路由(不是 SuperGrok 独占户口)', () => {
+    clearSessionProvider('sess-grok');
+    const transform = createModelRoutingTransform();
+    const decision = transform(
+      { model: 'x-ai/grok-4.6' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    );
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+    });
+  });
 });
 
 describe('pi routingTransform — xdt session header selects the Pi provider route', () => {
@@ -380,6 +427,26 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     await decision?.localHandler?.({ res: response } as never);
     expect(response.status).toBe(401);
     expect(response.body).toContain('invalid_pi_session_token');
+  });
+
+  it('Pi 裸 grok-4.6 且未绑 xAI 时拒绝默认网关,不让 LiteLLM 报 Invalid model name', async () => {
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    registerPiProxySession('sess-pi', 'session-secret');
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      { model: 'grok-4.6' },
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'session-secret',
+        'x-api-key': 'cindy-pi-provider-auth-placeholder',
+      }),
+    ));
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(400, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'exclusive_xai_route_required' },
+    });
   });
 
   it('never forwards an orphaned internal Pi token header', async () => {

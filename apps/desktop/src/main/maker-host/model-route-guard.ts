@@ -32,6 +32,7 @@ import {
   effectiveSourceIdForModel,
   getModel,
   isAgentSelectableModel,
+  isExclusiveXaiModelId,
   isModelSelectableForNewRoute,
   nativeDefaultSourceId,
   providerOffersModel,
@@ -45,8 +46,76 @@ export type ModelRouteVerdict =
   | { kind: 'reroute'; providerId: string }
   | {
       kind: 'reject';
-      reason: 'model-disabled' | 'explicit-source-disabled' | 'capability-model' | 'model-retired';
+      reason:
+        | 'model-disabled'
+        | 'explicit-source-disabled'
+        | 'capability-model'
+        | 'model-retired'
+        | 'exclusive-source-unavailable';
     };
+
+export type ExclusiveProviderRoute =
+  | { kind: 'keep' }
+  | { kind: 'pin'; providerId: string }
+  | { kind: 'reject' };
+
+/**
+ * Grok / SuperGrok 独占模型的无痛绑定:
+ * 默认网关服务不了这些 id,providerId=null 时能连 xAI 就钉死,否则拒绝。
+ * Claude/GPT 双来源不在这里处理,继续 spawn-aware 默认。
+ */
+export function materializeExclusiveProviderRoute(
+  views: readonly ProviderView[],
+  agent: AgentKind,
+  modelId: string,
+  providerId: string | null,
+): ExclusiveProviderRoute {
+  if (!isExclusiveXaiModelId(modelId)) return { kind: 'keep' };
+  const xai = views.find(
+    (provider) =>
+      provider.id === 'xai'
+      && provider.connected
+      && provider.suspended !== true
+      && provider.agents.includes(agent),
+  );
+  if (providerId === 'xai') {
+    return xai ? { kind: 'keep' } : { kind: 'reject' };
+  }
+  if (providerId === 'xd') return { kind: 'reject' };
+  if (providerId) return { kind: 'keep' };
+  return xai ? { kind: 'pin', providerId: 'xai' } : { kind: 'reject' };
+}
+
+/** SET_MODEL: undefined = 保持当前来源,不能当成显式 null 去改绑。 */
+export function resolveSetModelGuardProviderId(
+  requestedProviderId: string | null | undefined,
+  currentProviderId: string | null,
+): string | null {
+  return requestedProviderId !== undefined ? requestedProviderId : currentProviderId;
+}
+
+/** 内存已 hydrate 用内存(含显式 null);尚未 hydrate 才回落 DB 持久值。 */
+export function resolveCurrentSetModelProviderId(
+  memoryHydrated: boolean,
+  memoryProviderId: string | null,
+  persistedProviderId: string | null,
+): string | null {
+  return memoryHydrated ? memoryProviderId : persistedProviderId;
+}
+
+/** SET_MODEL: 只有显式回到默认,或当前本来就没有来源时,才接受独占 pin。 */
+export function resolveExclusiveSetModelReroute(
+  requestedProviderId: string | null | undefined,
+  currentProviderId: string | null,
+  rerouteProviderId: string | undefined,
+  currentKnown = true,
+): string | null | undefined {
+  if (!rerouteProviderId) return requestedProviderId;
+  if (!currentKnown) return requestedProviderId;
+  if (requestedProviderId === null) return rerouteProviderId;
+  if (requestedProviderId === undefined && !currentProviderId) return rerouteProviderId;
+  return requestedProviderId;
+}
 
 export interface ModelRouteGuardOptions {
   /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
@@ -247,12 +316,20 @@ export function resolveLenientRoute(
     return { model: resolvedModel, providerId: resolvedProviderId, degraded, effort };
   };
   let verdict = checkModelRoute(views, agent, model, providerId, opts);
-  if (verdict.kind === 'pass') return { model, providerId, degraded: false };
+  if (verdict.kind === 'pass') {
+    const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
+    if (exclusive.kind === 'pin') return withEffort(model, exclusive.providerId, false);
+    // reject: 独占 Grok 不能落到默认网关,落到下方改走可用对话模型。
+    if (exclusive.kind !== 'reject') return { model, providerId, degraded: false };
+  }
   if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, false);
   if (providerId) {
     verdict = checkModelRoute(views, agent, model, null, opts);
-    if (verdict.kind === 'pass') return withEffort(model, null, true);
-    if (verdict.kind === 'reroute') {
+    if (verdict.kind === 'pass') {
+      const exclusive = materializeExclusiveProviderRoute(views, agent, model, null);
+      if (exclusive.kind === 'pin') return withEffort(model, exclusive.providerId, true);
+      if (exclusive.kind !== 'reject') return withEffort(model, null, true);
+    } else if (verdict.kind === 'reroute') {
       return withEffort(model, verdict.providerId, true);
     }
   }

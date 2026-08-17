@@ -892,7 +892,7 @@ describe('maker:event hot path ordering', () => {
       "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",
     );
     expect(claudeDoneSource).toContain(
-      "m.source === 'subscription' && isSubscriptionDirectModel(m.model)",
+      "m.source === 'subscription' && isSubscriptionDirectRoute(m.model)",
     );
     expect(claudeDoneSource).toMatch(
       /estimateClaudeSubscriptionTurnValue\(\s*perModel,\s*currentLedgerCurrency\(\),\s*pricing,\s*\)/,
