@@ -367,6 +367,26 @@ describe("sanitizeXaiModelInputBody", () => {
     ]);
   });
 
+  it("emits empty-string text when input_text.text is not a string", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "x-ai/grok-4.6",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: null }],
+        },
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "" }],
+      },
+    ]);
+  });
+
   it("wraps a single object input into an array before sanitizing", () => {
     const out = sanitizeXaiModelInputBody({
       model: "grok-4.5",

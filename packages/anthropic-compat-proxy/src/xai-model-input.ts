@@ -395,12 +395,14 @@ function normalizeXaiInputItem(item: unknown): {
           continue;
         }
         if (partType === "input_text" || partType === "output_text") {
-          parts.push({
-            type: partType,
-            text: typeof part.text === "string" ? part.text : "",
-          });
-          if (Object.keys(part).some((k) => k !== "type" && k !== "text"))
+          const text = typeof part.text === "string" ? part.text : "";
+          parts.push({ type: partType, text });
+          if (
+            typeof part.text !== "string" ||
+            Object.keys(part).some((k) => k !== "type" && k !== "text")
+          ) {
             changed = true;
+          }
           continue;
         }
         if (partType === "input_image") {
