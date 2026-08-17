@@ -38,6 +38,7 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:get-session-tree');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:navigate-session-tree');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:schedule:create-from-template');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:schedule:list-sidebar-index-runs');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:schedule:delete-run');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:codex-rate-limits');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:codex-rate-limit-reset');
@@ -49,6 +50,7 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('text-file:read-preview');
     expect(isMobileRemoteInvokeChannel('maker:send')).toBe(true);
+    expect(isMobileRemoteInvokeChannel('maker:schedule:list-sidebar-index-runs')).toBe(true);
     expect(isMobileRemoteInvokeChannel('auth:logout')).toBe(false);
   });
 

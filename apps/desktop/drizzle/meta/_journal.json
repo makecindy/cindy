@@ -659,6 +659,13 @@
       "when": 1786930147088,
       "tag": "0093_add_schedule_run_session_index",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "6",
+      "when": 1786941011630,
+      "tag": "0094_add_schedule_session_bindings",
+      "breakpoints": true
     }
   ]
 }

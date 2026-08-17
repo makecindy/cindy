@@ -15,7 +15,13 @@ import type {
 import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getDbClient } from './client/current.js';
-import { messages, scheduleRuns, schedules, sessions } from './schema.js';
+import {
+  messages,
+  scheduleRuns,
+  scheduleSessionBindings,
+  schedules,
+  sessions,
+} from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import {
@@ -110,8 +116,9 @@ export async function searchConversations(
   const titleMatches = sessionRows
     .map((row, index) => {
       const displayTitleMatch = displayTitleMatches.get(row.id) ?? null;
-      // 自定义实例标题可以完全不含自动化名称。已关联的 schedule_runs 才是稳定身份，
-      // 不按同名或旧 [Schedule] 前缀猜测，避免删除后重建同名任务发生误命中。
+      // 自定义实例标题可以完全不含自动化名称。持久绑定是稳定身份，schedule_runs
+      // 只补迁移前/短暂兼容数据；不按同名或旧 [Schedule] 前缀猜测，避免删除后
+      // 重建同名任务发生误命中。
       const scheduleNameMatch = displayTitleMatch
         ? null
         : bestScheduleNameMatch(scheduleNamesBySessionId.get(row.id), query);
@@ -316,19 +323,29 @@ async function fetchScheduleNamesBySessionId(sessionIds: string[]): Promise<Map<
 
   for (let offset = 0; offset < sessionIds.length; offset += SCHEDULE_NAME_LOOKUP_CHUNK_SIZE) {
     const chunk = sessionIds.slice(offset, offset + SCHEDULE_NAME_LOOKUP_CHUNK_SIZE);
-    const rows = await db
-      .select({
-        sessionId: scheduleRuns.sessionId,
-        scheduleName: schedules.name,
-      })
-      .from(scheduleRuns)
-      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-      .where(and(
-        isNotNull(scheduleRuns.sessionId),
-        inArray(scheduleRuns.sessionId, chunk),
-      ));
+    const [runRows, bindingRows] = await Promise.all([
+      db
+        .select({
+          sessionId: scheduleRuns.sessionId,
+          scheduleName: schedules.name,
+        })
+        .from(scheduleRuns)
+        .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+        .where(and(
+          isNotNull(scheduleRuns.sessionId),
+          inArray(scheduleRuns.sessionId, chunk),
+        )),
+      db
+        .select({
+          sessionId: scheduleSessionBindings.sessionId,
+          scheduleName: schedules.name,
+        })
+        .from(scheduleSessionBindings)
+        .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id))
+        .where(inArray(scheduleSessionBindings.sessionId, chunk)),
+    ]);
 
-    for (const row of rows) {
+    for (const row of [...runRows, ...bindingRows]) {
       if (!row.sessionId) continue;
       const names = namesBySessionId.get(row.sessionId) ?? [];
       if (!names.includes(row.scheduleName)) names.push(row.scheduleName);

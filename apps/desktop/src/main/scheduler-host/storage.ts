@@ -21,7 +21,13 @@ import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
 import type { Schedule, ScheduleRun, ScheduleStorage, ListFilter } from '@cindy/maker-scheduler';
 
 import * as schema from '../localDb/schema';
-import { messages, schedules, scheduleRuns, sessions } from '../localDb/schema';
+import {
+  messages,
+  schedules,
+  scheduleRuns,
+  scheduleSessionBindings,
+  sessions,
+} from '../localDb/schema';
 import {
   scheduleToCamel,
   scheduleCreateToRow,
@@ -52,6 +58,8 @@ export interface ScheduleSidebarIndexRun {
   workingDir?: string;
   projectConfigId?: string;
   sessionId?: string;
+  firedAt: number;
+  associationOnly?: boolean;
   status: ScheduleRun['status'];
   readAt?: number;
 }
@@ -163,6 +171,8 @@ interface LegacyScheduleSessionAlias {
 
 const LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] ';
 const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
+const PERSISTED_SESSION_BINDING_RUN_ID_PREFIX = 'schedule-session-binding:';
+const COMPACT_UNREAD_RUN_LIMIT_PER_SCHEDULE = 50;
 
 const UNREAD_TERMINAL_RUN_STATUSES: ScheduleRun['status'][] = [
   'success',
@@ -315,6 +325,23 @@ function legacyRunFromSession(
     // so old imported history does not create new attention dots.
     readAt: finishedAt,
   };
+}
+
+function limitCompactRealRuns(
+  runs: ScheduleSidebarIndexRun[],
+): ScheduleSidebarIndexRun[] {
+  const running = runs.filter((run) => run.status === 'running');
+  const unread = runs
+    .filter((run) => run.status !== 'running')
+    .sort((left, right) => right.firedAt - left.firedAt);
+  const unreadCounts = new Map<string, number>();
+  const limitedUnread = unread.filter((run) => {
+    const count = unreadCounts.get(run.scheduleId) ?? 0;
+    if (count >= COMPACT_UNREAD_RUN_LIMIT_PER_SCHEDULE) return false;
+    unreadCounts.set(run.scheduleId, count + 1);
+    return true;
+  });
+  return [...running, ...limitedUnread];
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
@@ -582,11 +609,32 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
   /**
    * Sidebar 聚合索引用的轻量 run 列表：
-   * - 所有带 sessionId 的 run 都返回，保证高频 schedule 超过 history limit 后仍能归组。
-   * - 额外包含无 sessionId 的未读终态 run，保证自动化任务列表的小红点不被漏掉。
+   * - 默认 full 模式返回所有带 sessionId 的真实 run，供 Desktop 本地历史计数与归组。
+   * - compact 模式始终为每个持久绑定返回 associationOnly 项，再只追加全部 running 与
+   *   每个 schedule 最新 50 条未读真实 run，避免设备链路把无上限历史装进单个响应。
+   * - 两种模式都包含未被现代绑定覆盖的 legacy association；associationOnly 项只表达
+   *   归属，不计入真实运行历史。
    */
-  async listSidebarIndexRuns(): Promise<ScheduleSidebarIndexRun[]> {
+  async listSidebarIndexRuns(
+    options: { compact?: boolean } = {},
+  ): Promise<ScheduleSidebarIndexRun[]> {
     const db = this.getDb();
+    // 先读绑定、后读真实 run：若两次查询之间刚插入 run，较新的真实 run 查询能
+    // 压掉合成项，避免短暂把 running/unread 状态覆盖成已读终态。
+    const bindingRows = await db
+      .select({
+        scheduleId: schedules.id,
+        scheduleName: schedules.name,
+        scheduleStatus: schedules.status,
+        scheduleSource: schedules.source,
+        nextFireAt: schedules.nextFireAt,
+        workingDir: schedules.workingDir,
+        projectConfigId: schedules.projectConfigId,
+        sessionId: scheduleSessionBindings.sessionId,
+        lastRunAt: scheduleSessionBindings.lastRunAt,
+      })
+      .from(scheduleSessionBindings)
+      .innerJoin(schedules, eq(scheduleSessionBindings.scheduleId, schedules.id));
     const rows = await db
       .select({
         runId: scheduleRuns.id,
@@ -598,22 +646,31 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         workingDir: schedules.workingDir,
         projectConfigId: schedules.projectConfigId,
         sessionId: scheduleRuns.sessionId,
+        firedAt: scheduleRuns.firedAt,
         status: scheduleRuns.status,
         readAt: scheduleRuns.readAt,
       })
       .from(scheduleRuns)
       .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
       .where(
-        or(
-          isNotNull(scheduleRuns.sessionId),
-          and(
-            isNull(scheduleRuns.readAt),
-            inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
-          ),
-        ),
+        options.compact
+          ? or(
+              eq(scheduleRuns.status, 'running'),
+              and(
+                isNull(scheduleRuns.readAt),
+                inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
+              ),
+            )
+          : or(
+              isNotNull(scheduleRuns.sessionId),
+              and(
+                isNull(scheduleRuns.readAt),
+                inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
+              ),
+            ),
       );
 
-    const indexedRuns = rows.map((row) => ({
+    const allIndexedRuns = rows.map((row) => ({
       runId: row.runId,
       scheduleId: row.scheduleId,
       scheduleName: row.scheduleName,
@@ -623,12 +680,47 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       workingDir: row.workingDir ?? undefined,
       projectConfigId: row.projectConfigId ?? undefined,
       sessionId: row.sessionId ?? undefined,
+      firedAt: row.firedAt,
       status: row.status,
       readAt: row.readAt ?? undefined,
     }));
+    const indexedRuns = options.compact
+      ? limitCompactRealRuns(allIndexedRuns)
+      : allIndexedRuns;
+
+    const realRunBindings = new Set(
+      indexedRuns
+        .map((run) =>
+          run.sessionId ? `${run.scheduleId}\u0000${run.sessionId}` : null,
+        )
+        .filter((key): key is string => key !== null),
+    );
+    const bindingRuns: ScheduleSidebarIndexRun[] = bindingRows
+      .filter(
+        (row) =>
+          options.compact
+          || !realRunBindings.has(`${row.scheduleId}\u0000${row.sessionId}`),
+      )
+      .map((row) => ({
+        runId: `${PERSISTED_SESSION_BINDING_RUN_ID_PREFIX}${row.scheduleId}:${row.sessionId}`,
+        scheduleId: row.scheduleId,
+        scheduleName: row.scheduleName,
+        scheduleStatus: row.scheduleStatus,
+        scheduleSource: toScheduleSource(row.scheduleSource),
+        nextFireAt: row.nextFireAt ?? undefined,
+        workingDir: row.workingDir ?? undefined,
+        projectConfigId: row.projectConfigId ?? undefined,
+        sessionId: row.sessionId,
+        firedAt: row.lastRunAt,
+        associationOnly: true,
+        status: 'success',
+        readAt: Math.max(1, row.lastRunAt),
+      }));
 
     const linkedSessionIds = new Set(
-      indexedRuns.map((run) => run.sessionId).filter((id): id is string => Boolean(id)),
+      [...indexedRuns, ...bindingRuns]
+        .map((run) => run.sessionId)
+        .filter((id): id is string => Boolean(id)),
     );
     const scheduleByLegacyKey = await this.listSchedulesByLegacyKey(db);
     const legacySessions = await db
@@ -666,6 +758,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         workingDir: schedule.workingDir,
         projectConfigId: schedule.projectConfigId,
         sessionId: session.id,
+        firedAt: session.updatedAt,
+        associationOnly: true,
         status: 'success',
         // Legacy rows have no schedule_runs.read_at. Treat them as read so old
         // history can group under the real schedule without creating new dots.
@@ -673,7 +767,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       });
     }
 
-    return [...indexedRuns, ...legacyRuns];
+    return [...indexedRuns, ...bindingRuns, ...legacyRuns];
   }
 
   /**

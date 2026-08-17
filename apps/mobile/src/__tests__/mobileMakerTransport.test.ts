@@ -83,6 +83,7 @@ describe('mobile maker transport', () => {
       'maker:schedule:create',
       'maker:schedule:update',
       'maker:schedule:list-runs',
+      'maker:schedule:list-sidebar-index-runs',
       'maker:schedule:run-now',
       'maker:schedule:pause',
       'maker:schedule:resume',
@@ -506,6 +507,7 @@ describe('mobile maker transport', () => {
     });
     await maker.schedule.update('sched-1', { name: 'Updated' });
     await maker.schedule.listRuns('sched-1', 50);
+    await maker.schedule.listSidebarIndexRuns();
     await maker.schedule.runNow('sched-1');
     await maker.schedule.pause('sched-1');
     await maker.schedule.resume('sched-1');
@@ -542,6 +544,7 @@ describe('mobile maker transport', () => {
       }]],
       ['maker:schedule:update', ['sched-1', { name: 'Updated' }]],
       ['maker:schedule:list-runs', ['sched-1', 50]],
+      ['maker:schedule:list-sidebar-index-runs', [{ compact: true }]],
       ['maker:schedule:run-now', ['sched-1']],
       ['maker:schedule:pause', ['sched-1']],
       ['maker:schedule:resume', ['sched-1']],

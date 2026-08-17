@@ -147,6 +147,7 @@ const SCHEDULER_DDL = [
       use_worktree INTEGER NOT NULL DEFAULT 0,
       target_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
       persistent_session INTEGER NOT NULL DEFAULT 0,
+      session_title_template TEXT,
       silent_when_idle INTEGER NOT NULL DEFAULT 0,
       pre_run_hook_command TEXT,
       pre_run_hook_timeout_ms INTEGER,
@@ -188,6 +189,36 @@ const SCHEDULER_DDL = [
     )
   `,
   'CREATE INDEX idx_schedule_runs_schedule ON schedule_runs(schedule_id, fired_at)',
+  `
+    CREATE TABLE schedule_session_bindings (
+      schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      last_run_at INTEGER NOT NULL,
+      PRIMARY KEY (schedule_id, session_id)
+    )
+  `,
+  `
+    CREATE TRIGGER schedule_runs_bind_session_after_insert
+    AFTER INSERT ON schedule_runs
+    WHEN NEW.session_id IS NOT NULL
+    BEGIN
+      INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+      VALUES (NEW.schedule_id, NEW.session_id, NEW.fired_at)
+      ON CONFLICT(schedule_id, session_id) DO UPDATE SET
+        last_run_at = MAX(schedule_session_bindings.last_run_at, excluded.last_run_at);
+    END
+  `,
+  `
+    CREATE TRIGGER schedule_runs_bind_session_after_update
+    AFTER UPDATE OF schedule_id, session_id, fired_at ON schedule_runs
+    WHEN NEW.session_id IS NOT NULL
+    BEGIN
+      INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at)
+      VALUES (NEW.schedule_id, NEW.session_id, NEW.fired_at)
+      ON CONFLICT(schedule_id, session_id) DO UPDATE SET
+        last_run_at = MAX(schedule_session_bindings.last_run_at, excluded.last_run_at);
+    END
+  `,
 ];
 
 function createStorageHarness() {
@@ -274,6 +305,192 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       });
       await harness.storage.delete(schedule.id);
       await expect(harness.storage.get(schedule.id)).resolves.toBeNull();
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('keeps schedule-session bindings after run deletion without creating unread history', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-bindings', name: 'binding owner' });
+
+    try {
+      await harness.storage.insert(schedule);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES
+          ('sess-binding-a', 'first instance', 'scheduler', 100, 100),
+          ('sess-binding-b', 'second instance', 'scheduler', 200, 200)
+      `);
+
+      await harness.storage.insertRun({
+        id: 'run-binding-newer',
+        scheduleId: schedule.id,
+        sessionId: 'sess-binding-a',
+        firedAt: 300,
+        status: 'success',
+      });
+      await harness.storage.insertRun({
+        id: 'run-binding-older',
+        scheduleId: schedule.id,
+        sessionId: 'sess-binding-a',
+        firedAt: 100,
+        status: 'success',
+      });
+      await harness.storage.insertRun({
+        id: 'run-binding-late-session',
+        scheduleId: schedule.id,
+        firedAt: 400,
+        status: 'running',
+      });
+      await harness.storage.updateRun('run-binding-late-session', {
+        sessionId: 'sess-binding-b',
+      });
+
+      await expect(
+        harness.db.select().from(schema.scheduleSessionBindings).orderBy(schema.scheduleSessionBindings.sessionId),
+      ).resolves.toEqual([
+        { scheduleId: schedule.id, sessionId: 'sess-binding-a', lastRunAt: 300 },
+        { scheduleId: schedule.id, sessionId: 'sess-binding-b', lastRunAt: 400 },
+      ]);
+
+      await harness.storage.deleteRun('run-binding-newer');
+      await harness.storage.deleteRun('run-binding-older');
+      await harness.storage.deleteRun('run-binding-late-session');
+      await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([]);
+
+      await expect(harness.storage.listSidebarIndexRuns()).resolves.toEqual([
+        expect.objectContaining({
+          runId: 'schedule-session-binding:sch-bindings:sess-binding-a',
+          scheduleId: schedule.id,
+          sessionId: 'sess-binding-a',
+          firedAt: 300,
+          associationOnly: true,
+          status: 'success',
+          readAt: 300,
+        }),
+        expect.objectContaining({
+          runId: 'schedule-session-binding:sch-bindings:sess-binding-b',
+          scheduleId: schedule.id,
+          sessionId: 'sess-binding-b',
+          firedAt: 400,
+          associationOnly: true,
+          status: 'success',
+          readAt: 400,
+        }),
+      ]);
+
+      await harness.storage.insertRun({
+        id: 'run-binding-real',
+        scheduleId: schedule.id,
+        sessionId: 'sess-binding-b',
+        firedAt: 500,
+        status: 'running',
+      });
+      const sessionBRuns = (await harness.storage.listSidebarIndexRuns()).filter(
+        (run) => run.sessionId === 'sess-binding-b',
+      );
+      expect(sessionBRuns).toHaveLength(1);
+      expect(sessionBRuns[0]).toMatchObject({
+        runId: 'run-binding-real',
+        status: 'running',
+        readAt: undefined,
+      });
+      expect(sessionBRuns[0]?.associationOnly).toBeUndefined();
+
+      harness.db.run(sql`DELETE FROM sessions WHERE id = 'sess-binding-a'`);
+      await expect(harness.db.select().from(schema.scheduleSessionBindings)).resolves.toEqual([
+        { scheduleId: schedule.id, sessionId: 'sess-binding-b', lastRunAt: 500 },
+      ]);
+
+      await harness.storage.delete(schedule.id);
+      await expect(harness.db.select().from(schema.scheduleSessionBindings)).resolves.toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('bounds compact sidebar rows while full mode keeps real run history', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-compact-history', name: 'compact history' });
+
+    try {
+      await harness.storage.insert(schedule);
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, created_at, updated_at)
+        VALUES ('sess-compact-history', 'compact instance', 'scheduler', 1, 1)
+      `);
+      harness.db.run(sql`
+        WITH RECURSIVE run_numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM run_numbers WHERE value < 1200
+        )
+        INSERT INTO schedule_runs (
+          id, schedule_id, session_id, fired_at, finished_at, status, read_at
+        )
+        SELECT
+          'compact-read-' || value,
+          ${schedule.id},
+          'sess-compact-history',
+          value,
+          value,
+          'success',
+          value
+        FROM run_numbers
+      `);
+      harness.db.run(sql`
+        WITH RECURSIVE unread_numbers(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM unread_numbers WHERE value < 80
+        )
+        INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status)
+        SELECT
+          'compact-unread-' || value,
+          ${schedule.id},
+          'sess-compact-history',
+          2000 + value,
+          'failed'
+        FROM unread_numbers
+      `);
+      await harness.storage.insertRun({
+        id: 'compact-latest-read',
+        scheduleId: schedule.id,
+        sessionId: 'sess-compact-history',
+        firedAt: 3000,
+        status: 'success',
+        readAt: 3000,
+      });
+      await harness.storage.insertRun({
+        id: 'compact-running',
+        scheduleId: schedule.id,
+        sessionId: 'sess-compact-history',
+        firedAt: 2500,
+        status: 'running',
+      });
+
+      const compact = await harness.storage.listSidebarIndexRuns({ compact: true });
+      expect(compact).toHaveLength(52);
+      expect(compact).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: 'schedule-session-binding:sch-compact-history:sess-compact-history',
+            firedAt: 3000,
+            associationOnly: true,
+          }),
+          expect.objectContaining({ runId: 'compact-running', status: 'running' }),
+          expect.objectContaining({ runId: 'compact-unread-80', status: 'failed' }),
+        ]),
+      );
+      const compactUnread = compact.filter((run) => run.status === 'failed');
+      expect(compactUnread).toHaveLength(50);
+      expect(Math.min(...compactUnread.map((run) => run.firedAt))).toBe(2031);
+      expect(compact.some((run) => run.runId === 'compact-unread-30')).toBe(false);
+
+      const full = await harness.storage.listSidebarIndexRuns();
+      expect(full).toHaveLength(1282);
+      expect(full.some((run) => run.associationOnly === true)).toBe(false);
     } finally {
       harness.close();
     }
@@ -1309,6 +1526,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         expect.objectContaining({
           scheduleId: legacySchedule.id,
           sessionId: 'sess-legacy-owner',
+          associationOnly: true,
         }),
       ]);
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([

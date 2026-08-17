@@ -23,6 +23,18 @@ export async function loadSessionScheduleIndex(
   options: LoadSessionScheduleIndexOptions = {},
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
   const schedules = normalizeScheduleList(await maker.schedule.list());
+  if (typeof maker.schedule.listSidebarIndexRuns === 'function') {
+    try {
+      const pairs = scheduleRunsByScheduleFromSidebarSnapshot(
+        await maker.schedule.listSidebarIndexRuns(),
+      );
+      // Older Desktop builds already expose this channel but omit firedAt. A malformed
+      // snapshot therefore means "unsupported shape", not an empty schedule index.
+      if (pairs) return buildSessionScheduleIndex(schedules, pairs);
+    } catch (error) {
+      if (!isSidebarIndexUnsupportedError(error)) throw error;
+    }
+  }
   // listRuns 逐个串行而非 Promise.all 全并发:device-link 是无优先级的单 WS 管道,
   // N 个背景 listRuns 一齐压上去会把会话打开的关键读(messages / getSession / projection)
   // 挤到队尾(2026-07 实测:并发轮次叠加时 list-runs 均值 8.8s、messages:list 被拖到 6s+)。
@@ -50,6 +62,50 @@ export async function loadSessionScheduleIndex(
     pairs.push([schedule.id, runs] as const);
   }
   return buildSessionScheduleIndex(schedules, new Map(pairs));
+}
+
+function scheduleRunsByScheduleFromSidebarSnapshot(
+  value: unknown,
+): Map<string, RemoteScheduleRun[]> | null {
+  if (!value || typeof value !== 'object') return null;
+  const rawRuns = (value as { runs?: unknown }).runs;
+  if (!Array.isArray(rawRuns)) return null;
+  const bySchedule = new Map<string, RemoteScheduleRun[]>();
+  for (const raw of rawRuns) {
+    if (!raw || typeof raw !== 'object') return null;
+    const row = raw as Record<string, unknown>;
+    if (
+      typeof row.runId !== 'string'
+      || typeof row.scheduleId !== 'string'
+      || typeof row.status !== 'string'
+      || typeof row.firedAt !== 'number'
+      || !Number.isFinite(row.firedAt)
+      || (row.sessionId !== undefined && typeof row.sessionId !== 'string')
+      || (row.readAt !== undefined && typeof row.readAt !== 'number')
+    ) {
+      return null;
+    }
+    const run = normalizeScheduleRuns([{
+      id: row.runId,
+      scheduleId: row.scheduleId,
+      sessionId: row.sessionId,
+      firedAt: row.firedAt,
+      status: row.status,
+      readAt: row.readAt,
+    }])[0];
+    if (!run) return null;
+    const runs = bySchedule.get(run.scheduleId) ?? [];
+    runs.push(run);
+    bySchedule.set(run.scheduleId, runs);
+  }
+  return bySchedule;
+}
+
+function isSidebarIndexUnsupportedError(error: unknown): boolean {
+  return (
+    hasRemoteErrorMarker(error, 'CHANNEL_NOT_ALLOWED')
+    || hasRemoteErrorMarker(error, 'DEVICE_LINK_CHANNEL_NOT_ALLOWED')
+  );
 }
 
 /**

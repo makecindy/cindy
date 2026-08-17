@@ -1068,6 +1068,32 @@ export const scheduleRuns = sqliteTable(
 );
 
 /**
+ * 自动化与其生成任务之间的持久关联。
+ *
+ * run 历史允许被用户删除，因此会话归组和按自动化名称搜索不能只依赖 schedule_runs。
+ * 关联会随任一端实体删除而级联清理，时间戳只按已持久化 run 的 fired_at 单调推进。
+ */
+export const scheduleSessionBindings = sqliteTable(
+  'schedule_session_bindings',
+  {
+    scheduleId: text('schedule_id')
+      .notNull()
+      .references(() => schedules.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    lastRunAt: integer('last_run_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.scheduleId, t.sessionId] }),
+    idxBySessionSchedule: index('idx_schedule_session_bindings_session_schedule').on(
+      t.sessionId,
+      t.scheduleId,
+    ),
+  }),
+);
+
+/**
  * embedding-host (Phase 1.1): 待处理 embedding 任务队列。
  *
  * 通用 schema — 不绑定任何具体 consumer (chat/document/memory/skill/...)。

@@ -31,6 +31,135 @@ function makerWithSchedules(
 }
 
 describe('scheduleIndex', () => {
+  it('uses the sidebar snapshot to keep deleted-history instances grouped without unread state', async () => {
+    const listRuns = vi.fn(async () => []);
+    const listSidebarIndexRuns = vi.fn(async () => ({
+      runs: [
+        {
+          runId: 'schedule-session-binding:sched-1:session-a',
+          scheduleId: 'sched-1',
+          sessionId: 'session-a',
+          firedAt: 100,
+          status: 'success',
+          readAt: 100,
+        },
+        {
+          runId: 'schedule-session-binding:sched-1:session-b',
+          scheduleId: 'sched-1',
+          sessionId: 'session-b',
+          firedAt: 200,
+          status: 'success',
+          readAt: 200,
+        },
+      ],
+      inflightRunIds: [],
+    }));
+    const maker = {
+      schedule: {
+        list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+        listRuns,
+        listSidebarIndexRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    const index = await loadSessionScheduleIndex(maker);
+
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(1);
+    expect(listRuns).not.toHaveBeenCalled();
+    expect([...index.entries()]).toEqual([
+      [
+        'session-a',
+        expect.objectContaining({
+          scheduleId: 'sched-1',
+          scheduleName: 'Daily',
+          unreadCount: 0,
+          unreadRunIds: [],
+          running: false,
+          latestRunAt: 100,
+        }),
+      ],
+      [
+        'session-b',
+        expect.objectContaining({
+          scheduleId: 'sched-1',
+          scheduleName: 'Daily',
+          unreadCount: 0,
+          unreadRunIds: [],
+          running: false,
+          latestRunAt: 200,
+        }),
+      ],
+    ]);
+  });
+
+  it('falls back to listRuns for older Desktop sidebar channels and shapes', async () => {
+    for (const listSidebarIndexRuns of [
+      vi.fn(async () => {
+        throw Object.assign(new Error('unsupported'), {
+          code: 'CHANNEL_NOT_ALLOWED',
+        });
+      }),
+      vi.fn(async () => ({
+        runs: [
+          {
+            runId: 'old-shape',
+            scheduleId: 'sched-1',
+            sessionId: 'session-old',
+            status: 'success',
+          },
+        ],
+        inflightRunIds: [],
+      })),
+    ]) {
+      const listRuns = vi.fn(async () => [
+        {
+          id: 'fallback-run',
+          scheduleId: 'sched-1',
+          sessionId: 'session-fallback',
+          status: 'success',
+          firedAt: 300,
+          readAt: 300,
+        },
+      ]);
+      const maker = {
+        schedule: {
+          list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+          listRuns,
+          listSidebarIndexRuns,
+        },
+      } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+      const index = await loadSessionScheduleIndex(maker);
+
+      expect(listRuns).toHaveBeenCalledWith('sched-1', 50);
+      expect(index.get('session-fallback')).toMatchObject({
+        scheduleId: 'sched-1',
+        unreadCount: 0,
+      });
+    }
+  });
+
+  it.each(['NOT_CONNECTED', 'DEVICE_OFFLINE', 'INVOKE_TIMEOUT', 'PAYLOAD_TOO_LARGE'])(
+    'does not expand %s failures into the legacy 1+N request path',
+    async (code) => {
+      const listRuns = vi.fn(async () => []);
+      const maker = {
+        schedule: {
+          list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+          listRuns,
+          listSidebarIndexRuns: async () => {
+            throw Object.assign(new Error(code), { code });
+          },
+        },
+      } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+      await expect(loadSessionScheduleIndex(maker)).rejects.toMatchObject({
+        code,
+      });
+      expect(listRuns).not.toHaveBeenCalled();
+    },
+  );
+
   it('loads schedule unread and running metadata without failing the whole index on one bad schedule', async () => {
     const listRuns = vi.fn(async (scheduleId: string) => {
       if (scheduleId === 'broken') throw new Error('remote schedule runs unavailable');

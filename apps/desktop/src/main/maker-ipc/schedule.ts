@@ -57,7 +57,10 @@ import {
 } from '@cindy/maker-scheduler';
 
 import { createLogger } from '../logger.js';
-import type { DrizzleScheduleStorage } from '../scheduler-host/storage.js';
+import type {
+  DrizzleScheduleStorage,
+  ScheduleSidebarIndexRun,
+} from '../scheduler-host/storage.js';
 import { executePreRunHook } from '../scheduler-host/pre-run-hook.js';
 import {
   HookScriptUtilityModelError,
@@ -250,6 +253,22 @@ export function normalizeNullableScheduleFields<
   T extends { intervalMs?: number | null; sessionTitleTemplate?: string | null },
 >(input: T) {
   return normalizeNullableSessionTitleTemplate(normalizeNullableIntervalMs(input));
+}
+
+export function isCompactSidebarIndexRequest(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && (value as { compact?: unknown }).compact === true);
+}
+
+export function toCompactSidebarIndexRun(run: ScheduleSidebarIndexRun) {
+  return {
+    runId: run.runId,
+    scheduleId: run.scheduleId,
+    ...(run.sessionId === undefined ? {} : { sessionId: run.sessionId }),
+    firedAt: run.firedAt,
+    ...(run.associationOnly === undefined ? {} : { associationOnly: run.associationOnly }),
+    status: run.status,
+    ...(run.readAt === undefined ? {} : { readAt: run.readAt }),
+  };
 }
 
 /**
@@ -580,11 +599,17 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   // 注意这**不是**原子快照:两次读之间隔着 DB 查询的 await,run 恰好在那个窗口内结束时
   // 会出现「行还是 running、controller 已注销」。消费方(reconcileRunMarkers)能识别这种
   // 不一致并安排一次重查,所以这里不为它忙等重采样。
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_SIDEBAR_INDEX_RUNS, async () =>
-    withScheduler(async ({ storage, scheduler }) => ({
-      runs: await storage.listSidebarIndexRuns(),
-      inflightRunIds: scheduler.listInflightRunIds(),
-    })),
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_SIDEBAR_INDEX_RUNS, async (_e, request: unknown) =>
+    withScheduler(async ({ storage, scheduler }) => {
+      const compact = isCompactSidebarIndexRequest(request);
+      const runs = compact
+        ? await storage.listSidebarIndexRuns({ compact: true })
+        : await storage.listSidebarIndexRuns();
+      return {
+        runs: compact ? runs.map(toCompactSidebarIndexRun) : runs,
+        inflightRunIds: scheduler.listInflightRunIds(),
+      };
+    }),
   );
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () =>

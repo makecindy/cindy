@@ -87,6 +87,13 @@ function indexExists(db: Database.Database, indexName: string): boolean {
   );
 }
 
+function triggerExists(db: Database.Database, triggerName: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?").get(triggerName) !==
+    undefined
+  );
+}
+
 function columnNames(db: Database.Database, tableName: string): string[] {
   return db
     .prepare(`PRAGMA table_info('${tableName}')`)
@@ -135,6 +142,10 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'wechat_outbox')).toBe(true);
       expect(tableExists(db, 'wechat_file_attachments')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_session_schedule')).toBe(true);
+      expect(tableExists(db, 'schedule_session_bindings')).toBe(true);
+      expect(indexExists(db, 'idx_schedule_session_bindings_session_schedule')).toBe(true);
+      expect(triggerExists(db, 'schedule_runs_bind_session_after_insert')).toBe(true);
+      expect(triggerExists(db, 'schedule_runs_bind_session_after_update')).toBe(true);
     } finally {
       cleanup();
     }

@@ -84,6 +84,12 @@ function createHarness(): Harness {
       schedule_id TEXT NOT NULL,
       session_id TEXT
     );
+    CREATE TABLE schedule_session_bindings (
+      schedule_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      last_run_at INTEGER NOT NULL,
+      PRIMARY KEY (schedule_id, session_id)
+    );
   `);
   const client = { drizzle: drizzle(sqlite, { schema }) } as unknown as DbClient;
   setCurrentDbClient(client, 'test-user');
@@ -161,5 +167,38 @@ describe('conversation search schedule title association', () => {
       // 命中的是未显示的 schedule 名称，不能把高亮位置投影到实例标题上。
       titleMatchIndices: [],
     });
+  });
+
+  it('keeps automation-name search after the visible run history is deleted', async () => {
+    const { sqlite } = createHarness();
+    insertSession(sqlite, 'session-retained-binding', '2026-08-10 a1b2c3d4', 'scheduler');
+    sqlite
+      .prepare('INSERT INTO schedules (id, name) VALUES (?, ?)')
+      .run('schedule-retained-binding', 'Retained automation');
+    sqlite
+      .prepare('INSERT INTO schedule_runs (id, schedule_id, session_id) VALUES (?, ?, ?)')
+      .run('run-to-delete', 'schedule-retained-binding', 'session-retained-binding');
+    sqlite
+      .prepare(
+        'INSERT INTO schedule_session_bindings (schedule_id, session_id, last_run_at) VALUES (?, ?, ?)',
+      )
+      .run('schedule-retained-binding', 'session-retained-binding', 100);
+    sqlite.prepare('DELETE FROM schedule_runs WHERE id = ?').run('run-to-delete');
+
+    const result = await searchConversations({
+      query: 'retained automation',
+      semanticMode: 'keyword',
+    });
+
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        matchKind: 'title',
+        session: expect.objectContaining({
+          id: 'session-retained-binding',
+          title: '2026-08-10 a1b2c3d4',
+        }),
+        titleMatchIndices: [],
+      }),
+    ]);
   });
 });

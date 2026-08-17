@@ -125,7 +125,8 @@ function PrTooltip({
  * 单独 automation-generated 会话行的 hover 浮层 —— 显示「下次运行剩余时间 + 累计运行
  * 次数」,和 AutomationSessionGroupItem 的 rowTooltip 语义一致。数据源和 Timer chip
  * 点击复用同一套 loadScheduleSidebarIndexRuns:runs 里每条自带 nextFireAt /
- * scheduleStatus,同 scheduleId 的条数即为总运行次数。tooltip 打开时才发起一次拉取
+ * scheduleStatus；同 scheduleId 的真实 run 条数即为总运行次数，持久归组用的
+ * associationOnly 行不计入。tooltip 打开时才发起一次拉取
  * (与 PrTooltip 的 fetchStatusesForSession 同风格,不在密集渲染路径上常驻拉数据);
  * 拉到的 nextFireAt 用一次性 formatSidebarFutureTime 转成 "N 分钟后运行",不做秒级 tick
  * (tooltip 通常只停留几秒,静态文案够用)。
@@ -156,7 +157,9 @@ function AutomationTooltip({ sessionId, children }: { sessionId: string; childre
       : '';
   const isStopped = hit?.scheduleStatus === 'paused' || hit?.scheduleStatus === 'expired';
   const stoppedText = isStopped ? t('ccAgent.sidebar.automationGroup.stopped') : '';
-  const runCount = hit ? runs!.filter((r) => r.scheduleId === hit.scheduleId).length : 0;
+  const runCount = hit
+    ? runs!.filter((r) => r.scheduleId === hit.scheduleId && r.associationOnly !== true).length
+    : 0;
   const runCountText =
     runCount > 0 ? t('ccAgent.sidebar.automationGroup.runCount', { count: runCount }) : '';
   const hasContent = countdownText || stoppedText || runCountText;
