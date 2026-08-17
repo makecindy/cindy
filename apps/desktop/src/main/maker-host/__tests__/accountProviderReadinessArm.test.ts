@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createAccountProviderReadinessArmBinding,
   shouldFirePendingReadinessStart,
+  shouldKeepPendingReadinessStart,
 } from '../account-provider-readiness-arm.js';
 
 describe('createAccountProviderReadinessArmBinding', () => {
@@ -70,6 +71,30 @@ describe('shouldFirePendingReadinessStart', () => {
       shouldFirePendingReadinessStart({
         pendingOwnerId: 'owner-a',
         currentOwnerId: 'owner-a',
+        boundaryPending: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps a same-owner pending start across a transient Ghost boundary', () => {
+    expect(
+      shouldKeepPendingReadinessStart({
+        pendingOwnerId: 'owner-a',
+        currentOwnerId: 'owner-a',
+        boundaryPending: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldKeepPendingReadinessStart({
+        pendingOwnerId: 'owner-a',
+        currentOwnerId: 'owner-a',
+        boundaryPending: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldKeepPendingReadinessStart({
+        pendingOwnerId: 'owner-a',
+        currentOwnerId: 'owner-b',
         boundaryPending: true,
       }),
     ).toBe(false);

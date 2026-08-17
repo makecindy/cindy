@@ -141,17 +141,15 @@ describe('account provider readiness wiring', () => {
     ).toBeGreaterThan(waitFn);
 
     const unchanged = bootstrapSource.indexOf("dbClientTakeover.mode === 'unchanged'");
-    const unchangedAdopt = bootstrapSource.indexOf(
-      'adoptSameOwnerAfterPreviousSettles(',
+    const unchangedEnsure = bootstrapSource.indexOf(
+      'ensureCurrentAccountProviderReadiness()',
       unchanged,
     );
-    const unchangedReturn = bootstrapSource.indexOf('return;', unchangedAdopt);
+    const unchangedReturn = bootstrapSource.indexOf('return;', unchangedEnsure);
     expect(unchanged).toBeGreaterThanOrEqual(0);
-    expect(unchangedAdopt).toBeGreaterThan(unchanged);
-    expect(unchangedReturn).toBeGreaterThan(unchangedAdopt);
-    expect(
-      bootstrapSource.slice(unchanged, unchangedReturn).includes('startIfOwnerMatches'),
-    ).toBe(false);
+    expect(unchangedEnsure).toBeGreaterThan(unchanged);
+    expect(unchangedReturn).toBeGreaterThan(unchangedEnsure);
+    expect(bootstrapSource).toContain('shouldKeepPendingReadinessStart');
 
     expect(bootstrapSource).toContain(
       'accountProviderReadinessArm.publish(userId, startProviderReadiness, resumeIncompleteDiscovery)',

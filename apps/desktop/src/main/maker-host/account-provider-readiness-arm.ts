@@ -48,4 +48,18 @@ export function shouldFirePendingReadinessStart(opts: {
   );
 }
 
+/** Keep the one-shot pending start across a same-owner Ghost repair window. */
+export function shouldKeepPendingReadinessStart(opts: {
+  pendingOwnerId: string | null;
+  currentOwnerId: string | null;
+  boundaryPending: boolean;
+}): boolean {
+  return Boolean(
+    opts.boundaryPending &&
+      opts.pendingOwnerId &&
+      opts.currentOwnerId &&
+      opts.pendingOwnerId === opts.currentOwnerId,
+  );
+}
+
 export const accountProviderReadinessArm = createAccountProviderReadinessArmBinding();

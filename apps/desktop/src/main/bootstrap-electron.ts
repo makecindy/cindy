@@ -545,6 +545,7 @@ import { accountProviderReadinessBarrier } from './maker-host/account-provider-r
 import {
   accountProviderReadinessArm,
   shouldFirePendingReadinessStart,
+  shouldKeepPendingReadinessStart,
 } from './maker-host/account-provider-readiness-arm.js';
 import {
   ensureCurrentAccountProviderReadiness,
@@ -834,15 +835,21 @@ function markMakerProviderRefreshConfigured(): void {
   makerProviderRefreshConfigured = true;
   const startPending = startPendingAccountProviderReadiness;
   startPendingAccountProviderReadiness = null;
-  if (
-    startPending &&
-    shouldFirePendingReadinessStart({
-      pendingOwnerId: startPending.ownerId,
-      currentOwnerId: getActiveAppSession().dataOwnerId,
-      boundaryPending: isAppSessionBoundaryPending(),
-    })
-  ) {
+  if (!startPending) return;
+  const decision = {
+    pendingOwnerId: startPending.ownerId,
+    currentOwnerId: getActiveAppSession().dataOwnerId,
+    boundaryPending: isAppSessionBoundaryPending(),
+  };
+  if (shouldFirePendingReadinessStart(decision)) {
     startPending.start();
+    return;
+  }
+  // Same-owner Ghost repair holds the boundary while this one-shot callback
+  // fires. Put the pending start back so a later unchanged ensureReady / arm
+  // start can still launch discovery after the window closes.
+  if (shouldKeepPendingReadinessStart(decision)) {
+    startPendingAccountProviderReadiness = startPending;
   }
 }
 
@@ -6903,12 +6910,11 @@ app.on('ready', async () => {
             userId,
           });
         }
-        // Same-owner generation bump also lands here. Adopt the settled
-        // discovery task onto the new generation; do not start a second
-        // account-switch refresh from this duplicate-owner path.
-        void accountProviderReadinessBarrier.adoptSameOwnerAfterPreviousSettles(
-          activeOwnerScopeKey(),
-        );
+        // Same-owner generation bump also lands here. Ensure adopts a settled
+        // discovery task, starts one if it never launched (pending start was
+        // held across a Ghost boundary), and starts consumers if the original
+        // then() skipped them while boundaryPending.
+        void ensureCurrentAccountProviderReadiness();
         return;
       }
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
@@ -7045,7 +7051,14 @@ app.on('ready', async () => {
         }
         const providerScopeKey = activeOwnerScopeKey();
         const currentOwnerId = getActiveAppSession().dataOwnerId;
-        if (!currentOwnerId || currentOwnerId !== userId || isAppSessionBoundaryPending()) {
+        if (!currentOwnerId || currentOwnerId !== userId) {
+          return;
+        }
+        if (isAppSessionBoundaryPending()) {
+          startPendingAccountProviderReadiness = {
+            ownerId: userId,
+            start: startProviderReadiness,
+          };
           return;
         }
         if (accountProviderReadinessBarrier.needsIncompleteDiscoveryResume(providerScopeKey)) {
