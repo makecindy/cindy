@@ -18,7 +18,10 @@
  *   - root-query sections (Add / Plugins / Reference directories)
  *   - click-outside close (ignoring the `+` trigger button)
  *
- * Per F2 spec: 480px width and 44px row height.
+ * Per F2 spec: 480px width and 44px row height. The 480px is owned by the
+ * standalone `@` popover, or by MorphPopover's `panelWidth` when `embedded`.
+ * Embedded content must be `w-full` — a second 480px inside the 1px-bordered
+ * Morph shell overflows by 2px and flashes a 2s horizontal scrollbar.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -453,7 +456,11 @@ export function AtMentionPanel({
         ref={panelRef}
         onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
         className={cn(
-          'w-[480px] overflow-y-auto',
+          // embedded: fill the Morph shell. A nested w-[480px] is 2px wider
+          // than the border-box panel and paints a horizontal scrollbar thumb
+          // for ~2s via the global .is-scrolling auto-hide.
+          embedded ? 'w-full min-w-0' : 'w-[480px]',
+          'overflow-x-hidden overflow-y-auto',
           'p-[6px]',
           !embedded && [
             'rounded-[12px] border',

@@ -19,6 +19,8 @@ import {
   parseAuthSessionRecord,
   reduceAuthFlow,
   serializeAccountDeletionReceiptRecord,
+  soleAutoStartSsoMethod,
+  soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
   type AuthFlowState,
@@ -1026,6 +1028,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ) {
               throw authCodeError('INVALID_AUTH_ACTION');
             }
+            const sole = soleAutoStartSsoMethod(confirmation.methods);
+            if (sole) {
+              return startBrowserAuthorization({
+                previousState: confirmation,
+                kind: 'sso',
+                providerOrConnectionId: sole.connectionId,
+                label: sole.connectionName || sole.orgName,
+              });
+            }
             updateLoginState(
               reduceAuthFlow(confirmation, {
                 type: 'discovery-loaded',
@@ -1056,8 +1067,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               did,
               BUILD_AUTH_REGION,
             ).discover(email);
+            const currentState = loginStateRef.current;
+            const sole = soleLoginMethod(methods);
+            if (sole?.type === 'sso' && currentState) {
+              return startBrowserAuthorization({
+                previousState: currentState,
+                kind: 'sso',
+                providerOrConnectionId: sole.connectionId,
+                label: sole.connectionName || sole.orgName,
+              });
+            }
+            if (sole?.type === 'email_code') {
+              await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+                'email',
+                email,
+              );
+              updateLoginState(
+                reduceAuthFlow(currentState, {
+                  type: 'code-requested',
+                  kind: 'email',
+                  identifier: email,
+                }),
+              );
+              return true;
+            }
             updateLoginState(
-              reduceAuthFlow(loginStateRef.current, {
+              reduceAuthFlow(currentState, {
                 type: 'discovery-loaded',
                 email,
                 methods,
@@ -1065,8 +1100,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
             return true;
           }
-          // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
-          // 复用连接选择 UI 与 start-sso 流程。
+          // 企业 SSO 入口（按组织 ID/slug/已验证域名）：唯一连接直接进浏览器；
+          // 多连接才映射进 method-choice，复用连接选择 UI 与 start-sso 流程。
           if (action.type === 'discover-sso-org') {
             const org = action.org.trim().toLowerCase();
             // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后
@@ -1118,6 +1153,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 }),
               );
             } else {
+              const sole = soleAutoStartSsoMethod(methods);
+              if (sole && currentState) {
+                return startBrowserAuthorization({
+                  previousState: currentState,
+                  kind: 'sso',
+                  providerOrConnectionId: sole.connectionId,
+                  label: sole.connectionName || sole.orgName,
+                });
+              }
               updateLoginState(
                 reduceAuthFlow(currentState, {
                   type: 'discovery-loaded',

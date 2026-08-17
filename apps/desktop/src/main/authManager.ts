@@ -2885,9 +2885,10 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       return { success: true, state: loginFlowState };
     }
 
-    // 企业 SSO 入口（按组织 ID/slug/已验证域名）：结果映射进 method-choice，
-    // 同区域直接进入连接选择；跨区域先进入确认状态，确认后才把连接写入
-    // start-browser 白名单并允许继续 SSO。
+    // 企业 SSO 入口（按组织 ID/slug/已验证域名）：同区域进入连接选择；
+    // 跨区域先进入确认状态，确认后才把连接写入 start-browser 白名单。
+    // 唯一 SSO 由 renderer 接到 method-choice 后直接派发 start-browser，
+    // 以便立刻投影 browser-redirect（确认框消失、露出取消）。
     if (action.type === 'discover-sso-org') {
       const discovery = await discoverOrganizationRealm(action.org.trim().toLowerCase());
       const methods = ssoOrgDiscoveryToMethods(discovery);
