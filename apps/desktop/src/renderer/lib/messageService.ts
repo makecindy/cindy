@@ -8,6 +8,7 @@ import type { AgentMeta, Message, MessageRole } from '@/lib/ccAgent.types';
 import { ApiError } from '@/lib/httpClient';
 import { extractIpcError } from '@/utils/ipcError';
 import type { RegionalMoney } from '../../shared/regionalMoney';
+import type { SdkCostPresentation } from '../../shared/regionalMoney';
 
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
@@ -31,6 +32,8 @@ export async function list(
 
 export async function estimatedSessionValue(
   sessionId: string,
+  presentation: SdkCostPresentation = 'regular',
+  showSdkEstimate: boolean = presentation === 'estimate',
 ): Promise<{
   totalValueMoney?: RegionalMoney | null;
   totalValueUsd?: number;
@@ -38,10 +41,19 @@ export async function estimatedSessionValue(
     clientId: string;
     money?: RegionalMoney;
     costUsd?: number;
+    excludedActualMoney?: RegionalMoney;
+    turnCostIsCustomProvider?: boolean;
+    turnCostProviderId?: string | null;
     turnUsageDetails?: unknown;
   }>;
 }> {
-  return wrap(window.electronAPI.localDb.messages.estimatedSessionValue(sessionId));
+  return wrap(
+    window.electronAPI.localDb.messages.estimatedSessionValue(
+      sessionId,
+      presentation,
+      showSdkEstimate,
+    ),
+  );
 }
 
 export async function around(
@@ -84,13 +96,7 @@ export async function updateContent(
   clientId: string,
   content: unknown,
 ): Promise<Message> {
-  return wrap(
-    window.electronAPI.localDb.messages.updateContent(
-      sessionId,
-      clientId,
-      content,
-    ),
-  );
+  return wrap(window.electronAPI.localDb.messages.updateContent(sessionId, clientId, content));
 }
 
 /**
@@ -98,9 +104,6 @@ export async function updateContent(
  * merge dismissed:true 写回 —— 不要在 renderer 用解析后的展示字段重建 content
  * (会丢 sdkError 等未透传字段)。
  */
-export async function dismissError(
-  sessionId: string,
-  clientId: string,
-): Promise<Message> {
+export async function dismissError(sessionId: string, clientId: string): Promise<Message> {
   return wrap(window.electronAPI.localDb.messages.dismissError(sessionId, clientId));
 }

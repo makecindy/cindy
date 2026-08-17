@@ -1945,6 +1945,12 @@
       "toggleAria": "切换 Git 安全保存点",
       "saveFailed": "保存 Git 安全设置失败"
     },
+    "customProviderBilling": {
+      "title": "显示自定义供应商的 SDK 估算",
+      "description": "默认隐藏 SDK 计算的金额，仅显示 Token 用量；如果你设置了价格或供应商提供参考价，仍可能显示明确标注的估算金额。开启后还会显示 SDK 估算；它不是供应商账单，计价规则由 SDK 决定且可能与你的实际账单不一致，请酌情开启。",
+      "toggleAria": "切换自定义供应商 SDK 估算显示",
+      "saveFailed": "保存自定义供应商计费设置失败"
+    },
     "feishuBot": {
       "title": "飞书 / Lark 机器人",
       "description": "通过飞书或 Lark 机器人随时随地连接 {{appName}} 进行工作。",
@@ -5038,6 +5044,7 @@
     "monthlyLimitLabel": "本周期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "本任务 {{cost}}",
+    "sessionSdkEstimateLabel": "本任务 SDK 估算（非供应商账单）{{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "暂无用量",
@@ -5105,6 +5112,7 @@
     "extraUsageEnabled": "额外用量已启用",
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
+    "sdkEstimateLine": "本轮 SDK 估算（非供应商账单）：{{cost}}",
     "noBilledCost": "本轮费用暂不可用，仅显示用量",
     "latestMessageTitle": "最近一轮用户请求累计",
     "turnCostUnavailable": "本轮费用暂无法估算",
@@ -5128,6 +5136,7 @@
     "timeLine": "耗时 {{duration}}",
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
+    "sdkEstimateLine": "本轮 SDK 估算（非供应商账单）：{{cost}}",
     "tokenLine": "Tokens：共 {{total}} · 输入 {{input}} · 输出 {{output}}",
     "cacheLine": "缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "缓存拆分：读取 {{read}} · 写入 {{create}}",
@@ -6912,6 +6921,8 @@
       "turnCost": "本轮消耗",
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
+      "turnCostSdkEstimated": "本轮 SDK 估算（非供应商账单）",
+      "turnCostSdkEstimatedValue": "SDK 估算 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本轮明细"
     },
@@ -7894,7 +7905,8 @@
       },
       "taskInfoTip": {
         "tokens": "累计 Token",
-        "cost": "累计费用"
+        "cost": "累计费用",
+        "sdkEstimate": "累计 SDK 估算（非供应商账单）"
       },
       "dateGroup": {
         "today": "今天",

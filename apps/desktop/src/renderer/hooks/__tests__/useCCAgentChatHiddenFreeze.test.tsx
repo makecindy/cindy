@@ -113,7 +113,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
-import { useSessionEstimatedValue } from '@/hooks/useSessionEstimatedValue';
+import { useSessionEstimatedValueMoney } from '@/hooks/useSessionEstimatedValue';
 import { ChatDisplaySnapshotProvider, type ChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
@@ -294,7 +294,7 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
 
     function EstimatedValueProbe() {
       renderCounts.estimated += 1;
-      const value = useSessionEstimatedValue(sessionId, true);
+      const value = useSessionEstimatedValueMoney(sessionId, true);
       return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
     }
 
@@ -347,7 +347,7 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     vi.mocked(messageService.estimatedSessionValue).mockResolvedValue({ totalValueUsd: 0, entries: [] });
 
     function EstimatedValueProbe() {
-      const value = useSessionEstimatedValue(sessionId, true);
+      const value = useSessionEstimatedValueMoney(sessionId, true);
       return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
     }
 
@@ -408,7 +408,7 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
 
     function EstimatedValueProbe({ sessionId: currentSessionId }: { sessionId: string }) {
       renderCounts.estimated += 1;
-      const value = useSessionEstimatedValue(currentSessionId, true);
+      const value = useSessionEstimatedValueMoney(currentSessionId, true);
       return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
     }
 
@@ -492,7 +492,7 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     };
 
     function EstimatedValueProbe({ sessionId: currentSessionId }: { sessionId: string }) {
-      const value = useSessionEstimatedValue(currentSessionId, true);
+      const value = useSessionEstimatedValueMoney(currentSessionId, true);
       return <div data-testid="estimated-value">{value == null ? '' : value.amount.toFixed(2)}</div>;
     }
 

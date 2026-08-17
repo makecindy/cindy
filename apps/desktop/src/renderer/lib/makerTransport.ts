@@ -464,20 +464,31 @@ export function listSessionBackgroundTasksFor(
  * 与 goal/learn 链路同款);老被控端无此 channel → CHANNEL_NOT_ALLOWED,调用方 catch
  * 后退化为只显示已加载消息 + 实时推送的部分值。
  */
-export function estimatedSessionValueFor(sessionId: string): Promise<{
+export function estimatedSessionValueFor(
+  sessionId: string,
+  presentation: import('../../shared/regionalMoney').SdkCostPresentation = 'regular',
+  showSdkEstimate: boolean = presentation === 'estimate',
+): Promise<{
   totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
   totalValueUsd?: number;
   entries: Array<{
     clientId: string;
     money?: import('../../shared/regionalMoney').RegionalMoney;
     costUsd?: number;
+    excludedActualMoney?: import('../../shared/regionalMoney').RegionalMoney;
+    turnCostIsCustomProvider?: boolean;
+    turnCostProviderId?: string | null;
     turnUsageDetails?: unknown;
   }>;
 }> {
   const deviceId = getStickySessionDeviceId(sessionId);
-  if (!deviceId) return messageService.estimatedSessionValue(sessionId);
+  if (!deviceId) {
+    return messageService.estimatedSessionValue(sessionId, presentation, showSdkEstimate);
+  }
   return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
     sessionId,
+    presentation,
+    showSdkEstimate,
   ]) as ReturnType<typeof estimatedSessionValueFor>;
 }
 

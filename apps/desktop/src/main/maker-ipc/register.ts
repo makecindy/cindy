@@ -464,12 +464,9 @@ import {
 } from '../turnCostBroadcaster.js';
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
+import { isCustomProviderForBilling } from '../../shared/customProviderBilling.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
-import {
-  getGatewayAccountCurrency,
-  getGatewayModelPricingForModel,
-  getModelPriceQuote,
-} from '../usage/modelPricing.js';
+import { getGatewayModelPricingForModel, getModelPriceQuote } from '../usage/modelPricing.js';
 import {
   broadcastReferenceModelPricing,
   getCodexProviderSubscriptionValuePrice,
@@ -498,11 +495,13 @@ import {
 import {
   billingRouteForExplicitProvider,
   buildClaudeTurnUsageDetails,
+  computeCumulativeCostDelta,
   computePriceQuoteTurnMoney,
   estimateClaudeSubscriptionTurnValue,
   isAnthropicModel,
   normalizeModelIdForPricing,
   resolveClaudeTurnCostSinks,
+  resolveTurnCost,
   type BillingRoute,
 } from '../usage/turnCostCalculator.js';
 import {
@@ -511,11 +510,7 @@ import {
   isExclusiveXaiModelId,
   isSubscriptionDirectRoute,
 } from '../../shared/subscriptionModels.js';
-import {
-  addRegionalMoney,
-  usdToLedgerCurrency,
-  type RegionalMoney,
-} from '../../shared/regionalMoney.js';
+import { addRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import {
   mergePiPackageCommands,
@@ -750,7 +745,6 @@ import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
 import {
   beginProviderRouteMutation,
-  isUserProviderSession,
   setPendingCredentialSwitchReader,
 } from '../maker-host/provider-route.js';
 import {
@@ -2525,6 +2519,9 @@ function getDirectAbortBoundaryForClosingSession(
  * close-session 时清掉, 避免长跑下来 leak。
  */
 const lastReportedCostUsdBySession = new Map<string, number>();
+
+/** Pi usage status reports a session-cumulative SDK amount; keep a separate baseline per session. */
+const lastReportedPiCostUsdBySession = new Map<string, number>();
 
 /**
  * Claude done 事件 modelUsage 的 per-session 累计快照 (与 lastReportedCostUsdBySession
@@ -4663,6 +4660,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               billingRoute === 'xd-gateway'
                 ? await getGatewayModelPricingForModel()
                 : getReferenceModelPricing();
+            const isCustomProviderBillingRoute = isCustomProviderForBilling(
+              sessionProviderForBilling,
+              getActiveCatalog().providers,
+            );
             const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
               deltas,
               pricing,
@@ -4670,6 +4671,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 providerId: sessionProviderForBilling,
                 billingRoute,
                 region: CURRENT_CINDY_REGION,
+                customProviderSdkEstimate: isCustomProviderBillingRoute ? 'shown' : undefined,
               },
             );
             // 按模型记账 (首页仪表盘"按模型拆分"): 写归一化裸 id, 与 codex 行 / 价格表对齐。
@@ -4728,6 +4730,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 money: turnMoney,
                 turnUsageDetails,
                 turnOrigin: event.turnOrigin,
+                turnCostIsCustomProvider: isCustomProviderBillingRoute,
+                turnCostProviderId: sessionProviderForBilling,
               });
               if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
             } else if (turnAssistantPersistId) {
@@ -4779,6 +4783,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   money: turnEstimatedValue,
                   turnUsageDetails,
                   turnOrigin: event.turnOrigin,
+                  turnCostIsCustomProvider: isCustomProviderBillingRoute,
+                  turnCostProviderId: sessionProviderForBilling,
                 });
                 if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
               } else {
@@ -4788,6 +4794,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   sessionId: session.id,
                   clientId: turnAssistantPersistId,
                   turnUsageDetails,
+                  turnCostIsCustomProvider: isCustomProviderBillingRoute,
+                  turnCostProviderId: sessionProviderForBilling,
                 });
               }
             }
@@ -4795,7 +4803,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         } else if (typeof cumulative === 'number' && cumulative >= 0) {
           // 窄兜底: 罕见地 done 只带 total_cost_usd、没 modelUsage —— 拆不了 daily_model_usage,
           // 但至少用累计差把总额 / session / message 记上, 别漏整轮 (review #4)。
-          const rawDelta = Math.max(0, cumulative - prevReportedCost);
+          const rawDelta = computeCumulativeCostDelta(prevReportedCost, cumulative);
           void (async () => {
             let resolvedModel = 'unknown';
             try {
@@ -4803,29 +4811,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               resolvedModel = model;
             } catch {
               /* non-fatal: 保留 SDK 原始 cost */
-            }
-            const turnUsageDetails = buildClaudeTurnUsageDetails(
-              doneData?.usage,
-              undefined,
-              resolvedModel,
-              undefined,
-              claudeGenerationDurationMs,
-              claudeTurnDurationMs,
-            );
-            // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
-            // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
-            // 算不出来,UI 那一格据此退回显示 token 而不是空着。
-            const recordUsageOnly = async () => {
-              if (!turnAssistantPersistId) return;
-              await recordTurnUsageOnMessage({
-                sessionId: session.id,
-                clientId: turnAssistantPersistId,
-                turnUsageDetails,
-              });
-            };
-            if (rawDelta <= 0) {
-              await recordUsageOnly();
-              return;
             }
             const providerId = getSessionProvider(session.id);
             const observedRoute = providerId == null ? readClaudeSessionRoute(session.id) : null;
@@ -4842,28 +4827,106 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 ? 'subscription'
                 : (explicitProviderRoute ??
                   (observedRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+            const isCustomProviderRoute = isCustomProviderForBilling(
+              providerId,
+              getActiveCatalog().providers,
+            );
+            // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
+            // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
+            // 算不出来,UI 那一格据此退回显示 token 而不是空着。Provider 分类同样在 turn
+            // 边界落库，避免会话中途切换 Provider 后按当前会话状态误投影历史。
+            const recordUsageOnly = async (
+              turnUsageDetails: ReturnType<typeof buildClaudeTurnUsageDetails>,
+            ) => {
+              if (!turnAssistantPersistId) return;
+              await recordTurnUsageOnMessage({
+                sessionId: session.id,
+                clientId: turnAssistantPersistId,
+                turnUsageDetails,
+                turnCostIsCustomProvider: isCustomProviderRoute,
+                turnCostProviderId: providerId,
+              });
+            };
             // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
             // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
             // 避免把订阅 SDK 自报 cost 误记进计费)。但显式 provider-api 是权威路由:
             // 自定义 API 供应商可能供应带订阅前缀的模型 id,不能按前缀把真实费用判掉。
             if (route !== 'provider-api' && isSubscriptionDirectRoute(resolvedModel)) {
-              await recordUsageOnly();
+              await recordUsageOnly(
+                buildClaudeTurnUsageDetails(
+                  doneData?.usage,
+                  undefined,
+                  resolvedModel,
+                  undefined,
+                  claudeGenerationDurationMs,
+                  claudeTurnDurationMs,
+                ),
+              );
               return;
             }
             if (route === 'subscription' || route === 'xd-gateway') {
-              await recordUsageOnly();
+              await recordUsageOnly(
+                buildClaudeTurnUsageDetails(
+                  doneData?.usage,
+                  undefined,
+                  resolvedModel,
+                  undefined,
+                  claudeGenerationDurationMs,
+                  claudeTurnDurationMs,
+                ),
+              );
               return;
             }
-            const ledgerCurrency = (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
-            const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
-            recordTurnSpend(money);
-            recordSessionTurnSpend(session.id, money);
+            const fallbackTokens = {
+              inputTokens: doneData?.usage?.input_tokens ?? 0,
+              outputTokens: doneData?.usage?.output_tokens ?? 0,
+              cacheReadTokens: doneData?.usage?.cache_read_input_tokens ?? 0,
+              cacheCreateTokens: doneData?.usage?.cache_creation_input_tokens ?? 0,
+            };
+            const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
+              [
+                {
+                  model: resolvedModel,
+                  costUsdDelta: rawDelta,
+                  inputTokensDelta: fallbackTokens.inputTokens,
+                  outputTokensDelta: fallbackTokens.outputTokens,
+                  cacheReadTokensDelta: fallbackTokens.cacheReadTokens,
+                  cacheCreateTokensDelta: fallbackTokens.cacheCreateTokens,
+                },
+              ],
+              getReferenceModelPricing(),
+              {
+                providerId,
+                billingRoute: route,
+                region: CURRENT_CINDY_REGION,
+                customProviderSdkEstimate: isCustomProviderRoute ? 'shown' : undefined,
+              },
+            );
+            const turnUsageDetails = buildClaudeTurnUsageDetails(
+              doneData?.usage,
+              undefined,
+              resolvedModel,
+              perModel,
+              claudeGenerationDurationMs,
+              claudeTurnDurationMs,
+            );
+            const money = turnMoney ?? estimatedTurnMoney;
+            if (!money || money.amount <= 0) {
+              await recordUsageOnly(turnUsageDetails);
+              return;
+            }
+            if (turnMoney) {
+              recordTurnSpend(turnMoney);
+              recordSessionTurnSpend(session.id, turnMoney);
+            }
             const changedScheduleId = await recordSchedulerTurnCost({
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,
+              turnCostIsCustomProvider: isCustomProviderRoute,
+              turnCostProviderId: providerId,
             });
             if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
           })();
@@ -4896,7 +4959,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 「是否走订阅(不计网关费)」改由 spawn 注入 + 该会话是否显式选了 XD 网关决定。
         const sessionProvider = getSessionProvider(session.id);
         const isRemoteCodexSession = Boolean(session.remoteHostId);
-        const isCustomProviderRoute = !isRemoteCodexSession && isUserProviderSession(session.id);
+        const isCustomProviderRoute = isCustomProviderForBilling(
+          sessionProvider,
+          getActiveCatalog().providers,
+        );
         const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();
         const modelPromise =
           turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
@@ -5011,6 +5077,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 sessionId: session.id,
                 clientId: turnAssistantPersistId,
                 turnUsageDetails,
+                turnCostIsCustomProvider: isCustomProviderRoute,
+                turnCostProviderId: sessionProvider,
               });
             };
             try {
@@ -5071,6 +5139,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   money,
                   turnUsageDetails,
                   turnOrigin: event.turnOrigin,
+                  turnCostIsCustomProvider: isCustomProviderRoute,
+                  turnCostProviderId: sessionProvider,
                 });
                 if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
               } else {
@@ -5122,6 +5192,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);
         const rawUsage = (event.data as { usage?: unknown } | undefined)?.usage;
+        const piCumulativeCostUsd = session.getUsageSnapshot().costUsd;
+        const previousPiCumulativeCostUsd = lastReportedPiCostUsdBySession.get(session.id) ?? 0;
+        if (Number.isFinite(piCumulativeCostUsd) && piCumulativeCostUsd >= 0) {
+          lastReportedPiCostUsdBySession.set(session.id, piCumulativeCostUsd);
+        }
+        const piSdkCostDelta = computeCumulativeCostDelta(
+          previousPiCumulativeCostUsd,
+          piCumulativeCostUsd,
+        );
         if (rawUsage && typeof rawUsage === 'object') {
           const tokens = piUsageToTokens(
             rawUsage as {
@@ -5145,7 +5224,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               // 模型读取失败仍持久化 token/cache，模型显示为 unknown。
             }
             const pricingModel = normalizeModelIdForPricing(turnModel);
-            const isCustomProviderRoute = isUserProviderSession(session.id);
             const effectiveProvider =
               sessionProvider ??
               (pricingModel.startsWith(CHATGPT_MODEL_PREFIX)
@@ -5153,11 +5231,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 : pricingModel.startsWith(XAI_MODEL_PREFIX)
                   ? 'xai'
                   : null);
+            const isCustomProviderRoute = isCustomProviderForBilling(
+              sessionProvider,
+              getActiveCatalog().providers,
+            );
             const isSubscriptionValue =
-              effectiveProvider === 'openai' ||
-              effectiveProvider === 'anthropic' ||
-              effectiveProvider === 'xai' ||
-              (!isCustomProviderRoute && isSubscriptionDirectRoute(pricingModel));
+              !isCustomProviderRoute &&
+              (effectiveProvider === 'openai' ||
+                effectiveProvider === 'anthropic' ||
+                effectiveProvider === 'xai' ||
+                isSubscriptionDirectRoute(pricingModel));
             const turnUsageDetails = buildTurnUsageDetails({
               ...tokens,
               model: turnModel,
@@ -5194,7 +5277,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               // 裸 grok-4.6 会先映射到 xai/grok-4.6。旧实现把 catalog 置 null 再
               // getModelPriceQuote(null, 'xai', 'grok-4.6'),报价永远 miss,消息上就只剩用量。
               const pricing = isCustomProviderRoute
-                ? null
+                ? getReferenceModelPricing()
                 : isSubscriptionValue
                   ? getReferenceModelPricing()
                   : await getGatewayModelPricingForModel();
@@ -5203,13 +5286,27 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 : isSubscriptionValue
                   ? getSubscriptionValuePriceFor('pi', pricingModel, pricing)
                   : getModelPriceQuote(pricing, 'xd', pricingModel);
-              const money = computePriceQuoteTurnMoney(
-                tokens,
-                price ?? undefined,
-                currentLedgerCurrency(),
-              );
+              const money = isCustomProviderRoute
+                ? resolveTurnCost({
+                    rawModel: turnModel,
+                    tokens,
+                    sdkCostDelta: piSdkCostDelta,
+                    pricing,
+                    context: {
+                      providerId: sessionProvider,
+                      billingRoute: 'provider-api',
+                      region: CURRENT_CINDY_REGION,
+                      pricingAgent: 'pi',
+                      customProviderSdkEstimate: 'shown',
+                    },
+                  }).money
+                : computePriceQuoteTurnMoney(
+                    tokens,
+                    price ?? undefined,
+                    currentLedgerCurrency(),
+                  );
               if (money && money.amount > 0) {
-                if (!isSubscriptionValue) {
+                if (!isSubscriptionValue && money.kind === 'actual-cost') {
                   // token 已在上方入库；这里只补真实 API/gateway 费用，
                   // 避免重复累加 token。订阅价值挂到消息(value-estimate),不进 daily_spend。
                   await recordModelTurnUsage({
@@ -5230,6 +5327,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   money,
                   turnUsageDetails,
                   turnOrigin: event.turnOrigin,
+                  turnCostIsCustomProvider: isCustomProviderRoute,
+                  turnCostProviderId: sessionProvider,
                 });
                 if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
               } else if (turnAssistantPersistId && turnUsageDetails) {
@@ -5237,6 +5336,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   sessionId: session.id,
                   clientId: turnAssistantPersistId,
                   turnUsageDetails,
+                  turnCostIsCustomProvider: isCustomProviderRoute,
+                  turnCostProviderId: sessionProvider,
                 });
               }
             } catch {
@@ -5246,6 +5347,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   sessionId: session.id,
                   clientId: turnAssistantPersistId,
                   turnUsageDetails,
+                  turnCostIsCustomProvider: isCustomProviderRoute,
+                  turnCostProviderId: sessionProvider,
                 });
               }
             }
@@ -5329,6 +5432,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           clearOrcaMcpHydrated(session.id);
           knownNonOrcaSessionIds.delete(session.id);
           lastReportedCostUsdBySession.delete(session.id);
+          lastReportedPiCostUsdBySession.delete(session.id);
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
           productTurnWallClockTracker.clear(session.id);

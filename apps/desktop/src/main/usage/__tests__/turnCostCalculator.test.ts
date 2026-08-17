@@ -9,6 +9,7 @@ import {
 import {
   billingRouteForExplicitProvider,
   buildClaudeTurnUsageDetails,
+  computeCumulativeCostDelta,
   computePriceQuoteTurnMoney,
   computeGatewayTurnCost,
   estimateClaudeSubscriptionTurnValue,
@@ -136,6 +137,14 @@ describe('model id and route helpers', () => {
     expect(isAnthropicModel('claude-sonnet-4-6')).toBe(true);
     expect(isAnthropicModel('sonnet')).toBe(true);
     expect(isAnthropicModel('gpt-5.5')).toBe(false);
+  });
+
+  it('rebases cumulative SDK cost after a child-process restart', () => {
+    expect(computeCumulativeCostDelta(undefined, 0.4)).toBe(0.4);
+    expect(computeCumulativeCostDelta(0.4, 0.75)).toBeCloseTo(0.35);
+    expect(computeCumulativeCostDelta(3.2, 0.15)).toBe(0.15);
+    expect(computeCumulativeCostDelta(0.4, Number.NaN)).toBe(0);
+    expect(computeCumulativeCostDelta(0.4, -1)).toBe(0);
   });
 });
 
@@ -401,6 +410,119 @@ describe('resolveTurnCost', () => {
     });
     expect(providerApiOnCnyLedger.money).toMatchObject({ currency: 'CNY' });
     expect(providerApiOnCnyLedger.money?.amount).toBeCloseTo(2 * 6.7, 6);
+  });
+
+  it('keeps custom provider SDK amounts token-only by default and estimate-only when shown', () => {
+    const suppressed = resolveTurnCost({
+      rawModel: 'gpt-4o',
+      tokens: { inputTokens: 1_000, outputTokens: 100, cacheReadTokens: 0, cacheCreateTokens: 0 },
+      sdkCostDelta: 2,
+      pricing: catalog(quote('some-other-model', 3, 15)),
+      context: {
+        providerId: 'custom-openrouter',
+        billingRoute: 'provider-api',
+        region: 'global',
+        customProviderSdkEstimate: 'hidden',
+      },
+    });
+    expect(suppressed.money).toBeNull();
+    expect(suppressed.source).toBe('sdk');
+
+    const shown = resolveTurnCost({
+      rawModel: 'gpt-4o',
+      tokens: { inputTokens: 1_000, outputTokens: 100, cacheReadTokens: 0, cacheCreateTokens: 0 },
+      sdkCostDelta: 2,
+      pricing: catalog(quote('some-other-model', 3, 15)),
+      context: {
+        providerId: 'custom-openrouter',
+        billingRoute: 'provider-api',
+        region: 'global',
+        customProviderSdkEstimate: 'shown',
+      },
+    });
+    expect(shown.money).toMatchObject({
+      amount: 2,
+      currency: 'USD',
+      kind: 'value-estimate',
+      approximate: true,
+    });
+    expect(shown.money?.estimateReasons).toContain('sdk-estimate');
+    expect(shown.money?.estimateReasons).not.toContain('subscription-value');
+  });
+
+  it('keeps custom provider user pricing ahead of an SDK estimate even when SDK display is hidden', () => {
+    const result = resolveTurnCost({
+      rawModel: 'custom-model',
+      tokens: {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 99,
+      pricing: catalog(
+        quote('custom-model', 2, 10, {
+          providerId: 'custom-openrouter',
+          source: 'user-override',
+          approximate: true,
+        }),
+      ),
+      context: {
+        providerId: 'custom-openrouter',
+        billingRoute: 'provider-api',
+        region: 'global',
+        customProviderSdkEstimate: 'hidden',
+      },
+    });
+    expect(result).toMatchObject({
+      source: 'reference',
+      money: { amount: 3, kind: 'value-estimate' },
+    });
+  });
+
+  it('uses the Pi-specific custom provider price override before the SDK estimate', () => {
+    const providerId = 'custom-pi';
+    const modelId = 'custom-model';
+    const generic = quote(modelId, 20, 20, {
+      providerId,
+      source: 'provider-reference',
+      approximate: true,
+    });
+    const piOverride = quote(modelId, 2, 10, {
+      providerId,
+      source: 'user-override',
+      approximate: true,
+    });
+    const pricing: ModelPricingCatalog = {
+      [providerId]: {
+        [modelId]: generic,
+        [`${modelId}\u0000pi`]: piOverride,
+      },
+    };
+
+    const result = resolveTurnCost({
+      rawModel: modelId,
+      tokens: {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 99,
+      pricing,
+      context: {
+        providerId,
+        billingRoute: 'provider-api',
+        region: 'global',
+        pricingAgent: 'pi',
+        customProviderSdkEstimate: 'shown',
+      },
+    });
+
+    expect(result).toMatchObject({
+      source: 'reference',
+      money: { amount: 3, kind: 'value-estimate' },
+    });
   });
 
   it('omits the SDK USD fallback for a CNY-settled account (wrong currency, no discount)', () => {

@@ -217,6 +217,7 @@
     "aiRenameNoMaterial": "任務中還沒有可用於命名的訊息，請先傳送訊息。",
     "aiRenameProviderUnsupported": "目前的供應商暫不支援自動起名，請切換供應商後再試。",
     "contextUsageSummary": "上下文 {{percent}}%",
+    "estimatedUsageSummary": "估算 {{amount}}",
     "copied": "已複製",
     "copyFailed": "複製失敗",
     "deleteConfirmTitle": "刪除任務？",

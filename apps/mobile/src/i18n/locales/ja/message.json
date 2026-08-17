@@ -199,6 +199,8 @@
     "learnFailed": "スキル学習を開始できませんでした",
     "learnBusyBody": "学習タスクが既に進行中です。完了してから再度お試しください。",
     "learnFailedBody": "開始に失敗:{{detail}}",
+    "sdkEstimateTitle": "SDK 見積もり",
+    "estimatedValueTitle": "セッション推定値",
     "unknownError": "不明なエラー"
   },
   "quote": {

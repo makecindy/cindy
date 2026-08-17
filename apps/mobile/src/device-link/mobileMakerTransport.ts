@@ -159,6 +159,26 @@ export interface MessageAroundOptions {
   radius?: number;
 }
 
+export interface MobileEstimatedSessionValueSnapshot {
+  totalValueMoney?: import('@/session/remoteMoney').RemoteMoney | null;
+  totalValueUsd?: number;
+  entries: Array<{
+    clientId: string;
+    money?: import('@/session/remoteMoney').RemoteMoney;
+    costUsd?: number;
+    excludedActualMoney?: import('@/session/remoteMoney').RemoteMoney;
+    turnCostIsCustomProvider?: boolean;
+    turnCostProviderId?: string | null;
+    turnUsageDetails?: unknown;
+  }>;
+}
+
+export interface MobileCustomProviderBillingSettingsState {
+  showSdkCostForCustomProviders: boolean;
+  isCustomized: boolean;
+  defaultShowSdkCostForCustomProviders: boolean;
+}
+
 export interface RemoteDirectoryEntry {
   name: string;
   kind: 'dir' | 'symlink' | 'file';
@@ -388,6 +408,8 @@ export interface MobileMakerTransport {
     providers: ProviderView[];
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
+  /** 被控端全局偏好:是否显示自定义 Provider 的 SDK 自报费用估算。 */
+  getCustomProviderBillingSettings(): Promise<MobileCustomProviderBillingSettingsState>;
   getSession(sessionId: string): Promise<RemoteSession>;
   patchSessionMeta(sessionId: string, patch: SessionMetaPatch): Promise<RemoteSession>;
   /**
@@ -407,6 +429,11 @@ export interface MobileMakerTransport {
    */
   regenerateSessionTitle(sessionId: string): Promise<{ title: string | null }>;
   listMessages(sessionId: string, opts?: MessageListOptions): Promise<RemoteMessage[]>;
+  estimatedSessionValue(
+    sessionId: string,
+    presentation?: 'regular' | 'hidden' | 'estimate',
+    showSdkEstimate?: boolean,
+  ): Promise<MobileEstimatedSessionValueSnapshot>;
   aroundMessages(sessionId: string, messageId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   aroundMessagesByClientId(sessionId: string, clientId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
   send(
@@ -659,6 +686,7 @@ export function createMobileMakerTransport({
     listProviders: () => call('maker:provider:list', [{
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     }]),
+    getCustomProviderBillingSettings: () => call('maker:custom-provider-billing:get'),
     getSession: (sessionId) => call('local-db:sessions:get', [sessionId]),
     patchSessionMeta: (sessionId, patch) => call('local-db:sessions:patch-meta', [sessionId, patch]),
     dismissErrorMessage: (sessionId, clientId) =>
@@ -666,6 +694,12 @@ export function createMobileMakerTransport({
     ackInterruptedTurn: (sessionId) => call('local-db:sessions:ack-interrupted', [sessionId]),
     regenerateSessionTitle: (sessionId) => call('maker:regenerate-title', [{ sessionId }]),
     listMessages: (sessionId, opts) => call('local-db:messages:list', [sessionId, opts]),
+    estimatedSessionValue: (sessionId, presentation, showSdkEstimate) =>
+      call('local-db:messages:estimatedSessionValue', [
+        sessionId,
+        presentation,
+        showSdkEstimate,
+      ]),
     aroundMessages: (sessionId, messageId, opts) =>
       call('local-db:messages:around', [sessionId, messageId, opts]),
     aroundMessagesByClientId: (sessionId, clientId, opts) =>

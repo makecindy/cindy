@@ -56,10 +56,7 @@ import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
-import {
-  legacyUsdMoney,
-  type RegionalMoney,
-} from '../../../shared/regionalMoney';
+import { legacyUsdMoney, type RegionalMoney } from '../../../shared/regionalMoney';
 
 interface MessageActionBarProps {
   createdAt?: string;
@@ -211,35 +208,29 @@ export function MessageActionBar({
     [copyText],
   );
 
-  const handleFork = useCallback(
-    async () => {
-      if (!onFork || forking) return;
-      setForking(true);
-      try {
-        await onFork();
-      } catch {
-        // useForkAtMessage already maps the error to a user-facing toast.
-      } finally {
-        // Reset regardless of outcome — caller toasts on failure, and on
-        // success we usually navigate away anyway so unmount handles it.
-        setForking(false);
-      }
-    },
-    [onFork, forking],
-  );
+  const handleFork = useCallback(async () => {
+    if (!onFork || forking) return;
+    setForking(true);
+    try {
+      await onFork();
+    } catch {
+      // useForkAtMessage already maps the error to a user-facing toast.
+    } finally {
+      // Reset regardless of outcome — caller toasts on failure, and on
+      // success we usually navigate away anyway so unmount handles it.
+      setForking(false);
+    }
+  }, [onFork, forking]);
 
-  const handleCopyLink = useCallback(
-    async () => {
-      if (!copyLinkText) return;
-      try {
-        await navigator.clipboard.writeText(copyLinkText);
-        toast.success(t('chat.messageActionBar.linkCopied'));
-      } catch {
-        toast.warning(t('chat.messageActionBar.copyLinkFailed'));
-      }
-    },
-    [copyLinkText, t],
-  );
+  const handleCopyLink = useCallback(async () => {
+    if (!copyLinkText) return;
+    try {
+      await navigator.clipboard.writeText(copyLinkText);
+      toast.success(t('chat.messageActionBar.linkCopied'));
+    } catch {
+      toast.warning(t('chat.messageActionBar.copyLinkFailed'));
+    }
+  }, [copyLinkText, t]);
 
   const handleDelete = useCallback(async () => {
     if (!onDelete || deleting) return;
@@ -386,9 +377,7 @@ export function MessageActionBar({
   // 用户轮累计优先；没有新字段的历史消息继续显示原始 SDK 分段成本。
   const effectiveTurnMoney =
     turnMoney ??
-    (typeof turnCostUsd === 'number' && turnCostUsd > 0
-      ? legacyUsdMoney(turnCostUsd)
-      : undefined);
+    (typeof turnCostUsd === 'number' && turnCostUsd > 0 ? legacyUsdMoney(turnCostUsd) : undefined);
   const effectiveUserTurnMoney =
     userTurnMoney ??
     (typeof userTurnCostUsd === 'number' && userTurnCostUsd > 0
@@ -398,6 +387,8 @@ export function MessageActionBar({
   const displayedCostIsEstimate = effectiveUserTurnMoney
     ? userTurnCostIsEstimate
     : turnCostIsEstimate;
+  const displayedCostIsSdkEstimate =
+    displayedMoney?.estimateReasons?.includes('sdk-estimate') === true;
   const isUserTurnTotal = effectiveUserTurnMoney != null;
 
   // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
@@ -410,13 +401,18 @@ export function MessageActionBar({
           t,
           money: displayedMoney,
           isEstimate: displayedCostIsEstimate,
-          ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
+          estimateKind: displayedCostIsSdkEstimate ? 'sdk' : 'value',
+          ...(isUserTurnTotal
+            ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') }
+            : {}),
         }).join('\n')}
       </span>
     ) : (
       t(
         displayedCostIsEstimate
-          ? 'chat.messageActionBar.turnCostEstimated'
+          ? displayedCostIsSdkEstimate
+            ? 'chat.messageActionBar.turnCostSdkEstimated'
+            : 'chat.messageActionBar.turnCostEstimated'
           : 'chat.messageActionBar.turnCost',
       )
     );
@@ -436,15 +432,18 @@ export function MessageActionBar({
       <Tooltip.Trigger asChild>
         <span className={metaTextClassName}>
           {displayedCostIsEstimate
-            ? t('chat.messageActionBar.turnCostEstimatedValue', {
-                cost: formatTurnCostMoney(displayedMoney),
-              })
+            ? t(
+                displayedCostIsSdkEstimate
+                  ? 'chat.messageActionBar.turnCostSdkEstimatedValue'
+                  : 'chat.messageActionBar.turnCostEstimatedValue',
+                {
+                  cost: formatTurnCostMoney(displayedMoney),
+                },
+              )
             : formatTurnCostMoney(displayedMoney)}
         </span>
       </Tooltip.Trigger>
-      <Tooltip.Content>
-        {turnCostTooltipNode}
-      </Tooltip.Content>
+      <Tooltip.Content>{turnCostTooltipNode}</Tooltip.Content>
     </Tooltip.Root>
   );
 

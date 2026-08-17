@@ -58,6 +58,8 @@ import {
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import type { TaskInfoField } from '../hooks/useTaskInfoFields';
 import type { SessionWorktreeInfo } from './sessionWorktreeInfo';
+import type { SdkCostPresentation } from '../../../../shared/regionalMoney';
+import { useSessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 
 const log = createLogger('SessionInfoMeta');
 
@@ -104,10 +106,17 @@ export function buildSessionInfoPieces(
     if (field === 'cost') {
       const money = session.totalMoney;
       if (money && money.amount > 0) {
+        const isSdkEstimate =
+          money.kind === 'value-estimate' &&
+          money.estimateReasons?.includes('sdk-estimate') === true;
         pieces.push({
           key: 'cost',
           text: formatMoney(money),
-          title: t('ccAgent.sidebar.taskInfoTip.cost'),
+          title: t(
+            isSdkEstimate
+              ? 'ccAgent.sidebar.taskInfoTip.sdkEstimate'
+              : 'ccAgent.sidebar.taskInfoTip.cost',
+          ),
         });
       } else if (session.totalCostUsd > 0) {
         pieces.push({
@@ -138,6 +147,44 @@ export function buildSessionInfoPieces(
     }
   }
   return pieces;
+}
+
+export function useProjectedSessionInfoPieces(
+  session: Session,
+  fields: readonly TaskInfoField[],
+  activityIso: string | undefined,
+  t: TFunc,
+  hasPrRef: boolean,
+  hasWorktree: boolean,
+  costPresentation: SdkCostPresentation,
+  showSdkEstimate: boolean,
+): SessionInfoPiece[] {
+  // A session can switch providers over its lifetime.  New message rows carry a
+  // per-turn provider classification, so always rebuild the cost projection when
+  // the field is visible; the current provider is only the fallback for legacy rows.
+  const needsMoneyProjection = fields.includes('cost');
+  const usage = useSessionUsageMoney(
+    needsMoneyProjection ? session.id : undefined,
+    needsMoneyProjection ? (session.totalMoney ?? null) : null,
+    needsMoneyProjection ? session.totalCostUsd : null,
+    costPresentation,
+    showSdkEstimate,
+  );
+  const projectedSession = needsMoneyProjection
+    ? {
+        ...session,
+        totalMoney: usage.totalMoney ?? undefined,
+        totalCostUsd: usage.totalMoney?.currency === 'USD' ? usage.totalMoney.amount : 0,
+      }
+    : session;
+  return buildSessionInfoPieces(
+    projectedSession,
+    fields,
+    activityIso,
+    t,
+    hasPrRef,
+    hasWorktree,
+  );
 }
 
 /**

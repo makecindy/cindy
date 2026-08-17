@@ -48,19 +48,12 @@ import {
   formatTurnCostMoney,
   formatTurnCostUsd,
 } from '@/lib/usageFormat';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
-import {
-  useSessionUsageMoney,
-  type SessionUsageMoney,
-} from '@/hooks/useSessionUsageMoney';
+import { useSessionUsageMoney, type SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import { useSessionTokens } from '@/hooks/useSessionTokens';
 import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
 import {
@@ -110,6 +103,7 @@ import {
   DEFAULT_USAGE_CURRENCY,
   gatewayMoney,
   type RegionalMoney,
+  type SdkCostPresentation,
 } from '../../../shared/regionalMoney';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import {
@@ -190,10 +184,31 @@ function computeMetricSlots(
   t: TFunction,
 ): Record<MetricKey, MetricSlot> {
   const slots: Record<MetricKey, MetricSlot> = {
-    daily: { label: t('todaySpend.dailyLimitLabel', { spend: DEFAULT_MONEY_PLACEHOLDER, limit: DEFAULT_MONEY_PLACEHOLDER }), available: false },
-    monthly: { label: t('todaySpend.monthlyLimitLabel', { spend: DEFAULT_MONEY_PLACEHOLDER, limit: DEFAULT_MONEY_PLACEHOLDER }), available: false },
-    credit: { label: t('todaySpend.creditLabel', { used: DEFAULT_MONEY_PLACEHOLDER, total: DEFAULT_MONEY_PLACEHOLDER }), available: false },
-    session: { label: t('todaySpend.sessionCostLabel', { cost: DEFAULT_MONEY_PLACEHOLDER }), available: false },
+    daily: {
+      label: t('todaySpend.dailyLimitLabel', {
+        spend: DEFAULT_MONEY_PLACEHOLDER,
+        limit: DEFAULT_MONEY_PLACEHOLDER,
+      }),
+      available: false,
+    },
+    monthly: {
+      label: t('todaySpend.monthlyLimitLabel', {
+        spend: DEFAULT_MONEY_PLACEHOLDER,
+        limit: DEFAULT_MONEY_PLACEHOLDER,
+      }),
+      available: false,
+    },
+    credit: {
+      label: t('todaySpend.creditLabel', {
+        used: DEFAULT_MONEY_PLACEHOLDER,
+        total: DEFAULT_MONEY_PLACEHOLDER,
+      }),
+      available: false,
+    },
+    session: {
+      label: t('todaySpend.sessionCostLabel', { cost: DEFAULT_MONEY_PLACEHOLDER }),
+      available: false,
+    },
   };
 
   // 额度池账本没有周期概念(订阅发放 + 充值 + 赠送), 所以不派生日均软限额。
@@ -226,9 +241,7 @@ function computeMetricSlots(
       const softLimit = (claudeQuota.maxBudget / 30) * DAILY_SOFT_LIMIT_FACTOR;
       slots.daily = {
         label: t('todaySpend.dailyLimitLabel', {
-          spend: formatCompactMoney(
-            gatewayMoney(claudeQuota.todaySpend, claudeQuota.currency),
-          ),
+          spend: formatCompactMoney(gatewayMoney(claudeQuota.todaySpend, claudeQuota.currency)),
           limit: formatCompactMoney(gatewayMoney(softLimit, claudeQuota.currency)),
         }),
         available: true,
@@ -238,9 +251,15 @@ function computeMetricSlots(
 
   if (sessionMoney && sessionMoney.amount > 0) {
     const cost = formatTurnCostMoney(sessionMoney);
+    const labelKey = isSdkEstimateMoney(sessionMoney)
+      ? 'todaySpend.sessionSdkEstimateLabel'
+      : 'todaySpend.sessionCostLabel';
     slots.session = {
-      label: t('todaySpend.sessionCostLabel', { cost }),
-      tooltipLabel: t('todaySpend.tooltip.sessionUsed', { cost }),
+      label: t(labelKey, { cost }),
+      tooltipLabel: t(
+        isSdkEstimateMoney(sessionMoney) ? labelKey : 'todaySpend.tooltip.sessionUsed',
+        { cost },
+      ),
       available: true,
     };
   }
@@ -267,9 +286,7 @@ function formatPlanType(planType: string | null | undefined): string | null {
   if (!trimmed) return null;
   const knownLabel = PLAN_TYPE_LABELS[trimmed];
   if (knownLabel) return knownLabel;
-  return trimmed
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return trimmed.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function clampPercent(value: number): number {
@@ -310,9 +327,10 @@ function formatResetCreditExpiryAt(
   }
   const date = new Date(epochSeconds * 1000);
   const now = new Date(nowMs);
-  const sameDay = date.getFullYear() === now.getFullYear()
-    && date.getMonth() === now.getMonth()
-    && date.getDate() === now.getDate();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
   return new Intl.DateTimeFormat(
     locale,
     sameDay
@@ -383,9 +401,11 @@ interface ChipWindowSegment extends ChipWindowSlot {
  * 含等号会让它再等一轮慢 tick(多挂最长一分钟)。
  */
 function isResetPending(resetsAtMs: number | null, nowMs: number): boolean {
-  return typeof resetsAtMs === 'number'
-    && resetsAtMs <= nowMs
-    && nowMs - resetsAtMs < RESET_PENDING_MAX_MS;
+  return (
+    typeof resetsAtMs === 'number' &&
+    resetsAtMs <= nowMs &&
+    nowMs - resetsAtMs < RESET_PENDING_MAX_MS
+  );
 }
 
 function formatWindowLabel(
@@ -442,9 +462,7 @@ function toCodexWindowUsage(
 }
 
 function formatRateLimitReason(reason: string): string {
-  return reason
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return reason.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function getCodexWindowUsages(
@@ -517,15 +535,13 @@ function shouldShowCodexLimitReachedReason(snapshot: RateLimitSnapshot): boolean
 }
 
 function getGatewayChipSegments(slots: Record<MetricKey, MetricSlot>): string[] {
-  return PRIMARY_GATEWAY_METRICS
-    .filter((key) => slots[key].available)
-    .map((key) => slots[key].label);
+  return PRIMARY_GATEWAY_METRICS.filter((key) => slots[key].available).map(
+    (key) => slots[key].label,
+  );
 }
 
 function hasPositiveSessionTokens(sessionTokens: number | null): boolean {
-  return typeof sessionTokens === 'number'
-    && Number.isFinite(sessionTokens)
-    && sessionTokens > 0;
+  return typeof sessionTokens === 'number' && Number.isFinite(sessionTokens) && sessionTokens > 0;
 }
 
 function getCodexApiEmptyState(
@@ -562,16 +578,20 @@ function buildCodexTooltipNode(
   const parsedCredits = parseCreditBalance(credits?.balance);
 
   if (planLabel && parsedCredits) {
-    lines.push(t('todaySpend.codex.planCreditsLine', {
-      plan: planLabel,
-      credits: parsedCredits.formatted,
-    }));
+    lines.push(
+      t('todaySpend.codex.planCreditsLine', {
+        plan: planLabel,
+        credits: parsedCredits.formatted,
+      }),
+    );
   } else if (planLabel) {
     lines.push(t('todaySpend.codex.planLine', { plan: planLabel }));
   } else if (parsedCredits) {
-    lines.push(t('todaySpend.codex.creditsLine', {
-      credits: parsedCredits.formatted,
-    }));
+    lines.push(
+      t('todaySpend.codex.creditsLine', {
+        credits: parsedCredits.formatted,
+      }),
+    );
   }
 
   if (credits?.unlimited) {
@@ -589,9 +609,8 @@ function buildCodexTooltipNode(
       remaining: window.remaining,
       used: window.used,
     });
-    lines.push(window.resetAt
-      ? `${base} · ${t('todaySpend.codex.resetAt', { at: window.resetAt })}`
-      : base,
+    lines.push(
+      window.resetAt ? `${base} · ${t('todaySpend.codex.resetAt', { at: window.resetAt })}` : base,
     );
   }
 
@@ -599,9 +618,11 @@ function buildCodexTooltipNode(
     ? snapshot.rateLimitReachedType
     : null;
   if (limitReachedReason) {
-    lines.push(t('todaySpend.codex.limitReached', {
-      reason: formatRateLimitReason(limitReachedReason),
-    }));
+    lines.push(
+      t('todaySpend.codex.limitReached', {
+        reason: formatRateLimitReason(limitReachedReason),
+      }),
+    );
   }
 
   if (lines.length === 0) {
@@ -655,7 +676,11 @@ function getClaudeChipWindows(
   if (!snapshot) return [];
   const windows: ChipWindowSegment[] = [];
   const fiveHour = snapshot.fiveHour;
-  if (fiveHour && typeof fiveHour.utilization === 'number' && Number.isFinite(fiveHour.utilization)) {
+  if (
+    fiveHour &&
+    typeof fiveHour.utilization === 'number' &&
+    Number.isFinite(fiveHour.utilization)
+  ) {
     const countdown = formatCompactTimeUntilReset(fiveHour.resetsAt, nowMs, t);
     const resetsAtMs = toEpochMs(fiveHour.resetsAt);
     windows.push({
@@ -668,18 +693,22 @@ function getClaudeChipWindows(
   }
   const weekly = resolveClaudeWeeklyWindow(snapshot, modelId, t);
   if (
-    weekly
-    && typeof weekly.window.utilization === 'number'
-    && Number.isFinite(weekly.window.utilization)
+    weekly &&
+    typeof weekly.window.utilization === 'number' &&
+    Number.isFinite(weekly.window.utilization)
   ) {
     const countdown = formatCompactTimeUntilReset(weekly.window.resetsAt, nowMs, t);
     const label = countdown
-      ? (weekly.modelDisplayName ? `${weekly.modelDisplayName} ${countdown}` : countdown)
+      ? weekly.modelDisplayName
+        ? `${weekly.modelDisplayName} ${countdown}`
+        : countdown
       : weekly.label;
     const resetsAtMs = toEpochMs(weekly.window.resetsAt);
     windows.push({
       // 身份 key 区分总周限与各 scoped 周限: 切模型导致窗口切换时只重置动画基线。
-      key: weekly.modelDisplayName ? `claude-weekly:${weekly.modelDisplayName}` : 'claude-weekly:total',
+      key: weekly.modelDisplayName
+        ? `claude-weekly:${weekly.modelDisplayName}`
+        : 'claude-weekly:total',
       label,
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
       resetsAtMs,
@@ -698,8 +727,13 @@ interface LatestTurnUsageSummary {
   money?: RegionalMoney;
   costUsd?: number;
   isEstimate?: boolean;
+  isSdkEstimate?: boolean;
   isUserTurnTotal: boolean;
   details: TurnUsageDetails;
+}
+
+function isSdkEstimateMoney(money: RegionalMoney | null | undefined): boolean {
+  return money?.estimateReasons?.includes('sdk-estimate') === true;
 }
 
 function formatTurnUsagePercent(value: number | null): string | null {
@@ -751,6 +785,7 @@ function toQuotaHoverCardTurnUsage(
   return {
     costText,
     costIsEstimate: summary.isEstimate,
+    costIsSdkEstimate: summary.isSdkEstimate,
     isUserTurnTotal: summary.isUserTurnTotal,
     totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
     inputTokensText: formatCompactTokens(details.inputTokens),
@@ -786,14 +821,16 @@ function toQuotaHoverCardSessionUsage(
     // approximate 只说明金额精度，不能把第三方参考价的实际费用改成订阅价值语义。
     // 纯价值估算优先信任 kind；兼容旧投影时再以唯一存在的估值分量兜底。
     costIsEstimate:
-      totalMoney.kind === 'value-estimate'
-      || Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
-    ...(actualMoney?.amount
-      ? { actualCostText: formatTurnCostMoney(actualMoney) }
-      : {}),
+      totalMoney.kind === 'value-estimate' ||
+      Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
+    ...(actualMoney?.amount ? { actualCostText: formatTurnCostMoney(actualMoney) } : {}),
     ...(estimatedValueMoney?.amount
-      ? { estimatedValueText: formatTurnCostMoney(estimatedValueMoney) }
+      ? {
+          estimatedValueText: formatTurnCostMoney(estimatedValueMoney),
+          estimatedValueIsSdkEstimate: isSdkEstimateMoney(estimatedValueMoney),
+        }
       : {}),
+    costIsSdkEstimate: !actualMoney?.amount && isSdkEstimateMoney(estimatedValueMoney),
   };
 }
 
@@ -801,13 +838,11 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'assistant' || !message.turnUsageDetails) continue;
-    const userTurnMoney =
-      message.userTurnMoney?.amount
-        ? message.userTurnMoney
+    const userTurnMoney = message.userTurnMoney?.amount ? message.userTurnMoney : undefined;
+    const userTurnCostUsd =
+      typeof message.userTurnCostUsd === 'number' && message.userTurnCostUsd > 0
+        ? message.userTurnCostUsd
         : undefined;
-    const userTurnCostUsd = typeof message.userTurnCostUsd === 'number' && message.userTurnCostUsd > 0
-      ? message.userTurnCostUsd
-      : undefined;
     const displayedMoney = userTurnMoney ?? message.turnMoney;
     return {
       ...(userTurnMoney
@@ -816,22 +851,21 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
           ? { costUsd: userTurnCostUsd }
           : message.turnMoney?.amount
             ? { money: message.turnMoney }
-        : typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
-          ? { costUsd: message.turnCostUsd }
-        : {}),
+            : typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
+              ? { costUsd: message.turnCostUsd }
+              : {}),
       ...((userTurnMoney || userTurnCostUsd != null
         ? message.userTurnCostIsEstimate
-        : message.turnCostIsEstimate) === true
-        || displayedMoney?.kind === 'value-estimate'
+        : message.turnCostIsEstimate) === true || displayedMoney?.kind === 'value-estimate'
         ? { isEstimate: true }
         : {}),
+      ...(isSdkEstimateMoney(displayedMoney) ? { isSdkEstimate: true } : {}),
       isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null),
       // Amount and token/model detail now describe the same visible user turn.
       // Raw segment costs remain persisted for billing and analytics, but are
       // an implementation detail rather than a second user-facing total.
       details:
-        aggregateAssistantTurnUsageDetails(messages, message.clientId) ??
-        message.turnUsageDetails,
+        aggregateAssistantTurnUsageDetails(messages, message.clientId) ?? message.turnUsageDetails,
     };
   }
   return null;
@@ -840,7 +874,7 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
 function useLatestTurnUsageSummary(sessionId: string | undefined): LatestTurnUsageSummary | null {
   const displaySnapshot = useChatDisplaySnapshot(sessionId);
   const displaySummary = React.useMemo(
-    () => displaySnapshot ? findLatestTurnUsageSummary(displaySnapshot.messages) : null,
+    () => (displaySnapshot ? findLatestTurnUsageSummary(displaySnapshot.messages) : null),
     [displaySnapshot],
   );
   const [summary, setSummary] = React.useState<LatestTurnUsageSummary | null>(() => {
@@ -871,18 +905,21 @@ function appendLatestTurnUsageLines(
 ): void {
   if (!summary) return;
   if (lines.length > 0) lines.push('');
-  lines.push(...buildTurnUsageTooltipLines({
-    details: summary.details,
-    t,
-    money: summary.money,
-    costUsd: summary.costUsd,
-    isEstimate: summary.isEstimate,
-    title: t(
-      summary.isUserTurnTotal
-        ? 'todaySpend.tooltip.latestUserTurnTitle'
-        : 'todaySpend.tooltip.latestTurnTitle',
-    ),
-  }));
+  lines.push(
+    ...buildTurnUsageTooltipLines({
+      details: summary.details,
+      t,
+      money: summary.money,
+      costUsd: summary.costUsd,
+      isEstimate: summary.isEstimate,
+      estimateKind: summary.isSdkEstimate ? 'sdk' : 'value',
+      title: t(
+        summary.isUserTurnTotal
+          ? 'todaySpend.tooltip.latestUserTurnTitle'
+          : 'todaySpend.tooltip.latestTurnTitle',
+      ),
+    }),
+  );
 }
 
 function buildTooltipNode(lines: string[]): React.ReactNode {
@@ -911,24 +948,35 @@ function pushSessionUsageLines(
 ): void {
   const { actualMoney, estimatedValueMoney, totalMoney } = sessionUsage;
   if (actualMoney?.amount && estimatedValueMoney?.amount && totalMoney?.amount) {
-    lines.push(t('todaySpend.sessionCostLabel', {
-      cost: formatTurnCostMoney(totalMoney),
-    }));
+    lines.push(
+      t('todaySpend.sessionCostLabel', {
+        cost: formatTurnCostMoney(totalMoney),
+      }),
+    );
   }
   if (actualMoney?.amount) {
-    lines.push(t('todaySpend.tooltip.sessionUsed', {
-      cost: formatTurnCostMoney(actualMoney),
-    }));
+    lines.push(
+      t('todaySpend.tooltip.sessionUsed', {
+        cost: formatTurnCostMoney(actualMoney),
+      }),
+    );
   }
   if (estimatedValueMoney?.amount) {
-    lines.push(t('todaySpend.codex.sessionValueLabel', {
-      cost: formatTurnCostMoney(estimatedValueMoney),
-    }));
+    lines.push(
+      t(
+        isSdkEstimateMoney(estimatedValueMoney)
+          ? 'todaySpend.sessionSdkEstimateLabel'
+          : 'todaySpend.codex.sessionValueLabel',
+        { cost: formatTurnCostMoney(estimatedValueMoney) },
+      ),
+    );
   }
   if (typeof sessionTokens === 'number' && Number.isFinite(sessionTokens) && sessionTokens > 0) {
-    lines.push(t('todaySpend.codex.sessionTokensLine', {
-      tokens: formatCompactTokens(Math.floor(sessionTokens)),
-    }));
+    lines.push(
+      t('todaySpend.codex.sessionTokensLine', {
+        tokens: formatCompactTokens(Math.floor(sessionTokens)),
+      }),
+    );
   }
 }
 
@@ -941,15 +989,13 @@ function pushCodexResetCreditLines(
   nowMs: number,
 ): void {
   if (resetSummary?.hasResetCreditCount) {
-    lines.push(t('todaySpend.codex.resetCreditsAvailableLine', {
-      count: resetSummary.availableCount,
-    }));
+    lines.push(
+      t('todaySpend.codex.resetCreditsAvailableLine', {
+        count: resetSummary.availableCount,
+      }),
+    );
   }
-  const expiryAt = formatResetCreditExpiryAt(
-    resetSummary?.earliestExpiryAt,
-    nowMs,
-    locale,
-  );
+  const expiryAt = formatResetCreditExpiryAt(resetSummary?.earliestExpiryAt, nowMs, locale);
   if (expiryAt) {
     lines.push(t('todaySpend.codex.resetCreditEarliestExpiryLine', { at: expiryAt }));
   }
@@ -976,11 +1022,13 @@ function buildXaiTooltipNode(
   }
   const weekly = isXaiWeeklyUsageCurrent(usage, nowMs) ? usage : null;
   if (weekly && typeof weekly.creditUsagePercent === 'number') {
-    lines.push(t('todaySpend.xai.windowLine', {
-      label: t('todaySpend.xai.weeklyLabel'),
-      remaining: formatPercent(100 - clampPercent(weekly.creditUsagePercent)),
-      used: formatPercent(clampPercent(weekly.creditUsagePercent)),
-    }));
+    lines.push(
+      t('todaySpend.xai.windowLine', {
+        label: t('todaySpend.xai.weeklyLabel'),
+        remaining: formatPercent(100 - clampPercent(weekly.creditUsagePercent)),
+        used: formatPercent(clampPercent(weekly.creditUsagePercent)),
+      }),
+    );
     lines.push(t('todaySpend.xai.accountWeeklyHint'));
   }
   if (weekly?.resetsAt) {
@@ -988,27 +1036,43 @@ function buildXaiTooltipNode(
     if (resetAt) lines.push(t('todaySpend.xai.resetAt', { at: resetAt }));
   }
   for (const product of weekly?.productUsage ?? []) {
-    lines.push(t('todaySpend.xai.productLine', {
-      product: formatXaiProductLabel(product.product),
-      percent: formatPercent(product.usagePercent),
-    }));
+    lines.push(
+      t('todaySpend.xai.productLine', {
+        product: formatXaiProductLabel(product.product),
+        percent: formatPercent(product.usagePercent),
+      }),
+    );
   }
   if (weekly && typeof weekly.prepaidBalance === 'number' && weekly.prepaidBalance > 0) {
-    lines.push(t('todaySpend.xai.extraCreditsLine', {
-      amount: `US$${weekly.prepaidBalance.toFixed(2)}`,
-    }));
+    lines.push(
+      t('todaySpend.xai.extraCreditsLine', {
+        amount: `US$${weekly.prepaidBalance.toFixed(2)}`,
+      }),
+    );
   }
-  if (rateLimit && typeof rateLimit.remainingRequests === 'number' && typeof rateLimit.limitRequests === 'number') {
-    lines.push(t('todaySpend.xai.requestsLine', {
-      remaining: rateLimit.remainingRequests.toLocaleString(),
-      limit: rateLimit.limitRequests.toLocaleString(),
-    }));
+  if (
+    rateLimit &&
+    typeof rateLimit.remainingRequests === 'number' &&
+    typeof rateLimit.limitRequests === 'number'
+  ) {
+    lines.push(
+      t('todaySpend.xai.requestsLine', {
+        remaining: rateLimit.remainingRequests.toLocaleString(),
+        limit: rateLimit.limitRequests.toLocaleString(),
+      }),
+    );
   }
-  if (rateLimit && typeof rateLimit.remainingTokens === 'number' && typeof rateLimit.limitTokens === 'number') {
-    lines.push(t('todaySpend.xai.tokensLine', {
-      remaining: formatCompactTokens(rateLimit.remainingTokens),
-      limit: formatCompactTokens(rateLimit.limitTokens),
-    }));
+  if (
+    rateLimit &&
+    typeof rateLimit.remainingTokens === 'number' &&
+    typeof rateLimit.limitTokens === 'number'
+  ) {
+    lines.push(
+      t('todaySpend.xai.tokensLine', {
+        remaining: formatCompactTokens(rateLimit.remainingTokens),
+        limit: formatCompactTokens(rateLimit.limitTokens),
+      }),
+    );
   }
   if (!usage && !rateLimit) {
     lines.push(t('todaySpend.xai.noQuotaDetail'));
@@ -1027,23 +1091,22 @@ function getXaiChipWindows(
   const used = snapshot.creditUsagePercent ?? 0;
   const countdown = formatCompactTimeUntilReset(snapshot.resetsAt ?? undefined, nowMs, t);
   const resetsAtMs = toEpochMs(snapshot.resetsAt ?? undefined);
-  return [{
-    key: 'xai-weekly',
-    label: countdown ?? t('todaySpend.xai.weeklyLabel'),
-    remainingPercent: 100 - clampPercent(used),
-    resetsAtMs,
-    resetPending: isResetPending(resetsAtMs, nowMs),
-  }];
+  return [
+    {
+      key: 'xai-weekly',
+      label: countdown ?? t('todaySpend.xai.weeklyLabel'),
+      remainingPercent: 100 - clampPercent(used),
+      resetsAtMs,
+      resetPending: isResetPending(resetsAtMs, nowMs),
+    },
+  ];
 }
 
 function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
   return segments.map((seg, i) => (
     <React.Fragment key={i}>
       {i > 0 && (
-        <span
-          aria-hidden="true"
-          className="mx-2 inline-block h-3 w-px bg-current opacity-30"
-        />
+        <span aria-hidden="true" className="mx-2 inline-block h-3 w-px bg-current opacity-30" />
       )}
       <span className="tabular-nums">{seg}</span>
     </React.Fragment>
@@ -1069,6 +1132,10 @@ interface TodaySpendChipProps {
   sessionInitialCostUsd?: number | null;
   /** 来自 session.totalTokenUsage（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialTokens?: number | null;
+  /** Custom Provider SDK amounts are display-only estimates and never actual session spend. */
+  customProviderCostPresentation?: SdkCostPresentation;
+  /** Global display preference, kept separate so mixed-provider history is projected per turn. */
+  showCustomProviderSdkEstimate?: boolean;
   /** 远端 Codex 由远端 daemon 路由,本机不能拿本地 app-server route / 账号快照来归类。 */
   remoteHostId?: string | null;
   /**
@@ -1087,10 +1154,14 @@ export function TodaySpendChip({
   sessionInitialMoney,
   sessionInitialCostUsd,
   sessionInitialTokens,
+  customProviderCostPresentation = 'regular',
+  showCustomProviderSdkEstimate,
   remoteHostId,
   deviceLinkDeviceId,
 }: TodaySpendChipProps) {
   const { t, i18n } = useTranslation();
+  const showSdkCostForCustomProviders =
+    showCustomProviderSdkEstimate ?? customProviderCostPresentation === 'estimate';
   const formatterLocale = i18n.resolvedLanguage ?? i18n.language;
   // device-link 远程会话:turn 跑在被控端、消耗被控端账号,计费形态(订阅/网关)与账号
   // 余量的事实都在被控端 —— 本机的 route 观察 / 账号快照与之无关,一律不读、不据此分类。
@@ -1122,76 +1193,64 @@ export function TodaySpendChip({
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(isDefaultRouteClaudeSession);
   const observedClaudeRoute = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
-  const ccBillingFormPending = isDefaultRouteClaudeSession && observedClaudeRoute == null
-    && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
-  const isClaudeSubscription = !isDeviceLinkRemote && (
-    (
-      vendorKey === 'cc'
-      && !isRemoteClaudeSession
-      && (
-        providerId === 'anthropic'
-        || (providerId == null && (
-          observedClaudeRoute != null
+  const ccBillingFormPending =
+    isDefaultRouteClaudeSession &&
+    observedClaudeRoute == null &&
+    (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
+  const isClaudeSubscription =
+    !isDeviceLinkRemote &&
+    ((vendorKey === 'cc' &&
+      !isRemoteClaudeSession &&
+      (providerId === 'anthropic' ||
+        (providerId == null &&
+          (observedClaudeRoute != null
             ? observedClaudeRoute === 'subscription'
-            : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true
-        ))
-      )
-    )
-    // Pi 的 provider 在创建会话时已经显式固化，不需要再从 CC proxy route 猜。
-    || (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')
-  );
+            : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true)))) ||
+      // Pi 的 provider 在创建会话时已经显式固化，不需要再从 CC proxy route 猜。
+      (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic'));
   // cc 走「订阅直连 bridge」= model 带 chatgpt/ / xai/ 前缀(经本地 responses-bridge 打用户个人
   // 订阅额度,真实计费恒 0,gateway quota 与之无关):
   //   - chatgpt/ → 与 codex 同一 ChatGPT 账户,复用 codex 订阅 chip 形态(限额窗口 + 价值估算);
   //   - xai/    → SuperGrok 账号周用量(cli-chat-proxy billing) + 尽力显示限流头。
   // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
   const isChatgptBridge =
-    (vendorKey === 'cc' || vendorKey === 'pi')
-    && (providerId == null || providerId === 'openai')
-    && typeof modelId === 'string'
-    && modelId.startsWith(CHATGPT_MODEL_PREFIX);
+    (vendorKey === 'cc' || vendorKey === 'pi') &&
+    (providerId == null || providerId === 'openai') &&
+    typeof modelId === 'string' &&
+    modelId.startsWith(CHATGPT_MODEL_PREFIX);
   // SuperGrok 周用量是账号级。Pi catalog 的模型 id 是 grok-4.6,没有 xai/ 前缀,
   // 只靠前缀会漏掉「显式选了 xAI」的 Pi/CC 会话(设置页看得到、chip 没有)。
-  const isXaiPrefixedModel =
-    typeof modelId === 'string' && modelId.startsWith(XAI_MODEL_PREFIX);
+  const isXaiPrefixedModel = typeof modelId === 'string' && modelId.startsWith(XAI_MODEL_PREFIX);
   const isXaiBridge =
-    (vendorKey === 'cc' || vendorKey === 'pi')
-    && (
-      providerId === 'xai'
-      || (providerId == null && isXaiPrefixedModel)
-    );
+    (vendorKey === 'cc' || vendorKey === 'pi') &&
+    (providerId === 'xai' || (providerId == null && isXaiPrefixedModel));
   const isSubscriptionBridge = isChatgptBridge || isXaiBridge;
   const isRemoteCodexSession = vendorKey === 'codex' && Boolean(remoteHostId);
   const isCodexBudgetModel = typeof modelId === 'string' && modelId.startsWith('codex/');
   const isCodexGatewayBudgetModel =
     isCodexBudgetModel && (providerId == null || providerId === 'xd');
   const isCodexXaiProvider =
-    vendorKey === 'codex'
-    && (
-      providerId === 'xai'
-      || (providerId == null && isXaiPrefixedModel)
-    );
+    vendorKey === 'codex' && (providerId === 'xai' || (providerId == null && isXaiPrefixedModel));
   // codex 走订阅价值估算:ChatGPT 订阅需要 oauth-bearer + OpenAI 来源;xAI 由 proxy 注入
   // SuperGrok OAuth。显式自定义供应商优先于共享 host 的 authInjection 和模型名前缀。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
-  const isCodexOauth = vendorKey === 'codex' && !isCodexXaiProvider && (
-    isRemoteCodexSession ||
-    (
-      codexAuthInjection === 'oauth-bearer'
-      && !isCodexGatewayBudgetModel
-      && (providerId == null || providerId === 'openai')
-    )
-  );
+  const isCodexOauth =
+    vendorKey === 'codex' &&
+    !isCodexXaiProvider &&
+    (isRemoteCodexSession ||
+      (codexAuthInjection === 'oauth-bearer' &&
+        !isCodexGatewayBudgetModel &&
+        (providerId == null || providerId === 'openai')));
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
   const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
   const isPiGateway =
-    vendorKey === 'pi'
-    && !remoteHostId
-    && !isDeviceLinkRemote
-    && (providerId == null || providerId === 'xd')
-    && !isClaudeSubscription
-    && !isChatgptBridge
-    && !isXaiBridge;
+    vendorKey === 'pi' &&
+    !remoteHostId &&
+    !isDeviceLinkRemote &&
+    (providerId == null || providerId === 'xd') &&
+    !isClaudeSubscription &&
+    !isChatgptBridge &&
+    !isXaiBridge;
   // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户 → 同一套限额窗口 chip 渲染。
   const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;
   const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;
@@ -1202,36 +1261,24 @@ export function TodaySpendChip({
   // Model Access 配额只属于实际走 XD/Cindy AI Gateway 的本地会话。显式自定义供应商即使
   // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证把 /v2/user/info 串进来。
   const isClaudeGateway =
-    vendorKey === 'cc'
-    && !isAnyRemoteSession
-    && !isSubscriptionBridge
-    && !ccBillingFormPending
-    && (
-      providerId === 'xd'
-      || (
-        providerId == null
-        && (
-          observedClaudeRoute != null
-            ? observedClaudeRoute === 'gateway'
-            : !gatewayKeyReconciling && hasGatewayKey
-        )
-      )
-    );
+    vendorKey === 'cc' &&
+    !isAnyRemoteSession &&
+    !isSubscriptionBridge &&
+    !ccBillingFormPending &&
+    (providerId === 'xd' ||
+      (providerId == null &&
+        (observedClaudeRoute != null
+          ? observedClaudeRoute === 'gateway'
+          : !gatewayKeyReconciling && hasGatewayKey)));
   const isCodexGateway =
-    vendorKey === 'codex'
-    && !isAnyRemoteSession
-    && !isCodexSubscription
-    && (
-      providerId === 'xd'
-      || (
-        providerId == null
-        && (
-          codexAuthInjection === 'env-key'
-          || isCodexGatewayBudgetModel
-          || (codexAuthInjection === 'provider-oauth' && hasGatewayKey)
-        )
-      )
-    );
+    vendorKey === 'codex' &&
+    !isAnyRemoteSession &&
+    !isCodexSubscription &&
+    (providerId === 'xd' ||
+      (providerId == null &&
+        (codexAuthInjection === 'env-key' ||
+          isCodexGatewayBudgetModel ||
+          (codexAuthInjection === 'provider-oauth' && hasGatewayKey))));
   const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;
   const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
@@ -1240,10 +1287,17 @@ export function TodaySpendChip({
     sessionId,
     sessionInitialMoney,
     sessionInitialCostUsd,
+    customProviderCostPresentation,
+    showSdkCostForCustomProviders,
   );
   const sessionMoney = sessionUsage.totalMoney;
   const sessionTokens = useSessionTokens(
-    vendorKey === 'pi' || isCodexApi || isCodexSubscription || isSubscriptionBridge || isDeviceLinkRemote
+    vendorKey === 'pi' ||
+      isCodexApi ||
+      isCodexSubscription ||
+      isSubscriptionBridge ||
+      customProviderCostPresentation !== 'regular' ||
+      isDeviceLinkRemote
       ? sessionId
       : undefined,
     sessionInitialTokens,
@@ -1259,10 +1313,9 @@ export function TodaySpendChip({
     // 促销桶, 见 useAccountUsage.matchCodexBucketForModel)。
     modelId,
   );
-  const {
-    snapshot: codexRateLimits,
-    refresh: refreshCodexRateLimits,
-  } = useCodexRateLimits(isCodexOauth && !isAnyRemoteSession);
+  const { snapshot: codexRateLimits, refresh: refreshCodexRateLimits } = useCodexRateLimits(
+    isCodexOauth && !isAnyRemoteSession,
+  );
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
   const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession);
   const xaiSubscriptionUsage = useXaiSubscriptionUsage(usesXaiQuotaForm && !isAnyRemoteSession);
@@ -1371,8 +1424,9 @@ export function TodaySpendChip({
   });
   React.useLayoutEffect(() => {
     const previousContext = quotaPopoverContextRef.current;
-    const contextInvalidated = previousContext.enabled
-      && (!usesClaudeSubscriptionPopover || previousContext.sessionId !== sessionId);
+    const contextInvalidated =
+      previousContext.enabled &&
+      (!usesClaudeSubscriptionPopover || previousContext.sessionId !== sessionId);
     quotaPopoverContextRef.current = {
       enabled: usesClaudeSubscriptionPopover,
       sessionId,
@@ -1386,15 +1440,23 @@ export function TodaySpendChip({
     closeQuotaPopoverImmediately();
   }, [closeQuotaPopoverImmediately, sessionId, usesClaudeSubscriptionPopover]);
 
-  React.useEffect(() => () => {
-    clearQuotaPopoverOpenTimer();
-    clearQuotaPopoverCloseTimer();
-  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+  React.useEffect(
+    () => () => {
+      clearQuotaPopoverOpenTimer();
+      clearQuotaPopoverCloseTimer();
+    },
+    [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer],
+  );
 
   const sessionSegment = sessionMoney?.amount
-    ? t('todaySpend.sessionCostLabel', {
-        cost: formatTurnCostMoney(sessionMoney),
-      })
+    ? t(
+        isSdkEstimateMoney(sessionMoney)
+          ? 'todaySpend.sessionSdkEstimateLabel'
+          : 'todaySpend.sessionCostLabel',
+        {
+          cost: formatTurnCostMoney(sessionMoney),
+        },
+      )
     : null;
   // codex-oauth / cc+chatgpt bridge → ChatGPT 用量看板; cc+xai bridge → grok.com 用量页;
   // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 暂无看板(null,见文件头 TODO)。
@@ -1431,9 +1493,9 @@ export function TodaySpendChip({
     ? getCodexChipWindows(accountUsage, t, windowLabelNowMs)
     : usesXaiQuotaForm
       ? getXaiChipWindows(xaiSubscriptionUsage, t, windowLabelNowMs)
-    : isClaudeSubscription
-      ? getClaudeChipWindows(claudeSubscriptionUsage, modelId, t, windowLabelNowMs)
-      : [];
+      : isClaudeSubscription
+        ? getClaudeChipWindows(claudeSubscriptionUsage, modelId, t, windowLabelNowMs)
+        : [];
   // chip 最多两个窗口段, 固定两个 slot 无条件调 hook(Rules of Hooks)。
   // 重置滚动: 快照刷新中同窗口剩余百分比大幅回升(典型: 窗口到点重置 0% → 100%)
   // 时, 显示值从 0% 快速滚动到新值。
@@ -1487,19 +1549,20 @@ export function TodaySpendChip({
   // 锚点取正在揭晓的窗口段元素(兜底 chip 容器)。
   const chipRef = React.useRef<HTMLDivElement | null>(null);
   const celebratingKey = rollupA?.celebrating
-    ? windowSlotA?.key ?? null
+    ? (windowSlotA?.key ?? null)
     : rollupB?.celebrating
-      ? windowSlotB?.key ?? null
+      ? (windowSlotB?.key ?? null)
       : null;
   const prevCelebratingRef = React.useRef(false);
-  const [confettiBurst, setConfettiBurst] = React.useState<
-    { nonce: number; anchor: HTMLElement } | null
-  >(null);
+  const [confettiBurst, setConfettiBurst] = React.useState<{
+    nonce: number;
+    anchor: HTMLElement;
+  } | null>(null);
   React.useEffect(() => {
     const celebrating = celebratingKey !== null;
     if (celebrating && !prevCelebratingRef.current) {
-      const anchor = (celebratingKey ? segmentElsRef.current[celebratingKey] : null)
-        ?? chipRef.current;
+      const anchor =
+        (celebratingKey ? segmentElsRef.current[celebratingKey] : null) ?? chipRef.current;
       if (anchor) {
         setConfettiBurst((prev) => ({ nonce: (prev?.nonce ?? 0) + 1, anchor }));
       }
@@ -1511,9 +1574,10 @@ export function TodaySpendChip({
   // (含滚动动画的每一帧), 直接进 tick effect 依赖会让定时器反复重建。
   const resetsAtSignature = chipWindows.map((window) => window.resetsAtMs ?? 'na').join(',');
   const chipResetsAtMsList = React.useMemo(
-    () => resetsAtSignature === ''
-      ? []
-      : resetsAtSignature.split(',').map((value) => (value === 'na' ? null : Number(value))),
+    () =>
+      resetsAtSignature === ''
+        ? []
+        : resetsAtSignature.split(',').map((value) => (value === 'na' ? null : Number(value))),
     [resetsAtSignature],
   );
 
@@ -1527,7 +1591,13 @@ export function TodaySpendChip({
       setWindowLabelNowMs(Date.now());
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [usesCodexQuotaForm, usesXaiQuotaForm, isClaudeSubscription, windowLabelNowMs, chipResetsAtMsList]);
+  }, [
+    usesCodexQuotaForm,
+    usesXaiQuotaForm,
+    isClaudeSubscription,
+    windowLabelNowMs,
+    chipResetsAtMsList,
+  ]);
 
   // 悬念期主动催一次余量刷新, 让「重置揭晓」尽快到来 —— main read 都是
   // cached-first + 节流(Claude 订阅端点 180s + 退避; Codex WHAM 10s + in-flight
@@ -1538,8 +1608,8 @@ export function TodaySpendChip({
   //     且无空闲期 app-server 催刷通道, 靠下一个 turn 事件或悬念超时回落兜底;
   //   - Claude 订阅形态催订阅端点。
   const hasPendingResetWindow = chipWindows.some((window) => window.resetPending);
-  const xaiNeedsWeeklyRefresh = usesXaiQuotaForm
-    && !isXaiWeeklyUsageCurrent(xaiSubscriptionUsage, windowLabelNowMs);
+  const xaiNeedsWeeklyRefresh =
+    usesXaiQuotaForm && !isXaiWeeklyUsageCurrent(xaiSubscriptionUsage, windowLabelNowMs);
   React.useEffect(() => {
     if (!hasPendingResetWindow && !xaiNeedsWeeklyRefresh) return;
     if (isChatgptBridge) {
@@ -1549,7 +1619,15 @@ export function TodaySpendChip({
     } else if (isClaudeSubscription && !usesCodexQuotaForm) {
       requestClaudeSubscriptionRefresh();
     }
-  }, [hasPendingResetWindow, xaiNeedsWeeklyRefresh, isChatgptBridge, isClaudeSubscription, usesCodexQuotaForm, usesXaiQuotaForm, windowLabelNowMs]);
+  }, [
+    hasPendingResetWindow,
+    xaiNeedsWeeklyRefresh,
+    isChatgptBridge,
+    isClaudeSubscription,
+    usesCodexQuotaForm,
+    usesXaiQuotaForm,
+    windowLabelNowMs,
+  ]);
 
   const isDashboardClickable = usageDashboardUrl !== null;
   const handleClick = () => {
@@ -1562,9 +1640,12 @@ export function TodaySpendChip({
   if (isDeviceLinkRemote) {
     // device-link 远程会话不读取本机账号形态；金额仍使用同一个会话合计投影。
     const chipSegments = sessionSegment ? [sessionSegment] : [];
-    labelNode = chipSegments.length > 0
-      ? renderSegmentedLabel(chipSegments)
-      : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
+    labelNode =
+      chipSegments.length > 0 ? (
+        renderSegmentedLabel(chipSegments)
+      ) : (
+        <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
+      );
     const tooltipLines: string[] = [];
     pushSessionUsageLines(tooltipLines, sessionUsage, sessionTokens, t);
     appendLatestTurnUsageLines(tooltipLines, latestTurnUsage, t);
@@ -1573,9 +1654,12 @@ export function TodaySpendChip({
     // 配额窗口跟随当前渠道；会话金额独立汇总历史上所有已发生的 turn。
     const chipSegments = [...windowSegments];
     if (sessionSegment) chipSegments.push(sessionSegment);
-    labelNode = chipSegments.length > 0
-      ? renderSegmentedLabel(chipSegments)
-      : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
+    labelNode =
+      chipSegments.length > 0 ? (
+        renderSegmentedLabel(chipSegments)
+      ) : (
+        <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
+      );
     tooltipNode = buildCodexTooltipNode(
       accountUsage,
       sessionTokens,
@@ -1591,9 +1675,12 @@ export function TodaySpendChip({
     // 账号周用量进 chip;限流头与额外点数只在 tooltip。文案是账号级,不是本任务配额。
     const chipSegments = [...windowSegments];
     if (sessionSegment) chipSegments.push(sessionSegment);
-    labelNode = chipSegments.length > 0
-      ? renderSegmentedLabel(chipSegments)
-      : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
+    labelNode =
+      chipSegments.length > 0 ? (
+        renderSegmentedLabel(chipSegments)
+      ) : (
+        <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
+      );
     tooltipNode = buildXaiTooltipNode(
       xaiSubscriptionUsage,
       xaiRateLimit,
@@ -1609,24 +1696,29 @@ export function TodaySpendChip({
     // 倒计时由 windowLabelNowMs 驱动 (常态 60s tick, 最后一分钟逐秒)。
     const chipSegments = [...windowSegments];
     if (sessionSegment) chipSegments.push(sessionSegment);
-    labelNode = chipSegments.length > 0
-      ? renderSegmentedLabel(chipSegments)
-      : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
+    labelNode =
+      chipSegments.length > 0 ? (
+        renderSegmentedLabel(chipSegments)
+      ) : (
+        <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
+      );
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionMoney, t);
     const chipSegments = getGatewayChipSegments(slots);
-    const codexApiHasTokenFallback = isCodexApi
-      && !slots.session.available
-      && hasPositiveSessionTokens(sessionTokens);
-    const codexApiEmptyState = isCodexApi
-      && !slots.session.available
-      && !hasPositiveSessionTokens(sessionTokens)
-      ? getCodexApiEmptyState(latestTurnUsage)
-      : null;
-    if (codexApiHasTokenFallback) {
-      chipSegments.push(t('todaySpend.codex.sessionTokensLine', {
-        tokens: formatCompactTokens(Math.floor(sessionTokens ?? 0)),
-      }));
+    const shouldUseSessionTokenFallback =
+      (isCodexApi || customProviderCostPresentation !== 'regular') &&
+      !slots.session.available &&
+      hasPositiveSessionTokens(sessionTokens);
+    const codexApiEmptyState =
+      isCodexApi && !slots.session.available && !hasPositiveSessionTokens(sessionTokens)
+        ? getCodexApiEmptyState(latestTurnUsage)
+        : null;
+    if (shouldUseSessionTokenFallback) {
+      chipSegments.push(
+        t('todaySpend.codex.sessionTokensLine', {
+          tokens: formatCompactTokens(Math.floor(sessionTokens ?? 0)),
+        }),
+      );
     }
     // tooltip 主体: 主 chip 未显示且可用的 metric, 同样按固定顺序
     const tooltipMetricLines = METRIC_KEYS.filter(
@@ -1646,19 +1738,23 @@ export function TodaySpendChip({
     if (slots.session.available) {
       pushSessionUsageLines(tooltipLines, sessionUsage, null, t);
     }
-    if (codexApiHasTokenFallback) {
-      tooltipLines.push(t('todaySpend.codex.sessionTokensLine', {
-        tokens: formatCompactTokens(Math.floor(sessionTokens ?? 0)),
-      }));
+    if (shouldUseSessionTokenFallback) {
+      tooltipLines.push(
+        t('todaySpend.codex.sessionTokensLine', {
+          tokens: formatCompactTokens(Math.floor(sessionTokens ?? 0)),
+        }),
+      );
     }
     tooltipLines.push(...tooltipMetricLines);
     appendLatestTurnUsageLines(tooltipLines, latestTurnUsage, t);
     if (codexApiEmptyState) {
-      tooltipLines.unshift(t(
-        codexApiEmptyState === 'no-usage'
-          ? 'todaySpend.codex.noUsageDetail'
-          : 'todaySpend.codex.unavailableDetail',
-      ));
+      tooltipLines.unshift(
+        t(
+          codexApiEmptyState === 'no-usage'
+            ? 'todaySpend.codex.noUsageDetail'
+            : 'todaySpend.codex.unavailableDetail',
+        ),
+      );
     }
     // 链接行在最底(用空行隔开);网关账号 label 为 null → 不追加(见 usageDashboardUrl)。
     pushDashboardLinkLine(tooltipLines, usageDashboardLabel);
@@ -1668,9 +1764,11 @@ export function TodaySpendChip({
       if (codexApiEmptyState) {
         labelNode = (
           <span className="tabular-nums opacity-60">
-            {t(codexApiEmptyState === 'no-usage'
-              ? 'todaySpend.codex.noUsageLabel'
-              : 'todaySpend.codex.unavailableLabel')}
+            {t(
+              codexApiEmptyState === 'no-usage'
+                ? 'todaySpend.codex.noUsageLabel'
+                : 'todaySpend.codex.unavailableLabel',
+            )}
           </span>
         );
       } else {
@@ -1689,10 +1787,10 @@ export function TodaySpendChip({
   // 打满, 或 headers 报 rejected → chip 变 error 色 (语义豁免色, 跨主题一致)。
   // 其它模型的周限吃紧不染红 —— chip 上没有那一段, 红了也无从解释 (见
   // isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
-  const claudeSubscriptionAlerting = isClaudeSubscription
-    && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
-  const xaiSubscriptionAlerting = usesXaiQuotaForm
-    && isXaiSubscriptionAlerting(xaiSubscriptionUsage);
+  const claudeSubscriptionAlerting =
+    isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
+  const xaiSubscriptionAlerting =
+    usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage);
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
@@ -1701,8 +1799,8 @@ export function TodaySpendChip({
     'text-12 font-medium leading-none tabular-nums',
     claudeSubscriptionAlerting || xaiSubscriptionAlerting
       ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
-      // 不可点(网关账号)时不加 hover 变色,避免暗示可交互。
-      : cn('text-[var(--msg-tool-card-chevron)]', isDashboardClickable && 'hover:text-foreground'),
+      : // 不可点(网关账号)时不加 hover 变色,避免暗示可交互。
+        cn('text-[var(--msg-tool-card-chevron)]', isDashboardClickable && 'hover:text-foreground'),
     'border-0 bg-transparent p-0 m-0',
     'transition-colors',
     'focus:outline-none',

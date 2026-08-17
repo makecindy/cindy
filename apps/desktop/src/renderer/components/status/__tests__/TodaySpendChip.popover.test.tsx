@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     estimatedValueMoney: null,
     totalMoney: null,
   } as SessionUsageMoney,
+  sessionTokens: null as number | null,
   openExternal: vi.fn(() => Promise.resolve()),
   refreshCodexRateLimits: vi.fn(),
 }));
@@ -25,11 +26,15 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
     t: (key: string, options: Record<string, string | number> = {}) => {
+      if (key === 'todaySpend.codex.sessionTokensLine') {
+        return `${options.tokens} tokens`;
+      }
       const templates: Record<string, string> = {
         'todaySpend.openClaudeUsage': '打开 Claude 用量页面',
         'todaySpend.claude.weeklyLabel': '周限',
         'todaySpend.claude.windowSegment': '{{label}} 剩余 {{remaining}}',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
+        'todaySpend.sessionSdkEstimateLabel': '本任务 SDK 估算（非供应商账单）{{cost}}',
         'todaySpend.tooltip.sessionUsed': '本任务已用 {{cost}}',
         'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
         'todaySpend.unit.day': '天',
@@ -53,6 +58,7 @@ vi.mock('react-i18next', () => ({
         'chat.messageActionBar.userTurnCostDetailsTitle': '本轮明细',
         'quotaCard.costLine': '本轮消耗：{{cost}}',
         'quotaCard.valueLine': '本轮 token 价值：{{cost}}',
+        'quotaCard.sdkEstimateLine': '本轮 SDK 估算（非供应商账单）：{{cost}}',
         'quotaCard.noBilledCost': '本轮费用暂不可用，仅显示用量',
         'usageDetails.costBreakdownHeader': '按模型拆分：',
         'usageDetails.durationSeconds': '{{value}}秒',
@@ -82,7 +88,7 @@ vi.mock('@/hooks/useClaudeSessionRoute', () => ({
 vi.mock('@/hooks/useSessionUsageMoney', () => ({
   useSessionUsageMoney: () => mocks.sessionUsage,
 }));
-vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => null }));
+vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => mocks.sessionTokens }));
 vi.mock('@/hooks/useAccountUsage', () => ({
   requestCodexAccountRefresh: vi.fn(),
   useAccountUsage: () => null,
@@ -131,12 +137,14 @@ const TURN_USAGE_DETAILS = {
 function usdMoney(
   amount: number,
   kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
+  estimateReasons?: RegionalMoney['estimateReasons'],
 ): RegionalMoney {
   return {
     amount,
     currency: 'USD',
     approximate: kind === 'value-estimate',
     kind,
+    ...(estimateReasons ? { estimateReasons } : {}),
   };
 }
 
@@ -178,6 +186,7 @@ beforeEach(() => {
     estimatedValueMoney: null,
     totalMoney: null,
   };
+  mocks.sessionTokens = null;
   mocks.claudeSnapshot = {
     source: 'oauth-endpoint',
     subscriptionType: 'max',
@@ -454,10 +463,27 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.queryByText('本轮消耗：$0.46')).toBeNull();
   });
 
+  it('把 SDK 估算明确标为非供应商账单', () => {
+    setLatestUsageMessage({
+      turnMoney: usdMoney(0.46, 'value-estimate', ['sdk-estimate']),
+      turnCostIsEstimate: true,
+    });
+    mocks.sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney: usdMoney(0.5, 'value-estimate', ['sdk-estimate']),
+      totalMoney: usdMoney(0.5, 'value-estimate', ['sdk-estimate']),
+    };
+
+    renderClaudeSubscriptionChip();
+    const { card } = openCardFromHover();
+    expect(within(card).getByText('本轮 SDK 估算（非供应商账单）：$0.46')).toBeTruthy();
+    expect(within(card).getByText('本任务 SDK 估算（非供应商账单）$0.50')).toBeTruthy();
+  });
+
   it('把混合会话合计及实际费用和价值估算拆分传入卡片', () => {
     mocks.sessionUsage = {
       actualMoney: usdMoney(0.25),
-      estimatedValueMoney: usdMoney(0.50, 'value-estimate'),
+      estimatedValueMoney: usdMoney(0.5, 'value-estimate'),
       totalMoney: {
         ...usdMoney(0.75),
         approximate: true,
@@ -496,7 +522,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
   });
 
   it('纯订阅价值估算仍标为本任务价值', () => {
-    const estimatedValueMoney = usdMoney(0.50, 'value-estimate');
+    const estimatedValueMoney = usdMoney(0.5, 'value-estimate');
     mocks.sessionUsage = {
       actualMoney: null,
       estimatedValueMoney,
@@ -527,8 +553,8 @@ describe('TodaySpendChip Claude subscription popover', () => {
     equalAmount.unmount();
     vi.clearAllTimers();
     setLatestUsageMessage({
-      turnMoney: usdMoney(0.20),
-      userTurnMoney: usdMoney(0.70),
+      turnMoney: usdMoney(0.2),
+      userTurnMoney: usdMoney(0.7),
       turnCostIsEstimate: false,
       userTurnCostIsEstimate: false,
     });
@@ -634,13 +660,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
   });
 
   it('非 Claude 订阅形态继续使用旧 Tip，不挂载额度卡片', () => {
-    render(
-      <TodaySpendChip
-        vendorKey="cc"
-        providerId="xd"
-        sessionId="session-1"
-      />,
-    );
+    render(<TodaySpendChip vendorKey="cc" providerId="xd" sessionId="session-1" />);
 
     const legacyChip = document.querySelector('.inline-flex.h-5.shrink-0.items-center');
     expect(legacyChip).toBeTruthy();
@@ -648,4 +668,25 @@ describe('TodaySpendChip Claude subscription popover', () => {
     act(() => vi.advanceTimersByTime(1_000));
     expect(screen.queryByTestId('quota-hover-card')).toBeNull();
   });
+
+  it.each([
+    ['cc', 'custom-claude'],
+    ['pi', 'custom-pi'],
+  ] as const)(
+    'shows Token instead of money for a hidden %s custom-provider SDK amount',
+    (vendorKey, providerId) => {
+      mocks.sessionTokens = 12_345;
+      render(
+        <TodaySpendChip
+          vendorKey={vendorKey}
+          providerId={providerId}
+          sessionId="session-1"
+          customProviderCostPresentation="hidden"
+        />,
+      );
+
+      expect(screen.getByText('12.3k tokens')).toBeTruthy();
+      expect(document.body.textContent).not.toContain('$');
+    },
+  );
 });

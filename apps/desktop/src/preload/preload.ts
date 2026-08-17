@@ -4918,8 +4918,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
         sessionId: string,
         opts?: { limit?: number; before?: string; beforeTs?: number },
       ): Promise<unknown> => ipcRenderer.invoke('local-db:messages:list', sessionId, opts),
-      estimatedSessionValue: (sessionId: string): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:messages:estimatedSessionValue', sessionId),
+      estimatedSessionValue: (
+        sessionId: string,
+        presentation?: 'regular' | 'hidden' | 'estimate',
+        showSdkEstimate?: boolean,
+      ): Promise<unknown> =>
+        ipcRenderer.invoke(
+          'local-db:messages:estimatedSessionValue',
+          sessionId,
+          presentation,
+          showSdkEstimate,
+        ),
       around: (
         sessionId: string,
         messageId: string,
@@ -6126,6 +6135,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       isCustomized: boolean;
       defaultAutoSnapshotEnabled: boolean;
     }> => ipcRenderer.invoke('maker:git-safety:reset'),
+
+    // Custom provider billing: default off records token usage only, hides SDK cost.
+    customProviderBillingGet: (): Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }> => ipcRenderer.invoke('maker:custom-provider-billing:get'),
+    customProviderBillingSet: (
+      enabled: boolean,
+    ): Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }> => ipcRenderer.invoke('maker:custom-provider-billing:set', enabled),
+    customProviderBillingReset: (): Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }> => ipcRenderer.invoke('maker:custom-provider-billing:reset'),
 
     // 智能通讯录(maker-contacts)—— 设置页管理 UI 的数据通道。
     // DTO 形状即 @cindy/maker-core contacts/types.ts(renderer 直接 type-import),

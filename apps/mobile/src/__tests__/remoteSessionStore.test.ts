@@ -2800,17 +2800,23 @@ describe('remoteSessionStore', () => {
       turnMoney: {
         amount: 0.29,
         currency: 'CNY',
-        approximate: false,
-        kind: 'actual-cost',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['sdk-estimate'],
       },
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'custom-provider',
     });
 
     expect(remoteSessionStore.getMessages('s1')[0].agentMeta).toMatchObject({
       turnCost: {
         amount: 0.29,
         currency: 'CNY',
+        estimateReasons: ['sdk-estimate'],
       },
-      turnCostIsEstimate: false,
+      turnCostIsEstimate: true,
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'custom-provider',
     });
   });
 

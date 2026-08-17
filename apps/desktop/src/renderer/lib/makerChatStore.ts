@@ -564,6 +564,10 @@ export interface ChatMessage {
   turnMoney?: RegionalMoney;
   /** true = 订阅模式下的 token 价值;false = API 账单 cost / API 单价折算 cost。 */
   turnCostIsEstimate?: boolean;
+  /** 该轮执行时是否使用自定义 Provider；undefined 表示升级前历史行。 */
+  turnCostIsCustomProvider?: boolean;
+  /** 该轮执行时的 Provider 快照；null 表示默认路由。 */
+  turnCostProviderId?: string | null;
   /** 用户从最近一条真实输入至本消息的累计成本；只用于消息旁展示。 */
   userTurnCostUsd?: number;
   userTurnMoney?: RegionalMoney;
@@ -7360,6 +7364,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       userTurnMoney?: unknown;
       userTurnCostUsd?: number;
       userTurnCostIsEstimate?: boolean;
+      turnCostIsCustomProvider?: boolean;
+      turnCostProviderId?: string | null;
       turnUsageDetails?: unknown;
     } | null;
     if (!p?.sessionId || !p.clientId) return;
@@ -7394,6 +7400,14 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
         }
       : {};
+    const turnCostRoutePatch = {
+      ...(typeof p.turnCostIsCustomProvider === 'boolean'
+        ? { turnCostIsCustomProvider: p.turnCostIsCustomProvider }
+        : {}),
+      ...(typeof p.turnCostProviderId === 'string' || p.turnCostProviderId === null
+        ? { turnCostProviderId: p.turnCostProviderId }
+        : {}),
+    };
     // 无当前 segment 金额 = main 的 recordTurnUsageOnMessage(算不出报价的轮次):
     // 更新明细 + 可能存在的整轮累计,让 action bar 优先显示已花的钱、否则退回 token。
     // 三者都没有才是真的无事可做。
@@ -7405,6 +7419,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         const msgs = s.messages.slice();
         msgs[idx] = {
           ...msgs[idx],
+          ...turnCostRoutePatch,
           ...userTurnCostPatch,
           ...(turnUsageDetails ? { turnUsageDetails } : {}),
         };
@@ -7419,6 +7434,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       const msgs = s.messages.slice();
       msgs[idx] = {
         ...msgs[idx],
+        ...turnCostRoutePatch,
         turnMoney,
         ...(resolvedTurnCostUsd !== undefined ? { turnCostUsd: resolvedTurnCostUsd } : {}),
         turnCostIsEstimate,
@@ -15690,6 +15706,14 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // 本轮 token 明细独立于金额挂载:Pi/新模型算不出报价的轮次只有它，
       // UI 据此退回显示 token，历史加载不能把它绑在 money 分支。
       ...(m.role === 'assistant' && turnUsageDetails ? { turnUsageDetails } : {}),
+      ...(m.role === 'assistant' &&
+      typeof agentMeta?.turnCostIsCustomProvider === 'boolean'
+        ? { turnCostIsCustomProvider: agentMeta.turnCostIsCustomProvider }
+        : {}),
+      ...(m.role === 'assistant' &&
+      (typeof agentMeta?.turnCostProviderId === 'string' || agentMeta?.turnCostProviderId === null)
+        ? { turnCostProviderId: agentMeta.turnCostProviderId }
+        : {}),
       // 整轮累计费用同样独立挂载:无价收尾轮只有它,没有 turnCost。
       ...persistedUserTurnCostPatch,
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)

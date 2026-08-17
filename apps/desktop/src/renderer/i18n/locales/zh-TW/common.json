@@ -4739,6 +4739,12 @@
       "hint": "遠端 IM 會為需要審批的操作保留確認流程。",
       "fullAccessDisabled": "遠端 IM 不支援完全訪問，避免無法安全確認的操作被直接執行。",
       "permissionModeDisabled": "遠端 IM 使用 Cindy 桌面端確認策略，因此該權限模式不可用。"
+    },
+    "customProviderBilling": {
+      "title": "顯示自訂供應商的 SDK 估算",
+      "description": "預設隱藏 SDK 計算的金額，只顯示 Token 用量；如果你設定了價格或供應商提供參考價，仍可能顯示明確標示的估算金額。開啟後還會顯示 SDK 估算；它不是供應商帳單，計價規則由 SDK 決定且可能與實際帳單不一致，請斟酌開啟。",
+      "toggleAria": "切換自訂供應商 SDK 估算顯示",
+      "saveFailed": "儲存自訂供應商計費設定失敗"
     }
   },
   "remoteDevice": {
@@ -5038,6 +5044,7 @@
     "monthlyLimitLabel": "本週期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "本任務 {{cost}}",
+    "sessionSdkEstimateLabel": "本任務 SDK 估算（非供應商帳單）{{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "暫無用量",
@@ -5105,6 +5112,7 @@
     "extraUsageEnabled": "額外用量已啟用",
     "costLine": "本輪消耗：{{cost}}",
     "valueLine": "本輪 token 價值：{{cost}}",
+    "sdkEstimateLine": "本輪 SDK 估算（非供應商帳單）：{{cost}}",
     "noBilledCost": "本輪費用暫不可用，僅顯示用量",
     "latestMessageTitle": "最近一輪使用者請求累計",
     "turnCostUnavailable": "本輪費用暫無法估算",
@@ -5128,6 +5136,7 @@
     "timeLine": "耗時 {{duration}}",
     "costLine": "本輪消耗：{{cost}}",
     "valueLine": "本輪 token 價值：{{cost}}",
+    "sdkEstimateLine": "本輪 SDK 估算（非供應商帳單）：{{cost}}",
     "tokenLine": "Tokens：共 {{total}} · 輸入 {{input}} · 輸出 {{output}}",
     "cacheLine": "快取拆分：讀取 {{read}} · 寫入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取拆分：讀取 {{read}} · 寫入 {{create}}",
@@ -6911,6 +6920,8 @@
       "turnCost": "本輪消耗",
       "turnCostEstimated": "本輪 token 價值(按 API 單價折算)",
       "turnCostEstimatedValue": "價值 {{cost}}",
+      "turnCostSdkEstimated": "本輪 SDK 估算（非供應商帳單）",
+      "turnCostSdkEstimatedValue": "SDK 估算 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本輪明細"
     },
@@ -7894,7 +7905,8 @@
       },
       "taskInfoTip": {
         "tokens": "累計 Token",
-        "cost": "累計費用"
+        "cost": "累計費用",
+        "sdkEstimate": "累計 SDK 估算（非供應商帳單）"
       },
       "dateGroup": {
         "today": "今天",

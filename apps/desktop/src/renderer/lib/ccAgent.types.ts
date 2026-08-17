@@ -121,6 +121,10 @@ export interface CcMeta {
   turnCost?: RegionalMoney;
   /** true = Codex token × 价格表折算的估算值; false / 缺省 = SDK 实报。 */
   turnCostIsEstimate?: boolean;
+  /** Host-side immutable billing-route classification for this turn. */
+  turnCostIsCustomProvider?: boolean;
+  /** Provider id captured when this turn completed; null means the default route. */
+  turnCostProviderId?: string | null;
   /** 历史用户轮累计 USD；新数据以 userTurnCost 为区域金额事实。 */
   userTurnCostUsd?: number;
   userTurnCost?: RegionalMoney;

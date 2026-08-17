@@ -398,6 +398,13 @@ export const MAKER_INVOKE = {
   GIT_SAFETY_SET: 'maker:git-safety:set',
   GIT_SAFETY_RESET: 'maker:git-safety:reset',
   /**
+   * Custom (user-defined) provider billing: default records token usage only;
+   * optionally shows SDK self-reported cost (uncontrollable, may differ from bill).
+   */
+  CUSTOM_PROVIDER_BILLING_GET: 'maker:custom-provider-billing:get',
+  CUSTOM_PROVIDER_BILLING_SET: 'maker:custom-provider-billing:set',
+  CUSTOM_PROVIDER_BILLING_RESET: 'maker:custom-provider-billing:reset',
+  /**
    * 智能通讯录(maker-contacts) ——
    *  - SETTINGS_GET/SET: 功能开关(<userData>/contacts-settings.json), 只 gate agent 侧
    *    cindy_contacts MCP(新 session 生效); 下面的数据 CRUD 通道不受 gate, 设置页

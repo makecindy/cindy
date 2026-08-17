@@ -2732,8 +2732,18 @@ export const remoteSessionStore = {
       const userTurnMoney = normalizeRemoteMoney(payload.userTurnMoney);
       const userTurnCostUsd = readNumber(payload, 'userTurnCostUsd');
       const userTurnCostIsEstimate = payload.userTurnCostIsEstimate === true;
+      const turnCostIsCustomProvider =
+        typeof payload.turnCostIsCustomProvider === 'boolean'
+          ? payload.turnCostIsCustomProvider
+          : undefined;
+      const turnCostProviderId =
+        typeof payload.turnCostProviderId === 'string' || payload.turnCostProviderId === null
+          ? payload.turnCostProviderId
+          : undefined;
       const basePatch: Record<string, unknown> = {
         ...(turnUsageDetails ? { turnUsageDetails } : {}),
+        ...(turnCostIsCustomProvider !== undefined ? { turnCostIsCustomProvider } : {}),
+        ...(turnCostProviderId !== undefined ? { turnCostProviderId } : {}),
       };
       if (userTurnMoney && userTurnMoney.amount > 0) {
         basePatch.userTurnCost = userTurnMoney;

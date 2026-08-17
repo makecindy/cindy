@@ -26,12 +26,14 @@ describe('mobile maker transport', () => {
       'maker:create-session',
       'maker:get-capabilities',
       'maker:provider:list',
+      'maker:custom-provider-billing:get',
       'local-db:sessions:get',
       'local-db:sessions:patch-meta',
       'local-db:messages:dismiss-error',
       'local-db:sessions:ack-interrupted',
       'maker:regenerate-title',
       'local-db:messages:list',
+      'local-db:messages:estimatedSessionValue',
       'local-db:messages:around',
       'local-db:messages:around-client-id',
       'maker:send',
@@ -229,6 +231,26 @@ describe('mobile maker transport', () => {
         capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
       }],
     }]);
+  });
+
+  it('reads the controlled desktop billing preference and session projection', async () => {
+    const { calls, maker } = harness();
+
+    await maker.getCustomProviderBillingSettings();
+    await maker.estimatedSessionValue('s1', 'hidden', false);
+
+    expect(calls).toEqual([
+      {
+        deviceId: 'dev-1',
+        channel: 'maker:custom-provider-billing:get',
+        args: [],
+      },
+      {
+        deviceId: 'dev-1',
+        channel: 'local-db:messages:estimatedSessionValue',
+        args: ['s1', 'hidden', false],
+      },
+    ]);
   });
 
   it('carries providerId into create-session only when a source is explicitly chosen', async () => {

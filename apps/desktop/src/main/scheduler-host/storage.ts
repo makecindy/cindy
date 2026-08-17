@@ -39,6 +39,8 @@ import {
   type RegionalMoney,
   zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
+import { sdkEstimatedValuePart } from '../../shared/customProviderBilling.js';
+import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
 
@@ -60,6 +62,7 @@ export interface ScheduleCostSummary {
   scheduleId: string;
   totalMoney: RegionalMoney;
   totalEstimatedValueMoney: RegionalMoney;
+  totalSdkEstimatedValueMoney?: RegionalMoney;
   totalCostUsd?: number;
   totalEstimatedValueUsd?: number;
   /** 至少一轮 agent run 无法得到可靠费用。 */
@@ -72,6 +75,7 @@ export interface ScheduleSessionCostSummary {
   sessionId: string;
   totalMoney: RegionalMoney;
   totalEstimatedValueMoney: RegionalMoney;
+  totalSdkEstimatedValueMoney?: RegionalMoney;
   totalCostUsd?: number;
   totalEstimatedValueUsd?: number;
 }
@@ -79,6 +83,7 @@ export interface ScheduleSessionCostSummary {
 interface ScheduleMoneyValues {
   costValues: RegionalMoney[];
   estimatedValueValues: RegionalMoney[];
+  sdkEstimatedValueValues: RegionalMoney[];
   /** 最新一笔金额的币种(按时间戳取最大)——汇总聚合的偏好币种。 */
   latestCurrency?: RegionalMoney['currency'];
   latestCurrencyAt?: number;
@@ -110,6 +115,7 @@ function emptyScheduleMoneyValues(): ScheduleMoneyValues {
   return {
     costValues: [],
     estimatedValueValues: [],
+    sdkEstimatedValueValues: [],
   };
 }
 
@@ -233,12 +239,14 @@ function scheduleOriginFromAgentMeta(agentMeta: string | null): PersistedSchedul
 function turnCostFromAgentMeta(agentMeta: string | null): {
   costMoney: RegionalMoney | null;
   estimatedValueMoney: RegionalMoney | null;
+  sdkEstimatedValueMoney: RegionalMoney | null;
   legacyProjectedActualAmount: number;
 } {
   if (!agentMeta) {
     return {
       costMoney: null,
       estimatedValueMoney: null,
+      sdkEstimatedValueMoney: null,
       legacyProjectedActualAmount: 0,
     };
   }
@@ -247,6 +255,8 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
       turnCost?: unknown;
       turnCostUsd?: unknown;
       turnCostIsEstimate?: unknown;
+      turnCostIsCustomProvider?: unknown;
+      turnUsageDetails?: unknown;
     };
     const structured = normalizeRegionalMoney(parsed.turnCost);
     const legacy =
@@ -260,19 +270,37 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
       return {
         costMoney: null,
         estimatedValueMoney: null,
+        sdkEstimatedValueMoney: null,
         legacyProjectedActualAmount: 0,
       };
     }
-    const isEstimate = parsed.turnCostIsEstimate === true || money.kind === 'value-estimate';
+    const turnUsageDetails = normalizeTurnUsageDetails(parsed.turnUsageDetails);
+    const sdkEstimatedValueMoney = sdkEstimatedValuePart(
+      money,
+      turnUsageDetails?.perModelCost?.map((entry) => entry.money),
+      parsed.turnCostIsCustomProvider === true,
+    );
+    const isHistoricalCustomProviderSdkCost =
+      money.kind === 'actual-cost' && sdkEstimatedValueMoney !== null;
+    const isEstimate =
+      parsed.turnCostIsEstimate === true ||
+      money.kind === 'value-estimate' ||
+      isHistoricalCustomProviderSdkCost;
     return {
       costMoney: isEstimate ? null : money,
-      estimatedValueMoney: isEstimate ? asValueEstimateMoney(money) : null,
+      estimatedValueMoney: isEstimate
+        ? isHistoricalCustomProviderSdkCost
+          ? sdkEstimatedValueMoney
+          : asValueEstimateMoney(money)
+        : null,
+      sdkEstimatedValueMoney: isEstimate ? sdkEstimatedValueMoney : null,
       legacyProjectedActualAmount: !structured && !isEstimate ? money.amount : 0,
     };
   } catch {
     return {
       costMoney: null,
       estimatedValueMoney: null,
+      sdkEstimatedValueMoney: null,
       legacyProjectedActualAmount: 0,
     };
   }
@@ -518,7 +546,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     ).flat();
     const ledger = new Map<
       string,
-      { costValues: RegionalMoney[]; estimatedValues: RegionalMoney[] }
+      {
+        costValues: RegionalMoney[];
+        estimatedValues: RegionalMoney[];
+        sdkEstimatedValues: RegionalMoney[];
+      }
     >();
     for (const row of rows) {
       const origin = scheduleOriginFromAgentMeta(row.agentMeta);
@@ -527,10 +559,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const current = ledger.get(origin.runId) ?? {
         costValues: [],
         estimatedValues: [],
+        sdkEstimatedValues: [],
       };
       if (cost.costMoney) current.costValues.push(cost.costMoney);
       if (cost.estimatedValueMoney) {
         current.estimatedValues.push(cost.estimatedValueMoney);
+      }
+      if (cost.sdkEstimatedValueMoney) {
+        current.sdkEstimatedValues.push(cost.sdkEstimatedValueMoney);
       }
       ledger.set(origin.runId, current);
     }
@@ -549,6 +585,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
             : []),
           ...persisted.estimatedValues,
         ];
+        const sdkEstimatedValues = [
+          ...(run.sdkEstimatedValueMoney && run.sdkEstimatedValueMoney.amount > 0
+            ? [run.sdkEstimatedValueMoney]
+            : []),
+          ...persisted.sdkEstimatedValues,
+        ];
         return {
           ...run,
           costMoney:
@@ -561,6 +603,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
               estimatedValues,
               run.estimatedValueMoney?.currency,
             ) ?? zeroUsageMoney('value-estimate'),
+          sdkEstimatedValueMoney:
+            addCompatibleRegionalMoney(
+              sdkEstimatedValues,
+              run.sdkEstimatedValueMoney?.currency,
+            ) ?? undefined,
           costAttribution: 'exact',
         };
       }
@@ -575,6 +622,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         estimatedValueMoney:
           addCompatibleRegionalMoney(persisted.estimatedValues) ??
           zeroUsageMoney('value-estimate'),
+        sdkEstimatedValueMoney:
+          addCompatibleRegionalMoney(persisted.sdkEstimatedValues) ?? undefined,
         costAttribution: 'exact',
       };
     });
@@ -797,6 +846,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         if (turnCost.estimatedValueMoney) {
           runCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
         }
+        if (turnCost.sdkEstimatedValueMoney) {
+          runCost.sdkEstimatedValueValues.push(turnCost.sdkEstimatedValueMoney);
+        }
         messageCostByRunId.set(assistantRunId, runCost);
       }
       const entry = bySchedule.get(attributedScheduleId) ?? emptyScheduleTurnCostState();
@@ -807,6 +859,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (turnCost.estimatedValueMoney) {
         entry.estimatedValueValues.push(turnCost.estimatedValueMoney);
       }
+      if (turnCost.sdkEstimatedValueMoney) {
+        entry.sdkEstimatedValueValues.push(turnCost.sdkEstimatedValueMoney);
+      }
       noteLatestCurrency(entry, turnCost.costMoney, row.createdAt);
       noteLatestCurrency(entry, turnCost.estimatedValueMoney, row.createdAt);
       const sessionCost = entry.sessionCosts.get(row.sessionId) ?? emptyScheduleMoneyValues();
@@ -815,6 +870,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       }
       if (turnCost.estimatedValueMoney) {
         sessionCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
+      }
+      if (turnCost.sdkEstimatedValueMoney) {
+        sessionCost.sdkEstimatedValueValues.push(turnCost.sdkEstimatedValueMoney);
       }
       noteLatestCurrency(sessionCost, turnCost.costMoney, row.createdAt);
       noteLatestCurrency(sessionCost, turnCost.estimatedValueMoney, row.createdAt);
@@ -830,11 +888,15 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       sessionId: string | undefined,
       costMoney: RegionalMoney | null,
       estimatedValueMoney: RegionalMoney | null,
+      sdkEstimatedValueMoney: RegionalMoney | null,
       at: number,
     ): void => {
       if (costMoney && costMoney.amount > 0) entry.costValues.push(costMoney);
       if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
         entry.estimatedValueValues.push(estimatedValueMoney);
+      }
+      if (sdkEstimatedValueMoney && sdkEstimatedValueMoney.amount > 0) {
+        entry.sdkEstimatedValueValues.push(sdkEstimatedValueMoney);
       }
       noteLatestCurrency(entry, costMoney, at);
       noteLatestCurrency(entry, estimatedValueMoney, at);
@@ -844,6 +906,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (costMoney && costMoney.amount > 0) sessionCost.costValues.push(costMoney);
       if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
         sessionCost.estimatedValueValues.push(estimatedValueMoney);
+      }
+      if (sdkEstimatedValueMoney && sdkEstimatedValueMoney.amount > 0) {
+        sessionCost.sdkEstimatedValueValues.push(sdkEstimatedValueMoney);
       }
       noteLatestCurrency(sessionCost, costMoney, at);
       noteLatestCurrency(sessionCost, estimatedValueMoney, at);
@@ -870,7 +935,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         if (messageCostRunIds.has(run.id)) continue;
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
         entry.hasUnavailableCost = true;
-        appendRunMoney(entry, run.sessionId, null, null, run.firedAt);
+        appendRunMoney(entry, run.sessionId, null, null, null, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -880,7 +945,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         !messageCostRunIds.has(run.id)
       ) {
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
-        appendRunMoney(entry, run.sessionId, null, null, run.firedAt);
+        appendRunMoney(entry, run.sessionId, null, null, null, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -897,8 +962,22 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
                 run.estimatedValueMoney,
                 messageCost?.estimatedValueValues ?? [],
               );
+        const sdkEstimatedValueMoney =
+          run.costAttribution === 'direct'
+            ? (run.sdkEstimatedValueMoney ?? null)
+            : remainingMoney(
+                run.sdkEstimatedValueMoney,
+                messageCost?.sdkEstimatedValueValues ?? [],
+              );
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
-        appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney, run.firedAt);
+        appendRunMoney(
+          entry,
+          run.sessionId,
+          costMoney,
+          estimatedValueMoney,
+          sdkEstimatedValueMoney,
+          run.firedAt,
+        );
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -911,6 +990,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         run.sessionId,
         run.costMoney ?? null,
         run.estimatedValueMoney ?? null,
+        run.sdkEstimatedValueMoney ?? null,
         run.firedAt,
       );
       bySchedule.set(run.scheduleId, entry);
@@ -954,10 +1034,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           summary.estimatedValueValues,
           summary.latestCurrency,
         ) ?? zeroUsageMoney('value-estimate');
+      const totalSdkEstimatedValueMoney = addCompatibleRegionalMoney(
+        summary.sdkEstimatedValueValues,
+        summary.latestCurrency,
+      );
       return {
         scheduleId,
         totalMoney,
         totalEstimatedValueMoney,
+        ...(totalSdkEstimatedValueMoney && totalSdkEstimatedValueMoney.amount > 0
+          ? { totalSdkEstimatedValueMoney }
+          : {}),
         ...(totalMoney.currency === 'USD'
           ? {
               totalCostUsd: totalMoney.amount,
@@ -975,10 +1062,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
               costs.estimatedValueValues,
               costs.latestCurrency,
             ) ?? zeroUsageMoney('value-estimate');
+          const sdkEstimatedMoney = addCompatibleRegionalMoney(
+            costs.sdkEstimatedValueValues,
+            costs.latestCurrency,
+          );
           return {
             sessionId,
             totalMoney: money,
             totalEstimatedValueMoney: estimatedMoney,
+            ...(sdkEstimatedMoney && sdkEstimatedMoney.amount > 0
+              ? { totalSdkEstimatedValueMoney: sdkEstimatedMoney }
+              : {}),
             ...(money.currency === 'USD'
               ? {
                   totalCostUsd: money.amount,

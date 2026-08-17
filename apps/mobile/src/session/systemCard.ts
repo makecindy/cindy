@@ -11,6 +11,7 @@ import {
 } from '@cindy/maker-shared/system-card';
 import { i18n } from '@/i18n';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
+import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 /**
  * 手机端系统卡类型 = 共享 slash 命令卡 + goal 持久记录卡 + silent-stop 自动续跑卡。
@@ -101,11 +102,22 @@ export function buildMobileSystemCardData(
   // goal / auto-resume / agent-switch 卡的数据由桌面落库行派生,learn 卡的数据由
   // 发送侧 buildLearnCardData 直接组装,都不走本地 slash 命令的数据组装。
   if (type === 'goal-complete' || type === 'goal-resumed' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch') return {};
-  return buildSystemCardData(type, {
+  const data = buildSystemCardData(type, {
     ...options,
     localCommands: MOBILE_LOCAL_SYSTEM_COMMANDS,
     remoteCommands: options.remoteCommands,
   });
+  if (type !== 'cost') return data;
+  const money = normalizeRemoteMoney(options.session?.totalMoney);
+  if (!money || (money.kind === 'actual-cost' && !money.approximate)) return data;
+  const reasons = money.estimateReasons ?? [];
+  const isSdkOnly = reasons.includes('sdk-estimate') &&
+    !reasons.includes('reference-price') &&
+    !reasons.includes('subscription-value');
+  return {
+    ...data,
+    billingPresentation: isSdkOnly ? 'sdk-estimate' : 'estimate',
+  };
 }
 
 export function formatMobileSystemCard(
@@ -128,6 +140,16 @@ export function formatMobileSystemCard(
   if (type === 'auto-resume') return formatAutoResumeCard(data);
   if (type === 'agent-switch') return formatAgentSwitchCard(data);
   if (type === 'learn') return formatLearnCard(data);
+  if (type === 'cost') {
+    const presentation = formatSystemCard(type, data);
+    if (data?.billingPresentation === 'sdk-estimate') {
+      return { ...presentation, title: i18n.t('message.systemCard.sdkEstimateTitle') };
+    }
+    if (data?.billingPresentation === 'estimate') {
+      return { ...presentation, title: i18n.t('message.systemCard.estimatedValueTitle') };
+    }
+    return presentation;
+  }
   return formatSystemCard(type, data);
 }
 

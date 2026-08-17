@@ -133,6 +133,7 @@ export interface RemoteScheduleRun {
   estimatedValueUsd?: number;
   costMoney?: RemoteScheduleRunMoney;
   estimatedValueMoney?: RemoteScheduleRunMoney;
+  sdkEstimatedValueMoney?: RemoteScheduleRunMoney;
   costAttribution?: 'exact' | 'direct' | 'mixed' | 'zero' | 'unavailable' | 'legacy';
   readAt?: RemoteTimestamp;
 }
@@ -143,7 +144,7 @@ export interface RemoteScheduleRunMoney {
   approximate: boolean;
   kind: 'actual-cost' | 'value-estimate';
   estimateReasons?: Array<
-    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency'
+    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency' | 'sdk-estimate'
   >;
 }
 

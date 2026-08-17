@@ -1945,6 +1945,12 @@
       "toggleAria": "Git 안전 저장점 전환",
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
+    "customProviderBilling": {
+      "title": "커스텀 제공자의 SDK 추정액 표시",
+      "description": "기본적으로 SDK가 계산한 금액은 숨기고 Token 사용량을 표시합니다. 사용자가 설정한 가격이나 제공자 참고 가격에 따른 추정액은 추정치로 명시되어 표시될 수 있습니다. 활성화하면 SDK 추정액도 표시하지만, 이는 제공자 청구서가 아니며 실제 청구액과 다를 수 있습니다.",
+      "toggleAria": "커스텀 제공자의 SDK 추정액 표시 전환",
+      "saveFailed": "커스텀 제공자 과금 설정 저장 실패"
+    },
     "feishuBot": {
       "title": "Feishu / Lark 봇",
       "description": "Feishu 또는 Lark 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",
@@ -5038,6 +5044,7 @@
     "monthlyLimitLabel": "주기 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "세션 {{cost}}",
+    "sessionSdkEstimateLabel": "세션 SDK 추정치(제공자 청구서 아님) {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "아직 사용량 없음",
@@ -5105,6 +5112,7 @@
     "extraUsageEnabled": "추가 사용량 활성화됨",
     "costLine": "이번 메시지 비용: {{cost}}",
     "valueLine": "이번 메시지 토큰 가치: {{cost}}",
+    "sdkEstimateLine": "이번 메시지 SDK 추정액(제공자 청구서 아님): {{cost}}",
     "noBilledCost": "이번 메시지의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
     "latestMessageTitle": "최근 메시지 합계",
     "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
@@ -5128,6 +5136,7 @@
     "timeLine": "시간 {{duration}}",
     "costLine": "이번 턴 비용: {{cost}}",
     "valueLine": "이번 턴 토큰 가치: {{cost}}",
+    "sdkEstimateLine": "이번 턴 SDK 추정액(제공자 청구서 아님): {{cost}}",
     "tokenLine": "토큰: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
     "cacheLine": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}} · 적중률 {{rate}}",
     "cacheLineNoRate": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}}",
@@ -6912,6 +6921,8 @@
       "turnCost": "이번 턴 비용",
       "turnCostEstimated": "이번 턴 토큰 가치(API 단가 환산)",
       "turnCostEstimatedValue": "가치 {{cost}}",
+      "turnCostSdkEstimated": "이번 턴 SDK 추정액(제공자 청구서 아님)",
+      "turnCostSdkEstimatedValue": "SDK 추정액 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "이번 요청 상세"
     },
@@ -7894,7 +7905,8 @@
       },
       "taskInfoTip": {
         "tokens": "누적 토큰",
-        "cost": "누적 비용"
+        "cost": "누적 비용",
+        "sdkEstimate": "누적 SDK 추정치(제공자 청구서 아님)"
       },
       "dateGroup": {
         "today": "오늘",

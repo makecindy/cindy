@@ -3280,6 +3280,7 @@ const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set([
   'device-link:unsubscribe',
   'device-link:voice:dictionary:get',
   'maker:provider:list',
+  'maker:custom-provider-billing:get',
   'maker:get-capabilities',
   'maker:get-new-maker-defaults',
   'maker:list-active',

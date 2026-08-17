@@ -170,6 +170,101 @@ describe('normalizeRemoteMessages', () => {
     expect(items[3].turnTotalTokens).toBeUndefined();
   });
 
+  it('hides custom-provider SDK amounts by default while preserving reference estimates', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'sdk-estimate',
+        role: 'assistant',
+        content: 'SDK estimate',
+        agentMeta: {
+          turnCostIsCustomProvider: true,
+          turnCost: {
+            amount: 0.42,
+            currency: 'USD',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['sdk-estimate'],
+          },
+          turnCostIsEstimate: true,
+          turnUsageDetails: { totalTokens: 12_345 },
+        },
+      }),
+      message({
+        id: 'legacy-sdk',
+        role: 'assistant',
+        content: 'Legacy SDK amount',
+        agentMeta: {
+          turnCostIsCustomProvider: true,
+          turnCostUsd: 0.35,
+          turnCostIsEstimate: false,
+          turnUsageDetails: { totalTokens: 9_876 },
+        },
+      }),
+      message({
+        id: 'reference-estimate',
+        role: 'assistant',
+        content: 'Reference estimate',
+        agentMeta: {
+          turnCostIsCustomProvider: true,
+          turnCost: {
+            amount: 0.18,
+            currency: 'USD',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['reference-price'],
+          },
+          turnCostIsEstimate: true,
+          turnUsageDetails: { totalTokens: 4_321 },
+        },
+      }),
+    ]);
+
+    expect(items[0]).toMatchObject({ turnTotalTokens: 12_345 });
+    expect(items[0].turnMoney).toBeUndefined();
+    expect(items[1]).toMatchObject({ turnTotalTokens: 9_876 });
+    expect(items[1].turnMoney).toBeUndefined();
+    expect(items[2].turnMoney).toMatchObject({
+      amount: 0.18,
+      kind: 'value-estimate',
+      estimateReasons: ['reference-price'],
+    });
+  });
+
+  it('shows a custom-provider SDK amount only when the billing projection opts in', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'custom-sdk',
+        role: 'assistant',
+        content: 'SDK amount',
+        agentMeta: {
+          turnCostIsCustomProvider: true,
+          turnCost: {
+            amount: 0.42,
+            currency: 'USD',
+            approximate: false,
+            kind: 'actual-cost',
+          },
+          turnUsageDetails: { totalTokens: 12_345 },
+        },
+      }),
+    ], {
+      presentation: 'estimate',
+      showSdkEstimate: true,
+      entries: [],
+    });
+
+    expect(item).toMatchObject({
+      turnCostUsd: 0.42,
+      turnTotalTokens: 12_345,
+      turnMoney: {
+        amount: 0.42,
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['sdk-estimate'],
+      },
+    });
+  });
+
   // 整轮累计与当前 segment 是两个独立事实(不变量正本见
   // apps/desktop/src/shared/turnCostPayload.ts):操作行只挂在收尾正文上,它要承载整轮
   // 总额;收尾 segment 缺报价的轮次更是只有 userTurnCost —— 不读它就会用 token 把已经

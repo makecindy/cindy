@@ -50,6 +50,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useProviders } from '@/hooks/useProviders';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useModifierHold } from '@/hooks/useModifierHold';
@@ -72,6 +73,7 @@ import {
   SessionAttentionUrgencyProvider,
   useSessionAttentionUrgencySet,
 } from './contexts/SessionAttentionUrgencyContext';
+import { CustomProviderCostPresentationProvider } from './contexts/CustomProviderCostPresentationContext';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -404,6 +406,7 @@ function cutoffForLastActivity(
 
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
+  const { providers } = useProviders();
   const localPlatform = window.electronAPI.platform;
   const isCollapsed = useSidebarCollapsedState();
   // 展开态由本 Feature 在自己的列表滚动区里渲染顶部导航的可滚动段(自动任务 /
@@ -745,8 +748,9 @@ export function CCAgentSidebarUpper() {
     // skipDelayDuration 放宽到 1500ms(默认 200):tip 弹出过之后在列表行间移动
     // 保持"热态"即时切换——PR tips 行间穿插着无 tip 的普通行,默认窗口太短,
     // 路过几行热态就丢了,体感退回"每行都要重新等 500ms"(session-git-pr-context)。
-    <Tooltip.Provider skipDelayDuration={1500}>
-      <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
+    <CustomProviderCostPresentationProvider providers={providers}>
+      <Tooltip.Provider skipDelayDuration={1500}>
+        <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
         <div className="relative flex flex-1 flex-col overflow-hidden">
           {/* Expanded — fade out when collapsed.
           min-w-0 让内层跟着外层 aside 的实际宽度走，配合 SessionItem 里的
@@ -866,8 +870,9 @@ export function CCAgentSidebarUpper() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      </SessionAttentionUrgencyProvider>
-    </Tooltip.Provider>
+        </SessionAttentionUrgencyProvider>
+      </Tooltip.Provider>
+    </CustomProviderCostPresentationProvider>
   );
 }
 /* ============================== Types ============================== */

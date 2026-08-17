@@ -93,7 +93,10 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     ]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:set-extra-dirs', ['rs', ['/a']]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:close-session', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:compact-session', ['rs', 'focus on API design']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:compact-session', [
+      'rs',
+      'focus on API design',
+    ]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:enable-orca', [
       'rs',
       { workerAgent: 'codex' },
@@ -324,12 +327,20 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
       totalValueUsd: 1.5,
       entries: [{ clientId: 'a', costUsd: 1.5 }],
     });
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:messages:estimatedSessionValue', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:messages:estimatedSessionValue', [
+      'rs',
+      'regular',
+      false,
+    ]);
     expect(localMessages.estimatedSessionValue).not.toHaveBeenCalled();
 
     invoke.mockClear();
     await estimatedSessionValueFor('local-sess');
-    expect(localMessages.estimatedSessionValue).toHaveBeenCalledWith('local-sess');
+    expect(localMessages.estimatedSessionValue).toHaveBeenCalledWith(
+      'local-sess',
+      'regular',
+      false,
+    );
     expect(invoke).not.toHaveBeenCalled();
   });
 

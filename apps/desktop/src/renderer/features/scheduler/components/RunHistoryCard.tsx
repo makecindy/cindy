@@ -39,6 +39,8 @@ import {
 } from '../../../../shared/regionalMoney';
 import { isUnreadScheduleRun } from '../lib/runUnread';
 import { markScheduleRunReadAndSync } from '../lib/scheduleRunReadSync';
+import { useCustomProviderBillingSettings } from '@/hooks/useCustomProviderBillingSettings';
+import { projectScheduleRunSdkEstimate } from '../lib/projectScheduleCost';
 
 const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
 
@@ -147,6 +149,7 @@ export function RunHistoryCard({
   sessionReference,
 }: Props) {
   const { t } = useTranslation();
+  const { showSdkCostForCustomProviders } = useCustomProviderBillingSettings();
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const showError =
@@ -172,8 +175,10 @@ export function RunHistoryCard({
             run.costMoney ??
             legacyUsdMoney(run.costUsd ?? 0);
           const valueMoney =
-            run.estimatedValueMoney ??
-            usdMoney(run.estimatedValueUsd ?? 0, 'value-estimate', 'legacy-usd');
+            projectScheduleRunSdkEstimate(run, showSdkCostForCustomProviders) ??
+            (run.estimatedValueMoney
+              ? usdMoney(0, 'value-estimate', 'legacy-usd')
+              : usdMoney(run.estimatedValueUsd ?? 0, 'value-estimate', 'legacy-usd'));
           return [
           costMoney.amount > 0
             ? t('scheduler.runs.runCost', { cost: formatTurnCostMoney(costMoney) })

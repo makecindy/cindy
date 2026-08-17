@@ -303,10 +303,8 @@ type SubagentModelSettingsState =
   import('../shared/subagentModelSettings').SubagentModelSettingsState;
 type SubagentModelSettingsWriteResult =
   import('../shared/subagentModelSettings').SubagentModelSettingsWriteResult;
-type VisionBridgeSettingsPatch =
-  import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
-type VisionBridgeSettingsState =
-  import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
+type VisionBridgeSettingsPatch = import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
+type VisionBridgeSettingsState = import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -1111,7 +1109,9 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
-  onLocaleChanged?: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+  onLocaleChanged?: (
+    cb: (locale: import('../shared/locale').SupportedLocale) => void,
+  ) => () => void;
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
@@ -1311,9 +1311,7 @@ interface ElectronAPI {
       iconDataUrl?: string;
     }>;
     /** 本地包第三条恢复路径第一步:从已装目录读确认卡事实,零副作用。 */
-    reapproveInspect: (
-      id: string,
-    ) => Promise<{
+    reapproveInspect: (id: string) => Promise<{
       manifest: import('../shared/ghost').GhostManifest;
       trust: import('../shared/ghost').GhostTrustInfo;
       /** 确认卡展示时的清单字节指纹;确认时回传,防确认间隙清单被换。 */
@@ -1921,7 +1919,9 @@ interface ElectronAPI {
     rendererReady: () => Promise<void>;
     presentationReady: () => Promise<void>;
     onSamplingActiveChanged: (cb: (active: boolean) => void) => () => void;
-    onLocaleChanged: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+    onLocaleChanged: (
+      cb: (locale: import('../shared/locale').SupportedLocale) => void,
+    ) => () => void;
   };
 
   /** 插件停靠面板独立窗口(每 ghostId 一扇窗;状态机在 main)。 */
@@ -3481,9 +3481,7 @@ interface ElectronAPI {
     enableBeta: boolean;
     isCustomized?: boolean;
   }>;
-  setUpdateChannelSettings: (settings: {
-    enableBeta: boolean;
-  }) => Promise<{
+  setUpdateChannelSettings: (settings: { enableBeta: boolean }) => Promise<{
     enableBeta: boolean;
     isCustomized?: boolean;
   }>;
@@ -3764,7 +3762,12 @@ interface ElectronAPI {
       agent?: 'cc' | 'pi',
     ) => Promise<{ ok: true; daemonReady: boolean }>;
     ccMgrListPendingUpgrades: () => Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
+      pending: Array<{
+        hostId: string;
+        currentVersion: string;
+        availableVersion: string;
+        agent: 'cc' | 'pi';
+      }>;
     }>;
     ccMgrDismissPendingUpgrade: (hostId: string, agent?: 'cc' | 'pi') => Promise<{ ok: true }>;
     // Codex credential sync
@@ -4464,13 +4467,20 @@ interface ElectronAPI {
         sessionId: string,
         opts?: { limit?: number; before?: string; beforeTs?: number },
       ) => Promise<import('@/lib/ccAgent.types').Message[]>;
-      estimatedSessionValue: (sessionId: string) => Promise<{
+      estimatedSessionValue: (
+        sessionId: string,
+        presentation?: import('../shared/regionalMoney').SdkCostPresentation,
+        showSdkEstimate?: boolean,
+      ) => Promise<{
         totalValueMoney?: import('../shared/regionalMoney').RegionalMoney | null;
         totalValueUsd?: number;
         entries: Array<{
           clientId: string;
           money?: import('../shared/regionalMoney').RegionalMoney;
           costUsd?: number;
+          excludedActualMoney?: import('../shared/regionalMoney').RegionalMoney;
+          turnCostIsCustomProvider?: boolean;
+          turnCostProviderId?: string | null;
           turnUsageDetails?: unknown;
         }>;
       }>;
@@ -5540,7 +5550,9 @@ interface ElectronAPI {
 
     /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
     visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsSet: (patch: VisionBridgeSettingsPatch) => Promise<VisionBridgeSettingsState>;
+    visionBridgeSettingsSet: (
+      patch: VisionBridgeSettingsPatch,
+    ) => Promise<VisionBridgeSettingsState>;
     visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
@@ -5617,6 +5629,23 @@ interface ElectronAPI {
       autoSnapshotEnabled: boolean;
       isCustomized: boolean;
       defaultAutoSnapshotEnabled: boolean;
+    }>;
+
+    /** Custom provider billing: default off records token only, hides SDK cost. */
+    customProviderBillingGet: () => Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }>;
+    customProviderBillingSet: (enabled: boolean) => Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
+    }>;
+    customProviderBillingReset: () => Promise<{
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+      defaultShowSdkCostForCustomProviders: boolean;
     }>;
 
     /**

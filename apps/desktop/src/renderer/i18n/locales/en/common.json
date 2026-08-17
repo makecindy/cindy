@@ -1946,6 +1946,12 @@
       "toggleAria": "Toggle Git safety snapshots",
       "saveFailed": "Failed to save Git safety setting"
     },
+    "customProviderBilling": {
+      "title": "Show SDK estimate for custom providers",
+      "description": "By default, Cindy hides SDK-calculated amounts and shows token usage. Estimates based on prices you set or provider reference prices may still appear with an estimate label. Enable this to also show SDK estimates; they are not provider bills and may differ from actual charges.",
+      "toggleAria": "Toggle SDK estimate display for custom providers",
+      "saveFailed": "Failed to save custom provider billing setting"
+    },
     "feishuBot": {
       "title": "Feishu / Lark Bot",
       "description": "Connect to {{appName}} via a Feishu or Lark bot to work anywhere, anytime.",
@@ -5040,6 +5046,7 @@
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Session {{cost}}",
+    "sessionSdkEstimateLabel": "Session SDK estimate (not the provider bill) {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "No usage yet",
@@ -5107,6 +5114,7 @@
     "extraUsageEnabled": "Extra usage enabled",
     "costLine": "Cost this message: {{cost}}",
     "valueLine": "Token value this message: {{cost}}",
+    "sdkEstimateLine": "SDK estimate for this message (not your provider bill): {{cost}}",
     "noBilledCost": "Cost unavailable for this message; showing usage only",
     "latestMessageTitle": "Latest message total",
     "turnCostUnavailable": "Cost unavailable for this message",
@@ -5130,6 +5138,7 @@
     "timeLine": "Time {{duration}}",
     "costLine": "Cost this turn: {{cost}}",
     "valueLine": "Token value this turn: {{cost}}",
+    "sdkEstimateLine": "SDK estimate this turn (not your provider bill): {{cost}}",
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",
     "cacheLine": "Cache breakdown: read {{read}} · write {{create}} · hit rate {{rate}}",
     "cacheLineNoRate": "Cache breakdown: read {{read}} · write {{create}}",
@@ -6914,6 +6923,8 @@
       "turnCost": "Cost this turn",
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
+      "turnCostSdkEstimated": "SDK estimate this turn (not your provider bill)",
+      "turnCostSdkEstimatedValue": "SDK estimate {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details"
     },
@@ -7906,7 +7917,8 @@
       },
       "taskInfoTip": {
         "tokens": "Total tokens",
-        "cost": "Total cost"
+        "cost": "Total cost",
+        "sdkEstimate": "SDK estimate total (not provider bill)"
       },
       "dateGroup": {
         "today": "Today",

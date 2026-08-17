@@ -3,11 +3,9 @@
  */
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import type { AgentKind } from '@cindy/model-providers';
 
-import {
-  gatewayLedgerCurrency,
-  getModelPriceQuote,
-} from '../../shared/modelPriceQuote.js';
+import { gatewayLedgerCurrency, getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import {
   addRegionalMoney,
   toLedgerCurrency,
@@ -53,6 +51,13 @@ export interface TurnPricingContext {
   providerId: string | null;
   billingRoute: BillingRoute;
   region: CindyRegion;
+  /** Agent-specific user price overrides take precedence over generic provider quotes. */
+  pricingAgent?: AgentKind;
+  /**
+   * User-defined provider SDK amounts are not bill facts. Quotes remain visible as value
+   * estimates; the SDK fallback is shown only when this display preference is enabled.
+   */
+  customProviderSdkEstimate?: 'hidden' | 'shown';
 }
 
 export type TurnCostSource = 'sdk' | 'gateway' | 'reference' | 'sdk-fallback' | 'subscription';
@@ -68,6 +73,17 @@ export function normalizeModelIdForPricing(model: string | null | undefined): st
   if (!trimmed) return 'unknown';
   const stripped = trimmed.replace(/\[[^\]]*\]\s*$/, '').trim();
   return stripped || 'unknown';
+}
+
+/**
+ * SDK usage snapshots are cumulative within one child-process lifetime. When the process
+ * respawns, the counter can move backwards; in that case the new snapshot is the full delta
+ * for the restarted process rather than zero.
+ */
+export function computeCumulativeCostDelta(previous: number | undefined, current: number): number {
+  if (!Number.isFinite(current) || current < 0) return 0;
+  const validPrevious = typeof previous === 'number' && Number.isFinite(previous) && previous >= 0;
+  return !validPrevious || current < previous ? current : current - previous;
 }
 
 export function isAnthropicModel(normalizedModel: string): boolean {
@@ -87,14 +103,12 @@ export function computeGatewayTurnCost(
   price: ModelPriceQuote | undefined,
 ): number | null {
   if (!price) return null;
-  const totalInputTokens =
-    tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreateTokens;
+  const totalInputTokens = tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreateTokens;
   const band = price.inputTokenPriceBands
     ?.filter(
       (candidate) =>
         totalInputTokens >= candidate.minInputTokens &&
-        (candidate.maxInputTokens === undefined ||
-          totalInputTokens < candidate.maxInputTokens),
+        (candidate.maxInputTokens === undefined || totalInputTokens < candidate.maxInputTokens),
     )
     .sort((a, b) => b.minInputTokens - a.minInputTokens)[0];
   // Provider reference bands describe the complete set of ranges for which the
@@ -107,10 +121,8 @@ export function computeGatewayTurnCost(
   }
   const inputPrice = band?.inputPerMtok ?? price.inputPerMtok;
   const outputPrice = band?.outputPerMtok ?? price.outputPerMtok;
-  const cacheReadPrice =
-    band?.cacheReadPerMtok ?? price.cacheReadPerMtok ?? inputPrice;
-  const cacheCreatePrice =
-    band?.cacheCreatePerMtok ?? price.cacheCreatePerMtok ?? inputPrice;
+  const cacheReadPrice = band?.cacheReadPerMtok ?? price.cacheReadPerMtok ?? inputPrice;
+  const cacheCreatePrice = band?.cacheCreatePerMtok ?? price.cacheCreatePerMtok ?? inputPrice;
   return (
     (tokens.inputTokens * inputPrice +
       tokens.outputTokens * outputPrice +
@@ -193,9 +205,13 @@ export function resolveTurnCost(args: {
   // subscription would discard both the provider's SDK cost and the user's price override.
   // Prefix inference remains the compatibility fallback for routes whose upstream is not an
   // explicitly selected provider API (for example a bridge sub-agent inside an XD session).
+  // A remote custom-provider turn can arrive with billingRoute='unknown'; the explicit custom
+  // classification is still authoritative and must not be reclassified as a subscription.
   if (
     context.billingRoute === 'subscription' ||
-    (context.billingRoute !== 'provider-api' && isSubscriptionDirectRoute(model))
+    (context.billingRoute !== 'provider-api' &&
+      context.customProviderSdkEstimate === undefined &&
+      isSubscriptionDirectRoute(model))
   ) {
     return { model, money: null, source: 'subscription' };
   }
@@ -232,7 +248,12 @@ export function resolveTurnCost(args: {
 
   const providerQuote =
     context.billingRoute === 'provider-api'
-      ? getModelPriceQuote(pricing, context.providerId, model, 'claude-code')
+      ? getModelPriceQuote(
+          pricing,
+          context.providerId,
+          model,
+          context.pricingAgent ?? 'claude-code',
+        )
       : undefined;
   const hasTokenDeltas =
     tokens.inputTokens > 0 ||
@@ -244,7 +265,11 @@ export function resolveTurnCost(args: {
   // 前台金额就会被成倍放大。有 token 增量且官方参考价存在时，按实际 token/cache
   // 分桶重算并保留 value-estimate 标记；只有 cost 增量或目录价格不覆盖本轮时仍退回
   // SDK，避免把有费用但无 token 明细的轮次误算成 $0。
-  if (context.providerId === 'deepseek' && providerQuote && hasTokenDeltas) {
+  if (
+    (context.customProviderSdkEstimate !== undefined || context.providerId === 'deepseek') &&
+    providerQuote &&
+    hasTokenDeltas
+  ) {
     const referenceMoney = computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency);
     if (referenceMoney) {
       return {
@@ -259,9 +284,17 @@ export function resolveTurnCost(args: {
   // 否则 USD 结算账号上这些花费会变成 CNY 并被账本守卫丢弃。
   const sdkAmount = Math.max(0, sdkCostDelta ?? 0);
   if (sdkAmount > 0) {
+    if (context.customProviderSdkEstimate === 'hidden') {
+      return { model, money: null, source: 'sdk' };
+    }
     return {
       model,
-      money: usdToLedgerCurrency(sdkAmount, ledgerCurrency),
+      money: usdToLedgerCurrency(
+        sdkAmount,
+        ledgerCurrency,
+        context.customProviderSdkEstimate === 'shown' ? 'value-estimate' : 'actual-cost',
+        context.customProviderSdkEstimate === 'shown' ? 'sdk-estimate' : undefined,
+      ),
       source: context.billingRoute === 'provider-api' ? 'sdk' : 'sdk-fallback',
     };
   }
@@ -321,8 +354,7 @@ export function resolveClaudeTurnCostSinks(
   }
   return {
     turnMoney: actualMoney.length > 0 ? addRegionalMoney(actualMoney) : null,
-    estimatedTurnMoney:
-      estimatedMoney.length > 0 ? addRegionalMoney(estimatedMoney) : null,
+    estimatedTurnMoney: estimatedMoney.length > 0 ? addRegionalMoney(estimatedMoney) : null,
     perModel,
   };
 }

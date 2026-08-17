@@ -18,7 +18,7 @@ import {
   safeStringify,
   extractMessagePreview,
 } from '../mapper';
-import { throwIpcError, requireString } from '../../utils/ipcValidate';
+import { optionalEnum, throwIpcError, requireString } from '../../utils/ipcValidate';
 import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
 import { collectCindyMediaHashes, commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
@@ -38,12 +38,17 @@ import {
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
 import { normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
 import {
+  projectSdkCostMoneyWithBreakdown,
+  resolveTurnSdkCostPresentation,
+} from '../../../shared/customProviderBilling.js';
+import {
   addCompatibleRegionalMoney,
   asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
   usdMoney,
   type RegionalMoney,
+  type SdkCostPresentation,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
@@ -118,8 +123,17 @@ const PERSISTED_CHAT_ATTACHMENT_PATHS_SQL = `SELECT DISTINCT
 
 export interface EstimatedSessionValueEntry {
   clientId: string;
-  money: RegionalMoney;
+  money?: RegionalMoney;
   costUsd?: number;
+  /**
+   * Pre-upgrade custom-provider SDK amounts were persisted as actual cost.  The
+   * renderer subtracts this read-only projection from the session ledger before
+   * presenting the remaining provider/Gateway spend.
+   */
+  excludedActualMoney?: RegionalMoney;
+  turnCostIsCustomProvider?: boolean;
+  turnCostProviderId?: string | null;
+  turnUsageDetails?: unknown;
 }
 
 /**
@@ -412,45 +426,81 @@ export function registerMessageIpc(): void {
     },
   );
 
-  ipcMain.handle('local-db:messages:estimatedSessionValue', async (_e, sessionId: unknown) => {
-    const sid = requireString(sessionId, 'sessionId');
-    const db = getDbClient().drizzle;
+  ipcMain.handle(
+    'local-db:messages:estimatedSessionValue',
+    async (
+      _e,
+      sessionId: unknown,
+      presentationValue?: unknown,
+      showSdkEstimateValue?: unknown,
+    ) => {
+      const sid = requireString(sessionId, 'sessionId');
+      const presentation: SdkCostPresentation =
+        optionalEnum(
+          presentationValue,
+          ['regular', 'hidden', 'estimate'] as const,
+          'custom provider cost presentation',
+        ) ?? 'regular';
+      if (showSdkEstimateValue !== undefined && typeof showSdkEstimateValue !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'showSdkEstimate must be a boolean');
+      }
+      const showSdkEstimate =
+        typeof showSdkEstimateValue === 'boolean'
+          ? showSdkEstimateValue
+          : presentation === 'estimate';
+      const db = getDbClient().drizzle;
 
-    const [sessionRow] = await db
-      .select({ clearedAt: sessions.clearedAt })
-      .from(sessions)
-      .where(eq(sessions.id, sid))
-      .limit(1);
-    const clearedAtMs = sessionRow?.clearedAt ?? null;
+      const [sessionRow] = await db
+        .select({ clearedAt: sessions.clearedAt })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      const clearedAtMs = sessionRow?.clearedAt ?? null;
 
-    const visibleConds = clearedAtMs === null ? [] : [gt(messages.createdAt, clearedAtMs)];
-    const rows = await db
-      .select({
-        clientId: messages.clientId,
-        agentMeta: messages.agentMeta,
-      })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.sessionId, sid),
-          eq(messages.role, 'assistant'),
-          isNull(messages.rewindAt),
-          ...visibleConds,
-        ),
+      const rows = await db
+        .select({
+          clientId: messages.clientId,
+          agentMeta: messages.agentMeta,
+          createdAt: messages.createdAt,
+          rewindAt: messages.rewindAt,
+        })
+        .from(messages)
+        .where(and(eq(messages.sessionId, sid), eq(messages.role, 'assistant')));
+      const visibleRows = rows.filter(
+        (row) =>
+          row.rewindAt === null &&
+          (clearedAtMs === null || row.createdAt > clearedAtMs),
       );
-    const entries = extractEstimatedSessionValueEntries(rows);
-    const totalValueMoney = addCompatibleRegionalMoney(entries.map((entry) => entry.money));
-    const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
-    return {
-      totalValueMoney,
-      ...(hasCompleteUsdProjection
-        ? {
-            totalValueUsd: entries.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
-          }
-        : {}),
-      entries,
-    };
-  });
+      const visibleEntries = extractEstimatedSessionValueEntries(
+        visibleRows,
+        presentation,
+        showSdkEstimate,
+      );
+      const lifetimeEntries = extractEstimatedSessionValueEntries(
+        rows,
+        presentation,
+        showSdkEstimate,
+      );
+      const entries = mergeEstimatedSessionValueEntriesWithLifetimeExclusions(
+        visibleEntries,
+        lifetimeEntries,
+      );
+      const estimatedEntries = entries.flatMap((entry) => (entry.money ? [entry.money] : []));
+      const totalValueMoney = addCompatibleRegionalMoney(estimatedEntries);
+      const hasCompleteUsdProjection = entries.every(
+        (entry) => !entry.money || typeof entry.costUsd === 'number',
+      );
+      return {
+        totalValueMoney,
+        ...(hasCompleteUsdProjection
+          ? {
+              totalValueUsd: entries.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
+            }
+          : {}),
+        entries,
+      };
+    },
+  );
 
   ipcMain.handle('local-db:messages:create', async (_e, sessionId: unknown, body: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
@@ -1590,6 +1640,8 @@ export async function updateAgentMeta(
 
 export function extractEstimatedSessionValueEntries(
   rows: Array<{ clientId: string; agentMeta: string | null }>,
+  presentation: SdkCostPresentation = 'regular',
+  showSdkEstimate: boolean = presentation === 'estimate',
 ): EstimatedSessionValueEntry[] {
   const entries: EstimatedSessionValueEntry[] = [];
   for (const row of rows) {
@@ -1603,48 +1655,104 @@ export function extractEstimatedSessionValueEntries(
     } catch {
       continue;
     }
-    if (meta?.turnCostIsEstimate !== true) continue;
+    if (!meta) continue;
     const structured = normalizeRegionalMoney(meta.turnCost);
-    if (structured && structured.amount > 0) {
-      const recomputed =
-        structured.currency === 'USD'
-          ? resolveStaleCodexSubscriptionValueEstimate(
-              structured.amount,
-              normalizeTurnUsageDetails(meta.turnUsageDetails),
-              meta.model,
-            )
+    const legacyCostUsd =
+      typeof meta.turnCostUsd === 'number' &&
+      Number.isFinite(meta.turnCostUsd) &&
+      meta.turnCostUsd > 0
+        ? meta.turnCostUsd
+        : null;
+    const rawMoney =
+      structured && structured.amount > 0
+        ? structured
+        : legacyCostUsd != null
+          ? meta.turnCostIsEstimate === true
+            ? usdMoney(legacyCostUsd, 'value-estimate', 'legacy-usd')
+            : usdMoney(legacyCostUsd)
           : null;
-      const money = asValueEstimateMoney({
-        ...structured,
-        amount: recomputed ?? structured.amount,
-      });
-      entries.push({
-        clientId: row.clientId,
-        money,
-        ...(money.currency === 'USD' ? { costUsd: money.amount } : {}),
-      });
-      continue;
-    }
-    if (
-      typeof meta.turnCostUsd !== 'number' ||
-      !Number.isFinite(meta.turnCostUsd) ||
-      meta.turnCostUsd <= 0
-    ) {
-      continue;
-    }
-    const recomputed = resolveStaleCodexSubscriptionValueEstimate(
-      meta.turnCostUsd,
-      normalizeTurnUsageDetails(meta.turnUsageDetails),
-      meta.model,
+    if (!rawMoney) continue;
+
+    const turnUsageDetails = normalizeTurnUsageDetails(meta.turnUsageDetails);
+    const turnPresentation = resolveTurnSdkCostPresentation({
+      money: rawMoney,
+      isCustomProviderCost: meta.turnCostIsCustomProvider,
+      fallback: presentation,
+      showSdkEstimate,
+    });
+    const projected = projectSdkCostMoneyWithBreakdown(
+      rawMoney,
+      turnUsageDetails?.perModelCost?.map((entry) => entry.money),
+      turnPresentation,
     );
-    const costUsd = recomputed ?? meta.turnCostUsd;
+    const excludedActualMoney =
+      rawMoney.kind === 'actual-cost' &&
+      meta.turnCostIsEstimate !== true &&
+      turnPresentation !== 'regular'
+        ? rawMoney
+        : null;
+    const canExposeProjectedEstimate =
+      Boolean(projected && projected.amount > 0) &&
+      (projected?.kind === 'value-estimate' || meta.turnCostIsEstimate === true);
+    if (!canExposeProjectedEstimate && !excludedActualMoney) continue;
+
+    const estimateMoney = canExposeProjectedEstimate
+      ? projected!.kind === 'value-estimate'
+        ? projected!
+        : asValueEstimateMoney(projected!)
+      : null;
+    const recomputed =
+      estimateMoney?.currency === 'USD' &&
+      estimateMoney.estimateReasons?.includes('sdk-estimate') !== true
+        ? resolveStaleCodexSubscriptionValueEstimate(
+            estimateMoney.amount,
+            turnUsageDetails,
+            meta.model,
+          )
+        : null;
+    const money = estimateMoney
+      ? {
+          ...estimateMoney,
+          amount: recomputed ?? estimateMoney.amount,
+        }
+      : null;
     entries.push({
       clientId: row.clientId,
-      money: usdMoney(costUsd, 'value-estimate', 'legacy-usd'),
-      costUsd,
+      ...(money ? { money } : {}),
+      ...(money?.currency === 'USD' ? { costUsd: money.amount } : {}),
+      ...(excludedActualMoney ? { excludedActualMoney } : {}),
+      ...(typeof meta.turnCostIsCustomProvider === 'boolean'
+        ? { turnCostIsCustomProvider: meta.turnCostIsCustomProvider }
+        : {}),
+      ...(typeof meta.turnCostProviderId === 'string' || meta.turnCostProviderId === null
+        ? { turnCostProviderId: meta.turnCostProviderId }
+        : {}),
+      ...(turnUsageDetails?.perModelCost?.length ? { turnUsageDetails } : {}),
     });
   }
   return entries;
+}
+
+/**
+ * Visible value estimates follow the transcript boundary, while exclusions for
+ * legacy custom-provider SDK amounts follow the lifetime session ledger.  Merge
+ * the latter back without making cleared or rewound estimates visible again.
+ */
+export function mergeEstimatedSessionValueEntriesWithLifetimeExclusions(
+  visibleEntries: readonly EstimatedSessionValueEntry[],
+  lifetimeEntries: readonly EstimatedSessionValueEntry[],
+): EstimatedSessionValueEntry[] {
+  const merged = new Map(
+    visibleEntries.map((entry) => [entry.clientId, { ...entry }] as const),
+  );
+  for (const entry of lifetimeEntries) {
+    if (!entry.excludedActualMoney) continue;
+    merged.set(entry.clientId, {
+      ...(merged.get(entry.clientId) ?? { clientId: entry.clientId }),
+      excludedActualMoney: entry.excludedActualMoney,
+    });
+  }
+  return [...merged.values()];
 }
 
 /**

@@ -242,6 +242,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
+  // 自定义 Provider SDK 费用展示偏好(只读)。SET/RESET 不放行,控制端不能改被控端全局偏好。
+  'maker:custom-provider-billing:get',
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',

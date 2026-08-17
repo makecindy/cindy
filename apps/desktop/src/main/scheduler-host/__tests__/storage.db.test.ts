@@ -178,6 +178,7 @@ const SCHEDULER_DDL = [
       estimated_value_usd REAL NOT NULL DEFAULT 0,
       cost_amount REAL NOT NULL DEFAULT 0,
       estimated_value_amount REAL NOT NULL DEFAULT 0,
+      sdk_estimated_value_amount REAL NOT NULL DEFAULT 0,
       cost_currency TEXT,
       cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
@@ -313,6 +314,82 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           costMoney: actualMoneyFromLegacyUsd(0.42),
           estimatedValueMoney: estimatedMoneyFromLegacyUsd(0.29),
           costAttribution: 'exact',
+        }),
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('keeps reference estimates while reclassifying SDK and historical custom-provider amounts', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-sdk-projection' });
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at, total_cost_usd)
+        VALUES ('sess-sdk-projection', 'SDK projection session', 'desktop', 'dialogue', 1, 1, 0)
+      `);
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-sdk-projection',
+        scheduleId: schedule.id,
+        sessionId: 'sess-sdk-projection',
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+      });
+      harness.db.run(sql`
+        INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+        VALUES
+          ('sdk-historical', 'sdk-historical', 'sess-sdk-projection', 'assistant', '{}',
+            '{"origin":{"kind":"scheduler","scheduleId":"sch-sdk-projection","runId":"run-sdk-projection"},"turnCost":{"amount":0.42,"currency":"CNY","approximate":false,"kind":"actual-cost"},"turnCostIsCustomProvider":true}', 11),
+          ('sdk-mixed', 'sdk-mixed', 'sess-sdk-projection', 'assistant', '{}',
+            '{"origin":{"kind":"scheduler","scheduleId":"sch-sdk-projection","runId":"run-sdk-projection"},"turnCost":{"amount":0.61,"currency":"CNY","approximate":true,"kind":"value-estimate","estimateReasons":["reference-price","sdk-estimate"]},"turnCostIsEstimate":true,"turnCostIsCustomProvider":true,"turnUsageDetails":{"inputTokens":1,"outputTokens":0,"cacheReadTokens":0,"cacheCreateTokens":0,"perModelCost":[{"model":"reference-model","money":{"amount":0.19,"currency":"CNY","approximate":true,"kind":"value-estimate","estimateReasons":["reference-price"]}},{"model":"sdk-model","money":{"amount":0.42,"currency":"CNY","approximate":true,"kind":"value-estimate","estimateReasons":["sdk-estimate"]}}]}}', 12)
+      `);
+
+      await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([
+        expect.objectContaining({
+          id: 'run-sdk-projection',
+          costMoney: expect.objectContaining({ amount: 0 }),
+          estimatedValueMoney: {
+            amount: expect.closeTo(1.03, 10),
+            currency: 'CNY',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: expect.arrayContaining(['reference-price', 'sdk-estimate']),
+          },
+          sdkEstimatedValueMoney: {
+            amount: expect.closeTo(0.84, 10),
+            currency: 'CNY',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['sdk-estimate'],
+          },
+          costAttribution: 'exact',
+        }),
+      ]);
+
+      await expect(harness.storage.listCostSummaries()).resolves.toEqual([
+        expect.objectContaining({
+          scheduleId: schedule.id,
+          totalMoney: expect.objectContaining({ amount: 0 }),
+          totalEstimatedValueMoney: expect.objectContaining({
+            amount: expect.closeTo(1.03, 10),
+            currency: 'CNY',
+          }),
+          totalSdkEstimatedValueMoney: expect.objectContaining({
+            amount: expect.closeTo(0.84, 10),
+            currency: 'CNY',
+          }),
+          sessions: [
+            expect.objectContaining({
+              sessionId: 'sess-sdk-projection',
+              totalSdkEstimatedValueMoney: expect.objectContaining({
+                amount: expect.closeTo(0.84, 10),
+                currency: 'CNY',
+              }),
+            }),
+          ],
         }),
       ]);
     } finally {
@@ -902,6 +979,90 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
             currency: 'CNY',
             approximate: false,
             kind: 'actual-cost',
+          },
+          costAttribution: 'direct',
+        }),
+      ]);
+    } finally {
+      clearCurrentDbClient(dbClient);
+      harness.close();
+    }
+  });
+
+  it('persists only the SDK part of a mixed direct-only estimate', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-direct-sdk-estimate' });
+    const dbClient = { drizzle: harness.db } as unknown as DbClient;
+    try {
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-direct-sdk-estimate',
+        scheduleId: schedule.id,
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+        costAttribution: 'unavailable',
+      });
+      setCurrentDbClient(dbClient, 'test-user');
+
+      await recordScheduleRunCostDirect({
+        runId: 'run-direct-sdk-estimate',
+        money: {
+          amount: 0.61,
+          currency: 'CNY',
+          approximate: true,
+          kind: 'value-estimate',
+          estimateReasons: ['reference-price', 'sdk-estimate'],
+        },
+        turnCostIsCustomProvider: true,
+        turnUsageDetails: {
+          inputTokens: 1,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          totalTokens: 1,
+          cacheHitRate: 0,
+          perModelCost: [
+            {
+              model: 'reference-model',
+              money: {
+                amount: 0.19,
+                currency: 'CNY',
+                approximate: true,
+                kind: 'value-estimate',
+                estimateReasons: ['reference-price'],
+              },
+            },
+            {
+              model: 'sdk-model',
+              money: {
+                amount: 0.42,
+                currency: 'CNY',
+                approximate: true,
+                kind: 'value-estimate',
+                estimateReasons: ['sdk-estimate'],
+              },
+            },
+          ],
+        },
+      });
+
+      await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([
+        expect.objectContaining({
+          id: 'run-direct-sdk-estimate',
+          estimatedValueMoney: {
+            amount: expect.closeTo(0.61, 10),
+            currency: 'CNY',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: expect.arrayContaining(['sdk-estimate']),
+          },
+          sdkEstimatedValueMoney: {
+            amount: expect.closeTo(0.42, 10),
+            currency: 'CNY',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['sdk-estimate'],
           },
           costAttribution: 'direct',
         }),

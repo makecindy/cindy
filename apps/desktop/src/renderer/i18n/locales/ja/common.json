@@ -1945,6 +1945,12 @@
       "toggleAria": "Git セーフティ保存点を切り替え",
       "saveFailed": "Git セーフティ設定の保存に失敗しました"
     },
+    "customProviderBilling": {
+      "title": "カスタムプロバイダーの SDK 見積もりを表示",
+      "description": "デフォルトでは SDK が計算した金額を非表示にし、Token 使用量を表示します。設定した価格またはプロバイダーの参考価格に基づく見積もりは、見積もりと明示して表示される場合があります。有効にすると SDK 見積もりも表示しますが、これはプロバイダーの請求書ではなく、実際の請求額と異なる場合があります。",
+      "toggleAria": "カスタムプロバイダーの SDK 見積もり表示を切り替え",
+      "saveFailed": "カスタムプロバイダーの課金設定の保存に失敗しました"
+    },
     "feishuBot": {
       "title": "Feishu / Lark ボット",
       "description": "Feishu または Lark ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",
@@ -5038,6 +5044,7 @@
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "セッション {{cost}}",
+    "sessionSdkEstimateLabel": "セッションの SDK 見積もり（プロバイダー請求ではありません）{{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "使用量なし",
@@ -5105,6 +5112,7 @@
     "extraUsageEnabled": "追加使用量が有効です",
     "costLine": "このメッセージの消費: {{cost}}",
     "valueLine": "このメッセージの token 価値: {{cost}}",
+    "sdkEstimateLine": "このメッセージの SDK 見積もり（プロバイダー請求ではありません）: {{cost}}",
     "noBilledCost": "このメッセージの料金は現在取得できないため、使用量のみ表示しています",
     "latestMessageTitle": "直近のメッセージ合計",
     "turnCostUnavailable": "このメッセージの料金は現在見積もれません",
@@ -5128,6 +5136,7 @@
     "timeLine": "時間 {{duration}}",
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
+    "sdkEstimateLine": "このターンの SDK 見積もり（プロバイダー請求ではありません）: {{cost}}",
     "tokenLine": "トークン: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
     "cacheLine": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}} · ヒット率 {{rate}}",
     "cacheLineNoRate": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}}",
@@ -6912,6 +6921,8 @@
       "turnCost": "このターンの消費",
       "turnCostEstimated": "このターンの token 価値(API 単価換算)",
       "turnCostEstimatedValue": "価値 {{cost}}",
+      "turnCostSdkEstimated": "このターンの SDK 見積もり（プロバイダー請求ではありません）",
+      "turnCostSdkEstimatedValue": "SDK 見積もり {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "リクエストの明細"
     },
@@ -7894,7 +7905,8 @@
       },
       "taskInfoTip": {
         "tokens": "累計トークン",
-        "cost": "累計コスト"
+        "cost": "累計コスト",
+        "sdkEstimate": "累計 SDK 見積もり（プロバイダー請求ではありません）"
       },
       "dateGroup": {
         "today": "今日",

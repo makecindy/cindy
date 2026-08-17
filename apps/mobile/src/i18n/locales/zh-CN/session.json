@@ -217,6 +217,7 @@
     "aiRenameProviderUnsupported": "当前供应商暂不支持自动起名，请切换供应商后再试。",
     "aiRenameFailed": "自动起名失败，请重试。",
     "contextUsageSummary": "上下文 {{percent}}%",
+    "estimatedUsageSummary": "估算 {{amount}}",
     "copied": "已复制",
     "copyFailed": "复制失败",
     "deleteConfirmTitle": "删除任务？",

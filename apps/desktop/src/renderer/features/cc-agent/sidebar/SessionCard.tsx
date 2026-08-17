@@ -61,7 +61,7 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import type { Session } from '@/lib/ccAgent.types';
 import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
-import { buildSessionInfoPieces, SessionInfoMeta, type SessionInfoPiece } from './SessionInfoMeta';
+import { SessionInfoMeta, useProjectedSessionInfoPieces, type SessionInfoPiece } from './SessionInfoMeta';
 import { useTaskInfoWorktree, type SessionWorktreeInfo } from './sessionWorktreeInfo';
 import type { SessionPrRef } from '@/lib/gitContext.types';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
@@ -99,6 +99,10 @@ import {
   needsDedicatedSplitGroupDragHandle,
   startSessionDrag,
 } from '../splitGroupDnd';
+import {
+  useSessionCustomProviderCostPresentation,
+  useShowCustomProviderSdkEstimate,
+} from '../contexts/CustomProviderCostPresentationContext';
 
 const log = createLogger('SessionCard');
 
@@ -248,14 +252,18 @@ export function SessionCard({
   const cardPrRefs = usePrRefsForSession(session.id);
   const cardInfoPrRef = taskInfoFields.includes('pr') ? cardPrRefs[0] : undefined;
   const cardInfoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));
+  const costPresentation = useSessionCustomProviderCostPresentation(session.providerId);
+  const showSdkEstimate = useShowCustomProviderSdkEstimate();
   // 传 hasPrRef / hasWorktree 让它们参与「按勾选顺序」排列。
-  const cardInfoPieces = buildSessionInfoPieces(
+  const cardInfoPieces = useProjectedSessionInfoPieces(
     session,
     taskInfoFields,
     activityIso,
     t,
     cardInfoPrRef != null,
     cardInfoWorktree != null,
+    costPresentation,
+    showSdkEstimate,
   );
   // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
   // 此后 Provider 周期/聚焦统一刷新,失败自愈(与 SessionItem 同一条路径)。

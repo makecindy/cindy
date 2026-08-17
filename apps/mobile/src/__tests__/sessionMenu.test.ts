@@ -89,6 +89,22 @@ describe('sessionMenu header', () => {
   it('hides the usage summary when no cost and no context data exist', () => {
     expect(buildSessionMenuHeader(session(), {}).usageSummary).toBeNull();
   });
+
+  it('labels projected value as an estimate instead of actual spend', () => {
+    const header = buildSessionMenuHeader(session({
+      totalMoney: {
+        amount: 0.42,
+        currency: 'USD',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['sdk-estimate'],
+      },
+      totalCostUsd: 0.42,
+    }), {});
+    expect(header.usageSummary).toBe(
+      i18n.t('session.menu.estimatedUsageSummary', { amount: '$0.42' }),
+    );
+  });
 });
 
 describe('sessionMenu actions', () => {

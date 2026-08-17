@@ -646,6 +646,11 @@ import {
   writeGitSafetyAutoSnapshotEnabled,
 } from './maker-host/git-safety-settings-store.js';
 import {
+  readCustomProviderBillingSettingsState,
+  resetCustomProviderBillingSettings,
+  writeCustomProviderShowSdkCostEnabled,
+} from './maker-host/custom-provider-billing-settings-store.js';
+import {
   CHAT_EMBED_MODEL_ID,
   setupChatHistoryEmbedder,
   setChatEmbeddingEnabled,
@@ -3779,6 +3784,25 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_RESET, async () => {
     resetGitSafetySettings();
     return gitSafetyWire();
+  });
+
+  // Custom provider billing: default off records token usage only, hides SDK cost.
+  ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return customProviderBillingWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_SET, async (event, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'custom provider billing enabled required (boolean)');
+    }
+    writeCustomProviderShowSdkCostEnabled(enabled);
+    return customProviderBillingWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_RESET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    resetCustomProviderBillingSettings();
+    return customProviderBillingWire();
   });
 
   // Codex runtime route GET —— 右下角用量 chip 读 app-server 当前 spawn 冻结的鉴权注入方式
@@ -7876,6 +7900,15 @@ function gitSafetyWire() {
     autoSnapshotEnabled: state.value.autoSnapshotEnabled,
     isCustomized: state.isCustomized,
     defaultAutoSnapshotEnabled: state.defaults.autoSnapshotEnabled,
+  };
+}
+
+function customProviderBillingWire() {
+  const state = readCustomProviderBillingSettingsState();
+  return {
+    showSdkCostForCustomProviders: state.value.showSdkCostForCustomProviders,
+    isCustomized: state.isCustomized,
+    defaultShowSdkCostForCustomProviders: state.defaults.showSdkCostForCustomProviders,
   };
 }
 
