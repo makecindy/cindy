@@ -289,6 +289,28 @@ describe("sanitizeXaiModelInputBody", () => {
     ]);
   });
 
+  it("drops tool calls that have no non-empty call id", () => {
+    const out = sanitizeXaiModelInputBody({
+      model: "x-ai/grok-4.6",
+      input: [
+        { type: "custom_tool_call", name: "exec", input: "pwd" },
+        {
+          type: "function",
+          function: { name: "read_file", arguments: "{}" },
+        },
+        { type: "function_call", name: "ok", arguments: "{}", call_id: "c1" },
+      ],
+    });
+    expect(out?.input).toEqual([
+      {
+        type: "function_call",
+        name: "ok",
+        arguments: "{}",
+        call_id: "c1",
+      },
+    ]);
+  });
+
   it("drops empty reasoning shells and image generation items", () => {
     const out = sanitizeXaiModelInputBody({
       model: "grok-4.5",

@@ -183,6 +183,23 @@ function functionCallOutputFrom(
   };
 }
 
+function functionCallFrom(
+  item: Record<string, unknown>,
+  name: string,
+  args: string,
+): { item: unknown; changed: boolean } {
+  const callId = callIdFrom(item);
+  if (!callId) return { item: null, changed: true };
+  const next: Record<string, unknown> = {
+    type: "function_call",
+    name,
+    arguments: args,
+    call_id: callId,
+  };
+  if (typeof item.id === "string") next.id = item.id;
+  return { item: next, changed: true };
+}
+
 function normalizeXaiInputItem(item: unknown): {
   item: unknown;
   changed: boolean;
@@ -221,15 +238,11 @@ function normalizeXaiInputItem(item: unknown): {
   }
 
   if (type === "custom_tool_call") {
-    const name = typeof base.name === "string" ? base.name : "";
-    const next: Record<string, unknown> = {
-      type: "function_call",
-      name,
-      arguments: argumentsFromCustomToolInput(base.input),
-      call_id: callIdFrom(base),
-    };
-    if (typeof base.id === "string") next.id = base.id;
-    return { item: next, changed: true };
+    return functionCallFrom(
+      base,
+      typeof base.name === "string" ? base.name : "",
+      argumentsFromCustomToolInput(base.input),
+    );
   }
 
   if (type === "custom_tool_call_output" || type === "tool_result") {
@@ -245,16 +258,13 @@ function normalizeXaiInputItem(item: unknown): {
         : typeof base.name === "string"
           ? base.name
           : "";
-    const next: Record<string, unknown> = {
-      type: "function_call",
+    return functionCallFrom(
+      base,
       name,
-      arguments: argumentsFromCustomToolInput(
+      argumentsFromCustomToolInput(
         fn.arguments ?? base.arguments ?? base.input,
       ),
-      call_id: callIdFrom(base),
-    };
-    if (typeof base.id === "string") next.id = base.id;
-    return { item: next, changed: true };
+    );
   }
 
   // Codex multi-agent collab 历史项。OpenAI 会话里的 agent_message 带着 author/
@@ -282,12 +292,14 @@ function normalizeXaiInputItem(item: unknown): {
   }
 
   if (type === "function_call") {
+    const callId = callIdFrom(base);
+    if (!callId) return { item: null, changed: true };
     const normalizedArguments = argumentsFromCustomToolInput(base.arguments);
     const next: Record<string, unknown> = {
       type: "function_call",
       name: typeof base.name === "string" ? base.name : "",
       arguments: normalizedArguments,
-      call_id: callIdFrom(base),
+      call_id: callId,
     };
     if (typeof base.id === "string") next.id = base.id;
     const changed =
