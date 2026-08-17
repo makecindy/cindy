@@ -21,6 +21,7 @@
 import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 
 import type { LocalRequestHandler } from '@cindy/anthropic-compat-proxy';
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
@@ -419,6 +420,29 @@ function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> |
   return { ...body, model: body.model.slice(0, -'[1m]'.length) };
 }
 
+function rewriteOpenaiContextProfileRequest(
+  rawBody: Buffer,
+  parsedBody: unknown,
+  contentEncoding: string | undefined,
+): { body: Buffer; contentEncoding: string | undefined } | null {
+  const parsedProfile = withOpenaiContextProfileModel(parsedBody);
+  if (parsedProfile) {
+    return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
+  }
+  if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
+  try {
+    const decoded = JSON.parse(zstdDecompressSync(rawBody).toString('utf8')) as unknown;
+    const compressedProfile = withOpenaiContextProfileModel(decoded);
+    if (!compressedProfile) return null;
+    return {
+      body: zstdCompressSync(Buffer.from(JSON.stringify(compressedProfile))),
+      contentEncoding,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * PI already emits xAI-native payloads, so this path bypasses the Messages →
  * Responses bridge that normally supplies xAI's model-gated server tools.
@@ -529,10 +553,10 @@ export function getPiNativeSubscriptionHandler(
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
       if (providerId === 'openai') {
-        const withBareModel = withOpenaiContextProfileModel(parsedBody);
-        if (withBareModel) {
-          outboundBody = Buffer.from(JSON.stringify(withBareModel));
-          contentEncoding = undefined;
+        const rewritten = rewriteOpenaiContextProfileRequest(rawBody, parsedBody, contentEncoding);
+        if (rewritten) {
+          outboundBody = rewritten.body;
+          contentEncoding = rewritten.contentEncoding;
         }
       } else if (providerId === 'xai') {
         const withServerTools = withNativeXaiServerSideTools(parsedBody);

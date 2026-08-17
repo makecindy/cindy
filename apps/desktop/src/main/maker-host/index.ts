@@ -20,6 +20,7 @@ import {
 } from '@cindy/maker-core';
 import {
   getActiveCatalog,
+  getLocalCatalogOverridesSnapshot,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
 } from './active-catalog.js';
@@ -1708,7 +1709,9 @@ export function getMaker(): Maker {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
-        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
+        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {
+          localOverrides: getLocalCatalogOverridesSnapshot(),
+        }),
       resolvePiGatewayModelDescriptor: (providerId, modelId) => {
         // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
         // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
@@ -1716,6 +1719,7 @@ export function getMaker(): Maker {
           getDesktopSelectableCatalog(),
           resolvePiGatewayDescriptorProviderId(providerId),
           modelId,
+          { localOverrides: getLocalCatalogOverridesSnapshot() },
         );
       },
       mcpProviders: piMcpProviders,

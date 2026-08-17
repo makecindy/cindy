@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
@@ -134,7 +135,7 @@ describe('PI native subscription forwarding', () => {
         reqId: 2,
         method: 'POST',
         url: '/codex/responses',
-        headers: { 'content-type': 'application/json', 'content-encoding': 'zstd' },
+        headers: { 'content-type': 'application/json' },
       },
       res: responseRecorder(),
     } as never);
@@ -144,6 +145,44 @@ describe('PI native subscription forwarding', () => {
     );
     expect(request).toEqual({ model: 'gpt-5.6-sol', input: 'hello' });
     expect(fetchMock.mock.calls[0]![1]?.headers).not.toHaveProperty('content-encoding');
+  });
+
+  it('rewrites the profile suffix after the real proxy zstd parse boundary', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('openai', 'session-1m-zstd', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const proxy = await createAnthropicCompatProxy({
+      upstream: null,
+      transformRequest: [],
+      routingTransform: () => ({ localHandler: handler }),
+    });
+    const compressed = zstdCompressSync(Buffer.from(JSON.stringify({
+      model: 'gpt-5.6-sol[1m]',
+      input: 'hello',
+    })));
+
+    try {
+      const response = await fetch(`${proxy.url}/codex/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-encoding': 'zstd' },
+        body: compressed,
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    } finally {
+      await proxy.dispose();
+    }
+
+    const init = fetchMock.mock.calls[0]![1];
+    expect(init?.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    const request = JSON.parse(
+      zstdDecompressSync(Buffer.from(init?.body as Uint8Array)).toString('utf8'),
+    );
+    expect(request).toEqual({ model: 'gpt-5.6-sol', input: 'hello' });
   });
 
   it('destroys the local bridge response when a native upstream stream fails after headers', async () => {

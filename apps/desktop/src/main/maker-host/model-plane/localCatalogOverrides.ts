@@ -448,6 +448,23 @@ export function applyLocalOverridesToRootModel(
 }
 
 /**
+ * 对 Registry retired root 重放与 active-catalog 相同的最终层顺序。
+ * 完整 addition 可显式复活；仅有 patch 时无论其 status 写什么都重新压回 tombstone。
+ */
+export function applyLocalOverridesToRetiredRootModel(
+  providerId: string,
+  agent: RootAgentKind,
+  model: CatalogModel,
+  overrides: ModelCatalogOverrides,
+  warnings: ModelPlaneWarning[] = [],
+): CatalogModel {
+  const overlaid = applyLocalOverridesToRootModel(providerId, agent, model, overrides, warnings);
+  return hasLocalAddition(overrides, providerId, model.id, agent)
+    ? overlaid
+    : { ...overlaid, status: 'retired' };
+}
+
+/**
  * root 投影到 bridge 后，应用目标消费端的本地 perAgent/base patch。顺序仍是
  * addition → patch；bridge 的 ID/effort/fast 硬约束由 active-catalog 最后收口。
  */

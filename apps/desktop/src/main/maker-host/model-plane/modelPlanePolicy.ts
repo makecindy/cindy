@@ -632,6 +632,13 @@ export function resolveRetiredRegistryModelForPi(
   registry: ModelRegistry | null | undefined,
   providerId: string,
   piModelId: string,
+  options: {
+    prepareRootModel?: (params: {
+      providerId: string;
+      rootAgent: RootAgentKind;
+      model: CatalogModel;
+    }) => CatalogModel;
+  } = {},
 ): CatalogModel | null {
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!registry || !policy) return null;
@@ -641,7 +648,13 @@ export function resolveRetiredRegistryModelForPi(
   if (fields.validationError) return null;
   const root = toMaterializedModel(matched.rootModelId, fields, 'active');
   if (typeof root === 'string') return null;
-  return projectRootModelToPi(providerId, policy.piRoot, { ...root, status: 'retired' });
+  const retiredRoot = { ...root, status: 'retired' as const };
+  const preparedRoot = options.prepareRootModel?.({
+    providerId,
+    rootAgent: policy.piRoot,
+    model: retiredRoot,
+  }) ?? retiredRoot;
+  return projectRootModelToPi(providerId, policy.piRoot, preparedRoot);
 }
 
 /**

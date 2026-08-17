@@ -23,6 +23,7 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
 } from '../catalog-to-descriptors.js';
+import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -413,15 +414,79 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     };
 
     expect(deriveAvailableModels(catalog, 'pi').some((m) => m.id === 'chatgpt/gpt-retired')).toBe(false);
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-retired')).toMatchObject({
+    const localOverrides = sanitizeModelCatalogOverrides({
+      patches: {
+        'openai:gpt-retired': {
+          base: {
+            contextWindow: 444_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'high',
+          },
+        },
+      },
+    }).overrides;
+    expect(resolvePiRuntimeModelDescriptor(
+      catalog,
+      'openai',
+      'chatgpt/gpt-retired',
+      { localOverrides },
+    )).toMatchObject({
       id: 'chatgpt/gpt-retired',
       displayName: 'GPT Retired',
-      contextWindow: 300_000,
+      contextWindow: 444_000,
       maxOutputTokens: 96_000,
-      efforts: ['minimal', 'low'],
-      defaultEffort: 'low',
+      efforts: ['minimal', 'medium', 'high'],
+      defaultEffort: 'high',
     });
     expect(resolvePiRuntimeModelDescriptor(catalog, 'anthropic', 'chatgpt/gpt-retired')).toBeNull();
+  });
+
+  it('retired Pi fallback 按 addition 后 patch 的最终层顺序重建 root', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+      models: [{
+        id: 'openai/gpt-local-revival',
+        name: 'Registry baseline',
+        status: 'retired',
+        contextWindow: 300_000,
+        efforts: ['low'],
+        defaultEffort: 'low',
+        routes: [{ providerId: 'openai', modelId: 'gpt-local-revival', agents: ['codex'] }],
+      }],
+    };
+    const localOverrides = sanitizeModelCatalogOverrides({
+      additions: {
+        'openai:gpt-local-revival': {
+          agents: ['codex'],
+          base: {
+            name: 'Local addition',
+            contextWindow: 500_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'medium',
+            status: 'active',
+          },
+        },
+      },
+      patches: {
+        'openai:gpt-local-revival': {
+          base: { contextWindow: 600_000, defaultEffort: 'high' },
+        },
+      },
+    }).overrides;
+
+    expect(resolvePiRuntimeModelDescriptor(
+      catalog,
+      'openai',
+      'chatgpt/gpt-local-revival',
+      { localOverrides },
+    )).toMatchObject({
+      displayName: 'Local addition',
+      contextWindow: 600_000,
+      efforts: ['minimal', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
   });
 
   it('retired OpenAI context profile 按 alias id 与 entry baseline 重建 Pi 私有描述符', () => {
