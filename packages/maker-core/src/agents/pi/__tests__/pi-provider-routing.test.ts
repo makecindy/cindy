@@ -2215,6 +2215,93 @@ describe('Pi provider-aware model routing', () => {
     expect(captured.args).toEqual([]);
   });
 
+  it('rejects a local-only OpenAI context profile before resolving or spawning remote Pi', async () => {
+    const resolver = vi.fn(async () => ({ providers: [], env: {} }));
+    const transport = vi.fn(async () => {
+      throw new Error('remote transport must not be created');
+    });
+    const agent = new PiAgent({
+      ...byomDeps(resolver, [
+        {
+          id: 'chatgpt/gpt-5.6-sol[1m]',
+          displayName: 'GPT-5.6-Sol 1M',
+          contextWindow: 1_000_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ]),
+      getRemotePiTransport: transport,
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'remote-openai-context-profile',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      providerId: 'openai',
+      remoteHostId: 'remote-host',
+    })).rejects.toThrow(/\[REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE\]/);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(captured.args).toEqual([]);
+  });
+
+  it('rejects switching a running remote Pi session to a local-only OpenAI context profile', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const base = byomDeps(async () => ({ providers: [], env: {} }), [
+      {
+        id: 'gateway-model',
+        displayName: 'Gateway model',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+      {
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        displayName: 'GPT-5.6-Sol 1M',
+        contextWindow: 1_000_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ]);
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => remoteStub,
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-gateway-context-profile-switch',
+      workingDir: cwd,
+      model: 'gateway-model',
+      providerId: 'xd',
+      remoteHostId: 'remote-host',
+    });
+
+    captured.requests.length = 0;
+    await expect(handle.setModel!('chatgpt/gpt-5.6-sol[1m]', { providerId: 'openai' }))
+      .rejects.toThrow(/\[REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE\]/);
+    expect(handle.model).toBe('gateway-model');
+    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'set_model' }));
+    await handle.close();
+  });
+
   it('allows an explicitly forwarded remote xAI provider and keeps proxy auth in the remote env', async () => {
     const remoteStub: import('../transport.js').PiTransport = {
       writeLine: async () => {},
