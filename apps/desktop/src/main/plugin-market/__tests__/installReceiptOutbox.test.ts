@@ -162,6 +162,36 @@ describe('PluginInstallReceiptOutbox', () => {
     expect(h.outbox.pending()).toEqual([]);
   });
 
+  it('stops after a zero-progress batch even when another flush was requested', async () => {
+    let online = false;
+    let sequence = 0;
+    const send = vi.fn(async () => {
+      if (send.mock.calls.length === 1) {
+        await Promise.resolve();
+        void h.outbox.flush();
+      }
+      if (!online) throw new Error('endpoint unavailable');
+    });
+    const h = harness(send, {
+      retryDelaysMs: [0],
+      randomUUID: () => `123e4567-e89b-42d3-a456-${String(sequence++).padStart(12, '0')}`,
+    });
+    for (let index = 0; index < 17; index += 1) {
+      h.outbox.enqueue(PLUGIN_ID, `release-${index}`);
+    }
+
+    await h.outbox.flush();
+
+    expect(send).toHaveBeenCalledTimes(16);
+    expect(h.outbox.pending()).toHaveLength(17);
+
+    online = true;
+    await h.outbox.flush();
+
+    expect(send).toHaveBeenCalledTimes(33);
+    expect(h.outbox.pending()).toEqual([]);
+  });
+
   it('discards a permanently rejected receipt, continues, and releases queue capacity', async () => {
     const ids = [EVENT_A, EVENT_B, EVENT_C];
     const send = vi.fn(async (receipt: { eventId: string }) => {

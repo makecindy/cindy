@@ -172,22 +172,24 @@ export class PluginInstallReceiptOutbox {
     return this.readPending().map(({ receipt }) => receipt);
   }
 
-  private async flushPending(): Promise<void> {
-    if (!this.shouldSend()) return;
+  private async flushPending(): Promise<boolean> {
+    if (!this.shouldSend()) return false;
     // 目录容量本身有上限；先固定本轮快照，避免持续入队让一次 flush 的内存/时长无界增长。
     const pending = this.readPending();
     for (let offset = 0; offset < pending.length; offset += this.maxReceiptsPerFlush) {
       const batch = pending.slice(offset, offset + this.maxReceiptsPerFlush);
+      let deliveredCount = 0;
+      let permanentFailureCount = 0;
       for (const entry of batch) {
-        if (!this.shouldSend()) return;
+        if (!this.shouldSend()) return false;
         let delivered = false;
         let permanentFailure = false;
         for (const delayMs of this.retryDelaysMs) {
-          if (!this.shouldSend()) return;
+          if (!this.shouldSend()) return false;
           if (delayMs > 0) await this.wait(delayMs);
           // backoff 期间可能切换 owner；发送前必须重新核对，不能用新 owner 的
           // token 发送旧 owner 目录里的回执。
-          if (!this.shouldSend()) return;
+          if (!this.shouldSend()) return false;
           try {
             await this.send(entry.receipt);
             delivered = true;
@@ -203,6 +205,8 @@ export class PluginInstallReceiptOutbox {
           }
         }
         if (!delivered && !permanentFailure) continue;
+        if (delivered) deliveredCount += 1;
+        if (permanentFailure) permanentFailureCount += 1;
         try {
           fs.rmSync(entry.filePath, { force: true });
         } catch (error) {
@@ -213,7 +217,11 @@ export class PluginInstallReceiptOutbox {
           });
         }
       }
+      // 整批只有瞬时失败时立即停止：避免离线/端点悬挂时继续扫完全部积压，
+      // 也不处理等待期间累积的 flushRequested。有成功投递或整批均为终态失败才继续。
+      if (deliveredCount === 0 && permanentFailureCount < batch.length) return false;
     }
+    return true;
   }
 
   private receiptFiles(): string[] {
@@ -272,7 +280,8 @@ export class PluginInstallReceiptOutbox {
   private async flushLoop(): Promise<void> {
     do {
       this.flushRequested = false;
-      await this.flushPending();
+      const canContinue = await this.flushPending();
+      if (!canContinue) return;
     } while (this.flushRequested && this.shouldSend());
   }
 }
