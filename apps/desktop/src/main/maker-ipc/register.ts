@@ -9454,6 +9454,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (failure) throw failure.reason;
   }
 
+  async function prepareOrcaTeamTerminalCommit(input: {
+    teamId: string;
+    sessionIds: string[];
+  }): Promise<void> {
+    // markTeamEnded / duplicate reconciliation raises the terminal fence before
+    // invoking this hook. Drain every ingress attempt that reserved settlement
+    // before that fence, then snapshot the exact rows/recovery items they left.
+    // Do not wait after the terminal write: a crash in that gap would strand a
+    // late persisted row without durable cleanup intent.
+    await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);
+    await prepareOrcaTeamCleanupIntents(input);
+  }
+
   async function settleOrcaTeamQueuedInputs(input: {
     teamId: string;
     sessionIds: string[];
@@ -9537,7 +9550,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       sessionIds: [leadSessionId, ...activeWorkers.map((worker) => worker.sessionId)],
     };
     await markTeamEnded(team.id, 'completed', {
-      beforeTerminalCommit: () => prepareOrcaTeamCleanupIntents(cleanupScope),
+      beforeTerminalCommit: () => prepareOrcaTeamTerminalCommit(cleanupScope),
       onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope),
     });
     await settleOrcaTeamQueuedInputs(cleanupScope);
@@ -11651,7 +11664,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ];
     if (phase === 'prepare') {
       for (const teamId of reconciliation.staleTeamIds) {
-        await prepareOrcaTeamCleanupIntents({ teamId, sessionIds });
+        await prepareOrcaTeamTerminalCommit({ teamId, sessionIds });
       }
       return;
     }

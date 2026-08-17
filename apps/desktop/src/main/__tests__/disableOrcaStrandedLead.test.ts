@@ -88,10 +88,21 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('persists cleanup intent before terminal commit and settles it after commit', () => {
+  it('waits for ingress settlement before persisting cleanup intent and terminal commit', () => {
+    const helperAt = registerSource.indexOf(
+      'async function prepareOrcaTeamTerminalCommit',
+    );
+    const waitedAt = registerSource.indexOf(
+      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId)',
+      helperAt,
+    );
+    const helperPreparedAt = registerSource.indexOf(
+      'await prepareOrcaTeamCleanupIntents(input)',
+      helperAt,
+    );
     const endedAt = registerSource.indexOf("await markTeamEnded(team.id, 'completed', {");
     const preparedAt = registerSource.indexOf(
-      'beforeTerminalCommit: () => prepareOrcaTeamCleanupIntents(cleanupScope)',
+      'beforeTerminalCommit: () => prepareOrcaTeamTerminalCommit(cleanupScope)',
       endedAt,
     );
     const rollbackAt = registerSource.indexOf(
@@ -104,6 +115,9 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     );
     const clearedAt = registerSource.indexOf('await clearLeadOrcaRoleState(leadSessionId)', endedAt);
 
+    expect(helperAt).toBeGreaterThan(-1);
+    expect(waitedAt).toBeGreaterThan(helperAt);
+    expect(helperPreparedAt).toBeGreaterThan(waitedAt);
     expect(endedAt).toBeGreaterThan(-1);
     expect(preparedAt).toBeGreaterThan(endedAt);
     expect(rollbackAt).toBeGreaterThan(preparedAt);

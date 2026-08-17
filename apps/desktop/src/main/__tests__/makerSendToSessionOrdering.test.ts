@@ -316,7 +316,7 @@ describe('sendToSession ordering', () => {
     );
     expect(reconciliationBlock).toContain("if (phase === 'prepare') {");
     expect(reconciliationBlock).toContain(
-      'await prepareOrcaTeamCleanupIntents({ teamId, sessionIds });',
+      'await prepareOrcaTeamTerminalCommit({ teamId, sessionIds });',
     );
     expect(reconciliationBlock).toContain(
       'await settleOrcaTeamQueuedInputs({ teamId, sessionIds });',
@@ -413,7 +413,9 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('live,');
     expectOrder(liveBranch, 'message,', 'clientId,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('acquireVendorDispatchLease: acquireOriginVendorDispatchLease,');
+    expect(liveBranch).toContain(
+      'acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,',
+    );
     expect(liveBranch).toContain('onDispatching: () => {');
     expect(liveBranch).toContain('assertOrcaQueueOriginActive(origin);');
     expect(liveBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
@@ -422,7 +424,9 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('session,');
     expectOrder(resumedBranch, 'message,', 'clientId,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('acquireVendorDispatchLease: acquireOriginVendorDispatchLease,');
+    expect(resumedBranch).toContain(
+      'acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,',
+    );
     expect(resumedBranch).toContain('onDispatching: () => {');
     expect(resumedBranch).toContain('assertOrcaQueueOriginActive(origin);');
     expect(resumedBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
