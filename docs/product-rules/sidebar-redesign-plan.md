@@ -213,7 +213,7 @@
 | 项 | 默认 | 形态 |
 |---|---|---|
 | 最近活动时间 | **勾** | 现状行为 |
-| PR 状态 | | 状态 icon + 等宽 `#号`(与顶栏 PrChip 同款,2026-08-12 用户裁决):状态颜色只上在 icon 上(形状 + 颜色双编码,四态见 `gitContextPrVisuals`),`#号` 文字用信息槽常规灰;文字状态放 hover;无 PR 的任务不显示不占位 |
+| PR 状态 | | 状态 icon + 等宽 `#号`(与顶栏 PrChip 同款,2026-08-12 用户裁决):状态颜色只上在 icon 上(形状 + 颜色双编码,四态见 `gitContextPrVisuals`;open 绿按表面取 `#2EA043` / `#3FB950`,2026-08-17);`#号` 文字用信息槽常规灰;open/draft 且有未解决 review thread 时 icon 右上角 5px `--status-bar-accent` 静点;文字状态放 hover;无 PR 的任务不显示不占位 |
 | 累计 token | | `1.4M` / `320k` 缩写,无单位 |
 | 费用 | | 按 `totalCostCurrency` 显示 $/¥;无数据(如订阅模式)留空 |
 

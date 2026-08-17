@@ -1233,6 +1233,32 @@ export interface BotRuntimeProfile {
   toolsetPolicy: BotRuntimeToolsetPolicy;
 }
 
+/**
+ * The adapter dispatched a turn request but could not determine whether the
+ * provider accepted it. The Session wrapper must fence the ambiguous handle
+ * before surfacing this error. Fencing prevents further execution but does not
+ * roll back completed side effects, so orchestrators must not blindly replay
+ * the same turn.
+ */
+export class TurnDispatchUnconfirmedError extends Error {
+  readonly code = 'TURN_DISPATCH_UNCONFIRMED';
+
+  constructor(msg: string, options?: ErrorOptions) {
+    super(msg, options);
+    this.name = 'TurnDispatchUnconfirmedError';
+  }
+}
+
+/** The provider explicitly rejected the turn before accepting any work. */
+export class TurnDispatchRejectedError extends Error {
+  readonly code = 'TURN_DISPATCH_REJECTED';
+
+  constructor(msg: string, options?: ErrorOptions) {
+    super(msg, options);
+    this.name = 'TurnDispatchRejectedError';
+  }
+}
+
 export interface StartSessionOptions {
   /**
    * Business 层 session id (host 调用 maker.createSession 时传的 opts.id, 由

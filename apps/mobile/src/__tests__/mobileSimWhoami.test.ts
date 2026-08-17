@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   bootedSimulatorLinesForTarget,
+  classifySimMetroListener,
+  extractSimJsonArgs,
   extractSimMetroPortArgs,
+  extractSimTakeoverArgs,
   extractSimWhoamiUdidArgs,
   getSimulatorAppContainer,
   resolveMobileSimulatorBundleId,
@@ -31,6 +34,48 @@ describe('mobile:sim:whoami Metro port', () => {
     expect(() => extractSimMetroPortArgs(['--port'])).toThrow(/端口无效/);
     expect(() => extractSimMetroPortArgs(['--port', '0'])).toThrow(/端口无效/);
     expect(() => extractSimMetroPortArgs(['--port=8082', '-p', '8083'])).toThrow(/只能传一次/);
+  });
+});
+
+describe('mobile:sim takeover and JSON arguments', () => {
+  it('extracts one explicit takeover flag', () => {
+    expect(extractSimTakeoverArgs(['--takeover'])).toEqual({
+      takeover: true,
+      passthrough: [],
+    });
+    expect(extractSimTakeoverArgs([])).toEqual({ takeover: false, passthrough: [] });
+    expect(() => extractSimTakeoverArgs(['--takeover', '--takeover'])).toThrow(/只能传一次/);
+  });
+
+  it('extracts one JSON output flag', () => {
+    expect(extractSimJsonArgs(['--json', '--port=8082'])).toEqual({
+      json: true,
+      passthrough: ['--port=8082'],
+    });
+    expect(() => extractSimJsonArgs(['--json', '--json'])).toThrow(/只能传一次/);
+  });
+
+  it('rejects non-Cindy paths and missing source identities', () => {
+    expect(classifySimMetroListener({
+      cwd: '/other/project',
+      source: 'branch@commit',
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: null,
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: false, worktree: null });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile',
+      source: 'branch@commit',
+      targetWorktree: '/repo-target',
+    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: '/repo/apps/mobile/',
+      source: 'branch@commit',
+      targetWorktree: '/repo/',
+    })).toEqual({ confirmed: true, worktree: '/repo', isTarget: true });
   });
 });
 

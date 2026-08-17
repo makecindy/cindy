@@ -1360,6 +1360,19 @@
       "note": "Orca 协同角色名，五语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
     },
     {
+      "id": "role-name",
+      "status": "proposed",
+      "en": "Role name",
+      "translations": {
+        "zh-CN": "角色名",
+        "zh-TW": "角色名",
+        "ja": "ロール名",
+        "ko": "역할 이름"
+      },
+      "checkCase": false,
+      "note": "Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改变 Agent、模型、权限或能力。先登记为 proposed，避免「角色 / 名称 / Role」多套说法并存。"
+    },
+    {
       "id": "working-directory",
       "status": "decided",
       "en": "Working directory",

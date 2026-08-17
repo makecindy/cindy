@@ -8,10 +8,18 @@ import { fileURLToPath } from "node:url";
 
 import {
 	applyDesktopStartupConfigForPhase,
+	clearDesktopDevCaches,
 	commandUsesUserDataDir,
 	defaultIsolatedUserDataDir,
+	desktopDevCacheDirs,
 	devEnvPrefix,
+	hasIsolationIntent,
+	isOfficialProductionUserDataDir,
 	isRepositoryDesktopDevProcess,
+	officialProductionUserDataDirs,
+	resolveRestartTargetUserDataDir,
+	sanitizeIsolationName,
+	canonicalizeUserDataDir,
 	formatDesktopStartupFailure,
 	inspectSharedUserDataRegion,
 	partitionDesktopDevProcesses,
@@ -63,6 +71,39 @@ test("desktop restart no longer depends on the retired Feishu build app id", () 
 		"utf8",
 	);
 	assert.equal(source.includes("VITE_FEISHU_APP_ID"), false);
+});
+
+test("desktop restart clears only desktop Vite dev caches", () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-cache-"));
+	const desktopCacheDirs = desktopDevCacheDirs(repo);
+	const preservedDirs = [
+		path.join(repo, "node_modules", ".vite"),
+		path.join(repo, "apps", "mobile", "node_modules", ".vite"),
+		path.join(repo, "packages", "maker-shared", "node_modules", ".vite"),
+	];
+	try {
+		for (const dir of [...desktopCacheDirs, ...preservedDirs]) {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, "marker"), "cached\n");
+		}
+
+		const logs = [];
+		const removed = clearDesktopDevCaches(repo, { logger: { log: (message) => logs.push(message) } });
+
+		assert.deepEqual(removed.map((entry) => path.relative(repo, entry)), [
+			path.join("apps", "desktop", "node_modules", ".vite"),
+			path.join("apps", "desktop", ".vite"),
+		]);
+		for (const dir of desktopCacheDirs) {
+			assert.equal(fs.existsSync(dir), false);
+		}
+		for (const dir of preservedDirs) {
+			assert.equal(fs.existsSync(path.join(dir, "marker")), true);
+		}
+		assert.match(logs.join("\n"), /Cleared desktop dev cache/);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
 });
 
 test("desktop restart recognizes dev processes from sibling repository worktrees", () => {
@@ -149,6 +190,88 @@ test("default isolated userData path is region-aware", () => {
 	assert.equal(path.basename(defaultIsolatedUserDataDir("", "global")), "CindyGlobal-dev2");
 	assert.equal(path.basename(defaultIsolatedUserDataDir("", "cn")), "Cindy-dev2");
 	assert.equal(path.basename(defaultIsolatedUserDataDir("review", "dev")), "CindyDev-dev2-review");
+});
+
+test("hasIsolationIntent sees argv and ambient XDT_ISOLATED=1", () => {
+	assert.equal(hasIsolationIntent([]), false);
+	assert.equal(hasIsolationIntent(["--isolated"]), true);
+	assert.equal(hasIsolationIntent(["--isolated=review"]), true);
+	assert.equal(hasIsolationIntent([], { XDT_ISOLATED: "1" }), true);
+	assert.equal(hasIsolationIntent([], { XDT_ISOLATED: "0" }), false);
+});
+
+test("isOfficialProductionUserDataDir matches every official region profile", () => {
+	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("cn")), true);
+	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("global")), true);
+	assert.equal(isOfficialProductionUserDataDir(productionUserDataDir("dev")), true);
+	assert.equal(isOfficialProductionUserDataDir(defaultIsolatedUserDataDir("", "cn")), false);
+	assert.ok(officialProductionUserDataDirs().some((dir) => path.basename(dir) === "Cindy"));
+	assert.ok(officialProductionUserDataDirs().some((dir) => path.basename(dir) === "CindyGlobal"));
+});
+
+test("isolated restart target pointing at the other region's official profile is refused", () => {
+	const cnFromGlobal = resolveRestartTargetUserDataDir({
+		envUserDataDir: productionUserDataDir("cn"),
+		isolatedArg: "--isolated",
+		selectedRegion: "global",
+	});
+	assert.equal(isOfficialProductionUserDataDir(cnFromGlobal), true);
+	const globalFromCn = resolveRestartTargetUserDataDir({
+		envUserDataDir: productionUserDataDir("global"),
+		isolatedArg: "--isolated",
+		selectedRegion: "cn",
+	});
+	assert.equal(isOfficialProductionUserDataDir(globalFromCn), true);
+});
+
+test("env-only XDT_ISOLATED=1 derives the default sandbox, not the official profile", () => {
+	const target = resolveRestartTargetUserDataDir({
+		isolatedEnv: "1",
+		selectedRegion: "cn",
+	});
+	assert.equal(target, defaultIsolatedUserDataDir("", "cn"));
+	assert.equal(isOfficialProductionUserDataDir(target), false);
+	const named = resolveRestartTargetUserDataDir({
+		isolatedEnv: "1",
+		isolatedName: "review",
+		selectedRegion: "global",
+	});
+	assert.equal(named, defaultIsolatedUserDataDir("review", "global"));
+});
+
+test("invalid env isolation name falls back to the default sandbox", () => {
+	assert.equal(sanitizeIsolationName("../Cindy"), "");
+	assert.equal(sanitizeIsolationName("我的沙箱"), "");
+	const target = resolveRestartTargetUserDataDir({
+		isolatedEnv: "1",
+		isolatedName: "../Cindy",
+		selectedRegion: "cn",
+	});
+	assert.equal(target, defaultIsolatedUserDataDir("", "cn"));
+	assert.equal(isOfficialProductionUserDataDir(target), false);
+});
+
+test("canonicalizeUserDataDir follows symlink parents when the leaf does not exist yet", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-canon-"));
+	const realParent = path.join(root, "real");
+	const linkParent = path.join(root, "link");
+	try {
+		fs.mkdirSync(realParent);
+		fs.symlinkSync(realParent, linkParent);
+		const viaLink = canonicalizeUserDataDir(path.join(linkParent, "Cindy"));
+		const viaReal = canonicalizeUserDataDir(path.join(realParent, "Cindy"));
+		assert.equal(viaLink, viaReal);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("isolated official-profile refuse happens before mkdir in the restart main flow", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const refuseIdx = source.indexOf("isOfficialProductionUserDataDir(targetUserDataDir)");
+	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
+	assert.ok(refuseIdx > 0);
+	assert.ok(mkdirIdx > refuseIdx);
 });
 
 test("preserve-running only shares a target with live records from the same region", () => {

@@ -75,7 +75,7 @@ import {
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { SessionRenameInput } from '../SessionRenameInput';
-import type { SessionItemProps } from './SessionItem';
+import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
@@ -672,7 +672,11 @@ export function SessionCard({
               // inset shadow 画在盒内、不参与布局,行高与未选中时逐像素一致。
               isActive
                 ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
-                : 'hover:bg-sidebar-item-hover',
+                : cn(
+                    'hover:bg-sidebar-item-hover',
+                    // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
+                    menuPos !== null && 'bg-sidebar-item-hover',
+                  ),
             )
           : cn(
               // 卡片:白底 + 描边 + 圆角。多列瀑布由 CardMasonry/DraggableCardColumns
@@ -743,9 +747,9 @@ export function SessionCard({
                 />
               ) : (
                 <div className="flex min-w-0 flex-1 items-center gap-1">
-                  <span
+                  <SidebarTitleMarquee
+                    title={displayTitle}
                     className={cn(
-                      'min-w-0 truncate',
                       'text-sm font-medium leading-[1.3]',
                       isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
                     )}
@@ -760,7 +764,7 @@ export function SessionCard({
                           ),
                         })
                       : displayTitle}
-                  </span>
+                  </SidebarTitleMarquee>
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -1229,116 +1233,115 @@ function TimeActionsSlot({
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
-      {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
-      <div
-        className={cn(
-          // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
-          'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
-          !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
-          (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
-          // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
-          archivePending && 'invisible opacity-0',
-        )}
-      >
-        <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />
-        <SessionInfoMeta
-          pieces={infoPieces}
-          prRef={infoPrRef}
-          isActive={isActive}
-          className="leading-none"
-        />
-      </div>
-
-      {canQuickArchive && archivePending && (
-        <span
-          aria-hidden
-          className="invisible col-start-1 row-start-1 inline-flex h-[22px] w-max min-w-14 items-center justify-center whitespace-nowrap rounded-full px-[9px] text-11 font-semibold"
-        >
-          {t('ccAgent.sidebar.sessionMenu.archived')}
-        </span>
-      )}
-      {yieldToOrdinalBadge && ordinalBadgeLabel ? (
-        <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
-          <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
-        </span>
-      ) : null}
-      {canQuickArchive && archivePending && (
-        <button
-          ref={confirmPillRef}
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setArchivePending(false);
-            onArchiveNow();
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
+        {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
+        <div
           className={cn(
-            'absolute right-0 top-1/2 z-20 flex h-[22px] w-max min-w-14 -translate-y-1/2 items-center justify-center rounded-full px-[9px]',
-            'whitespace-nowrap text-11 font-semibold',
-            'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] text-[hsl(var(--destructive))]',
-            'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))]',
-            'transition-colors focus:outline-none',
+            // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
+            'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
+            !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
+            (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
+            // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
+            archivePending && 'invisible opacity-0',
           )}
-          aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
         >
-          {t('ccAgent.sidebar.sessionMenu.archived')}
-        </button>
-      )}
+          <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />
+          <SessionInfoMeta
+            pieces={infoPieces}
+            prRef={infoPrRef}
+            isActive={isActive}
+            className="leading-none"
+          />
+        </div>
 
-      {!archivePending && (
-        <>
-          <div
+        {canQuickArchive && archivePending && (
+          <span
             aria-hidden
-            className={cn(
-              'invisible col-start-1 row-start-1 flex h-[22px] items-center gap-0.5',
-              !menuOpen && 'hidden group-hover/card:flex group-focus-within/slot:flex',
-            )}
+            className="invisible col-start-1 row-start-1 inline-flex h-[22px] w-max min-w-14 items-center justify-center whitespace-nowrap rounded-full px-[9px] text-11 font-semibold"
           >
-            <span className="size-5 shrink-0" />
-            {(isArchived && canUnarchive) || canQuickArchive ? <span className="size-5 shrink-0" /> : null}
-          </div>
-          <div
-            // 渐显(120ms)配 pointer-events 守卫:淡出期间按钮不占鼠标位置,
-            // 不会拦下卡片点击;键盘焦点不受 pointer-events 影响。
+            {t('ccAgent.sidebar.sessionMenu.archived')}
+          </span>
+        )}
+        {yieldToOrdinalBadge && ordinalBadgeLabel ? (
+          <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
+            <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+          </span>
+        ) : null}
+        {canQuickArchive && archivePending && (
+          <button
+            ref={confirmPillRef}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setArchivePending(false);
+              onArchiveNow();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
             className={cn(
-              'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
-              'transition-opacity duration-[120ms]',
-              menuOpen
-                ? 'opacity-100'
-                : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
+              'absolute right-0 top-1/2 z-20 flex h-[22px] w-max min-w-14 -translate-y-1/2 items-center justify-center rounded-full px-[9px]',
+              'whitespace-nowrap text-11 font-semibold',
+              'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] text-[hsl(var(--destructive))]',
+              'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))]',
+              'transition-colors focus:outline-none',
             )}
+            aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
           >
-            <CardAction
-              variant="list"
-              isActive={isActive}
-              label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-              onClick={onOpenMenu}
+            {t('ccAgent.sidebar.sessionMenu.archived')}
+          </button>
+        )}
+
+        {!archivePending && (
+          <>
+            <div
+              aria-hidden
+              className={cn(
+                'invisible col-start-1 row-start-1 h-[22px] items-center gap-0.5',
+                menuOpen ? 'flex' : 'hidden group-hover/card:flex group-focus-within/slot:flex',
+              )}
             >
-              <EllipsisVertical size={14} strokeWidth={2} />
-            </CardAction>
-            {isArchived && canUnarchive ? (
+              <span className="size-5 shrink-0" />
+              {(isArchived && canUnarchive) || canQuickArchive ? (
+                <span className="size-5 shrink-0" />
+              ) : null}
+            </div>
+            <div
+              className={cn(
+                'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
+                menuOpen
+                  ? 'opacity-100'
+                  : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+              )}
+            >
               <CardAction
                 variant="list"
                 isActive={isActive}
-                label={t('ccAgent.sidebar.sessionMenu.unarchive')}
-                onClick={() => onUnarchive()}
+                label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+                onClick={onOpenMenu}
               >
-                <Undo size={14} strokeWidth={2} />
+                <EllipsisVertical size={14} strokeWidth={2} />
               </CardAction>
-            ) : canQuickArchive ? (
-              <CardAction
-                variant="list"
-                isActive={isActive}
-                label={t('ccAgent.sidebar.sessionMenu.archived')}
-                onClick={() => setArchivePending(true)}
-              >
-                <Archive size={14} strokeWidth={2} />
-              </CardAction>
-            ) : null}
-          </div>
-        </>
-      )}
+              {isArchived && canUnarchive ? (
+                <CardAction
+                  variant="list"
+                  isActive={isActive}
+                  label={t('ccAgent.sidebar.sessionMenu.unarchive')}
+                  onClick={() => onUnarchive()}
+                >
+                  <Undo size={14} strokeWidth={2} />
+                </CardAction>
+              ) : canQuickArchive ? (
+                <CardAction
+                  variant="list"
+                  isActive={isActive}
+                  label={t('ccAgent.sidebar.sessionMenu.archived')}
+                  onClick={() => setArchivePending(true)}
+                >
+                  <Archive size={14} strokeWidth={2} />
+                </CardAction>
+              ) : null}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

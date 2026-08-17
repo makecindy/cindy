@@ -10,9 +10,11 @@
  *   - pr:session_pr_refs 的最新一条(lastSeenAt 降序首位),显示「状态 icon +
  *     等宽 `#号`」,与会话顶栏 GitContextBadge 的 PrChip 同款(2026-08-12 用户
  *     裁决:仿顶栏,状态颜色只上在 icon 上,`#号` 文字用信息槽常规灰):形状表
- *     PR_STATUS_ICON + 色表 PR_STATUS_COLOR(色弱友好,四态形状不同);状态
- *     未加载 / no-token / 查询失败时 icon 降级 GitPullRequest + tertiary 灰
- *     (号码本地就有)。文字状态放 hover。
+ *     PR_STATUS_ICON + 侧栏 open 绿按表面取(prStatusIconColor;浅 `#2EA043` /
+ *     深 `#3FB950`);其它三态仍走 PR_STATUS_COLOR。open/draft 且有未解决
+ *     review thread 时 icon 右上角打 `--status-bar-accent` 静点。状态未加载 /
+ *     no-token / 查询失败时 icon 降级 GitPullRequest + tertiary 灰(号码本地
+ *     就有)。文字状态与未解决条数放 hover。
  *   - tokens:session.totalTokenUsage,formatCompactTokens 缩写(1.4M / 320k),
  *     无单位后缀(与费用的货币前缀天然区分);0 视为无数据不显示。
  *   - cost:优先 totalMoney(区域币种 $/¥),回退 legacy totalCostUsd;
@@ -30,18 +32,25 @@
  * 等价于"只查可见行"(列表有 collapse 上限,数量有界)。
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { GitPullRequest } from 'lucide-react';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { useTranslation } from 'react-i18next';
 
+import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
+import { usePrActions, usePrStatus } from '@/contexts/PrRefsContext';
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
 import type { SessionPrRef } from '@/lib/gitContext.types';
 import { formatMoney, formatUsd } from '@/lib/usageFormat';
 import { prStatusKey } from '@/lib/prStatus';
-import { usePrActions, usePrStatus } from '@/contexts/PrRefsContext';
-import { PR_STATUS_COLOR, PR_STATUS_ICON } from '../gitContextPrVisuals';
+import {
+  PR_STATUS_ICON,
+  hslTripletLightness,
+  prIconSurface,
+  prStatusIconColor,
+  shouldShowPrUnresolvedDot,
+} from '../gitContextPrVisuals';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import type { TaskInfoField } from '../hooks/useTaskInfoFields';
 
@@ -123,10 +132,33 @@ export function buildSessionInfoPieces(
  * 挂载即请求状态(fetchStatusesForSession 有去重 + main 60s TTL)。
  * 视觉与顶栏 PrChip 同款:状态 icon(形状 + 颜色双编码)+ 等宽 `#号`;
  * `#号` 文字继承信息槽前景色(active 让位由父级统一处理),状态颜色只上
- * 在 icon 上。状态未加载时 icon 灰色 GitPullRequest 占位;文字状态进 title。
+ * 在 icon 上(open 按所在表面取,见 prStatusIconColor)。状态未加载时 icon
+ * 灰色 GitPullRequest 占位;文字状态与未解决条数进 title。
  */
-function PrNumberPiece({ prRef }: { prRef: SessionPrRef }) {
+function readSidebarSurfaceLightness(isActive: boolean): number | null {
+  if (typeof document === 'undefined') return null;
+  const token = isActive ? '--sidebar-item-active' : '--sidebar';
+  return hslTripletLightness(getComputedStyle(document.documentElement).getPropertyValue(token));
+}
+
+function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: boolean }) {
   const { t } = useTranslation();
+  const themeIsDark = useIsDarkMode();
+  const [backgroundLightness, setBackgroundLightness] = useState(() =>
+    readSidebarSurfaceLightness(Boolean(isActive)),
+  );
+  useEffect(() => {
+    const read = () => setBackgroundLightness(readSidebarSurfaceLightness(Boolean(isActive)));
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      // data-theme:同模式切社区/导入主题时 class 与 colorScheme 都不动,
+      // applyTheme 只改 dataset.theme(2026-08-17 review P1)。
+      attributeFilter: ['class', 'style', 'data-theme'],
+    });
+    return () => observer.disconnect();
+  }, [isActive, themeIsDark]);
   // fetch 从恒定的 actions context 拿——经 usePrStatuses 拿会连带订阅整表快照,
   // 徽标就退化回"任一状态变化全体重渲染"。
   const { fetchStatusesForSession } = usePrActions();
@@ -137,18 +169,45 @@ function PrNumberPiece({ prRef }: { prRef: SessionPrRef }) {
   // 全部已挂载徽标;usePrStatus 在本 PR 结果未变时快照引用不变、不重渲染。
   const status = usePrStatus(prStatusKey(prRef));
   const kind = status?.ok ? status.status : null;
+  const unresolvedCount = status?.ok ? status.unresolvedCount : null;
+  const showDot = shouldShowPrUnresolvedDot(kind, unresolvedCount);
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
-  const title = kind
+  const color = prStatusIconColor(
+    kind,
+    prIconSurface({
+      themeIsDark,
+      isActive: Boolean(isActive),
+      backgroundLightness,
+    }),
+  );
+  const baseTitle = kind
     ? `${prRef.owner}/${prRef.repo}#${prRef.prNumber} · ${t(`ccAgent.gitContext.pr.status.${kind}`)}`
     : `${prRef.owner}/${prRef.repo}#${prRef.prNumber}`;
+  const title =
+    showDot && unresolvedCount
+      ? `${baseTitle} · ${t('ccAgent.gitContext.pr.unresolved', { count: unresolvedCount })}`
+      : baseTitle;
   return (
     <span className="flex shrink-0 items-center gap-0.5 font-mono" title={title}>
-      <Icon
-        size={11}
-        strokeWidth={1.75}
-        className="shrink-0"
-        style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
-      />
+      <span className="relative shrink-0">
+        <Icon size={11} strokeWidth={1.75} className="block" style={{ color }} />
+        {showDot ? (
+          <span
+            aria-hidden
+            className={cn(
+              'absolute rounded-full bg-[var(--status-bar-accent)]',
+              isActive
+                ? 'shadow-[0_0_0_1.25px_hsl(var(--sidebar-item-active))]'
+                : [
+                    'shadow-[0_0_0_1.25px_hsl(var(--sidebar))]',
+                    'group-hover:shadow-[0_0_0_1.25px_hsl(var(--sidebar-item-hover))]',
+                    'group-hover/card:shadow-[0_0_0_1.25px_hsl(var(--sidebar-item-hover))]',
+                  ],
+            )}
+            style={{ width: 5, height: 5, top: -1.5, right: -1.5 }}
+          />
+        ) : null}
+      </span>
       #{prRef.prNumber}
     </span>
   );
@@ -183,7 +242,9 @@ export function SessionInfoMeta({
     >
       {/* 顺序完全由 pieces 决定(= 用户勾选顺序);'pr' 是占位,这里换成徽标。
           兼容旧调用:未把 pr 排进 pieces 时(hasPrRef 未传),仍按老样子前置。 */}
-      {prRef && !pieces.some((piece) => piece.key === 'pr') && <PrNumberPiece prRef={prRef} />}
+      {prRef && !pieces.some((piece) => piece.key === 'pr') && (
+        <PrNumberPiece prRef={prRef} isActive={isActive} />
+      )}
       {pieces.map((piece, index) => (
         <span key={piece.key} className="flex shrink-0 items-center gap-1" title={piece.title}>
           {(index > 0 || (prRef && !pieces.some((p) => p.key === 'pr'))) && (
@@ -193,7 +254,7 @@ export function SessionInfoMeta({
           )}
           {piece.key === 'pr' ? (
             prRef ? (
-              <PrNumberPiece prRef={prRef} />
+              <PrNumberPiece prRef={prRef} isActive={isActive} />
             ) : null
           ) : piece.dateTime ? (
             <time dateTime={piece.dateTime}>{piece.text}</time>

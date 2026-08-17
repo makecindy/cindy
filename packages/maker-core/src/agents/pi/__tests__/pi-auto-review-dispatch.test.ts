@@ -74,7 +74,7 @@ vi.mock('../rpc-client.js', () => ({
     }
     async request(
       cmd: Record<string, unknown> & { type: string },
-    ): Promise<{ success: boolean; data?: unknown }> {
+    ): Promise<{ success: boolean; command?: string; data?: unknown }> {
       captured.requests.push(cmd);
       if (cmd.type === 'set_model' && captured.holdSetModel) {
         await captured.holdSetModel;
@@ -87,7 +87,7 @@ vi.mock('../rpc-client.js', () => ({
         return { success: false };
       }
       if (cmd.type === 'prompt' && captured.failPrompt) {
-        return { success: false };
+        return { command: 'prompt', success: false };
       }
       if (cmd.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };

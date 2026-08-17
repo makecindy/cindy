@@ -50,6 +50,10 @@ import type {
   SendOptions,
   TurnContinuationState,
 } from './agents/base-agent.js';
+import {
+  TurnDispatchRejectedError,
+  TurnDispatchUnconfirmedError,
+} from './agents/base-agent.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -289,7 +293,10 @@ export interface SessionTurnLifecycleObserver {
  */
 export type SessionSendResult =
   | { accepted: true }
-  | { accepted: false; reason: 'cancelled-before-dispatch' };
+  | {
+      accepted: false;
+      reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
+    };
 
 type SendReservation = {
   phase: 'accepting' | 'dispatching';
@@ -495,6 +502,7 @@ export class Session {
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
     let originInstalled = false;
     let turnDispatched = false;
+    let dispatchConfirmedUndispatched = false;
     let previousTurnOrigin: SendOrigin | null = null;
     let previousTurnAttemptToken: number | null = null;
     const turnLifecycleObserver = this.turnLifecycleObserver;
@@ -571,14 +579,30 @@ export class Session {
           signal: reservation.abortController.signal,
         });
       } catch (e) {
+        if (e instanceof TurnDispatchRejectedError) {
+          // The provider returned a trustworthy rejection before accepting any
+          // work. This path is safe to reschedule and must not arm the
+          // ambiguous-tail drain used for unknown dispatch failures.
+          dispatchConfirmedUndispatched = true;
+          return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+        }
+        // Cancellation cannot downgrade an explicitly ambiguous provider result
+        // into "cancelled before dispatch"; that would skip the mandatory
+        // transport fence and could leave accepted work running invisibly.
+        if (e instanceof TurnDispatchUnconfirmedError) throw e;
         if (reservation.cancelled) {
           return { accepted: false, reason: 'cancelled-before-dispatch' };
         }
         throw e;
       }
-      if (reservation.cancelled) {
-        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      if (reservation.cancelled && (this.terminationStarted || this.closePromise)) {
+        throw new TurnDispatchUnconfirmedError(
+          `Session ${this.id} terminated before provider acceptance could be reconciled`,
+        );
       }
+      // A resolved handle.send is the provider-acceptance boundary. A signal
+      // racing after that point may request abort, but cannot rewrite history
+      // and report the turn as undispatched.
       turnDispatched = true;
       // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
       // error 会清掉它（见 armTurnStallWatchdog）。
@@ -587,6 +611,18 @@ export class Session {
     } catch (e) {
       if (this.sendReservation === reservation) {
         this.sendReservation = null;
+      }
+      if (e instanceof TurnDispatchUnconfirmedError) {
+        // Reserve Session shutdown before closing the handle. This suppresses
+        // a synthetic terminal event from transport teardown and fences any
+        // late provider activity before the orchestrator reports blocked.
+        if (originInstalled && !turnDispatched) {
+          this.currentTurnOrigin = previousTurnOrigin;
+          this.currentTurnAttemptToken = previousTurnAttemptToken;
+          this.turnGeneration = previousTurnGeneration;
+          originInstalled = false;
+        }
+        await this.close();
       }
       throw e;
     } finally {
@@ -608,13 +644,12 @@ export class Session {
         this.currentTurnOrigin = previousTurnOrigin;
         this.currentTurnAttemptToken = previousTurnAttemptToken;
         this.turnGeneration = previousTurnGeneration;
-        // runEventLoop may already be awaiting the failed generation. Reusing
-        // the rolled-back generation immediately creates an ABA window where
-        // a delayed terminal event from this failed dispatch can claim the
-        // next turn's origin/token. Reuse the existing bounded tail fence:
-        // an old terminal event releases it; no tail closes the ambiguous
-        // Session so Maker can rebuild before the next send.
-        this.armTerminalErrorDrain(previousTurnGeneration);
+        // Confirmed provider rejection cannot produce a turn tail, so it may
+        // immediately reuse the rolled-back generation. Other failures retain
+        // the bounded tail fence before another turn can enter.
+        if (!dispatchConfirmedUndispatched) {
+          this.armTerminalErrorDrain(previousTurnGeneration);
+        }
       }
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
@@ -810,21 +845,29 @@ export class Session {
     // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
     // 否则 handle.detach() 慢/挂起时，in-flight 视觉请求会继续拖住退出链。
     this.cancelSendReservation(this.sendReservation);
+    let detachSucceeded = false;
     try {
       if (this.handle.detach) {
         await this.handle.detach();
       } else {
         await this.handle.close();
       }
+      detachSucceeded = true;
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
       this.clearTerminalErrorDrain();
-      this.setStatus('closed');
       this.eventListeners.clear();
-      this.statusListeners.clear();
       this.interactionListener = null;
+      if (detachSucceeded) {
+        this.setStatus('closed');
+        this.statusListeners.clear();
+      } else {
+        // Shutdown must retain Maker's status listener and active-session owner
+        // until a later detach/close attempt confirms the process is gone.
+        this.setStatus('error');
+      }
     }
   }
 
@@ -1688,8 +1731,9 @@ export class Session {
           // clear that fence. The fence itself prevents any later generation entering.
           observedGeneration = this.turnGeneration;
         }
+        if (this.terminationStarted) continue;
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
-        // 见那里的注释）。
+        // 见那里的注释）。关闭门一旦占住，旧 handle 的迟到事件不得再改写业务状态。
         this.fanOutEvent(event, observedGeneration);
       }
     } catch (e) {

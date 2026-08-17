@@ -1759,6 +1759,21 @@
         "toggleFailed": "LSP の切り替えに失敗しました"
       }
     },
+    "betaChannel": {
+      "title": "Beta チャンネル",
+      "description": "Beta チャンネルに参加すると、今後のクライアント更新を先行して受け取れます。再起動後に反映されます。",
+      "toggleAria": "Beta チャンネルの切り替え",
+      "restartTitle": "クライアントを再起動",
+      "restartDescription": "Beta チャンネルは再起動後に反映されます。今すぐ再起動しますか？",
+      "restartNow": "今すぐ再起動",
+      "restartLater": "後で",
+      "restartBusyDescription": "進行中のタスクがあります。再起動すると中断されます。今すぐ再起動しますか？",
+      "unavailable": "Beta チャンネルは利用できません。Beta 更新サーバーに接続できませんでした。",
+      "toast": {
+        "disabled": "Beta チャンネルをオフにしました。再起動後に反映されます",
+        "toggleFailed": "Beta チャンネルの切り替えに失敗しました"
+      }
+    },
     "gitSafety": {
       "title": "Git セーフティ",
       "autoSnapshotTitle": "Git セーフティ保存点",
@@ -9699,9 +9714,11 @@
       "title": "新しい Worker を作成",
       "submit": "Worker を作成",
       "closeAria": "Worker 作成ダイアログを閉じる",
-      "roleLabel": "ロール",
-      "customRolePlaceholder": "+ カスタムロール（任意）",
-      "customRolePredefinedError": "カスタムロールには既定ロール名を使用できません",
+      "roleLabel": "ロール名",
+      "roleHint": "名前だけです。複数の協働者がいるときに役割を見分けるためで、能力は変わりません",
+      "roleHintAria": "ロール名の説明",
+      "customRolePlaceholder": "+ カスタムロール名（任意）",
+      "customRolePredefinedError": "カスタムロール名には既定ロール名を使用できません",
       "agentLabel": "Agent",
       "modelLabel": "モデル",
       "permissionLabel": "権限モード",

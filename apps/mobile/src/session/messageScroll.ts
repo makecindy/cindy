@@ -125,7 +125,9 @@ export interface MobileNearBottomResolveInput {
  *
  *  - 命令式滚动 settling → 保持原跟随态,不把瞬时 offset 当成用户上翻;
  *  - 内容未撑满一屏 → true(与 isNearMessageListBottom 同口径);
- *  - 距底超出阈值 → false(离底解除,原行为不变);
+ *  - 距底超出阈值且(已解除, 或明确上滑) → false(滚动条/拖动离底的兜底)。
+ *    已在跟、只是内容在下方长高导致距底越线时保持跟随 — 发送后首块
+ *    assistant / 工具卡撑高不得把跟随掐死;
  *  - 阈值带内且原本在跟 → 保持 true(贴底期间程序化 scrollToEnd 产生的
  *    向下增量、以及被动微小位移都不改变状态);
  *  - 阈值带内且已解除 → 仅「明确向下」(增量 > 死区)才恢复跟随。**不能只看
@@ -136,7 +138,10 @@ export function resolveMobileNearBottomOnScroll(input: MobileNearBottomResolveIn
   if (input.programmaticScrollInFlight) return input.wasNearBottom;
   const { contentHeight, viewportHeight } = input.metrics;
   if (contentHeight <= viewportHeight) return true;
-  if (!isNearMobileMessageListBottom(input.metrics, input.bottomOverlayHeight)) return false;
+  if (!isNearMobileMessageListBottom(input.metrics, input.bottomOverlayHeight)) {
+    if (!input.wasNearBottom) return false;
+    return input.scrollDelta >= -MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
+  }
   if (input.wasNearBottom) return true;
   return input.scrollDelta > MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
 }

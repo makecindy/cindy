@@ -6,7 +6,8 @@
  *   2. buildTitleTarget:据 catalog titleModel 组装目标(模型 / 最低 effort / wire / upstream)
  *      —— 同时锁定 providers.json 里三家 titleModel 的配置(haiku / gpt-5.4-mini / gpt-5.4-mini)。
  *   3. generateTitleViaProvider:三家 wire 各发一次 fetch,断言 URL/headers/body 形状 + 响应解析;
- *      凭证缺失 / 非 2xx → 返回 null(不抛、不试别家)。
+ *      凭证缺失 / 非 2xx → 返回 null(不抛;有标题 wire 的供应商不试别家)。
+ *      无标题 wire 的会话供应商在官方 `xd` 已连接时回落官方通道。
  *
  * electron 在此 mock(stub app.getPath)纯粹是为了让 import 链(auth-adapters 顶层单例)能在
  * 无 electron 的 vitest 里加载;真正的凭证 / fetch / 会话 provider 全部经 deps 注入,不碰真实实现。
@@ -341,7 +342,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
 });
 
 describe('generateTitleViaProviderResult — 手动重命名失败语义', () => {
-  it('direct custom DeepSeek 没有受支持的标题 wire → unsupported-provider', async () => {
+  it('无标题 wire 的会话供应商且官方未连接 → unsupported-provider', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { choices: [{ message: { content: '不应出现' } }] },
     }));
@@ -369,6 +370,43 @@ describe('generateTitleViaProviderResult — 手动重命名失败语义', () =>
         },
       ),
     ).resolves.toBeNull();
+  });
+
+  it('无标题 wire 的会话供应商 + 官方已连接 → 走 xd 网关', async () => {
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: '官方标题' } }] },
+      }));
+
+      await expect(
+        generateTitleViaProviderResult(
+          { sessionId: 's-deepseek-official', agentKind: 'claude-code', prompt: 'x' },
+          {
+            fetchImpl,
+            readSessionProviderId: async () => 'deepseek',
+            listConnectedProviders: async () => [providerStub('deepseek'), providerStub('xd')],
+            readGatewayKey: () => 'gk',
+          },
+        ),
+      ).resolves.toEqual({ status: 'ok', title: '官方标题' });
+      expect(String(vi.mocked(fetchImpl).mock.calls[0][0])).toContain('/v1/chat/completions');
+
+      // 自动起名同样走官方,不再折叠为启发式。
+      await expect(
+        generateTitleViaProvider(
+          { sessionId: 's-deepseek-official', agentKind: 'claude-code', prompt: 'x' },
+          {
+            fetchImpl,
+            readSessionProviderId: async () => 'deepseek',
+            listConnectedProviders: async () => [providerStub('deepseek'), providerStub('xd')],
+            readGatewayKey: () => 'gk',
+          },
+        ),
+      ).resolves.toBe('官方标题');
+    } finally {
+      setXdGatewayModels([]);
+    }
   });
 
   it('XD 结构上受支持但实时目录暂无聊天模型 → failed', async () => {

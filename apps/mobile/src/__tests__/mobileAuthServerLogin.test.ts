@@ -204,6 +204,11 @@ describe('mobile auth-server login', () => {
     expect(authSource).toContain(
       "previousState?.step !== 'method-choice' ||",
     );
+    expect(authSource).toContain('soleLoginMethod(methods)');
+    expect(authSource).toContain('soleAutoStartSsoMethod(confirmation.methods)');
+    expect(authSource).toContain("kind: 'sso'");
+    expect(authSource).toContain('startBrowserAuthorization({');
+    expect(authSource).toContain("sole?.type === 'email_code'");
   });
 
   it('keeps account tokens inside membership selection and private tickets off screen', () => {
