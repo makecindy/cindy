@@ -677,6 +677,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
         clientId,
         error: err instanceof Error ? err.message : String(err),
       });
+      throw err;
     }
   }
   return {

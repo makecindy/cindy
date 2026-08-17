@@ -569,6 +569,7 @@ import {
   type OrcaInterAgentDispatcher,
   type OrcaInterAgentMessageSource,
 } from './orcaInterAgentDispatcher.js';
+import { resolveOrcaQueueItemTeamId } from './orcaQueueItem.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -8882,17 +8883,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     });
     return run;
-  }
-
-  function resolveOrcaQueueItemTeamId(item: AgentInputQueuedMessage): string | null {
-    if (item.origin?.kind !== 'orca') return null;
-    if (typeof item.origin.teamId === 'string' && item.origin.teamId.length > 0) {
-      return item.origin.teamId;
-    }
-    const legacyTeamId = item.createOpts.vendorOptions?.orcaWorkflowId;
-    return typeof legacyTeamId === 'string' && legacyTeamId.length > 0
-      ? legacyTeamId
-      : null;
   }
 
   function assertOrcaQueueOriginActive(origin: AgentInputQueuedMessage['origin']): void {

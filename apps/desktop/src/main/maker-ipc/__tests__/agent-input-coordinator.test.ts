@@ -462,6 +462,14 @@ function latestSnapshotClientIds(
   return call[1].map((item) => item.clientId);
 }
 
+function latestSnapshotItems(
+  persistQueueSnapshot: ReturnType<typeof createHarness>['persistQueueSnapshot'],
+): AgentInputQueuedMessage[] {
+  const call = persistQueueSnapshot.mock.calls.at(-1);
+  if (!call) throw new Error('expected a persistQueueSnapshot call');
+  return call[1];
+}
+
 function latestProjection(projections: AgentInputProjection[]): AgentInputProjection {
   const latest = projections.at(-1);
   if (!latest) throw new Error('expected a projection');
@@ -3584,6 +3592,7 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'inactive-orca-rewind-failure';
     const item = makeOrcaItem('orca-old-persisted', 'stale worker report', 'team-old');
 
+    await h.coordinator.ensureQueueRestored(sid);
     h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
     h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
       await persistQueuedUserMessage(sessionId, sendOpts);
@@ -3597,6 +3606,12 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(latestProjection(h.projections).recovery).toEqual({ kind: 'active-turn', item });
     expect(latestProjection(h.projections).error).toContain('database busy');
+    expect(latestSnapshotItems(h.persistQueueSnapshot)).toEqual([
+      expect.objectContaining({
+        clientId: 'orca-old-persisted',
+        mainSnapshotRecoveryKind: 'active-turn-cleanup',
+      }),
+    ]);
 
     h.setOrcaTeamInputActive(false);
     h.coordinator.enqueue(
@@ -6453,6 +6468,57 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it('restores a legacy Orca cleanup recovery and retries its rewind after restart', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-legacy-orca-cleanup-recovery';
+    const legacyItem = makeOrcaItem(
+      'orca-legacy-cleanup',
+      'legacy accepted worker report',
+      'team-legacy',
+    );
+    delete (legacyItem.origin as { teamId?: string }).teamId;
+    const persistedCleanup = {
+      ...legacyItem,
+      mainSnapshotRecoveryKind: 'active-turn-cleanup',
+    } as AgentInputQueuedMessage;
+
+    h.setLoadQueueSnapshot(async () => [persistedCleanup]);
+    const lifecycleCheck = vi.fn(async () => false);
+    h.setQueueSnapshotItemCurrent(lifecycleCheck);
+    h.setGetPersistedClientIds(async () => new Set(['orca-legacy-cleanup']));
+    h.setOrcaTeamInputActive(false);
+    h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('database busy'));
+
+    await h.coordinator.ensureQueueRestored(sid);
+    await flush();
+
+    expect(lifecycleCheck).not.toHaveBeenCalled();
+    const restoredRecovery = latestProjection(h.projections).recovery;
+    expect(restoredRecovery?.kind).toBe('active-turn');
+    if (restoredRecovery?.kind !== 'active-turn') {
+      throw new Error('expected an active-turn cleanup recovery');
+    }
+    expect(restoredRecovery.item.clientId).toBe('orca-legacy-cleanup');
+    expect(restoredRecovery.item.origin?.kind).toBe('orca');
+    expect(
+      (restoredRecovery.item as AgentInputQueuedMessage & {
+        mainSnapshotRecoveryKind?: string;
+      }).mainSnapshotRecoveryKind,
+    ).toBeUndefined();
+    expect(h.isOrcaTeamInputActive).toHaveBeenCalledWith('team-legacy');
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(1);
+    // The loaded durable snapshot already matches the retained cleanup state,
+    // so the change detector should not rewrite it after a failed first retry.
+    expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
+
+    h.coordinator.wakeSession(sid, 'retry-restored-cleanup');
+    await flush();
+
+    expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(2);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(latestSnapshotItems(h.persistQueueSnapshot)).toHaveLength(0);
+  });
+
   it('drops inactive Orca team items from a crash snapshot without touching user input', async () => {
     const h = createHarness();
     const sid = 'snapshot-orca-team-lifecycle';

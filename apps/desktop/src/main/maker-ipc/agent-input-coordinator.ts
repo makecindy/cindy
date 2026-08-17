@@ -61,6 +61,7 @@ import {
   RECOVERY_CHECKPOINT_MARKER,
   type RecoveryContextSnapshot,
 } from './recoveryCoordinator.js';
+import { resolveOrcaQueueItemTeamId } from './orcaQueueItem.js';
 
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
@@ -82,6 +83,39 @@ const MAX_AUTO_RESUME_DISPATCH_ATTEMPTS = 3;
 const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
+const ACTIVE_TURN_CLEANUP_SNAPSHOT_KIND = 'active-turn-cleanup';
+
+type PersistedQueueSnapshotItem = AgentInputQueuedMessage & {
+  mainSnapshotRecoveryKind?: typeof ACTIVE_TURN_CLEANUP_SNAPSHOT_KIND;
+};
+
+/** Main-owned durable marker for an accepted row that still needs a DB rewind. */
+function isActiveTurnCleanupSnapshotItem(
+  item: AgentInputQueuedMessage,
+): item is PersistedQueueSnapshotItem {
+  return (
+    (item as PersistedQueueSnapshotItem).mainSnapshotRecoveryKind ===
+      ACTIVE_TURN_CLEANUP_SNAPSHOT_KIND &&
+    resolveOrcaQueueItemTeamId(item) !== null
+  );
+}
+
+function markActiveTurnCleanupSnapshotItem(
+  item: AgentInputQueuedMessage,
+): PersistedQueueSnapshotItem {
+  return {
+    ...item,
+    mainSnapshotRecoveryKind: ACTIVE_TURN_CLEANUP_SNAPSHOT_KIND,
+  };
+}
+
+function stripActiveTurnCleanupSnapshotMarker(
+  item: AgentInputQueuedMessage,
+): AgentInputQueuedMessage {
+  const queuedItem: PersistedQueueSnapshotItem = { ...item };
+  delete queuedItem.mainSnapshotRecoveryKind;
+  return queuedItem;
+}
 
 type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
 
@@ -585,6 +619,8 @@ interface SessionInputState {
   /** 最新自动接管 attempt；展示态落库后仍保留到 vendor accepted 或明确失败。 */
   autoResumeAttemptToken: number | null;
   recovery: AgentInputRecovery;
+  /** active-turn recovery 中仅用于完成 DB rewind 的那一条；不会被当作用户 Retry。 */
+  activeTurnCleanupRecoveryClientId: string | null;
   drainScheduled: boolean;
   drainWakeupGeneration: number;
   /** Codex emits terminal error followed by done; queued work must not drain between the pair. */
@@ -659,6 +695,7 @@ function createInitialInputState(
     autoResumePending: null,
     autoResumeAttemptToken: null,
     recovery: null,
+    activeTurnCleanupRecoveryClientId: null,
     drainScheduled: false,
     drainWakeupGeneration: 0,
     pendingExternalTerminalDone: false,
@@ -1034,6 +1071,13 @@ export class AgentInputCoordinator {
     if (this.deps.isQueueSnapshotItemCurrent && items.length > 0) {
       const lifecycleResults = await Promise.all(
         items.map(async (item) => {
+          // A cleanup recovery is expected to belong to an ended team: the
+          // terminal lifecycle is the reason its persisted row needs rewind.
+          // Re-running the ordinary restore fence here would discard the only
+          // durable cleanup intent before the coordinator can tombstone it.
+          if (isActiveTurnCleanupSnapshotItem(item)) {
+            return { item, current: true };
+          }
           try {
             return {
               item,
@@ -1076,11 +1120,17 @@ export class AgentInputCoordinator {
     // 写尚未提交"的崩溃窗口——该 clientId 已属 interrupted-turn 辖区,不应二次恢复。
     const existingIds = new Set(state.pendingQueue.map((q) => q.clientId));
     if (state.activeTurn?.item) existingIds.add(state.activeTurn.item.clientId);
-    if (this.deps.getPersistedClientIds && items.length > 0) {
+    if (state.recovery?.kind === 'active-turn') {
+      existingIds.add(state.recovery.item.clientId);
+    }
+    const ordinarySnapshotClientIds = items
+      .filter((item) => !isActiveTurnCleanupSnapshotItem(item))
+      .map((item) => item.clientId);
+    if (this.deps.getPersistedClientIds && ordinarySnapshotClientIds.length > 0) {
       try {
         const persisted = await this.deps.getPersistedClientIds(
           sessionId,
-          items.map((i) => i.clientId),
+          ordinarySnapshotClientIds,
         );
         const currentState = this.getState(sessionId);
         if (currentState !== preState || currentState.generation !== preGeneration) {
@@ -1114,6 +1164,10 @@ export class AgentInputCoordinator {
     const clearBoundaryMs = state.clearBoundaryMs;
     const staleClearItems: AgentInputQueuedMessage[] = [];
     const boundaryFilteredItems = items.filter((item) => {
+      // Cleanup recoveries intentionally refer to a row that already crossed
+      // the persistence boundary. A later clear must not hide that row while
+      // also deleting the only instruction that can finish its tombstone.
+      if (isActiveTurnCleanupSnapshotItem(item)) return true;
       if (clearBoundaryMs === null) return true;
       const acceptedAtMs = item.hostAcceptedAtMs;
       if (
@@ -1136,6 +1190,15 @@ export class AgentInputCoordinator {
         dropped: staleClearItems.length,
       });
     }
+    const cleanupSnapshotItems = boundaryFilteredItems.filter(
+      isActiveTurnCleanupSnapshotItem,
+    );
+    if (cleanupSnapshotItems.length > 1) {
+      throw new Error(
+        `queue snapshot contains multiple active-turn cleanup recoveries for ${sessionId}`,
+      );
+    }
+    const cleanupSnapshotItem = cleanupSnapshotItems[0] ?? null;
     // 标记恢复完成:所有 async 工作已结束,此后 getDrainableHead 放行、
     // maybePersistQueueSnapshot 开闸。
     this.restoredQueueSessions.add(sessionId);
@@ -1153,7 +1216,9 @@ export class AgentInputCoordinator {
     // 判 duplicate 顺延 —— 无人值守自动化整体停摆(PR #972 review P1)。直接
     // 丢弃并走 onDiscarded 释放回调注册表;下一轮 cron fire 按当下状态重新走
     // 排队/直发,不丢任务只丢陈旧副本。
-    const restorable = boundaryFilteredItems.filter((item) => !existingIds.has(item.clientId));
+    const restorable = boundaryFilteredItems.filter(
+      (item) => !isActiveTurnCleanupSnapshotItem(item) && !existingIds.has(item.clientId),
+    );
     const staleSchedulerItems = restorable.filter((item) => item.origin?.kind === 'scheduler');
     const restored = restorable.filter((item) => item.origin?.kind !== 'scheduler');
     if (staleSchedulerItems.length > 0) {
@@ -1165,7 +1230,7 @@ export class AgentInputCoordinator {
         dropped: staleSchedulerItems.length,
       });
     }
-    if (restored.length === 0) {
+    if (restored.length === 0 && !cleanupSnapshotItem) {
       // 快照为空 / 全部与内存态重复:同步一次收口点,让内存态成为权威快照。
       this.queueRestorePromises.delete(sessionId);
       this.maybePersistQueueSnapshot(sessionId);
@@ -1182,20 +1247,28 @@ export class AgentInputCoordinator {
       state.steeringQueueClientIds.length === 0 &&
       !this.deps.isTurnRunning(sessionId);
     state.pendingQueue = [...restored, ...state.pendingQueue];
-    if (wasQuiet) {
+    if (cleanupSnapshotItem) {
+      const cleanupItem = stripActiveTurnCleanupSnapshotMarker(cleanupSnapshotItem);
+      state.recovery = { kind: 'active-turn', item: cleanupItem };
+      state.activeTurnCleanupRecoveryClientId = cleanupItem.clientId;
+    }
+    if (restored.length > 0 && wasQuiet) {
       state.queuePaused = true;
       state.queuePausedByRestore = true;
     }
     log.info('restored queued input from crash snapshot', {
       sessionId,
       restored: restored.length,
+      cleanupRecoveryRestored: Boolean(cleanupSnapshotItem),
       paused: state.queuePaused,
     });
     // 清除 in-flight 标记 BEFORE scheduleDrain:drain 的微任务检查
     // queueRestorePromises,必须在此之前清掉否则 getDrainableHead 永远返回 null。
     this.queueRestorePromises.delete(sessionId);
     this.emit(sessionId);
-    if (!state.queuePaused) this.scheduleDrain(sessionId, 'queue-snapshot-restored');
+    if (cleanupSnapshotItem || !state.queuePaused) {
+      this.scheduleDrain(sessionId, 'queue-snapshot-restored');
+    }
   }
 
   shouldQueueNewTurn(sessionId: string): boolean {
@@ -1371,7 +1444,9 @@ export class AgentInputCoordinator {
     },
   ): AgentInputProjection {
     const state = this.getState(sessionId);
-    item = captureOriginalSyntheticTrigger(item);
+    // Snapshot recovery markers are main-owned. Strip a forged wire field
+    // before any renderer/device input can enter the durable queue.
+    item = captureOriginalSyntheticTrigger(stripActiveTurnCleanupSnapshotMarker(item));
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机
     // 断连自动重试 / 用户对 ack 丢失的消息重发)在补发同一条消息,不是新消息。
     // 直接返回当前 projection、不再入队——否则同一条消息双入队、agent 跑两轮。
@@ -2596,6 +2671,7 @@ export class AgentInputCoordinator {
         // Clearing both activeTurn and recovery first would strand a visible DB
         // row forever when the worker/database is temporarily unavailable.
         state.recovery = { kind: 'active-turn', item: active.item };
+        state.activeTurnCleanupRecoveryClientId = active.item.clientId;
       } else {
         this.deps.onDiscardedQueuedMessage?.(sessionId, active.item);
       }
@@ -2624,6 +2700,7 @@ export class AgentInputCoordinator {
       recoveryDiscarded = true;
       persistedItemsToRewind.set(state.recovery.item.clientId, state.recovery.item);
       discardedRecoveryItems.add(state.recovery.item.clientId);
+      state.activeTurnCleanupRecoveryClientId = state.recovery.item.clientId;
     }
 
     // Persist the active-turn recovery before attempting the DB tombstone. On
@@ -2649,6 +2726,9 @@ export class AgentInputCoordinator {
         state.recovery = null;
         state.error = null;
         state.stickyError = null;
+      }
+      if (state.activeTurnCleanupRecoveryClientId === item.clientId) {
+        state.activeTurnCleanupRecoveryClientId = null;
       }
       if (discardedRecoveryItems.has(item.clientId)) {
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
@@ -3163,7 +3243,8 @@ export class AgentInputCoordinator {
 
   /**
    * 计算应持久化的快照内容:pendingQueue + 已离队但尚未跨过 DB 持久化边界的
-   * activeTurn.item。后者覆盖"drain 已把队首切走、agent 还没接受"的窗口 ——
+   * activeTurn.item + 尚未完成 DB rewind 的 cleanup recovery。active item 覆盖
+   * "drain 已把队首切走、agent 还没接受"的窗口 ——
    * 只有一条排队消息时它几乎立刻进入该窗口,不含它则单条排队必丢。已持久化
    * (persisted=true)的 active item 不再进快照:它已落 messages 表,重启后属于
    * interrupted-turn 提示的辖区,重复恢复会造成二次发送。
@@ -3176,11 +3257,17 @@ export class AgentInputCoordinator {
       !state.pendingQueue.some((q) => q.clientId === active.item?.clientId)
         ? [active.item]
         : [];
+    const cleanupRecovery =
+      state.recovery?.kind === 'active-turn' &&
+      state.activeTurnCleanupRecoveryClientId === state.recovery.item.clientId &&
+      resolveOrcaQueueItemTeamId(state.recovery.item) !== null
+        ? [markActiveTurnCleanupSnapshotItem(state.recovery.item)]
+        : [];
     // scheduler 撞忙排队项不进崩溃快照:runner 的 run 在重启时会被 sweep 标
     // interrupted,恢复出的副本没有等待方;心跳 prompt 每轮 fire 重新生成,
     // 陈旧副本无价值,恢复它只会造成"暂停队列里的僵尸自动化"(restore 侧
     // 有对老快照的同款过滤,见 restoreQueueSnapshot)。
-    return [...activeItem, ...state.pendingQueue]
+    return [...activeItem, ...cleanupRecovery, ...state.pendingQueue]
       .filter((item) => item.origin?.kind !== 'scheduler')
       .map(sanitizeQueuedMessageForPersistence);
   }
@@ -3751,7 +3838,7 @@ export class AgentInputCoordinator {
     const item = recovery.kind === 'active-turn'
       ? recovery.item
       : state.pendingQueue.find((queued) => queued.clientId === recovery.clientId);
-    const teamId = item?.origin?.kind === 'orca' ? item.origin.teamId : undefined;
+    const teamId = item ? resolveOrcaQueueItemTeamId(item) : null;
     if (!teamId) return false;
 
     let active: boolean;
@@ -3775,7 +3862,7 @@ export class AgentInputCoordinator {
     try {
       discarded = await this.discardQueuedItemsWhere(
         sessionId,
-        (queued) => queued.origin?.kind === 'orca' && queued.origin.teamId === teamId,
+        (queued) => resolveOrcaQueueItemTeamId(queued) === teamId,
       );
     } catch (error) {
       // discardQueuedItemsWhere persisted an active-turn recovery before the
@@ -3936,6 +4023,7 @@ export class AgentInputCoordinator {
     latest.error = null;
     latest.stickyError = null;
     latest.recovery = active.persisted ? { kind: 'active-turn', item } : null;
+    latest.activeTurnCleanupRecoveryClientId = active.persisted ? item.clientId : null;
     this.clearCredentialSwitchWait(latest);
     this.removePendingCompactWaitClientId(latest, item.clientId);
     latest.recentEnqueuedClientIds = latest.recentEnqueuedClientIds.filter(
@@ -3967,6 +4055,9 @@ export class AgentInputCoordinator {
         latest.recovery.item.clientId === item.clientId
       ) {
         latest.recovery = null;
+      }
+      if (latest.activeTurnCleanupRecoveryClientId === item.clientId) {
+        latest.activeTurnCleanupRecoveryClientId = null;
       }
     } else {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);

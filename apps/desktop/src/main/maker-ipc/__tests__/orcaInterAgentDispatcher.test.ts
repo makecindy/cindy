@@ -616,6 +616,53 @@ describe('Orca lead/worker dispatcher', () => {
     expect(rollback).toHaveBeenCalledTimes(1);
   });
 
+  it('returns a direct dispatch failure when the final-fence row rewind fails', async () => {
+    const rollback = vi.fn();
+    const h = createHarness({
+      getLiveSession: vi.fn(() =>
+        createLiveSession(async (_message, opts) => {
+          await opts?.onAccepted?.();
+          opts?.onDispatching?.();
+          return { accepted: true };
+        })
+      ),
+      assertOrcaTeamActiveBeforeVendorDispatch: vi.fn(() => {
+        throw new Error('ORCA_TEAM_INACTIVE: team team-1 has already ended');
+      }),
+      rewindPersistedUserMessage: vi.fn(async () => {
+        throw new Error('database busy');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Stale direct report',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'final-fence-rewind-failure-test' },
+      onAcceptedRollback: rollback,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SEND_FAILED',
+        message: 'database busy',
+      },
+    });
+    expect(h.deps.rewindPersistedUserMessage).toHaveBeenCalledWith(
+      'target-session',
+      'client-1',
+    );
+    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'direct Orca user row rewind failed',
+      expect.objectContaining({ clientId: 'client-1', error: 'database busy' }),
+    );
+  });
+
   it('retries a direct send when a later pending terminal transition rolls back', async () => {
     const transitionSettled = deferredVoid();
     const accepted = vi.fn();
