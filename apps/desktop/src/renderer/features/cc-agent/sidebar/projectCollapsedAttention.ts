@@ -5,6 +5,7 @@ export type CollapsedProjectAttentionTone = 'error' | 'done';
 
 interface CollapsedProjectAttentionInput {
   sessions: readonly { id: string }[];
+  runningSessionIds: ReadonlySet<string>;
   notifications: ReadonlySet<string>;
   attentionKinds: ReadonlyMap<string, AttentionKind>;
   urgentSessionIds: ReadonlySet<string>;
@@ -17,6 +18,7 @@ interface CollapsedProjectAttentionInput {
  */
 export function resolveCollapsedProjectAttentionTone({
   sessions,
+  runningSessionIds,
   notifications,
   attentionKinds,
   urgentSessionIds,
@@ -39,7 +41,8 @@ export function resolveCollapsedProjectAttentionTone({
 
     const attentionKind = attentionKinds.get(session.id);
     if (attentionKind === 'error') return 'error';
-    if (attentionKind !== 'awaiting') hasDone = true;
+    if (attentionKind === 'awaiting' || runningSessionIds.has(session.id)) continue;
+    hasDone = true;
   }
 
   return hasDone ? 'done' : null;

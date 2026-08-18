@@ -25,12 +25,14 @@ const sessions = (ids: string[]) => ids.map((id) => ({ id }));
 
 function resolve({
   ids = ['session-1'],
+  running = [],
   notifications = [],
   attentionKinds = [],
   urgent = [],
   remotePhases = [],
 }: {
   ids?: string[];
+  running?: string[];
   notifications?: string[];
   attentionKinds?: [string, AttentionKind][];
   urgent?: string[];
@@ -39,6 +41,7 @@ function resolve({
   const phases = new Map(remotePhases);
   return resolveCollapsedProjectAttentionTone({
     sessions: sessions(ids),
+    runningSessionIds: new Set(running),
     notifications: new Set(notifications),
     attentionKinds: new Map(attentionKinds),
     urgentSessionIds: new Set(urgent),
@@ -92,6 +95,16 @@ describe('collapsed project attention tone', () => {
         notifications: ['session-1'],
         attentionKinds: [['session-1', 'error']],
         remotePhases: [['session-1', 'running']],
+      }),
+    ).toBeNull();
+  });
+
+  it('does not aggregate stale local completion while the child is running again', () => {
+    expect(
+      resolve({
+        running: ['session-1'],
+        notifications: ['session-1'],
+        attentionKinds: [['session-1', 'done']],
       }),
     ).toBeNull();
   });

@@ -323,13 +323,14 @@ export function ProjectsSection({
     (sessions: readonly Session[]) =>
       resolveCollapsedProjectAttentionTone({
         sessions,
+        runningSessionIds,
         notifications,
         attentionKinds,
         urgentSessionIds: urgentSet,
         remotePhaseOf: (sessionId) => getRemoteSessionActivity(sessionId)?.phase,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
-    [notifications, attentionKinds, urgentSet, remoteActivityRevision],
+    [runningSessionIds, notifications, attentionKinds, urgentSet, remoteActivityRevision],
   );
   // 正在看的任务 id:files 路由下回落到被浏览文件所属任务。
   const viewedIdForSort = viewedSessionId ?? activeSessionId;
