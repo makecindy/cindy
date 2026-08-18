@@ -49,6 +49,8 @@ function renderChrome(
     commentSupported?: boolean;
     canOpenInSystemBrowser?: boolean;
     isLoading?: boolean;
+    canGoBack?: boolean;
+    canGoForward?: boolean;
     onReload?: () => void;
     onStop?: () => void;
   } = {},
@@ -62,8 +64,8 @@ function renderChrome(
       ref,
       url,
       isLoading: extra.isLoading ?? false,
-      canGoBack: false,
-      canGoForward: false,
+      canGoBack: extra.canGoBack ?? false,
+      canGoForward: extra.canGoForward ?? false,
       onNavigate,
       onReload: extra.onReload ?? vi.fn(),
       onStop: extra.onStop ?? vi.fn(),
@@ -102,16 +104,12 @@ describe('BrowserChrome', () => {
 
   it('renders the page-comment button by default (commentSupported defaults to true)', () => {
     renderChrome();
-    expect(
-      screen.getByRole('button', { name: 'rightSidebar.browser.comment' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'rightSidebar.browser.comment' })).toBeTruthy();
   });
 
   it('hides the page-comment button when commentSupported is false (detached sidebar window has no composer)', () => {
     renderChrome('https://www.taptap.cn/', { commentSupported: false });
-    expect(
-      screen.queryByRole('button', { name: 'rightSidebar.browser.comment' }),
-    ).toBeNull();
+    expect(screen.queryByRole('button', { name: 'rightSidebar.browser.comment' })).toBeNull();
   });
 
   it('shows a compositor-friendly refresh animation while loading and stops on click', () => {
@@ -131,9 +129,9 @@ describe('BrowserChrome', () => {
     expect(spinner?.classList.contains('motion-reduce:hidden')).toBe(true);
     expect(button.querySelector('.lucide-rotate-cw')).toBeTruthy();
     expect(
-      button.querySelector('.lucide-x')?.parentElement?.classList.contains(
-        'motion-reduce:inline-flex',
-      ),
+      button
+        .querySelector('.lucide-x')
+        ?.parentElement?.classList.contains('motion-reduce:inline-flex'),
     ).toBe(true);
 
     fireEvent.click(button);
@@ -155,6 +153,28 @@ describe('BrowserChrome', () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 
+  it('explains why back and forward navigation are unavailable', () => {
+    renderChrome();
+
+    expect(
+      screen
+        .getByRole('button', { name: 'rightSidebar.browser.goBackUnavailable' })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
+    expect(
+      screen
+        .getByRole('button', { name: 'rightSidebar.browser.goForwardUnavailable' })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
+  });
+
+  it('uses action labels when back and forward navigation are available', () => {
+    renderChrome('https://www.taptap.cn/', { canGoBack: true, canGoForward: true });
+
+    expect(screen.getByRole('button', { name: 'rightSidebar.browser.goBack' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'rightSidebar.browser.goForward' })).toBeTruthy();
+  });
+
   it('routes the refresh spinner through the approved semantic cycle token', () => {
     const animation = (
       tailwindConfig.theme?.extend?.animation as Record<string, string> | undefined
@@ -171,9 +191,7 @@ describe('BrowserChrome', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'rightSidebar.browser.openInSystemBrowser' }),
     );
-    fireEvent.click(
-      screen.getByRole('button', { name: 'rightSidebar.browser.copyLink' }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.copyLink' }));
 
     expect(onOpenInSystemBrowser).toHaveBeenCalledTimes(1);
     expect(onCopyLink).toHaveBeenCalledTimes(1);

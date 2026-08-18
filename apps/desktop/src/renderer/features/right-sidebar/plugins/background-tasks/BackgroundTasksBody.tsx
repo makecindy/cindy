@@ -52,10 +52,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import {
-  getSessionDeviceId,
-  useRemoteDevices,
-} from '@/features/device-link/remoteProjectsStore';
+import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 import {
@@ -233,13 +230,14 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
     },
     [sessionId, taskId, stopping],
   );
-  const label = t('rightSidebar.backgroundTasks.stop');
+  const actionLabel = t('rightSidebar.backgroundTasks.stop');
+  const label = stopping ? t('rightSidebar.backgroundTasks.stopping') : actionLabel;
   const button = (
     <button
       type="button"
       onClick={handleStop}
       disabled={stopping}
-      aria-label={label}
+      aria-label={actionLabel}
       aria-hidden={stopping ? true : undefined}
       className={cn(
         'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',

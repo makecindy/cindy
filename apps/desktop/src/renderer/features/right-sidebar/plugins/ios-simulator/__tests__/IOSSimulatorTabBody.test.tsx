@@ -173,6 +173,17 @@ function preparePointerTarget(container: HTMLElement): HTMLImageElement {
   return image;
 }
 
+function expectDisabledIconButton(label: string, disabledReason: string): void {
+  const button = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('button[aria-label]'),
+  ).find((candidate) => candidate.getAttribute('aria-label') === label);
+  expect(button?.disabled).toBe(true);
+  expect(button?.getAttribute('aria-hidden')).toBe('true');
+  expect(button?.parentElement?.getAttribute('role')).toBe('button');
+  expect(button?.parentElement?.getAttribute('aria-disabled')).toBe('true');
+  expect(button?.parentElement?.getAttribute('aria-label')).toBe(disabledReason);
+}
+
 function installFakeH264DecoderRuntime(): void {
   class FakeVideoDecoder {
     static async isConfigSupported() {
@@ -1763,19 +1774,20 @@ describe('IOSSimulatorTabBody', () => {
     const rendered = render(
       <IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active shellVisible />,
     );
-    fireEvent.click(
-      await screen.findByRole('button', {
-        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
-      }),
-    );
+    const recoveryButtonA = (await screen.findByRole('button', {
+      name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(recoveryButtonA.disabled).toBe(false));
+    fireEvent.click(recoveryButtonA);
     await waitFor(() => expect(api.retryNativeRoute).toHaveBeenCalledTimes(1));
 
     rendered.rerender(
       <IOSSimulatorTabBody state={{ instanceId: 'instance-b' }} ctx={ctx} active shellVisible />,
     );
-    const recoveryButtonB = await screen.findByRole('button', {
+    const recoveryButtonB = (await screen.findByRole('button', {
       name: 'rightSidebar.iosSimulator.nativeRecovery.action',
-    });
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(recoveryButtonB.disabled).toBe(false));
     fireEvent.click(recoveryButtonB);
     await waitFor(() => {
       expect(api.retryNativeRoute).toHaveBeenCalledTimes(2);
@@ -2819,13 +2831,10 @@ describe('IOSSimulatorTabBody', () => {
         value: () => ({ left: 0, top: 0, width: 200, height: 400 }),
       },
     });
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'iPhone B rightSidebar.iosSimulator.pressHome',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.pressHome',
+      'rightSidebar.iosSimulator.agentBusyDescription',
+    );
 
     fireEvent.pointerDown(image, { pointerId: 41, button: 0, clientX: 20, clientY: 40 });
     fireEvent.pointerUp(image, { pointerId: 41, clientX: 180, clientY: 360 });
@@ -2867,13 +2876,10 @@ describe('IOSSimulatorTabBody', () => {
     };
     await waitFor(
       () =>
-        expect(
-          (
-            screen.getByRole('button', {
-              name: 'iPhone B rightSidebar.iosSimulator.pressHome',
-            }) as HTMLButtonElement
-          ).disabled,
-        ).toBe(true),
+        expectDisabledIconButton(
+          'iPhone B rightSidebar.iosSimulator.pressHome',
+          'rightSidebar.iosSimulator.agentBusyDescription',
+        ),
       { timeout: 2_000 },
     );
     expect(api.status).toHaveBeenCalledOnce();
@@ -2980,13 +2986,10 @@ describe('IOSSimulatorTabBody', () => {
     });
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(2), { timeout: 2_000 });
     await waitFor(() => expect(screen.queryByAltText('iPhone B')).toBeNull());
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'iPhone B rightSidebar.iosSimulator.pressHome',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.pressHome',
+      'rightSidebar.iosSimulator.controlsUnavailable',
+    );
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:ios-simulator-1');
     fireEvent.pointerUp(staleImage, {
       pointerId: 31,

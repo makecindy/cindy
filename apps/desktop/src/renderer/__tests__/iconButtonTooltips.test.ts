@@ -21,13 +21,184 @@ function rendererComponentFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true })
     .flatMap((entry) => {
       const path = resolve(directory, entry.name);
-      if (entry.isDirectory()) return rendererComponentFiles(path);
-      return /\.[jt]sx$/.test(entry.name) ? [path] : [];
+      if (entry.isDirectory()) {
+        return entry.name === '__tests__' ? [] : rendererComponentFiles(path);
+      }
+      return /\.[jt]sx$/.test(entry.name) && !/\.(?:test|spec)\.[jt]sx$/.test(entry.name)
+        ? [path]
+        : [];
     })
     .sort();
 }
 
-function nativeButtonTitleViolations(): string[] {
+type JsxOpeningLikeElement = ts.JsxOpeningElement | ts.JsxSelfClosingElement;
+
+function jsxAttribute(
+  node: JsxOpeningLikeElement,
+  name: string,
+  sourceFile: ts.SourceFile,
+): ts.JsxAttribute | undefined {
+  return node.attributes.properties
+    .filter(ts.isJsxAttribute)
+    .find((attribute) => attribute.name.getText(sourceFile) === name);
+}
+
+function staticAttributeValue(attribute: ts.JsxAttribute | undefined): string | true | undefined {
+  if (!attribute) return undefined;
+  if (!attribute.initializer) return true;
+  return ts.isStringLiteral(attribute.initializer) ? attribute.initializer.text : undefined;
+}
+
+function jsxTagName(node: JsxOpeningLikeElement, sourceFile: ts.SourceFile): string {
+  return node.tagName.getText(sourceFile);
+}
+
+function jsxElementForOpening(
+  node: JsxOpeningLikeElement,
+): ts.JsxElement | ts.JsxSelfClosingElement {
+  return ts.isJsxOpeningElement(node) ? node.parent : node;
+}
+
+function expressionContainsButtonRole(expression: ts.Expression): boolean {
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    return expression.text === 'button';
+  }
+  return expression
+    .getChildren()
+    .some((child) => (ts.isExpression(child) ? expressionContainsButtonRole(child) : false));
+}
+
+function hasButtonRole(node: JsxOpeningLikeElement, sourceFile: ts.SourceFile): boolean {
+  const role = jsxAttribute(node, 'role', sourceFile);
+  if (!role?.initializer) return false;
+  if (ts.isStringLiteral(role.initializer)) return role.initializer.text === 'button';
+  return (
+    ts.isJsxExpression(role.initializer) &&
+    role.initializer.expression !== undefined &&
+    expressionContainsButtonRole(role.initializer.expression)
+  );
+}
+
+function isInteractiveControl(node: JsxOpeningLikeElement, sourceFile: ts.SourceFile): boolean {
+  return jsxTagName(node, sourceFile) === 'button' || hasButtonRole(node, sourceFile);
+}
+
+function expressionHasPersistentText(expression: ts.Expression): boolean {
+  if (
+    ts.isStringLiteral(expression) ||
+    ts.isNoSubstitutionTemplateLiteral(expression) ||
+    ts.isNumericLiteral(expression)
+  ) {
+    return expression.text.length > 0;
+  }
+  if (ts.isParenthesizedExpression(expression)) {
+    return expressionHasPersistentText(expression.expression);
+  }
+  if (ts.isConditionalExpression(expression)) {
+    return (
+      expressionHasPersistentText(expression.whenTrue) ||
+      expressionHasPersistentText(expression.whenFalse)
+    );
+  }
+  if (
+    ts.isBinaryExpression(expression) &&
+    [
+      ts.SyntaxKind.AmpersandAmpersandToken,
+      ts.SyntaxKind.BarBarToken,
+      ts.SyntaxKind.QuestionQuestionToken,
+    ].includes(expression.operatorToken.kind)
+  ) {
+    return (
+      expressionHasPersistentText(expression.left) || expressionHasPersistentText(expression.right)
+    );
+  }
+  if (ts.isJsxElement(expression) || ts.isJsxFragment(expression)) {
+    return jsxChildrenHavePersistentText(expression.children);
+  }
+  if (ts.isJsxSelfClosingElement(expression)) return false;
+
+  // A dynamic value rendered as a child is persistent visible content (for example
+  // `{label}`). Icon components instead arrive as JSX elements and take the branches above.
+  return true;
+}
+
+function jsxChildrenHavePersistentText(children: ts.NodeArray<ts.JsxChild>): boolean {
+  return children.some((child) => {
+    if (ts.isJsxText(child)) return child.text.trim().length > 0;
+    if (ts.isJsxExpression(child)) {
+      return child.expression ? expressionHasPersistentText(child.expression) : false;
+    }
+    if (ts.isJsxElement(child) || ts.isJsxFragment(child)) {
+      return jsxChildrenHavePersistentText(child.children);
+    }
+    return false;
+  });
+}
+
+function isIconOnlyControl(node: JsxOpeningLikeElement): boolean {
+  return ts.isJsxSelfClosingElement(node) || !jsxChildrenHavePersistentText(node.parent.children);
+}
+
+function isDirectTooltipTrigger(node: ts.Node, sourceFile: ts.SourceFile): boolean {
+  let current: ts.Node | undefined = node;
+
+  while (current?.parent) {
+    const parent: ts.Node = current.parent;
+    if (ts.isJsxElement(parent)) {
+      const tagName = jsxTagName(parent.openingElement, sourceFile);
+      if (tagName === 'Tip' || tagName === 'Tooltip.Trigger') return true;
+      return false;
+    }
+    if (ts.isJsxSelfClosingElement(parent)) return false;
+    current = parent;
+  }
+  return false;
+}
+
+function variableDeclarationForControl(
+  node: JsxOpeningLikeElement,
+): ts.VariableDeclaration | undefined {
+  let current: ts.Node | undefined = jsxElementForOpening(node);
+
+  while (current?.parent) {
+    const parent: ts.Node = current.parent;
+    if (ts.isJsxElement(parent) || ts.isJsxSelfClosingElement(parent)) return undefined;
+    if (ts.isVariableDeclaration(parent) && parent.initializer) return parent;
+    current = parent;
+  }
+  return undefined;
+}
+
+function hasManagedTip(node: JsxOpeningLikeElement, sourceFile: ts.SourceFile): boolean {
+  if (isDirectTooltipTrigger(jsxElementForOpening(node), sourceFile)) return true;
+
+  const declaration = variableDeclarationForControl(node);
+  if (!declaration || !ts.isIdentifier(declaration.name)) return false;
+
+  const declarationName = declaration.name;
+  const bindingName = declarationName.text;
+  const scope = declaration.parent.parent.parent;
+  let covered = false;
+
+  function visit(candidate: ts.Node): void {
+    if (
+      !covered &&
+      ts.isIdentifier(candidate) &&
+      candidate.text === bindingName &&
+      candidate !== declarationName &&
+      isDirectTooltipTrigger(candidate, sourceFile)
+    ) {
+      covered = true;
+      return;
+    }
+    ts.forEachChild(candidate, visit);
+  }
+
+  visit(scope);
+  return covered;
+}
+
+function tooltipContractViolations(): string[] {
   const violations: string[] = [];
 
   for (const root of GUARDED_TOOLTIP_ROOTS) {
@@ -42,23 +213,22 @@ function nativeButtonTitleViolations(): string[] {
       );
 
       function visit(node: ts.Node): void {
-        if (
-          (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
-          node.tagName.getText(sourceFile) === 'button'
-        ) {
-          const attributes = node.attributes.properties.filter(ts.isJsxAttribute);
-          const nativeTitle = attributes.find(
-            (attribute) => attribute.name.getText(sourceFile) === 'title',
-          );
-          const nativeTitleMarker = attributes.find(
-            (attribute) => attribute.name.getText(sourceFile) === 'data-native-title',
-          );
+        if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+          const nativeTitle = jsxAttribute(node, 'title', sourceFile);
+          const nativeTitleMarker = jsxAttribute(node, 'data-native-title', sourceFile);
           const isTruncatedTextException =
-            nativeTitleMarker?.initializer &&
-            ts.isStringLiteral(nativeTitleMarker.initializer) &&
-            nativeTitleMarker.initializer.text === 'truncated-text';
+            staticAttributeValue(nativeTitleMarker) === 'truncated-text';
+          const ariaHidden = jsxAttribute(node, 'aria-hidden', sourceFile);
+          const isHiddenFromAccessibilityTree = staticAttributeValue(ariaHidden) === 'true';
+          const isIconControl =
+            isInteractiveControl(node, sourceFile) &&
+            !isHiddenFromAccessibilityTree &&
+            isIconOnlyControl(node);
 
-          if (nativeTitle && !isTruncatedTextException) {
+          if (
+            (nativeTitle && isInteractiveControl(node, sourceFile) && !isTruncatedTextException) ||
+            (isIconControl && !hasManagedTip(node, sourceFile))
+          ) {
             const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
             violations.push(`${relative(RENDERER_ROOT, file)}:${line + 1}`);
           }
@@ -162,7 +332,7 @@ describe('icon-only button tooltip coverage', () => {
     expect(sidebar).toContain("t('ccAgent.sidebar.creationInProgress')");
   });
 
-  it('discovers native button titles anywhere in the guarded migration roots', () => {
-    expect(nativeButtonTitleViolations()).toEqual([]);
+  it('discovers native titles and icon controls without a managed Tip in guarded roots', () => {
+    expect(tooltipContractViolations()).toEqual([]);
   });
 });
