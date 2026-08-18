@@ -833,7 +833,9 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
     expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
-    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
+    // The snapshot also persists the alias route table for Subagent model
+    // normalization, so assert the rebuilt identity rather than exact shape.
+    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toMatchObject({
       model: 'grok-4.6',
       provider: 'xai',
     });
@@ -887,10 +889,10 @@ describe('Pi provider-aware model routing', () => {
     captured.requests.length = 0;
     await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
     expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
-    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
-      model: 'grok-4.6',
-      provider: 'xai',
-    });
+    const cleared = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+    expect(cleared).toMatchObject({ model: 'grok-4.6', provider: 'xai' });
+    // The point of this test: the stuck pending flag must be gone.
+    expect(cleared.pending).toBeUndefined();
     await handle.close();
   });
 
