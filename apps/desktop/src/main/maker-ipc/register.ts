@@ -704,6 +704,7 @@ import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
   isPiPromptRpcTimeoutError,
+  lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
   shouldRebuildPiNativeSession,
 } from './contextOverflowRollover.js';
@@ -743,6 +744,7 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descriptors.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
@@ -4502,10 +4504,18 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         }
       }
       if (pendingContextSnapshot) {
+        const verifiedWindow = lookupVerifiedContextWindow(
+          (modelId, providerId) =>
+            resolveVerifiedContextWindow(getActiveCatalog(), 'pi', providerId, modelId) ??
+            resolveVerifiedContextWindow(getActiveCatalog(), 'pi', 'xai', modelId) ??
+            resolveVerifiedContextWindow(getActiveCatalog(), 'claude-code', 'xai', modelId),
+          session.model,
+          typeof session.providerId === 'string' ? session.providerId : null,
+        );
         recordSessionContextSnapshot(
           session.id,
           pendingContextSnapshot.contextTokens,
-          pendingContextSnapshot.contextWindow,
+          verifiedWindow ?? pendingContextSnapshot.contextWindow,
         );
       }
       if (pendingCodexAccountUsageSnapshot) {
@@ -10843,11 +10853,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           contextTokens: sessions.contextTokens,
           contextWindow: sessions.contextWindow,
           model: sessions.model,
+          providerId: sessions.providerId,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       return row ?? null;
+    },
+    resolveVerifiedWindow: (modelId, providerId) => {
+      const catalog = getActiveCatalog();
+      return (
+        resolveVerifiedContextWindow(catalog, 'pi', providerId, modelId) ??
+        resolveVerifiedContextWindow(catalog, 'pi', 'xai', modelId) ??
+        resolveVerifiedContextWindow(catalog, 'claude-code', 'xai', modelId)
+      );
     },
     listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
     findLatestRebuildMeta: findLatestContextRebuildMeta,
@@ -13686,6 +13705,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (isDeviceLinkInvoke()) {
               // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
               markRemoteSettingPersistedInsideHandler(response);
+            }
+          }
+          if (!response.deferred) {
+            const verifiedWindow = lookupVerifiedContextWindow(
+              (modelId, pid) =>
+                resolveVerifiedContextWindow(getActiveCatalog(), 'pi', pid, modelId) ??
+                resolveVerifiedContextWindow(getActiveCatalog(), 'pi', 'xai', modelId) ??
+                resolveVerifiedContextWindow(getActiveCatalog(), 'claude-code', 'xai', modelId),
+              model,
+              typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
+            );
+            if (verifiedWindow) {
+              const [usage] = await getDbClient()
+                .drizzle.select({ contextTokens: sessions.contextTokens })
+                .from(sessions)
+                .where(eq(sessions.id, sessionId))
+                .limit(1);
+              await recordSessionContextSnapshot(
+                sessionId,
+                usage?.contextTokens ?? 0,
+                verifiedWindow,
+              );
             }
           }
           return response;

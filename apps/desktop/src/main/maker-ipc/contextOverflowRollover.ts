@@ -64,12 +64,31 @@ const CONTEXT_PRESSURE_REMAINING = 32_000;
 export function effectivePiContextWindow(
   model: string | null | undefined,
   reportedWindow: number,
+  verifiedWindow?: number | null,
 ): number {
+  if (typeof verifiedWindow === 'number' && verifiedWindow > 0) return verifiedWindow;
   const reported = Number.isFinite(reportedWindow) && reportedWindow > 0 ? reportedWindow : 0;
   if (typeof model === 'string' && /grok-4/i.test(model)) {
     return reported > 0 ? Math.min(reported, GROK_4_CONTEXT_CAP) : GROK_4_CONTEXT_CAP;
   }
   return reported;
+}
+
+export function lookupVerifiedContextWindow(
+  resolve: ((modelId: string, providerId: string | null) => number | null) | undefined,
+  model: string | null | undefined,
+  providerId?: string | null,
+): number | null {
+  if (!resolve || !model) return null;
+  const ids = [model];
+  const slash = model.lastIndexOf('/');
+  if (slash >= 0) ids.push(model.slice(slash + 1));
+  if (model.startsWith('x-ai/')) ids.push(`xai/${model.slice(5)}`);
+  for (const id of [...new Set(ids)]) {
+    const hit = resolve(id, providerId ?? null) ?? resolve(id, 'xai');
+    if (typeof hit === 'number' && hit > 0) return hit;
+  }
+  return null;
 }
 
 export function shouldRebuildForContextPressure(tokens: number, window: number): boolean {
@@ -215,7 +234,9 @@ export interface ContextOverflowRolloverDeps {
     contextTokens?: number | null;
     contextWindow?: number | null;
     model?: string | null;
+    providerId?: string | null;
   } | null>;
+  resolveVerifiedWindow?(modelId: string, providerId: string | null): number | null;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
   findLatestRebuildMeta(
     sessionId: string,
@@ -326,9 +347,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (live?.isTurnRunning()) return false;
     const source = await deps.listMessages(sessionId);
     const lastError = findLatestRebuildableError(source);
+    const verified = lookupVerifiedContextWindow(
+      deps.resolveVerifiedWindow,
+      sessionRow.model,
+      sessionRow.providerId,
+    );
     const window = effectivePiContextWindow(
       sessionRow.model,
       typeof sessionRow.contextWindow === 'number' ? sessionRow.contextWindow : 0,
+      verified,
     );
     const tokens = typeof sessionRow.contextTokens === 'number' ? sessionRow.contextTokens : 0;
     const pressure = shouldRebuildForContextPressure(tokens, window);

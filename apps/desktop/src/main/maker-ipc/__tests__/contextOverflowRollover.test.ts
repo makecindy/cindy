@@ -4,6 +4,7 @@ import {
   createContextOverflowRollover,
   effectivePiContextWindow,
   findLatestRebuildableError,
+  lookupVerifiedContextWindow,
   isContextOverflowErrorData,
   isPiPromptRpcTimeoutError,
   persistedUserContentToWireMessage,
@@ -57,6 +58,10 @@ describe('shouldRebuildPiNativeSession', () => {
 
   it('treats Grok 4 remaining-window pressure as a rebuild even if the DB window is inflated', () => {
     expect(effectivePiContextWindow('x-ai/grok-4.6', 1_050_000)).toBe(500_000);
+    expect(effectivePiContextWindow('x-ai/grok-4.6', 1_050_000, 500_000)).toBe(500_000);
+    expect(lookupVerifiedContextWindow((id) => (id === 'grok-4.6' ? 500_000 : null), 'x-ai/grok-4.6')).toBe(
+      500_000,
+    );
     expect(shouldRebuildForContextPressure(553_582, 1_050_000)).toBe(false);
     expect(shouldRebuildForContextPressure(553_582, effectivePiContextWindow('x-ai/grok-4.6', 1_050_000))).toBe(
       true,
