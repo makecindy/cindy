@@ -13,8 +13,13 @@
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
- *   4. 其余                —— 逐次弹窗（第三方 server、cindy_ssh、插件 ghost_call…）
+ *   3. cindy::ghost_call  —— 按用户在插件详情页为该插件的该工具选的授权档位判定
+ *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
+ *   5. 其余                —— `'prompt'`：交回 agent 原有权限链（第三方 server、cindy_ssh…）
+ *
+ * 注意 `'prompt'` 与 `'prompt-each-time'` 不是同义词：前者维持 agent 自己的权限链
+ * （用户可以在 agent 的权限卡上选「always allow」并持久化），后者才会全程禁止持久化
+ * 授权。需要「每次都必须问」的判定必须显式返回 `'prompt-each-time'`。
  */
 
 import type {
@@ -24,6 +29,7 @@ import type {
 } from '@cindy/maker-core';
 import { canAutoApproveContactsMcpTool, canonicalIOSSimulatorToolName } from '@cindy/mcps';
 
+import { resolveToolApprovalMode } from '../cindy-brain/ghostToolPermissionsStore.js';
 import { t } from '../i18n.js';
 
 /**
@@ -114,6 +120,50 @@ function readJsonObject(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
+ * `cindy::ghost_call` 的免审批判定 —— 唯一依据是用户在插件详情页亲手选的档位。
+ *
+ * `cindy` 仍然不进 TRUSTED_MCP_SERVERS：它转发到第三方插件沙箱，不能 server 级静默。
+ * 本函数只兑现用户对某个插件工具的 always-allow 选择；工作目录外附件/目录交接仍由
+ * mcp-integrations/ghost.ts 的独立确认闸控制。
+ *
+ * **非 always-allow 一律 `'prompt-each-time'`,不能回落到 `'prompt'`**：`'prompt'` 会把
+ * 判定交回 agent 自己的权限链，用户在 agent 的权限卡上点一次「不再询问」就会持久化，
+ * 之后 canUseTool 压根不再被调用 —— 插件详情页上显式选的「每次询问」就被绕过了，
+ * 三档里的中间档形同虚设。想要免打扰的正确入口是插件页的「总是允许」，本 PR 建的
+ * 就是这个机制。
+ *
+ * 同一条也覆盖 fail-closed 分支：grant_only（批量预授权，把一批文件过户给插件，
+ * 更不该允许「不再询问」）、坐标缺失、读取失败 —— 都无法证明用户选过 always-allow，
+ * 一律按最严的「每次都问且禁止持久化」处理。
+ *
+ * **已知差异（会话级旧授权）**：上面 `'prompt-each-time'` 只保证从这次判定往后不再
+ * 持久化新授权（claude-code/index.ts 的 canUseTool dispatcher 会丢弃这一档的
+ * `permissionUpdates`）；如果用户在**当前这个会话里、切换到按工具授权设置之前**已经
+ * 对 `ghost_call` 点过 agent 级「总是允许」，那条会话内累积的旧授权仍然有效，SDK 会
+ * 直接跳过 canUseTool，本函数返回什么都不会被读取——插件页设成「每次询问」在这条已
+ * 存在的会话里形同虚设（`blocked` 仍受派发器闸口保护，不受影响）。这个授权是会话级
+ * 内存态（未发现任何 `.claude/settings*.json` 持久化读写路径），换一个新会话就不再
+ * 存在，不是永久污染。抹平它需要先实机验证 SDK 在"会话已有粗粒度授权"时的确切行为，
+ * 与本文件 bypassPermissions 那条已知差异（见 claude-code/index.ts 的
+ * classifyMcpApprovalPolicy 旁注）同一处境：两条路都不便宜，本轮如实记录，不做未经
+ * 验证的半吊子拦截。
+ */
+function ghostCallApprovalPolicy(toolParams: unknown): McpToolApprovalPolicy {
+  const params = readJsonObject(toolParams);
+  if (!params || params.grant_only === true) return 'prompt-each-time';
+  const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
+  const innerTool = typeof params.tool === 'string' ? params.tool.trim() : '';
+  if (!ghostId || !innerTool) return 'prompt-each-time';
+  try {
+    return resolveToolApprovalMode(ghostId, innerTool) === 'always-allow'
+      ? 'auto-approve'
+      : 'prompt-each-time';
+  } catch {
+    return 'prompt-each-time';
+  }
+}
+
+/**
  * 取 iOS Simulator progressive 调用的内层动作。
  *
  * 内层名一律过 canonical 化：改名后旧名仍是可调用的隐藏别名，别名必须命中与新名
@@ -196,6 +246,19 @@ export function getDesktopMcpToolApprovalPolicy(
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
       : 'prompt-each-time';
+  }
+  // Codex app-server may omit the outer toolName while retaining the validated
+  // ghost_call payload. The coordinates inside it remain sufficient for an
+  // exact user-selected policy; malformed payloads fail closed in the helper.
+  //
+  // 约束（新增 `cindy` server 工具时必须复核）：`toolName === undefined` 会让本分支
+  // 吞掉 cindy server 上**所有**丢了工具名的调用，判据只看 payload 里的
+  // `ghost_id` + `tool`。当前 7 个工具里只有 ghost_call 同时带这两个字符串参数
+  // （ghost_info 只有 ghost_id，ghost_manual 是 ghost_id + path，forge 三件套都没有），
+  // 所以误判不了。一旦有新工具同时带这两个字段，必须先收窄这条分支（例如追加
+  // ghost_call 独有字段的形状校验），否则它会被当成 ghost_call 拿到 auto-approve。
+  if (serverName === 'cindy' && (toolName === 'ghost_call' || toolName === undefined)) {
+    return ghostCallApprovalPolicy(toolParams);
   }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
   if (iosSimulatorCall) {

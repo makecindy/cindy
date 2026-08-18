@@ -3782,6 +3782,13 @@
           "workdirClear": "恢复默认目录"
         },
         "toolsTitle": "Tools",
+        "alwaysAllow": "总是允许",
+        "needsApproval": "每次询问",
+        "blocked": "已阻止",
+        "custom": "自定义",
+        "chooseToolPermission": "选择何时允许 Agent 使用这些工具",
+        "toolPermissionGroup": "Tool {{name}} 的授权档位",
+        "toolPermissionSaveFailed": "工具授权没能保存，请重试。",
         "permissionsTitle": "权限",
         "infoDescription": "描述",
         "customSlotAsleep": "插件已停用，启用后这里将显示它的设置界面。",

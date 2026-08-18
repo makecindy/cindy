@@ -84,6 +84,29 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     expect(fn).toContain('beginGhostMutation(');
   });
 
+  it('ghosts:uninstall 清理工具粒度授权策略(否则同 id 重装不同插件会继承旧的 always-allow/blocked)', () => {
+    const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
+    expect(start).toBeGreaterThan(-1);
+    const fn = source.slice(start, source.indexOf('\n}', start));
+    expect(fn).toContain('writeGhostToolPermissions(');
+  });
+
+  it('ghosts:uninstall 的工具授权清理带重试,单次瞬时失败不满足 Codex 指出的"catch 让卸载悄悄留下旧策略"', () => {
+    // Codex P2:清理写盘失败时原来只 warn 一次就放过,同 id 重装不同插件可能
+    // 继承旧 ghostId 名下的 always-allow。写盘本身是临时文件+rename 的原子写,
+    // 失败大多是瞬时的(AV 扫描锁、I/O 抖动),重试几次可以自愈；仍然失败要
+    // 升到 error 级别,不能停在容易被忽略的 warn。
+    const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
+    expect(start).toBeGreaterThan(-1);
+    const fn = source.slice(start, source.indexOf('\n}', start));
+    const writeIndex = fn.indexOf('writeGhostToolPermissions(');
+    expect(writeIndex).toBeGreaterThan(-1);
+    const before = fn.slice(0, writeIndex);
+    // 写盘调用前一段窗口内必须有一个 for 循环(重试),不是裸的单次 try/catch。
+    expect(before.slice(-400)).toMatch(/for\s*\(/);
+    expect(fn).toContain('log.error(');
+  });
+
   it('市场装入/更新持租约(installOrUpdateMarketGhostPackage)', () => {
     // 同上:外层委托 withGhostInstallLock,owner 捕获 + 起租约在 ...Locked 内。
     const outerStart = source.indexOf('export async function installOrUpdateMarketGhostPackage');

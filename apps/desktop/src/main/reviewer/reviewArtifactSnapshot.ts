@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import { constants, promises as fs, type Stats } from 'node:fs';
+import { constants, promises as fs, type BigIntStats, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import {
   isPathWithinReviewWorkspace,
   reviewArtifactFileLinkLayoutIsSafe,
+  reviewArtifactHandleIdentityMatches,
   reviewArtifactPathIdentityMatches,
   ReviewArtifactAuthorizationError,
   type ReviewArtifactPathIdentity,
@@ -21,6 +22,7 @@ import {
   type ReviewProcessAliveProbe,
 } from './reviewRunRecovery.js';
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
+import { sameFileIdentity } from '../utils/fileIdentity.js';
 
 const MAX_SNAPSHOT_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SNAPSHOT_TOTAL_BYTES = 128 * 1024 * 1024;
@@ -45,13 +47,15 @@ export interface PreparedStableReviewArtifacts<T> {
   cleanup(): Promise<void>;
 }
 
-export function reviewArtifactSnapshotStatMatches(before: Stats, after: Stats): boolean {
+export function reviewArtifactSnapshotStatMatches(
+  before: BigIntStats,
+  after: BigIntStats,
+): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
+    sameFileIdentity(before, after) &&
     before.size === after.size &&
-    before.mtimeMs === after.mtimeMs &&
-    before.ctimeMs === after.ctimeMs &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs &&
     before.mode === after.mode
   );
 }
@@ -97,13 +101,13 @@ async function loadSnapshotOwnerRecord(
   currentUid: number | null,
 ): Promise<ReviewArtifactSnapshotOwnerRecord | null> {
   const ownerPath = snapshotOwnerPath(snapshotRoot);
-  const before = await fs.lstat(ownerPath).catch(() => null);
+  const before = await fs.lstat(ownerPath, { bigint: true }).catch(() => null);
   if (
     !before ||
     before.isSymbolicLink() ||
     !before.isFile() ||
-    before.size > SNAPSHOT_OWNER_MAX_BYTES ||
-    (currentUid !== null && before.uid !== currentUid)
+    before.size > BigInt(SNAPSHOT_OWNER_MAX_BYTES) ||
+    (currentUid !== null && before.uid !== BigInt(currentUid))
   ) {
     return null;
   }
@@ -111,11 +115,11 @@ async function loadSnapshotOwnerRecord(
   let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
     handle = await fs.open(ownerPath, constants.O_RDONLY | NOFOLLOW_FLAG);
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (!reviewArtifactSnapshotStatMatches(before, opened)) return null;
     const raw = await handle.readFile({ encoding: 'utf8' });
-    const afterHandle = await handle.stat();
-    const afterPath = await fs.lstat(ownerPath).catch(() => null);
+    const afterHandle = await handle.stat({ bigint: true });
+    const afterPath = await fs.lstat(ownerPath, { bigint: true }).catch(() => null);
     if (
       !reviewArtifactSnapshotStatMatches(opened, afterHandle) ||
       !afterPath ||
@@ -279,8 +283,8 @@ async function copyOpenFile(
         'A review artifact changed after permission was granted',
       );
     }
-    const before = await source.stat();
-    if (!reviewArtifactPathIdentityMatches(expectedIdentity, before)) {
+    const before = await source.stat({ bigint: true });
+    if (!reviewArtifactHandleIdentityMatches(expectedIdentity, before)) {
       throw new ReviewArtifactAuthorizationError(
         'A review artifact changed after permission was granted',
       );
@@ -291,7 +295,7 @@ async function copyOpenFile(
     if (!(await reviewArtifactFileLinkLayoutIsSafe(sourcePath, canonicalWorkingDir, before))) {
       throw new ReviewArtifactAuthorizationError('Review refused a multiply linked artifact file');
     }
-    if (before.size > MAX_SNAPSHOT_FILE_BYTES) {
+    if (before.size > BigInt(MAX_SNAPSHOT_FILE_BYTES)) {
       throw new ReviewArtifactAuthorizationError(
         'A review artifact is larger than the 64 MB local snapshot limit',
       );
@@ -303,9 +307,10 @@ async function copyOpenFile(
       0o600,
     );
     const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
+    const sourceSize = Number(before.size);
     let sourceOffset = 0;
-    while (sourceOffset < before.size) {
-      const requested = Math.min(buffer.length, before.size - sourceOffset);
+    while (sourceOffset < sourceSize) {
+      const requested = Math.min(buffer.length, sourceSize - sourceOffset);
       const { bytesRead } = await source.read(buffer, 0, requested, sourceOffset);
       if (bytesRead === 0) break;
       let written = 0;
@@ -315,8 +320,8 @@ async function copyOpenFile(
       }
       sourceOffset += bytesRead;
     }
-    const after = await source.stat();
-    const afterPath = await fs.lstat(sourcePath).catch(() => null);
+    const after = await source.stat({ bigint: true });
+    const afterPath = await fs.lstat(sourcePath, { bigint: true }).catch(() => null);
     const afterHandleLayoutIsSafe = await reviewArtifactFileLinkLayoutIsSafe(
       sourcePath,
       canonicalWorkingDir,
@@ -326,7 +331,7 @@ async function copyOpenFile(
       ? await reviewArtifactFileLinkLayoutIsSafe(sourcePath, canonicalWorkingDir, afterPath)
       : false;
     if (
-      sourceOffset !== before.size ||
+      sourceOffset !== sourceSize ||
       !reviewArtifactSnapshotStatMatches(before, after) ||
       !afterHandleLayoutIsSafe ||
       !afterPath ||
@@ -340,7 +345,7 @@ async function copyOpenFile(
     }
     await destination.sync();
     await destination.chmod(0o600);
-    return before.size;
+    return sourceSize;
   } finally {
     await destination?.close().catch(() => undefined);
     await source.close().catch(() => undefined);
@@ -402,7 +407,7 @@ export async function materializeReviewArtifactSnapshots(input: {
           'A review artifact has no permission-time identity',
         );
       }
-      const entry = await fs.lstat(sourcePath).catch(() => null);
+      const entry = await fs.lstat(sourcePath, { bigint: true }).catch(() => null);
       if (
         !entry ||
         entry.isSymbolicLink() ||

@@ -158,6 +158,54 @@
   - 随包种子是第一方输入；发现链接、junction、FIFO 等非普通条目必须整颗跳过并告警，
     不得在复制时静默丢弃后继续写批准 receipt。
 
+### 3.1 工具粒度授权（用户对单个插件工具选的档位）
+
+manifest 的 `tool` 槽只回答"这个插件**能**暴露哪些工具"。装入之后，用户还能在插件
+详情页对**每一个工具**单独选一个档位，存在
+`<userData>/owners/<owner>/ghost-tool-permissions.json`（`ghostToolPermissionsStore.ts`）：
+
+| 档位 | 语义 | 执法点 |
+| --- | --- | --- |
+| `always-allow` | 免掉「要不要让 Agent 调这个工具」的权限卡，直接放行 | `maker-host/mcp-tool-approval-policy.ts` 返回 `auto-approve` |
+| `needs-approval`（默认） | 每次都问，且全程禁止持久化授权 | 同上，返回 `prompt-each-time`（不是 `prompt`——`prompt` 会把判定交回 agent 自己的权限链，用户在 agent 权限卡上点一次「不再询问」就会持久化，这一档就形同虚设） |
+| `blocked` | 硬拒，任何调用方都调不动 | `cindy-brain/pipeDispatcher.ts` 的资格审 |
+
+三条不变量，改这套东西前先确认它们仍然成立：
+
+1. **默认必须是 `needs-approval`。** 配置缺失、文件损坏、读不出来、拿不到
+   `ghost_id`/`tool` 坐标，全部落回默认。免审批只能来自用户显式选择，任何
+   fallback 都不得放宽。
+2. **`always-allow` 只免掉工具审批卡，免不掉文件交接卡。** 工作目录外的文件／目录
+   过户是另一条独立闸门（`mcp-integrations/ghost.ts` 的 `requestGrantConfirm`，
+   见下节 4）。2026-08 曾把 `always-allow` 接进 `requestGrantConfirm` 造成越权放行，
+   已撤销；**不要再接**。`grant_only` 调用同理不吃 `always-allow`。
+3. **`blocked` 的硬拦截只能落在 `pipeDispatcher.callGhostTool`。** agent 的
+   `ghost_call` 只是调用方之一，还有 `ghosts:*` IPC 的 `call` action、定时任务脚本
+   通道（`scheduler-host/script-capability-broker.ts`）和 github-issue 内部提交器
+   直接打派发器。拦在 MCP 门面层等于没拦。审批策略枚举里没有 deny 档，因此
+   `mcp-tool-approval-policy.ts` 对 `blocked` 同样返回 `prompt-each-time`（与
+   `needs-approval` 同一分支，只当作"不免审批"，不是硬拒）——**必须**是
+   `prompt-each-time`，不能落回 `prompt`：后者会把判定交回 agent 自己的权限链，
+   用户在权限卡上点一次「不再询问」就会持久化成 user/project 级授权；等这个工具
+   后续被解禁、档位改回 `needs-approval` 时，那条旧授权仍然生效，会绕过插件页新选
+   的"每次询问"。真正的硬拒永远由派发器兜底，这一层只负责不让持久化授权在解禁之后
+   留下后门。
+4. **`grant_only` 是唯一走不到派发器的支路，它的收口在
+   `mcp-integrations/ghost.ts`。** 它只过户不派发，协议上忽略 `tool` 字段，所以判据
+   落在插件层：工具被用户全禁时不存在任何合法的后续调用，预授权只剩"绕过禁用把文件
+   交出去"这一个用途，直接拒；显式点名了一个已声明且被禁的工具同样拒。判据本身是
+   `ghostToolBlockVerdict`（`ghostToolPermissionsStore.ts`），可注入 resolver 直测。
+   `grantAttachmentUrls` 中间夹着用户确认卡，期间用户可能刚把工具改成 `blocked`，
+   所以确认返回后、写任何 blob / ledger / ref 之前必须**再判一次**；写完才拒绝
+   会留下已生效的授权副作用，不算拦住。这条路没有派发器兜底。
+
+这也是 `cindy` 这个 server 至今**不进** `TRUSTED_MCP_SERVERS` 的原因没有变：
+`ghost_call` 转发进第三方插件沙箱，server 级整体静默永远不可接受；能免审批的只有
+用户逐个工具亲手点出来的那些。
+
+存量兼容（下节 5）：配置文件不存在 = 全部 `needs-approval` = 升级前的行为，老用户
+升级后无感，不需要重新确认任何东西。
+
 ## 4. 网络、凭证与资源交接
 
 - network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**给沙箱。

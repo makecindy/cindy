@@ -427,6 +427,21 @@ export interface GhostToolDecl {
   parameters?: Record<string, unknown>;
 }
 
+/** 插件工具的授权确认模式。 */
+export const TOOL_APPROVAL_MODES = ['always-allow', 'needs-approval', 'blocked'] as const;
+export type ToolApprovalMode = (typeof TOOL_APPROVAL_MODES)[number];
+
+/** 插件工具全局策略状态(当不同工具配置混杂时显示 'custom')。 */
+export type GlobalToolPolicy = ToolApprovalMode | 'custom';
+
+/** 插件/连接器的工具级授权配置结构。 */
+export interface GhostToolPermissionConfig {
+  /** 插件工具整体默认/全局策略。 */
+  globalPolicy?: GlobalToolPolicy;
+  /** 单工具级别的精确授权映射(toolName -> mode)。 */
+  tools?: Record<string, ToolApprovalMode>;
+}
+
 /** cindy 槽·图像类可申请的动作(主机代办菜单的"图像"类目)。 */
 export const GHOST_MODEL_IMAGE_ACTIONS = ['generate', 'edit'] as const;
 export type GhostModelImageAction = (typeof GHOST_MODEL_IMAGE_ACTIONS)[number];

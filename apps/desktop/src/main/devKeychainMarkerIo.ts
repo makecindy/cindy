@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 
 import { isKeychainIdentityMarkerArtifact, type KeychainIdentityIo } from './devKeychainName.js';
+import { samePathAndHandleFileIdentity } from './utils/fileIdentity.js';
 
 export interface KeychainMarkerIoDeps {
   /** 身份标记文件的绝对路径(profileDir 下的 KEYCHAIN_IDENTITY_MARKER_FILE)。 */
@@ -29,7 +30,7 @@ export interface KeychainMarkerIoDeps {
      * 语义为 **lstat**(不跟随符号链接):路径项若在读取期间被换成链接,跟随式
      * stat 会拿到链接目标、与 fd 同源,校验形同虚设(review 第三十七轮)。
      */
-    statSync?: (path: string) => fs.Stats;
+    statSync?: (path: string) => fs.BigIntStats;
     /** readMarker 的有界读(测试注入模拟"同 inode 原地改写")。 */
     readSync?: typeof fs.readSync;
   };
@@ -39,7 +40,8 @@ export function createKeychainMarkerIo(deps: KeychainMarkerIoDeps): KeychainIden
   const { markerPath, profileDir } = deps;
   const linkSync = deps.fsOverrides?.linkSync ?? fs.linkSync;
   const writeSync = deps.fsOverrides?.writeSync ?? fs.writeSync;
-  const statPath = deps.fsOverrides?.statSync ?? ((p: string) => fs.lstatSync(p));
+  const statPath =
+    deps.fsOverrides?.statSync ?? ((p: string) => fs.lstatSync(p, { bigint: true }));
   const readSync = deps.fsOverrides?.readSync ?? fs.readSync;
 
   // fsync profile 目录(claimMarker 与 flushProfileDir 共用同一实现)。
@@ -97,7 +99,7 @@ export function createKeychainMarkerIo(deps: KeychainMarkerIoDeps): KeychainIden
           (fs.constants.O_NONBLOCK ?? 0),
       );
       try {
-        const opened = fs.fstatSync(fd);
+        const opened = fs.fstatSync(fd, { bigint: true });
         if (!opened.isFile()) return { kind: 'unreadable' };
         const maxBytes = 256;
         const boundedRead = (): Buffer | null => {
@@ -134,7 +136,7 @@ export function createKeychainMarkerIo(deps: KeychainMarkerIoDeps): KeychainIden
         try {
           const now = statPath(markerPath);
           if (now.isSymbolicLink()) return 'changed';
-          if (now.dev !== opened.dev || now.ino !== opened.ino) return 'changed';
+          if (!samePathAndHandleFileIdentity(now, opened)) return 'changed';
         } catch {
           return 'changed';
         }

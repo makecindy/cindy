@@ -6,7 +6,7 @@
  * 把结果/结构化失败原样交回总机。
  *
  * 职责边界:
- *   - 资格审(装没装 / 醒没醒 / 有没有这个工具 / 熔断没)→ 结构化错误码;
+ *   - 资格审(装没装 / 醒没醒 / 有没有这个工具 / 用户禁没禁 / 熔断没)→ 结构化错误码;
  *   - 按需拉起沙箱(spawn 幂等);
  *   - callId 配对 + 超时掐断(过期卷子作废丢弃);
  *   - 长任务续命:主机代办在途 hold(cindySlot 接线)与插件 tool-progress
@@ -25,10 +25,11 @@ import type {
   GhostToolCallResult,
   GhostToolDecl,
   InstalledGhost,
+  ToolApprovalMode,
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
-import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
+import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
 
 export interface PipeDispatcherDeps {
   /** 按 id 取已装意识(未装 → null)。 */
@@ -39,6 +40,16 @@ export interface PipeDispatcherDeps {
   spawn(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** 把下行消息发到该意识的电子脑逻辑页;false = 逻辑页不在线。 */
   sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
+  /**
+   * 该插件该工具当前的用户授权档位(插件详情页设定,现读现查支持热切)。
+   *
+   * 放在派发器而不是 MCP 门面层:agent 的 ghost_call 只是**其中一个**调用方,
+   * 还有 `ghosts:*` IPC 的 call action、定时任务脚本通道(script-capability-broker)
+   * 与 github-issue 内部提交器都直接打这里。禁用是安全开关,只有唯一收口才拦得住。
+   * 缺省(未注入)= 不做授权拦截,保持老 deps 的调用方零改动。
+   */
+  resolveToolApprovalMode?(ghostId: string, tool: string): ToolApprovalMode;
+  /** 当前 owner / session 的代际边界；异步调用跨代时必须作废。 */
   ownerScope?: GhostOwnerScope;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
   timeoutMs?: number;
@@ -136,6 +147,40 @@ export class GhostPipeDispatcher {
   }
 
   /**
+   * 现读一次工具授权档位，`blocked` 直接拒绝；读取本身抛错按无法证明未禁
+   * 处理，同样 fail closed。供派发入口与冷启动 spawn 之后的复判共用——
+   * 两处必须是同一份判据，不能各写一遍再悄悄漂移。
+   */
+  private checkBlockedPolicy(ghostId: string, tool: string): GhostToolCallResult | null {
+    let approvalMode: ToolApprovalMode | undefined;
+    try {
+      approvalMode = this.deps.resolveToolApprovalMode?.(ghostId, tool);
+    } catch (error) {
+      this.deps.log?.warn('ghost tool approval lookup failed; denying call', {
+        ghostId,
+        tool,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+        message: `无法读取 ${ghostId} 的工具 ${tool} 授权策略;为了安全未执行该工具,请重试或检查插件设置。`,
+      };
+    }
+    if (approvalMode === 'blocked') {
+      this.deps.log?.info('ghost tool call denied by user policy', { ghostId, tool });
+      return {
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+        message:
+          `用户已在插件设置里禁用 ${ghostId} 的工具 ${tool};不要重试、也不要换别的工具绕过,` +
+          `如确实需要请让用户自己到「插件」详情页把该工具改回「每次询问」或「总是允许」。`,
+      };
+    }
+    return null;
+  }
+
+  /**
    * 派活主入口(ghost 总机的 callGhostTool 回调)。
    * 永不 reject——一切失败都折叠成结构化 GhostToolCallResult。
    */
@@ -165,6 +210,12 @@ export class GhostPipeDispatcher {
     if (!declared) {
       return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools) };
     }
+    // 用户把该工具设成「已阻止」时硬拒,且必须在拉起沙箱之前——被禁用的工具
+    // 不该造成任何可观察副作用(进程拉起、OAuth 卡、ledger 落账)。
+    // store 正常读取时会把缺失/损坏配置 normalize 为 needs-approval;但依赖本身
+    // 抛错意味着宿主无法证明当前工具未被 blocked，必须 fail closed。
+    const preSpawnBlock = this.checkBlockedPolicy(ghostId, tool);
+    if (preSpawnBlock) return preSpawnBlock;
     if (this.deps.runtimeStateOf(ghostId) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };
     }
@@ -181,6 +232,11 @@ export class GhostPipeDispatcher {
       if (!spawned.ok) {
         return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件启动失败:${spawned.reason}` };
       }
+      // 冷启动是一次真实的 await 窗口：spawn 之前读到的 approvalMode 到这里
+      // 可能已经过期(用户刚把该工具切成 blocked)。派发器是唯一收口，这个
+      // 窗口不重判就等于放过被禁工具执行一次。
+      const postSpawnBlock = this.checkBlockedPolicy(ghostId, tool);
+      if (postSpawnBlock) return postSpawnBlock;
     }
     if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();

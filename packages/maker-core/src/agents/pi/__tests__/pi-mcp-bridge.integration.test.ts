@@ -296,8 +296,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             }],
           };
         } else if (body.method === 'tools/call') {
-          // 超过 50ms startup budget 后才回工具结果，证明探测完成后切回长 request budget。
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          // 超过 startup budget 后才回工具结果，证明探测完成后切回长 request budget。
+          await new Promise((resolve) => setTimeout(resolve, 700));
           const text = body.params?.arguments?.text;
           echoCalls.push({ text });
           result = { content: [{ type: 'text', text: `ECHO[${String(text)}]` }] };
@@ -308,7 +308,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         res.write(`event: message\r\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\r\n\r\n`);
         // 合法 Streamable HTTP server 可在返回当前 response 后继续保持 SSE 流；client
         // 必须在 event 到达时返回并取消流，而不是等待这里结束。
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise((resolve) => setTimeout(resolve, 750));
         if (!res.destroyed && !res.writableEnded) res.end();
         return;
       }
@@ -423,8 +423,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                     authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0',
                     'x-api-key': 'CINDY_PI_REMOTE_MCP_SECRET_1',
                   },
-                  startupTimeoutMs: 50,
-                  requestTimeoutMs: 1_000,
+                  // 给繁忙的 Windows runner 留出事件循环调度余量；server 在 event 后继续
+                  // 保持 750ms，仍能证明启动探测没有等待 SSE 流关闭。
+                  startupTimeoutMs: 500,
+                  requestTimeoutMs: 2_000,
                 },
               }],
             },

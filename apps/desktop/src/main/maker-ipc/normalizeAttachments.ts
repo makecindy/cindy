@@ -19,7 +19,7 @@
 
 import { app } from 'electron';
 import path from 'node:path';
-import { constants, type Stats } from 'node:fs';
+import { constants, type BigIntStats } from 'node:fs';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
@@ -32,6 +32,7 @@ import { isAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachme
 import type { AttachmentIntegrity, AttachmentOssRef } from '../../shared/attachmentOssRef.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { sameFileIdentity } from '../utils/fileIdentity.js';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety.js';
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
 import {
@@ -110,10 +111,9 @@ function tempOwnerRecordPath(ownerRoot: string): string {
   return path.join(ownerRoot, TEMP_OWNER_RECORD_NAME);
 }
 
-function statMatches(before: Stats, after: Stats): boolean {
+function statMatches(before: BigIntStats, after: BigIntStats): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
+    sameFileIdentity(before, after) &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs &&
@@ -151,24 +151,24 @@ async function loadTempOwnerRecord(
   currentUid: number | null,
 ): Promise<TempAttachmentOwnerRecord | null> {
   const recordPath = tempOwnerRecordPath(ownerRoot);
-  const before = await fs.lstat(recordPath).catch(() => null);
+  const before = await fs.lstat(recordPath, { bigint: true }).catch(() => null);
   if (
     !before ||
     before.isSymbolicLink() ||
     !before.isFile() ||
-    before.size > TEMP_OWNER_RECORD_MAX_BYTES ||
-    (currentUid !== null && before.uid !== currentUid)
+    before.size > BigInt(TEMP_OWNER_RECORD_MAX_BYTES) ||
+    (currentUid !== null && before.uid !== BigInt(currentUid))
   ) {
     return null;
   }
   let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
     handle = await fs.open(recordPath, constants.O_RDONLY | NOFOLLOW_FLAG);
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (!statMatches(before, opened)) return null;
     const raw = await handle.readFile({ encoding: 'utf8' });
-    const afterHandle = await handle.stat();
-    const afterPath = await fs.lstat(recordPath).catch(() => null);
+    const afterHandle = await handle.stat({ bigint: true });
+    const afterPath = await fs.lstat(recordPath, { bigint: true }).catch(() => null);
     if (
       !statMatches(opened, afterHandle) ||
       !afterPath ||

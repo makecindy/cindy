@@ -1,10 +1,11 @@
 import { createHash, type Hash } from 'node:crypto';
-import { constants, promises as fs, type Stats } from 'node:fs';
+import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 
 import { isReviewSensitiveCredentialPath } from '@cindy/maker-core';
 
 import { isPathInside } from '../git-review/fsPathGuard.js';
+import { sameFileIdentity } from '../utils/fileIdentity.js';
 
 const MAX_CAPPED_WORKSPACE_PATHS = 10_000;
 const MAX_CAPPED_WORKSPACE_BYTES = 512 * 1024 * 1024;
@@ -24,13 +25,12 @@ function addRecord(hash: Hash, ...parts: Array<string | number>): void {
   hash.update(JSON.stringify(parts)).update('\n');
 }
 
-function stableStatMatches(before: Stats, after: Stats): boolean {
+function stableStatMatches(before: BigIntStats, after: BigIntStats): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
+    sameFileIdentity(before, after) &&
     before.size === after.size &&
-    before.mtimeMs === after.mtimeMs &&
-    before.ctimeMs === after.ctimeMs &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs &&
     before.mode === after.mode
   );
 }
@@ -49,9 +49,9 @@ function assertSafeGitPath(rawPath: string): void {
   }
 }
 
-async function lstatOrNull(filePath: string): Promise<Stats | null> {
+async function lstatOrNull(filePath: string): Promise<BigIntStats | null> {
   try {
-    return await fs.lstat(filePath);
+    return await fs.lstat(filePath, { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
@@ -63,7 +63,7 @@ async function hashRegularFile(input: {
   repoRootReal: string;
   candidate: string;
   rawPath: string;
-  entryBefore: Stats;
+  entryBefore: BigIntStats;
   remainingBytes: number;
 }): Promise<number> {
   const linkTargetBefore = input.entryBefore.isSymbolicLink()
@@ -89,13 +89,13 @@ async function hashRegularFile(input: {
         'Review refused a capped workspace path that changed its repository boundary',
       );
     }
-    const before = await handle.stat();
+    const before = await handle.stat({ bigint: true });
     if (!before.isFile()) {
       throw new ReviewCappedWorkspaceFingerprintError(
         'Review can only content-fingerprint regular capped workspace files',
       );
     }
-    if (before.size > input.remainingBytes) {
+    if (before.size > BigInt(input.remainingBytes)) {
       throw new ReviewCappedWorkspaceFingerprintLimitError(
         'Capped Review files exceed the 512 MB full-content fingerprint limit',
       );
@@ -103,21 +103,22 @@ async function hashRegularFile(input: {
 
     const contentHash = createHash('sha256');
     const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+    const sourceSize = Number(before.size);
     let offset = 0;
-    while (offset < before.size) {
-      const requested = Math.min(buffer.length, before.size - offset);
+    while (offset < sourceSize) {
+      const requested = Math.min(buffer.length, sourceSize - offset);
       const { bytesRead } = await handle.read(buffer, 0, requested, offset);
       if (bytesRead === 0) break;
       contentHash.update(buffer.subarray(0, bytesRead));
       offset += bytesRead;
     }
-    const after = await handle.stat();
+    const after = await handle.stat({ bigint: true });
     const entryAfter = await lstatOrNull(input.candidate);
     const linkTargetAfter = entryAfter?.isSymbolicLink()
       ? await fs.readlink(input.candidate).catch(() => null)
       : null;
     if (
-      offset !== before.size ||
+      offset !== sourceSize ||
       !stableStatMatches(before, after) ||
       !entryAfter ||
       !stableStatMatches(input.entryBefore, entryAfter) ||
@@ -133,11 +134,11 @@ async function hashRegularFile(input: {
       input.entryBefore.isSymbolicLink() ? 'symlink-file' : 'file',
       input.rawPath,
       linkTargetBefore ?? '',
-      before.size,
-      before.mode,
+      sourceSize,
+      Number(before.mode),
       contentHash.digest('hex'),
     );
-    return before.size;
+    return sourceSize;
   } finally {
     await handle.close().catch(() => undefined);
   }

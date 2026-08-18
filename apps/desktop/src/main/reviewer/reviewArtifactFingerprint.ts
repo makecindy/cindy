@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
-import { constants, promises as fs, type Stats } from 'node:fs';
+import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 
 import { isReviewSensitiveCredentialPath, reviewFileLinkLayoutIsSafe } from '@cindy/maker-core';
 
-import { reviewArtifactPathIdentityMatches } from './reviewArtifactAuthorization.js';
+import {
+  reviewArtifactHandleIdentityMatches,
+  reviewArtifactPathIdentityMatches,
+} from './reviewArtifactAuthorization.js';
 
 const MAX_DIRECTORY_ENTRIES = 50_000;
 const READ_CHUNK_BYTES = 128 * 1024;
@@ -57,14 +60,14 @@ async function assertCanonicalReviewArtifactPath(absolutePath: string): Promise<
 
 async function resolveFingerprintRoot(rawPath: string): Promise<string> {
   const normalizedPath = path.normalize(rawPath);
-  const before = await fs.lstat(normalizedPath).catch(() => null);
+  const before = await fs.lstat(normalizedPath, { bigint: true }).catch(() => null);
   if (!before || before.isSymbolicLink()) return normalizedPath;
 
   const canonicalPath = await fs.realpath(normalizedPath).catch(() => null);
   if (!canonicalPath) return normalizedPath;
   const [afterRawPath, afterCanonicalPath] = await Promise.all([
-    fs.lstat(normalizedPath).catch(() => null),
-    fs.lstat(canonicalPath).catch(() => null),
+    fs.lstat(normalizedPath, { bigint: true }).catch(() => null),
+    fs.lstat(canonicalPath, { bigint: true }).catch(() => null),
   ]);
   if (
     !afterRawPath ||
@@ -88,7 +91,9 @@ async function resolveLinkConfinementRoot(rawPath: string): Promise<string> {
     );
   }
   const canonicalPath = await fs.realpath(path.normalize(rawPath)).catch(() => null);
-  const stat = canonicalPath ? await fs.lstat(canonicalPath).catch(() => null) : null;
+  const stat = canonicalPath
+    ? await fs.lstat(canonicalPath, { bigint: true }).catch(() => null)
+    : null;
   if (
     !canonicalPath ||
     isSensitive(canonicalPath) ||
@@ -103,7 +108,7 @@ async function resolveLinkConfinementRoot(rawPath: string): Promise<string> {
   return canonicalPath;
 }
 
-function addRecord(state: FingerprintState, ...parts: Array<string | number>): void {
+function addRecord(state: FingerprintState, ...parts: Array<string | number | bigint>): void {
   state.hash.update(parts.join('\0')).update('\n');
 }
 
@@ -140,7 +145,7 @@ async function addFile(
   absolutePath: string,
   relativePath: string,
   linkConfinementRoot: string,
-  stat: Stats,
+  stat: BigIntStats,
   state: FingerprintState,
 ): Promise<void> {
   if (!(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, stat))) {
@@ -149,9 +154,8 @@ async function addFile(
     );
   }
   if (
-    !Number.isSafeInteger(stat.size) ||
-    stat.size < 0 ||
-    stat.size > state.contentBytesRemaining
+    stat.size < 0n ||
+    stat.size > BigInt(state.contentBytesRemaining)
   ) {
     throw new ReviewArtifactFingerprintLimitError(
       'Review artifacts exceed the complete-content fingerprint byte limit',
@@ -162,13 +166,14 @@ async function addFile(
   // timestamps are checked for TOCTOU below, but are intentionally omitted
   // from the digest so the regression exercises the complete content hash.
   addRecord(state, 'file', relativePath, stat.size, stat.mode);
+  const sourceSize = Number(stat.size);
   let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
     handle = await state.openFile(absolutePath, constants.O_RDONLY | NOFOLLOW_FLAG);
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (
       !opened.isFile() ||
-      !reviewArtifactPathIdentityMatches(stat, opened) ||
+      !reviewArtifactHandleIdentityMatches(stat, opened) ||
       !(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, opened))
     ) {
       throw new ReviewArtifactFingerprintChangedError(
@@ -176,15 +181,15 @@ async function addFile(
       );
     }
 
-    const bytesRead = await hashRange(handle, state, 0, opened.size);
-    const afterHandle = await handle.stat();
-    const afterPath = await fs.lstat(absolutePath).catch(() => null);
+    const bytesRead = await hashRange(handle, state, 0, sourceSize);
+    const afterHandle = await handle.stat({ bigint: true });
+    const afterPath = await fs.lstat(absolutePath, { bigint: true }).catch(() => null);
     if (
-      bytesRead !== opened.size ||
+      bytesRead !== sourceSize ||
       !reviewArtifactPathIdentityMatches(opened, afterHandle) ||
       !afterPath ||
       afterPath.isSymbolicLink() ||
-      !reviewArtifactPathIdentityMatches(opened, afterPath) ||
+      !reviewArtifactHandleIdentityMatches(afterPath, opened) ||
       afterHandle.nlink !== afterPath.nlink ||
       !(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, afterHandle))
     ) {
@@ -219,9 +224,9 @@ async function walk(
   }
   state.entries += 1;
 
-  let stat: Stats;
+  let stat: BigIntStats;
   try {
-    stat = await fs.lstat(absolutePath);
+    stat = await fs.lstat(absolutePath, { bigint: true });
   } catch (error) {
     addRecord(
       state,

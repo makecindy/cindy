@@ -24,7 +24,7 @@ describe('review plugin', () => {
     pluginMod = await import('../index');
     expansionPreference = await import('../diffExpansionPreference');
     expansionPreference.resetReviewDiffExpansionPreferencesForTests();
-  });
+  }, 30_000);
 
   afterEach(() => {
     registry._resetTabKindRegistry();

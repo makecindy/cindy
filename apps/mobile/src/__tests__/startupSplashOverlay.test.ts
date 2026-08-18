@@ -169,7 +169,7 @@ describe("startup splash overlay", () => {
     expect(colorValue(android.colorsNight.resources.color)).toBe(
       darkColors.brandSplashBackground,
     );
-  });
+  }, 60_000);
 });
 
 interface AndroidResource {

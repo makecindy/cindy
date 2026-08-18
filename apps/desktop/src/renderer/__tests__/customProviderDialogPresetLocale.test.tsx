@@ -56,6 +56,11 @@ vi.mock('@/lib/customProviders', () => ({
 import { CustomProviderDialog } from '@/components/settings/CustomProviderDialog';
 import { createCustomProvider } from '@/lib/customProviders';
 
+// The model picker mounts after an async IPC result. The desktop gate runs the
+// renderer suite in parallel forks on Windows, where one second is not enough
+// to distinguish scheduler contention from a missing picker.
+const MODEL_PICKER_READY_TIMEOUT_MS = 5_000;
+
 const localizedPreset: ProviderPreset = {
   id: 'localized-provider',
   name: '简体供应商',
@@ -388,7 +393,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
     expect(
       await screen.findByRole('heading', {
         name: 'settings.providers.custom.fetch.pickerTitle',
-      }),
+      }, { timeout: MODEL_PICKER_READY_TIMEOUT_MS }),
     ).not.toBeNull();
 
     // Radix Popover 的退场 DismissableLayer 会短暂保留 document-capture
@@ -425,7 +430,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
 
     const pickerHeading = await screen.findByRole('heading', {
       name: 'settings.providers.custom.fetch.pickerTitle',
-    });
+    }, { timeout: MODEL_PICKER_READY_TIMEOUT_MS });
     const pickerScrim = pickerHeading.closest('[role="dialog"]')?.parentElement;
     expect(pickerScrim).not.toBeNull();
     fireEvent.pointerDown(pickerScrim as Element);

@@ -3782,6 +3782,13 @@
           "workdirClear": "既定のフォルダーに戻す"
         },
         "toolsTitle": "Tools",
+        "alwaysAllow": "常に許可",
+        "needsApproval": "毎回確認",
+        "blocked": "ブロック済み",
+        "custom": "カスタム",
+        "chooseToolPermission": "Agent がこれらのツールを使用できるタイミングを選択",
+        "toolPermissionGroup": "Tool {{name}} の権限",
+        "toolPermissionSaveFailed": "ツールの権限を保存できませんでした。もう一度お試しください。",
         "permissionsTitle": "権限",
         "infoDescription": "説明",
         "customSlotAsleep": "このプラグインは無効です。有効化すると、ここに設定画面が表示されます。",

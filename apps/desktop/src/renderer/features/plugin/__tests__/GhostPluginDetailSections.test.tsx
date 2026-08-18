@@ -20,8 +20,15 @@ vi.mock('react-i18next', () => ({
       const labels: Record<string, string> = {
         'settings.ghosts.detail.openTool': `Open ${String(options?.name ?? '')}`,
         'settings.ghosts.detail.toolsTitle': 'Tools',
-        'settings.ghosts.detail.viewAllTools': 'See All',
-        'settings.ghosts.detail.collapseTools': 'Show Less',
+        'settings.ghosts.detail.alwaysAllow': 'Always allow',
+        'settings.ghosts.detail.needsApproval': 'Needs approval',
+        'settings.ghosts.detail.blocked': 'Blocked',
+        'settings.ghosts.detail.custom': 'Custom',
+        'settings.ghosts.detail.chooseToolPermission':
+          'Choose when the Agent is allowed to use these tools',
+        'settings.ghosts.detail.toolPermissionGroup': `Permission for Tool ${String(options?.name ?? '')}`,
+        'settings.ghosts.detail.toolPermissionSaveFailed':
+          "Couldn't save the tool permission. Please try again.",
         'settings.ghosts.detail.noToolDescription': 'No description',
         'settings.ghosts.detail.permissionsTitle': 'Permissions',
         'settings.ghosts.detail.viewAllPermissions': 'See All',
@@ -887,21 +894,477 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.queryByText('JSON Schema')).toBeNull();
   });
 
-  it('keeps the Tools title count-free and puts See All beside the title', () => {
-    render(
-      <ToolsSection
-        tools={Array.from({ length: 7 }, (_, index) => ({
-          name: `tool_${index}`,
-          description: `Tool ${index}`,
-        }))}
-      />,
+  function stubToolPermissionApi(overrides?: {
+    config?: Record<string, unknown> | ((id: string) => Record<string, unknown>);
+    setToolPermissions?: (id: string, config: unknown) => Promise<unknown>;
+  }) {
+    const setToolPermissions = vi.fn(
+      overrides?.setToolPermissions ?? (async () => ({ config: {} })),
     );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          toolPermissionsSync: (id: string) => ({
+            config:
+              typeof overrides?.config === 'function'
+                ? overrides.config(id)
+                : (overrides?.config ?? {}),
+          }),
+          setToolPermissions,
+        },
+      },
+    });
+    return setToolPermissions;
+  }
+
+  const sevenTools = Array.from({ length: 7 }, (_, index) => ({
+    name: `tool_${index}`,
+    description: `Tool ${index}`,
+  }));
+
+  it('keeps the Tools title count-free and puts the count in its own badge', () => {
+    stubToolPermissionApi();
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
 
     const heading = screen.getByRole('heading', { name: 'Tools' });
     expect(heading).toBeTruthy();
     expect(heading.closest('section')?.className).not.toContain('border-t');
+    // 计数是独立 badge,不写进标题文本。
     expect(screen.queryByRole('heading', { name: /Tools.*7/ })).toBeNull();
-    expect(screen.getByRole('button', { name: 'See All' })).toBeTruthy();
+    expect(screen.getByText('7')).toBeTruthy();
+    expect(screen.getByText('tool_0')).toBeTruthy();
+  });
+
+  // 回归锚点:档位值是 `always-allow` / `needs-approval`,locale 键名是 camelCase。
+  // 按档位值拼 i18n key 会把原始 key 字符串显示给用户。
+  it('labels the global policy with translated copy, never a raw i18n key', () => {
+    stubToolPermissionApi();
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    expect(screen.getByText('Needs approval')).toBeTruthy();
+    expect(screen.queryByText(/settings\.ghosts\.detail\./)).toBeNull();
+  });
+
+  it('exposes the selected permission through aria-pressed, not colour alone', () => {
+    stubToolPermissionApi({ config: { tools: { tool_0: 'blocked' } } });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstRowGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const pressed = within(firstRowGroup)
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0].getAttribute('aria-label')).toBe('Blocked');
+  });
+
+  it('shows a newly added tool as needs-approval even when older tools were always-allow', () => {
+    stubToolPermissionApi({
+      config: {
+        globalPolicy: 'always-allow',
+        tools: { tool_0: 'always-allow' },
+      },
+    });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const newToolGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    const pressed = within(newToolGroup)
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0].getAttribute('aria-label')).toBe('Needs approval');
+  });
+
+  // 回归锚点:config 经 IPC 反序列化后是普通对象,工具名与 Object.prototype
+  // 成员撞名(constructor/toString/valueOf/hasOwnProperty/__proto__)时,裸
+  // 下标 `tools?.[toolName]` 会读到原型链上的方法(truthy 但不是合法档位),
+  // 把 globalPolicy 的继承短路掉。旧 bug 下没有任何按钮命中 mode(函数值
+  // 不等于任何档位字符串);修复后必须落回 globalPolicy 的 blocked。
+  it('does not let a tool named "constructor" bypass a blocked global policy', () => {
+    stubToolPermissionApi({ config: { globalPolicy: 'blocked', tools: {} } });
+    render(
+      <ToolsSection
+        ghostId="demo-ghost"
+        tools={[{ name: 'constructor', description: 'Collides with Object.prototype' }]}
+      />,
+    );
+
+    const group = screen.getAllByRole('group', { name: /constructor/ })[0];
+    const pressed = within(group)
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0].getAttribute('aria-label')).toBe('Blocked');
+  });
+
+  it('materializes inherited blocked tools before saving one customized row', async () => {
+    const setToolPermissions = stubToolPermissionApi({
+      config: {
+        globalPolicy: 'blocked',
+        tools: { tool_0: 'blocked' },
+      },
+    });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Always allow' }));
+
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(1));
+    expect(setToolPermissions).toHaveBeenCalledWith('demo-ghost', {
+      globalPolicy: 'custom',
+      tools: {
+        tool_0: 'always-allow',
+        tool_1: 'blocked',
+        tool_2: 'blocked',
+        tool_3: 'blocked',
+        tool_4: 'blocked',
+        tool_5: 'blocked',
+        tool_6: 'blocked',
+      },
+    });
+  });
+
+  it('drops permission keys removed from the current manifest when saving', async () => {
+    const setToolPermissions = stubToolPermissionApi({
+      config: {
+        globalPolicy: 'custom',
+        tools: { removed_tool: 'always-allow', tool_0: 'blocked' },
+      },
+    });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Always allow' }));
+
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(1));
+    const saved = setToolPermissions.mock.calls[0]?.[1] as {
+      tools?: Record<string, unknown>;
+    };
+    expect(saved.tools).not.toHaveProperty('removed_tool');
+    expect(Object.keys(saved.tools ?? {})).toEqual(sevenTools.map((tool) => tool.name));
+  });
+
+  it('collapses the tool list without losing the global policy control', () => {
+    stubToolPermissionApi();
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const toggle = screen.getByRole('button', { expanded: true });
+    fireEvent.click(toggle);
+
+    expect(screen.queryByText('tool_0')).toBeNull();
+    expect(screen.getByText('Needs approval')).toBeTruthy();
+  });
+
+  it('rolls the switch back and warns when the permission fails to persist', async () => {
+    // 安全设置写盘失败却把 UI 留在新档位 = 告诉用户"已阻止"而实际没拦。
+    const setToolPermissions = vi.fn(async () => {
+      throw new Error('ipc denied');
+    });
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstRowGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const blockedButton = within(firstRowGroup).getByRole('button', { name: 'Blocked' });
+    fireEvent.click(blockedButton);
+
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalled());
+    expect(setToolPermissions).toHaveBeenCalledWith(
+      'demo-ghost',
+      expect.objectContaining({ tools: expect.objectContaining({ tool_0: 'blocked' }) }),
+    );
+    await waitFor(() =>
+      expect(blockedButton.getAttribute('aria-pressed')).toBe('false'),
+    );
+  });
+
+  it('does not let an older failed save roll back a newer successful policy', async () => {
+    let rejectFirst!: (reason?: unknown) => void;
+    const firstSave = new Promise<unknown>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockResolvedValueOnce({ config: {} });
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const secondGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Blocked' }));
+    fireEvent.click(within(secondGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+
+    rejectFirst(new Error('older write failed late'));
+    await Promise.resolve();
+
+    expect(
+      within(firstGroup).getByRole('button', { name: 'Blocked' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      within(secondGroup)
+        .getByRole('button', { name: 'Always allow' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
+  it('rolls back to the last disk-confirmed config, not an unconfirmed intermediate value, when two consecutive saves both fail', async () => {
+    // 回归 Greptile P1:旧实现的回滚目标是"上一次点击时的乐观值"
+    // (configRef.current)，不是磁盘上真正确认过的配置。连续两次写都失败
+    // 时，第二次的回滚会退到第一次那个同样从未落盘成功的中间态——UI 显示
+    // 的安全策略（"已阻止"/"总是允许"）会和磁盘实际生效的策略不一致，这是
+    // 安全设置，不能凭空停在一个磁盘上从未真正出现过的状态。
+    let rejectFirst!: (reason?: unknown) => void;
+    let rejectSecond!: (reason?: unknown) => void;
+    const firstSave = new Promise<unknown>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const secondSave = new Promise<unknown>((_resolve, reject) => {
+      rejectSecond = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementationOnce(() => secondSave);
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const secondGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Blocked' }));
+    fireEvent.click(within(secondGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+
+    rejectFirst(new Error('first write failed'));
+    await Promise.resolve();
+    rejectSecond(new Error('second write failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 只有最新一次(第二次)的失败才应该触发回滚与提示；第一次是被后一次
+    // 请求取代的旧请求，它的失败必须被忽略，不能再弹一次。
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledTimes(1));
+    // 磁盘上从未真正出现过 tool_0=blocked(两次写都失败)，必须退回到最初
+    // 的确认态(needs-approval)，不能停在中间那个从未确认过的乐观值上。
+    expect(
+      within(firstGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      within(secondGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
+  it('records a stale-dispatched success into the confirmed baseline so a later failure rolls back to it, not to the pre-edit config', async () => {
+    // 回归 Greptile 又发现的 P1:上一条修复给成功路径也套用了"只有序号匹配
+    // 当前最新一次请求才生效"的过滤，但这是错的——第一次请求真的成功落盘
+    // 了，只是它发起时不再是"当前最新"（第二次此时已经发起），如果因此把
+    // 这次成功当没发生过而丢弃，第二次失败时的回滚就会拿一个"两次编辑前"
+    // 的过期快照，而不是真正落盘的状态。
+    let resolveFirst!: (value: unknown) => void;
+    let rejectSecond!: (reason?: unknown) => void;
+    const firstSave = new Promise<unknown>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondSave = new Promise<unknown>((_resolve, reject) => {
+      rejectSecond = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementationOnce(() => secondSave);
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const secondGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Blocked' }));
+    fireEvent.click(within(secondGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+
+    resolveFirst({ config: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+    rejectSecond(new Error('second write failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledTimes(1));
+    // 第一次真的落盘成功了：tool_0 必须还是 Blocked，不能被第二次的回滚
+    // 抹掉、退回最初的 needs-approval。
+    expect(
+      within(firstGroup).getByRole('button', { name: 'Blocked' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    // 第二次没有成功落盘：tool_1 必须回到确认过的状态(needs-approval)，
+    // 不能停在它自己那次失败的乐观值(always-allow)上。
+    expect(
+      within(secondGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
+  it('redisplays a late-arriving success after an earlier rollback, instead of leaving the UI on the rolled-back state', async () => {
+    // 回归 Greptile 又发现的 P1:上一条修复让成功回执更新 confirmedConfigRef
+    // 这本账，但没有同步更新真正渲染到界面上的 loaded/configRef。如果顺序
+    // 是"较新请求先失败(把界面回滚到旧状态)、较早请求后成功(只更新了账，
+    // 没碰界面)"，界面会停在回滚后的旧状态，而磁盘上其实是较早请求成功
+    // 写入的新状态——界面和磁盘又对不上了。
+    let rejectSecond!: (reason?: unknown) => void;
+    let resolveFirst!: (value: unknown) => void;
+    const firstSave = new Promise<unknown>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondSave = new Promise<unknown>((_resolve, reject) => {
+      rejectSecond = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementationOnce(() => secondSave);
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const secondGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Blocked' }));
+    fireEvent.click(within(secondGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+
+    // 较新的请求(第二次)先失败，回滚界面到"两次编辑之前"。
+    rejectSecond(new Error('second write failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledTimes(1));
+    expect(
+      within(firstGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+
+    // 较早的请求(第一次)姗姗来迟才成功——它真的落盘了，界面必须补画出来。
+    resolveFirst({ config: {} });
+    await waitFor(() =>
+      expect(
+        within(firstGroup).getByRole('button', { name: 'Blocked' }).getAttribute('aria-pressed'),
+      ).toBe('true'),
+    );
+    // 第二次没有成功，tool_1 仍然停在回滚后的确认态。
+    expect(
+      within(secondGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    // 迟到的成功不应该再弹一次失败提示。
+    expect(toastMocks.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a failed save from the previous ghost poison the current config ref', async () => {
+    let rejectPreviousGhost!: (reason?: unknown) => void;
+    const previousSave = new Promise<unknown>((_resolve, reject) => {
+      rejectPreviousGhost = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => previousSave)
+      .mockResolvedValueOnce({ config: {} });
+    stubToolPermissionApi({
+      config: (id) =>
+        id === 'ghost-a'
+          ? { tools: { tool_0: 'blocked' } }
+          : { tools: { tool_2: 'always-allow' } },
+      setToolPermissions,
+    });
+    const { rerender } = render(<ToolsSection ghostId="ghost-a" tools={sevenTools} />);
+
+    const ghostAGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(ghostAGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(1));
+
+    rerender(<ToolsSection ghostId="ghost-b" tools={sevenTools} />);
+    await waitFor(() => {
+      const ghostBSeedGroup = screen.getAllByRole('group', { name: /tool_2/ })[0];
+      expect(
+        within(ghostBSeedGroup)
+          .getByRole('button', { name: 'Always allow' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+    });
+
+    rejectPreviousGhost(new Error('ghost-a write failed after navigation'));
+    await Promise.resolve();
+
+    const ghostBEditGroup = screen.getAllByRole('group', { name: /tool_3/ })[0];
+    fireEvent.click(within(ghostBEditGroup).getByRole('button', { name: 'Blocked' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+    expect(setToolPermissions).toHaveBeenLastCalledWith(
+      'ghost-b',
+      expect.objectContaining({
+        tools: expect.objectContaining({ tool_2: 'always-allow', tool_3: 'blocked' }),
+      }),
+    );
+    const lastConfig = setToolPermissions.mock.calls[1]?.[1] as {
+      tools?: Record<string, unknown>;
+    };
+    // 当前 manifest 的所有工具会被实体化；tool_0 必须是 ghost-b
+    // 自己的默认 needs-approval，不能泄入 ghost-a 的 blocked。
+    expect(lastConfig.tools).toHaveProperty('tool_0', 'needs-approval');
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
+  it('rolls a failed first save on a freshly switched ghost back to its own disk config, not the previous ghost’s', async () => {
+    // 回归 Greptile 又发现的 P1:切插件那一轮渲染里，`setLoaded(...)` 只是
+    // 排了队还没真正生效(React 丢弃本轮渲染输出、带新 state 重渲染)，这一轮
+    // 的 `config` 变量此刻仍是"上一个插件"的值。`confirmedConfigRef` 的重置
+    // 逻辑当时直接拿这个还没更新的 `config` 当新插件的确认基准存了进去——
+    // ref 是直接赋值，不会跟着被丢弃的渲染输出一起撤销，于是新插件的确认
+    // 基准被错误地钉死成了上一个插件的档位。如果新插件的第一次保存又失败，
+    // 回滚会把上一个插件的档位错误地画到新插件身上。
+    const setToolPermissions = vi.fn(async () => {
+      throw new Error('first save on the new ghost failed');
+    });
+    stubToolPermissionApi({
+      config: (id) =>
+        id === 'ghost-a'
+          ? { tools: { tool_0: 'blocked' } }
+          : { tools: { tool_2: 'always-allow' } },
+      setToolPermissions,
+    });
+    const { rerender } = render(<ToolsSection ghostId="ghost-a" tools={sevenTools} />);
+
+    rerender(<ToolsSection ghostId="ghost-b" tools={sevenTools} />);
+    await waitFor(() => {
+      const ghostBSeedGroup = screen.getAllByRole('group', { name: /tool_2/ })[0];
+      expect(
+        within(ghostBSeedGroup)
+          .getByRole('button', { name: 'Always allow' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+    });
+
+    // ghost-b 的第一次保存(切换后从未成功过任何一次写)失败。
+    const ghostBEditGroup = screen.getAllByRole('group', { name: /tool_3/ })[0];
+    fireEvent.click(within(ghostBEditGroup).getByRole('button', { name: 'Blocked' }));
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledTimes(1));
+
+    // 回滚必须退到 ghost-b 自己磁盘上的配置(tool_2=always-allow，其余默认
+    // needs-approval)，不能是 ghost-a 的 tool_0=blocked。
+    const tool0Group = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    expect(
+      within(tool0Group).getByRole('button', { name: 'Needs approval' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    const tool2Group = screen.getAllByRole('group', { name: /tool_2/ })[0];
+    expect(
+      within(tool2Group).getByRole('button', { name: 'Always allow' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    const tool3Group = screen.getAllByRole('group', { name: /tool_3/ })[0];
+    expect(
+      within(tool3Group).getByRole('button', { name: 'Needs approval' }).getAttribute('aria-pressed'),
+    ).toBe('true');
   });
 
   it('shows every host permission except Tools and opens the same complete details', async () => {

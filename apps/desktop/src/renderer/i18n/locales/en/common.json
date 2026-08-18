@@ -3783,6 +3783,13 @@
           "workdirClear": "Reset to default folder"
         },
         "toolsTitle": "Tools",
+        "alwaysAllow": "Always allow",
+        "needsApproval": "Needs approval",
+        "blocked": "Blocked",
+        "custom": "Custom",
+        "chooseToolPermission": "Choose when the Agent is allowed to use these tools",
+        "toolPermissionGroup": "Permission for Tool {{name}}",
+        "toolPermissionSaveFailed": "Couldn't save the tool permission. Please try again.",
         "permissionsTitle": "Permissions",
         "infoDescription": "Description",
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",

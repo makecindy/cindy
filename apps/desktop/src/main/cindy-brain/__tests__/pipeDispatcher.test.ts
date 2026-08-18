@@ -55,6 +55,7 @@ function makeHarness(opts: {
   ghost?: InstalledGhost | null;
   state?: GhostRuntimeState;
   timeoutMs?: number;
+  resolveToolApprovalMode?: PipeDispatcherDeps['resolveToolApprovalMode'];
   ownerScope?: PipeDispatcherDeps['ownerScope'];
 } = {}): Harness {
   const sent: GhostPipeToolCall[] = [];
@@ -73,8 +74,9 @@ function makeHarness(opts: {
   };
   const dispatcher = new GhostPipeDispatcher({
     ...deps,
-    timeoutMs: opts.timeoutMs,
+    ...(opts.resolveToolApprovalMode ? { resolveToolApprovalMode: opts.resolveToolApprovalMode } : {}),
     ownerScope: opts.ownerScope,
+    timeoutMs: opts.timeoutMs,
   } as unknown as PipeDispatcherDeps);
   return { dispatcher, deps, sent };
 }
@@ -92,6 +94,49 @@ describe('资格审(结构化错误分类)', () => {
     const h = makeHarness({ ghost: fakeGhost({ enabled: false }) });
     const r = await h.dispatcher.callGhostTool(CALL);
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+  });
+
+  it('用户禁用该工具 → PERMISSION_DENIED,且不拉起沙箱、不派发', async () => {
+    // off 状态:如果拦截点放错在拉起之后,这条会看到 spawn 被调用。
+    const h = makeHarness({ state: 'off', resolveToolApprovalMode: () => 'blocked' });
+    const r = await h.dispatcher.callGhostTool(CALL);
+    expect(r).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    // 被禁用的工具不该造成任何可观察副作用。
+    expect(h.deps.spawn).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('always-allow / needs-approval 都照常派发(免审批只影响弹不弹窗)', async () => {
+    for (const mode of ['always-allow', 'needs-approval'] as const) {
+      const h = makeHarness({ resolveToolApprovalMode: () => mode });
+      void h.dispatcher.callGhostTool(CALL);
+      await vi.waitFor(() => expect(h.sent, mode).toHaveLength(1));
+    }
+  });
+
+  it('档位查询抛错 → PERMISSION_DENIED,且不拉起沙箱、不派发', async () => {
+    const h = makeHarness({
+      state: 'off',
+      resolveToolApprovalMode: () => {
+        throw new Error('settings file unreadable');
+      },
+    });
+    const r = await h.dispatcher.callGhostTool(CALL);
+    expect(r).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(h.deps.spawn).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(h.sent).toHaveLength(0);
+    expect(h.deps.log.warn).toHaveBeenCalledWith(
+      'ghost tool approval lookup failed; denying call',
+      expect.objectContaining({ ghostId: 'art', tool: 'gen_image', error: 'settings file unreadable' }),
+    );
+  });
+
+  it('未注入档位查询时行为不变(老调用方零改动)', async () => {
+    const h = makeHarness();
+    void h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
   });
 
   it('工具未声明 → TOOL_NOT_FOUND', async () => {
@@ -179,6 +224,63 @@ describe('按需拉起', () => {
     h.deps.spawn.mockResolvedValue({ ok: false, reason: '入口加载失败' });
     const r = await h.dispatcher.callGhostTool(CALL);
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+  });
+
+  it('工具在冷启动 spawn 等待期间被切成 blocked:派发前的复判拦下这次调用', async () => {
+    // spawn 之前读到的 approvalMode 只对"暖机、无需拉起"的路径有效；冷启动是
+    // 一次真实的 await 窗口，必须在这个窗口结束后现读一次，否则一次冷启动就
+    // 能放过被禁工具执行一次(见 checkBlockedPolicy 的调用点)。
+    let blocked = false;
+    const spawnStarted = deferred();
+    const releaseSpawn = deferred();
+    const h = makeHarness({
+      state: 'off',
+      resolveToolApprovalMode: () => (blocked ? 'blocked' : 'needs-approval'),
+    });
+    h.deps.spawn.mockImplementation(async () => {
+      spawnStarted.resolve();
+      await releaseSpawn.promise;
+      return { ok: true as const };
+    });
+
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await spawnStarted.promise;
+    blocked = true;
+    releaseSpawn.resolve();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('owner changes while spawn is pending: stops the runtime and never dispatches', async () => {
+    let generation = 1;
+    const invalidated = vi.fn();
+    const spawnStarted = deferred();
+    const releaseSpawn = deferred();
+    const h = makeHarness({
+      state: 'off',
+      ownerScope: {
+        capture: () => generation,
+        isCurrent: (scope) => scope === generation,
+        isStable: (scope) => scope === generation,
+        onInvalidated: invalidated,
+      },
+    });
+    h.deps.spawn.mockImplementation(async () => {
+      spawnStarted.resolve();
+      await releaseSpawn.promise;
+      return { ok: true as const };
+    });
+
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await spawnStarted.promise;
+    generation = 2;
+    releaseSpawn.resolve();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(invalidated).toHaveBeenCalledWith('art');
   });
 
   it('电子脑离线(send 失败)→ GHOST_CRASHED 立即收卷', async () => {

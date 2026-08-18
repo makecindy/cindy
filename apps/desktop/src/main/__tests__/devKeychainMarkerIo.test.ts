@@ -118,13 +118,13 @@ describe('createKeychainMarkerIo', () => {
     const io = makeIo();
     expect(io.claimMarker('CindyDev')).toBe('claimed');
     // 注入的 statSync 每次返回不同 ino,模拟"每次读取期间都被并发替换"。
-    let fakeIno = 10_000;
-    const alwaysChanged = (p: string): fs.Stats => {
-      const real = fs.statSync(p);
-      fakeIno += 1;
+    let fakeIno = 10_000n;
+    const alwaysChanged = (p: string): fs.BigIntStats => {
+      const real = fs.statSync(p, { bigint: true });
+      fakeIno += 1n;
       return Object.assign(Object.create(Object.getPrototypeOf(real) as object), real, {
         ino: fakeIno,
-      }) as fs.Stats;
+      }) as fs.BigIntStats;
     };
     const unstable = makeIo({ statSync: alwaysChanged });
     expect(unstable.readMarker()).toEqual({ kind: 'unreadable' });
@@ -158,11 +158,11 @@ describe('createKeychainMarkerIo', () => {
     expect(io.claimMarker('CindyDev')).toBe('claimed');
     // 注入 lstat 语义的 statSync:模拟 open 后路径项被换成符号链接——即使链接
     // 目标内容与 fd 一致,路径项本身是链接就必须拒。
-    const linkNow = (p: string): fs.Stats => {
-      const real = fs.lstatSync(p);
+    const linkNow = (p: string): fs.BigIntStats => {
+      const real = fs.lstatSync(p, { bigint: true });
       return Object.assign(Object.create(Object.getPrototypeOf(real) as object), real, {
         isSymbolicLink: () => true,
-      }) as fs.Stats;
+      }) as fs.BigIntStats;
     };
     const swapped = makeIo({ statSync: linkNow });
     expect(swapped.readMarker()).toEqual({ kind: 'unreadable' });

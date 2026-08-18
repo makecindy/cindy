@@ -691,9 +691,19 @@ describe('PluginMarketService 自定义市场图标', () => {
       if (!String(args[0]).endsWith(path.join('plugins', 'alpha', 'assets', 'icon.png'))) {
         return handle;
       }
+      const openedStat = await handle.stat({ bigint: true });
+      const stableOpenedStat = new Proxy(stableStat, {
+        get(target, key) {
+          // Windows 路径 stat 的 dev=0，而真实句柄 stat 带卷序列号；只碰 dev，
+          // 其余字段继续保持碰撞，保留本测试的“元数据不变、内容改变”语义。
+          if (key === 'dev') return openedStat.dev;
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
       return new Proxy(handle, {
         get(target, key) {
-          if (key === 'stat') return async () => stableStat;
+          if (key === 'stat') return async () => stableOpenedStat;
           const value = Reflect.get(target, key);
           return typeof value === 'function' ? value.bind(target) : value;
         },

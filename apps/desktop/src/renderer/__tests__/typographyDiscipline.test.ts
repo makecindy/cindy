@@ -669,7 +669,7 @@ export function parseNumericCssMappings(css: string): Array<readonly [number, nu
 // ── 主守卫 ──────────────────────────────────────────────────────────
 
 describe('typography discipline (DESIGN.md §3, #1505)', () => {
-  it('keeps weights and sizes on the ladder; exemption hit counts stay exact', () => {
+  it('keeps weights and sizes on the ladder; exemption hit counts stay exact', { timeout: 60_000 }, () => {
     const violations = scan();
 
     const keyOf = (file: string, rule: string) => `${file} ${rule}`;

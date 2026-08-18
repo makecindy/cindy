@@ -42,6 +42,7 @@ import {
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
   type GhostSetupReauthSuggest,
+  type GhostToolPermissionConfig,
   type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
@@ -227,6 +228,12 @@ import {
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
+import {
+  readGhostToolPermissions,
+  resolveToolApprovalMode,
+  undeclaredToolPermissionKeys,
+  writeGhostToolPermissions,
+} from './ghostToolPermissionsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
@@ -1540,6 +1547,7 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
       },
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
+      resolveToolApprovalMode,
       log,
     });
   }
@@ -4721,6 +4729,30 @@ async function uninstallGhostAndCleanupLocked(
     const result = await manager.uninstall(id, { notify: false });
     if ('rejection' in result) throwUninstallError(result.rejection);
     removeGhostSecrets(id);
+    // 工具粒度授权(always-allow/blocked)按 ghostId 存,卸载不清就会在同 id
+    // 装入内容不同的新插件时被 resolveToolApprovalMode 当成用户已经对新
+    // 安装做过的选择——空配置触发 writeGhostToolPermissions 自带的删除
+    // 分支,复用同一条写路径而不是另开一个清理函数。写盘用的是临时文件+
+    // rename 的原子写,失败大多是瞬时的(AV 扫描锁临时文件、磁盘 I/O 抖动
+    // 之类),重试几次即可自愈;仍然失败就升到 error 级别(不再是 warn)
+    // 让它更容易被发现——但不因此让已经基本完成的卸载(ghost 文件/密钥都
+    // 已清)整体报失败,那样用户会更困惑。
+    let toolPermissionsCleared = false;
+    let lastClearError: unknown;
+    for (let attempt = 0; attempt < 3 && !toolPermissionsCleared; attempt += 1) {
+      try {
+        writeGhostToolPermissions(id, {});
+        toolPermissionsCleared = true;
+      } catch (err) {
+        lastClearError = err;
+      }
+    }
+    if (!toolPermissionsCleared) {
+      log.error('ghost tool permissions 清理失败,重试 3 次后仍未成功;同 id 后续安装可能继承旧的授权档位', {
+        id,
+        error: lastClearError instanceof Error ? lastClearError.message : String(lastClearError),
+      });
+    }
     removeGhostKvBestEffort(
       createGhostKvStore({
         getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
@@ -5832,6 +5864,56 @@ export function registerGhostIpc(): void {
       throwIpcError('INVALID_PARAMS', 'config must be an object or null');
     }
     const saved = writeGhostErrandConfig(ghostId, config as Record<string, unknown> | null);
+    return { config: saved };
+  });
+
+  // ── 插件/连接器工具粒度授权配置 (ghosts:tool-permissions) ──
+  // sendSync 的 handler **不能抛**:一旦抛出,event.returnValue 永远不会被赋值,
+  // Electron 也就不会回 reply,调用方 renderer 会一直同步阻塞。来源闸因此走
+  // ghosts:unread 的非抛出口径 —— 非可信 frame 拿到空配置,而空配置在读端就是
+  // 默认的 needs-approval,不构成任何放宽。
+  ipcMain.on('ghosts:tool-permissions', (event, ghostId: unknown) => {
+    let config: GhostToolPermissionConfig = {};
+    try {
+      if (isTrustedAppRendererEvent(event) && typeof ghostId === 'string') {
+        config = readGhostToolPermissions(ghostId);
+      }
+    } catch (error) {
+      // 读盘异常同样不能把 renderer 卡死;空配置 = 界面显示默认档位。
+      log.warn('ghost tool permissions 读取失败', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    event.returnValue = { config };
+  });
+  ipcMain.handle('ghosts:tool-permissions:set', (event, ghostId: unknown, config: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (
+      typeof ghostId !== 'string' ||
+      ghostId.trim().length === 0 ||
+      ghostId !== ghostId.trim()
+    ) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be an exact non-empty installed plugin id');
+    }
+    if (config !== null && (typeof config !== 'object' || Array.isArray(config))) {
+      throwIpcError('INVALID_PARAMS', 'config must be an object or null');
+    }
+    const installed = manager.list().find((ghost) => ghost.manifest.id === ghostId);
+    if (!installed) {
+      throwIpcError('NOT_FOUND', 'ghostId must identify an installed plugin');
+    }
+    const undeclaredKeys = undeclaredToolPermissionKeys(config, installed.manifest.tools);
+    if (undeclaredKeys.length > 0) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `tool permission keys are not declared by the installed plugin: ${undeclaredKeys.join(', ')}`,
+      );
+    }
+    const saved = writeGhostToolPermissions(ghostId, config);
+    getGhostSetupChangeBus().emit(ghostId, {
+      source: 'host_config',
+      ref: 'tool-permissions',
+    });
     return { config: saved };
   });
 

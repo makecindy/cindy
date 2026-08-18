@@ -102,6 +102,33 @@ const REPLAY_READ_FLAGS =
     ? 0
     : (fsConstants.O_NONBLOCK ?? 0) | (fsConstants.O_NOFOLLOW ?? 0));
 
+/**
+ * Compare a path stat with an opened-handle stat without weakening the replay
+ * TOCTOU guard. On Windows, path stat may expose dev=0 while handle stat exposes
+ * the real volume serial, so a non-zero matching NTFS FileId is authoritative.
+ * Both sides missing dev, either side missing ino, and every non-Windows partial
+ * identity remain fail-closed.
+ */
+function sameReplayFileIdentity(
+  pathIdentity: Pick<import('node:fs').BigIntStats, 'dev' | 'ino'>,
+  handleIdentity: Pick<import('node:fs').BigIntStats, 'dev' | 'ino'>,
+): boolean {
+  if (
+    pathIdentity.ino === 0n ||
+    handleIdentity.ino === 0n ||
+    pathIdentity.ino !== handleIdentity.ino
+  ) {
+    return false;
+  }
+  if (pathIdentity.dev !== 0n && handleIdentity.dev !== 0n) {
+    return pathIdentity.dev === handleIdentity.dev;
+  }
+  return (
+    process.platform === 'win32' &&
+    (pathIdentity.dev === 0n) !== (handleIdentity.dev === 0n)
+  );
+}
+
 interface ReplayTrajectoryAction {
   turn: string;
   tool: ComputerMcpToolName;
@@ -571,8 +598,8 @@ export function createComputerMcpServer(
         const actionFile = await fs.open(actionPath, REPLAY_READ_FLAGS);
         let actionText: string;
         try {
-          const stat = await actionFile.stat();
-          if (!stat.isFile() || stat.size > MAX_REPLAY_ACTION_BYTES) {
+          const stat = await actionFile.stat({ bigint: true });
+          if (!stat.isFile() || stat.size > BigInt(MAX_REPLAY_ACTION_BYTES)) {
             return {
               error: trajectoryValidationFailedResult(
                 'The recorded action is not a bounded regular JSON file.',
@@ -582,8 +609,8 @@ export function createComputerMcpServer(
           }
           const currentCanonicalPath = await fs.realpath(actionPath);
           await resolvePathInsideRoot(workingRoot, currentCanonicalPath);
-          const currentStat = await fs.stat(currentCanonicalPath);
-          if (currentStat.dev !== stat.dev || currentStat.ino !== stat.ino) {
+          const currentStat = await fs.stat(currentCanonicalPath, { bigint: true });
+          if (!sameReplayFileIdentity(currentStat, stat)) {
             return {
               error: trajectoryValidationFailedResult(
                 'The recorded action changed while Cindy was opening it.',

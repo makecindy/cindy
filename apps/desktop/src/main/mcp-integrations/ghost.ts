@@ -32,6 +32,7 @@ import type {
 import type { PermissionMode } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import {
   GrantPolicyError,
   grantAttachmentsToGhost,
@@ -76,12 +77,21 @@ import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.j
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
+import {
+  ghostToolBlockVerdict,
+  resolveToolApprovalMode,
+} from '../cindy-brain/ghostToolPermissionsStore.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
+import {
+  captureMediaRefCompensationScope,
+  withMediaRefCompensation,
+} from '../cindy-media/refCompensationJournal.js';
+import { getDbClient } from '../localDb/client/current.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
 import { createForgeIconConverter } from './forgeIconConversion.js';
@@ -131,6 +141,11 @@ export interface CindyGhostsHostDeps {
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
   /**
+   * 测试可注入当前工具档位；生产仍然每次经 owner-scoped 存储现读。
+   * 目录/附件确认存在异步等待，不能把一次开始时的判定缓存到出票时。
+   */
+  resolveToolApprovalMode?: typeof resolveToolApprovalMode;
+  /**
    * 把工具结果里的图片（cindy-media:// 地址）转成文字描述（视觉桥，最佳努力）。
    * host 侧注入；内部判定视觉桥是否启用、当前 session 模型是否命中、blob 是否可读。
    * 返回对象区分两种「无描述」：
@@ -156,6 +171,12 @@ export interface CindyGhostsHostDeps {
 }
 
 type GhostGrantApprovalSource = 'user' | 'full-access';
+type GhostGrantPolicyBlock = {
+  ok: false;
+  errorCode: 'PERMISSION_DENIED';
+  message: string;
+};
+type GhostGrantPolicyRecheck = () => GhostGrantPolicyBlock | null;
 
 /** 确认卡内嵌图片预览的文件体积上限(只是预览阈值,不是过户限制——超阈值
  *  照样可过户,卡片上退化为文件名 + 路径 + 大小)。 */
@@ -309,9 +330,10 @@ async function requestGrantConfirm(params: {
   lane: GhostGrantLane;
   items: GhostGrantFileItem[];
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
 }): Promise<
   | { ok: true; approvalSource: GhostGrantApprovalSource; allowDirs?: boolean }
-  | { ok: false; message: string }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   if (params.sessionId && params.sessionInstanceId && params.getLiveSessionGrantState) {
     try {
@@ -319,6 +341,8 @@ async function requestGrantConfirm(params: {
       // 远程会话的 workingDir 是另一台机器上的路径。即使档位为 Full Access,
       // 也不能据此静默读取本机同名/任意路径;保留原确认边界。
       if (live?.permissionMode === 'bypassPermissions' && !live.remoteHostId) {
+        const policyBlock = params.recheckPolicy?.();
+        if (policyBlock) return policyBlock;
         log.info('ghost grant: Full Access auto-approved outside-workdir handoff', {
           ghostId: params.ghostId,
           lane: params.lane,
@@ -359,6 +383,10 @@ async function requestGrantConfirm(params: {
     items: params.items,
   });
   if (decision.confirmed) {
+    // 确认卡等待期间用户可能把工具切换为 blocked。在返回给
+    // 调用方写 blob / ledger / ref 或记目录授权之前现读重判。
+    const policyBlock = params.recheckPolicy?.();
+    if (policyBlock) return policyBlock;
     return { ok: true, approvalSource: 'user', allowDirs: decision.allowDirs };
   }
   return {
@@ -383,10 +411,12 @@ async function prepareLocalPathAttachments(params: {
   sessionId: string | null;
   sessionInstanceId: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
   /** 张数上限(普通调用 MAX_GRANT_ATTACHMENTS;grant_only 批量预授权放宽)。 */
   maxCount: number;
 }): Promise<
-  { ok: true; resolved: Map<string, ResolvedGrantSource> } | { ok: false; message: string }
+  | { ok: true; resolved: Map<string, ResolvedGrantSource> }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   const resolved = new Map<string, ResolvedGrantSource>();
   // 超张数上限时不弹确认,直接交给 grant 流程报标准错(别让用户白点一次)。
@@ -512,6 +542,7 @@ async function prepareLocalPathAttachments(params: {
         lane: 'attachments',
         items,
         getLiveSessionGrantState: params.getLiveSessionGrantState,
+        recheckPolicy: params.recheckPolicy,
       });
       if (!confirm.ok) return confirm;
       for (const o of needConfirm) {
@@ -565,10 +596,11 @@ async function confirmDepositOutsideWorkdir(params: {
   dirAbs: string;
   workdirAbs: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
 }): Promise<
   | { ok: true; userGranted: false }
   | { ok: true; userGranted: true; approvedRealPath: string }
-  | { ok: false; message: string }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   if (!path.isAbsolute(params.dirAbs)) return { ok: true, userGranted: false };
   let real: string;
@@ -619,6 +651,7 @@ async function confirmDepositOutsideWorkdir(params: {
     lane: params.lane,
     items: [item],
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
   });
   if (!confirm.ok) return confirm;
   // Full Access 是每次在实时档位上自动裁决,不伪造「用户确认过」的目录
@@ -657,8 +690,10 @@ async function prepareManagedToolGrantSources(params: {
   sessionId: string | null;
   sessionInstanceId: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
 }): Promise<
-  { ok: true; resolved: Map<string, ResolvedGrantSource> } | { ok: false; message: string }
+  | { ok: true; resolved: Map<string, ResolvedGrantSource> }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   // Preserve attachmentGrant's standard count error and, importantly, do not
   // read or confirm an over-limit batch before that error is produced.
@@ -774,6 +809,7 @@ async function prepareManagedToolGrantSources(params: {
     lane: 'attachments',
     items,
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
   });
   if (!confirm.ok) return confirm;
 
@@ -804,9 +840,18 @@ async function grantAttachmentUrls(params: {
   sessionId: string | null;
   sessionInstanceId: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
   maxCount: number;
-}): Promise<{ ok: true; hashes: string[] } | { ok: false; message: string }> {
+}): Promise<
+  | { ok: true; hashes: string[]; revoke: () => Promise<void> }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
+> {
   const { ghostId } = params;
+  // 捕获在两次可能弹确认卡的 prepare 之前：owner scope key 编码
+  // mode:dataOwnerId:generation，账号切换会改变它。等到落任何持久副作用前
+  // 才现取，会让"等待期间切了账号"的窗口把旧会话解析出的附件写进新账号的
+  // 媒体账本——同一份判据必须钉在同一个起点。
+  const ownerScopeKeyAtStart = activeOwnerScopeKey();
   const localGrant = await prepareLocalPathAttachments({
     urls: params.urls,
     ghostId,
@@ -814,6 +859,7 @@ async function grantAttachmentUrls(params: {
     sessionId: params.sessionId,
     sessionInstanceId: params.sessionInstanceId,
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
     maxCount: params.maxCount,
   });
   if (!localGrant.ok) return localGrant;
@@ -825,8 +871,54 @@ async function grantAttachmentUrls(params: {
     sessionId: params.sessionId,
     sessionInstanceId: params.sessionInstanceId,
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
   });
   if (!managedToolGrant.ok) return managedToolGrant;
+  // 已有授权记忆可能让上面两个 prepare 都不弹卡，但其间仍有异步
+  // 读盘/查账。落任何持久副作用前再做一次无 await 的最终重判。
+  const policyBlock = params.recheckPolicy?.();
+  if (policyBlock) return policyBlock;
+  // 从此到整批 ref 事务收口始终固定同一 owner scope 与 DB 句柄。现读一次
+  // 只用来核对没有漂移——真正生效的 key 是函数开头捕获的那份，不是这里
+  // 重新现取的，否则"重新现取"本身就是在重犯这条不变量要堵的漏洞。
+  const grantRuntime = (() => {
+    try {
+      const ownerScopeKeyNow = activeOwnerScopeKey();
+      if (ownerScopeKeyNow !== ownerScopeKeyAtStart) {
+        log.warn('ghost attachment grant: owner scope changed during grant wait; denying call', {
+          ghostId,
+        });
+        return null;
+      }
+      return {
+        compensationScope: captureMediaRefCompensationScope(ownerScopeKeyAtStart),
+        db: getDbClient().drizzle,
+      };
+    } catch (error) {
+      log.warn('ghost attachment grant: cannot capture stable owner transaction', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  })();
+  if (!grantRuntime) {
+    return {
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: '附件授权环境未就绪，为了安全未执行工具，请重试。',
+    };
+  }
+  const { compensationScope, db } = grantRuntime;
+  const assertStillAllowed = (): void => {
+    compensationScope.assertStillValid();
+    const block = params.recheckPolicy?.();
+    if (block) throw new GrantPolicyError(block.message);
+  };
+  const guardedCompensationScope = {
+    ...compensationScope,
+    assertStillValid: assertStillAllowed,
+  };
   return grantAttachmentsToGhost(
     {
       // 宽容解析:模型可能只有本地路径、缩图副本路径、或把 xdt-image
@@ -841,7 +933,7 @@ async function grantAttachmentUrls(params: {
         if (managed) return managed;
         const r = resolveGhostAttachmentUrl(url);
         if (!r.blobHash) return r;
-        const origin = await chatAttachmentOrigin(r.blobHash);
+        const origin = await chatAttachmentOrigin(r.blobHash, db);
         if (!origin) {
           // 交接记忆:该内容此前已过户给本意识时,模型拿总仓地址再引用
           // 直接放行——workdir 外确认流落仓后,模型手里的地址就是总仓
@@ -853,14 +945,14 @@ async function grantAttachmentUrls(params: {
             refKind: 'ghost-grant',
             refId: ghostId,
             originKind: 'user',
-          });
+          }, db);
           if (userGranted) {
             return { absPath: r.absPath, mimeType: r.mimeType, originKind: 'user' };
           }
           const toolGranted = await ledger.hasGhostToolGrant({
             hash: r.blobHash,
             ghostId,
-          });
+          }, db);
           if (toolGranted) {
             // The batch preflight above must have covered every tool grant.
             // If the ledger changes during the async resolve phase, fail
@@ -874,7 +966,37 @@ async function grantAttachmentUrls(params: {
       },
       readFile: (absPath) => fs.promises.readFile(absPath),
       writeBlob: (p) => blobStore.writeBlob(p),
-      recordBlob: (p) => ledger.recordBlob(p),
+      recordBlob: (p) => ledger.recordBlob(p, db),
+      assertStillAllowed,
+      removeRefById: (id) => ledger.removeRefById(id, db),
+      withRefCompensation: ({ refIds, perform, compensate }) =>
+        withMediaRefCompensation({
+          scope: guardedCompensationScope,
+          refIds,
+          perform,
+          compensate,
+        }),
+      // 撤销的持久标记不能绑任何会拒绝的 assertStillValid——工具被切成
+      // blocked、owner 漂移都正是触发撤销的常见原因(见上面派发前的复判与
+      // grant_only 的收口复判),沿用会拒绝这些状态的判据只会让补偿写盘前
+      // 置断言直接抛错,连 pending 标记都落不了盘,持久补偿这层保护整个
+      // 失效。journalDir/ownerStorageKey 是抓取时就定死的静态路径值,与
+      // "现在活跃的 owner 是不是它"无关,复用完全安全;真正"继续用同一个
+      // db 句柄是否安全"这件事交给 perform/compensate 里的 removeRefById
+      // 自己去试——db 已经失效时它自然会抛错,withMediaRefCompensation 的
+      // catch→compensate 兜底会接住,兜底也失败则 pending 标记已经落盘,
+      // 留给下次同 owner DB 就绪时的 reconcile 重放。
+      withRevokeCompensation: ({ refIds, perform, compensate }) =>
+        withMediaRefCompensation({
+          scope: {
+            journalDir: compensationScope.journalDir,
+            ownerStorageKey: compensationScope.ownerStorageKey,
+            assertStillValid: () => {},
+          },
+          refIds,
+          perform,
+          compensate,
+        }),
       // 顺序调用幂等化:同 (指纹,意识,引用类型,来源) 已有交接行就不再插入。
       // 并发 check-then-insert 仍可能产生重复账行,但不会改变归属或扩权语义。
       addRef: async (p) => {
@@ -883,8 +1005,11 @@ async function grantAttachmentUrls(params: {
           refKind: p.refKind,
           refId: p.refId,
           originKind: p.originKind,
-        });
-        return exists ? '' : ledger.addRef(p);
+        }, db);
+        // hasRef 本身是 async；返回后再读一次当前工具策略，不能把这段 I/O
+        // 变成 blocked 后仍插入持久 grant ref 的窗口。
+        assertStillAllowed();
+        if (!exists) await ledger.addRef(p, db);
       },
       log,
     },
@@ -1278,6 +1403,80 @@ export function getCindyGhostsMcpDeps(
       );
       if (!initialVisibility.ok) return initialVisibility;
       const target = initialVisibility.ghost;
+      const blockedToolVerdict = (
+        declaredTools: typeof target.manifest.tools,
+        isGrantOnly: boolean,
+      ): GhostGrantPolicyBlock | null => {
+        try {
+          return ghostToolBlockVerdict(
+            ghostId,
+            tool,
+            declaredTools,
+            isGrantOnly,
+            hostDeps.resolveToolApprovalMode ?? resolveToolApprovalMode,
+          );
+        } catch (error) {
+          // 这是授权执法点,不是可选 UI 偏好。读取失败时无法证明
+          // 当前工具未被 blocked,setup/过户/出票副作用都必须 fail closed。
+          log.warn('ghost tool approval lookup failed at grant gate; denying call', {
+            ghostId,
+            tool,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: `无法读取 ${ghostId} 的工具 ${tool} 授权策略;为了安全未执行该工具,请重试或检查插件设置。`,
+          };
+        }
+      };
+      // Attachment confirmation and directory handoff may wait for user input.
+      // Every side-effect recheck must therefore resolve the current installed
+      // plugin again: the original object can be removed or replaced under the
+      // same id while the card is open. The narrow recheck result uses
+      // PERMISSION_DENIED for every lost eligibility state so downstream grant
+      // code can trigger its exact-id compensation path uniformly.
+      const recheckCurrentGrantPolicy = (isGrantOnly: boolean): GhostGrantPolicyBlock | null => {
+        const currentVisibility = classifyGhostVisibility(
+          ghostId,
+          sessionWorkdir,
+          ghostVisibilityDeps,
+        );
+        if (!currentVisibility.ok) {
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: currentVisibility.message,
+          };
+        }
+        const currentTools = currentVisibility.ghost.manifest.tools;
+        if (
+          !isGrantOnly &&
+          !(currentTools ?? []).some((candidate) => candidate.name === tool)
+        ) {
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: toolNotFoundMessage(ghostId, tool, currentTools),
+          };
+        }
+        try {
+          if (getGhostSetupAssessment(ghostId).state !== 'ready') {
+            return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: t('newChat.pluginSetup.setupChangedDuringResume'),
+            };
+          }
+        } catch {
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: t('newChat.pluginSetup.assessmentReadFailed'),
+          };
+        }
+        return blockedToolVerdict(currentTools, isGrantOnly);
+      };
       // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记可读引用
       // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
@@ -1296,6 +1495,16 @@ export function getCindyGhostsMcpDeps(
           message: toolNotFoundMessage(ghostId, tool, target.manifest.tools),
         };
       }
+      // 用户禁用判定。普通调用的真正收口在派发器的资格审(pipeDispatcher.callGhostTool,
+      // 所有调用方共用),这里只是提前到 setupCoordinator.ensureReady 之前,免得一个注定
+      // 被拒的调用先把配置卡/OAuth 卡弹到用户脸上。
+      //
+      // grant_only 是例外:它只过户不派发,永远走不到派发器,**这里就是它唯一的收口**。
+      // 它按协议忽略 tool 字段,所以判据落在插件层——目标插件的工具被用户全禁时,不存在
+      // 任何合法的后续调用,预授权只剩"绕过禁用把文件交出去"这一个用途;显式点名了某个
+      // 已声明且被禁的工具时同样拒。
+      const blockedVerdict = blockedToolVerdict(target.manifest.tools, grantOnly === true);
+      if (blockedVerdict) return blockedVerdict;
       if (grantOnly && (!attachments || attachments.length === 0)) {
         return {
           ok: false,
@@ -1385,6 +1594,15 @@ export function getCindyGhostsMcpDeps(
             message: t('newChat.pluginSetup.assessmentReadFailed'),
           };
         }
+        // 附件引用提交后到 grantOnlySucceeded 落地之间有一次真实的异步锁
+        // 释放窗口(grantAttachmentUrls 内部的确认卡等待)。如果账号在这段
+        // 窗口切换,且新账号下恰好也装了同 id、ready 且未 blocked 的插件,
+        // 下面的 postGrant 复判只会现查"当前活跃账号",照常通过并把
+        // grantOnlySucceeded 置真——但 hashes 只在旧账号账本里获得了授权,
+        // 新账号的插件用不了它们,旧账号那笔授权也没被撤销。派发前(这里是
+        // grantOnlySucceeded 落地前)统一核对,漂移就当拒绝处理,交给下面
+        // finally 的撤销收拾。
+        const grantOnlyOwnerScopeKeyAtStart = activeOwnerScopeKey();
         const grant = await grantAttachmentUrls({
           ghostId,
           urls: attachments!,
@@ -1392,28 +1610,245 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+          recheckPolicy: () => recheckCurrentGrantPolicy(true),
           maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
         });
         if (!grant.ok) {
-          return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
+          return {
+            ok: false,
+            errorCode: grant.errorCode ?? 'ATTACHMENT_INVALID',
+            message: grant.message,
+          };
         }
         // Post-grant revalidation: the grant process includes an async user
         // confirmation step; re-check everything before returning success.
-        const postGrantVisibility = classifyGhostVisibility(
+        // grant_only 走不到派发器,这里就是它唯一的收口——下面任何一个提前
+        // return 都必须先撤销刚授出的 ghost-tool-grant,否则会留下和上面
+        // callGhostTool 主路径同样的"写完才拒绝"授权残留。
+        let grantOnlySucceeded = false;
+        try {
+          const postGrantVisibility = classifyGhostVisibility(
+            ghostId,
+            sessionWorkdir,
+            ghostVisibilityDeps,
+          );
+          if (!postGrantVisibility.ok) return postGrantVisibility;
+          let postGrantAssessment: GhostSetupAssessment;
+          try {
+            postGrantAssessment = getGhostSetupAssessment(ghostId);
+            if (postGrantAssessment.state !== 'ready') {
+              return {
+                ok: false,
+                errorCode: 'SETUP_REQUIRED',
+                message: t('newChat.pluginSetup.setupChangedDuringResume'),
+                setup: postGrantAssessment,
+              };
+            }
+          } catch {
+            return {
+              ok: false,
+              errorCode: 'INTERNAL',
+              message: t('newChat.pluginSetup.assessmentReadFailed'),
+            };
+          }
+          // 补偿事务的最后一次策略断言:visibility/setup 刷新之后、
+          // grantOnlySucceeded 落地之前,工具仍可能被用户切到 blocked——
+          // 只查 visibility+setup 会漏掉这个窗口,必须复用同一份
+          // postGrantVisibility 再判一次 blockedToolVerdict。
+          const postGrantBlocked = blockedToolVerdict(postGrantVisibility.ghost.manifest.tools, true);
+          if (postGrantBlocked) return postGrantBlocked;
+          // 同一收口点核对 owner 是否漂移(见 grantOnlyOwnerScopeKeyAtStart
+          // 旁边的注释)——visibility/setup/blocked 都只现查"当前活跃账号",
+          // 单靠它们查不出"这还是不是授权发生时那个账号"。
+          if (activeOwnerScopeKey() !== grantOnlyOwnerScopeKeyAtStart) {
+            log.warn('ghost grant-only: denied, owner scope changed during grant wait', {
+              ghostId,
+            });
+            return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: '账号状态已变化，为了安全未执行预授权，请重试。',
+            };
+          }
+          log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
+          grantOnlySucceeded = true;
+          return {
+            ok: true,
+            ...(postGrantAssessment.reauthSuggest ? { setup: postGrantAssessment } : {}),
+            result: {
+              ok: true,
+              granted_count: grant.hashes.length,
+              attachments: grant.hashes,
+              guidance:
+                '整批文件已过户并获授权;在当前权限档位下继续逐次调用目标工具,可引用原路径或这些指纹。若热切回需要确认的权限档位,后续重新交接可能再次弹出确认卡。不要向用户复述指纹列表。',
+            },
+          };
+        } finally {
+          if (!grantOnlySucceeded) {
+            await grant.revoke().catch((err: unknown) => {
+              log.warn('ghost attachment grant: revoke after grant_only post-check rejection did not complete', {
+                ghostId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
+        }
+      }
+      // owner 快照:下面这段从这里到实际派发之间会经过 dir/save_dir 确认、
+      // 附件授权、session-context 构建等好几个 await 窗口。就算这次调用没有
+      // 附件,dir/save_dir 出的一次性票据与 buildGhostSessionContext 铸的
+      // 上下文同样是"交接"——账号在这些窗口切换后,若新账号下恰好也装了
+      // 同 id 插件,后续 classifyGhostVisibility 只现查"当前活跃账号",会
+      // 照常放行并把旧账号铸好的票据/上下文连同派发一起送进新账号的进程。
+      // 在整段交接开始前统一捕获一次,派发前统一复核,不局限于"有附件才
+      // 检查"。
+      const ownerScopeKeyAtHandoffStart = activeOwnerScopeKey();
+      // 附件授权(ghost-grant/ghost-tool-grant)是持久 ledger 记录,不是这次
+      // 调用专属的一次性凭证——插件此后任何时候引用同一 hash 都会被判定为
+      // 已授权。下面直到实际派发之间还有多处会拒绝这次调用(目录/save_dir
+      // 确认、两次 blocked 复判、pre-dispatch 与 session-context 复判、
+      // 派发本身失败);任何一处拒绝都不能把这次刚授出的读取权限留在账上
+      // ——"写完才拒绝会留下已生效的授权副作用，不算拦住"
+      // (docs/dev-rules/plugin-security-and-authoring.md §3.1 第 4 条)。
+      let pendingAttachmentRevoke: (() => Promise<void>) | null = null;
+      if (attachments && attachments.length > 0) {
+        const grant = await grantAttachmentUrls({
+          ghostId,
+          urls: attachments,
+          workdirAbs: sessionWorkdir,
+          sessionId: sessionIdForConfirm,
+          sessionInstanceId: sessionInstanceIdForGrant,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+          recheckPolicy: () => recheckCurrentGrantPolicy(false),
+          maxCount: MAX_GRANT_ATTACHMENTS,
+        });
+        if (!grant.ok) {
+          return {
+            ok: false,
+            errorCode: grant.errorCode ?? 'ATTACHMENT_INVALID',
+            message: grant.message,
+          };
+        }
+        mergedArgs = { ...args, attachments: grant.hashes };
+        pendingAttachmentRevoke = grant.revoke;
+      }
+      // dispatchSucceeded 置真的两种情况:调用整体成功,或者 pipeDispatcher
+      // 明确报告 TIMEOUT(语义是"可能仍在后台继续",附件已经真正交给了
+      // sandbox)。下面任何一个提前 return(派发前的复判/确认,以及
+      // pipeDispatcher 自己资格审失败的 PERMISSION_DENIED 等)都会让它保持
+      // false,finally 据此撤销刚才可能已经授出的附件读取权限——见下方调用点
+      // 旁边的注释。
+      let dispatchSucceeded = false;
+      try {
+        // 目录过户(xd-service 意识化二期):dir 收集文件发一次性票据,元数据
+        // 注入 args.dir_deposit——意识拿到的只有票据与相对路径清单;上传时
+        // networkSlot 凭票读盘代组 multipart。钳制两层策略:workdir 内直通,
+        // workdir 外(含无 workdir 语境)经确认卡放行。
+        if (dir !== undefined) {
+          const dirConfirm = await confirmDepositOutsideWorkdir({
+            ghostId,
+            sessionId: sessionIdForConfirm,
+            sessionInstanceId: sessionInstanceIdForGrant,
+            lane: 'dir',
+            dirAbs: dir,
+            workdirAbs: sessionWorkdir,
+            getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+            recheckPolicy: () => recheckCurrentGrantPolicy(false),
+          });
+          if (!dirConfirm.ok) {
+            return {
+              ok: false,
+              errorCode: dirConfirm.errorCode ?? 'DIR_INVALID',
+              message: dirConfirm.message,
+            };
+          }
+          // 确认卡的返回与出票之间绝不能沿用旧裁决：票据一旦创建可由 sandbox
+          // 在稍后消费，派发器的 blocked 闸已无法撤销它。这里是最后一个无 await
+          // 的拦截点，命中时保证零票据副作用。
+          const dirBlocked = recheckCurrentGrantPolicy(false);
+          if (dirBlocked) return dirBlocked;
+          const deposited = getDirDepositVault().deposit({
+            ghostId,
+            dirAbs: dirConfirm.userGranted ? dirConfirm.approvedRealPath : dir,
+            workdirAbs: sessionWorkdir,
+            userGranted: dirConfirm.userGranted,
+            ...(dirConfirm.userGranted ? { expectedRealPath: dirConfirm.approvedRealPath } : {}),
+          });
+          if (!deposited.ok) {
+            return { ok: false, errorCode: 'DIR_INVALID', message: deposited.message };
+          }
+          mergedArgs = { ...mergedArgs, dir_deposit: deposited.receipt };
+        }
+        // 下行落盘过户(附件下载不降级):save_dir 发限时票据注入
+        // args.save_deposit——意识 fetch as:'file' 报票据,主机把响应字节直接
+        // 写进该目录,绝对路径与字节不进沙箱。钳制两层策略同 dir。
+        if (saveDir !== undefined) {
+          const saveConfirm = await confirmDepositOutsideWorkdir({
+            ghostId,
+            sessionId: sessionIdForConfirm,
+            sessionInstanceId: sessionInstanceIdForGrant,
+            lane: 'save_dir',
+            dirAbs: saveDir,
+            workdirAbs: sessionWorkdir,
+            getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+            recheckPolicy: () => recheckCurrentGrantPolicy(false),
+          });
+          if (!saveConfirm.ok) {
+            return {
+              ok: false,
+              errorCode: saveConfirm.errorCode ?? 'DIR_INVALID',
+              message: saveConfirm.message,
+            };
+          }
+          // 与 dir 相同：出票前重新读取当前策略，不能让确认期间后的 blocked
+          // 切换留下仍可消费的本地写入票据。
+          const saveBlocked = recheckCurrentGrantPolicy(false);
+          if (saveBlocked) return saveBlocked;
+          const saveDeposited = getSaveDepositVault().deposit({
+            ghostId,
+            dirAbs: saveConfirm.userGranted ? saveConfirm.approvedRealPath : saveDir,
+            workdirAbs: sessionWorkdir,
+            userGranted: saveConfirm.userGranted,
+            ...(saveConfirm.userGranted ? { expectedRealPath: saveConfirm.approvedRealPath } : {}),
+          });
+          if (!saveDeposited.ok) {
+            return { ok: false, errorCode: 'DIR_INVALID', message: saveDeposited.message };
+          }
+          mergedArgs = { ...mergedArgs, save_deposit: saveDeposited.receipt };
+        }
+        // ── session-context 槽:注入宿主铸造的会话上下文(盖章工作单)────
+        // agent / 上游自报的同名字段一律剥除——这个字段的全部价值在于
+        // "主机铸造、不可伪造";未声明槽的插件连剥除后的空位都不给。
+        if ('session_context' in mergedArgs) {
+          const { session_context: _dropped, ...rest } = mergedArgs;
+          void _dropped;
+          mergedArgs = rest;
+        }
+        // Pre-dispatch revalidation: attachment grants and dir tickets may have
+        // taken time; confirm the target is still available before committing the
+        // callId and dispatching to the sandbox.
+        const preDispatchVisibility = classifyGhostVisibility(
           ghostId,
           sessionWorkdir,
           ghostVisibilityDeps,
         );
-        if (!postGrantVisibility.ok) return postGrantVisibility;
-        let postGrantAssessment: GhostSetupAssessment;
+        if (!preDispatchVisibility.ok) return preDispatchVisibility;
+        const preDispatch = preDispatchVisibility.ghost;
+        if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
+          return {
+            ok: false,
+            errorCode: 'TOOL_NOT_FOUND',
+            message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools),
+          };
+        }
         try {
-          postGrantAssessment = getGhostSetupAssessment(ghostId);
-          if (postGrantAssessment.state !== 'ready') {
+          const preDispatchAssessment = getGhostSetupAssessment(ghostId);
+          if (preDispatchAssessment.state !== 'ready') {
             return {
               ok: false,
               errorCode: 'SETUP_REQUIRED',
               message: t('newChat.pluginSetup.setupChangedDuringResume'),
-              setup: postGrantAssessment,
+              setup: preDispatchAssessment,
             };
           }
         } catch {
@@ -1423,239 +1858,152 @@ export function getCindyGhostsMcpDeps(
             message: t('newChat.pluginSetup.assessmentReadFailed'),
           };
         }
-        log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
-        return {
-          ok: true,
-          ...(postGrantAssessment.reauthSuggest ? { setup: postGrantAssessment } : {}),
-          result: {
-            ok: true,
-            granted_count: grant.hashes.length,
-            attachments: grant.hashes,
-            guidance:
-              '整批文件已过户并获授权;在当前权限档位下继续逐次调用目标工具,可引用原路径或这些指纹。若热切回需要确认的权限档位,后续重新交接可能再次弹出确认卡。不要向用户复述指纹列表。',
-          },
-        };
-      }
-      if (attachments && attachments.length > 0) {
-        const grant = await grantAttachmentUrls({
-          ghostId,
-          urls: attachments,
-          workdirAbs: sessionWorkdir,
-          sessionId: sessionIdForConfirm,
-          sessionInstanceId: sessionInstanceIdForGrant,
-          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          maxCount: MAX_GRANT_ATTACHMENTS,
-        });
-        if (!grant.ok) {
-          return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
-        }
-        mergedArgs = { ...args, attachments: grant.hashes };
-      }
-      // 目录过户(xd-service 意识化二期):dir 收集文件发一次性票据,元数据
-      // 注入 args.dir_deposit——意识拿到的只有票据与相对路径清单;上传时
-      // networkSlot 凭票读盘代组 multipart。钳制两层策略:workdir 内直通,
-      // workdir 外(含无 workdir 语境)经确认卡放行。
-      if (dir !== undefined) {
-        const dirConfirm = await confirmDepositOutsideWorkdir({
-          ghostId,
-          sessionId: sessionIdForConfirm,
-          sessionInstanceId: sessionInstanceIdForGrant,
-          lane: 'dir',
-          dirAbs: dir,
-          workdirAbs: sessionWorkdir,
-          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-        });
-        if (!dirConfirm.ok) {
-          return { ok: false, errorCode: 'DIR_INVALID', message: dirConfirm.message };
-        }
-        const deposited = getDirDepositVault().deposit({
-          ghostId,
-          dirAbs: dirConfirm.userGranted ? dirConfirm.approvedRealPath : dir,
-          workdirAbs: sessionWorkdir,
-          userGranted: dirConfirm.userGranted,
-          ...(dirConfirm.userGranted ? { expectedRealPath: dirConfirm.approvedRealPath } : {}),
-        });
-        if (!deposited.ok) {
-          return { ok: false, errorCode: 'DIR_INVALID', message: deposited.message };
-        }
-        mergedArgs = { ...mergedArgs, dir_deposit: deposited.receipt };
-      }
-      // 下行落盘过户(附件下载不降级):save_dir 发限时票据注入
-      // args.save_deposit——意识 fetch as:'file' 报票据,主机把响应字节直接
-      // 写进该目录,绝对路径与字节不进沙箱。钳制两层策略同 dir。
-      if (saveDir !== undefined) {
-        const saveConfirm = await confirmDepositOutsideWorkdir({
-          ghostId,
-          sessionId: sessionIdForConfirm,
-          sessionInstanceId: sessionInstanceIdForGrant,
-          lane: 'save_dir',
-          dirAbs: saveDir,
-          workdirAbs: sessionWorkdir,
-          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-        });
-        if (!saveConfirm.ok) {
-          return { ok: false, errorCode: 'DIR_INVALID', message: saveConfirm.message };
-        }
-        const saveDeposited = getSaveDepositVault().deposit({
-          ghostId,
-          dirAbs: saveConfirm.userGranted ? saveConfirm.approvedRealPath : saveDir,
-          workdirAbs: sessionWorkdir,
-          userGranted: saveConfirm.userGranted,
-          ...(saveConfirm.userGranted ? { expectedRealPath: saveConfirm.approvedRealPath } : {}),
-        });
-        if (!saveDeposited.ok) {
-          return { ok: false, errorCode: 'DIR_INVALID', message: saveDeposited.message };
-        }
-        mergedArgs = { ...mergedArgs, save_deposit: saveDeposited.receipt };
-      }
-      // ── session-context 槽:注入宿主铸造的会话上下文(盖章工作单)────
-      // agent / 上游自报的同名字段一律剥除——这个字段的全部价值在于
-      // "主机铸造、不可伪造";未声明槽的插件连剥除后的空位都不给。
-      if ('session_context' in mergedArgs) {
-        const { session_context: _dropped, ...rest } = mergedArgs;
-        void _dropped;
-        mergedArgs = rest;
-      }
-      // Pre-dispatch revalidation: attachment grants and dir tickets may have
-      // taken time; confirm the target is still available before committing the
-      // callId and dispatching to the sandbox.
-      const preDispatchVisibility = classifyGhostVisibility(
-        ghostId,
-        sessionWorkdir,
-        ghostVisibilityDeps,
-      );
-      if (!preDispatchVisibility.ok) return preDispatchVisibility;
-      const preDispatch = preDispatchVisibility.ghost;
-      if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
-        return {
-          ok: false,
-          errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools),
-        };
-      }
-      try {
-        const preDispatchAssessment = getGhostSetupAssessment(ghostId);
-        if (preDispatchAssessment.state !== 'ready') {
-          return {
-            ok: false,
-            errorCode: 'SETUP_REQUIRED',
-            message: t('newChat.pluginSetup.setupChangedDuringResume'),
-            setup: preDispatchAssessment,
-          };
-        }
-      } catch {
-        return {
-          ok: false,
-          errorCode: 'INTERNAL',
-          message: t('newChat.pluginSetup.assessmentReadFailed'),
-        };
-      }
-      // Session-context slot: use the revalidated manifest to decide injection.
-      // Re-read manifest after the async buildGhostSessionContext to guard against
-      // a same-ID plugin replacement removing the slot during the await.
-      if (preDispatch.manifest.slots?.includes('session-context')) {
-        const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
-        const postCtxManifest = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId)?.manifest;
-        if (postCtxManifest?.slots?.includes('session-context')) {
-          mergedArgs = { ...mergedArgs, session_context: ctx };
-        }
-      }
-      // Full revalidation after session-context await (DB query may take time)
-      const postCtxVisibility = classifyGhostVisibility(
-        ghostId,
-        sessionWorkdir,
-        ghostVisibilityDeps,
-      );
-      if (!postCtxVisibility.ok) return postCtxVisibility;
-      const postCtx = postCtxVisibility.ghost;
-      if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool)) {
-        return {
-          ok: false,
-          errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools),
-        };
-      }
-      let postCtxAssessment: GhostSetupAssessment;
-      try {
-        postCtxAssessment = getGhostSetupAssessment(ghostId);
-        if (postCtxAssessment.state !== 'ready') {
-          return {
-            ok: false,
-            errorCode: 'SETUP_REQUIRED',
-            message: t('newChat.pluginSetup.setupChangedDuringResume'),
-            setup: postCtxAssessment,
-          };
-        }
-      } catch {
-        return {
-          ok: false,
-          errorCode: 'INTERNAL',
-          message: t('newChat.pluginSetup.assessmentReadFailed'),
-        };
-      }
-      // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────
-      // 时序契约:register(供片窗开)→ dispatch(意识拿到同一 callId,执行
-      // 中可 card-update)→ finalize(问"这单供过卡吗",开晚到宽限窗)→
-      // 真供过卡才把 xdt_card_id 注入 result(mcpServer 提升到顶层,renderer
-      // 据此配对取卡;没供过 = 结果零变化,模型永远看不到内部 UUID)。
-      const callId = randomUUID();
-      const cardService = getGhostCardService();
-      cardService.registerCall(callId, {
-        ghostId,
-        toolUseId: agentToolUseId ?? null,
-        // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
-        // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
-        sessionId: resolveSessionContext()?.sessionId ?? null,
-      });
-      // GhostToolCallResult 与 CindyGhostCallResult 同构(错误码枚举一致),
-      // 原样透传;类型层若有漂移 tsc 会拦。
-      const result = await getGhostPipeDispatcher().callGhostTool({
-        ghostId,
-        tool,
-        args: mergedArgs,
-        callId,
-      });
-      // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
-      // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
-      // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
-      const producedMedia = drainGhostCallMedia(ghostId, callId);
-      const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
-      if (!finalized.ok) return finalized;
-      // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。
-      const advisory = postCtxAssessment.reauthSuggest ? { setup: postCtxAssessment } : {};
-      const base = producedMedia.length > 0
-        ? { ...finalized, ...advisory, producedMedia }
-        : { ...finalized, ...advisory };
-      // 视觉桥工具结果图片描述(最佳努力,不阻塞):把工具返回的 cindy-media://
-      // 图片 URL 转成文字描述,附加为 xdt_media_descriptions——纯文本模型
-      // (deepseek 等)拿不到 image block,只能看到 URL 文本,易幻觉编造图片
-      // 内容;描述让它真正「看到」图。任何失败/未启用都静默跳过,工具结果照常。
-      // 仅在成功分支执行:ok:false 无 result 可扫,视觉桥也无需对失败结果描述。
-      if (result.ok) {
-        const sessionContext = resolveSessionContext();
-        const mediaDescriptions = await buildToolResultImageDescriptions({
-          producedMedia,
-          resultPayload: result.result,
-          sessionId: sessionContext?.sessionId ?? null,
-          sessionInstanceId: sessionContext?.sessionInstanceId ?? null,
-          describeImage: hostDeps.describeToolResultImage,
-        });
-        if (mediaDescriptions) {
-          // 有成功描述 → 附加 xdt_media_descriptions（attemptedCount 是内部告警计数，
-          // 不泄漏给模型）；有图但全部失败 → 发「视觉桥不可用」UI 警告（fire-and-forget，
-          // 不阻塞工具结果，也不改返回结构）。
-          if (mediaDescriptions.xdt_media_descriptions?.length) {
-            return { ...base, xdt_media_descriptions: mediaDescriptions.xdt_media_descriptions };
-          }
-          // 预算超时中止（aborted）不是后端不可用：不告警，避免把慢后端/长图误报成故障。
-          if (!mediaDescriptions.aborted && mediaDescriptions.attemptedCount > 0 && sessionContext?.sessionId) {
-            hostDeps.onToolResultImagesFailed?.(sessionContext.sessionId, mediaDescriptions.attemptedCount);
+        // Session-context slot: use the revalidated manifest to decide injection.
+        // Re-read manifest after the async buildGhostSessionContext to guard against
+        // a same-ID plugin replacement removing the slot during the await.
+        if (preDispatch.manifest.slots?.includes('session-context')) {
+          const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
+          const postCtxManifest = getGhostManager()
+            .list()
+            .find((g) => g.manifest.id === ghostId)?.manifest;
+          if (postCtxManifest?.slots?.includes('session-context')) {
+            mergedArgs = { ...mergedArgs, session_context: ctx };
           }
         }
+        // Full revalidation after session-context await (DB query may take time)
+        const postCtxVisibility = classifyGhostVisibility(
+          ghostId,
+          sessionWorkdir,
+          ghostVisibilityDeps,
+        );
+        if (!postCtxVisibility.ok) return postCtxVisibility;
+        const postCtx = postCtxVisibility.ghost;
+        if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool)) {
+          return {
+            ok: false,
+            errorCode: 'TOOL_NOT_FOUND',
+            message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools),
+          };
+        }
+        let postCtxAssessment: GhostSetupAssessment;
+        try {
+          postCtxAssessment = getGhostSetupAssessment(ghostId);
+          if (postCtxAssessment.state !== 'ready') {
+            return {
+              ok: false,
+              errorCode: 'SETUP_REQUIRED',
+              message: t('newChat.pluginSetup.setupChangedDuringResume'),
+              setup: postCtxAssessment,
+            };
+          }
+        } catch {
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: t('newChat.pluginSetup.assessmentReadFailed'),
+          };
+        }
+        // 派发前最后一个无 await 的拦截点:核对整段交接开始以来 owner 是否
+        // 漂移(见 ownerScopeKeyAtHandoffStart 旁边的注释)——不局限于有
+        // 附件的调用,dir/save_dir 票据与 session-context 同样是交接。命中
+        // 就直接拒,让 dispatchSucceeded 保持 false,交给下面 finally 去撤销
+        // 可能已经写进旧账号账本的 ghost-grant/ghost-tool-grant——不能在这里
+        // 改派发目标或者忽略漂移继续派发,那样等于把旧账号的票据/上下文/
+        // 附件送进了新账号的插件进程。
+        if (activeOwnerScopeKey() !== ownerScopeKeyAtHandoffStart) {
+          log.warn('ghost tool call denied: owner scope changed during handoff', { ghostId });
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: '账号状态已变化，为了安全未执行该工具，请重试。',
+          };
+        }
+        // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────
+        // 时序契约:register(供片窗开)→ dispatch(意识拿到同一 callId,执行
+        // 中可 card-update)→ finalize(问"这单供过卡吗",开晚到宽限窗)→
+        // 真供过卡才把 xdt_card_id 注入 result(mcpServer 提升到顶层,renderer
+        // 据此配对取卡;没供过 = 结果零变化,模型永远看不到内部 UUID)。
+        const callId = randomUUID();
+        const cardService = getGhostCardService();
+        cardService.registerCall(callId, {
+          ghostId,
+          toolUseId: agentToolUseId ?? null,
+          // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
+          // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
+          sessionId: resolveSessionContext()?.sessionId ?? null,
+        });
+        // GhostToolCallResult 与 CindyGhostCallResult 同构(错误码枚举一致),
+        // 原样透传;类型层若有漂移 tsc 会拦。
+        const result = await getGhostPipeDispatcher().callGhostTool({
+          ghostId,
+          tool,
+          args: mergedArgs,
+          callId,
+        });
+        // pipeDispatcher 自己的资格审失败(GHOST_NOT_FOUND / GHOST_ASLEEP /
+        // TOOL_NOT_FOUND / PERMISSION_DENIED / GHOST_CRASHED)从未真正把
+        // mergedArgs 送进 sandbox——那条 ghost-tool-grant 必须照旧撤销,见下方
+        // finally。真正把附件交出去之后才可能出现的结果只有两种:调用本身
+        // 成功,或者 TIMEOUT(armTimer 的 message 明确写了"任务可能仍在后台
+        // 继续")——这两种都不再是"调用被拒绝",不该撤销已生效的授权,否则
+        // 重试还得让用户再走一遍确认。除 TIMEOUT 外的其它 ok:false 暂时仍归
+        // 入"撤销"这一支:插件工具自己上报的 errorCode 是开放集合,没有结构化
+        // 信号能安全区分"确实送达但工具自己失败"与"根本没送达",宁可多撤销
+        // 一次逼用户重新确认,也不留下无法证伪的已生效授权(fail closed)。
+        if (result.ok || result.errorCode === 'TIMEOUT') {
+          dispatchSucceeded = true;
+        }
+        // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
+        // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
+        // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
+        const producedMedia = drainGhostCallMedia(ghostId, callId);
+        const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
+        if (!finalized.ok) return finalized;
+        // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。
+        const advisory = postCtxAssessment.reauthSuggest ? { setup: postCtxAssessment } : {};
+        const base = producedMedia.length > 0
+          ? { ...finalized, ...advisory, producedMedia }
+          : { ...finalized, ...advisory };
+        // 视觉桥工具结果图片描述(最佳努力,不阻塞):把工具返回的 cindy-media://
+        // 图片 URL 转成文字描述,附加为 xdt_media_descriptions——纯文本模型
+        // (deepseek 等)拿不到 image block,只能看到 URL 文本,易幻觉编造图片
+        // 内容;描述让它真正「看到」图。任何失败/未启用都静默跳过,工具结果照常。
+        // 仅在成功分支执行:ok:false 无 result 可扫,视觉桥也无需对失败结果描述。
+        // 这段发生在 dispatchSucceeded 已置真之后,与上面的附件撤销互不影响——
+        // 派发已经成功,视觉桥本身的失败不构成"调用被拒",不该触发撤销。
+        if (result.ok) {
+          const sessionContext = resolveSessionContext();
+          const mediaDescriptions = await buildToolResultImageDescriptions({
+            producedMedia,
+            resultPayload: result.result,
+            sessionId: sessionContext?.sessionId ?? null,
+            sessionInstanceId: sessionContext?.sessionInstanceId ?? null,
+            describeImage: hostDeps.describeToolResultImage,
+          });
+          if (mediaDescriptions) {
+            // 有成功描述 → 附加 xdt_media_descriptions（attemptedCount 是内部告警计数，
+            // 不泄漏给模型）；有图但全部失败 → 发「视觉桥不可用」UI 警告（fire-and-forget，
+            // 不阻塞工具结果，也不改返回结构）。
+            if (mediaDescriptions.xdt_media_descriptions?.length) {
+              return { ...base, xdt_media_descriptions: mediaDescriptions.xdt_media_descriptions };
+            }
+            // 预算超时中止（aborted）不是后端不可用：不告警，避免把慢后端/长图误报成故障。
+            if (!mediaDescriptions.aborted && mediaDescriptions.attemptedCount > 0 && sessionContext?.sessionId) {
+              hostDeps.onToolResultImagesFailed?.(sessionContext.sessionId, mediaDescriptions.attemptedCount);
+            }
+          }
+        }
+        return base;
+      } finally {
+        if (!dispatchSucceeded && pendingAttachmentRevoke) {
+          await pendingAttachmentRevoke().catch((err: unknown) => {
+            log.warn('ghost attachment grant: revoke after later call rejection did not complete', {
+              ghostId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
       }
-      return base;
     },
     async forgeGuide(): Promise<string> {
       return FORGE_GUIDE;

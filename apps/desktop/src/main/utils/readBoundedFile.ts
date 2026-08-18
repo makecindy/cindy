@@ -17,6 +17,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { samePathAndHandleFileIdentity } from './fileIdentity.js';
+
 /**
  * 身份卡(ghost.json)体量上限。合法身份卡远小于此;超限视为非法内容,
  * 发现层跳过、安装/打包层结构化拒绝。
@@ -99,13 +101,12 @@ export function isRealPathWithinRoot(realFilePath: string, realRoot: string): bo
 /**
  * 路径上的目录项与已打开句柄是否同一 inode。**必须用 BigInt**:
  * NTFS 的 FileId 高位在长期使用的卷上会超过 2^53,number 截断可能让两个不同
- * 文件比相等(误放行)。dev/ino 任一为 0 表示文件系统没提供可信标识(SMB /
- * 网络重定向器 / 部分 FUSE 常见)——此时无法证明"路径仍解析到这个 inode",
- * 一律按不可信拒绝,不让回退闸退化成只剩 isSymbolicLink 一条。
+ * 文件比相等(误放行)。Windows 的路径 stat 会出现 dev=0、句柄 stat 有真实
+ * 卷序列号的组合；该组合由共享身份判据用非零 NTFS FileId 安全兼容。两边
+ * dev 都为 0，或任一 ino 为 0 时仍无法证明身份，继续按不可信拒绝。
  */
 function sameInode(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
-  if (a.dev === 0n || a.ino === 0n || b.dev === 0n || b.ino === 0n) return false;
-  return a.dev === b.dev && a.ino === b.ino;
+  return samePathAndHandleFileIdentity(a, b);
 }
 
 function sameStableFileState(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
