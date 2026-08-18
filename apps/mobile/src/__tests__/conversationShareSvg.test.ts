@@ -36,6 +36,27 @@ describe("ConversationShareSvg", () => {
     expect(wrapSvgText("long latin message", 60, 15).length).toBeGreaterThan(1);
   });
 
+  it("wraps long runs of wide Arial glyphs before they can be clipped", () => {
+    const maxWidth = 263;
+    const fontSize = 15;
+    const cases: Array<[glyph: string, maxGlyphsPerLine: number]> = [
+      ["W", 17],
+      ["@", 16],
+      ["%", 17],
+      ["M", 19],
+      ["m", 19],
+    ];
+
+    for (const [glyph, maxGlyphsPerLine] of cases) {
+      const text = glyph.repeat(30);
+      const lines = wrapSvgText(text, maxWidth, fontSize);
+      expect(lines.join("")).toBe(text);
+      expect(Math.max(...lines.map((line) => line.length))).toBeLessThanOrEqual(
+        maxGlyphsPerLine,
+      );
+    }
+  });
+
   it("lays out user and assistant messages with a footer", () => {
     const layout = buildConversationShareSvgLayout({
       allShareableIds: ["u", "skipped", "a"],

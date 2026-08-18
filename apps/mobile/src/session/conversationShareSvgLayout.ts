@@ -242,7 +242,7 @@ export function wrapSvgText(
     let line = "";
     let units = 0;
     for (const character of Array.from(paragraph)) {
-      const characterUnits = /[\u0000-\u00ff]/.test(character) ? 0.58 : 1;
+      const characterUnits = conservativeArialGlyphWidthEm(character);
       if (line && units + characterUnits > maxUnits) {
         lines.push(line.trimEnd());
         line = "";
@@ -254,4 +254,23 @@ export function wrapSvgText(
     lines.push(line.trimEnd());
   }
   return lines.length > 0 ? lines : [""];
+}
+
+function conservativeArialGlyphWidthEm(character: string): number {
+  // react-native-svg does not expose synchronous glyph measurement while this
+  // pure layout is built. These Arial-like buckets intentionally round wide
+  // glyphs up so an exported line wraps early instead of being clipped.
+  if (character === " ") return 0.33;
+  if (character.codePointAt(0)! > 0x7f) return 1;
+  if (character === "@") return 1.05;
+  if ("W%".includes(character)) return 1;
+  if ("Mm".includes(character)) return 0.9;
+  if ("CGOQw".includes(character)) return 0.82;
+  if ("ABDGHKNRUVXY&".includes(character)) return 0.75;
+  if ("EFLPSTZ".includes(character)) return 0.68;
+  if ("0123456789#?$+=<>^_~abdeghnopqu".includes(character)) return 0.62;
+  if ("Jckrsvxyz".includes(character)) return 0.55;
+  if ("(){}[]ft*".includes(character)) return 0.4;
+  if (`!"',.:;\`il|/\\-`.includes(character)) return 0.36;
+  return 0.68;
 }
