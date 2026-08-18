@@ -12,6 +12,7 @@ import {
   sidebarOwnerStorageKey,
 } from '@/lib/sidebarOwnerStorage';
 import {
+  isAutomationGroupCollapsed,
   setAutomationGroupCollapsed,
   useAutomationGroupCollapsed,
   useAutomationGroupsCollapsed,
@@ -26,6 +27,54 @@ beforeEach(() => {
 });
 
 describe('automation group collapsed owner binding', () => {
+  it('copies a legacy schedule preference to every device key and lets each device override it', () => {
+    setDataOwnerGeneration('owner-a', 1);
+    const ownerStorageKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-a');
+    window.localStorage.setItem(
+      ownerStorageKey,
+      JSON.stringify({
+        'schedule:a': { collapsed: false, lastSeenAt: '2026-08-01T00:00:00.000Z' },
+      }),
+    );
+
+    expect(isAutomationGroupCollapsed('schedule:a:device:dev-a', 'owner-a', 'schedule:a')).toBe(
+      false,
+    );
+    expect(isAutomationGroupCollapsed('schedule:a:device:dev-b', 'owner-a', 'schedule:a')).toBe(
+      false,
+    );
+
+    setAutomationGroupCollapsed('schedule:a:device:dev-a', true, 'owner-a', 'schedule:a');
+
+    expect(isAutomationGroupCollapsed('schedule:a:device:dev-a', 'owner-a', 'schedule:a')).toBe(
+      true,
+    );
+    expect(isAutomationGroupCollapsed('schedule:a:device:dev-b', 'owner-a', 'schedule:a')).toBe(
+      false,
+    );
+    expect(JSON.parse(window.localStorage.getItem(ownerStorageKey) ?? '{}')).toMatchObject({
+      'schedule:a': { collapsed: false },
+      'schedule:a:device:dev-a': { collapsed: true },
+      'schedule:a:device:dev-b': { collapsed: false },
+    });
+  });
+
+  it('keeps a device group collapsed when the local legacy group is expanded later', () => {
+    setDataOwnerGeneration('owner-a', 1);
+    const ownerStorageKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-a');
+
+    setAutomationGroupCollapsed('schedule:a:device:dev-a', true, 'owner-a', 'schedule:a');
+    setAutomationGroupCollapsed('schedule:a', false, 'owner-a');
+
+    expect(isAutomationGroupCollapsed('schedule:a:device:dev-a', 'owner-a', 'schedule:a')).toBe(
+      true,
+    );
+    expect(JSON.parse(window.localStorage.getItem(ownerStorageKey) ?? '{}')).toMatchObject({
+      'schedule:a': { collapsed: false },
+      'schedule:a:device:dev-a': { collapsed: true },
+    });
+  });
+
   it('synchronizes mounted groups with the batch collapse control', () => {
     setDataOwnerGeneration('owner-a', 1);
     const hook = renderHook(() => {

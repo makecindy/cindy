@@ -324,6 +324,10 @@ describe('buildMainListEntries — 混排(recency)', () => {
     );
     expect(groups).toHaveLength(2);
     expect(new Set(groups.map((entry) => entry.group.id)).size).toBe(2);
+    expect(groups.map((entry) => entry.group.legacyId)).toEqual([
+      'schedule:shared-schedule-id',
+      'schedule:shared-schedule-id',
+    ]);
     expect(
       groups.map((entry) => new Set(entry.group.sessions.map((item) => item.deviceLinkDeviceId))),
     ).toEqual([new Set(['dev-b']), new Set(['dev-a'])]);

@@ -89,7 +89,10 @@ export function AutomationSessionGroupItem({
   const { t } = useTranslation();
   const navigate = useNavigate();
   // 轴 1:文件夹开/关,持久化、记忆上次展开(默认收起)。
-  const [storedCollapsed, toggleStoredCollapsed] = useAutomationGroupCollapsed(group.id);
+  const [storedCollapsed, toggleStoredCollapsed] = useAutomationGroupCollapsed(
+    group.id,
+    group.legacyId,
+  );
   const collapsed = controlledCollapsed ?? storedCollapsed;
   const toggleCollapsed = useCallback(() => {
     if (onCollapsedChange) {

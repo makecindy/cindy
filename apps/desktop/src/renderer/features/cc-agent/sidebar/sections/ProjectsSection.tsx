@@ -542,12 +542,23 @@ export function ProjectsSection({
         .map((entry) => entry.group.id),
     [mixedEntries],
   );
+  const legacyAutomationGroupKeys = useMemo(
+    () =>
+      new Map(
+        mixedEntries.flatMap((entry) =>
+          entry.kind === 'automation-group' && entry.group.legacyId
+            ? [[entry.group.id, entry.group.legacyId] as const]
+            : [],
+        ),
+      ),
+    [mixedEntries],
+  );
   const [
     allAutomationGroupsCollapsed,
     setAllAutomationGroupsCollapsed,
     isAutomationGroupCollapsed,
     setAutomationGroupCollapsed,
-  ] = useAutomationGroupsCollapsed(visibleAutomationGroupKeys);
+  ] = useAutomationGroupsCollapsed(visibleAutomationGroupKeys, legacyAutomationGroupKeys);
   // 组层是否收齐必须看**当前范围**有没有项目行。allKnownProjects 是全机器宇宙,
   // 单机范围下本机只有对话组、远端仍有项目时 length>0;isAllCollapsed 却来自
   // 当前范围的 activeWorkingDirs,此时为空并恒为 false,foldState 会卡在

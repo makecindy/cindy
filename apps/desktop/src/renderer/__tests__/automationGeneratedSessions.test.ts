@@ -702,7 +702,8 @@ describe('automation-generated sessions', () => {
 
     expect(source).toContain('setFrozen(null)');
     // 轴 1:箭头切换的是持久化 disclosure(useAutomationGroupCollapsed),不是「显示全部」。
-    expect(source).toContain('useAutomationGroupCollapsed(group.id)');
+    expect(source).toContain('useAutomationGroupCollapsed(');
+    expect(source).toContain('group.legacyId');
     expect(source).toContain('toggleCollapsed()');
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
