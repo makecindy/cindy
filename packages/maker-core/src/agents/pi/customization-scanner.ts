@@ -28,6 +28,7 @@ import {
 export const PI_CUSTOMIZATION_SCAN_DEADLINE_MS = 30_000;
 export const MAX_PI_CUSTOMIZATION_SCAN_ENTRIES = 10_000;
 const MAX_PI_CUSTOMIZATION_SKILL_MD_BYTES = 16 * 1024 * 1024;
+const MAX_PI_CUSTOMIZATION_SCAN_TOTAL_BYTES = 64 * 1024 * 1024;
 const PI_CUSTOMIZATION_SCAN_TIMEOUT = 'PI_CUSTOMIZATION_SCAN_TIMEOUT';
 const PI_CUSTOMIZATION_SCAN_BUDGET = 'PI_CUSTOMIZATION_SCAN_BUDGET';
 const PI_CUSTOMIZATION_SCAN_UNSAFE_FILE = 'PI_CUSTOMIZATION_SCAN_UNSAFE_FILE';
@@ -54,6 +55,7 @@ const defaultScanDeps: PiCustomizationScanDeps = {
 
 interface PiCustomizationScanBudget {
   remainingEntries: number;
+  remainingBytes: number;
   readonly deadlineAtMs: number;
 }
 
@@ -77,6 +79,12 @@ function isScanTimeout(error: unknown): boolean {
 
 function scanBudgetError(): Error & { code: string } {
   return Object.assign(new Error('Pi customization scan entry budget exceeded'), {
+    code: PI_CUSTOMIZATION_SCAN_BUDGET,
+  });
+}
+
+function scanByteBudgetError(): Error & { code: string } {
+  return Object.assign(new Error('Pi customization scan byte budget exceeded'), {
     code: PI_CUSTOMIZATION_SCAN_BUDGET,
   });
 }
@@ -124,6 +132,20 @@ function consumeScanEntry(budget: PiCustomizationScanBudget): void {
   }
 }
 
+function reserveScanBytes(
+  budget: PiCustomizationScanBudget,
+  byteLength: number,
+): void {
+  if (
+    !Number.isSafeInteger(byteLength)
+    || byteLength < 0
+    || byteLength > budget.remainingBytes
+  ) {
+    throw scanByteBudgetError();
+  }
+  budget.remainingBytes -= byteLength;
+}
+
 function filesystemErrorCode(error: unknown): string | undefined {
   return error && typeof error === 'object'
     && typeof (error as { code?: unknown }).code === 'string'
@@ -152,6 +174,7 @@ async function readBoundedSkillFile(
   if (!pathBefore.isFile() || pathBefore.size > MAX_PI_CUSTOMIZATION_SKILL_MD_BYTES) {
     throw unsafeSkillFileError('Pi Skill entrypoint is not a bounded file');
   }
+  reserveScanBytes(budget, pathBefore.size);
 
   const handle = await awaitScanStep(() => dependencies.openFile(mdPath), budget);
   let iterator: AsyncIterator<unknown> | undefined;
@@ -540,6 +563,7 @@ export async function scanPiRuntimeUserSkillSources(
   const dependencies = defaultScanDeps;
   const budget: PiCustomizationScanBudget = {
     remainingEntries: MAX_PI_CUSTOMIZATION_SCAN_ENTRIES,
+    remainingBytes: MAX_PI_CUSTOMIZATION_SCAN_TOTAL_BYTES,
     deadlineAtMs,
   };
   const sources: PiRuntimeUserSkillSource[] = [];
@@ -600,7 +624,8 @@ export async function scanPiRuntimeUserSkillSources(
           runtimeCommandName,
         });
       }
-    } catch {
+    } catch (error) {
+      if (isScanFatal(error)) return [];
       // Catalog discovery is diagnostic; missing or unstable proof fails closed per Skill.
     }
   }
@@ -640,6 +665,7 @@ export async function scanPiCustomizations(
     : 0;
   const budget: PiCustomizationScanBudget = {
     remainingEntries: MAX_PI_CUSTOMIZATION_SCAN_ENTRIES,
+    remainingBytes: MAX_PI_CUSTOMIZATION_SCAN_TOTAL_BYTES,
     deadlineAtMs: Date.now() + deadlineMs,
   };
   try {

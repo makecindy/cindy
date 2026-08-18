@@ -150,6 +150,53 @@ describe('scanPiCustomizations', () => {
     expect(stat.mock.calls.some(([candidate]) => String(candidate).includes('entry-'))).toBe(false);
   });
 
+  it('fails closed at the shared byte budget before opening the next SKILL.md', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    const skillDirs = Array.from({ length: 5 }, (_, index) => (
+      writeSkill(repo, path.join('.pi', 'skills'), `aggregate-${index}`)
+    ));
+    const mdPaths = new Set(skillDirs.map((dir) => path.join(canonical(dir), 'SKILL.md')));
+    const actualStat = await fs.promises.stat([...mdPaths][0]);
+    const reservedStat = {
+      ...actualStat,
+      size: 16 * 1024 * 1024,
+      isFile: () => true,
+    } as fs.Stats;
+    const originalStat = fs.promises.stat;
+    const stat = vi.fn((candidate: string) => {
+      if (candidate === piUserSkillRoot()) {
+        return Promise.reject(Object.assign(new Error('missing user root'), { code: 'ENOENT' }));
+      }
+      if (mdPaths.has(String(candidate))) return Promise.resolve(reservedStat);
+      return originalStat(candidate) as Promise<fs.Stats>;
+    });
+    const close = vi.fn(async () => {});
+    const openFile = vi.fn(async (candidate: string) => {
+      if (!mdPaths.has(String(candidate))) return fs.promises.open(candidate, 'r');
+      return {
+        stat: vi.fn(async () => reservedStat),
+        createReadStream: vi.fn(() => ({
+          [Symbol.asyncIterator]: () => [][Symbol.iterator](),
+        })),
+        close,
+      } as unknown as FileHandle;
+    });
+
+    const result = await scanPiCustomizations(
+      { workingDirs: [repo] },
+      { stat, openFile },
+    );
+
+    expect(result).toEqual({
+      items: [],
+      errors: [{ message: 'Pi customization scan byte budget exceeded' }],
+    });
+    expect(openFile).toHaveBeenCalledTimes(4);
+    expect(close).toHaveBeenCalledTimes(4);
+  });
+
   it('stops streaming a growing project SKILL.md at the byte budget', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');
