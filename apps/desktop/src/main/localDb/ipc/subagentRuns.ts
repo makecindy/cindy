@@ -1,5 +1,6 @@
 /** Read-only renderer IPC for Cindy-owned durable Subagent records. */
 
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { app, BrowserWindow, ipcMain } from 'electron';
@@ -19,7 +20,7 @@ import {
   type SubagentRunsListResponse,
 } from '@cindy/maker-shared/subagent-workspace';
 
-import { getActiveDataOwnerPushStamp } from '../../appSessionState.js';
+import { activeOwnerScopeKey, getActiveDataOwnerPushStamp } from '../../appSessionState.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import {
   isDataOwnerBroadcastScopeCurrent,
@@ -43,9 +44,69 @@ import {
 
 const RUN_DIRECTORY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/**
+ * Write-skip cache for reconciliation.
+ *
+ * Both the list and the detail IPC reconcile, and the remote detail view polls
+ * both once a second, so a session with N historical runs produced ~2N SQLite
+ * writes per second with nothing changing — every readable run re-wrote its
+ * alias rows and main row on each poll, and several controllers multiplied that
+ * into write-lock contention.
+ *
+ * The fingerprint is taken over the *exact payload* that would be persisted
+ * rather than a hand-picked field list, so it cannot drift from what the UI
+ * renders: a terminal run whose truncated output is later backfilled changes
+ * the payload, therefore changes the fingerprint, therefore still writes.
+ *
+ * Scoped by owner key so a stale entry can never suppress the first write into
+ * a replaced database, and bounded so a long-lived process cannot grow it
+ * without limit.
+ */
+const RECONCILE_FINGERPRINT_SESSION_LIMIT = 64;
+let reconcileFingerprintOwnerKey: string | null = null;
+const reconcileFingerprints = new Map<string, Map<string, string>>();
+
+function reconcileFingerprintsFor(sessionId: string, ownerKey: string): Map<string, string> {
+  if (reconcileFingerprintOwnerKey !== ownerKey) {
+    reconcileFingerprintOwnerKey = ownerKey;
+    reconcileFingerprints.clear();
+  }
+  let perSession = reconcileFingerprints.get(sessionId);
+  if (!perSession) {
+    if (reconcileFingerprints.size >= RECONCILE_FINGERPRINT_SESSION_LIMIT) {
+      const oldest = reconcileFingerprints.keys().next();
+      if (!oldest.done) reconcileFingerprints.delete(oldest.value);
+    }
+    perSession = new Map();
+    reconcileFingerprints.set(sessionId, perSession);
+  }
+  return perSession;
+}
+
+function reconcileFingerprint(update: unknown, observedAt: number): string {
+  return createHash('sha1').update(JSON.stringify([update, observedAt])).digest('base64');
+}
+
+/** Test-only: forget every cached fingerprint. */
+export function __resetSubagentReconcileFingerprintsForTests(): void {
+  reconcileFingerprintOwnerKey = null;
+  reconcileFingerprints.clear();
+}
+
 async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
   const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
   const statuses = await listPiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
+  const fingerprints = reconcileFingerprintsFor(sessionId, activeOwnerScopeKey());
+  const persistIfChanged = async (
+    key: string,
+    update: Record<string, unknown>,
+    observedAt: number,
+  ): Promise<void> => {
+    const fingerprint = reconcileFingerprint(update, observedAt);
+    if (fingerprints.get(key) === fingerprint) return;
+    await persistSubagentTaskUpdate(sessionId, update, 'pi', observedAt);
+    fingerprints.set(key, fingerprint);
+  };
   const seenTaskIds = new Set<string>();
   for (const status of statuses) {
     if (seenTaskIds.has(status.taskId)) continue;
@@ -67,7 +128,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
       : undefined;
     const models = new Set(status.tasks.map((task) => task.model).filter(Boolean));
     const thinking = new Set(status.tasks.map((task) => task.thinking).filter(Boolean));
-    await persistSubagentTaskUpdate(sessionId, {
+    await persistIfChanged(`run:${status.taskId}`, {
       provider: 'pi',
       taskId: status.taskId,
       parentToolUseId: status.taskId,
@@ -97,7 +158,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
         providerRunIds: [status.runId, ...status.tasks.map((task) => task.childId)],
       },
       updatedAt: new Date(status.updatedAt).toISOString(),
-    }, 'pi', status.updatedAt);
+    }, status.updatedAt);
   }
   const diagnostics = await listPiSubagentRunDiagnostics(piSubagentRunRoot(agentHome, sessionId));
   const seenDiagnosticTaskIds = new Set<string>();
@@ -114,7 +175,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
     // both directory sets in sequence.
     if (seenTaskIds.has(diagnostic.taskId) || seenDiagnosticTaskIds.has(diagnostic.taskId)) continue;
     seenDiagnosticTaskIds.add(diagnostic.taskId);
-    await persistSubagentTaskUpdate(sessionId, {
+    await persistIfChanged(`diagnostic:${diagnostic.taskId}`, {
       provider: 'pi',
       taskId: diagnostic.taskId,
       parentToolUseId: diagnostic.taskId,
@@ -131,7 +192,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
         providerRunIds: [diagnostic.runId],
       },
       updatedAt: new Date(diagnostic.updatedAt).toISOString(),
-    }, 'pi', diagnostic.updatedAt);
+    }, diagnostic.updatedAt);
   }
 }
 

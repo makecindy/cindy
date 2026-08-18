@@ -28,6 +28,26 @@ import {
 
 const roots: string[] = [];
 
+/**
+ * `runner.cjs` is byte-identical for every fixture and by far the biggest file
+ * each one writes. Writing it once for the suite keeps ~30 real file creations
+ * (and, on Windows, ~30 realtime-scanner passes over a freshly written script)
+ * off the per-test path. It is stateless, so sharing cannot leak between tests;
+ * the runner reads all of its state from the config path it is given.
+ */
+let sharedRunnerFilePromise: Promise<string> | null = null;
+
+function sharedRunnerFile(): Promise<string> {
+  sharedRunnerFilePromise ??= (async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-runner-shared-'));
+    const file = path.join(dir, 'runner.cjs');
+    await writeFile(file, CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
+    await chmod(file, 0o700);
+    return file;
+  })();
+  return sharedRunnerFilePromise;
+}
+
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-runner-'));
   roots.push(root);
@@ -51,48 +71,49 @@ async function waitFor<T>(
   read: () => Promise<T | null>,
   timeoutMs = 30_000,
   what = 'runner state',
-  diagnose?: () => Promise<string> | string,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await read();
     if (value !== null) return value;
     if (Date.now() >= deadline) {
-      let detail = '';
-      if (diagnose) {
-        try {
-          detail = `\n${await diagnose()}`;
-        } catch (error) {
-          detail = `\n(diagnostics unavailable: ${String(error)})`;
-        }
-      }
-      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}${detail}`);
+      throw new Error(
+        `timed out after ${timeoutMs}ms waiting for ${what}\n${await activeFixtureDiagnostics()}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
 
 /**
- * Why a durable-state wait timed out, for a platform we cannot reproduce on.
+ * Why a durable-state wait timed out, on platforms we cannot reproduce on.
  *
  * `listPiSubagentRuns` hides corrupt *and* stale records, so "the run never
  * reached this state" is indistinguishable from "it published the state but the
- * record was rejected" or "the runner died and the record went stale". Reading
+ * record was rejected" and "the runner died and the record went stale". Reading
  * status.json raw, next to the runner's own stderr, separates those three on the
  * first CI run instead of costing another round trip.
+ *
+ * Attached to every wait in this suite through the live-fixture registry rather
+ * than per call site, so a case that starts timing out on Windows next month is
+ * self-explaining without anyone remembering to opt in.
  */
-function runnerDiagnostics(fixture: { runDir: string; stderr: () => string }) {
-  return async (): Promise<string> => {
-    const parts: string[] = [];
+const activeFixtures: Array<{ runDir: string; stderr: () => string }> = [];
+
+async function activeFixtureDiagnostics(): Promise<string> {
+  if (activeFixtures.length === 0) return '(no live runner fixture)';
+  const blocks = await Promise.all(activeFixtures.map(async (fixture, index) => {
+    const parts = [`fixture[${index}] runDir=${fixture.runDir}`];
     try {
-      parts.push(`status.json: ${await readFile(path.join(fixture.runDir, 'status.json'), 'utf8')}`);
+      parts.push(`  status.json: ${await readFile(path.join(fixture.runDir, 'status.json'), 'utf8')}`);
     } catch (error) {
-      parts.push(`status.json unreadable: ${String(error)}`);
+      parts.push(`  status.json unreadable: ${String(error)}`);
     }
     const stderr = fixture.stderr().trim();
-    parts.push(stderr ? `runner stderr: ${stderr.slice(-4000)}` : 'runner stderr: (empty)');
+    parts.push(stderr ? `  runner stderr: ${stderr.slice(-4000)}` : '  runner stderr: (empty)');
     return parts.join('\n');
-  };
+  }));
+  return blocks.join('\n');
 }
 
 async function waitForClose(child: ReturnType<typeof spawn>, stderr: () => string): Promise<void> {
@@ -137,7 +158,7 @@ async function makeFixture(options: {
   await mkdir(sessions, { recursive: true });
   await mkdir(childConfigHome, { recursive: true });
   await writeFile(path.join(childConfigHome, 'models.json'), '{"providers":{}}\n');
-  const runnerFile = path.join(root, 'runner.cjs');
+  const runnerFile = await sharedRunnerFile();
   const fakePiFile = path.join(root, 'fake-pi.cjs');
   const bridgeFile = path.join(runDir, 'cindy-bridge.ts');
   const permissionFile = path.join(runDir, 'permission.json');
@@ -148,8 +169,6 @@ async function makeFixture(options: {
   const tokensFile = path.join(root, 'tokens.jsonl');
   const pidsFile = path.join(root, 'child-pids.jsonl');
   const poisonedSessionDir = path.join(root, 'poisoned-session-dir');
-  await writeFile(runnerFile, CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
-  await chmod(runnerFile, 0o700);
   await writeFile(bridgeFile, 'export default function () {}\n');
   await writeFile(permissionFile, '{"mode":"ask"}\n');
   const fixtureOutput = JSON.stringify(options.outputText ?? 'fixture result');
@@ -303,14 +322,17 @@ process.stdin.on('end', () => {
   let stderr = '';
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => { stderr += chunk; });
-  return {
-    root, runId, runDir, argsFile, promptsFile, commandsFile, stdinEndedFile, tokensFile,
-    pidsFile,
+  const fixture = {
+    root, runId, runDir, runnerFile, argsFile, promptsFile, commandsFile, stdinEndedFile,
+    tokensFile, pidsFile,
     child, stderr: () => stderr,
   };
+  activeFixtures.push(fixture);
+  return fixture;
 }
 
 afterEach(async () => {
+  activeFixtures.splice(0);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -357,7 +379,6 @@ describe('Cindy durable PI Subagent runner', () => {
       },
       undefined,
       'the zero-exit model failure to be recorded as failed',
-      runnerDiagnostics(fixture),
     );
     expect(failed.tasks[0]).toMatchObject({
       status: 'failed',
@@ -441,7 +462,7 @@ describe('Cindy durable PI Subagent runner', () => {
       return {
         nodeExecutable: process.execPath,
         runtimeOwnerId: 'resume-owner',
-        runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
+        runnerFallbackFile: fixture.runnerFile,
         env: {
           ...process.env,
           CINDY_TEST_PI_ARGS: fixture.argsFile,
@@ -490,7 +511,7 @@ describe('Cindy durable PI Subagent runner', () => {
           const runs = await listPiSubagentRuns(fixture.root);
           return runs.find((run) => run.runId === resumedRunId && isPiSubagentTerminal(run.state)) ?? null;
         },
-        15_000,
+        undefined,
         'the resumed generation to settle',
       );
       // The claim is released once the new generation exists on disk.
@@ -533,7 +554,7 @@ describe('Cindy durable PI Subagent runner', () => {
           const resumed = settledRuns.find((run) => run.runId === resumedRunId);
           return resumed && isPiSubagentTerminal(resumed.state) ? resumed : null;
         },
-        15_000,
+        undefined,
         'the hung resumed generation to stop',
       );
     });
@@ -548,7 +569,6 @@ describe('Cindy durable PI Subagent runner', () => {
       },
       undefined,
       'the first generation to complete',
-      runnerDiagnostics(fixture),
     );
     await waitForClose(fixture.child, fixture.stderr);
     const resumeTokenCanary = 'resume-parent-token-canary-1234567890';
@@ -571,7 +591,7 @@ describe('Cindy durable PI Subagent runner', () => {
       {
         nodeExecutable: process.execPath,
         runtimeOwnerId: 'resume-owner',
-        runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
+        runnerFallbackFile: fixture.runnerFile,
         env: {
           ...process.env,
           CINDY_PI_SESSION_TOKEN: resumeTokenCanary,
@@ -620,7 +640,7 @@ describe('Cindy durable PI Subagent runner', () => {
       {
         nodeExecutable: process.execPath,
         runtimeOwnerId: 'resume-owner',
-        runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
+        runnerFallbackFile: fixture.runnerFile,
         env: {
           ...process.env,
           CINDY_PI_SESSION_TOKEN: resumeTokenCanary,
@@ -667,7 +687,7 @@ describe('Cindy durable PI Subagent runner', () => {
       {
         nodeExecutable: process.execPath,
         runtimeOwnerId: 'resume-owner',
-        runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
+        runnerFallbackFile: fixture.runnerFile,
         env: process.env,
         permissionSnapshot: { mode: 'ask', readOnlyRoots: [] },
       },
@@ -690,7 +710,7 @@ describe('Cindy durable PI Subagent runner', () => {
       {
         nodeExecutable: process.execPath,
         runtimeOwnerId: 'resume-owner',
-        runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
+        runnerFallbackFile: fixture.runnerFile,
         env: process.env,
         permissionSnapshot: { unserializable: 1n },
       },
@@ -712,7 +732,7 @@ describe('Cindy durable PI Subagent runner', () => {
     const launch = {
       nodeExecutable: process.execPath,
       runtimeOwnerId: 'resume-owner',
-      runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
+      runnerFallbackFile: fixture.runnerFile,
       env: {
         ...process.env,
         CINDY_TEST_PI_ARGS: fixture.argsFile,
@@ -871,7 +891,7 @@ describe('Cindy durable PI Subagent runner', () => {
         if (run?.state !== 'running') return null;
         return run.tasks[0]?.output === 'fixture result' ? run : null;
       },
-      15_000,
+      undefined,
       'the child result to land in durable status while the run is still live',
     );
     expect(running.tasks[0]?.output).toBe('fixture result');
@@ -895,7 +915,7 @@ describe('Cindy durable PI Subagent runner', () => {
         const [run] = await listPiSubagentRuns(fixture.root);
         return run?.state === 'stopped' ? run : null;
       },
-      15_000,
+      undefined,
       'the stop request to land the run in a stopped state',
     );
     expect(stopped.tasks[0]?.output).toBe('fixture result');
@@ -939,7 +959,7 @@ describe('Cindy durable PI Subagent runner', () => {
     }));
     await waitFor(
       async () => (await readdir(controlsDir)).length === 0 ? true : null,
-      15_000,
+      undefined,
       'the runner to drain every queued control request',
     );
     // Draining the mailbox is not the same event as publishing the receipts:
@@ -950,7 +970,7 @@ describe('Cindy durable PI Subagent runner', () => {
     const receiptsDir = path.join(fixture.runDir, 'control-receipts');
     await waitFor(
       async () => (await readdir(receiptsDir)).length === 512 ? true : null,
-      15_000,
+      undefined,
       'the retained control receipts to settle at the 512 bound',
     );
 
@@ -1029,7 +1049,7 @@ describe('Cindy durable PI Subagent runner', () => {
         const [run] = await listPiSubagentRuns(fixture.root);
         return run?.state === 'failed' ? run : null;
       },
-      15_000,
+      undefined,
       'the runner to publish its mid-flight failure terminal',
     );
 
@@ -1054,7 +1074,7 @@ describe('Cindy durable PI Subagent runner', () => {
           return (error as NodeJS.ErrnoException).code === 'ESRCH';
         }
       }) ? true : null,
-      15_000,
+      undefined,
       'every launched child process to be gone after the failure terminal',
     );
 
@@ -1063,7 +1083,7 @@ describe('Cindy durable PI Subagent runner', () => {
     // the run read as finished while this process stayed alive.
     await waitFor(
       async () => (fixture.child.exitCode !== null || fixture.child.signalCode !== null ? true : null),
-      15_000,
+      undefined,
       'the runner process to exit after publishing its failure terminal',
     );
     expect(fixture.child.exitCode).toBe(1);
@@ -1084,7 +1104,7 @@ describe('Cindy durable PI Subagent runner', () => {
           const [run] = await listPiSubagentRuns(fixture.root);
           return run?.state === 'running' ? run : null;
         },
-        15_000,
+        undefined,
         'the runner to launch its hanging child',
       );
       const childPid = Number((await readFile(fixture.pidsFile, 'utf8')).trim().split('\n')[0]);
@@ -1101,7 +1121,7 @@ describe('Cindy durable PI Subagent runner', () => {
             return (error as NodeJS.ErrnoException).code === 'ESRCH' ? true : null;
           }
         },
-        15_000,
+        undefined,
         'the SIGTERMed runner to reap its own child',
       );
 
@@ -1110,7 +1130,7 @@ describe('Cindy durable PI Subagent runner', () => {
           const [run] = await listPiSubagentRuns(fixture.root);
           return run?.state === 'stopped' ? run : null;
         },
-        15_000,
+        undefined,
         'the SIGTERMed runner to publish a terminal status',
       );
       expect(stopped.tasks[0]?.error).toMatch(/stopped by SIGTERM/i);
@@ -1175,7 +1195,7 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);
       return run?.tasks[1]?.status === 'running' ? run : null;
-    }, 15_000, 'the queued child to launch');
+    }, undefined, 'the queued child to launch');
     // "child is running" and "its queued direction has been written" are two
     // different events; wait for the one the assertions below actually read.
     const commands = await waitFor(
@@ -1186,7 +1206,7 @@ describe('Cindy durable PI Subagent runner', () => {
           ? parsed
           : null;
       },
-      15_000,
+      undefined,
       'the queued direction to reach the child after its prompt',
     );
     const secondPrompt = commands.findIndex((command) => command.type === 'prompt' && command.message === 'task 2');

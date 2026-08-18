@@ -201,6 +201,25 @@ function finiteTime(value: string | undefined, fallback: number): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+/**
+ * Union of `values` then `incoming`, deduped, capped to `max` by **rolling the
+ * window** — the oldest entries are evicted, never the newest.
+ *
+ * Truncating the head instead (the previous `slice(0, max)`) silently dropped
+ * every id seen after the cap was reached. For `providerRunIds` that broke two
+ * things at once: the detail and transcript readers select a durable generation
+ * by membership — and the transcript reader takes the *last* run-directory id
+ * (`ipc/subagentRuns.ts`, `[...providerRunIds].reverse().find(...)`) — so the
+ * panel pinned itself to an old generation forever; and `persistSubagentTaskUpdate`
+ * decides "this is a resume" by asking whether any incoming id is absent from
+ * the persisted list, so a current id that could never land re-fired `resumed`
+ * on every reconciliation tick, reopening the terminal row and discarding its
+ * result each time.
+ *
+ * Newest therefore has to stay at the tail: eviction is from the front, and new
+ * ids keep appending. Ids that age out remain resolvable through the
+ * append-only `subagent_run_aliases` index, which is never pruned.
+ */
 function mergeUnique(
   values: readonly string[],
   incoming: readonly (string | undefined)[],
@@ -210,9 +229,8 @@ function mergeUnique(
   for (const raw of incoming) {
     const value = boundedText(raw, TEXT_LIMITS.id);
     if (value) out.add(value);
-    if (out.size >= max) break;
   }
-  return [...out].slice(0, max);
+  return out.size <= max ? [...out] : [...out].slice(-max);
 }
 
 function terminal(status: SubagentRunStatus): boolean {

@@ -17,6 +17,27 @@ function runs(count: number): SubagentRunsListResponse {
   };
 }
 
+/** Historical rows for a task that has since switched to Pi. */
+function nonPiRuns(...providers: Array<'claude-code' | 'codex'>): SubagentRunsListResponse {
+  return {
+    supported: true,
+    runs: providers.map((provider, index) => ({
+      id: `legacy-${index}`,
+      provider,
+    })) as unknown as SubagentRunsListResponse['runs'],
+  };
+}
+
+function mixedRuns(): SubagentRunsListResponse {
+  return {
+    supported: true,
+    runs: [
+      { id: 'legacy-0', provider: 'claude-code' },
+      { id: 'run-0', provider: 'pi' },
+    ] as unknown as SubagentRunsListResponse['runs'],
+  };
+}
+
 const EMPTY: SubagentRunsListResponse = { supported: true, runs: [] };
 const UNSUPPORTED: SubagentRunsListResponse = { supported: false, runs: [] };
 
@@ -110,6 +131,34 @@ describe('startSubagentTabDiscovery', () => {
     await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_DISCOVERY_POLL_MS * 4);
     await settle();
     expect(h.listRemote).toHaveBeenCalledTimes(2);
+    expect(h.registerTab).toHaveBeenCalledOnce();
+    dispose();
+  });
+
+  it('does not register the Pi-only tab for non-Pi history alone', async () => {
+    // The tab is Pi-only and SubagentsBody drops every non-Pi row, so a task
+    // that switched to Pi but still has Claude Code / Codex history would have
+    // opened a permanently empty tab. The remote read is already Pi-narrowed on
+    // the Main side; this is the local path.
+    const h = harness();
+    h.listLocal.mockResolvedValue(nonPiRuns('claude-code', 'codex'));
+
+    const dispose = startSubagentTabDiscovery({
+      sessionId: 's1',
+      deviceId: null,
+      listLocal: h.listLocal,
+      listRemote: h.listRemote,
+      subscribeLocalChanges: h.subscribeLocalChanges,
+      registerTab: h.registerTab,
+      isRequestOwnerCurrent: () => true,
+    });
+    await settle();
+    expect(h.registerTab).not.toHaveBeenCalled();
+
+    // The first Pi run in the same mixed history does register it.
+    h.listLocal.mockResolvedValue(mixedRuns());
+    h.emitLocalChange();
+    await settle();
     expect(h.registerTab).toHaveBeenCalledOnce();
     dispose();
   });

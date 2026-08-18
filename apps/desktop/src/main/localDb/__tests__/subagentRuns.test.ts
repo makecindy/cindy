@@ -323,6 +323,51 @@ describe('durable Subagent runs', () => {
     expect(detail?.activity.at(-1)?.kind).toBe('resumed');
   });
 
+  it('keeps the newest generations once providerRunIds passes its cap', async () => {
+    // The cap used to truncate the head, so past 64 generations the current run
+    // id could never land. Two things broke at once: the transcript reader
+    // takes the *last* run-directory id, so the panel pinned itself to an old
+    // generation forever; and "is this a resume?" is decided by asking whether
+    // an incoming id is missing from the persisted list, so every reconciliation
+    // tick re-fired `resumed` — reopening the terminal row and discarding its
+    // result each pass.
+    const generation = (index: number) =>
+      `123e4567-e89b-42d3-a456-4266141${String(index).padStart(5, '0')}`;
+    const total = 70;
+    for (let index = 0; index < total; index += 1) {
+      await persistSubagentTaskUpdate('session-1', observed({
+        provider: 'pi', taskId: 'capped-tool',
+        status: 'completed', taskType: 'pi_subagent', returnedResult: `result ${index}`,
+        updatedAt: `1970-01-01T00:00:${String(10 + index).padStart(2, '0')}.000Z`,
+      }, { kind: 'spawn', providerRunIds: [generation(index)] }), 'pi');
+    }
+
+    const detail = await getSubagentRunDetail('session-1', 'pi', 'capped-tool');
+    const ids = detail?.providerRunIds ?? [];
+    expect(ids).toHaveLength(64);
+    // Newest survives and stays at the tail: the transcript reader reverse-finds
+    // the last run-directory id, so a rolled window must not reorder.
+    expect(ids.at(-1)).toBe(generation(total - 1));
+    expect(ids[0]).toBe(generation(total - 64));
+    // The evicted head is genuinely gone from the array (it stays resolvable
+    // through the append-only alias index, which this row does not own).
+    expect(ids).not.toContain(generation(0));
+    expect(detail?.returnedResult).toBe(`result ${total - 1}`);
+
+    // Re-persisting the current generation is not a resume: no new id, so the
+    // terminal row keeps its result and grows no further activity.
+    const activityBefore = detail?.activity.length ?? 0;
+    await persistSubagentTaskUpdate('session-1', observed({
+      provider: 'pi', taskId: 'capped-tool',
+      status: 'completed', taskType: 'pi_subagent', returnedResult: `result ${total - 1}`,
+      updatedAt: `1970-01-01T00:00:${String(10 + total - 1).padStart(2, '0')}.000Z`,
+    }, { kind: 'spawn', providerRunIds: [generation(total - 1)] }), 'pi');
+    const settled = await getSubagentRunDetail('session-1', 'pi', 'capped-tool');
+    expect(settled?.status).toBe('completed');
+    expect(settled?.returnedResult).toBe(`result ${total - 1}`);
+    expect(settled?.activity.length).toBe(activityBefore);
+  });
+
   it('projects an immediately failed PI resume as a fresh failed generation', async () => {
     await persistSubagentTaskUpdate('session-1', observed({
       provider: 'pi', taskId: 'resume-failed-tool',

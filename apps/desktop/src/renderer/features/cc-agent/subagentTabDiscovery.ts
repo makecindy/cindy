@@ -69,7 +69,13 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     if (disposed || !isRequestOwnerCurrent()) return;
     // `unsupported` is the honest answer from a device that has no durable
     // Subagent store; an empty list means this task simply has no children yet.
-    if (!response.supported || response.runs.length === 0) return;
+    //
+    // The tab itself is Pi-only, and `SubagentsBody` drops every non-Pi row, so
+    // registering on "any run" opens a permanently empty tab for a task that
+    // switched to Pi but only has Claude Code / Codex history in the store. The
+    // remote read is already narrowed to Pi on the Main side; this is the local
+    // path catching up, filtered here so the IPC contract stays unchanged.
+    if (!response.supported || !response.runs.some((run) => run.provider === 'pi')) return;
     await registerTab();
     if (disposed) return;
     registered = true;

@@ -27,6 +27,7 @@ const h = vi.hoisted(() => {
     scopeCurrent: true,
     activeStamp: { dataOwnerId: 'active-owner', ownerGeneration: 2 },
     deviceLinkInvoke: false,
+    ownerScopeKey: 'owner-a:1',
   };
 });
 
@@ -50,6 +51,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
 }));
 vi.mock('../../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => h.activeStamp,
+  activeOwnerScopeKey: () => h.ownerScopeKey,
 }));
 vi.mock('../../../device-link/invoke-context.js', () => ({
   isDeviceLinkInvoke: () => h.deviceLinkInvoke,
@@ -72,6 +74,7 @@ vi.mock('../../subagentRuns.js', () => ({
 
 import { SUBAGENT_RUNS_CHANGED_CHANNEL } from '@cindy/maker-shared/subagent-workspace';
 import {
+  __resetSubagentReconcileFingerprintsForTests,
   broadcastSubagentRunsChanged,
   broadcastSubagentRunsInvalidated,
   registerSubagentRunsIpc,
@@ -89,6 +92,59 @@ describe('Subagent runs broadcast boundary', () => {
     h.persistSubagentTaskUpdate.mockResolvedValue(null);
     h.scopeCurrent = true;
     h.deviceLinkInvoke = false;
+    h.ownerScopeKey = 'owner-a:1';
+    __resetSubagentReconcileFingerprintsForTests();
+  });
+
+  it('skips reconciliation writes while durable state is unchanged', async () => {
+    // The remote detail view polls list + detail once a second and both
+    // reconcile, so every readable run used to re-write its alias rows and main
+    // row ~2N times a second for nothing — and several controllers multiplied
+    // that into write-lock contention.
+    registerSubagentRunsIpc();
+    const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+    const status = {
+      version: 1, runId: '123e4567-e89b-42d3-a456-426614174000', taskId: 'parent-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'completed',
+      context: 'fresh', title: 'Finished run', startedAt: 1_000, updatedAt: 2_000,
+      endedAt: 2_000, totalTokens: 5, toolUses: 1,
+      tasks: [{
+        childId: 'child-1', sessionId: 'session-child', agent: 'worker',
+        status: 'completed', output: 'first result',
+      }],
+    };
+    h.listPiSubagentRuns.mockResolvedValue([status]);
+
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledOnce();
+
+    // Same durable state, three more polls: nothing to write.
+    await list({}, { sessionId: 'session-1' });
+    await list({}, { sessionId: 'session-1' });
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledOnce();
+
+    // A late backfill of truncated output is a real change and must still land,
+    // which is why the fingerprint covers the rendered payload rather than just
+    // `updatedAt`.
+    h.listPiSubagentRuns.mockResolvedValue([{
+      ...status,
+      tasks: [{ ...status.tasks[0], output: 'first result, now complete' }],
+    }]);
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledTimes(2);
+    expect(h.persistSubagentTaskUpdate).toHaveBeenLastCalledWith(
+      'session-1',
+      expect.objectContaining({ returnedResult: 'first result, now complete' }),
+      'pi',
+      2_000,
+    );
+
+    // An account boundary invalidates the cache: the first write into the
+    // replaced database must never be suppressed.
+    h.ownerScopeKey = 'owner-b:1';
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledTimes(3);
   });
 
   it('sends only to a currently trusted Cindy renderer window', () => {

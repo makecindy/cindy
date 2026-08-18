@@ -114,7 +114,12 @@ describe('SubagentsBody', () => {
     loadDetail.mockClear();
     stopAgentTask.mockClear();
     controlPiSubagent.mockClear();
-    loadTranscript.mockClear();
+    // mockClear keeps implementations, so a persistent mockResolvedValue would
+    // leak across tests. Reset and re-establish the default instead, which lets
+    // a test model "every read returns this page" without relying on exactly one
+    // read happening.
+    loadTranscript.mockReset();
+    loadTranscript.mockResolvedValue({ supported: false, entries: [] });
     deviceInvoke.mockClear();
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -594,7 +599,7 @@ describe('SubagentsBody', () => {
       },
       returnedResult: 'durable completed result',
     };
-    loadTranscript.mockResolvedValueOnce({
+    loadTranscript.mockResolvedValue({
       supported: true,
       entries: [
         entry({ id: 'entry-parent', role: 'parent', content: 'go and research' }),
@@ -634,7 +639,7 @@ describe('SubagentsBody', () => {
       },
       returnedResult: 'the final answer',
     };
-    loadTranscript.mockResolvedValueOnce({
+    loadTranscript.mockResolvedValue({
       supported: true,
       entries: [
         entry({ id: 'entry-parent', role: 'parent', content: 'go and research' }),
@@ -664,7 +669,7 @@ describe('SubagentsBody', () => {
       summary: '',
       capabilities: { ...detail('unused').capabilities, viewFullTranscript: true },
     };
-    loadTranscript.mockResolvedValueOnce({
+    loadTranscript.mockResolvedValue({
       supported: true,
       entries: [
         entry({
