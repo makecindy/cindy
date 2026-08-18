@@ -16,6 +16,14 @@ const mocks = vi.hoisted(() => ({
   getCombos: vi.fn(),
 }));
 
+vi.mock('@/features/skillhub/hooks/useSkillhub', () => ({
+  useSkillhub: () => ({
+    skills: [],
+    bootstrapped: true,
+    refresh: vi.fn(async () => []),
+  }),
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -47,6 +55,22 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     vi.restoreAllMocks();
   });
 
+  it('opens the Work Louder device settings from the keyboard-shortcuts page', () => {
+    mocks.getOverrides.mockReturnValue({});
+    mocks.getCombos.mockReturnValue([]);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        onAuthStateChange: vi.fn(() => () => {}),
+      },
+    });
+
+    render(<KeyboardShortcutsSection />);
+    fireEvent.click(screen.getByLabelText('settings.shortcuts.workLouderCodex.openAria'));
+
+    expect(screen.getByLabelText('settings.shortcuts.workLouderCodex.back')).toBeTruthy();
+  });
+
   it('ignores an older mutation failure after a newer mutation succeeds', async () => {
     let rejectOlder!: (reason: unknown) => void;
     const olderRequest = new Promise<{ overrides: Record<string, unknown> }>((_resolve, reject) => {
@@ -59,6 +83,7 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        onAuthStateChange: vi.fn(() => () => {}),
         appShortcuts: {
           setOverride,
           clearOverride,
@@ -92,6 +117,7 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        onAuthStateChange: vi.fn(() => () => {}),
         appShortcuts: {
           setOverride,
           clearOverride: vi.fn(async () => ({ overrides: {} })),

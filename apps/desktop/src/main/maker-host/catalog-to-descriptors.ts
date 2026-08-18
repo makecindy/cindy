@@ -91,8 +91,9 @@ function toDescriptor(
   if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
-  const supportsImageInput = m.supportsImageInput
-    ?? (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
+  const supportsImageInput =
+    m.supportsImageInput ??
+    (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
   if (supportsImageInput !== undefined) d.supportsImageInput = supportsImageInput;
   return d;
 }
@@ -187,11 +188,12 @@ export function resolvePiRuntimeModelDescriptor(
   modelId: string,
   options: { localOverrides?: ModelCatalogOverrides } = {},
 ): ModelDescriptor | null {
-  const providers = providerId === 'cindy'
-    ? catalog.providers.filter((provider) => provider.source !== 'user')
-    : providerId
-      ? catalog.providers.filter((provider) => provider.id === providerId)
-      : catalog.providers;
+  const providers =
+    providerId === 'cindy'
+      ? catalog.providers.filter((provider) => provider.source !== 'user')
+      : providerId
+        ? catalog.providers.filter((provider) => provider.id === providerId)
+        : catalog.providers;
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {

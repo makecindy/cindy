@@ -1,7 +1,23 @@
 import type {
-  CustomProviderRuntimeConfig,
+  AgentKind,
+  ProviderPreset,
+  ProviderPresetRuntime,
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
+
+/** Remote presets may predate explicit Pi protocol metadata. Such a runtime is not saveable. */
+export function isConfiguredPresetRuntime(
+  agent: AgentKind,
+  runtime: ProviderPresetRuntime | undefined,
+): runtime is ProviderPresetRuntime {
+  return runtime !== undefined && (agent !== 'pi' || runtime.wireProtocol !== undefined);
+}
+
+export function configuredPresetAgents(preset: ProviderPreset): AgentKind[] {
+  return (Object.keys(preset.runtimes) as AgentKind[]).filter((agent) =>
+    isConfiguredPresetRuntime(agent, preset.runtimes[agent]),
+  );
+}
 
 export function savedCustomProviderModelShape(
   model: ProviderRuntimeModelConfig,
@@ -26,22 +42,5 @@ export function savedCustomProviderModelShape(
             : {}),
         }
       : {}),
-  };
-}
-
-export function derivePiRuntimeFromClaudeRuntime(
-  runtime: CustomProviderRuntimeConfig,
-): CustomProviderRuntimeConfig | null {
-  if (runtime.requestPath?.trim()) return null;
-  if (runtime.wireProtocol && runtime.wireProtocol !== 'anthropic-messages') return null;
-
-  return {
-    baseUrl: runtime.baseUrl,
-    wireProtocol: 'anthropic-messages',
-    models: runtime.models.map((model) => savedCustomProviderModelShape(model, false)),
-    ...(runtime.headers && Object.keys(runtime.headers).length > 0
-      ? { headers: { ...runtime.headers } }
-      : {}),
-    ...(runtime.modelsUrl ? { modelsUrl: runtime.modelsUrl } : {}),
   };
 }

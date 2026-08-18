@@ -151,11 +151,7 @@ function toCatalogModel(
 }
 
 function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
-  // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
-  // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
-  // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
   if (agent === 'claude-code') return 'anthropic-messages';
-  if (agent === 'pi') return 'openai-chat';
   return 'openai-responses';
 }
 
@@ -180,7 +176,9 @@ function toRouting(
       ? { disabled: true }
       : {}),
     ...(requestPath ? { requestPath } : {}),
-    ...(wireProtocol && wireProtocol !== defaultWireProtocol(agent) ? { wireProtocol } : {}),
+    ...(wireProtocol && (agent === 'pi' || wireProtocol !== defaultWireProtocol(agent))
+      ? { wireProtocol }
+      : {}),
   };
   if (headers && Object.keys(headers).length > 0) {
     r.headerOverride = { ...headers };

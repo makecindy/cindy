@@ -38,7 +38,13 @@ export type {
 
 export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
 
-export { effectivePiWireProtocol, preservesPiCatalogModels } from './pi-catalog-marker.js';
+export {
+  effectivePiWireProtocol,
+  preservesPiCatalogModels,
+  resolvePiModelRoute,
+  resolvePiModelWireProtocol,
+} from './pi-catalog-marker.js';
+export type { ResolvedPiModelRoute } from './pi-catalog-marker.js';
 
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 

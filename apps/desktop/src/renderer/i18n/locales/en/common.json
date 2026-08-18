@@ -1415,6 +1415,16 @@
           "piChatHelp": "Pi connects directly to the provider's OpenAI-compatible Chat Completions API.",
           "piAnthropicHelp": "Pi connects directly to the provider's Anthropic Messages API."
         },
+        "modelProtocol": {
+          "label": "Model protocol",
+          "inherit": "Inherit default",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "Inherit uses the provider protocol above. Override only when this model needs a different protocol.",
+          "ariaLabel": "Model protocol for {{model}}"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
@@ -1453,7 +1463,8 @@
           "button": "Test connection",
           "testing": "Testing…",
           "ok": "Connected ({{ms}} ms)",
-          "needFields": "Fill in the base URL and at least one model ID first"
+          "needFields": "Fill in the base URL and at least one model ID first",
+          "unsupportedProtocol": "This model protocol is not supported by connection testing"
         },
         "fetch": {
           "button": "Fetch model list",
@@ -3316,6 +3327,311 @@
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
       "editAria": "Change shortcut for {{name}}",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "Previous task",
+            "description": "Open the task above the current one in the sidebar"
+          },
+          "session.selectNext": {
+            "name": "Next task",
+            "description": "Open the task below the current one in the sidebar"
+          },
+          "toggleRightSidebar": {
+            "name": "Toggle right sidebar",
+            "description": "Show or hide the right sidebar"
+          },
+          "composer.toggleFastMode": {
+            "name": "Toggle Fast mode",
+            "description": "Turn Fast mode on or off in the current composer"
+          },
+          "approval.approve": {
+            "name": "Approve request",
+            "description": "Approve the active request"
+          },
+          "approval.decline": {
+            "name": "Decline request",
+            "description": "Decline the active request"
+          },
+          "forkTask": {
+            "name": "Continue in new task",
+            "description": "Create a new task from the current one"
+          },
+          "composer.submit": {
+            "name": "Send message",
+            "description": "Send the current composer message"
+          },
+          "feedback": {
+            "name": "Send feedback",
+            "description": "Send product feedback to the Cindy team"
+          },
+          "toggleTerminal": {
+            "name": "Open terminal",
+            "description": "Open the terminal panel"
+          },
+          "copyConversationMarkdown": {
+            "name": "Copy as Markdown",
+            "description": "Copy the current task as Markdown",
+            "copied": "Copied the task as Markdown",
+            "empty": "This task has nothing to copy yet",
+            "failed": "Could not copy the task"
+          },
+          "archiveTask": {
+            "name": "Archive task",
+            "description": "Archive the current task"
+          },
+          "newTask": {
+            "name": "New task",
+            "description": "Start a new task"
+          },
+          "openBrowserTab": {
+            "name": "Open browser tab",
+            "description": "Open a new browser tab"
+          },
+          "toggleTaskPin": {
+            "name": "Toggle pin",
+            "description": "Pin or unpin the current task"
+          },
+          "toggleReviewTab": {
+            "name": "Toggle review",
+            "description": "Show or hide review for the current task"
+          },
+          "composer.addPhotos": {
+            "name": "Add photos",
+            "description": "Add photos to the composer"
+          },
+          "settings": {
+            "name": "Settings",
+            "description": "Open Cindy settings"
+          },
+          "manageTasks": {
+            "name": "Manage scheduled tasks",
+            "description": "Create or manage scheduled tasks"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "Increase reasoning effort",
+            "description": "Raise the reasoning effort for the current composer"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "Decrease reasoning effort",
+            "description": "Lower the reasoning effort for the current composer"
+          },
+          "openFolder": {
+            "name": "Open folder",
+            "description": "Add a local project to Cindy"
+          },
+          "composer.addFiles": {
+            "name": "Attach files and folders",
+            "description": "Attach files and folders to the composer"
+          },
+          "openSkills": {
+            "name": "Go to skills",
+            "description": "Browse installed and recommended skills"
+          },
+          "composer.togglePlanMode": {
+            "name": "Toggle plan mode",
+            "description": "Turn plan mode on or off in the current composer"
+          },
+          "navigateForward": {
+            "name": "Forward",
+            "description": "Go forward in navigation history"
+          },
+          "toggleSidebar": {
+            "name": "Toggle sidebar",
+            "description": "Show or hide the sidebar"
+          },
+          "navigateBack": {
+            "name": "Back",
+            "description": "Go back in navigation history"
+          },
+          "composer.focus": {
+            "name": "Focus composer",
+            "description": "Move the cursor into the composer"
+          },
+          "conversation.scrollUp": {
+            "name": "Scroll up",
+            "description": "Scroll the conversation up"
+          },
+          "conversation.scrollDown": {
+            "name": "Scroll down",
+            "description": "Scroll the conversation down"
+          },
+          "conversation.scrollBottom": {
+            "name": "Jump to latest",
+            "description": "Scroll to the latest message"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
+        "openAria": "Open Work Louder Codex Micro settings",
+        "back": "Back to keyboard shortcuts",
+        "retry": "Try again",
+        "device": {
+          "title": "Device",
+          "firmware": "Firmware {{version}}",
+          "inputMonitoring": {
+            "label": "Input Monitoring",
+            "granted": "macOS allows Cindy to receive keyboard input.",
+            "denied": "macOS is blocking keyboard input. Allow Cindy in System Settings.",
+            "unknown": "Cindy has not checked the macOS Input Monitoring permission yet.",
+            "not-required": "Input Monitoring is not required on this platform.",
+            "open": "Open System Settings"
+          }
+        },
+        "errors": {
+          "load": "Failed to load Codex Micro settings",
+          "save": "Failed to save Codex Micro settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "error": "Connection problem",
+            "unavailable": "SDK unavailable"
+          },
+          "descriptions": {
+            "connecting": "Cindy is starting the Work Louder device service.",
+            "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+            "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
+            "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
+            "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+            "connection-timeout": "The Work Louder service did not respond in time. Cindy will retry automatically.",
+            "connection-failed": "The Work Louder service failed to start. Cindy will retry automatically.",
+            "permission-required": "macOS denied keyboard access. Allow Cindy in Input Monitoring, then try again.",
+            "sdk-unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy."
+          }
+        },
+        "lighting": {
+          "title": "Lighting",
+          "brightness": {
+            "label": "Brightness",
+            "description": "Adjust the overall brightness of the key, task, and ambient lighting.",
+            "aria": "Adjust Codex Micro lighting brightness"
+          },
+          "autoDim": {
+            "label": "Auto-dim",
+            "description": "Turn lighting off after inactivity and restore it when the keyboard is used or a task changes state.",
+            "aria": "Choose Codex Micro auto-dim delay",
+            "options": {
+              "off": "Off",
+              "30-seconds": "30 seconds",
+              "1-minute": "1 minute",
+              "3-minutes": "3 minutes",
+              "10-minutes": "10 minutes",
+              "30-minutes": "30 minutes",
+              "1-hour": "1 hour"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "What this agent key opens when the source is set to custom.",
+          "title": "Agent keys",
+          "source": {
+            "label": "Task order",
+            "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+            "descriptions": {
+              "sidebar": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+              "last-sent": "AG00–AG05 follow the six tasks you last sent a message in.",
+              "priority": "AG00–AG05 follow the first six priority tasks.",
+              "custom": "AG00–AG05 each open the task you assign."
+            },
+            "value": "Sidebar order",
+            "options": {
+              "sidebar": "Sidebar order",
+              "last-sent": "Recent tasks",
+              "priority": "Priority",
+              "custom": "Custom"
+            }
+          },
+          "singleTap": {
+            "label": "Focus Cindy with a single tap",
+            "description": "When enabled, one tap opens the task and brings Cindy forward. When disabled, one tap still switches tasks in the background; a second tap within 350 ms brings Cindy forward.",
+            "aria": "Focus Cindy with a single Agent-key tap"
+          },
+          "newTask": "New task",
+          "slot": "Recent {{position}}",
+          "slotAria": "AG{{slot}} opens recent task {{position}}"
+        },
+        "commandKeys": {
+          "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
+          "builtIn": "Use the keycap's built-in action",
+          "unmapped": "This keycap has no action"
+        },
+        "microphone": {
+          "title": "Microphone",
+          "separate": {
+            "label": "Use separate microphone keys",
+            "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
+          }
+        },
+        "analog": {
+          "title": "Joystick",
+          "description": "Choose the action for each joystick direction.",
+          "directions": {
+            "up": "Up",
+            "right": "Right",
+            "down": "Down",
+            "left": "Left"
+          }
+        },
+        "encoder": {
+          "title": "Encoder",
+          "mode": {
+            "label": "Encoder mode",
+            "description": "Choose what turning and pressing the encoder controls.",
+            "options": {
+              "session-switch": "Switch tasks",
+              "composer-navigation": "Navigate the composer",
+              "reasoning": "Reasoning effort",
+              "conversation-scroll": "Scroll the conversation",
+              "custom": "Custom"
+            }
+          },
+          "gestures": {
+            "left": "Turn left",
+            "right": "Turn right",
+            "click": "Press",
+            "longPress": "Long press"
+          },
+          "customDescription": "Choose the action for this encoder gesture."
+        },
+        "actions": {
+          "choose": "Choose an action",
+          "none": "No action",
+          "tasks": "Tasks",
+          "commands": "Commands",
+          "keycaps": "Keycaps",
+          "skills": "Skills"
+        },
+        "layout": {
+          "editor": {
+            "done": "Done",
+            "title": "Edit keycap",
+            "description": "Choose the keycap shown on this physical key.",
+            "searchPlaceholder": "Search keycaps",
+            "close": "Close keycap editor",
+            "cancel": "Cancel",
+            "save": "Save",
+            "assignedShortcut": "Assigned action",
+            "selectKeycap": "Select keycap {{keycap}}"
+          },
+          "keyboard": {
+            "indicator": "Status lights",
+            "title": "Layout",
+            "description": "Click a keycap to choose its label and built-in action.",
+            "analogStick": "Joystick",
+            "encoder": "Encoder"
+          },
+          "reset": {
+            "title": "Reset key layout",
+            "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",
+            "button": "Reset layout"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "Failed to save shortcut settings",
         "notBindable": "This key combination cannot be used",

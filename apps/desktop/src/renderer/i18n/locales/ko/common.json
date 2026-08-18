@@ -1415,6 +1415,16 @@
           "piChatHelp": "Pi가 제공자의 OpenAI 호환 Chat Completions API에 직접 연결합니다.",
           "piAnthropicHelp": "Pi가 제공자의 Anthropic Messages API에 직접 연결합니다."
         },
+        "modelProtocol": {
+          "label": "모델 프로토콜",
+          "inherit": "기본값 상속",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "상속하면 위의 제공자 프로토콜을 사용합니다. 이 모델에 다른 프로토콜이 필요할 때만 재정의하세요.",
+          "ariaLabel": "{{model}} 모델 프로토콜"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code는 Anthropic 프로토콜을 따릅니다(x-api-key 인증). 이 제공자의 Claude Code용 baseURL・키・모델을 입력하세요. 비워 두면 이 제공자는 Claude Code를 제공하지 않습니다.",
@@ -1453,7 +1463,8 @@
           "button": "연결 테스트",
           "testing": "테스트 중…",
           "ok": "연결 성공 ({{ms}}ms)",
-          "needFields": "먼저 기본 URL과 모델 ID를 하나 이상 입력하세요"
+          "needFields": "먼저 기본 URL과 모델 ID를 하나 이상 입력하세요",
+          "unsupportedProtocol": "연결 테스트는 이 모델 프로토콜을 지원하지 않습니다"
         },
         "fetch": {
           "button": "모델 목록 가져오기",
@@ -3342,6 +3353,311 @@
       "reset": "기본값으로 재설정",
       "recording": "새 단축키를 누르세요…",
       "editAria": "{{name}} 단축키 변경",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "이전 작업",
+            "description": "사이드바에서 현재 작업 바로 위의 작업을 엽니다"
+          },
+          "session.selectNext": {
+            "name": "다음 작업",
+            "description": "사이드바에서 현재 작업 바로 아래의 작업을 엽니다"
+          },
+          "toggleRightSidebar": {
+            "name": "오른쪽 사이드바 전환",
+            "description": "오른쪽 사이드바를 표시하거나 숨깁니다"
+          },
+          "composer.toggleFastMode": {
+            "name": "빠른 모드 전환",
+            "description": "현재 입력창에서 빠른 모드를 켜거나 끕니다"
+          },
+          "approval.approve": {
+            "name": "요청 승인",
+            "description": "확인 대기 중인 요청을 승인합니다"
+          },
+          "approval.decline": {
+            "name": "요청 거부",
+            "description": "확인 대기 중인 요청을 거부합니다"
+          },
+          "forkTask": {
+            "name": "새 작업에서 계속",
+            "description": "현재 작업을 바탕으로 새 작업을 만듭니다"
+          },
+          "composer.submit": {
+            "name": "메시지 보내기",
+            "description": "입력창의 메시지를 보냅니다"
+          },
+          "feedback": {
+            "name": "피드백 보내기",
+            "description": "제품 피드백을 Cindy 팀에 보냅니다"
+          },
+          "toggleTerminal": {
+            "name": "터미널 열기",
+            "description": "터미널 패널을 엽니다"
+          },
+          "copyConversationMarkdown": {
+            "name": "Markdown으로 복사",
+            "description": "현재 작업의 대화를 Markdown으로 복사합니다",
+            "copied": "Markdown으로 복사했습니다",
+            "empty": "이 작업에는 아직 복사할 내용이 없습니다",
+            "failed": "복사하지 못했습니다"
+          },
+          "archiveTask": {
+            "name": "작업 보관",
+            "description": "현재 작업을 보관합니다"
+          },
+          "newTask": {
+            "name": "새 작업",
+            "description": "새 작업을 시작합니다"
+          },
+          "openBrowserTab": {
+            "name": "브라우저 탭 열기",
+            "description": "새 브라우저 탭을 엽니다"
+          },
+          "toggleTaskPin": {
+            "name": "고정 전환",
+            "description": "현재 작업을 고정하거나 고정을 해제합니다"
+          },
+          "toggleReviewTab": {
+            "name": "검토 전환",
+            "description": "현재 작업의 검토를 표시하거나 숨깁니다"
+          },
+          "composer.addPhotos": {
+            "name": "사진 추가",
+            "description": "입력창에 사진을 추가합니다"
+          },
+          "settings": {
+            "name": "설정",
+            "description": "Cindy 설정을 엽니다"
+          },
+          "manageTasks": {
+            "name": "예약 작업 관리",
+            "description": "예약 작업을 만들거나 관리합니다"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "추론 강도 높이기",
+            "description": "현재 입력창의 추론 강도를 높입니다"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "추론 강도 낮추기",
+            "description": "현재 입력창의 추론 강도를 낮춥니다"
+          },
+          "openFolder": {
+            "name": "폴더 열기",
+            "description": "로컬 프로젝트를 Cindy에 추가합니다"
+          },
+          "composer.addFiles": {
+            "name": "파일 및 폴더 첨부",
+            "description": "입력창에 파일과 폴더를 첨부합니다"
+          },
+          "openSkills": {
+            "name": "스킬로 이동",
+            "description": "설치된 스킬과 추천 스킬을 살펴봅니다"
+          },
+          "composer.togglePlanMode": {
+            "name": "계획 모드 전환",
+            "description": "현재 입력창에서 계획 모드를 켜거나 끕니다"
+          },
+          "navigateForward": {
+            "name": "앞으로",
+            "description": "탐색 기록에서 앞으로 이동합니다"
+          },
+          "toggleSidebar": {
+            "name": "사이드바 전환",
+            "description": "사이드바를 표시하거나 숨깁니다"
+          },
+          "navigateBack": {
+            "name": "뒤로",
+            "description": "탐색 기록에서 뒤로 이동합니다"
+          },
+          "composer.focus": {
+            "name": "입력창에 포커스",
+            "description": "커서를 입력창으로 옮깁니다"
+          },
+          "conversation.scrollUp": {
+            "name": "위로 스크롤",
+            "description": "대화를 위로 스크롤합니다"
+          },
+          "conversation.scrollDown": {
+            "name": "아래로 스크롤",
+            "description": "대화를 아래로 스크롤합니다"
+          },
+          "conversation.scrollBottom": {
+            "name": "최신으로 이동",
+            "description": "최신 메시지로 스크롤합니다"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "Agent 키로 작업을 열고 조명으로 상태를 표시합니다.",
+        "openAria": "Work Louder Codex Micro 설정 열기",
+        "back": "키보드 단축키로 돌아가기",
+        "retry": "다시 시도",
+        "device": {
+          "title": "기기",
+          "firmware": "펌웨어 {{version}}",
+          "inputMonitoring": {
+            "label": "입력 모니터링",
+            "granted": "macOS가 Cindy의 키보드 입력 수신을 허용했습니다.",
+            "denied": "macOS가 키보드 입력을 차단하고 있습니다. 시스템 설정에서 Cindy를 허용하세요.",
+            "unknown": "Cindy가 아직 macOS 입력 모니터링 권한을 확인하지 않았습니다.",
+            "not-required": "이 플랫폼에서는 입력 모니터링이 필요하지 않습니다.",
+            "open": "시스템 설정 열기"
+          }
+        },
+        "errors": {
+          "load": "Codex Micro 설정을 불러오지 못했습니다",
+          "save": "Codex Micro 설정을 저장하지 못했습니다"
+        },
+        "connection": {
+          "label": "연결",
+          "status": {
+            "connecting": "연결 중",
+            "connected": "연결됨",
+            "not-detected": "감지되지 않음",
+            "error": "연결 문제",
+            "unavailable": "SDK 사용 불가"
+          },
+          "descriptions": {
+            "connecting": "Cindy가 Work Louder 장치 서비스를 시작하고 있습니다.",
+            "connected": "USB가 연결되었습니다. Cindy가 키 입력을 수신하고 작업 조명을 동기화합니다.",
+            "not-detected": "데이터 전송을 지원하는 USB 케이블로 연결하세요. ChatGPT가 장치를 사용 중이면 종료하세요.",
+            "error": "Cindy가 키보드와 통신하지 못해 자동으로 다시 시도하고 있습니다.",
+            "unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요.",
+            "connection-timeout": "Work Louder 서비스가 시간 내에 응답하지 않았습니다. Cindy가 자동으로 다시 시도합니다.",
+            "connection-failed": "Work Louder 서비스를 시작하지 못했습니다. Cindy가 자동으로 다시 시도합니다.",
+            "permission-required": "macOS가 키보드 접근을 거부했습니다. 입력 모니터링에서 Cindy를 허용한 뒤 다시 시도하세요.",
+            "sdk-unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요."
+          }
+        },
+        "lighting": {
+          "title": "조명",
+          "brightness": {
+            "label": "밝기",
+            "description": "키, 작업, 주변 조명의 전체 밝기를 조절합니다.",
+            "aria": "Codex Micro 조명 밝기 조절"
+          },
+          "autoDim": {
+            "label": "자동 끄기",
+            "description": "사용하지 않으면 조명을 끄고 키보드 사용 또는 작업 상태 변경 시 다시 켭니다.",
+            "aria": "Codex Micro 자동 끄기 시간 선택",
+            "options": {
+              "off": "끄기",
+              "30-seconds": "30초",
+              "1-minute": "1분",
+              "3-minutes": "3분",
+              "10-minutes": "10분",
+              "30-minutes": "30분",
+              "1-hour": "1시간"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "소스를 사용자 지정으로 설정했을 때 이 작업 키가 여는 대상입니다.",
+          "title": "Agent 키",
+          "source": {
+            "label": "작업 순서",
+            "description": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
+            "descriptions": {
+              "sidebar": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
+              "last-sent": "AG00~AG05는 마지막으로 메시지를 보낸 작업 순입니다.",
+              "priority": "AG00~AG05는 우선 작업 위쪽 6개입니다.",
+              "custom": "AG00~AG05는 각각 지정한 작업을 엽니다."
+            },
+            "value": "사이드바 순서",
+            "options": {
+              "sidebar": "사이드바 순서",
+              "last-sent": "최근 작업",
+              "priority": "우선 작업",
+              "custom": "사용자 지정"
+            }
+          },
+          "singleTap": {
+            "label": "한 번 눌러 Cindy 활성화",
+            "description": "켜면 한 번 눌러 작업을 열고 Cindy를 앞으로 가져옵니다. 꺼도 한 번 누르면 백그라운드에서 작업이 전환되며, 350밀리초 안에 같은 키를 다시 누르면 Cindy가 앞으로 옵니다.",
+            "aria": "Agent 키를 한 번 눌러 Cindy 활성화"
+          },
+          "newTask": "새 작업",
+          "slot": "최근 {{position}}번째",
+          "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기"
+        },
+        "commandKeys": {
+          "builtInDescription": "키캡 기본 동작을 유지하거나 다른 동작에 연결합니다.",
+          "builtIn": "키캡 기본 동작 사용",
+          "unmapped": "이 키캡에는 동작이 없습니다"
+        },
+        "microphone": {
+          "title": "마이크",
+          "separate": {
+            "label": "마이크 키 분리",
+            "description": "ACT10과 ACT11을 하나의 MIC 키로 합치지 않고 따로 사용합니다."
+          }
+        },
+        "analog": {
+          "title": "조이스틱",
+          "description": "조이스틱 각 방향의 동작을 선택합니다.",
+          "directions": {
+            "up": "위",
+            "right": "오른쪽",
+            "down": "아래",
+            "left": "왼쪽"
+          }
+        },
+        "encoder": {
+          "title": "인코더",
+          "mode": {
+            "label": "인코더 모드",
+            "description": "인코더를 돌리거나 눌렀을 때 제어할 기능을 선택합니다.",
+            "options": {
+              "session-switch": "작업 전환",
+              "composer-navigation": "입력창 이동",
+              "reasoning": "추론 강도",
+              "conversation-scroll": "대화 스크롤",
+              "custom": "사용자 지정"
+            }
+          },
+          "gestures": {
+            "left": "왼쪽으로 돌리기",
+            "right": "오른쪽으로 돌리기",
+            "click": "누르기",
+            "longPress": "길게 누르기"
+          },
+          "customDescription": "이 인코더 제스처의 동작을 선택합니다."
+        },
+        "actions": {
+          "choose": "동작 선택",
+          "none": "동작 없음",
+          "tasks": "작업",
+          "commands": "명령",
+          "keycaps": "키캡",
+          "skills": "스킬"
+        },
+        "layout": {
+          "editor": {
+            "done": "완료",
+            "title": "키캡 편집",
+            "description": "이 물리 키에 표시할 키캡을 선택합니다.",
+            "searchPlaceholder": "키캡 검색",
+            "close": "키캡 편집기 닫기",
+            "cancel": "취소",
+            "save": "저장",
+            "assignedShortcut": "할당된 동작",
+            "selectKeycap": "키캡 {{keycap}} 선택"
+          },
+          "keyboard": {
+            "indicator": "상태 표시등",
+            "title": "배치",
+            "description": "키캡을 클릭해 레이블과 기본 동작을 선택합니다.",
+            "analogStick": "조이스틱",
+            "encoder": "인코더"
+          },
+          "reset": {
+            "title": "키 배치 초기화",
+            "description": "작업 순서나 조명 설정은 유지하고 키캡, 조이스틱, 인코더, 마이크 할당을 초기 상태로 되돌립니다.",
+            "button": "배치 초기화"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "단축키 설정 저장에 실패했습니다",
         "notBindable": "이 키 조합은 사용할 수 없습니다",

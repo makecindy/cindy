@@ -1004,10 +1004,11 @@ async function promptCommand(
 function fingerprintPackageTreeCached(
   root: string,
   cache: Map<string, Promise<string>>,
+  aggregateBudget: SnapshotBudgetCounters,
 ): Promise<string> {
   const current = cache.get(root);
   if (current) return current;
-  const pending = fingerprintPiPackageTree(root);
+  const pending = fingerprintPiPackageTree(root, DEFAULT_SNAPSHOT_LIMITS, aggregateBudget);
   cache.set(root, pending);
   return pending;
 }
@@ -1025,6 +1026,7 @@ async function inspectPackage(
   pkg: ListedPackage,
   state: PiPackageState,
   fingerprintCache: Map<string, Promise<string>>,
+  aggregateFingerprintBudget: SnapshotBudgetCounters,
 ): Promise<InspectedPackage> {
   const empty: PiManagedPackageResources = {
     extensions: [], skills: [], promptTemplates: [], packageRoots: [],
@@ -1086,7 +1088,11 @@ async function inspectPackage(
       const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
       const resources = isExtension ? [await extensionResourceView(path.dirname(root), root)] : [];
       const contentFingerprint = isExtension
-        ? await fingerprintPackageTreeCached(launchRoot, fingerprintCache)
+        ? await fingerprintPackageTreeCached(
+            launchRoot,
+            fingerprintCache,
+            aggregateFingerprintBudget,
+          )
         : undefined;
       const requiresExtensionApproval = isExtension && !(
         contentFingerprint
@@ -1173,7 +1179,11 @@ async function inspectPackage(
     // so one oversized package is quarantined during inspection instead of
     // aborting the combined task snapshot and hiding otherwise valid packages.
     const contentFingerprint = hasLaunchResources
-      ? await fingerprintPackageTreeCached(launchRoot, fingerprintCache)
+      ? await fingerprintPackageTreeCached(
+          launchRoot,
+          fingerprintCache,
+          aggregateFingerprintBudget,
+        )
       : undefined;
     const requiresExtensionApproval = extensions.length > 0 && !(
       contentFingerprint
@@ -1251,6 +1261,7 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
   const startedAt = Date.now();
   const inspected: InspectedPackage[] = [];
   const fingerprintCache = new Map<string, Promise<string>>();
+  const aggregateFingerprintBudget = createSnapshotBudgetCounters(DEFAULT_SNAPSHOT_LIMITS);
   for (const [index, pkg] of listed.entries()) {
     if (index >= MAX_INSPECTED_PACKAGES || Date.now() - startedAt > MAX_ALL_INSPECTION_MS) {
       const { displaySource, unsafe } = projectPackageSource(pkg.source);
@@ -1269,7 +1280,12 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
       });
       continue;
     }
-    inspected.push(await inspectPackage(pkg, state, fingerprintCache));
+    inspected.push(await inspectPackage(
+      pkg,
+      state,
+      fingerprintCache,
+      aggregateFingerprintBudget,
+    ));
     // Package inspection includes synchronous parser work in Electron's main
     // process. Yield between packages so a long roster cannot monopolize it.
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1378,8 +1394,26 @@ export async function capturePiPackageEnableIdentity(source: string): Promise<Pi
   });
 }
 
+function projectSnapshotUnavailablePackages(
+  inspected: InspectedPackage[],
+  packageRoots: Iterable<string>,
+  warning: 'inspection-failed' | 'inspection-limit',
+): boolean {
+  const unavailableRoots = new Set([...packageRoots].map((root) => path.resolve(root)));
+  if (unavailableRoots.size === 0) return false;
+  let changed = false;
+  for (const pkg of inspected) {
+    if (!pkg.launch.packageRoots.some((root) => unavailableRoots.has(path.resolve(root)))) continue;
+    pkg.view = { ...pkg.view, enabled: false, warning };
+    pkg.launch = { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
+    pkg.promptCommands = [];
+    changed = true;
+  }
+  return changed;
+}
+
 export async function resolveManagedPiPackageResources(
-  options?: { snapshotRoot: string },
+  options?: { snapshotRoot: string; snapshotLimits?: PiPackageSnapshotLimits },
 ): Promise<PiManagedPackageResources> {
   if (!getReadyBinaryPath('pi')) {
     return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
@@ -1415,15 +1449,37 @@ export async function resolveManagedPiPackageResources(
           approvalsByRoot.set(root, approvals);
         }
       }
-      const staged = await stageManagedPackageSnapshot(resources, options.snapshotRoot);
       try {
+        const snapshotLimits = options.snapshotLimits ?? DEFAULT_SNAPSHOT_LIMITS;
+        const staged = await stageManagedPackageSnapshot(
+          resources,
+          options.snapshotRoot,
+          snapshotLimits,
+        );
+        const stageMetadata = snapshotStageMetadata.get(staged);
+        if (
+          stageMetadata?.skippedPackageRoots.length
+          && projectSnapshotUnavailablePackages(
+            inspected,
+            stageMetadata.skippedPackageRoots,
+            'inspection-limit',
+          )
+        ) {
+          await publishPiPackagesChanged({ invalidateCache: false });
+        }
         const changedSources = new Set<string>();
-        for (const [index, sourceRoot] of resources.packageRoots.entries()) {
+        const copiedSourceRoots = stageMetadata?.sourcePackageRoots ?? resources.packageRoots;
+        const verificationBudget = createSnapshotBudgetCounters(snapshotLimits);
+        for (const [index, sourceRoot] of copiedSourceRoots.entries()) {
           const approvals = approvalsByRoot.get(sourceRoot);
           if (!approvals?.length) continue;
           const stagedRoot = staged.packageRoots[index];
           if (!stagedRoot) throw new Error('Pi extension snapshot root mapping is incomplete');
-          const copiedFingerprint = await fingerprintPiPackageTree(stagedRoot);
+          const copiedFingerprint = await fingerprintPiPackageTree(
+            stagedRoot,
+            snapshotLimits,
+            verificationBudget,
+          );
           for (const approval of approvals) {
             if (approval.fingerprint !== copiedFingerprint) changedSources.add(approval.source);
           }
@@ -1437,6 +1493,15 @@ export async function resolveManagedPiPackageResources(
         return staged;
       } catch (error) {
         await fs.rm(options.snapshotRoot, { recursive: true, force: true }).catch(() => undefined);
+        if (projectSnapshotUnavailablePackages(
+          inspected,
+          resources.packageRoots,
+          error instanceof PiPackageSnapshotLimitError
+            ? 'inspection-limit'
+            : 'inspection-failed',
+        )) {
+          await publishPiPackagesChanged({ invalidateCache: false });
+        }
         throw error;
       }
     };
@@ -1606,28 +1671,72 @@ function isWithinPath(root: string, candidate: string): boolean {
 }
 
 class PiPackageSnapshotLimitError extends Error {
-  constructor() {
+  constructor(readonly scope: 'package' | 'aggregate' = 'package') {
     super('Pi extension snapshot exceeds the safe resource limit');
     this.name = 'PiPackageSnapshotLimitError';
   }
 }
 
-interface SnapshotCopyBudget {
+interface SnapshotBudgetCounters {
   startedAt: number;
   entries: number;
   bytes: number;
-  activeDirectories: Set<string>;
   limits: PiPackageSnapshotLimits;
 }
 
-function assertSnapshotBudget(budget: SnapshotCopyBudget, additionalBytes = 0): void {
-  if (
-    budget.entries > budget.limits.maxEntries
+interface SnapshotCopyBudget extends SnapshotBudgetCounters {
+  activeDirectories: Set<string>;
+  aggregate?: SnapshotBudgetCounters;
+}
+
+function createSnapshotBudgetCounters(
+  limits: PiPackageSnapshotLimits,
+): SnapshotBudgetCounters {
+  return {
+    startedAt: Date.now(),
+    entries: 0,
+    bytes: 0,
+    limits,
+  };
+}
+
+function createSnapshotCopyBudget(
+  limits: PiPackageSnapshotLimits,
+  aggregate?: SnapshotBudgetCounters,
+): SnapshotCopyBudget {
+  return {
+    ...createSnapshotBudgetCounters(limits),
+    activeDirectories: new Set(),
+    ...(aggregate ? { aggregate } : {}),
+  };
+}
+
+function snapshotBudgetExceeded(
+  budget: SnapshotBudgetCounters,
+  additionalBytes = 0,
+): boolean {
+  return budget.entries > budget.limits.maxEntries
     || budget.bytes + additionalBytes > budget.limits.maxBytes
-    || Date.now() - budget.startedAt >= budget.limits.maxDurationMs
-  ) {
-    throw new PiPackageSnapshotLimitError();
+    || Date.now() - budget.startedAt >= budget.limits.maxDurationMs;
+}
+
+function assertSnapshotBudget(budget: SnapshotCopyBudget, additionalBytes = 0): void {
+  if (snapshotBudgetExceeded(budget, additionalBytes)) {
+    throw new PiPackageSnapshotLimitError('package');
   }
+  if (budget.aggregate && snapshotBudgetExceeded(budget.aggregate, additionalBytes)) {
+    throw new PiPackageSnapshotLimitError('aggregate');
+  }
+}
+
+function recordSnapshotEntry(budget: SnapshotCopyBudget): void {
+  budget.entries += 1;
+  if (budget.aggregate) budget.aggregate.entries += 1;
+}
+
+function recordSnapshotBytes(budget: SnapshotCopyBudget, bytes: number): void {
+  budget.bytes += bytes;
+  if (budget.aggregate) budget.aggregate.bytes += bytes;
 }
 
 function updatePackageFingerprintField(
@@ -1660,15 +1769,10 @@ function sameStableStat(
 async function fingerprintPiPackageTree(
   rawRoot: string,
   limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
+  aggregateBudget?: SnapshotBudgetCounters,
 ): Promise<string> {
   const root = await fs.realpath(rawRoot);
-  const budget: SnapshotCopyBudget = {
-    startedAt: Date.now(),
-    entries: 0,
-    bytes: 0,
-    activeDirectories: new Set(),
-    limits,
-  };
+  const budget = createSnapshotCopyBudget(limits, aggregateBudget);
   const hash = createHash('sha256');
   updatePackageFingerprintField(hash, 'cindy-pi-package-fingerprint-v1');
 
@@ -1679,7 +1783,7 @@ async function fingerprintPiPackageTree(
       throw new Error('Pi extension fingerprint contains an escaped link');
     }
     const before = await fs.stat(canonical);
-    budget.entries += 1;
+    recordSnapshotEntry(budget);
     assertSnapshotBudget(budget, before.isFile() ? before.size : 0);
     const name = relativePath || '.';
 
@@ -1726,7 +1830,7 @@ async function fingerprintPiPackageTree(
         if (bytesRead === 0) break;
         assertSnapshotBudget(budget, bytesRead);
         hash.update(chunk.subarray(0, bytesRead));
-        budget.bytes += bytesRead;
+        recordSnapshotBytes(budget, bytesRead);
         position += bytesRead;
       }
       const after = await handle.stat();
@@ -1755,7 +1859,7 @@ async function copySnapshotEntryBounded(
   }
   const sourceStat = await fs.stat(canonicalSource);
   const sourceMode = sourceStat.mode & 0o777;
-  budget.entries += 1;
+  recordSnapshotEntry(budget);
   assertSnapshotBudget(budget, sourceStat.isFile() ? sourceStat.size : 0);
 
   if (sourceStat.isDirectory()) {
@@ -1814,7 +1918,7 @@ async function copySnapshotEntryBounded(
       if (bytesRead === 0) break;
       assertSnapshotBudget(budget, bytesRead);
       await targetHandle.write(chunk, 0, bytesRead, position);
-      budget.bytes += bytesRead;
+      recordSnapshotBytes(budget, bytesRead);
       position += bytesRead;
     }
     const after = await sourceHandle.stat();
@@ -1833,7 +1937,7 @@ async function copySnapshotEntryBounded(
 function mapSnapshotPath(
   sourcePath: string,
   mappings: Array<{ source: string; target: string; directory: boolean }>,
-): string {
+): string | undefined {
   const resolved = path.resolve(sourcePath);
   let containingDirectory: (typeof mappings)[number] | undefined;
   for (const mapping of mappings) {
@@ -1852,8 +1956,26 @@ function mapSnapshotPath(
       path.relative(containingDirectory.source, resolved),
     );
   }
+  return undefined;
+}
+
+function mapSnapshotPathOrSkip(
+  sourcePath: string,
+  mappings: Array<{ source: string; target: string; directory: boolean }>,
+  skippedPackageRoots: string[],
+): string | undefined {
+  const mapped = mapSnapshotPath(sourcePath, mappings);
+  if (mapped) return mapped;
+  if (skippedPackageRoots.some((root) => isWithinPath(root, sourcePath))) return undefined;
   throw new Error('Pi extension resource is outside its inspected package root');
 }
+
+interface SnapshotStageMetadata {
+  sourcePackageRoots: string[];
+  skippedPackageRoots: string[];
+}
+
+const snapshotStageMetadata = new WeakMap<PiManagedPackageResources, SnapshotStageMetadata>();
 
 export async function stageManagedPackageSnapshot(
   resources: PiManagedPackageResources,
@@ -1863,46 +1985,74 @@ export async function stageManagedPackageSnapshot(
   if (!path.isAbsolute(snapshotRoot)) throw new Error('Pi extension snapshot root must be absolute');
   const temporaryRoot = `${snapshotRoot}.tmp-${process.pid}-${Date.now()}`;
   const mappings: Array<{ source: string; target: string; directory: boolean }> = [];
+  const skippedPackageRoots: string[] = [];
+  const aggregateBudget = createSnapshotBudgetCounters(limits);
+  let aggregateLimitReached = false;
   try {
     await fs.mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const [index, rawRoot] of resources.packageRoots.entries()) {
-      // Inspection applies these limits independently to each package launch
-      // root. Keep staging aligned with that contract: several individually
-      // valid packages must not exhaust one shared cross-package budget and
-      // make the entire task start without resources.
-      const budget: SnapshotCopyBudget = {
-        startedAt: Date.now(),
-        entries: 0,
-        bytes: 0,
-        activeDirectories: new Set(),
-        limits,
-      };
-      const source = await fs.realpath(rawRoot);
-      const sourceStat = await fs.stat(source);
-      const directory = sourceStat.isDirectory();
-      if (!directory && !sourceStat.isFile()) throw new Error('Pi extension package root is not a file or directory');
-      const relativeTarget = directory ? String(index) : path.join(String(index), path.basename(source));
-      const temporaryTarget = path.join(temporaryRoot, relativeTarget);
-      await fs.mkdir(path.dirname(temporaryTarget), { recursive: true, mode: 0o700 });
-      await copySnapshotEntryBounded(source, source, temporaryTarget, budget);
-      mappings.push({ source, target: path.join(snapshotRoot, relativeTarget), directory });
+      if (aggregateLimitReached) {
+        skippedPackageRoots.push(path.resolve(rawRoot));
+        continue;
+      }
+      let source: string | undefined;
+      try {
+        source = await fs.realpath(rawRoot);
+        const sourceStat = await fs.stat(source);
+        const directory = sourceStat.isDirectory();
+        if (!directory && !sourceStat.isFile()) {
+          throw new Error('Pi extension package root is not a file or directory');
+        }
+        const relativeTarget = directory
+          ? String(index)
+          : path.join(String(index), path.basename(source));
+        const temporaryTarget = path.join(temporaryRoot, relativeTarget);
+        await fs.mkdir(path.dirname(temporaryTarget), { recursive: true, mode: 0o700 });
+        await copySnapshotEntryBounded(
+          source,
+          source,
+          temporaryTarget,
+          createSnapshotCopyBudget(limits, aggregateBudget),
+        );
+        mappings.push({ source, target: path.join(snapshotRoot, relativeTarget), directory });
+      } catch (error) {
+        if (!(error instanceof PiPackageSnapshotLimitError)) throw error;
+        if (error.scope !== 'aggregate') throw error;
+        skippedPackageRoots.push(source ?? path.resolve(rawRoot));
+        await fs.rm(path.join(temporaryRoot, String(index)), {
+          recursive: true,
+          force: true,
+        }).catch(() => undefined);
+        aggregateLimitReached = true;
+      }
     }
     // Windows temp paths can use an 8.3/user-profile spelling while realpath
     // returns the canonical long form. Compare resources and roots in the same
     // canonical namespace so the most-specific approved root remains stable on
     // every platform (and symlinked resources cannot inherit an ancestor root).
+    const mappedExtensions = await Promise.all(resources.extensions.map(async (entry) =>
+      mapSnapshotPathOrSkip(await fs.realpath(entry), mappings, skippedPackageRoots)));
+    const mappedSkills = await Promise.all(resources.skills.map(async (skill) => {
+      const mappedPath = mapSnapshotPathOrSkip(
+        await fs.realpath(skill.path),
+        mappings,
+        skippedPackageRoots,
+      );
+      return mappedPath ? { ...skill, path: mappedPath } : undefined;
+    }));
+    const mappedPromptTemplates = await Promise.all(resources.promptTemplates.map(async (entry) =>
+      mapSnapshotPathOrSkip(await fs.realpath(entry), mappings, skippedPackageRoots)));
     const mappedResources: PiManagedPackageResources = {
-      extensions: await Promise.all(resources.extensions.map(async (entry) =>
-        mapSnapshotPath(await fs.realpath(entry), mappings))),
-      skills: await Promise.all(resources.skills.map(async (skill) => ({
-        ...skill,
-        path: mapSnapshotPath(await fs.realpath(skill.path), mappings),
-      }))),
-      promptTemplates: await Promise.all(resources.promptTemplates.map(async (entry) =>
-        mapSnapshotPath(await fs.realpath(entry), mappings))),
+      extensions: mappedExtensions.filter((entry): entry is string => Boolean(entry)),
+      skills: mappedSkills.filter((skill): skill is PiManagedPackageSkill => Boolean(skill)),
+      promptTemplates: mappedPromptTemplates.filter((entry): entry is string => Boolean(entry)),
       packageRoots: mappings.map((mapping) => mapping.target),
     };
     await fs.rename(temporaryRoot, snapshotRoot);
+    snapshotStageMetadata.set(mappedResources, {
+      sourcePackageRoots: mappings.map((mapping) => mapping.source),
+      skippedPackageRoots,
+    });
     return mappedResources;
   } catch (error) {
     await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);

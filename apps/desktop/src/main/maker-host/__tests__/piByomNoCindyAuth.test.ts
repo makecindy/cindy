@@ -24,7 +24,13 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       id: 'local-keyless',
       name: 'Local keyless',
       auth: { method: 'none' },
-      runtimes: { pi: { baseUrl: 'http://127.0.0.1:11434/v1', models: [{ id: 'local-model' }] } },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'local-model' }],
+        },
+      },
     },
     {
       id: 'xai',
@@ -33,6 +39,7 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       runtimes: {
         pi: {
           baseUrl: 'https://private-xai.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'private-grok' }, { id: 'grok-4.6' }],
         },
       },

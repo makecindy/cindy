@@ -797,7 +797,7 @@ describe('Pi package executable-code boundary', () => {
     expect(leftovers).toEqual([]);
   });
 
-  it('applies snapshot budgets independently to each package root', async () => {
+  it('keeps earlier package roots when the aggregate snapshot budget is exhausted', async () => {
     const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-budget-first-'));
     const secondRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-budget-second-'));
     roots.push(firstRoot, secondRoot);
@@ -819,17 +819,77 @@ describe('Pi package executable-code boundary', () => {
       promptTemplates: [],
       packageRoots: [firstRoot, secondRoot],
     }, snapshotRoot, {
-      maxEntries: 2,
+      maxEntries: 3,
       maxBytes: 1024,
       maxDurationMs: 10_000,
     });
 
     expect(snapshot.skills).toEqual([
       { path: path.join(snapshotRoot, '0', 'SKILL.md'), name: 'first' },
-      { path: path.join(snapshotRoot, '1', 'SKILL.md'), name: 'second' },
     ]);
+    expect(snapshot.packageRoots).toEqual([path.join(snapshotRoot, '0')]);
     await expect(Promise.all(snapshot.skills.map((skill) => fs.readFile(skill.path, 'utf8'))))
-      .resolves.toEqual(['# First\n', '# Second\n']);
+      .resolves.toEqual(['# First\n']);
+    await expect(fs.stat(path.join(snapshotRoot, '1'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('projects aggregate snapshot limits without persisting package disables', async () => {
+    const sources = [
+      await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-budget-local-')),
+      'git:https://example.com/acme/budget-git.git',
+      'npm:budget-npm',
+    ];
+    const packageRoots = await Promise.all(sources.map(async (source, index) => {
+      const root = index === 0
+        ? source
+        : await fs.mkdtemp(path.join(os.tmpdir(), `cindy-pi-package-budget-${index}-`));
+      roots.push(root);
+      await fs.mkdir(path.join(root, 'skills', `skill-${index}`), { recursive: true });
+      await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+        name: `budget-package-${index}`,
+        pi: { skills: ['./skills'] },
+      }));
+      await fs.writeFile(
+        path.join(root, 'skills', `skill-${index}`, 'SKILL.md'),
+        `# Skill ${index}\n`,
+      );
+      return root;
+    }));
+    runtime.listOutput = [
+      'User packages:',
+      ...sources.flatMap((source, index) => [`  ${source}`, `    ${packageRoots[index]}`]),
+      '',
+    ].join('\n');
+
+    const store = await import('../pi-package-store.js');
+    const snapshotRoot = path.join(runtime.userData, 'aggregate-package-budget');
+    const snapshot = await store.resolveManagedPiPackageResources({
+      snapshotRoot,
+      snapshotLimits: {
+        maxEntries: 7,
+        maxBytes: 1024 * 1024,
+        maxDurationMs: 10_000,
+      },
+    });
+
+    expect(snapshot.skills).toEqual([
+      expect.objectContaining({
+        name: 'SKILL',
+        path: path.join(snapshotRoot, '0', 'skills', 'skill-0', 'SKILL.md'),
+      }),
+    ]);
+    expect(snapshot.packageRoots).toEqual([path.join(snapshotRoot, '0')]);
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [
+        { enabled: true },
+        { enabled: false, warning: 'inspection-limit' },
+        { enabled: false, warning: 'inspection-limit' },
+      ],
+    });
+    await expect(fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.runIf(process.platform !== 'win32').each([

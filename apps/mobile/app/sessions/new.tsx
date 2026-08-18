@@ -165,6 +165,7 @@ import {
   type NewSessionDeviceOption,
   type NewSessionStoredPreferences,
 } from '@/session/newSession';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { newSessionText } from '@/session/newSessionMessages';
 import { i18n } from '@/i18n';
 import {
@@ -5047,10 +5048,23 @@ export default function NewRemoteSessionScreen() {
         if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       } catch {
         if (!isCurrentOwner() || !ensureDeviceAlive()) return;
-        session = sessionFromCreateResult(result, finalDraft);
+        session = sessionFromCreateResult(result, {
+          ...finalDraft,
+          firstMessage: input.objective,
+        });
+      }
+      if (isDefaultDraftSessionTitle(session.title)) {
+        const titled = sessionFromCreateResult(result, {
+          ...finalDraft,
+          firstMessage: input.objective,
+        });
+        session = { ...session, title: titled.title };
       }
       if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
+      if (session.title && !isDefaultDraftSessionTitle(session.title)) {
+        remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title);
+      }
       if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       // 目标流不带 composer 附件(与桌面一致),跳转即丢引用:已上传的中转对象在此
       // best-effort 回收,否则成为 OSS 孤儿直到桶生命周期清理(codex review #504)。

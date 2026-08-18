@@ -63,6 +63,7 @@ import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSu
 import { PromotionalGrantNotice } from '@/components/onboarding/PromotionalGrantNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   dbToMakerAgentKind,
   normalizeDbAgentKind,
@@ -134,7 +135,9 @@ import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
   consumeNewMakerDialogueTargetRequest,
+  consumeNewMakerFolderPickerRequest,
   readNewMakerDialogueTargetRequest,
+  readNewMakerFolderPickerRequest,
 } from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
@@ -167,7 +170,11 @@ import {
 } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
-import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import {
+  DEFAULT_DRAFT_SESSION_TITLE,
+  deriveOptimisticSessionTitle,
+  normalizeAutoTitle,
+} from '@cindy/maker-shared/session-title';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { InvisibleWindowDragStrip } from '@/components/layout/windowDrag';
@@ -349,29 +356,33 @@ const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
  * (`remoteProjectsStore.setPendingTitlePreview`,免得干等一次隧道往返),本机路径缺的
  * 是对称的这一半。
  *
- * 预览经 `emitAutoTitlePreview` 交给 sessionsStore:那边把它记进叠加层,既能活过新建
- * 会话触发的 `forceRefreshAll`(否则会被仍带哨兵的 DB 快照冲掉),又统一持有「标题是否
- * 仍是哨兵」这唯一一份判据。不写 DB —— 权威标题仍由 main 落库并广播回来,那个串与这里
- * 算的是同一个(共用 `normalizeAutoTitle`),回流时不跳变。
+ * 预览必须在 `createSession` **之前**登记:main 一插入就广播 `sessions:created`,
+ * renderer 立刻 `forceRefreshAll`,那次重拉仍带哨兵。预览晚一步,用户就会先看到
+ * 「未命名任务」。sessionsStore.prependCreated 也会叠同一层,第一帧才不会露哨兵。
  *
- * **只对能证明一致的纯文本消息放行**。带 @mention / 附件 / 会话引用时,权威占位由
- * `deriveAutoTitleSeed` 另行推导(剔除 mention 的 wire token、拿文件名合成描述),这里
- * 算不出同一个串 —— 预览会先显示 A 再跳成 B,比短暂显示占位更糟。这类消息交给显示层的
- * 「未命名任务」兜底,等权威标题回流。
- *
- * 纯文本时两侧一致是可证明的:无 reference / 未编码引用标记时 `projectLiteralUserText`
- * 退化为 `text.trim()`,无 mention 时 `stripMentionTokens` 同样只做 trim,而
- * `normalizeAutoTitle` 本身已含 trim。
+ * 有字用字;没字再用附件名 / 类别词。带 @mention / 编码引用时权威占位由
+ * `deriveAutoTitleSeed` 另行剔除 wire token,这里算不出同一个串,仍不预览。
  */
 function optimisticFirstMessageTitle(
   message: string,
   files: AttachedFile[] | undefined,
   mentions: MentionedResource[] | undefined,
   opts: { quotesEncoded?: boolean; agentReferences?: AgentInputReference[] } | undefined,
+  labels: { image: string; file: string },
 ): string | null {
-  if (files?.length || mentions?.length) return null;
-  if (opts?.agentReferences?.length || opts?.quotesEncoded) return null;
-  return normalizeAutoTitle(message) || null;
+  if (mentions?.length || opts?.agentReferences?.length || opts?.quotesEncoded) return null;
+  const first = files?.[0];
+  const title = deriveOptimisticSessionTitle({
+    text: message,
+    fileNames: (files ?? [])
+      .filter((file) => !file.path?.startsWith('clipboard://'))
+      .map((file) => file.originalName || file.name)
+      .filter(Boolean),
+    imageLabel: labels.image,
+    fileLabel: labels.file,
+    firstFileIsImage: first?.category === 'image',
+  });
+  return title || null;
 }
 
 /**
@@ -592,8 +603,13 @@ export function NewMakerDraftRoute() {
     () => readNewMakerDialogueTargetRequest(location.state),
     [location.state],
   );
+  const folderPickerRequest = useMemo(
+    () => readNewMakerFolderPickerRequest(location.state),
+    [location.state],
+  );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
+  const handledFolderPickerRequestRef = useRef<string | null>(null);
   // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
   // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
   // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
@@ -2762,6 +2778,22 @@ export function NewMakerDraftRoute() {
     // 打开项目 picker 时收掉设备 picker(两个 popover 都是 absolute 浮层,会互相遮挡)。
     if (open) setDevicePickerOpen(false);
   }, []);
+
+  useLayoutEffect(() => {
+    if (
+      !folderPickerRequest ||
+      handledFolderPickerRequestRef.current === folderPickerRequest.requestId
+    ) {
+      return;
+    }
+    handledFolderPickerRequestRef.current = folderPickerRequest.requestId;
+    setFolderPickerOpen(true);
+    setDevicePickerOpen(false);
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: consumeNewMakerFolderPickerRequest(location.state),
+    });
+  }, [folderPickerRequest, location, navigate]);
   const handleDevicePickerOpenChange = useCallback((open: boolean) => {
     setDevicePickerOpen(open);
     if (open) setFolderPickerOpen(false);
@@ -3299,6 +3331,11 @@ export function NewMakerDraftRoute() {
       // catch 里撤回,否则空会话会跨列表刷新一直显示一句**没发出去**的话
       // (PR #1031 review P1;worktree 与 goal 两条路径各有自己的撤回点)。
       let optimisticTitleSessionId: string | null = null;
+      let remoteOptimisticTitleSessionId: string | null = null;
+      const autoTitleLabels = {
+        image: t('ccAgent.autoTitle.image'),
+        file: t('ccAgent.autoTitle.file'),
+      };
       void (async () => {
         try {
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
@@ -3524,6 +3561,23 @@ export function NewMakerDraftRoute() {
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
             }
+            {
+              const optimisticTitle = optimisticFirstMessageTitle(
+                message,
+                files,
+                mentions,
+                opts,
+                autoTitleLabels,
+              );
+              if (optimisticTitle) {
+                remoteProjectsStore.setPendingTitlePreview(
+                  remoteSessionId,
+                  optimisticTitle,
+                  Boolean(normalizeAutoTitle(message)),
+                );
+                remoteOptimisticTitleSessionId = remoteSessionId;
+              }
+            }
             // remoteSessionId 到手就是**提交点**:对端会话已经建出来了。此后任何一步都不许再把它
             // 退化成「创建失败」—— 用户会照着提示重试,于是对端多出第二个会话,第一个空着永久滞留。
             // 钉归属 → 补临时行 → 触发回流这三条不变量、以及各自被 review 抓出来的理由,都在
@@ -3619,6 +3673,17 @@ export function NewMakerDraftRoute() {
           // 拉起 Worker (见下方 "F-COLLAB: draft 阶段开了协同模式" 段)。
 
           const sessionId = makeDraftSessionId();
+          const optimisticTitle = optimisticFirstMessageTitle(
+            message,
+            files,
+            mentions,
+            opts,
+            autoTitleLabels,
+          );
+          if (optimisticTitle) {
+            emitAutoTitlePreview(sessionId, optimisticTitle);
+            optimisticTitleSessionId = sessionId;
+          }
           const workingDir = selectedWorkingDir;
           const wt = selectedWorktree;
           // 生效条件 = 勾选 && baseRepo 已就绪。上面的发送门已阻止不完整状态；
@@ -3649,6 +3714,7 @@ export function NewMakerDraftRoute() {
               providerId,
             });
             if (!newSession) {
+              if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
               toastCreateSessionFailed();
               return;
             }
@@ -3662,11 +3728,6 @@ export function NewMakerDraftRoute() {
               userSendAt: sendAt.toISOString(),
               updatedAt: sendAt.toISOString(),
             });
-            // 标题即时预览,理由同普通 send 分支(见 optimisticFirstMessageTitle)。
-            {
-              const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts);
-              if (optimisticTitle) emitAutoTitlePreview(newSession.id, optimisticTitle);
-            }
             sessionService.touchUserSend(newSession.id, sendAt.getTime()).catch((err) => {
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
@@ -3892,6 +3953,7 @@ export function NewMakerDraftRoute() {
             providerId,
           });
           if (!newSession) {
+            if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
             toastCreateSessionFailed();
             return;
           }
@@ -3917,11 +3979,6 @@ export function NewMakerDraftRoute() {
           {
             const iso = new Date().toISOString();
             sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
-            const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts);
-            if (optimisticTitle) {
-              emitAutoTitlePreview(newSession.id, optimisticTitle);
-              optimisticTitleSessionId = newSession.id;
-            }
           }
 
           // F-COLLAB: draft 阶段开了协同模式 → createSession 之后立刻 enableOrca
@@ -3992,10 +4049,14 @@ export function NewMakerDraftRoute() {
               : undefined,
           });
         } catch (err) {
+          // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
+          // 归属切换也会提前 return,必须先撤;否则已建、未发出首条的空会话会一直顶着原文。
+          if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
+          if (remoteOptimisticTitleSessionId) {
+            remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
+          }
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           log.error('[draft send]', err);
-          // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
-          if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
           toast.error(
             isRemotePrecreatedWorktreeCleanupPendingError(err)
               ? t('ccAgent.draft.remoteWorktreeCleanupPending')
@@ -4081,6 +4142,8 @@ export function NewMakerDraftRoute() {
         throw new Error(t('goal.newGoalDialog.busy'));
       }
       markSendInFlight(true);
+      let goalSessionId: string | null = null;
+      let optimisticGoalTitle: string | null = null;
       try {
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
         const selectedWorktree = { ...wtRef.current };
@@ -4319,6 +4382,12 @@ export function NewMakerDraftRoute() {
           if (!remoteSessionId) {
             throw new Error(t('ccAgent.draft.createSessionFailed'));
           }
+          {
+            const optimisticGoalTitle = normalizeAutoTitle(objective);
+            if (optimisticGoalTitle) {
+              remoteProjectsStore.setPendingTitlePreview(remoteSessionId, optimisticGoalTitle, true);
+            }
+          }
           // 与发送路径共用同一段交接收尾(钉归属 → 补临时行 → 触发回流)。三条不变量对目标路径
           // 同样成立,只是后果换了个形状:goalApiFor 也按归属路由,漏了钉子它就把 setGoal 发给本机
           // maker、对端刚建好的会话永远拿不到目标;而它不抛这条在这里更要紧 —— 抛出去 NewGoalDialog
@@ -4449,7 +4518,9 @@ export function NewMakerDraftRoute() {
           && selectedWorktree.enabled
           && selectedWorktree.confirmedIneligible !== true,
         );
-        const goalSessionId = makeDraftSessionId();
+        goalSessionId = makeDraftSessionId();
+        optimisticGoalTitle = normalizeAutoTitle(objective);
+        if (optimisticGoalTitle) emitAutoTitlePreview(goalSessionId, optimisticGoalTitle);
         let goalWorkingDir = selectedWorkingDir;
         let goalWorktreeName = '';
         let goalWorktreeBranchName = '';
@@ -4483,6 +4554,7 @@ export function NewMakerDraftRoute() {
           providerId: chatInitialProviderId ?? null,
         });
         if (!newSession) {
+          if (optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
           throw new Error(t('ccAgent.draft.createSessionFailed'));
         }
         if (useLocalGoalWorktree) {
@@ -4511,13 +4583,9 @@ export function NewMakerDraftRoute() {
           });
           await refreshWorktrees();
         }
-        // 目标文案是纯文本(goal 对话框没有附件 / mention 入口),直接即时预览 ——
-        // 与下面 autoNameSession(objective) 最终写入的占位是同一个串。
-        const optimisticGoalTitle = normalizeAutoTitle(objective);
         {
           const iso = new Date().toISOString();
           sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
-          if (optimisticGoalTitle) emitAutoTitlePreview(newSession.id, optimisticGoalTitle);
         }
         // 草稿开了协同 → 新建目标路径也要拉起 Worker(与 Send 路径同口径);否则用户开了协同
         // 却走「新建目标」会得到一个没有 Worker 的 lead session(codex P2)。失败 toast + 降级
@@ -4581,6 +4649,9 @@ export function NewMakerDraftRoute() {
           state: orcaWorkersRevealState ? { orcaWorkersReveal: orcaWorkersRevealState } : undefined,
         });
       } catch (error) {
+        // 预览在 createSession 之前登记。worktree 建议名 / 建树 / 回滚失败都走这里,
+        // 不撤回会让空会话或未建成的 goalSessionId 一直顶着目标原文。
+        if (goalSessionId && optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
         if (isLocalGoalWorktreeCleanupPendingError(error)) {
           log.error('[draft goal] incomplete local worktree session cleanup failed', {
             setupError: error.setupError,

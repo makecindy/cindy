@@ -11,10 +11,7 @@ import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { Sidebar } from '@/components/sidebar/Sidebar';
-import {
-  getSplitSessionIds,
-  useSplitGroup,
-} from '@/features/cc-agent/splitGroupStore';
+import { getSplitSessionIds, useSplitGroup } from '@/features/cc-agent/splitGroupStore';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
@@ -58,6 +55,7 @@ import { didUserCloseDetachedSidebarWindow } from '@/lib/rsbWindowTransitions';
 import { routeSidebarCommand } from '@/features/right-sidebar/lib/detachedSidebarRouting';
 import { openTerminalFromShortcut } from '@/features/right-sidebar/lib/openTerminalShortcut';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
+import { openUrlInSidebarBrowser } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { useSidebarResize } from '@/hooks/useSidebarResize';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { useSidebarPeek } from '@/hooks/useSidebarPeek';
@@ -69,7 +67,10 @@ import {
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useUpdateNotice } from '@/hooks/useUpdateNotice';
 import { syncNotificationsEnabledToMain } from '@/hooks/useNotificationSettings';
-import { isAgentIslandSupported, toggleAgentIslandSoundEnabled } from '@/hooks/useAgentIslandSettings';
+import {
+  isAgentIslandSupported,
+  toggleAgentIslandSoundEnabled,
+} from '@/hooks/useAgentIslandSettings';
 import { requestNewWorkerFromShortcut } from '@/features/cc-agent/lib/newWorkerShortcut';
 // chat-data-localization F1 V0.4 / M-FE6
 import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
@@ -83,12 +84,15 @@ import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { cleanupLegacyGlobalKeys } from '@/lib/sessionLayoutPrefs';
 import {
   onRequestRightSidebarVisibility,
   requestRightSidebarVisibility,
   shouldAnimateSidebarVisibilityRequest,
 } from '@/features/right-sidebar/lib/sidebarCommands';
+import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
+import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -273,6 +277,10 @@ export function MainLayout() {
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
+  const isRightSidebarCollapsedRef = useRef(isRightSidebarCollapsed);
+  isRightSidebarCollapsedRef.current = isRightSidebarCollapsed;
+  const rsbDetachedRef = useRef(rsbDetached);
+  rsbDetachedRef.current = rsbDetached;
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
@@ -431,15 +439,12 @@ export function MainLayout() {
   }, [sidebarPeek.peekState, isRailMode, handleRailModeChange]);
 
   const routeSessionId = resolveAgentIslandVisibleSessionIdFromPath(location.pathname);
-  const splitVisibleSessionIds = useMemo(
-    () => {
-      const splitSessionIds = getSplitSessionIds(splitGroup.root);
-      return routeSessionId && splitSessionIds.length >= 2
-        ? [...new Set([routeSessionId, ...splitSessionIds])]
-        : [];
-    },
-    [routeSessionId, splitGroup.root],
-  );
+  const splitVisibleSessionIds = useMemo(() => {
+    const splitSessionIds = getSplitSessionIds(splitGroup.root);
+    return routeSessionId && splitSessionIds.length >= 2
+      ? [...new Set([routeSessionId, ...splitSessionIds])]
+      : [];
+  }, [routeSessionId, splitGroup.root]);
 
   const syncAgentIslandVisibleSession = useCallback(() => {
     if (!isAgentIslandSupported()) return;
@@ -571,11 +576,16 @@ export function MainLayout() {
       if (!payload || typeof payload !== 'object') return;
       const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
       if (
-        typeof requestId !== 'string' || !requestId ||
-        typeof ghostId !== 'string' || !ghostId ||
-        typeof ghostName !== 'string' || !ghostName ||
-        typeof name !== 'string' || !name ||
-        typeof prompt !== 'string' || !prompt
+        typeof requestId !== 'string' ||
+        !requestId ||
+        typeof ghostId !== 'string' ||
+        !ghostId ||
+        typeof ghostName !== 'string' ||
+        !ghostName ||
+        typeof name !== 'string' ||
+        !name ||
+        typeof prompt !== 'string' ||
+        !prompt
       ) {
         return;
       }
@@ -715,6 +725,32 @@ export function MainLayout() {
     writeCollapsedFor(rightSidebarSessionId, true);
     setIsRightSidebarCollapsed(true);
   }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached]);
+
+  const handleToggleRightSidebar = useCallback(() => {
+    if (!rsbWindow.loaded) return;
+    if (rsbDetached) {
+      if (rsbWindow.open) {
+        void window.electronAPI.rightSidebarWindow
+          .close()
+          .catch((err) => log.warn('hide detached right sidebar failed', err));
+        return;
+      }
+      handleOpenRightSidebar();
+      return;
+    }
+    if (isRightSidebarCollapsed) {
+      handleOpenRightSidebar();
+      return;
+    }
+    handleCloseRightSidebar();
+  }, [
+    handleCloseRightSidebar,
+    handleOpenRightSidebar,
+    isRightSidebarCollapsed,
+    rsbDetached,
+    rsbWindow.loaded,
+    rsbWindow.open,
+  ]);
 
   // 关掉右侧栏最后一个 tab 时自动收起(由 RightSidebarShell 在 tab 数 >0→0 时回调)。
   // detached 子窗口形态不在此处理(那时主窗根本不渲染内嵌 Shell,也收不到此回调)。
@@ -1083,7 +1119,7 @@ export function MainLayout() {
     [rightSidebarSessionId],
   );
 
-  useAppShortcut('open-terminal', () => {
+  const openTerminalForCurrentTask = useCallback((): boolean => {
     const sessionId = rightSidebarSessionId;
     if (!rightSidebarAvailable || !sessionId) return false;
     openTerminalShortcutAbortRef.current?.abort();
@@ -1114,7 +1150,103 @@ export function MainLayout() {
         }
       });
     return true;
-  });
+  }, [rightSidebarAvailable, rightSidebarSessionId]);
+
+  useAppShortcut('open-terminal', openTerminalForCurrentTask);
+
+  useEffect(() => {
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'keyboard') {
+        const target =
+          document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+        target.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: action.key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        return true;
+      }
+      if (action.type !== 'command') return false;
+      switch (action.commandId) {
+        case 'newTask':
+          navigate('/cc-agent/new');
+          return true;
+        case 'settings':
+          navigate('/settings?tab=shortcuts&workLouderCodex=1');
+          return true;
+        case 'manageTasks':
+          navigate('/cc-agent/scheduled');
+          return true;
+        case 'openSkills':
+          navigate('/skillhub/local');
+          return true;
+        case 'feedback':
+          navigate('/issues');
+          return true;
+        case 'openFolder':
+          navigate('/cc-agent/new', { state: makeFolderPickerNewMakerRouteState() });
+          return true;
+        case 'navigateBack':
+          navigate(-1);
+          return true;
+        case 'navigateForward':
+          navigate(1);
+          return true;
+        case 'toggleSidebar':
+          handleToggleSidebar();
+          return true;
+        case 'toggleRightSidebar':
+          // Goes through the same handler as the UI button so the detached
+          // (separate window) preference keeps its open/close semantics.
+          handleToggleRightSidebar();
+          return true;
+        case 'session.selectPrevious':
+          requestSessionSwitch('previous');
+          return true;
+        case 'session.selectNext':
+          requestSessionSwitch('next');
+          return true;
+        case 'toggleTerminal':
+          return openTerminalForCurrentTask();
+        case 'openBrowserTab': {
+          const sessionId = rightSidebarSessionIdRef.current;
+          if (!sessionId) return false;
+          void openUrlInSidebarBrowser(sessionId, 'about:blank').catch((error) =>
+            applicationMenuLog.warn('Codex Micro browser action failed', error),
+          );
+          return true;
+        }
+        case 'toggleReviewTab': {
+          const sessionId = rightSidebarSessionIdRef.current;
+          if (!sessionId) return false;
+          void (async () => {
+            const routed = await routeSidebarCommand({ type: 'toggle-review-tab', sessionId });
+            if (routed !== 'attached') return;
+            if (rightSidebarSessionIdRef.current !== sessionId) return;
+            await ensureHydrated(sessionId);
+            if (rightSidebarSessionIdRef.current !== sessionId) return;
+            const bucket = getBucket(sessionId);
+            const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');
+            const reviewIsActive =
+              !isRightSidebarCollapsedRef.current &&
+              reviewTab != null &&
+              bucket.activeTabId === reviewTab.id;
+            if (reviewIsActive && reviewTab) {
+              await closeTab(sessionId, reviewTab.id);
+              return;
+            }
+            requestRightSidebarVisibility('open', { sessionId });
+            await addOrFocusSingletonTab(sessionId, 'review', null);
+          })().catch((error) => applicationMenuLog.warn('Codex Micro review action failed', error));
+          return true;
+        }
+        default:
+          return false;
+      }
+    });
+  }, [handleToggleRightSidebar, handleToggleSidebar, navigate, openTerminalForCurrentTask]);
 
   // ⌘W / Ctrl+W ('close-tab-or-window', 不可改绑): 用户"在右侧栏内"且有激活
   // tab → 只关那个 tab (与点 tab 上的 × 同路径, terminal 走 onBeforeClose

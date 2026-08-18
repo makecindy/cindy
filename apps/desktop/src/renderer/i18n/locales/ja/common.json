@@ -1415,6 +1415,16 @@
           "piChatHelp": "Pi がプロバイダーの OpenAI 互換 Chat Completions API に直接接続します。",
           "piAnthropicHelp": "Pi がプロバイダーの Anthropic Messages API に直接接続します。"
         },
+        "modelProtocol": {
+          "label": "モデルプロトコル",
+          "inherit": "デフォルトを継承",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "継承すると上のプロバイダープロトコルを使用します。このモデルだけ別のプロトコルが必要な場合に上書きします。",
+          "ariaLabel": "{{model}} のモデルプロトコル"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",
@@ -1453,7 +1463,8 @@
           "button": "接続テスト",
           "testing": "テスト中…",
           "ok": "接続に成功しました（{{ms}}ms）",
-          "needFields": "先にベース URL と少なくとも 1 つのモデル ID を入力してください"
+          "needFields": "先にベース URL と少なくとも 1 つのモデル ID を入力してください",
+          "unsupportedProtocol": "接続テストはこのモデルプロトコルに対応していません"
         },
         "fetch": {
           "button": "モデル一覧を取得",
@@ -3342,6 +3353,311 @@
       "reset": "デフォルトに戻す",
       "recording": "新しいショートカットを入力…",
       "editAria": "{{name}} のショートカットを変更",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "前のタスク",
+            "description": "サイドバーで現在のタスクの上にあるタスクを開きます"
+          },
+          "session.selectNext": {
+            "name": "次のタスク",
+            "description": "サイドバーで現在のタスクの下にあるタスクを開きます"
+          },
+          "toggleRightSidebar": {
+            "name": "右サイドバーの切り替え",
+            "description": "右サイドバーを表示/非表示にします"
+          },
+          "composer.toggleFastMode": {
+            "name": "高速モードの切り替え",
+            "description": "現在の入力欄で高速モードをオン/オフにします"
+          },
+          "approval.approve": {
+            "name": "リクエストを承認",
+            "description": "確認待ちのリクエストを承認します"
+          },
+          "approval.decline": {
+            "name": "リクエストを拒否",
+            "description": "確認待ちのリクエストを拒否します"
+          },
+          "forkTask": {
+            "name": "新しいタスクで続ける",
+            "description": "現在のタスクから新しいタスクを作成します"
+          },
+          "composer.submit": {
+            "name": "メッセージを送信",
+            "description": "入力欄のメッセージを送信します"
+          },
+          "feedback": {
+            "name": "フィードバックを送信",
+            "description": "製品フィードバックを Cindy チームに送信します"
+          },
+          "toggleTerminal": {
+            "name": "ターミナルを開く",
+            "description": "ターミナルパネルを開きます"
+          },
+          "copyConversationMarkdown": {
+            "name": "Markdown としてコピー",
+            "description": "現在のタスクの内容を Markdown としてコピーします",
+            "copied": "Markdown としてコピーしました",
+            "empty": "このタスクにはまだコピーできる内容がありません",
+            "failed": "コピーできませんでした"
+          },
+          "archiveTask": {
+            "name": "タスクをアーカイブ",
+            "description": "現在のタスクをアーカイブします"
+          },
+          "newTask": {
+            "name": "新しいタスク",
+            "description": "新しいタスクを開始します"
+          },
+          "openBrowserTab": {
+            "name": "ブラウザタブを開く",
+            "description": "新しいブラウザタブを開きます"
+          },
+          "toggleTaskPin": {
+            "name": "ピン留めの切り替え",
+            "description": "現在のタスクをピン留め、または解除します"
+          },
+          "toggleReviewTab": {
+            "name": "レビューの切り替え",
+            "description": "現在のタスクのレビューを表示/非表示にします"
+          },
+          "composer.addPhotos": {
+            "name": "画像を追加",
+            "description": "入力欄に画像を追加します"
+          },
+          "settings": {
+            "name": "設定",
+            "description": "Cindy の設定を開きます"
+          },
+          "manageTasks": {
+            "name": "予約タスクを管理",
+            "description": "予約タスクを作成または管理します"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "推論強度を上げる",
+            "description": "現在の入力欄の推論強度を上げます"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "推論強度を下げる",
+            "description": "現在の入力欄の推論強度を下げます"
+          },
+          "openFolder": {
+            "name": "フォルダを開く",
+            "description": "ローカルプロジェクトを Cindy に追加します"
+          },
+          "composer.addFiles": {
+            "name": "ファイルとフォルダを添付",
+            "description": "入力欄にファイルとフォルダを添付します"
+          },
+          "openSkills": {
+            "name": "スキルを開く",
+            "description": "インストール済みおよびおすすめのスキルを表示します"
+          },
+          "composer.togglePlanMode": {
+            "name": "プランモードの切り替え",
+            "description": "現在の入力欄でプランモードをオン/オフにします"
+          },
+          "navigateForward": {
+            "name": "進む",
+            "description": "ナビゲーション履歴を前に進みます"
+          },
+          "toggleSidebar": {
+            "name": "サイドバーの切り替え",
+            "description": "サイドバーを表示/非表示にします"
+          },
+          "navigateBack": {
+            "name": "戻る",
+            "description": "ナビゲーション履歴を戻ります"
+          },
+          "composer.focus": {
+            "name": "入力欄にフォーカス",
+            "description": "カーソルを入力欄に移動します"
+          },
+          "conversation.scrollUp": {
+            "name": "上にスクロール",
+            "description": "対話を上にスクロールします"
+          },
+          "conversation.scrollDown": {
+            "name": "下にスクロール",
+            "description": "対話を下にスクロールします"
+          },
+          "conversation.scrollBottom": {
+            "name": "最新へ移動",
+            "description": "最新のメッセージまでスクロールします"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "Agent キーでタスクを開き、ライトで状態を表示します。",
+        "openAria": "Work Louder Codex Micro の設定を開く",
+        "back": "キーボードショートカットに戻る",
+        "retry": "再試行",
+        "device": {
+          "title": "デバイス",
+          "firmware": "ファームウェア {{version}}",
+          "inputMonitoring": {
+            "label": "入力モニタリング",
+            "granted": "macOS は Cindy のキーボード入力の受信を許可しています。",
+            "denied": "macOS がキーボード入力をブロックしています。システム設定で Cindy を許可してください。",
+            "unknown": "Cindy は macOS の入力モニタリング権限をまだ確認していません。",
+            "not-required": "このプラットフォームでは入力モニタリングは必要ありません。",
+            "open": "システム設定を開く"
+          }
+        },
+        "errors": {
+          "load": "Codex Micro の設定を読み込めませんでした",
+          "save": "Codex Micro の設定を保存できませんでした"
+        },
+        "connection": {
+          "label": "接続",
+          "status": {
+            "connecting": "接続中",
+            "connected": "接続済み",
+            "not-detected": "検出されていません",
+            "error": "接続エラー",
+            "unavailable": "SDK を利用できません"
+          },
+          "descriptions": {
+            "connecting": "Cindy が Work Louder デバイスサービスを起動しています。",
+            "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
+            "not-detected": "データ通信対応の USB ケーブルで接続してください。ChatGPT がデバイスを使用している場合は終了してください。",
+            "error": "Cindy はキーボードと通信できませんでした。自動的に再試行しています。",
+            "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
+            "connection-timeout": "Work Louder サービスが時間内に応答しませんでした。Cindy は自動的に再試行します。",
+            "connection-failed": "Work Louder サービスを起動できませんでした。Cindy は自動的に再試行します。",
+            "permission-required": "macOS がキーボードへのアクセスを拒否しました。入力モニタリングで Cindy を許可してから再試行してください。",
+            "sdk-unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。"
+          }
+        },
+        "lighting": {
+          "title": "ライト",
+          "brightness": {
+            "label": "明るさ",
+            "description": "キー、タスク、アンビエントライト全体の明るさを調整します。",
+            "aria": "Codex Micro のライトの明るさを調整"
+          },
+          "autoDim": {
+            "label": "自動消灯",
+            "description": "操作がないとライトを消し、キーボードの使用またはタスク状態の変化で復帰します。",
+            "aria": "Codex Micro の自動消灯時間を選択",
+            "options": {
+              "off": "オフ",
+              "30-seconds": "30 秒",
+              "1-minute": "1 分",
+              "3-minutes": "3 分",
+              "10-minutes": "10 分",
+              "30-minutes": "30 分",
+              "1-hour": "1 時間"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "ソースをカスタムにしたとき、このタスクキーが開く対象です。",
+          "title": "Agent キー",
+          "source": {
+            "label": "タスクの順序",
+            "description": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+            "descriptions": {
+              "sidebar": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+              "last-sent": "AG00～AG05 は、最後にメッセージを送ったタスクの新しい順です。",
+              "priority": "AG00～AG05 は優先タスクの上から 6 件です。",
+              "custom": "AG00～AG05 はそれぞれ指定したタスクを開きます。"
+            },
+            "value": "サイドバー順",
+            "options": {
+              "sidebar": "サイドバー順",
+              "last-sent": "最近のタスク",
+              "priority": "優先タスク",
+              "custom": "カスタム"
+            }
+          },
+          "singleTap": {
+            "label": "1 回押して Cindy をアクティブにする",
+            "description": "オンにすると 1 回押すだけでタスクを開いて Cindy を前面に表示します。オフの場合も 1 回押すとタスクを切り替え、350 ミリ秒以内に同じキーをもう一度押すと Cindy を前面に表示します。",
+            "aria": "Agent キーを 1 回押して Cindy をアクティブにする"
+          },
+          "newTask": "新しいタスク",
+          "slot": "最近の {{position}} 件目",
+          "slotAria": "AG{{slot}} で最近の {{position}} 件目のタスクを開く"
+        },
+        "commandKeys": {
+          "builtInDescription": "キーキャップ既定の動作のままにするか、別の動作に割り当てます。",
+          "builtIn": "キーキャップの組み込みアクションを使用",
+          "unmapped": "このキーキャップには動作がありません"
+        },
+        "microphone": {
+          "title": "マイク",
+          "separate": {
+            "label": "マイクキーを分ける",
+            "description": "ACT10 と ACT11 を 1 つの MIC キーにまとめず、別々に使います。"
+          }
+        },
+        "analog": {
+          "title": "ジョイスティック",
+          "description": "ジョイスティックの各方向に割り当てるアクションを選択します。",
+          "directions": {
+            "up": "上",
+            "right": "右",
+            "down": "下",
+            "left": "左"
+          }
+        },
+        "encoder": {
+          "title": "エンコーダー",
+          "mode": {
+            "label": "エンコーダーモード",
+            "description": "エンコーダーの回転と押下で操作する機能を選択します。",
+            "options": {
+              "session-switch": "タスクを切り替え",
+              "composer-navigation": "コンポーザーを移動",
+              "reasoning": "推論強度",
+              "conversation-scroll": "会話をスクロール",
+              "custom": "カスタム"
+            }
+          },
+          "gestures": {
+            "left": "左に回す",
+            "right": "右に回す",
+            "click": "押す",
+            "longPress": "長押し"
+          },
+          "customDescription": "このエンコーダージェスチャーのアクションを選択します。"
+        },
+        "actions": {
+          "choose": "アクションを選択",
+          "none": "アクションなし",
+          "tasks": "タスク",
+          "commands": "コマンド",
+          "keycaps": "キーキャップ",
+          "skills": "スキル"
+        },
+        "layout": {
+          "editor": {
+            "done": "完了",
+            "title": "キーキャップを編集",
+            "description": "この物理キーに表示するキーキャップを選択します。",
+            "searchPlaceholder": "キーキャップを検索",
+            "close": "キーキャップエディターを閉じる",
+            "cancel": "キャンセル",
+            "save": "保存",
+            "assignedShortcut": "割り当てられたアクション",
+            "selectKeycap": "キーキャップ {{keycap}} を選択"
+          },
+          "keyboard": {
+            "indicator": "ステータスライト",
+            "title": "配置",
+            "description": "キーキャップをクリックしてラベルと組み込みアクションを選択します。",
+            "analogStick": "ジョイスティック",
+            "encoder": "エンコーダー"
+          },
+          "reset": {
+            "title": "キー配置をリセット",
+            "description": "タスク順序やライト設定を変えずに、キーキャップ、ジョイスティック、エンコーダー、マイクの割り当てを初期状態に戻します。",
+            "button": "配置をリセット"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "ショートカット設定の保存に失敗しました",
         "notBindable": "このキーの組み合わせは使用できません",
