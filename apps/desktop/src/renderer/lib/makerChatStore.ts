@@ -2587,6 +2587,14 @@ export interface SessionChatState {
    */
   pendingTaskWakeStarted: boolean;
   /**
+   * 唤醒桥接最近一次置位时刻(ms)。仅 wakesAfterTerminal 置位时刷新,清零路径
+   * 顺带置 null(残留旧值无害:所有读取方都以 pendingTaskWake > 0 为前置)。
+   * 用途:桥接对账收口的最小年龄闸 —— 距最近置位不足
+   * WAKE_BRIDGE_RECONCILE_MIN_AGE_MS 时不收口,防止把「合法但启动慢于对账
+   * 延迟的 wake 空窗」误判为泄漏(bot review:旧快照不得清新桥接)。
+   */
+  pendingTaskWakeArmedAt: number | null;
+  /**
    * 用户主动 Stop 标记:会话级(非组件级),确保同一 session 在多窗口打开时
    * 任一窗口的 Stop 都能阻止其他窗口触发预测等后续行为。
    * 置位:stopSession(用户主动 Stop 时)。
@@ -2711,6 +2719,7 @@ function createInitialState(): SessionChatState {
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
     pendingTaskWakeStarted: false,
+    pendingTaskWakeArmedAt: null,
     turnStoppedByUser: false,
     lastAgentMeta: null,
   };
@@ -2782,6 +2791,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   pendingTaskWake: 0,
   pendingTaskWakeDuringTurn: 0,
   pendingTaskWakeStarted: false,
+  pendingTaskWakeArmedAt: null,
   turnStoppedByUser: false,
   lastAgentMeta: null,
 }) as SessionChatState;
@@ -4950,6 +4960,8 @@ export function handleStreamEvent(
           nextWake > 0
           ? (state.pendingTaskWakeDuringTurn + (wakesAfterTerminal && mainTurnDoneNotCrossed ? 1 : 0))
           : 0,
+        // 最小年龄闸的时钟起点:每次真实置位都刷新(见字段注释)。
+        pendingTaskWakeArmedAt: wakesAfterTerminal ? Date.now() : state.pendingTaskWakeArmedAt,
       };
     }
 
@@ -5797,6 +5809,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
     pendingTaskWakeStarted: false,
+    pendingTaskWakeArmedAt: null,
     turnStoppedByUser: false,
     agentStatus: {
       ...finalized.agentStatus,
@@ -6025,6 +6038,14 @@ let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 // 事件 / wake turn 落地留窗口,到点后拉一次快照走 seed+对账;每会话至多一个
 // 待执行定时器(防抖),active:true 到达即取消。只在翻转沿触发,不轮询。
 const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
+
+/**
+ * 唤醒桥接对账收口的最小年龄:距最近一次桥接置位不足此时长时一律不收口
+ * (改为重新调度下一轮对账)。正常 wake 空窗是毫秒~秒级,10s 给慢机 / 高负载
+ * 下的合法 wake turn 留足启动余量;真泄漏(误投 / 重放,永远无 wake 跟进)
+ * 只是晚 ~10s 熄灭,仍远好于修复前的永久转圈。
+ */
+const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function cancelBackgroundTaskReconcile(sessionId: string): void {
@@ -6051,11 +6072,11 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
       const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
       // 桥接泄漏时 taskUpdates 里往往已无 running 条目(迟到终态本身就是 completed),
       // 只看 running 候选会把桥接对账挡在门外 —— pendingTaskWake > 0 时同样放行。
-      if (
-        staleRunningCandidates.size === 0 &&
-        !makerChatStore.hasPendingWakeBridgeForReconcile(sessionId)
-      )
-        return;
+      // 计数在请求发起前捕获(桥接代际):收口只在「响应落地时计数与代际完全一致
+      // (在飞期间无新增无消费)」时发生,请求在飞窗口内新置位的桥接绝不被旧快照
+      // 清除(bot review:旧快照不得清新桥接)。
+      const capturedWakeBridgeCount = makerChatStore.capturePendingWakeBridgeCount(sessionId);
+      if (staleRunningCandidates.size === 0 && capturedWakeBridgeCount === 0) return;
       const api = window.electronAPI?.maker;
       if (!api?.listSessionBackgroundTasks) return;
       void api
@@ -6067,7 +6088,7 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
           if (isRemoteSessionSticky(sessionId)) return;
           makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, {
             staleRunningCandidates,
-            reconcileWakeBridge: true,
+            reconcileWakeBridge: capturedWakeBridgeCount,
           });
         })
         .catch(() => {
@@ -7907,7 +7928,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // 唤醒桥接(pendingTaskWake)泄漏时 running 条目为空,同样需要对账,放行。
       if (
         makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0 &&
-        !makerChatStore.hasPendingWakeBridgeForReconcile(p.sessionId)
+        makerChatStore.capturePendingWakeBridgeCount(p.sessionId) === 0
       )
         return;
       scheduleBackgroundTaskReconcile(p.sessionId);
@@ -14401,13 +14422,15 @@ export const makerChatStore = {
     return out;
   },
   /**
-   * 该会话是否有仍未消费的唤醒桥接计数(pendingTaskWake > 0)。
-   * 用途:活动熄灭延迟对账的粗筛放行 —— 桥接泄漏时 taskUpdates 里往往已无
-   * running 条目(迟到终态本身就是 completed),只看 running 候选会把桥接
-   * 对账挡在门外(见 seedBackgroundTaskSnapshots 的 reconcileWakeBridge)。
+   * 捕获该会话当前的唤醒桥接计数(pendingTaskWake)。
+   * 用途:活动熄灭延迟对账 —— ①粗筛放行:桥接泄漏时 taskUpdates 里往往已无
+   * running 条目(迟到终态本身就是 completed),只看 running 候选会把桥接对账
+   * 挡在门外;②桥接代际:必须在发起 listSessionBackgroundTasks **之前**捕获,
+   * 收口只在「响应落地时计数与代际一致」时发生,请求在飞窗口内新置位 / 被
+   * isTurnStart 消费过的桥接都不收(见 seedBackgroundTaskSnapshots)。
    */
-  hasPendingWakeBridgeForReconcile: (sessionId: string): boolean =>
-    (sessions.get(sessionId)?.pendingTaskWake ?? 0) > 0,
+  capturePendingWakeBridgeCount: (sessionId: string): number =>
+    sessions.get(sessionId)?.pendingTaskWake ?? 0,
   /**
    * 后台任务快照水合:把 main 的 listSessionBackgroundTasks 结果补进 taskUpdates。
    * 只补「store 里完全没见过」的任务 —— 事件流是唯一实时源,快照可能落后于刚到
@@ -14422,18 +14445,24 @@ export const makerChatStore = {
    * 有降级空表窗口,不可当权威(与远程豁免 running 折算同口径)。
    *
    * opts.reconcileWakeBridge(可选):唤醒桥接对账收口 —— 仅活动熄灭延迟对账
-   * 路径可传(同 staleRunningCandidates 的本机会话口径)。快照落地后,若主 turn
-   * 不在跑且权威表里没有任何 wake 型任务,仍 > 0 的 pendingTaskWake 只能是
-   * 「不会再有 wake turn 跟进」的迟到 / 误投终态留下的泄漏(fork 会话收到父会话
-   * 任务终态、重连重放等)—— 不清会永久撑住 running 快照(spinner 永转)。wake
-   * turn 真要启动时 isTurnStart 本来就会消费桥接,这里的提前清零只影响空窗显示,
-   * 不改变任何 turn 语义;权威表里仍有 wake 任务在跑(终态未到)时不清,桥接继续
-   * 履行防误报职责。
+   * 路径可传(同 staleRunningCandidates 的本机会话口径),值为**发起快照请求前**
+   * 捕获的 pendingTaskWake 计数(桥接代际)。快照落地后,同时满足以下全部条件
+   * 才把桥接三元组清零,否则(计数仍 > 0 时)重新调度下一轮对账、留待复查:
+   *   1. 当前计数与代际完全一致 —— 在飞窗口内无新增置位、也无 isTurnStart 消费,
+   *      旧快照绝不清新桥接、也不吞多 wake 场景里尚待依次消费的合法计数;
+   *   2. 主 turn 不在跑;
+   *   3. 距最近一次置位已超过 WAKE_BRIDGE_RECONCILE_MIN_AGE_MS —— 给慢机 /
+   *      高负载下合法 wake turn 留足启动余量;
+   *   4. main 权威表里没有任何 wake 型任务。
+   * 全部满足时,仍挂着的桥接只能是「不会再有 wake turn 跟进」的迟到 / 误投终态
+   * 留下的泄漏(fork 会话收到父会话任务终态、重连重放等)—— 不清会永久撑住
+   * running 快照(spinner 永转)。wake turn 真要启动时 isTurnStart 本来就会消费
+   * 桥接,收口只影响空窗显示,不改变任何 turn 语义。
    */
   seedBackgroundTaskSnapshots: (
     sessionId: string,
     tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>,
-    opts?: { staleRunningCandidates?: ReadonlySet<string>; reconcileWakeBridge?: boolean },
+    opts?: { staleRunningCandidates?: ReadonlySet<string>; reconcileWakeBridge?: number },
   ): void => {
     const candidates = opts?.staleRunningCandidates;
     if (!tasks.length && !(candidates && candidates.size > 0) && !opts?.reconcileWakeBridge)
@@ -14463,21 +14492,35 @@ export const makerChatStore = {
       if (candidates && candidates.size > 0) {
         next = reconcileStaleRunningTasks(next, tasks, candidates);
       }
-      // 唤醒桥接对账收口(语义见方法头注释的 reconcileWakeBridge 段)。
-      if (
-        opts?.reconcileWakeBridge &&
-        next.pendingTaskWake > 0 &&
-        !next.agentStatus.isRunning &&
-        !tasks.some(
+      // 唤醒桥接对账收口(四条件语义见方法头注释的 reconcileWakeBridge 段)。
+      const capturedWakeBridge = opts?.reconcileWakeBridge ?? 0;
+      if (capturedWakeBridge > 0 && next.pendingTaskWake > 0) {
+        const bridgeSettled = next.pendingTaskWake === capturedWakeBridge;
+        const bridgeAgedOut =
+          next.pendingTaskWakeArmedAt !== null &&
+          Date.now() - next.pendingTaskWakeArmedAt >= WAKE_BRIDGE_RECONCILE_MIN_AGE_MS;
+        const authorityHasWakeTask = tasks.some(
           (t) => typeof t.taskType === 'string' && WAKE_AGENT_TASK_TYPES.has(t.taskType),
-        )
-      ) {
-        next = {
-          ...next,
-          pendingTaskWake: 0,
-          pendingTaskWakeDuringTurn: 0,
-          pendingTaskWakeStarted: false,
-        };
+        );
+        if (
+          bridgeSettled &&
+          bridgeAgedOut &&
+          !next.agentStatus.isRunning &&
+          !authorityHasWakeTask
+        ) {
+          next = {
+            ...next,
+            pendingTaskWake: 0,
+            pendingTaskWakeDuringTurn: 0,
+            pendingTaskWakeStarted: false,
+            pendingTaskWakeArmedAt: null,
+          };
+        } else {
+          // 条件未齐(在飞变动 / 年龄不足 / turn 在跑 / 权威表仍有 wake 任务):
+          // 本轮不动,重新调度下一轮对账复查。真泄漏最终会静止、超龄、表空,
+          // 收口收敛;合法 wake 则会经 isTurnStart 消费计数,后续对账自然空转。
+          scheduleBackgroundTaskReconcile(sessionId);
+        }
       }
       return next;
     });

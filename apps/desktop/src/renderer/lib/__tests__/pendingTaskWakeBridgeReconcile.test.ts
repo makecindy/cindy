@@ -8,15 +8,22 @@
  * 该会话(spinner 永转),且 pendingTaskWake 不在 reconcileStaleRunningTasks
  * 的对账覆盖内(迟到终态本身就是 completed,不是 running 残留)。
  *
- * 修复:活动熄灭延迟对账路径拿到 main 权威表后收口桥接
- * (seedBackgroundTaskSnapshots 的 opts.reconcileWakeBridge)。
+ * 修复:活动熄灭延迟对账路径拿到 main 权威表后收口桥接,四条件全部满足才清
+ * (计数与请求前捕获的代际一致 / 主 turn 不在跑 / 距最近置位超过最小年龄 /
+ * 权威表无 wake 型任务),见 seedBackgroundTaskSnapshots 的 reconcileWakeBridge。
  * 本测试直接驱动真实 store(__applyStatusUpdateForTest / __applyStreamEventForTest),
- * 断言 getRunningSnapshot 的可观察行为。
+ * 断言 getRunningSnapshot 的可观察行为;用 fake timers 控制最小年龄时钟。
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makerChatStore } from '@/lib/makerChatStore';
+
+/** 与 makerChatStore 的 WAKE_BRIDGE_RECONCILE_MIN_AGE_MS 对齐(10s)+ 余量。 */
+const OVER_MIN_AGE_MS = 11_000;
+const UNDER_MIN_AGE_MS = 2_000;
+
+const T0 = new Date('2026-01-01T00:00:00.000Z').getTime();
 
 function pushStatus(
   sessionId: string,
@@ -56,8 +63,29 @@ function runMainTurn(sessionId: string): void {
   pushStatus(sessionId, { isRunning: false, status: 'Done' });
 }
 
+/** 模拟延迟对账:请求前捕获代际 → 快照落地。 */
+function reconcileWithSnapshot(
+  sessionId: string,
+  tasks: Array<{ taskId: string; taskType?: string }>,
+): void {
+  const captured = makerChatStore.capturePendingWakeBridgeCount(sessionId);
+  makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, {
+    reconcileWakeBridge: captured,
+  });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(T0);
+});
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+
 describe('pendingTaskWake 桥接泄漏对账(reconcileWakeBridge)', () => {
-  it('主轮 Done 后迟到的 wake 终态撑住 running 快照;空权威表对账后收口熄灭', () => {
+  it('主轮 Done 后迟到的 wake 终态撑住 running 快照;静止+超龄+空权威表 → 收口熄灭', () => {
     const S = 'wake-bridge-leak-reconcile';
     runMainTurn(S);
     expect(isRunningInSnapshot(S)).toBe(false);
@@ -66,8 +94,80 @@ describe('pendingTaskWake 桥接泄漏对账(reconcileWakeBridge)', () => {
     pushLateWakeTerminal(S, 't-late');
     expect(isRunningInSnapshot(S)).toBe(true);
 
-    // 延迟对账落地:main 权威表为空、主 turn 不在跑 → 桥接收口,spinner 熄灭。
-    makerChatStore.seedBackgroundTaskSnapshots(S, [], { reconcileWakeBridge: true });
+    // 超过最小年龄后延迟对账落地:main 权威表为空、计数静止、主 turn 不在跑
+    // → 桥接收口,spinner 熄灭。
+    vi.setSystemTime(T0 + OVER_MIN_AGE_MS);
+    reconcileWithSnapshot(S, []);
+    expect(isRunningInSnapshot(S)).toBe(false);
+  });
+
+  it('距最近置位不足最小年龄时不收口(合法 wake 启动慢于对账延迟不被误熄)', () => {
+    const S = 'wake-bridge-min-age-gate';
+    runMainTurn(S);
+    pushLateWakeTerminal(S, 't-late-age');
+    expect(isRunningInSnapshot(S)).toBe(true);
+
+    // 3s 级延迟对账先到:年龄不足,桥接保留,快照继续 running。
+    vi.setSystemTime(T0 + UNDER_MIN_AGE_MS);
+    reconcileWithSnapshot(S, []);
+    expect(isRunningInSnapshot(S)).toBe(true);
+
+    // 复查轮到点(已超龄)才收口。
+    vi.setSystemTime(T0 + OVER_MIN_AGE_MS);
+    reconcileWithSnapshot(S, []);
+    expect(isRunningInSnapshot(S)).toBe(false);
+  });
+
+  it('请求在飞窗口内新置位的桥接不被旧快照清除(代际一致性)', () => {
+    const S = 'wake-bridge-inflight-generation';
+    runMainTurn(S);
+    pushLateWakeTerminal(S, 't-late-old');
+    // 模拟请求发起前捕获代际(此刻计数 = 1)。
+    const capturedBeforeFlight = makerChatStore.capturePendingWakeBridgeCount(S);
+    expect(capturedBeforeFlight).toBe(1);
+
+    // 请求在飞期间:又一条 wake 终态置位(计数 = 2,armedAt 刷新)。
+    vi.setSystemTime(T0 + OVER_MIN_AGE_MS);
+    pushLateWakeTerminal(S, 't-late-new');
+
+    // 旧空快照落地:计数(2)≠ 代际(1)→ 一个都不清,快照继续 running。
+    makerChatStore.seedBackgroundTaskSnapshots(S, [], {
+      reconcileWakeBridge: capturedBeforeFlight,
+    });
+    expect(isRunningInSnapshot(S)).toBe(true);
+
+    // 下一轮对账:计数静止(2 = 2)且距第二次置位已超龄 → 收口。
+    vi.setSystemTime(T0 + OVER_MIN_AGE_MS * 2);
+    reconcileWithSnapshot(S, []);
+    expect(isRunningInSnapshot(S)).toBe(false);
+  });
+
+  it('多 wake 依次消费:对账不一次清空尚待消费的合法计数', () => {
+    const S = 'wake-bridge-multi-wake';
+    runMainTurn(S);
+    pushLateWakeTerminal(S, 't-multi-1');
+    pushLateWakeTerminal(S, 't-multi-2');
+    expect(makerChatStore.capturePendingWakeBridgeCount(S)).toBe(2);
+
+    // 捕获代际(2)后 wake turn A 启动:isTurnStart 消费一个计数(剩 1)。
+    vi.setSystemTime(T0 + OVER_MIN_AGE_MS);
+    const capturedBeforeFlight = makerChatStore.capturePendingWakeBridgeCount(S);
+    pushStatus(S, { isRunning: true, status: 'Working' });
+    expect(makerChatStore.capturePendingWakeBridgeCount(S)).toBe(1);
+
+    // 旧快照落地:计数(1)≠ 代际(2),且主 turn 在跑 → 不清。
+    makerChatStore.seedBackgroundTaskSnapshots(S, [], {
+      reconcileWakeBridge: capturedBeforeFlight,
+    });
+    expect(makerChatStore.capturePendingWakeBridgeCount(S)).toBe(1);
+
+    // turn A Done:剩余 1 个桥接继续撑住 running 快照,等 wake turn B。
+    pushStatus(S, { isRunning: false, status: 'Done' });
+    expect(isRunningInSnapshot(S)).toBe(true);
+
+    // wake turn B 启动并完成:计数消费到 0,快照自然收敛。
+    pushStatus(S, { isRunning: true, status: 'Working' });
+    pushStatus(S, { isRunning: false, status: 'Done' });
     expect(isRunningInSnapshot(S)).toBe(false);
   });
 
@@ -77,12 +177,9 @@ describe('pendingTaskWake 桥接泄漏对账(reconcileWakeBridge)', () => {
     pushLateWakeTerminal(S, 't-late-2');
     expect(isRunningInSnapshot(S)).toBe(true);
 
-    // main 权威表仍报告一个 wake 型任务在跑:桥接保留,快照继续 running。
-    makerChatStore.seedBackgroundTaskSnapshots(
-      S,
-      [{ taskId: 't-alive', taskType: 'local_agent' }],
-      { reconcileWakeBridge: true },
-    );
+    // main 权威表仍报告一个 wake 型任务在跑:即便静止+超龄,桥接保留。
+    vi.setSystemTime(T0 + OVER_MIN_AGE_MS);
+    reconcileWithSnapshot(S, [{ taskId: 't-alive', taskType: 'local_agent' }]);
     expect(isRunningInSnapshot(S)).toBe(true);
   });
 
@@ -93,6 +190,7 @@ describe('pendingTaskWake 桥接泄漏对账(reconcileWakeBridge)', () => {
     expect(isRunningInSnapshot(S)).toBe(true);
 
     // 旧签名调用(挂载/面板路径):空表 early-return,桥接保持原状。
+    vi.setSystemTime(T0 + OVER_MIN_AGE_MS);
     makerChatStore.seedBackgroundTaskSnapshots(S, []);
     expect(isRunningInSnapshot(S)).toBe(true);
   });
