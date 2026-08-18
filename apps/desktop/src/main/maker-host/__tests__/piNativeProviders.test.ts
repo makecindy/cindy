@@ -653,6 +653,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.api).toBe('openai-responses');
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.3')?.catalogAddition).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.3')?.api).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-build-0.1')?.catalogAddition).toBeUndefined();
   });
 
   it('does not mark SuperGrok models as catalog additions when the PI probe is unavailable', () => {

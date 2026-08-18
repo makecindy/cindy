@@ -644,18 +644,6 @@ export function buildPiSubscriptionNativeProviders(
             || isXaiCatalogAddition
             ? { catalogAddition: true }
             : {}),
-          // SuperGrok 没有官方列模型通道，Cindy 目录是成员唯一来源。
-          // 缺席证明必须来自未过滤的 --list-models id：解析后的
-          // bundled 表会丢掉未知 api 的行，不能把「解析失败」当成
-          // 「二进制没有这个模型」。
-          ...(() => {
-            if (sourceProviderId !== 'xai') return {};
-            const listedIds =
-              listedModelIdsByProvider?.get(piProviderId) ??
-              listedPiModelIds(bundledModelsByProvider)?.get(piProviderId);
-            if (!listedIds || listedIds.has(wireId)) return {};
-            return { catalogAddition: true };
-          })(),
           ...(isXaiCatalogAddition
             ? { api: model.piApi ?? 'openai-responses' }
             : capabilityCorrection

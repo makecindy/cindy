@@ -2574,9 +2574,34 @@ export class PiAgent extends BaseAgent {
       }
       return true;
     };
+    const terminateUnconfirmedCatalogReload = async (cause?: unknown): Promise<never> => {
+      this.deps.logger.error(
+        'pi: catalog state unconfirmed; terminating session',
+        { message: cause instanceof Error ? cause.message : cause != null ? String(cause) : undefined },
+      );
+      try {
+        await proc.close();
+      } catch (closeErr) {
+        this.deps.logger.warn(
+          'pi: session termination after unconfirmed catalog reload also failed',
+          { message: closeErr instanceof Error ? closeErr.message : String(closeErr) },
+        );
+      }
+      throw new Error(
+        '[PI_CATALOG_RELOAD_UNCONFIRMED] 模型目录重载未确认，已终止本任务。请重新打开任务后再切换模型。',
+      );
+    };
     const restoreNativeCatalog = async (
       previousProviders: PiNativeProviderSpec[],
     ): Promise<void> => {
+      // 先写盘再改内存：写失败时磁盘仍是新目录，内存也保持新目录，避免分叉后再抛。
+      const written = await this.writeModelsJson(
+        configHome,
+        previousProviders,
+        retainedRuntimeModel,
+        authProviderId,
+        { remote, fileOps },
+      );
       nativeProviders = previousProviders;
       nativeProviderById.clear();
       nativeProviderBySourceId.clear();
@@ -2585,18 +2610,20 @@ export class PiAgent extends BaseAgent {
         nativeProviderById.set(spec.id, spec);
         nativeProviderBySourceId.set(spec.sourceProviderId ?? spec.id, spec);
       }
-      const written = await this.writeModelsJson(
-        configHome,
-        nativeProviders,
-        retainedRuntimeModel,
-        authProviderId,
-        { remote, fileOps },
-      );
       gatewayApiByModel.clear();
       for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
       gatewayImageInputByModel.clear();
       for (const [key, value] of written.gatewayImageInputByModel) {
         gatewayImageInputByModel.set(key, value);
+      }
+    };
+    const restoreNativeCatalogOrTerminate = async (
+      previousProviders: PiNativeProviderSpec[],
+    ): Promise<void> => {
+      try {
+        await restoreNativeCatalog(previousProviders);
+      } catch (err) {
+        await terminateUnconfirmedCatalogReload(err);
       }
     };
     const refreshLiveXaiCatalog = async (
@@ -2753,30 +2780,16 @@ export class PiAgent extends BaseAgent {
               sessionPath: sdkSessionId,
             });
           } catch (err) {
-            this.deps.logger.error(
-              'pi: switch_session after xAI catalog refresh did not confirm; terminating session',
-              { message: err instanceof Error ? err.message : String(err) },
-            );
-            try {
-              await proc.close();
-            } catch (closeErr) {
-              this.deps.logger.warn(
-                'pi: session termination after unconfirmed catalog reload also failed',
-                { message: closeErr instanceof Error ? closeErr.message : String(closeErr) },
-              );
-            }
-            throw new Error(
-              '[PI_CATALOG_RELOAD_UNCONFIRMED] 模型目录重载未确认，已终止本任务。请重新打开任务后再切换模型。',
-            );
+            return await terminateUnconfirmedCatalogReload(err);
           }
           if (!reloaded.success) {
-            await restoreNativeCatalog(previousProviders);
+            await restoreNativeCatalogOrTerminate(previousProviders);
             throw new Error(
               `pi: failed to reload models after catalog update: ${reloaded.error ?? 'unknown'}`,
             );
           }
         } else if (!refreshed) {
-          await restoreNativeCatalog(previousProviders);
+          await restoreNativeCatalogOrTerminate(previousProviders);
         }
       }
       // 显式选一个启动快照 nativeProviderById 里“无法服务该 model”的 BYOM provider 时 fail
