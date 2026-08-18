@@ -1519,6 +1519,15 @@ export interface AgentSessionHandle {
   /** 中断当前 turn */
   abort(): Promise<void>;
 
+  /**
+   * 请求当前 turn 在 provider 的安全边界停止。
+   *
+   * 与 abort() 的产品语义不同：这里只发送 provider 原生的软中断请求，不得关闭
+   * Query、transport 或子进程，也不得升级为 kill/rebuild。Session 层负责等到当前
+   * 工具结果边界再调用，并对悬挂/失败做有界的 unconfirmed 降级。
+   */
+  requestGracefulStop?(opts?: { signal?: AbortSignal }): Promise<void>;
+
   /** Provider turn identity when the adapter exposes one (currently Codex). */
   getCurrentTurnId?(): string | null;
 

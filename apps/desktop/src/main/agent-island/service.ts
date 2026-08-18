@@ -10,6 +10,11 @@ import {
 } from '@cindy/maker-core';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import {
+  projectSessionActivity,
+  type SessionActivitySnapshot,
+  type SessionActivityTransition,
+} from '@cindy/maker-shared/session-activity';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
   isProductTurnCompletionTailEvent,
@@ -52,6 +57,7 @@ import {
   type AgentIslandDisplayState,
   type AgentIslandPillSnapshot,
   type AgentIslandSessionActivity,
+  type AgentIslandSessionSnapshot,
   type AgentIslandDisplayTarget,
   type AgentIslandMascotSkin,
   type AgentIslandStrings,
@@ -220,12 +226,64 @@ export function getAgentIslandService(): AgentIslandService | null {
   return serviceSingleton;
 }
 
+function sessionActivitySnapshotsEqual(
+  left: AgentIslandSessionActivity,
+  right: AgentIslandSessionActivity,
+): boolean {
+  return left.sessionId === right.sessionId
+    && left.phase === right.phase
+    && left.currentTurnActive === right.currentTurnActive
+    && left.recordStatus === right.recordStatus
+    && left.startedAtMs === right.startedAtMs
+    && left.lastActivityAtMs === right.lastActivityAtMs
+    && left.currentActionSummary === right.currentActionSummary
+    && left.interactionKind === right.interactionKind
+    && left.attention === right.attention
+    && left.workflow?.key === right.workflow?.key
+    && left.workflow?.label === right.workflow?.label
+    && left.workflow?.waitingOn === right.workflow?.waitingOn
+    && left.turnGeneration === right.turnGeneration
+    && left.gracefulStopState === right.gracefulStopState
+    && left.source === right.source;
+}
+
+function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string {
+  if (snapshot.phase === 'needs-interaction') {
+    if (snapshot.interactionKind === 'permission') return '等待权限确认';
+    if (snapshot.interactionKind === 'ask_user_question') return '等待用户回答';
+    if (snapshot.interactionKind === 'plan_review') return '等待计划确认';
+    if (snapshot.interactionKind === 'plugin_setup') return '等待插件配置';
+    return '等待用户确认';
+  }
+  if (snapshot.phase === 'completed') return '运行已正常结束';
+  if (snapshot.phase === 'error') return '运行出错';
+  const latestKind = snapshot.activityLines.at(-1)?.kind;
+  if (latestKind === 'tool') return '正在运行工具';
+  if (latestKind === 'assistant') return '正在生成回复';
+  if (latestKind === 'user') return '正在处理新消息';
+  return '正在运行';
+}
+
+function canonicalSessionActivity(
+  activity: AgentIslandSessionActivity,
+): SessionActivitySnapshot {
+  const { compactDetail: _compactDetail, ...snapshot } = activity;
+  return {
+    ...snapshot,
+    workflow: snapshot.workflow ? { ...snapshot.workflow } : null,
+  };
+}
+
 /**
  * Owns Agent Island display arbitration in main. Rendering is macOS-native:
  * the Swift/AppKit helper owns the system-level panel, shape, shadow and hover
  * tracking while TypeScript owns product state and session prioritization.
  */
 export class AgentIslandService {
+  private readonly sessionActivityListeners = new Set<
+    (transition: SessionActivityTransition) => void
+  >();
+  private sessionActivitySubscriptionCursor = new Map<string, AgentIslandSessionActivity>();
   private readonly state = createAgentIslandState();
   private readonly nativeHost: AgentIslandNativeRenderer;
   private readonly headless: boolean;
@@ -570,6 +628,7 @@ export class AgentIslandService {
       this.clearSilencedRunTimer(runId);
     }
     resetAgentIslandState(this.state);
+    this.emitSessionActivityTransitions([], Date.now());
     this.metadataCache.clear();
     this.metadataLoading.clear();
     this.lastSoundDisplayState = null;
@@ -1399,17 +1458,78 @@ export class AgentIslandService {
    */
   private buildSessionActivityPayload(): AgentIslandSessionActivity[] {
     return buildAllSessionActivitySnapshots(this.state).map((s) => ({
-      sessionId: s.sessionId,
+      ...projectSessionActivity({
+        sessionId: s.sessionId,
+        recordStatus: 'active',
+        title: s.title,
+        source: 'live',
+        livePhase: s.phase,
+        startedAtMs: s.startedAt,
+        lastActivityAtMs: s.lastActivityAt,
+        currentActionSummary: safeSessionActionSummary(s),
+        interactionKind: s.interactionKind,
+        attention: s.attention,
+      }),
       phase: s.phase,
-      compactDetail: s.compactDetail,
       interactionKind: s.interactionKind,
-      attention: s.attention,
+      compactDetail: s.compactDetail,
     }));
+  }
+
+  /** Read the same canonical snapshot used by sidebar and device-list relays. */
+  getSessionActivitySnapshot(sessionId: string): SessionActivitySnapshot | null {
+    const activity = this.buildSessionActivityPayload()
+      .find((item) => item.sessionId === sessionId);
+    return activity ? canonicalSessionActivity(activity) : null;
+  }
+
+  /**
+   * Subscribe to canonical activity transitions. Future Bot consumers attach here;
+   * this service remains unaware of Bot/runtime implementations.
+   */
+  subscribeSessionActivity(
+    listener: (transition: SessionActivityTransition) => void,
+  ): () => void {
+    this.sessionActivityListeners.add(listener);
+    return () => this.sessionActivityListeners.delete(listener);
+  }
+
+  private emitSessionActivityTransitions(
+    list: readonly AgentIslandSessionActivity[],
+    changedAtMs: number,
+  ): void {
+    const next = new Map(list.map((snapshot) => [snapshot.sessionId, snapshot]));
+    const sessionIds = new Set([
+      ...this.sessionActivitySubscriptionCursor.keys(),
+      ...next.keys(),
+    ]);
+    for (const sessionId of sessionIds) {
+      const previous = this.sessionActivitySubscriptionCursor.get(sessionId) ?? null;
+      const current = next.get(sessionId) ?? null;
+      if (previous && current && sessionActivitySnapshotsEqual(previous, current)) continue;
+      for (const listener of this.sessionActivityListeners) {
+        try {
+          listener({
+            sessionId,
+            previous: previous ? canonicalSessionActivity(previous) : null,
+            current: current ? canonicalSessionActivity(current) : null,
+            changedAtMs,
+          });
+        } catch (error) {
+          log.warn('session activity listener failed', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+    this.sessionActivitySubscriptionCursor = next;
   }
 
   private emitSessionActivityToRenderer(): void {
     const payload = this.buildSessionActivityPayload();
     this.sessionActivityRelay.publish(payload);
+    this.emitSessionActivityTransitions(payload, Date.now());
     this.notifySessionActivityConsumer(payload);
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
     // 也订阅同一频道,只发主窗会让副窗卡片预览停在陈旧 summary(PR #246 review)。
