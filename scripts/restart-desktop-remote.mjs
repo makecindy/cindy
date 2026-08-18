@@ -10,6 +10,13 @@ import {
   desktopUserDataDirNameForRegion,
   resolveDesktopDevRegion,
 } from './shared/desktop-dev-region.mjs';
+import {
+  buildDesktopDevVerdictFromFailure,
+  buildDesktopDevVerdictFromWhoami,
+  printDesktopDevVerdict,
+  resolveIsolatedArg,
+} from './desktop-dev-verdict.mjs';
+import { collectDesktopWhoamiReport } from './desktop-whoami.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -324,10 +331,9 @@ function hasRepositoryCheckoutPath(command, checkoutPaths = repositoryWorktreePa
 }
 
 // 沿 ppid 链向上找祖先里有没有 Cindy desktop dev 进程。
-// 用途：拦住"agent 跑在 Cindy desktop dev 进程内还调 restart"这种自杀场景——
-// 一旦 taskkill /T 走到祖先 dev 进程，整棵树（包括正在跑的本脚本）都会被收掉，
-// 新 cmd 要么没机会起、要么撞上未释放的端口/文件锁，结果是看不懂的 ELIFECYCLE。
-// 检测到就直接 exit 1 + 清晰提示，让 agent 把控制权交回给开发者。
+// 用途：拦住"agent 跑在【当前 checkout】的 desktop dev 里还调 restart"这种自杀场景——
+// kill 作用域虽已限本 checkout，但祖先就是这份 checkout 时仍会把本脚本一起收掉。
+// 宿主是正式版或另一个 worktree 时不拦：杀不到那份祖先，隔离启动可以继续。
 function findDevAncestor() {
   const processes = process.platform === 'win32' ? listWindowsProcesses() : listPosixProcesses();
   const byPid = new Map(processes.map((proc) => [proc.pid, proc]));
@@ -574,15 +580,27 @@ export function resolveRestartTargetUserDataDir({
   isolatedEnv,
   isolatedName,
   selectedRegion,
+  rootDir: targetRoot = rootDir,
 }) {
+  const resolvedIsolatedArg = resolveIsolatedArg(isolatedArg, targetRoot);
   const isolationName = sanitizeIsolationName(
-    isolatedArg ? parseIsolationName(isolatedArg) : isolatedName,
+    resolvedIsolatedArg ? parseIsolationName(resolvedIsolatedArg) : isolatedName,
   );
-  const isolated = Boolean(isolatedArg) || isolatedEnv === '1';
+  const isolated = Boolean(resolvedIsolatedArg) || isolatedEnv === '1';
   return envUserDataDir
     || (isolated
       ? defaultIsolatedUserDataDir(isolationName, selectedRegion)
       : productionUserDataDir(selectedRegion));
+}
+
+/**
+ * Only refuse when the host desktop-dev ancestor belongs to THIS checkout.
+ * Another worktree's Cindy can start this checkout isolated without killing itself;
+ * kill scope is already limited to ownRootDir.
+ */
+export function shouldRefuseHostedRestart(ancestor, { preserveRunning, ownRootDir }) {
+  if (!ancestor || preserveRunning) return false;
+  return commandContainsPath(ancestor.command, ownRootDir);
 }
 
 export function defaultIsolatedUserDataDir(isolationName, region = 'global') {
@@ -857,6 +875,11 @@ function writeDesktopStartupStatus(statusPath, status) {
   }
 }
 
+function attachStartupFailure(error, status) {
+  error.startupStatus = status ?? null;
+  return error;
+}
+
 export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -864,12 +887,15 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
     if (status?.state === 'ready') {
       console.log(`==> Desktop dev is ready (window + auth/local database, pid ${status.pid ?? 'unknown'}).`);
       fs.rmSync(statusPath, { force: true });
-      return;
+      return status;
     }
     if (status?.state === 'failed') {
       fs.rmSync(statusPath, { force: true });
-      throw new Error(
-        `${formatDesktopStartupFailure(status)} Check the dev terminal, run \`pnpm desktop:whoami\`, and inspect apps/desktop/logs/.`,
+      throw attachStartupFailure(
+        new Error(
+          `${formatDesktopStartupFailure(status)} Check the dev terminal, run \`pnpm desktop:whoami\`, and inspect apps/desktop/logs/.`,
+        ),
+        status,
       );
     }
     await sleep(pollIntervalMs);
@@ -877,8 +903,15 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
   // Keep a tombstone so a late Electron startup signal cannot recreate a stale
   // status file after this waiter has already reported timeout to its caller.
   writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: Date.now() });
-  throw new Error(
-    `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
+  throw attachStartupFailure(
+    new Error(
+      `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
+    ),
+    {
+      state: 'failed',
+      code: 'STARTUP_TIMEOUT',
+      message: `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s.`,
+    },
   );
 }
 
@@ -893,7 +926,13 @@ export function applyDesktopStartupConfigForPhase(options) {
 }
 
 async function main() {
-  const argv = process.argv.slice(2);
+  let argv = process.argv.slice(2);
+  const rawIsolatedArg = argv.find((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
+  const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir);
+  if (rawIsolatedArg && isolatedArg && isolatedArg !== rawIsolatedArg) {
+    argv = argv.map((arg) => (arg === rawIsolatedArg ? isolatedArg : arg));
+    console.log(`==> Isolated sandbox from worktree: ${parseIsolationName(isolatedArg)}`);
+  }
   const killOnly = argv.includes('--kill-only');
   const waitReady = argv.includes('--wait-ready');
   const preserveRunning = argv.includes('--preserve-running');
@@ -905,7 +944,20 @@ async function main() {
   const mode = argv.includes('--local') ? 'local' : 'remote';
   const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
   const selectedRegion = startupConfig?.region ?? resolveDesktopDevRegion(argv, process.env);
-  const isolatedArg = argv.find((a) => a === '--isolated' || a.startsWith('--isolated='));
+  const isolationName = isolatedArg ? parseIsolationName(isolatedArg) : '';
+  const verdictContext = {
+    rootDir,
+    isolated: Boolean(isolatedArg),
+    sandbox: isolationName || undefined,
+  };
+  const exitWithFailure = (code, message, details = []) => {
+    for (const line of details) console.error(line);
+    printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(new Error(message), {
+      ...verdictContext,
+      code,
+    }));
+    process.exit(1);
+  };
   if (preserveRunning && killOnly) {
     throw new Error('--preserve-running cannot be combined with the internal --kill-only stage');
   }
@@ -971,15 +1023,15 @@ async function main() {
   // ——服务端登录凭证按 (user, device) 一对一存,不派生的话沙箱登录会覆盖正式版
   // 的续期凭证,同机互踢。
   if (startupConfig && isolatedArg) {
-    let isolationName = '';
-    if (isolatedArg.includes('=')) {
-      isolationName = isolatedArg.slice('--isolated='.length);
-      // 名字白名单与主进程 devCliFlags 一致:目录跨平台安全 + deviceId 总长可控。
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(isolationName)) {
-        console.error(`==> Invalid --isolated name: "${isolationName}"`);
-        console.error('    Allowed: letters / digits / _ / -, max 32 chars. e.g. --isolated=feature-a');
-        process.exit(1);
-      }
+    if (isolationName && !/^[A-Za-z0-9_-]{1,32}$/.test(isolationName)) {
+      exitWithFailure(
+        'INVALID_ISOLATED_NAME',
+        `Invalid --isolated name: "${isolationName}"`,
+        [
+          `==> Invalid --isolated name: "${isolationName}"`,
+          '    Allowed: letters / digits / _ / -, max 32 chars. e.g. --isolated=feature-a',
+        ],
+      );
     }
     process.env.XDT_ISOLATED = '1';
     if (isolationName) process.env.XDT_ISOLATED_NAME = isolationName;
@@ -999,8 +1051,11 @@ async function main() {
   // 白名单透传,maker-host auth-adapters 消费(仅非 packaged 生效)。
   if (startupConfig && argv.includes('--isolated-auth')) {
     if (!isolatedArg) {
-      console.error('==> --isolated-auth requires --isolated: 共享 userData 的实例不该单独隔离凭证');
-      process.exit(1);
+      exitWithFailure(
+        'INVALID_ISOLATED_NAME',
+        '--isolated-auth requires --isolated: shared userData must not isolate credentials alone',
+        ['==> --isolated-auth requires --isolated: 共享 userData 的实例不该单独隔离凭证'],
+      );
     }
     process.env.XDT_ISOLATED_AUTH = '1';
     console.log('==> Isolated auth: this sandbox will NOT share codex OAuth credentials with ~/.codex.');
@@ -1008,16 +1063,25 @@ async function main() {
   if (startupConfig) ensureDesktopEnv();
 
   const devAncestor = findDevAncestor();
+  if (shouldRefuseHostedRestart(devAncestor, { preserveRunning, ownRootDir: rootDir })) {
+    exitWithFailure(
+      'HOSTED_RESTART_REFUSED',
+      'Refusing to restart from within this checkout\'s desktop dev process tree.',
+      [
+        '==> Detected this script is running inside this checkout\'s Cindy desktop dev process tree:',
+        `    ancestor pid ${devAncestor.pid}: ${devAncestor.command.slice(0, 180)}`,
+        '==> Refusing to restart from within. Killing the ancestor would terminate this',
+        '    script mid-flight and leave ports / file locks held by the dying process,',
+        '    causing the new electron-forge to fail with ELIFECYCLE.',
+        '==> Ask the user to restart from the official Cindy app, another worktree, or the',
+        `    terminal where they originally launched \`pnpm ${devScriptForMode(mode)}\`.`,
+      ],
+    );
+  }
   if (devAncestor && !preserveRunning) {
-    console.error('==> Detected this script is running inside an Cindy desktop dev process tree:');
-    console.error(`    ancestor pid ${devAncestor.pid}: ${devAncestor.command.slice(0, 180)}`);
-    console.error('==> Refusing to restart from within. Killing the ancestor would terminate this');
-    console.error('    script mid-flight and leave ports / file locks held by the dying process,');
-    console.error('    causing the new electron-forge to fail with ELIFECYCLE.');
-    console.error('==> Ask the user to restart from the terminal where they originally launched');
-    console.error(`    \`pnpm ${devScriptForMode(mode)}\` (Ctrl+C then re-run), or from any external shell`);
-    console.error('    not spawned by the desktop dev tree.');
-    process.exit(1);
+    console.log(
+      `==> Hosted by another checkout's desktop dev pid ${devAncestor.pid}; this restart will not stop that host.`,
+    );
   }
   if (devAncestor && preserveRunning) {
     if (replaceRunningRoot && commandContainsPath(devAncestor.command, replaceRunningRoot)) {
@@ -1069,13 +1133,16 @@ async function main() {
         && commandUsesUserDataDir(proc.command, targetUserDataDir),
     );
     if (conflicts.length > 0) {
-      console.error(`==> Target userData is already in use by another checkout's dev instance: ${targetUserDataDir}`);
-      for (const proc of conflicts) {
-        console.error(`    pid ${proc.pid}: ${proc.command.slice(0, 180)}`);
-      }
-      console.error('==> Refusing to stop processes outside this checkout. Pick a different sandbox');
-      console.error('    name (--isolated=<name>), or stop that instance yourself and re-run.');
-      process.exit(1);
+      exitWithFailure(
+        'USERDATA_IN_USE',
+        `Target userData is already in use by another checkout's dev instance: ${targetUserDataDir}`,
+        [
+          `==> Target userData is already in use by another checkout's dev instance: ${targetUserDataDir}`,
+          ...conflicts.map((proc) => `    pid ${proc.pid}: ${proc.command.slice(0, 180)}`),
+          '==> Refusing to stop processes outside this checkout. Pick a different sandbox',
+          '    name (--isolated=<name>), or stop that instance yourself and re-run.',
+        ],
+      );
     }
   } else {
     const compatibility = inspectSharedUserDataRegion(
@@ -1140,11 +1207,14 @@ async function main() {
         matchesReplacementRoot,
       );
       if (remainingAfterForce.length > 0) {
-        console.error(`==> Failed to stop ${remainingAfterForce.length} process(es) from ${replaceRunningRoot}; aborting restart.`);
-        for (const target of remainingAfterForce) {
-          console.error(`    still running ${target.pid}: ${target.command.slice(0, 180)}`);
-        }
-        process.exit(1);
+        exitWithFailure(
+          'STARTUP_FAILED',
+          `Failed to stop ${remainingAfterForce.length} process(es) from ${replaceRunningRoot}; aborting restart.`,
+          [
+            `==> Failed to stop ${remainingAfterForce.length} process(es) from ${replaceRunningRoot}; aborting restart.`,
+            ...remainingAfterForce.map((target) => `    still running ${target.pid}: ${target.command.slice(0, 180)}`),
+          ],
+        );
       }
 
       closeDarwinTerminalTtys(darwinTerminalTtys);
@@ -1172,11 +1242,14 @@ async function main() {
 
     const remainingAfterForce = await waitForDesktopDevProcessesToExit(forceTimeoutMs, matchesOwnRoot);
     if (remainingAfterForce.length > 0) {
-      console.error(`==> Failed to stop ${remainingAfterForce.length} Cindy desktop dev process(es); aborting restart.`);
-      for (const target of remainingAfterForce) {
-        console.error(`    still running ${target.pid}: ${target.command.slice(0, 180)}`);
-      }
-      process.exit(1);
+      exitWithFailure(
+        'STARTUP_FAILED',
+        `Failed to stop ${remainingAfterForce.length} Cindy desktop dev process(es); aborting restart.`,
+        [
+          `==> Failed to stop ${remainingAfterForce.length} Cindy desktop dev process(es); aborting restart.`,
+          ...remainingAfterForce.map((target) => `    still running ${target.pid}: ${target.command.slice(0, 180)}`),
+        ],
+      );
     }
 
     closeDarwinTerminalTtys(darwinTerminalTtys);
@@ -1193,11 +1266,30 @@ async function main() {
     process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE = startupStatusPath;
   }
   startDesktopDev(mode);
-  if (startupStatusPath) await waitForDesktopStartup(startupStatusPath);
+  if (startupStatusPath) {
+    try {
+      await waitForDesktopStartup(startupStatusPath);
+      const report = collectDesktopWhoamiReport({
+        rootDir,
+        userDataDir: process.env.XDT_USER_DATA_DIR,
+      });
+      const verdict = buildDesktopDevVerdictFromWhoami(report, verdictContext);
+      printDesktopDevVerdict(verdict);
+      if (verdict.state !== 'ready') process.exit(1);
+    } catch (error) {
+      printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, verdictContext));
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
+    printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, {
+      rootDir,
+      isolated: hasIsolationIntent(process.argv.slice(2), process.env),
+    }));
     console.error(error);
     process.exit(1);
   });

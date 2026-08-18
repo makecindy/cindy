@@ -4,6 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { assertSharedDevMigrationPolicy } from './dev-migration-policy.mjs';
+import {
+  buildDesktopDevVerdictFromFailure,
+  printDesktopDevVerdict,
+} from './desktop-dev-verdict.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -71,14 +75,19 @@ export function runDesktopRestart(argv, root = rootDir, stepRunner = runStep) {
 }
 
 function main() {
-  runDesktopRestart(process.argv.slice(2));
-}
-
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const argv = process.argv.slice(2);
   try {
-    main();
+    runDesktopRestart(argv);
   } catch (error) {
+    printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, {
+      rootDir,
+      isolated: argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')),
+    }));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
 }
