@@ -968,17 +968,35 @@ test("isolatedRestartNextCommand keeps region and local mode", () => {
 	assert.equal(verdict.next, "pnpm restart:desktop:remote --region=cn -- --isolated=@worktree");
 });
 
-test("host identity treats a trailing space as the end of the checkout path", () => {
+test("host identity uses the same conservative path match as kill", () => {
 	const own = "/repo/cindy-feature";
-	const command = `electron-forge start ${own} --isolated=feature`;
-	assert.equal(commandContainsPath(command, own), false);
-	assert.equal(commandContainsPath(command, own, { spaceEndsPath: true }), true);
+	assert.equal(commandContainsPath(`electron-forge start ${own} --isolated=feature`, own), false);
+	assert.equal(commandContainsPath(`${own}/node_modules/electron`, own), true);
 	assert.equal(
 		shouldRefuseHostedRestart(
-			{ pid: 10, command },
+			{ pid: 10, command: `${own}/node_modules/electron` },
 			{ preserveRunning: false, ownRootDir: own, isolated: true },
 		),
 		true,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `${own} extra/node_modules/electron` },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		false,
+	);
+});
+
+test("hosted restart sees XDT_ISOLATED as isolation intent", () => {
+	const own = "/repo/cindy-feature";
+	const other = "/repo/cindy-other/node_modules/electron";
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: other },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		false,
 	);
 });
 
@@ -993,11 +1011,15 @@ test("restartContextFromArgv reads --region cn and XDT_ISOLATED", () => {
 	);
 });
 
-test("worktree sandbox hash keeps case on Linux and folds it elsewhere", () => {
-	const upper = isolationNameFromWorktree("/repo/Foo/cindy-feature");
-	const lower = isolationNameFromWorktree("/repo/foo/cindy-feature");
-	if (process.platform === "linux") assert.notEqual(upper, lower);
-	else assert.equal(upper, lower);
+test("worktree sandbox hash follows the foldCase option from the volume", () => {
+	assert.equal(
+		isolationNameFromWorktree("/repo/Foo/cindy-feature", { foldCase: true }),
+		isolationNameFromWorktree("/repo/foo/cindy-feature", { foldCase: true }),
+	);
+	assert.notEqual(
+		isolationNameFromWorktree("/repo/Foo/cindy-feature", { foldCase: false }),
+		isolationNameFromWorktree("/repo/foo/cindy-feature", { foldCase: false }),
+	);
 });
 
 test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", () => {

@@ -34,24 +34,24 @@ function normalizeRoot(value) {
   return path.resolve(value).replaceAll('\\', '/').toLowerCase();
 }
 
-function worktreeHashKey(rootDir) {
+function worktreeHashKey(rootDir, foldCase) {
   const resolved = path.resolve(rootDir).replaceAll('\\', '/');
-  // Linux 区分大小写：Foo 与 foo 可以是两个 worktree。macOS / Windows 默认不区分。
-  return process.platform === 'linux' ? resolved : resolved.toLowerCase();
+  return foldCase ? resolved.toLowerCase() : resolved;
 }
 
 function singleLine(value) {
   return String(value).replace(/\s+/g, ' ').trim();
 }
 
-export function isolationNameFromWorktree(rootDir) {
+export function isolationNameFromWorktree(rootDir, { foldCase } = {}) {
   const resolved = path.resolve(rootDir);
   let name = path.basename(resolved);
   name = name.replace(/^cindy-/i, '');
   name = name.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!name) name = 'worktree';
+  const shouldFold = foldCase ?? process.platform !== 'linux';
   const digest = createHash('sha256')
-    .update(worktreeHashKey(resolved))
+    .update(worktreeHashKey(resolved, shouldFold))
     .digest('hex')
     .slice(0, WORKTREE_NAME_DIGEST_LEN);
   const maxBase = 32 - 1 - digest.length;
@@ -82,9 +82,9 @@ export function restartContextFromArgv(argv = [], env = process.env) {
   };
 }
 
-export function resolveIsolatedArg(isolatedArg, rootDir) {
+export function resolveIsolatedArg(isolatedArg, rootDir, options) {
   if (isolatedArg === WORKTREE_ISOLATED_ARG) {
-    return `--isolated=${isolationNameFromWorktree(rootDir)}`;
+    return `--isolated=${isolationNameFromWorktree(rootDir, options)}`;
   }
   return isolatedArg;
 }

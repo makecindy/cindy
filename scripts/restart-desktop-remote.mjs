@@ -111,7 +111,7 @@ function stripTrailingSlashes(value) {
   return value.replace(/\/+$/, '');
 }
 
-export function commandContainsPath(command, candidatePath, { spaceEndsPath = false } = {}) {
+export function commandContainsPath(command, candidatePath) {
   const normalizedCommand = normalize(command);
   const normalizedPath = stripTrailingSlashes(normalize(candidatePath));
   if (!normalizedPath) return false;
@@ -120,10 +120,10 @@ export function commandContainsPath(command, candidatePath, { spaceEndsPath = fa
     const before = normalizedCommand[index - 1];
     const after = normalizedCommand[index + normalizedPath.length];
     const hasStartBoundary = before === undefined || /\s|["'=]/.test(before);
-    // kill 旧进程宁可漏杀也不能误杀其它 checkout，默认不把空格当结束边界。
-    // 宿主身份判定相反：漏认当前 checkout 会自杀，所以允许空格结束。
-    const hasEndBoundary = after === undefined || after === '/' || after === '"' || after === "'"
-      || (spaceEndsPath && /\s/.test(after));
+    // 命令行无法安全区分「裸 root 后接参数」和「带空格的 sibling 路径」。
+    // 空格当结束边界会误伤 sibling；不当结束会漏认裸路径。desktop-dev 命令行里
+    // checkout 都以 /node_modules 或 /apps/desktop 出现，保守匹配足够。
+    const hasEndBoundary = after === undefined || after === '/' || after === '"' || after === "'";
     if (hasStartBoundary && hasEndBoundary) return true;
     index = normalizedCommand.indexOf(normalizedPath, index + 1);
   }
@@ -544,6 +544,15 @@ function volumeIsCaseInsensitive(existingDir) {
   }
 }
 
+function foldCaseOption(dir) {
+  try {
+    fs.statSync(dir);
+    return { foldCase: volumeIsCaseInsensitive(dir) };
+  } catch {
+    return {};
+  }
+}
+
 export function canonicalizeUserDataDir(dir) {
   const resolved = path.resolve(dir);
   try {
@@ -584,7 +593,7 @@ export function resolveRestartTargetUserDataDir({
   selectedRegion,
   rootDir: targetRoot = rootDir,
 }) {
-  const resolvedIsolatedArg = resolveIsolatedArg(isolatedArg, targetRoot);
+  const resolvedIsolatedArg = resolveIsolatedArg(isolatedArg, targetRoot, foldCaseOption(targetRoot));
   const isolationName = sanitizeIsolationName(
     resolvedIsolatedArg ? parseIsolationName(resolvedIsolatedArg) : isolatedName,
   );
@@ -606,12 +615,12 @@ export function shouldRefuseHostedRestart(ancestor, {
   isolated = false,
 }) {
   if (!ancestor || preserveRunning) return false;
-  if (commandContainsPath(ancestor.command, ownRootDir, { spaceEndsPath: true })) return true;
+  if (commandContainsPath(ancestor.command, ownRootDir)) return true;
   return isolated !== true;
 }
 
 export function hostedRestartRefusal(ancestor, { ownRootDir }) {
-  return commandContainsPath(ancestor.command, ownRootDir, { spaceEndsPath: true })
+  return commandContainsPath(ancestor.command, ownRootDir)
     ? {
       code: 'HOSTED_RESTART_REFUSED',
       message: "Refusing to restart from within this checkout's desktop dev process tree.",
@@ -950,7 +959,7 @@ export function applyDesktopStartupConfigForPhase(options) {
 async function main() {
   let argv = process.argv.slice(2);
   const rawIsolatedArg = argv.find((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
-  const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir);
+  const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir, foldCaseOption(rootDir));
   if (rawIsolatedArg && isolatedArg && isolatedArg !== rawIsolatedArg) {
     argv = argv.map((arg) => (arg === rawIsolatedArg ? isolatedArg : arg));
     console.log(`==> Isolated sandbox from worktree: ${parseIsolationName(isolatedArg)}`);
@@ -1090,7 +1099,7 @@ async function main() {
   if (shouldRefuseHostedRestart(devAncestor, {
     preserveRunning,
     ownRootDir: rootDir,
-    isolated: Boolean(isolatedArg),
+    isolated: hasIsolationIntent(argv, process.env),
   })) {
     const refusal = hostedRestartRefusal(devAncestor, { ownRootDir: rootDir });
     exitWithFailure(
