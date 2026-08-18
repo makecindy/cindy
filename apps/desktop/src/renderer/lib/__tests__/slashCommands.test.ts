@@ -37,6 +37,13 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
     expect(rewriteAgentSkillInvocationForDispatch('/demo   keep spacing', loaded)).toBe(
       '/skill:demo   keep spacing',
     );
+    expect(rewriteAgentSkillInvocationForDispatch('  \n/demo keep', loaded)).toBe(
+      '  \n/skill:demo keep',
+    );
+    expect(rewriteAgentSkillInvocationForDispatch('please /demo', loaded)).toBe('please /demo');
+    expect(rewriteAgentSkillInvocationForDispatch('> quoted\n\n/demo', loaded)).toBe(
+      '> quoted\n\n/demo',
+    );
   });
 
   it('rebases command and later inline metadata when the runtime alias grows', () => {
@@ -55,6 +62,18 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
       { start: 0, end: 11, kind: 'slash' },
       { start: 12, end: 17, kind: 'reference' },
       { start: 18, end: 24, kind: 'paste' },
+    ]);
+
+    expect(rebaseInlineRangesAfterSlashCommandRewrite(
+      [
+        { start: 3, end: 8, kind: 'slash' },
+        { start: 9, end: 14, kind: 'reference' },
+      ],
+      '  \n/demo @task',
+      '  \n/skill:demo @task',
+    )).toEqual([
+      { start: 3, end: 14, kind: 'slash' },
+      { start: 15, end: 20, kind: 'reference' },
     ]);
   });
 
@@ -91,6 +110,8 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
     });
     expect(rewriteAgentSkillInvocationForDispatch('/git please', discovered)).toBe('/git please');
     expect(rewritePiSkillAliasFromCommand('/git please', discovered)).toBe('/skill:git please');
+    expect(rewritePiSkillAliasFromCommand(' \n/git please', discovered)).toBe(' \n/skill:git please');
+    expect(rewritePiSkillAliasFromCommand('note /git', discovered)).toBe('note /git');
   });
 });
 

@@ -163,21 +163,19 @@ export function leadingSlashCommandRange(
   return token ? { start: token.start, end: token.end } : undefined;
 }
 
-/** Clipboard / display projection for roster-known `/skill:name` tokens. */
-export function projectKnownRuntimeSlashCommands(
+/**
+ * First `/token` after leading whitespace. Same recognition window as Pi
+ * (`text.trimStart().startsWith('/skill:')`): leading spaces/newlines count,
+ * a quote block or other prose before the slash does not.
+ */
+export function leadingSlashInvocation(
   text: string,
-  commands: readonly { runtimeCommandName?: string }[],
-): string {
-  const known = new Set(
-    commands
-      .map((command) => command.runtimeCommandName?.trim().toLowerCase())
-      .filter((name): name is string => Boolean(name?.startsWith(PI_SKILL_RUNTIME_PREFIX))),
-  );
-  if (known.size === 0) return text;
-  return text.replace(/(^|[\s\n])(\/skill:\S+)/gi, (full, prefix: string, token: string) => {
-    const name = token.slice(1).toLowerCase();
-    return known.has(name) ? `${prefix}${slashCommandDisplayLabel(token)}` : full;
-  });
+): { start: number; end: number; name: string } | undefined {
+  const start = text.search(/\S/);
+  if (start < 0 || text[start] !== '/') return undefined;
+  const token = text.slice(start).match(/^\/\S+/)?.[0];
+  if (!token) return undefined;
+  return { start, end: start + token.length, name: token.slice(1) };
 }
 
 /**

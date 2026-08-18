@@ -6,8 +6,8 @@ import {
   insertAtResource,
   insertSlashCommand,
   leadingSlashCommandRange,
+  leadingSlashInvocation,
   mergeSlashCommands,
-  projectKnownRuntimeSlashCommands,
   projectSlashCommandsInText,
   restoreSlashCommandRuntimeAlias,
   serializeAtResource,
@@ -127,16 +127,13 @@ describe('shared composer palette model', () => {
       start: quotedRuntimeStart,
       end: quotedRuntimeStart + 10,
     });
-    expect(
-      projectKnownRuntimeSlashCommands('/skill:git and /skill:unknown', [
-        { runtimeCommandName: 'skill:git' },
-      ]),
-    ).toBe('/git and /skill:unknown');
-    expect(
-      projectKnownRuntimeSlashCommands('docs/skill:git and x/skill:git text', [
-        { runtimeCommandName: 'skill:git' },
-      ]),
-    ).toBe('docs/skill:git and x/skill:git text');
+    expect(leadingSlashInvocation('  \n/git please')).toEqual({
+      start: 3,
+      end: 7,
+      name: 'git',
+    });
+    expect(leadingSlashInvocation('please /git')).toBeUndefined();
+    expect(leadingSlashInvocation('> quoted\n\n/git')).toBeUndefined();
     const quoted = [
       '> <!-- cindy-composer-quote -->',
       '> quoted',
