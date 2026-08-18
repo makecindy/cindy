@@ -31,6 +31,7 @@ import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { UserMessage } from '@/components/chat/UserMessage';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import {
   getComposerModifierShortcutLabel,
   getComposerSendShortcutLabel,
@@ -385,17 +386,18 @@ function PiDurableDetailView({
         title={title}
         status={detail.status}
         action={showStop ? (
-          <button
-            type="button"
-            onClick={() => onStop(detail, selectedChild?.id)}
-            disabled={stopping}
-            title={t('chat.agentTask.stop')}
-            aria-label={t('chat.agentTask.stop')}
-            data-subagent-stop="true"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          >
-            <Square size={12} aria-hidden="true" />
-          </button>
+          <Tip text={t('chat.agentTask.stop')} side="bottom">
+            <button
+              type="button"
+              onClick={() => onStop(detail, selectedChild?.id)}
+              disabled={stopping}
+              aria-label={t('chat.agentTask.stop')}
+              data-subagent-stop="true"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              <Square size={12} aria-hidden="true" />
+            </button>
+          </Tip>
         ) : undefined}
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-3">
@@ -587,20 +589,21 @@ function PiDurableDetailView({
                 title={t('rightSidebar.subagents.sendShortcutHint', { shortcut: sendShortcutLabel })}
                 className="min-h-10 min-w-0 flex-1 resize-none rounded-lg bg-transparent px-2 py-1.5 text-13 leading-5 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
               />
-              <button
-                type="button"
-                disabled={controlBusy || !controlMessage.trim()}
-                onClick={() => submitControl(defaultComposerAction)}
-                title={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)}
-                aria-label={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)}
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
-                {controlBusy ? (
-                  <Spinner icon={LoaderCircle} spinning size={14} />
-                ) : (
-                  <SendHorizontal size={14} aria-hidden="true" />
-                )}
-              </button>
+              <Tip text={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)} side="top">
+                <button
+                  type="button"
+                  disabled={controlBusy || !controlMessage.trim()}
+                  onClick={() => submitControl(defaultComposerAction)}
+                  aria-label={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  {controlBusy ? (
+                    <Spinner icon={LoaderCircle} spinning size={14} />
+                  ) : (
+                    <SendHorizontal size={14} aria-hidden="true" />
+                  )}
+                </button>
+              </Tip>
             </div>
             {controlError ? (
               <p role="alert" className="px-2 text-11 text-[var(--error-fg)]">
