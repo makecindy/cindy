@@ -476,8 +476,7 @@ function looksLikePath(ref: string): boolean {
  * noise like `/1312312`.
  */
 function looksLikeCommand(word: string): boolean {
-  const display = word.replace(/^skill:/i, '');
-  return /^[a-zA-Z][a-zA-Z0-9_-]{0,29}$/.test(display);
+  return /^[a-zA-Z][a-zA-Z0-9_-]{0,29}$/.test(word);
 }
 
 /**
@@ -531,7 +530,7 @@ function renderContentWithoutPastedText(
     // Check for /command at line start — only if it looks like a real command
     const slashMatch = line.match(/^\/(\S+)/);
     if (renderLegacySlashCommands && slashMatch && looksLikeCommand(slashMatch[1])) {
-      const slashLabel = slashCommandDisplayLabel(`/${slashMatch[1]}`);
+      const slashLabel = `/${slashMatch[1]}`;
       nodes.push(
         <InlineReferenceChip
           key={`s-${li}`}
