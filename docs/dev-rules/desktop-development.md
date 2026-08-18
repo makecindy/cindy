@@ -103,6 +103,12 @@ agent 在 worktree 跑裸 `dev:remote` 会重新共享 profile/deviceId 互踢�
 的 `--passive` / `--preserve-running` 由 `XDT_RESTART_MANAGED`（one-hop）识别，不依赖
 这个可长期继承的 passive 标记；人类裸跑 `pnpm dev:remote -- --passive` 走 argv 豁免
 （Electron 侧认识并收敛为被动模式）。
+同理，`XDT_ISOLATED` / `XDT_USER_DATA_DIR` **单独出现也不豁免**自动隔离：它们可能是
+宿主 Desktop（以 `--isolated` 模式运行）留在 `process.env` 的变量，会沿同一继承路径
+到达 agent——agent 在 worktree 跑裸 `dev:remote` 时若凭它们豁免，会复用宿主 userData
+（宿主已持单实例锁则立即退出 / 同时继承 passive 则并发开沙箱）。restart 链路的
+`--isolated` 已由 `XDT_RESTART_MANAGED` 识别（隔离沙箱目录由 restart 自己派生），不
+依赖这些可长期继承的变量。**判定豁免只认 argv 显式参数与 `XDT_RESTART_MANAGED` 标记。**
 
 配套护栏与工具：
 

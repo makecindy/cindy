@@ -269,34 +269,28 @@ test("worktree dev launch honors explicit isolation/sharing intent and never ove
     }),
     { worktreeName: "epic-thompson" },
   );
-  assert.equal(
-    resolveWorktreeIsolationFromCwd({
-      cwd: worktreeCwd("epic-thompson"),
-      argv: [],
-      env: { XDT_ISOLATED: "1" },
-    }),
-    null,
-  );
-  assert.equal(
-    resolveWorktreeIsolationFromCwd({
-      cwd: worktreeCwd("epic-thompson"),
-      argv: [],
-      env: { XDT_USER_DATA_DIR: "C:\\custom\\profile" },
-    }),
-    null,
-  );
-  // XDT_SCHEDULER_PASSIVE 单独出现**不豁免**：它会沿 Electron → agent 子进程继承，
-  // agent 在 worktree 跑裸 dev:remote 时若凭它豁免会重新共享 profile/deviceId 互踢。
-  // restart 链路由 XDT_RESTART_MANAGED 识别，不依赖这个可长期继承的 passive 标记
-  // （review-pr P1，PR #2640）。
-  assert.deepEqual(
-    resolveWorktreeIsolationFromCwd({
-      cwd: worktreeCwd("epic-thompson"),
-      argv: [],
-      env: { XDT_SCHEDULER_PASSIVE: "1" },
-    }),
-    { worktreeName: "epic-thompson" },
-  );
+  // XDT_ISOLATED / XDT_USER_DATA_DIR / XDT_SCHEDULER_PASSIVE 单独出现**均不豁免**：
+  // 它们都可能是宿主 Desktop（以 --isolated / --passive 模式运行）留在 process.env
+  // 的变量，会沿 Electron → agent 子进程继承（buildCodexEnv / PI spawn env 复制
+  // process.env）——agent 在 worktree 跑裸 dev:remote 时若凭它们豁免会复用宿主
+  // userData（单实例锁冲突退出 / passive 并发开沙箱）或重新共享 profile/deviceId
+  // 互踢（review-pr P1×3，PR #2640）。restart 链路仅由 XDT_RESTART_MANAGED 识别。
+  for (const env of [
+    { XDT_ISOLATED: "1" },
+    { XDT_USER_DATA_DIR: "C:\\custom\\profile" },
+    { XDT_SCHEDULER_PASSIVE: "1" },
+    { XDT_ISOLATED: "1", XDT_USER_DATA_DIR: "C:\\custom\\profile", XDT_SCHEDULER_PASSIVE: "1" },
+  ]) {
+    assert.deepEqual(
+      resolveWorktreeIsolationFromCwd({
+        cwd: worktreeCwd("epic-thompson"),
+        argv: [],
+        env,
+      }),
+      { worktreeName: "epic-thompson" },
+      `env ${JSON.stringify(env)} must not suppress auto-isolation (agent inheritance)`,
+    );
+  }
   // restart 链路显式表态：参数契约由 restart 自己负责（无参=共库+正常调度），
   // 自动隔离兜底不得静默覆盖（review-pr P1，PR #2640）
   assert.equal(
@@ -368,6 +362,16 @@ test("restart marker is one-hop: honored during launch decision but stripped fro
       cwd: worktreeCwd("epic-thompson"),
       argv: [],
       env: { XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
+  );
+  // restart --isolated：XDT_RESTART_MANAGED + XDT_ISOLATED 都在 → 豁免（restart 链路
+  // 参数契约，隔离沙箱语义由 restart 自己管理）
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_ISOLATED: "1", XDT_USER_DATA_DIR: "C:\\custom\\profile" },
     }),
     null,
   );
