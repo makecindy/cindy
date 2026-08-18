@@ -1090,6 +1090,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     );
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
+      sessionProviderId: opts.providerId ?? null,
       modelContextWindows: providerRoutedModels,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
@@ -1162,6 +1163,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const remoteEnv = opts.remoteHostId
       ? await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
           credentialMode,
+          sessionProviderId: opts.providerId ?? null,
           mode: 'remote',
           modelContextWindows: providerRoutedModels,
           // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
