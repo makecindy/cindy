@@ -24,6 +24,7 @@ const mockState = vi.hoisted(() => {
       error: vi.fn(),
     },
     createAnthropicCompatProxy: vi.fn(),
+    capturedRequestTransforms: [] as Array<(body: unknown, ctx: unknown) => unknown | null>,
     createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
     createResponsesAnthropicHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
@@ -126,6 +127,16 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
 async function freshCodexProxyHost() {
   vi.resetModules();
   mockState.createAnthropicCompatProxy.mockReset();
+  mockState.createAnthropicCompatProxy.mockImplementation(async (opts: {
+    transformRequest?: Array<(body: unknown, ctx: unknown) => unknown | null>;
+  }) => {
+    mockState.capturedRequestTransforms = opts.transformRequest ?? [];
+    return {
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    };
+  });
+  mockState.capturedRequestTransforms = [];
   mockState.createResponsesChatHandler.mockClear();
   mockState.createResponsesAnthropicHandler.mockClear();
   mockState.createInstructionsInjectionTransform.mockClear();
@@ -491,6 +502,25 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     expect(transform(
       { model: 'gpt-5.5', input: [{ type: 'context_compaction', id: 'cc_2' }, { type: 'compaction', encrypted_content: '' }] },
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    )).toBeNull();
+  });
+
+  it('普通 agent_message 的加密任务正文原样透传', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+    const agentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/probe',
+      content: [
+        { type: 'input_text', text: 'Message Type: NEW_TASK\nPayload:' },
+        { type: 'encrypted_content', encrypted_content: 'TASK_BODY_BLOB' },
+      ],
+    };
+
+    expect(transform(
+      { model: 'codex/gpt-5.6-sol', input: [agentMessage] },
+      { ...CTX_BASE, upstreamBase: `${XD_GATEWAY_BASE_URL}/v1` },
     )).toBeNull();
   });
 });
@@ -1286,6 +1316,159 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  it('restores the discounted route prefix for a spawned child model at the HTTP boundary', async () => {
+    const host = await freshCodexProxyHost();
+    host.setCodexProxyGatewayKeyReader(() => 'gateway-key');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-discount', 'thread-collab-discount-parent', 'PRODUCT_PROMPT');
+    host.registerReviewerRouteContext(
+      'session-collab-discount',
+      'thread-collab-discount-parent',
+      'codex/gpt-5.6-sol',
+    );
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-collab-discount-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-discount-parent',
+      },
+    };
+
+    try {
+      const rawBody = { model: 'gpt-5.6-terra', input: [] };
+      expect(await host.createModelRoutingTransform()(rawBody, ctx)).toEqual({
+        headerOverride: { authorization: 'Bearer gateway-key' },
+      });
+
+      let body: unknown = rawBody;
+      for (const transform of mockState.capturedRequestTransforms) {
+        body = transform(body, ctx) ?? body;
+      }
+
+      expect(body).toMatchObject({ model: 'codex/gpt-5.6-terra' });
+      expect(mockState.capturedRegistry?.get('thread-collab-discount-child')).toBe('PRODUCT_PROMPT');
+    } finally {
+      host.unregister('session-collab-discount');
+      host.setCodexProxyGatewayKeyReader(() => null);
+    }
+  });
+
+  it('does not double-prefix an already routed spawned child model', async () => {
+    const host = await freshCodexProxyHost();
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-prefixed', 'thread-collab-prefixed-parent', 'PRODUCT_PROMPT');
+    host.registerReviewerRouteContext(
+      'session-collab-prefixed',
+      'thread-collab-prefixed-parent',
+      'codex/gpt-5.6-sol',
+    );
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-collab-prefixed-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-prefixed-parent',
+      },
+    };
+
+    try {
+      let body: unknown = { model: 'codex/gpt-5.6-terra', input: [] };
+      for (const transform of mockState.capturedRequestTransforms) {
+        body = transform(body, ctx) ?? body;
+      }
+      expect(body).toMatchObject({ model: 'codex/gpt-5.6-terra' });
+    } finally {
+      host.unregister('session-collab-prefixed');
+    }
+  });
+
+  it('keeps spawned-task agent_message encrypted payloads on the gateway transform chain', async () => {
+    const host = await freshCodexProxyHost();
+    host.setCodexProxyGatewayKeyReader(() => 'gateway-key');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-payload', 'thread-collab-payload-parent', 'PRODUCT_PROMPT');
+    host.registerReviewerRouteContext(
+      'session-collab-payload',
+      'thread-collab-payload-parent',
+      'codex/gpt-5.6-sol',
+    );
+    const agentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/probe',
+      content: [
+        {
+          type: 'input_text',
+          text: 'Message Type: NEW_TASK\nTask name: /root/probe\nPayload:',
+        },
+        { type: 'encrypted_content', encrypted_content: 'TASK_BODY_BLOB' },
+      ],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-collab-payload-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-payload-parent',
+      },
+      upstreamBase: `${XD_GATEWAY_BASE_URL}/v1`,
+    };
+
+    try {
+      let body: unknown = { model: 'gpt-5.6-sol', input: [agentMessage] };
+      for (const transform of mockState.capturedRequestTransforms) {
+        body = transform(body, ctx) ?? body;
+      }
+      expect(body).toMatchObject({
+        model: 'codex/gpt-5.6-sol',
+        input: [agentMessage],
+      });
+    } finally {
+      host.unregister('session-collab-payload');
+      host.setCodexProxyGatewayKeyReader(() => null);
+    }
+  });
+
+  it('keeps a native spawned child model unchanged when its parent is not discounted', async () => {
+    const host = await freshCodexProxyHost();
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-native', 'thread-collab-native-parent', 'PRODUCT_PROMPT');
+    host.registerReviewerRouteContext(
+      'session-collab-native',
+      'thread-collab-native-parent',
+      'gpt-5.6-sol',
+    );
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-collab-native-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-native-parent',
+      },
+    };
+
+    try {
+      let body: unknown = { model: 'gpt-5.6-terra', input: [] };
+      for (const transform of mockState.capturedRequestTransforms) {
+        body = transform(body, ctx) ?? body;
+      }
+      expect(body).toMatchObject({ model: 'gpt-5.6-terra' });
+    } finally {
+      host.unregister('session-collab-native');
+    }
+  });
+
   it('fails closed when a collab_spawn request cannot resolve its parent route', async () => {
     const host = await freshCodexProxyHost();
     const ctx = {
@@ -1946,8 +2129,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, collab_spawn 折扣路由恢复, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -4009,7 +4192,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(14); // encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(15); // encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, collab_spawn 折扣路由恢复, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

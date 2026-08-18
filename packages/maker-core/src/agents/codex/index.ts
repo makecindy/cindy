@@ -4810,6 +4810,11 @@ export class CodexAgent extends BaseAgent {
       register({ sessionId: sid, threadId, text });
     };
     const refreshCodexAutoReviewerRoute = (targetThreadId: string): void => {
+      this.deps.registerCodexThreadRouteContext?.({
+        sessionId: sid,
+        threadId: targetThreadId,
+        model: mutableModel,
+      });
       const routeCredentialMode = resolveAgentCredentialMode({
         agentKind: 'codex',
         providerId: mutableProviderId,
