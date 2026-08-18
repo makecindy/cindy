@@ -466,6 +466,19 @@ describe('pi translator', () => {
     expect(ctx.contextTokens).toBe(32000);
   });
 
+  it('labels host-triggered compact RPC as auto even when Pi reports reason=manual', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.hostAutoCompactInFlight = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 160000, estimatedTokensAfter: 20000 } }),
+      queue,
+      ctx,
+    );
+    const data = events.find((e) => e.type === 'compact_boundary')!.data as { trigger: string };
+    expect(data.trigger).toBe('auto');
+  });
+
   it('maps manual compaction trigger through to compact_boundary', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

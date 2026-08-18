@@ -129,6 +129,8 @@ export interface PiTranslateContext {
    * reduce it into the preceding live-card state.
    */
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
+  /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
+  hostAutoCompactInFlight: boolean;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -156,6 +158,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     delegatedUsage: new Map(),
     subagentToolCalls: new Map(),
     pendingAssistantError: null,
+    hostAutoCompactInFlight: false,
   };
 }
 
@@ -693,7 +696,7 @@ export function translatePiEvent(
       queue.push({
         type: 'compact_boundary',
         data: {
-          trigger: event.reason === 'manual' ? 'manual' : 'auto',
+          trigger: event.reason === 'manual' && !ctx.hostAutoCompactInFlight ? 'manual' : 'auto',
           preTokens: result?.tokensBefore,
           postTokens: result?.estimatedTokensAfter,
         },

@@ -2002,13 +2002,16 @@ export class PiAgent extends BaseAgent {
         contextTokens: snapshot?.contextTokens,
         contextWindow: snapshot?.contextWindow,
       });
+      ctx.hostAutoCompactInFlight = true;
       void runPiCompact()
         .then((result) => {
           if (result.noop) {
+            ctx.hostAutoCompactInFlight = false;
             autoCompactController.onCompactCanceled('host_auto_compact_noop');
           }
         })
         .catch((err) => {
+          ctx.hostAutoCompactInFlight = false;
           autoCompactController.onCompactCanceled('host_auto_compact_failed');
           this.deps.logger.warn('pi host auto-compact failed', {
             message: err instanceof Error ? err.message : String(err),
@@ -2250,6 +2253,7 @@ export class PiAgent extends BaseAgent {
               } else {
                 autoCompactController.onCompactBoundary();
               }
+              ctx.hostAutoCompactInFlight = false;
             } else if (event.type === 'message_end' || event.type === 'agent_settled') {
               autoCompactController.onUsageUpdate(ctx.contextTokens, ctx.contextWindow);
             }
