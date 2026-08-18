@@ -12,7 +12,8 @@
     "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again."
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
+    "INTERNAL": "Operation failed. Please try again later."
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -473,6 +474,13 @@
         "label": "Session list style",
         "hint": "Display style for the main sidebar list (below Pinned): Text is a compact single row; List is a two-line row with a preview.",
         "aria": "Switch session list style"
+      },
+      "ghostPanelRestore": {
+        "label": "Plugin panel restore entry",
+        "hint": "Choose where minimized plugin panels can be restored.",
+        "aria": "Choose the plugin panel restore entry",
+        "bubble": "Floating bubble",
+        "sidebar": "Sidebar"
       },
       "layout": {
         "label": "Panel layout",
@@ -1576,6 +1584,7 @@
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
+        "visibilityWriteFailed": "Couldn't save the model visibility setting. Try again, or restart Cindy if the problem continues.",
         "disabledGroup": "Disabled",
         "enableAllModels": "Enable All",
         "priceOverride": {
@@ -4648,7 +4657,7 @@
     "maximizeAria": "Maximize panel",
     "restoreAria": "Restore panel size",
     "detachAria": "Open in a new window",
-    "minimizeAria": "Minimize to floating bubble",
+    "minimizeAria": "Minimize panel",
     "closeAria": "Close panel and disable plugin"
   },
   "ghostPanel": {
@@ -4666,6 +4675,11 @@
     "restoreAria": "Restore {{name}} panel",
     "stackExpandAria": "{{count}} plugin panels minimized. Click to expand",
     "stackCollapseAria": "Collapse the plugin panel list"
+  },
+  "ghostPanelRestore": {
+    "single": "Restore {{name}}",
+    "multiple": "Minimized plugin panels",
+    "multipleAria": "{{count}} plugin panels minimized. Choose a panel to restore"
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
@@ -4765,19 +4779,25 @@
       },
       "refresh": "Refresh",
       "checking": "Checking",
-      "accessRequiredTitle": "Authorize This Session",
-      "accessRequiredDescription": "This panel is not authorized to access the simulator for this session. Confirm access in the system dialog.",
-      "allowTaskAccess": "Allow Session Access",
+      "accessRequiredTitle": "Allow Session Control",
+      "accessRequiredDescription": "Status viewing may remain available, but tapping, typing, and other controls require authorization for this session. Confirm in the system dialog.",
+      "allowTaskAccess": "Allow Session Control",
       "requestingAccess": "Requesting Access…",
       "accessDialogTitle": "Allow iOS Simulator Control?",
       "accessDialogMessage": "Allow this Cindy window to view and control the iOS Simulator for “{{task}}”?",
-      "accessDialogDetail": "This permission applies only to this session and is revoked when you switch sessions.",
+      "accessDialogDetail": "This permission applies only to this session. Switching away retains viewing access but pauses control; allow control again after you return.",
       "accessDialogAllow": "Allow Simulator Control",
       "accessDialogCancel": "Cancel",
       "accessDialogUntitledTask": "Untitled Session",
       "readyTitle": "Simulator environment ready",
       "unavailableTitle": "Simulator unavailable",
-      "connectionError": "Cindy could not inspect the local simulator environment. Try again.",
+      "connectionError": "Cindy could not connect to the iOS Simulator Host. Try again.",
+      "pluginNotInstalled": "The iOS Simulator plugin is not installed in this Cindy instance. Install and enable it from the Plugin Marketplace, then try again.",
+      "pluginDisabled": "The iOS Simulator plugin is installed in this Cindy instance but disabled. Enable it on the Plugins page, then try again.",
+      "pluginDisabledForProject": "The iOS Simulator plugin is disabled for this working directory. Enable it in the project plugin settings, then try again.",
+      "pluginSessionUnavailable": "The plugin is installed and enabled, but this Cindy instance temporarily cannot use the shared plugin capability. Another Cindy instance or an account switch may be using it; refresh shortly.",
+      "pluginStateChanging": "Cindy is switching account or plugin state. Refresh shortly.",
+      "statusInternalError": "Cindy encountered an internal error while reading iOS Simulator status. Try again.",
       "remoteUnsupported": "iOS Simulator is available only to local macOS sessions, not SSH or remote sessions.",
       "sessionUnavailable": "This Cindy session is no longer available.",
       "setupTitle": "Setup checklist",
@@ -4875,6 +4895,13 @@
           "reconnecting": "Reconnecting…",
           "unavailable": "Unavailable"
         }
+      },
+      "nativeRecovery": {
+        "available": "Native acceleration is unavailable. WDA stays active while you try again.",
+        "action": "Restore Native",
+        "recovering": "Restoring Native acceleration. The current WDA view and controls stay active.",
+        "recoveringAction": "Restoring Native…",
+        "failed": "Native acceleration could not be restored. WDA is still active; try again later."
       },
       "stream": {
         "idle": "Idle",
@@ -6310,6 +6337,10 @@
       "retry": "Retry",
       "continueAfterReset": "Continue After Reset",
       "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
+      "codexOrganizationUsageLimitWithReset": "The connected Codex account is managed by your organization and has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
+      "codexOrganizationUsageLimit": "The connected Codex account is managed by your organization and has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
+      "codexUsageLimitWithReset": "The connected Codex account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
+      "codexUsageLimit": "The connected Codex account has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "gatewayQuotaExhausted": "Your Cindy AI balance is used up. Add funds to continue.",
       "viewBalance": "View balance",
       "viewBalanceTitle": "Open Usage & Billing to check your balance and add funds",
@@ -8445,7 +8476,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
+      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
       "detailsPrefix": "\nMy initial description: {{details}}"
     },
     "confirm": {
@@ -8454,7 +8485,8 @@
       "typeFeature": "Feature",
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
-      "privacyHint": "Common secrets, personal paths, and email addresses are redacted when detected. Review the public content before submitting.",
+      "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+      "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
       "submissionMethodLabel": "Submission Identity",
       "identityGithubUser": "My GitHub account @{{login}}",
       "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",

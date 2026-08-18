@@ -94,6 +94,7 @@ import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivity
 import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
+import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -1348,7 +1349,7 @@ function ExpandedView({
     [projectUniverse.projects, hiddenProjectKeys, localPlatform],
   );
 
-  // 内联会话搜索:输入行在 SidebarTopNav 的第 4 行,状态经 ConversationSearchProvider 共享;
+  // 内联会话搜索:输入行在 SidebarTopNav 末行,状态经 ConversationSearchProvider 共享;
   // query 非空时同一份顶部导航 sticky 钉住,结果替换下方列表,不再用 overlay 盖输入框。
   const { search, openSignal } = useConversationSearchContext();
   const gcProjectKeys = useMemo(
@@ -3649,6 +3650,10 @@ function CollapsedView({
         aria-current={activeKey === 'plugins' ? 'page' : undefined}
         showDot={hasGhostUnread}
         onClick={() => navigateToView('plugins')}
+      />
+      <GhostPanelRestoreEntry
+        variant="rail"
+        className={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
       />
       <ConversationSearchBox
         navigate={navigate}

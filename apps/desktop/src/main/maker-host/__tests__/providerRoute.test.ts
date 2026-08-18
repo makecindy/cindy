@@ -451,6 +451,17 @@ describe('resolveSessionRouteDecision — modelPrefixes 服务范围门(issue #8
     )).resolves.toEqual(expect.objectContaining({ upstreamOverride: 'https://api.x.ai/v1' }));
   });
 
+  it('xAI 会话的裸 grok-4.6 仍算自家模型,不回落默认网关', async () => {
+    setSessionProvider('s-scope', 'xai');
+    setProviderOAuthTokenReader(() => Promise.resolve('xai-live-token'));
+    expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'grok-4.6')).toEqual({
+      upstreamOverride: 'https://api.x.ai/v1',
+    });
+    await expect(Promise.resolve(
+      resolveSessionRouteDecision('s-scope', 'codex', KEY, 'grok-4.6'),
+    )).resolves.toEqual(expect.objectContaining({ upstreamOverride: 'https://api.x.ai/v1' }));
+  });
+
   it('pending 目标在旧 Provider scope 外时仍先 fail closed', () => {
     setSessionProvider('s-scope', 'xai');
     setPendingCredentialSwitchReader(() => ({

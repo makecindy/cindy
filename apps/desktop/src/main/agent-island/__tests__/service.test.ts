@@ -3583,6 +3583,43 @@ describe('AgentIslandService native publishing', () => {
     expect(latestNativeFrame(publish)).toMatchObject({ height: 214 });
   });
 
+  it('collapses a click-expanded island from the compact-position click', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const expand = (
+      service as unknown as {
+        handleNativeExpand(): void;
+      }
+    ).handleNativeExpand.bind(service);
+    const collapse = (
+      service as unknown as {
+        handleNativeCollapse(): void;
+      }
+    ).handleNativeCollapse.bind(service);
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    expand();
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      mode: 'expanded',
+      displayPolicy: 'manualExpanded',
+    });
+
+    collapse();
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      mode: 'compact',
+      displaySurface: 'collapsed',
+    });
+  });
+
   it('publishes native frames for every display in all-displays render mode', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

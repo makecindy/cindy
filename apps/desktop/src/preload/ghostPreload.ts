@@ -12,9 +12,9 @@ import { contextBridge, ipcRenderer } from 'electron';
  * - onHostMessage(cb):订阅主机下行(工具调用派发等,后续切片投递);
  * - send(payload):上行投递(工具结果/面板推送申请等;主机按 slots 白名单
  *   与消息类型路由,未开闸的类型一律拒);
- * - request(req):读取宿主公开上下文的便捷口——就是
- *   send({type:'host-request',…req}) 的语法糖;目前只支持 app-context(region),
- *   不含用户数据与凭证,也不扩张其它主机能力。
+ * - request(req):读取宿主只读信息的便捷口——就是
+ *   send({type:'host-request',…req}) 的语法糖;支持 app-context 与当前插件已
+ *   声明的 Cindy 媒体能力选型,不返回其它插件配置、凭证或 endpoint。
  * - fetch(req):network 槽代理 HTTP 的便捷口——就是 send({type:'fetch-request',
  *   …req}) 的语法糖,零新通道零新权限(白名单/凭证注入全在主机侧守门)。
  * - fs(req):fs 槽代写文件的便捷口——send({type:'fs-request', …req}) 的

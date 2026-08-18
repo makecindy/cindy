@@ -13,4 +13,10 @@ describe('Settings tab order', () => {
     expect(TAB_IDS).not.toContain('pi-extensions');
     expect(isSettingsTab('pi-extensions')).toBe(false);
   });
+
+  it('places Plugins immediately before builtin tools', () => {
+    const toolsIndex = TAB_IDS.indexOf('builtin-tools');
+
+    expect(TAB_IDS.slice(toolsIndex - 1, toolsIndex + 1)).toEqual(['ghosts', 'builtin-tools']);
+  });
 });

@@ -1720,6 +1720,10 @@ registerColor('card-status-awaiting', {
   light: '#19D2C1',
   dark: '#19D2C1',
 }, '状态点 — 待用户回复/选择 (设计定稿 2026-07-17 #19D2C1,取代 #00D9C5 冻结红线;light/dark 同值)');
+registerColor('sidebar-draft-indicator', {
+  light: '#0B726B',
+  dark: 'var(--card-status-awaiting)',
+}, '侧边栏草稿/暂停队列铅笔 — light 深青保证透明侧栏上的小图形对比度,dark 复用 awaiting 青色');
 registerColor('card-status-error', {
   light: '#D91F37',
   dark: '#D91F37',

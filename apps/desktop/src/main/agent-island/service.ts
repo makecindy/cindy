@@ -81,6 +81,7 @@ import {
   hasAgentIslandSessionAttention,
   isAgentIslandPendingFocusAck,
   markAgentIslandSessionAttention,
+  requestAgentIslandManualCollapse,
   requestAgentIslandManualExpand,
   patchAgentIslandMetadata,
   removeAgentIslandSession,
@@ -294,6 +295,7 @@ export class AgentIslandService {
     this.nativeHost = deps.nativeHost ?? new MacAgentIslandNativeHost({
       onPointerZones: (zones) => this.handleNativePointerZones(zones),
       onExpand: (displayId) => this.handleNativeExpand(displayId),
+      onCollapse: () => this.handleNativeCollapse(),
       onFocusSession: (sessionId) => this.focusSession(sessionId),
       onOpenSettings: () => this.dispatchMainWindowCommand('open-agent-island-settings', { playSelectSound: true }),
       onNewMessage: () => this.dispatchMainWindowCommand('new-maker', { playSelectSound: true }),
@@ -1557,6 +1559,13 @@ export class AgentIslandService {
     if (requestAgentIslandManualExpand(this.state, displayId)) {
       this.publish();
     }
+  }
+
+  private handleNativeCollapse(): void {
+    const now = Date.now();
+    if (!requestAgentIslandManualCollapse(this.state, now)) return;
+    this.playConfiguredSound('select', now);
+    this.publish();
   }
 
   private handleNativeLayoutDragActive(active: boolean): void {

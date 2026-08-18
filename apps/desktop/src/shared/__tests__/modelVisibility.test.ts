@@ -7,6 +7,7 @@ describe('model visibility legacy owner claim validation', () => {
     expect(isModelVisibilityLegacyOwnerClaim({
       dataOwnerId: 'owner-a',
       ownerGeneration: 1,
+      canWriteOwnerScoped: true,
       claimed: true,
       claimedByOtherOwner: false,
       canInitialize: true,
@@ -17,12 +18,14 @@ describe('model visibility legacy owner claim validation', () => {
     expect(isModelVisibilityLegacyOwnerClaim({
       dataOwnerId: 'owner-a',
       ownerGeneration: 1,
+      claimedByOtherOwner: false,
       claimed: true,
       canInitialize: true,
     })).toBe(false);
     expect(isModelVisibilityLegacyOwnerClaim({
       dataOwnerId: 'owner-a',
       ownerGeneration: -1,
+      canWriteOwnerScoped: true,
       claimed: false,
       claimedByOtherOwner: true,
       canInitialize: false,
