@@ -503,7 +503,13 @@ export function providerRoutingForModel(
     ...inherited,
     upstream: agent === 'pi' ? piRoute!.baseUrl : modelRoute!.baseUrl,
     wireProtocol: agent === 'pi' ? piRoute!.wireProtocol : modelRoute!.wireProtocol,
-    ...(modelRoute?.requestPath ? { requestPath: modelRoute.requestPath } : {}),
+    ...(agent === 'pi'
+      ? piRoute!.requestPath
+        ? { requestPath: piRoute!.requestPath }
+        : {}
+      : modelRoute?.requestPath
+        ? { requestPath: modelRoute.requestPath }
+        : {}),
   };
 }
 

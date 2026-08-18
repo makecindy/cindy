@@ -119,6 +119,52 @@ describe('Pi per-model protocol routing', () => {
   it('fails closed for a native protocol unsupported by the HTTP bridge', () => {
     expect(providerRoutingForModel(provider, 'pi', 'google')).toBeNull();
   });
+
+  it('inherits model requestPath only when the route matches the final Pi protocol', () => {
+    const legacy = buildUserProvider({
+      id: 'pi-legacy-paths',
+      name: 'Pi Legacy Paths',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://pi.example.com/v1',
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'stale-path',
+              name: 'Stale Path',
+              piApi: 'openai-responses',
+              route: {
+                baseUrl: 'https://pi.example.com/messages',
+                wireProtocol: 'anthropic-messages',
+                requestPath: '/v1/messages',
+              },
+            },
+            {
+              id: 'matching-path',
+              name: 'Matching Path',
+              piApi: 'openai-responses',
+              route: {
+                baseUrl: 'https://pi.example.com/responses',
+                wireProtocol: 'openai-responses',
+                requestPath: '/tenant/responses',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(providerRoutingForModel(legacy, 'pi', 'stale-path')).toMatchObject({
+      upstream: 'https://pi.example.com/v1',
+      wireProtocol: 'openai-responses',
+    });
+    expect(providerRoutingForModel(legacy, 'pi', 'stale-path')).not.toHaveProperty('requestPath');
+    expect(providerRoutingForModel(legacy, 'pi', 'matching-path')).toMatchObject({
+      upstream: 'https://pi.example.com/responses',
+      wireProtocol: 'openai-responses',
+      requestPath: '/tenant/responses',
+    });
+  });
 });
 
 describe('implicit local bridge resume routing', () => {
@@ -1340,6 +1386,28 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     setCustomProviderKeyReader(() => 'sk-pi');
 
     expect(resolveVisionBackendRoute('pi-missing-wire', 'vision-model', null)).toBeNull();
+  });
+
+  it('XD 仅 Pi 的视觉模型保留服务端协议并可路由', () => {
+    setXdGatewayModels([
+      {
+        id: 'pi-only-vision',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+        modalities: { input: ['text', 'image'], output: ['text'] },
+      },
+    ]);
+    setVisionGatewayKeyReader(() => KEY);
+
+    expect(
+      resolveVisionBackendRoute('xd', 'pi-only-vision', 'https://tenant.gateway.xd'),
+    ).toMatchObject({
+      upstream: 'https://tenant.gateway.xd',
+      requestPath: '/responses',
+      wireProtocol: 'openai-responses',
+      model: 'pi-only-vision',
+      authorization: `Bearer ${KEY}`,
+    });
   });
 
   it('modelIdRewrite.stripPrefix：视觉后端返回已剥前缀的 model', () => {

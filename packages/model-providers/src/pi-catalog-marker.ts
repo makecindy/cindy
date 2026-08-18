@@ -9,12 +9,13 @@ export function effectivePiWireProtocol(
 
 interface PiProtocolModelLike {
   piApi?: PiModelApi;
-  route?: { baseUrl?: string; wireProtocol: ProviderWireProtocol };
+  route?: { baseUrl?: string; wireProtocol: ProviderWireProtocol; requestPath?: string };
 }
 
 export interface ResolvedPiModelRoute {
   baseUrl: string;
   wireProtocol: ProviderWireProtocol;
+  requestPath?: string;
 }
 
 /**
@@ -55,6 +56,9 @@ export function resolvePiModelRoute(
       ? (model.route?.baseUrl ?? providerDefault.baseUrl)
       : providerDefault.baseUrl,
     wireProtocol,
+    ...(modelRouteMatchesProtocol && model.route?.requestPath
+      ? { requestPath: model.route.requestPath }
+      : {}),
   };
 }
 

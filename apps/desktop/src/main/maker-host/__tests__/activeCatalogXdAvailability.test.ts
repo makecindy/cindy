@@ -137,6 +137,10 @@ describe('XD 网关权威模型清单重建', () => {
       'messages-model',
       'responses-model',
     ]);
+    expect(xdModels('pi')).toMatchObject([
+      { id: 'messages-model', piApi: 'anthropic-messages' },
+      { id: 'responses-model', piApi: 'openai-responses' },
+    ]);
   });
 
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {

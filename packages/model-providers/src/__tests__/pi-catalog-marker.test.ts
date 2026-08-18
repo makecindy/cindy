@@ -27,6 +27,7 @@ describe('resolvePiModelRoute', () => {
           route: {
             baseUrl: 'https://provider.example/anthropic',
             wireProtocol: 'anthropic-messages',
+            requestPath: '/tenant/messages',
           },
         },
         { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat' },
@@ -34,6 +35,7 @@ describe('resolvePiModelRoute', () => {
     ).toEqual({
       baseUrl: 'https://provider.example/anthropic',
       wireProtocol: 'anthropic-messages',
+      requestPath: '/tenant/messages',
     });
   });
 
@@ -50,6 +52,7 @@ describe('resolvePiModelRoute', () => {
             route: {
               baseUrl: 'https://provider.example/anthropic',
               wireProtocol: 'anthropic-messages',
+              requestPath: '/v1/messages',
             },
           },
           { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat' },
@@ -68,6 +71,7 @@ describe('resolvePiModelRoute', () => {
           route: {
             baseUrl: 'https://provider.example/anthropic',
             wireProtocol: 'anthropic-messages',
+            requestPath: '/tenant/messages',
           },
         },
         { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat' },
@@ -75,6 +79,7 @@ describe('resolvePiModelRoute', () => {
     ).toEqual({
       baseUrl: 'https://provider.example/anthropic',
       wireProtocol: 'anthropic-messages',
+      requestPath: '/tenant/messages',
     });
   });
 });

@@ -990,6 +990,9 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
+          // Pi 的协议是 Model Access 按模型下发的权威路由元数据。重建 CatalogModel 时
+          // 必须一并投影，否则模型虽然保留在 Pi tab，统一路由器却会因协议缺失而 fail closed。
+          ...(agent === 'pi' && ov.wireProtocol ? { piApi: ov.wireProtocol } : {}),
         };
         models[agent]!.push(merged);
       }
