@@ -23,6 +23,7 @@ import {
   conversationShareSvgRenderSize,
   type ConversationShareSvgBubble,
 } from "@/session/conversationShareSvgLayout";
+import { typeScale } from "@/theme";
 
 export interface ConversationShareSvgHandle {
   exportPng(): Promise<string>;
@@ -37,6 +38,9 @@ const shareLogoDarkAsset = require('../../assets/login/login-wordmark-dark.png')
 const SHARE_CHARACTER_SIZE = 22;
 const SHARE_LOGO_HEIGHT = 18;
 const SHARE_LOCKUP_GAP = 6;
+// Export-card geometry: this is a 1px bubble border in the SVG coordinate
+// system, not a Lucide icon stroke (whose thinnest token is intentionally 1.75).
+const SHARE_BUBBLE_STROKE_WIDTH = 1;
 
 export const ConversationShareSvg = forwardRef<
   ConversationShareSvgHandle,
@@ -112,7 +116,7 @@ export const ConversationShareSvg = forwardRef<
               <SvgText
                 fill={gap.color}
                 fontFamily="Arial"
-                fontSize={16}
+                fontSize={typeScale.body}
                 key={`gap-${gapIndex}`}
                 letterSpacing={4}
                 textAnchor="middle"
@@ -166,7 +170,7 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
           height={bubble.height}
           rx={12}
           stroke={bubble.stroke}
-          strokeWidth={bubble.stroke ? 1 : 0}
+          strokeWidth={bubble.stroke ? SHARE_BUBBLE_STROKE_WIDTH : undefined}
           width={bubble.width}
           x={bubble.x}
           y={bubble.y}
