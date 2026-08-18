@@ -314,6 +314,48 @@ describe('scanContainedDesktopPiProjectSkills', () => {
     }
   });
 
+  it('triggers streaming directory cleanup after the discovery deadline', async () => {
+    const project = makeProject();
+    const identity = (await resolveDesktopPiProjectIdentity(project.first))!;
+    const targetRoot = path.join(identity.canonicalWorkingDir!, '.pi', 'skills');
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const next = vi.fn(() => {
+      markReadStarted();
+      return new Promise<IteratorResult<fs.Dirent>>(() => {});
+    });
+    const close = vi.fn(() => new Promise<IteratorResult<fs.Dirent>>(() => {}));
+
+    vi.useFakeTimers();
+    try {
+      const pending = scanContainedDesktopPiProjectSkills(identity, {
+        readdir: (candidate) => fs.promises.readdir(candidate, { withFileTypes: true }),
+        openDirectory: async (candidate) => candidate === targetRoot
+          ? {
+              [Symbol.asyncIterator]: () => ({ next, return: close }),
+            }
+          : fs.promises.opendir(candidate),
+        lstat: (candidate) => fs.promises.lstat(candidate),
+        stat: (candidate) => fs.promises.stat(candidate),
+        realpath: (candidate) => fs.promises.realpath(candidate),
+        resolveWindowsCaseComparison: async () => (
+          identity.windowsCaseComparison ?? 'unavailable'
+        ),
+      });
+
+      await readStarted;
+      await vi.advanceTimersByTimeAsync(PI_PROJECT_SKILL_DISCOVERY_DEADLINE_MS);
+
+      await expect(pending).resolves.toBeNull();
+      expect(next).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('finds only directory-form Pi skills from workingDir through the repo root', async () => {
     const project = makeProject();
     const identity = (await resolveDesktopPiProjectIdentity(project.first))!;

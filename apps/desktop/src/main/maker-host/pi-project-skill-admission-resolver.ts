@@ -103,6 +103,17 @@ async function awaitProjectSkillDiscoveryStep<T>(
   }
 }
 
+function closeProjectSkillDirectoryIterator(
+  iterator: AsyncIterator<FsDirentLike>,
+): void {
+  if (!iterator.return) return;
+  try {
+    void iterator.return().catch(() => undefined);
+  } catch {
+    // Best-effort cleanup must not replace the original discovery result.
+  }
+}
+
 async function readProjectSkillDirectory(
   candidate: string,
   dependencies: ProjectSkillScanDeps,
@@ -124,9 +135,7 @@ async function readProjectSkillDirectory(
         entries.push(result.value);
       }
     } finally {
-      if (iterator.return) {
-        await awaitProjectSkillDiscoveryStep(() => iterator.return!(), budget);
-      }
+      closeProjectSkillDirectoryIterator(iterator);
     }
     return entries;
   }
@@ -301,7 +310,7 @@ async function detectWindowsCaseComparison(
       }
     }
     return 'unavailable';
-  } catch (error) {
+  } catch {
     return 'unavailable';
   }
 }
