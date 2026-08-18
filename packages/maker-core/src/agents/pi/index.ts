@@ -1960,8 +1960,8 @@ export class PiAgent extends BaseAgent {
             agentKind: 'pi',
             getThresholdPct: getAutoCompactThresholdPct,
           });
-    // compact / prompt / set_model / set_thinking_level 共用一条双向串行链。
-    // 只等 compact 再发控制 RPC 是单向的：send 越过 wait 后 compact 仍能插队。
+    // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
+    // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。
     let sessionRpcChain: Promise<void> = Promise.resolve();
     const waitForSessionRpcIdle = async (): Promise<void> => {
       await sessionRpcChain.catch(() => undefined);
@@ -3169,7 +3169,7 @@ export class PiAgent extends BaseAgent {
           if (enabled === planModeActive) return;
           let resp: Awaited<ReturnType<typeof proc.request>>;
           try {
-            resp = await proc.request({ type: 'prompt', message: '/plan' });
+            resp = await runExclusivePiRpc(() => proc.request({ type: 'prompt', message: '/plan' }));
           } catch (error) {
             // transport 超时/断线不能证明命令未到达 Pi；它可能已经完成 toggle。
             // 旧 boolean 此后不再可信，下次调用必须先从持久 entry 重同步。
@@ -3296,10 +3296,10 @@ export class PiAgent extends BaseAgent {
           ...(customInstructions ? { customInstructions } : {}),
           ...(label ? { label } : {}),
         }));
-        const switched = await proc.request(
+        const switched = await runExclusivePiRpc(() => proc.request(
           { type: 'prompt', message: `/cindy-branch-switch ${payload}` },
           { timeoutMs: PI_BRANCH_NAVIGATION_TIMEOUT_MS },
-        );
+        ));
         if (!switched.success) {
           throw new Error(`pi branch navigation failed: ${switched.error ?? 'unknown'}`);
         }
