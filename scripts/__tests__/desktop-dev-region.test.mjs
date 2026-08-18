@@ -275,6 +275,26 @@ test("worktree dev launch honors explicit isolation/sharing intent and never ove
     }),
     null,
   );
+  // restart --passive / --preserve-running 只透传 XDT_SCHEDULER_PASSIVE=1（argv 侧
+  // 没有 --passive / --preserve-running）——共享意图必须被识别，防止误隔离
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
+  );
+  // restart 链路显式表态：参数契约由 restart 自己负责（无参=共库+正常调度），
+  // 自动隔离兜底不得静默覆盖（review-pr P1，PR #2640）
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1" },
+    }),
+    null,
+  );
 });
 
 test("worktree dev launch outside a managed worktree keeps the shared-profile semantics", () => {

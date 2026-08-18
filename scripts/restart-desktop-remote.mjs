@@ -582,6 +582,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_USER_DATA_DIR_EPOCH', env.XDT_USER_DATA_DIR_EPOCH],
     ['XDT_DEVICE_ID_OVERRIDE', env.XDT_DEVICE_ID_OVERRIDE],
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
+    ['XDT_RESTART_MANAGED', env.XDT_RESTART_MANAGED],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
@@ -758,6 +759,13 @@ async function main() {
   const argv = process.argv.slice(2);
   const killOnly = argv.includes('--kill-only');
   const waitReady = argv.includes('--wait-ready');
+  // 显式表态：本启动由 restart 参数契约管理（无参=共库+正常调度、--isolated=隔离、
+  // --passive / --preserve-running=共享），经 devEnvPrefix 白名单透传给 dev 进程。
+  // worktree 内裸 dev:remote 的自动隔离兜底（desktop-dev-region.mjs 的
+  // resolveWorktreeIsolationFromCwd）据此识别 restart 链路并不干预——否则无参
+  // restart 在 worktree 内会被静默改造成隔离沙箱，违背「不带 = 共库 + 正常调度」
+  // 契约（review-pr P1，PR #2640）。
+  process.env.XDT_RESTART_MANAGED = '1';
   const preserveRunning = argv.includes('--preserve-running');
   const replaceRunningArg = argv.find((arg) => arg.startsWith('--replace-running-root='));
   const replaceRunningRoot = replaceRunningArg

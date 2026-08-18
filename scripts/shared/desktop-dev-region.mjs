@@ -178,8 +178,11 @@ export function worktreeNameFromPath(cwd) {
  * - cwd 命中托管 worktree 且调用方未声明任何显式模式时返回 `{ worktreeName }`；
  *   worktree 名不合法时返回 `{ worktreeName: null }`（仍隔离，回退默认沙箱，与
  *   devCliFlags 的 invalidIsolationName 语义一致——回落到不隔离会混进正式版数据）；
- * - 显式 `--isolated[=<名>]` / `--passive` / `--preserve-running`、`XDT_ISOLATED=1`
- *   或 `XDT_USER_DATA_DIR` 已设置时返回 null（显式意图优先，不覆盖用户选择）；
+ * - 显式 `--isolated[=<名>]` / `--passive` / `--preserve-running`、`XDT_ISOLATED=1`、
+ *   `XDT_USER_DATA_DIR`、`XDT_SCHEDULER_PASSIVE=1`（restart --passive /
+ *   --preserve-running 透传的共享意图）或 `XDT_RESTART_MANAGED=1`（restart 链路：
+ *   参数契约显式，默认=共库+正常调度，由 restart 自己负责，不套自动隔离）已设置时
+ *   返回 null（显式意图优先，不覆盖用户选择）；
  * - baseRepo 直跑（cwd 不在 worktree 下）返回 null，保持既有共库语义不变。
  */
 export function resolveWorktreeIsolationFromCwd({
@@ -200,6 +203,15 @@ export function resolveWorktreeIsolationFromCwd({
   }
   if (env.XDT_ISOLATED === "1") return null;
   if (env.XDT_USER_DATA_DIR?.trim()) return null;
+  // restart --passive / --preserve-running 只透传 XDT_SCHEDULER_PASSIVE=1（argv 侧
+  // 没有 --passive / --preserve-running）——共享意图必须被识别，否则会被误隔离，
+  // 违背「passive 数据仍与其它实例共享 / preserve 复用当前登录」承诺。
+  if (env.XDT_SCHEDULER_PASSIVE === "1") return null;
+  // restart 链路（restart-desktop-remote.mjs → desktop-dev-runner → dev:desktop:remote）
+  // 的启动参数契约是显式的：无参=共库+正常调度、--isolated=隔离、--passive /
+  // --preserve-running=共享。它不需要自动隔离兜底，显式表态后一律不干预，防止
+  // worktree 内无参 restart 被静默改造成隔离沙箱（review-pr P1, PR #2640）。
+  if (env.XDT_RESTART_MANAGED === "1") return null;
 
   const name = worktreeNameFromPath(cwd);
   if (name === null) return null;
