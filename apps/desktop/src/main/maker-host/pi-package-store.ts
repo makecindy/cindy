@@ -1194,10 +1194,9 @@ async function inspectPackage(
     const staleApproval = extensions.length > 0
       && state.approvedExtensionSources.includes(pkg.source)
       && requiresExtensionApproval;
-    const hasOnlyUnsupportedResources = resources.length > 0 && !hasLaunchResources;
-    const enabled = !explicitlyDisabled
-      && !requiresExtensionApproval
-      && !hasOnlyUnsupportedResources;
+    const enabled = hasLaunchResources
+      && !explicitlyDisabled
+      && !requiresExtensionApproval;
     const promptCommands = enabled
       ? await Promise.all(prompts.map((file) => promptCommand(file, budget)))
       : [];

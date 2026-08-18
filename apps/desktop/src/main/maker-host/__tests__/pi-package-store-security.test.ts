@@ -1716,7 +1716,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.listPiPackages()).resolves.toMatchObject({
       packages: [{
         source: '../confined',
-        enabled: true,
+        enabled: false,
         resources: [],
         warning: 'no-resources',
       }],
@@ -1725,6 +1725,99 @@ describe('Pi package executable-code boundary', () => {
       snapshotRoot: path.join(runtime.userData, 'escaped-snapshot'),
     })).resolves.toEqual({
       extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    });
+  });
+
+  it('enables directory packages only when inspection finds launch resources', async () => {
+    const emptyRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-empty-'));
+    const themeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-theme-matrix-'));
+    const filteredRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-filtered-'));
+    const skillRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-skill-matrix-'));
+    roots.push(emptyRoot, themeRoot, filteredRoot, skillRoot);
+
+    await fs.writeFile(path.join(emptyRoot, 'package.json'), JSON.stringify({
+      name: 'empty-package',
+      version: '1.0.0',
+    }));
+    await fs.mkdir(path.join(themeRoot, 'themes'));
+    await fs.writeFile(path.join(themeRoot, 'themes', 'night.json'), '{}');
+    await fs.writeFile(path.join(themeRoot, 'package.json'), JSON.stringify({
+      name: 'theme-package',
+      version: '1.0.0',
+      pi: { themes: ['./themes'] },
+    }));
+    await fs.mkdir(path.join(filteredRoot, 'prompts'));
+    await fs.writeFile(path.join(filteredRoot, 'prompts', 'not-loadable.txt'), 'not a Pi prompt');
+    await fs.writeFile(path.join(filteredRoot, 'package.json'), JSON.stringify({
+      name: 'filtered-package',
+      version: '1.0.0',
+      pi: { prompts: ['./prompts'] },
+    }));
+    await fs.mkdir(path.join(skillRoot, 'skills', 'launchable'), { recursive: true });
+    await fs.writeFile(path.join(skillRoot, 'skills', 'launchable', 'SKILL.md'), [
+      '---',
+      'name: launchable',
+      'description: launchable test skill',
+      '---',
+      'body',
+      '',
+    ].join('\n'));
+    await fs.writeFile(path.join(skillRoot, 'package.json'), JSON.stringify({
+      name: 'skill-package',
+      version: '1.0.0',
+      pi: { skills: ['./skills'] },
+    }));
+
+    runtime.listOutput = [
+      'User packages:',
+      '  npm:empty-package',
+      `    ${emptyRoot}`,
+      '  npm:theme-package',
+      `    ${themeRoot}`,
+      '  npm:filtered-package',
+      `    ${filteredRoot}`,
+      '  npm:skill-package',
+      `    ${skillRoot}`,
+      '',
+    ].join('\n');
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [
+        {
+          source: 'npm:empty-package',
+          enabled: false,
+          resources: [],
+          warning: 'no-resources',
+        },
+        {
+          source: 'npm:theme-package',
+          enabled: false,
+          resources: [{ kind: 'theme', compatibility: 'unsupported' }],
+        },
+        {
+          source: 'npm:filtered-package',
+          enabled: false,
+          resources: [],
+          warning: 'no-resources',
+        },
+        {
+          source: 'npm:skill-package',
+          enabled: true,
+          resources: [{ kind: 'skill', name: 'launchable', compatibility: 'supported' }],
+        },
+      ],
+    });
+
+    const snapshotRoot = path.join(runtime.userData, 'launch-resource-matrix');
+    await expect(store.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toMatchObject({
+      extensions: [],
+      skills: [{
+        name: 'launchable',
+        path: path.join(snapshotRoot, '0', 'skills', 'launchable', 'SKILL.md'),
+      }],
+      promptTemplates: [],
+      packageRoots: [path.join(snapshotRoot, '0')],
     });
   });
 
