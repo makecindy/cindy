@@ -1,0 +1,110 @@
+/** Local-only DeepSeek Harness adapter. It deliberately exposes the existing `pi` kind until host routing gains a dsh kind. */
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+
+import type { AgentEvent, UsageSnapshot } from '../../types/events.js';
+import type { AgentKind, UserContentBlock, UserMessage } from '../../types/common.js';
+import type { Capabilities } from '../../types/capabilities.js';
+import { BaseAgent, type AgentDeps, type AgentSessionHandle, type SendOptions, type StartSessionOptions } from '../base-agent.js';
+import { buildDshCordisConfig, renderDshCordisYaml } from './composition.js';
+import { DSH_BRIDGE_SOURCE } from './bridge-source.js';
+import type { DshInitializeResult, DshSessionEventNotificationParams, DshSessionStatusNotificationParams } from './protocol.js';
+import { DshRpcProcess } from './rpc-client.js';
+import { createDshEventQueue, createDshTranslateContext, settleDshTurnOnIdle, translateDshEvent } from './translator.js';
+import { createDshStdioTransport } from './transport.js';
+
+interface DshVendorOptions {
+  dshBinPath?: string;
+  dshNodePath?: string;
+  /** Host-controlled user-data root; dsh session persistence never falls back to cwd. */
+  dshSessionRoot?: string;
+  /** Secret is accepted only to populate the spawned process environment. */
+  dshApiKey?: string;
+  dshBashLocal?: boolean;
+}
+
+export class DshAgent extends BaseAgent {
+  readonly kind: AgentKind = 'pi';
+  readonly capabilities: Capabilities;
+  constructor(deps: AgentDeps) { super(deps); this.capabilities = this.buildCapabilities(DshAgent.baseCapabilities()); }
+  private static baseCapabilities(): Capabilities {
+    const unavailable = { supported: false as const, reason: 'not-implemented' as const };
+    return {
+      switchModel: unavailable, availableModels: [], hasFastMode: false, effort: unavailable, effortLevels: [], reasoningDisplay: ['full'], permissionModes: [], setPermissionModeMidSession: unavailable,
+      multimodal: { text: { supported: true }, image: unavailable, file: unavailable }, fork: unavailable, rewind: unavailable, sessionTree: unavailable,
+      abort: { supported: true }, sameTurnSteer: unavailable, memory: { supported: unavailable }, extraDirs: unavailable,
+    };
+  }
+  override async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    if (opts.remoteHostId) throw new Error('dsh does not support SSH remote sessions yet');
+    const vendor = (opts.vendorOptions ?? {}) as DshVendorOptions;
+    const sessionRoot = vendor.dshSessionRoot;
+    if (!sessionRoot || !path.isAbsolute(sessionRoot)) throw new Error('dshSessionRoot must be an absolute host-managed user-data path');
+    const apiKey = vendor.dshApiKey;
+    if (!apiKey) throw new Error('dsh requires an API key supplied by the host');
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-dsh-'));
+    const configPath = path.join(tempDir, 'cordis.yml');
+    try {
+      const config = buildDshCordisConfig({ provider: 'deepseek-official', model: opts.model || 'deepseek-v4-flash', apiKeyEnv: 'DEEPSEEK_API_KEY', cwd: opts.workingDir, sessionRoot, bashLocal: vendor.dshBashLocal });
+      await writeFile(configPath, renderDshCordisYaml(config), 'utf8');
+      await writeFile(path.join(tempDir, 'cindy-dsh-bridge.mjs'), DSH_BRIDGE_SOURCE, 'utf8');
+      const queue = createDshEventQueue();
+      const context = createDshTranslateContext(this.deps.logger);
+      const logger = this.deps.logger;
+      let closed = false;
+      const cleanTemp = async (): Promise<void> => { await rm(tempDir, { recursive: true, force: true }).catch((error) => this.deps.logger.warn('dsh temp config cleanup failed', { message: error instanceof Error ? error.message : String(error) })); };
+      const transport = createDshStdioTransport({ nodePath: vendor.dshNodePath ?? process.execPath, binPath: vendor.dshBinPath ?? this.deps.binaryPath, configPath, cwd: opts.workingDir, env: { ...process.env, DEEPSEEK_API_KEY: apiKey, DSH_CWD: opts.workingDir, DSH_SESSION_ROOT: sessionRoot }, logger: this.deps.logger });
+      const proc = new DshRpcProcess({ transport, logger: this.deps.logger, onExit: ({ code, signal }) => { if (!closed) queue.push({ type: 'error', data: { message: `dsh exited (code=${code}, signal=${signal})`, isTerminal: true }, source: 'pi' }); void cleanTemp(); queue.end(); }, onNotification: (notification) => {
+        if (notification.method === 'session.event') { const params = notification.params as DshSessionEventNotificationParams; if (params?.event) translateDshEvent(params.event, queue, context); }
+        else if (notification.method === 'session.status') { const params = notification.params as DshSessionStatusNotificationParams; if (params?.status === 'running') queue.push({ type: 'status', data: { status: 'Working…', ...context.usage, isRunning: true }, source: 'pi' }); else if (params?.status === 'idle') settleDshTurnOnIdle(queue, context); }
+      } });
+      await proc.request<DshInitializeResult>('initialize', { cwd: opts.workingDir, provider: 'deepseek-official', model: opts.model || 'deepseek-v4-flash' });
+      const sessionId = opts.resumeSessionId ?? randomUUID();
+      if (opts.resumeSessionId) await proc.request('session/resume', { sessionId });
+      const send = async (message: UserMessage, sendOpts?: SendOptions): Promise<void> => {
+        if (sendOpts?.signal?.aborted) throw new Error('dsh send cancelled before dispatch');
+        const text = textFromMessage(message);
+        if (!text) throw new Error('dsh requires non-empty text input');
+        await proc.request('session/prompt', { sessionId, contentBlocks: [{ type: 'text', text }] });
+      };
+      return {
+        get id() { return sessionId; }, agentKind: 'pi', model: opts.model || 'deepseek-v4-flash', send,
+        async steer() { throw new Error('dsh does not support same-turn steering'); },
+        async abort() {
+          if (proc.isClosed) return;
+          try { await proc.request('session/cancel', { sessionId }); } catch (error) {
+            logger.warn('dsh cancel RPC failed; terminating process', { message: error instanceof Error ? error.message : String(error) });
+            closed = true; await proc.close().catch(() => undefined); await cleanTemp(); queue.end();
+          }
+        },
+        async close() {
+          if (closed) return;
+          closed = true;
+          try {
+            // The current dsh wire lacks a reliable cancel; shutdown is best-effort.
+            await proc.request('shutdown', {}, { timeoutMs: 5_000 });
+          } catch (error) {
+            // Closing the process below is the required fallback after a lost RPC response.
+          } finally {
+            await proc.close().catch(() => undefined);
+            await cleanTemp();
+            queue.end();
+          }
+        },
+        events(): AsyncIterable<AgentEvent> { return queue; }, getUsageSnapshot(): UsageSnapshot { return context.usage; }, setInteractionResolver() { /* dsh wire has no interaction requests */ }, isTurnRunning() { return context.isStreaming; },
+      };
+    } catch (error) { await rm(tempDir, { recursive: true, force: true }); throw error; }
+  }
+}
+function textFromMessage(message: UserMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  const text: string[] = [];
+  for (const block of message.content as UserContentBlock[]) {
+    if (block.type === 'text') text.push(block.text);
+    else if (block.type === 'mention') text.push(`\`${block.path}\``);
+    else throw new Error(`dsh does not support ${block.type} attachments`);
+  }
+  return text.join(' ').trim();
+}
