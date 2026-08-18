@@ -48,6 +48,7 @@ vi.mock('../../security/trustedAppRenderer', () => ({
 import {
   RSB_NATIVE_POPUP_CLAIM_CHANNEL,
   RSB_NATIVE_POPUP_CLOSE_CHANNEL,
+  RSB_NATIVE_POPUP_COMMAND_CHANNEL,
   RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL,
 } from '../../../shared/rsbNativePopup';
 import {
@@ -76,6 +77,7 @@ function makeContents(id: number) {
     canGoForward: () => boolean;
     isCurrentlyAudible: () => boolean;
     getZoomFactor: () => number;
+    setZoomFactor: ReturnType<typeof vi.fn>;
   };
   contents.id = id;
   contents.destroyed = false;
@@ -94,6 +96,7 @@ function makeContents(id: number) {
   contents.canGoForward = () => false;
   contents.isCurrentlyAudible = () => false;
   contents.getZoomFactor = () => 1;
+  contents.setZoomFactor = vi.fn();
   return contents;
 }
 
@@ -229,6 +232,46 @@ describe('main-owned RSB native popup surfaces', () => {
         }),
       },
     });
+  });
+
+  it('sets and reapplies tab zoom only while a native popup surface is visible', async () => {
+    const host = makeContents(1);
+    const popup = makeContents(42);
+    electronMocks.windows.set(host, makeWindow());
+    const surfaceId = createRsbNativePopupSurface(host as never, popup as never)!;
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    await claim({ sender: host }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
+
+    const command = electronMocks.handlers.get(RSB_NATIVE_POPUP_COMMAND_CHANNEL)!;
+    expect(command(
+      { sender: host },
+      { surfaceId, command: 'set-zoom-factor', zoomFactor: 1.25 },
+    )).toEqual({ ok: true });
+    expect(popup.setZoomFactor).not.toHaveBeenCalled();
+
+    popup.emit('did-navigate');
+    expect(popup.setZoomFactor).not.toHaveBeenCalled();
+
+    const setBounds = electronMocks.handlers.get(RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL)!;
+    setBounds(
+      { sender: host },
+      {
+        surfaceId,
+        bounds: { x: 10, y: 50, width: 600, height: 400 },
+        visible: true,
+      },
+    );
+    expect(popup.setZoomFactor).toHaveBeenCalledTimes(1);
+    expect(popup.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+
+    popup.emit('did-navigate');
+    expect(popup.setZoomFactor).toHaveBeenCalledTimes(2);
+    expect(popup.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+
+    expect(() => command(
+      { sender: host },
+      { surfaceId, command: 'set-zoom-factor', zoomFactor: 10 },
+    )).toThrow(/INVALID_PARAMS/);
   });
 
   it('pins opener and popup, rejects a foreign owner, and closes idempotently', async () => {

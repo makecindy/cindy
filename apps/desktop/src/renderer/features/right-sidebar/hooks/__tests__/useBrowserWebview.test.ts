@@ -23,6 +23,7 @@ interface MockWebview {
   goBack: ReturnType<typeof vi.fn>;
   goForward: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  setZoomFactor: ReturnType<typeof vi.fn>;
 }
 
 let mockWebview: MockWebview;
@@ -120,17 +121,20 @@ function makeMockWebview(initialUrl: string): MockWebview {
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
+    setZoomFactor: vi.fn(),
   };
 }
 
 function HookProbe({
   onResult,
   visible,
+  zoomFactor,
 }: {
   onResult: (result: UseBrowserWebviewResult) => void;
   visible?: boolean;
+  zoomFactor?: number;
 }) {
-  const result = useBrowserWebview('tab-a', 'session-a', visible);
+  const result = useBrowserWebview('tab-a', 'session-a', visible, true, zoomFactor);
   onResult(result);
   return null;
 }
@@ -159,6 +163,48 @@ describe('useBrowserWebview', () => {
     expect(acquire).not.toHaveBeenCalled();
     expect(result!.wrapper).toBeNull();
     expect(result!.webview).toBeNull();
+  });
+
+  it('reapplies page zoom after navigation', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => result!.setZoomFactor(1.25));
+    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    const callsBeforeNavigation = mockWebview.setZoomFactor.mock.calls.length;
+
+    act(() => mockWebview.dispatch('did-navigate', { url: 'https://example.com/' }));
+    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+    expect(mockWebview.setZoomFactor).toHaveBeenCalledTimes(callsBeforeNavigation + 1);
+  });
+
+  it('restores the active tab zoom without letting hidden navigation override it', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    const view = render(createElement(HookProbe, {
+      visible: true,
+      zoomFactor: 1.25,
+      onResult: (next) => { result = next; },
+    }));
+    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
+
+    view.rerender(createElement(HookProbe, {
+      visible: false,
+      zoomFactor: 1.25,
+      onResult: (next) => { result = next; },
+    }));
+    mockWebview.setZoomFactor.mockClear();
+    act(() => mockWebview.dispatch('did-navigate', { url: 'https://example.com/' }));
+    expect(mockWebview.setZoomFactor).not.toHaveBeenCalled();
+
+    view.rerender(createElement(HookProbe, {
+      visible: true,
+      zoomFactor: 1.25,
+      onResult: (next) => { result = next; },
+    }));
+    expect(mockWebview.setZoomFactor).toHaveBeenLastCalledWith(1.25);
   });
 
   it('does not materialize a hidden tab until it becomes visible', async () => {

@@ -3,7 +3,11 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { WebBrowserTabPillIcon, type WebBrowserState } from '../index';
+import {
+  hydrateWebBrowserState,
+  WebBrowserTabPillIcon,
+  type WebBrowserState,
+} from '../index';
 
 function browserState(favicon: string | null): WebBrowserState {
   return {
@@ -11,6 +15,7 @@ function browserState(favicon: string | null): WebBrowserState {
     title: 'Example',
     favicon,
     isAudible: false,
+    zoomFactor: 1,
   };
 }
 
@@ -51,5 +56,17 @@ describe('WebBrowserTabPillIcon', () => {
     expect(view.container.querySelector('img')?.getAttribute('src'))
       .toBe('https://example.com/favicon-v2.ico');
     expect(view.container.querySelector('.lucide-globe')).toBeNull();
+  });
+});
+
+describe('hydrateWebBrowserState', () => {
+  it('defaults legacy tabs to 100% zoom', () => {
+    expect(hydrateWebBrowserState({ url: 'https://example.com/' }).zoomFactor).toBe(1);
+  });
+
+  it('restores a persisted supported zoom factor', () => {
+    expect(
+      hydrateWebBrowserState({ url: 'https://example.com/', zoomFactor: 1.25 }).zoomFactor,
+    ).toBe(1.25);
   });
 });

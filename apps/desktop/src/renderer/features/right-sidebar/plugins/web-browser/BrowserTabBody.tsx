@@ -53,6 +53,7 @@ import type { TabKindHostContext } from '../../types';
 
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
+import { normalizeBrowserZoomFactor } from './lib/browserZoom';
 import { useBrowserComment } from './useBrowserComment';
 import { useLocalHtmlAutoReload } from './useLocalHtmlAutoReload';
 import type { WebBrowserState } from './index';
@@ -108,7 +109,14 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   const nativePopupSurfaceId =
     findNativePopupSurfaceForTab(tabId)?.surfaceId ?? state.nativePopupSurfaceId;
   const isNativePopup = Boolean(nativePopupSurfaceId);
-  const webviewBrowser = useBrowserWebview(tabId, sessionId, tabVisible, !isNativePopup);
+  const zoomFactor = normalizeBrowserZoomFactor(state.zoomFactor);
+  const webviewBrowser = useBrowserWebview(
+    tabId,
+    sessionId,
+    tabVisible,
+    !isNativePopup,
+    zoomFactor,
+  );
   const nativeBrowser = useNativePopupSurface(
     nativePopupSurfaceId,
     sessionId,
@@ -125,6 +133,13 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   stateUrlRef.current = state.url;
   browserUrlRef.current = browser.url;
   navigateRef.current = browser.navigate;
+
+  // Keep the desired tab zoom attached to each webview generation and native
+  // popup surface. The hook reapplies it after navigation and guest attach.
+  useEffect(() => {
+    if (!tabVisible) return;
+    browser.setZoomFactor(zoomFactor);
+  }, [browser.setZoomFactor, browser.webview, nativePopupSurfaceId, tabVisible, zoomFactor]);
 
   // 当前会话一轮结束后，如果该轮产物修改了正在预览的本地 HTML，则刷新一次。
   // 不监听磁盘；非激活 tab 与 SSH 远程会话不参与。
@@ -480,6 +495,15 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     }
   }, [t]);
 
+  const handleZoomChange = useCallback(
+    (nextZoomFactor: number) => {
+      const normalized = normalizeBrowserZoomFactor(nextZoomFactor);
+      browser.setZoomFactor(normalized);
+      if (normalized !== zoomFactor) ctx.patchState({ zoomFactor: normalized });
+    },
+    [browser.setZoomFactor, ctx, zoomFactor],
+  );
+
   return (
     <div ref={rootRef} className="flex h-full w-full flex-col bg-content-area">
       <BrowserChrome
@@ -500,6 +524,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         canOpenInSystemBrowser={canOpenInSystemBrowser}
         onOpenInSystemBrowser={handleOpenInSystemBrowser}
         onCopyLink={handleCopyLink}
+        zoomFactor={zoomFactor}
+        onZoomChange={handleZoomChange}
         onOverlayOpenChange={setChromeOverlayOpen}
       />
       {/* webview slot:flex-1 占满剩余空间。pool 的 wrapper 用 100% width/height

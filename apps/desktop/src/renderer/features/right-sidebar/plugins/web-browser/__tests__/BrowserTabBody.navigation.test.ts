@@ -65,18 +65,29 @@ vi.mock('@/components/ui/dropdown-menu', () => {
       react.createElement(react.Fragment, null, children),
     DropdownMenuContent: ({ children }: { children: React.ReactNode }) =>
       react.createElement('div', null, children),
+    DropdownMenuGroup: ({ children }: { children: React.ReactNode }) =>
+      react.createElement('div', null, children),
+    DropdownMenuLabel: ({ children }: { children: React.ReactNode }) =>
+      react.createElement('div', null, children),
+    DropdownMenuSeparator: () => react.createElement('hr'),
     DropdownMenuItem: ({
       children,
       onSelect,
       disabled,
-    }: {
+      ...props
+    }: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onSelect'> & {
       children: React.ReactNode;
-      onSelect?: () => void;
+      onSelect?: (event: { preventDefault: () => void }) => void;
       disabled?: boolean;
     }) =>
       react.createElement(
         'button',
-        { type: 'button', disabled, onClick: () => onSelect?.() },
+        {
+          ...props,
+          type: 'button',
+          disabled,
+          onClick: () => onSelect?.({ preventDefault: vi.fn() }),
+        },
         children,
       ),
   };
@@ -130,6 +141,7 @@ function makeBrowserState(
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
+    setZoomFactor: vi.fn(),
     dismissResourceAlert: vi.fn(),
     ...patch,
   };
@@ -143,6 +155,7 @@ function renderBrowserTab(
     title: string;
     favicon: string | null;
     isAudible: boolean;
+    zoomFactor: number;
   }> = {},
   deviceLinkDeviceId?: string | null,
 ): ReactElement {
@@ -167,6 +180,7 @@ function renderBrowserTab(
       title: '',
       favicon: null,
       isAudible: false,
+      zoomFactor: 1,
       ...statePatch,
     },
   });
@@ -217,6 +231,24 @@ describe('BrowserTabBody navigation', () => {
     );
     expect(sharedWrapper.isConnected).toBe(false);
     expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  it('applies persisted tab zoom and patches the next zoom step', () => {
+    const setZoomFactor = vi.fn();
+    const patchState = vi.fn();
+    browserState = makeBrowserState({ setZoomFactor });
+
+    render(renderBrowserTab(
+      'https://www.taptap.cn/',
+      patchState,
+      true,
+      { zoomFactor: 1.25 },
+    ));
+
+    expect(setZoomFactor).toHaveBeenCalledWith(1.25);
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.zoomIn' }));
+    expect(setZoomFactor).toHaveBeenLastCalledWith(1.5);
+    expect(patchState).toHaveBeenCalledWith({ zoomFactor: 1.5 });
   });
 
   it('hides a native popup view while the renderer more-menu portal is open', () => {
@@ -787,6 +819,7 @@ describe('BrowserTabBody navigation', () => {
           title: '',
           favicon: null,
           isAudible: false,
+          zoomFactor: 1,
         },
       }),
     );
