@@ -383,7 +383,11 @@ export function MobileDownloadDialog({
           }}
         >
           <Dialog.Close asChild>
-            <Tip text={t('sidebar.mobileDownload.close')} side="bottom">
+            <Tip
+              text={t('sidebar.mobileDownload.close')}
+              side="bottom"
+              contentClassName="z-[10001]"
+            >
               <button
                 ref={closeActionRef}
                 type="button"

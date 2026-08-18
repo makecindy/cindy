@@ -200,6 +200,7 @@ export function SessionShareExportDialog({
                       : 'sessionShare.export.showPassword',
                   )}
                   side="bottom"
+                  contentClassName="z-[10001]"
                 >
                   <button
                     type="button"

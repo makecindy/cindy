@@ -318,6 +318,25 @@ describe('icon-only button tooltip coverage', () => {
     expect(tabBar).toContain('<Tip text={closeAriaLabel}>');
   });
 
+  it('keeps modal tips visible and row details separate from inline action tips', () => {
+    const mobileDownload = rendererSource('components/sidebar/MobileDownloadDialog.tsx');
+    const sessionExport = rendererSource('features/cc-agent/sidebar/SessionShareExportDialog.tsx');
+    const automation = rendererSource('features/cc-agent/sidebar/AutomationSessionGroupItem.tsx');
+
+    expect(mobileDownload).toMatch(
+      /text=\{t\('sidebar\.mobileDownload\.close'\)\}[\s\S]*?contentClassName="z-\[10001\]"/,
+    );
+    expect(sessionExport).toMatch(
+      /sessionShare\.export\.(?:hide|show)Password[\s\S]*?contentClassName="z-\[10001\]"/,
+    );
+    expect(automation).toContain('controlledOpen={rowTooltipOpen}');
+    expect(automation).toContain('setRowTooltipOpen(!isAutomationGroupInlineAction(event.target))');
+    expect(automation).toContain('onPointerLeave={() => setRowTooltipOpen(false)}');
+    expect(automation).toContain('onFocusCapture={(event) => {');
+    expect(automation).toContain('onBlurCapture={(event) => {');
+    expect(automation.match(/^\s+data-automation-group-inline-action="true"/gm)).toHaveLength(4);
+  });
+
   it('keeps disabled icon actions hoverable and keyboard discoverable', () => {
     const sidebar = rendererSource('features/cc-agent/CCAgentSidebarUpper.tsx');
 

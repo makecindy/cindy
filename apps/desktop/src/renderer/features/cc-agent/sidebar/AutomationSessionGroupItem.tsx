@@ -74,6 +74,14 @@ interface FrozenGroupState {
   visibleSessionIds: string[];
 }
 
+const AUTOMATION_GROUP_INLINE_ACTION_SELECTOR = '[data-automation-group-inline-action="true"]';
+
+function isAutomationGroupInlineAction(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element && target.closest(AUTOMATION_GROUP_INLINE_ACTION_SELECTOR) !== null
+  );
+}
+
 export function AutomationSessionGroupItem({
   group,
   activeSessionId,
@@ -114,6 +122,7 @@ export function AutomationSessionGroupItem({
   const [showAll, setShowAll] = useState(false);
   const [frozen, setFrozen] = useState<FrozenGroupState | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [rowTooltipOpen, setRowTooltipOpen] = useState(false);
   const [countdownNowMs, setCountdownNowMs] = useState(() => Date.now());
   // 组头 = 组内「最新一条」运行的代理:状态、running/loading、点击打开目标都跟这条一致。
   // 用 group.sessions 派生(仅活动时间排序,不掺 running/notifications),引用随组内成员
@@ -325,11 +334,13 @@ export function AutomationSessionGroupItem({
     <div className="flex w-full flex-col gap-0.5">
       {/* 行 hover 浮层视觉与 SessionTooltip(PR 引用)对齐:右侧 align=start 弹出、
           浅色 surface(--surface-elevated + --border-default + shadow-sm)、立即出现,
-          和侧栏其它 hover 卡片在同一套调色板下(规则 16)。 */}
+          和侧栏其它 hover 卡片在同一套调色板下(规则 16)。行内动作有自己的 Tip,
+          进入这些按钮时由受控 open 关闭行级浮层，避免两层提示重叠。 */}
       <Tip
         text={rowTooltip}
         side="right"
         delay={0}
+        controlledOpen={rowTooltipOpen}
         contentClassName={cn(
           'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
           'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
@@ -341,6 +352,21 @@ export function AutomationSessionGroupItem({
             标题 <button>(Tab focus + Enter/Space)天然提供。 */}
         <div
           onClick={openLatestSession}
+          onPointerOver={(event) => {
+            setRowTooltipOpen(!isAutomationGroupInlineAction(event.target));
+          }}
+          onPointerLeave={() => setRowTooltipOpen(false)}
+          onFocusCapture={(event) => {
+            setRowTooltipOpen(!isAutomationGroupInlineAction(event.target));
+          }}
+          onBlurCapture={(event) => {
+            const nextTarget = event.relatedTarget;
+            setRowTooltipOpen(
+              nextTarget instanceof Node &&
+                event.currentTarget.contains(nextTarget) &&
+                !isAutomationGroupInlineAction(nextTarget),
+            );
+          }}
           className={cn(
             // list 组头与普通 SessionCard 共用 10px 内容边距；只有展开后的子任务
             // 由下方 pl-3 容器额外缩进。text 模式继续沿用 SessionItem 的树形缩进。
@@ -379,6 +405,7 @@ export function AutomationSessionGroupItem({
             <Tip text={scheduleBindingLabel} side="bottom">
               <button
                 type="button"
+                data-automation-group-inline-action="true"
                 aria-label={scheduleBindingLabel}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -419,6 +446,7 @@ export function AutomationSessionGroupItem({
           <Tip text={toggleGroupLabel} side="bottom">
             <button
               type="button"
+              data-automation-group-inline-action="true"
               onClick={(event) => {
                 // 阻止冒泡到行级 onClick(否则一次点击既切展开又打开会话)。
                 event.stopPropagation();
@@ -567,6 +595,7 @@ export function AutomationSessionGroupItem({
                     <Tip text={t('ccAgent.sidebar.automationGroup.menu.runNow')} side="bottom">
                       <button
                         type="button"
+                        data-automation-group-inline-action="true"
                         onClick={(event) => {
                           event.stopPropagation();
                           // 点击后主动 blur:group/slot 的 focus-within 会让操作按钮
@@ -590,6 +619,7 @@ export function AutomationSessionGroupItem({
                         <Tip text={t('ccAgent.sidebar.automationGroup.menu.more')} side="bottom">
                           <button
                             type="button"
+                            data-automation-group-inline-action="true"
                             onClick={(event) => {
                               event.stopPropagation();
                               event.currentTarget.blur();
