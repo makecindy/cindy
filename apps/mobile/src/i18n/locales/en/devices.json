@@ -104,8 +104,8 @@
     },
     "plan": "Schedule",
     "automationsButtonA11y": "Open remote automations",
-    "bots": "Bots",
-    "botsButtonA11y": "Open Bots on this device",
+    "bots": "Teammates",
+    "botsButtonA11y": "Open teammates on this device",
     "search": {
       "openA11y": "Search remote sessions",
       "closeA11y": "Close remote session search",
@@ -185,15 +185,15 @@
   },
   "bots": {
     "eyebrow": "Long-running assistants",
-    "title": "Bots",
-    "subtitle": "Bots on {{deviceName}}",
-    "emptyTitle": "No Bots on this device",
-    "emptyCopy": "Create a Bot on Desktop first, then open its primary task from your phone.",
-    "unsupportedTitle": "Desktop does not support remote Bots yet",
+    "title": "Teammates",
+    "subtitle": "Teammates on {{deviceName}}",
+    "emptyTitle": "No teammates on this device",
+    "emptyCopy": "Create a teammate on Desktop first, then open its primary task from your phone.",
+    "unsupportedTitle": "Desktop does not support remote teammates yet",
     "unsupportedCopy": "Update Cindy on this computer. Existing tasks are unaffected.",
     "noDescription": "No description yet",
-    "openA11y": "Open the primary task for Bot {{name}}",
-    "unavailableA11y": "Bot {{name}} cannot be opened: {{status}}",
+    "openA11y": "Open the primary task for teammate {{name}}",
+    "unavailableA11y": "Teammate {{name}} cannot be opened: {{status}}",
     "status": { "active": "Active", "paused": "Paused", "error": "Needs attention", "archived": "Archived", "deleting": "Deleting", "needsDesktop": "Set up on Desktop" }
   },
   "automations": {

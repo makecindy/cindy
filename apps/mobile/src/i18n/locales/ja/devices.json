@@ -104,8 +104,8 @@
     },
     "plan": "スケジュール",
     "automationsButtonA11y": "リモート自動化を開く",
-    "bots": "Bots",
-    "botsButtonA11y": "このデバイスの Bots を開く",
+    "bots": "仲間",
+    "botsButtonA11y": "このデバイスの仲間を開く",
     "search": {
       "openA11y": "リモートセッションを検索",
       "closeA11y": "リモートセッションの検索を閉じる",
@@ -185,15 +185,15 @@
   },
   "bots": {
     "eyebrow": "常駐アシスタント",
-    "title": "Bots",
-    "subtitle": "{{deviceName}} の Bot",
-    "emptyTitle": "このデバイスには Bot がありません",
-    "emptyCopy": "先にデスクトップで Bot を作成し、スマートフォンからメインタスクを開いてください。",
-    "unsupportedTitle": "デスクトップはリモート Bots に未対応です",
+    "title": "仲間",
+    "subtitle": "{{deviceName}} の仲間",
+    "emptyTitle": "このデバイスには仲間がありません",
+    "emptyCopy": "先にデスクトップで仲間を作成し、スマートフォンからメインタスクを開いてください。",
+    "unsupportedTitle": "デスクトップはリモート仲間に未対応です",
     "unsupportedCopy": "このコンピューターの Cindy を更新してください。既存のタスクには影響しません。",
     "noDescription": "説明はまだありません",
-    "openA11y": "Bot {{name}} のメインタスクを開く",
-    "unavailableA11y": "Bot {{name}} は開けません：{{status}}",
+    "openA11y": "仲間 {{name}} のメインタスクを開く",
+    "unavailableA11y": "仲間 {{name}} は開けません：{{status}}",
     "status": { "active": "稼働中", "paused": "一時停止中", "error": "対応が必要", "archived": "アーカイブ済み", "deleting": "削除中", "needsDesktop": "デスクトップで初期設定が必要" }
   },
   "automations": {

@@ -1586,6 +1586,19 @@
       "note": "Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。"
     },
     {
+      "id": "teammate",
+      "status": "proposed",
+      "en": "Teammate",
+      "translations": {
+        "zh-CN": "伙伴",
+        "zh-TW": "夥伴",
+        "ja": "仲間",
+        "ko": "동료"
+      },
+      "checkCase": false,
+      "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、事件收件箱、自动化、消息通道，可绑定项目与 worktree，可互相委派。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题、`Teammates this routine may call`），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、rightSidebar.botDelegations.*、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
+    },
+    {
       "id": "upload-code",
       "status": "proposed",
       "en": "Upload code",

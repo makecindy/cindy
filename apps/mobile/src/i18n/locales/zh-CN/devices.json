@@ -104,8 +104,8 @@
     },
     "plan": "计划",
     "automationsButtonA11y": "打开远程自动化",
-    "bots": "Bots",
-    "botsButtonA11y": "打开这台设备上的 Bots",
+    "bots": "伙伴",
+    "botsButtonA11y": "打开这台设备上的伙伴",
     "search": {
       "openA11y": "搜索远程任务",
       "closeA11y": "关闭搜索远程任务",
@@ -185,15 +185,15 @@
   },
   "bots": {
     "eyebrow": "长期助手",
-    "title": "Bots",
-    "subtitle": "{{deviceName}} 上的 Bot",
-    "emptyTitle": "这台设备还没有 Bot",
-    "emptyCopy": "请先在桌面端创建 Bot，再从手机打开它的主任务。",
-    "unsupportedTitle": "桌面端暂不支持远程 Bots",
+    "title": "伙伴",
+    "subtitle": "{{deviceName}} 上的伙伴",
+    "emptyTitle": "这台设备还没有伙伴",
+    "emptyCopy": "请先在桌面端创建伙伴，再从手机打开它的主任务。",
+    "unsupportedTitle": "桌面端暂不支持远程伙伴",
     "unsupportedCopy": "请更新这台电脑上的 Cindy。现有任务不会受到影响。",
     "noDescription": "还没有描述",
-    "openA11y": "打开 Bot {{name}} 的主任务",
-    "unavailableA11y": "Bot {{name}} 暂不可打开：{{status}}",
+    "openA11y": "打开伙伴 {{name}} 的主任务",
+    "unavailableA11y": "伙伴 {{name}} 暂不可打开：{{status}}",
     "status": { "active": "活跃", "paused": "已暂停", "error": "需要处理", "archived": "已归档", "deleting": "正在删除", "needsDesktop": "需在桌面端初始化" }
   },
   "automations": {
