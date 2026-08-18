@@ -80,13 +80,14 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
 
 **内置 worktree 内的裸 dev 启动自动按隔离沙箱处理**（issue #2635）：`pnpm dev:remote`
 （不经 restart 包装的人类/agent 入口）从 `<repo>/.cindy-worktrees/<名字>`（含迁移前
-`.xdt-worktrees/<名字>`）下启动时，若没有显式传 `--isolated` / `--passive` /
-`--preserve-running`（也未设 `XDT_ISOLATED=1` / `XDT_USER_DATA_DIR` /
-`XDT_SCHEDULER_PASSIVE=1` / `XDT_RESTART_MANAGED=1`），启动包装自动注入
+`.xdt-worktrees/<名字>`）下启动时，若没有显式传 `--isolated` / `--passive`（也未设
+`XDT_ISOLATED=1` / `XDT_USER_DATA_DIR` / `XDT_RESTART_MANAGED=1`），启动包装自动注入
 `XDT_ISOLATED=1` + `XDT_ISOLATED_NAME=<worktree 名>`，并在控制台打印提示——否则
 dev 会沿用区域默认 profile + 物理机 deviceId，登录后把同机正式版的设备连接顶掉、
 覆盖其服务端 refresh token（4409 → `INVALID_REFRESH_TOKEN` → 正式版被登出）。显式
 传入任一模式时保持原语义；baseRepo 直跑 `pnpm dev:remote` 仍是共库 + 正常调度。
+注意 `--preserve-running` 与单独设置的 `XDT_SCHEDULER_PASSIVE=1` **不豁免**自动隔离
+（见下方说明）。
 **restart 链路（`restart-desktop-remote.mjs`）不受此自动隔离影响**：restart 会置
 `XDT_RESTART_MANAGED=1` 显式表态（其参数契约即语义：无参=共库+正常调度、
 `--isolated`=隔离、`--passive` / `--preserve-running`=共享），自动隔离判定识别后一律
