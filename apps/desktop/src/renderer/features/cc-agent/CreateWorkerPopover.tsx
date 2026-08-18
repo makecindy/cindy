@@ -734,7 +734,7 @@ export function CreateWorkerPopover({
               width={220}
               ariaLabel={t('orca.createWorker.agentLabel')}
               onChange={(next) =>
-                updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')
+                updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : next === 'kimi' ? 'kimi-code' : 'claude-code')
               }
             />
           </div>

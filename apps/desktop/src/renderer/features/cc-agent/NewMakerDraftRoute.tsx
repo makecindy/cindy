@@ -373,7 +373,7 @@ function draftEnableOrcaOptions(
   deferDelegateTask = false,
 ) {
   const preferredAgent: 'claude-code' | 'codex' | 'pi' | 'kimi-code' =
-    collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
+    collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : collab.worker === 'kimi' ? 'kimi-code' : 'claude-code';
   // Worker 类型也是**设备作用域**的(codex review P2):在只连了 Codex 的设备 A 选了 Codex
   // Worker,切到只连 Claude 的设备 B 时,workerConfig 虽然被清了,collab.worker 仍是 codex,
   // 透传过去必撞被控端的 NO_PROVIDER_FOR_AGENT 预检,协同又静默降级成单会话。
@@ -810,7 +810,7 @@ export function NewMakerDraftRoute() {
   );
   const hiddenSwitcherVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
-    return (['cc', 'codex', 'pi'] as const).filter((vendor) => !availableVendors.has(vendor));
+    return (['cc', 'codex', 'pi', 'kimi'] as const).filter((vendor) => !availableVendors.has(vendor));
   }, [availableAgentsLoaded, availableVendors]);
   /**
    * 「这份草稿要建到对端设备上」—— 只看 deviceId,**不再要求 workingDir**(#807)。
@@ -4860,7 +4860,7 @@ export function NewMakerDraftRoute() {
           onCreate={(form: CreateWorkerForm) => {
             patchCollab({
               enabled: true,
-              worker: form.agent === 'codex' ? 'codex' : form.agent === 'pi' ? 'pi' : 'cc',
+              worker: form.agent === 'codex' ? 'codex' : form.agent === 'pi' ? 'pi' : form.agent === 'kimi-code' ? 'kimi' : 'cc',
               workerConfig: {
                 role: form.role,
                 model: form.model,

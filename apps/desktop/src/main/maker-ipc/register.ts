@@ -9058,7 +9058,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         deferDelegateTask?: unknown;
       };
       const workerAgent: AgentKind =
-        body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : 'claude-code';
+        body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : body.workerAgent === 'kimi-code' ? 'kimi-code' : 'claude-code';
       const delegateTask = typeof body.delegateTask === 'string' ? body.delegateTask : undefined;
       if (
         body.workerPermissionMode !== undefined &&
@@ -10033,8 +10033,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }>> = {};
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
-          // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
-          const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code';
+          // key 必须区分 pi / kimi-code,否则它们的模型会被塞进 claude_code 键与 CC 模型混淆。
+          const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : a === 'kimi-code' ? 'kimi_code' : 'claude_code';
           const providers = providerRouting.availability[a] ?? [];
           result[key] = caps.availableModels.map((m) => ({
             id: m.id,

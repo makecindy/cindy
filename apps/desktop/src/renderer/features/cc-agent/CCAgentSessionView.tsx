@@ -2927,7 +2927,7 @@ export function CCAgentSessionView({
       // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
       // 再弹出旧页面的认证对话框或导航回旧路由。
       if (!remoteDeviceId) {
-        const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+        const authVendor = displayAgentKind === 'pi' ? 'pi' : displayAgentKind === 'kimi-code' ? 'kimi' : isCodex ? 'codex' : 'cc';
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
           // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
           // PR #744 review 第十七轮)。
@@ -3375,7 +3375,7 @@ export function CCAgentSessionView({
     // 用三值化后的 agent 映射选默认模型:Pi 会话必须回退到 Pi 目录默认,而不是被
     // `isCodex ? 'codex' : 'cc'` 误写成 CC 首选(可能是更贵的 Opus)(codex review)。
     const defaultModel = getDefaultModelForVendor(
-      agent === 'pi' ? 'pi' : agent === 'codex' ? 'codex' : 'cc',
+      agent === 'pi' ? 'pi' : agent === 'codex' ? 'codex' : agent === 'kimi-code' ? 'kimi' : 'cc',
     );
     sessionService
       .update(sessionId, { model: defaultModel.id })

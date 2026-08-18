@@ -182,7 +182,7 @@ export function AgentTabs({ value, onChange, disabled }: { value: AgentKind; onC
       useMorphPopover={false}
       overlayContentClassName="z-[10010]"
       onChange={(vendor) => {
-        onChange(vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex');
+        onChange(vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : vendor === 'kimi' ? 'kimi-code' : 'codex');
       }}
     />
   );

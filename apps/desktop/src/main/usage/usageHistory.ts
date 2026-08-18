@@ -606,7 +606,7 @@ export async function readUsageHistoryWith(
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
     isSubscriptionUsageModel(r.model) &&
     !getSubscriptionValuePriceFor(
-      r.agentKind === 'codex' ? 'codex' : r.agentKind === 'pi' ? 'pi' : 'claude-code',
+      r.agentKind === 'codex' ? 'codex' : r.agentKind === 'pi' ? 'pi' : r.agentKind === 'kimi-code' ? 'kimi-code' : 'claude-code',
       displayModelName(r.model),
       pricing,
       r.day,
@@ -627,7 +627,7 @@ export async function readUsageHistoryWith(
     if (row.day === todayKey) todayTokens += rowTokens;
   }
   for (const row of modelRows) {
-    const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+    const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : row.agentKind === 'kimi-code' ? 'kimi-code' : 'claude-code';
     // claude 订阅行同样带 #billing= 后缀, 展示名统一剥后缀; key 保留原始 model
     // (api / subscription 两个计费维度分行聚合)。
     const model = displayModelName(row.model);

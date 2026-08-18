@@ -120,6 +120,7 @@ export function registerListAvailableModelsTool(
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
         pi: tagTier(result.pi),
+        kimi_code: tagTier(result.kimi_code),
       });
     },
   });
