@@ -1,5 +1,11 @@
 import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 
+import { i18n } from "@/i18n";
+import {
+  parseMobileMarkdown,
+  type MobileMarkdownBlock,
+  type MobileMarkdownInline,
+} from "@/session/messageMarkdown";
 import type {
   ConversationShareMessage,
   ConversationShareWebViewColors,
@@ -41,10 +47,9 @@ export interface ConversationShareSvgLayout {
   width: number;
 }
 
-export function conversationShareSvgRenderSize(layout: Pick<
-  ConversationShareSvgLayout,
-  "height" | "width"
->): { height: number; scale: number; sourceTooLarge: boolean; width: number } {
+export function conversationShareSvgRenderSize(
+  layout: Pick<ConversationShareSvgLayout, "height" | "width">,
+): { height: number; scale: number; sourceTooLarge: boolean; width: number } {
   const sourceTooLarge = layout.width * layout.height > MAX_OUTPUT_PIXELS;
   if (sourceTooLarge) {
     return { height: 1, scale: 1, sourceTooLarge, width: 1 };
@@ -83,9 +88,9 @@ export function buildConversationShareSvgLayout({
   for (const message of messages) {
     const currentIndex = messageIndex.get(message.clientId) ?? null;
     if (
-      previousIndex !== null
-      && currentIndex !== null
-      && currentIndex - previousIndex > 1
+      previousIndex !== null &&
+      currentIndex !== null &&
+      currentIndex - previousIndex > 1
     ) {
       gaps.push({ color: colors.textTertiary, y: cursorY + 12 });
       cursorY += 28;
@@ -95,7 +100,12 @@ export function buildConversationShareSvgLayout({
     const bubbleX = user ? canvasWidth - PADDING - bubbleWidth : PADDING;
     const horizontalPadding = user ? 12 : 0;
     const textWidth = bubbleWidth - horizontalPadding * 2;
-    const blocks: Array<{ color: string; fontSize: number; lineHeight: number; text: string }> = [];
+    const blocks: Array<{
+      color: string;
+      fontSize: number;
+      lineHeight: number;
+      text: string;
+    }> = [];
 
     if (message.automationOriginLabel) {
       blocks.push({
@@ -164,20 +174,64 @@ export function buildConversationShareSvgLayout({
 
 function plainConversationShareText(message: ConversationShareMessage): string {
   const parts = message.bodyParts
-    ? message.bodyParts.map((part) => part.kind === "text" ? part.text : `${part.label}:`).join("\n")
+    ? message.bodyParts
+        .map((part) => (part.kind === "text" ? part.text : `${part.label}:`))
+        .join("\n")
     : message.body;
   const combined = [parts, message.secondaryBody].filter(Boolean).join("\n");
-  return redactSensitiveText(combined)
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}(#{1,6}|>|[-+*]\s|\d+[.)]\s)\s*/gm, "")
-    .replace(/(```|~~~)[^\n]*\n?/g, "")
-    .replace(/[*_~`]/g, "")
+  return redactSensitiveText(plainMarkdownText(combined));
+}
+
+function plainMarkdownText(markdown: string): string {
+  const blocks = parseMobileMarkdown(markdown);
+  return blocks
+    .map(plainMarkdownBlockText)
+    .filter(Boolean)
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
-export function wrapSvgText(text: string, maxWidth: number, fontSize: number): string[] {
+function plainMarkdownBlockText(block: MobileMarkdownBlock): string {
+  switch (block.type) {
+    case "paragraph":
+    case "heading":
+    case "blockquote":
+    case "list_item":
+      return plainMarkdownInlineText(block.inlines);
+    case "table": {
+      const rows = [block.header, ...block.rows.map((row) => row.cells)];
+      return rows
+        .map((cells) => cells.map(plainMarkdownInlineText).join(" | "))
+        .join("\n");
+    }
+    case "code":
+    case "math":
+    case "mermaid":
+      return block.text;
+  }
+}
+
+function plainMarkdownInlineText(
+  inlines: readonly MobileMarkdownInline[],
+): string {
+  return inlines
+    .map((inline) => {
+      if (inline.type === "image") {
+        return (
+          inline.alt.trim() || i18n.t("message.renderer.imageFallbackTitle")
+        );
+      }
+      return inline.text;
+    })
+    .join("");
+}
+
+export function wrapSvgText(
+  text: string,
+  maxWidth: number,
+  fontSize: number,
+): string[] {
   const maxUnits = Math.max(1, maxWidth / fontSize);
   const lines: string[] = [];
   for (const paragraph of text.replace(/\r\n?/g, "\n").split("\n")) {
