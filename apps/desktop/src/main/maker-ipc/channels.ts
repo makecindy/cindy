@@ -334,6 +334,11 @@ export const MAKER_INVOKE = {
   //   - RESET: 删 <userData>/maker-memory/ 全部内容 + close db pool
   MAKER_MEMORY_SET_ENABLED: 'maker:maker-memory:set-enabled',
   MAKER_MEMORY_RESET: 'maker:maker-memory:reset',
+  // Per-bot Maker Memory ("TA 记得的" — 批次 β) — 复用同一个 makerMemory 引擎,
+  // scope key 用 buildBotMemoryScopeKey(botId), 与 workdir 记忆完全独立,不改任何 schema。
+  BOT_MEMORY_LIST: 'maker:bot-memory:list',
+  BOT_MEMORY_DELETE: 'maker:bot-memory:delete',
+  BOT_MEMORY_CLEAR: 'maker:bot-memory:clear',
   /**
    * 启动期 renderer 同步 main 持久化的三个 memory 开关 (maker / claudeCode / codex)。
    * main 的 <userData>/memory-settings.json 是 source of truth, renderer localStorage

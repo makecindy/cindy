@@ -5561,14 +5561,7 @@
     "sessionUnavailableDescription": "更新、アーカイブ、または仲間から削除された可能性があります。仲間の概要に戻って現在のタスクを開いてください。",
     "settings": "仲間設定",
     "settingsNav": {
-      "title": "設定セクション",
-      "identity": "基本情報",
-      "channels": "チャネル",
-      "capabilities": "機能",
-      "automation": "自動化",
-      "notifications": "通知",
-      "projects": "プロジェクト",
-      "advanced": "詳細設定"
+      "title": "設定セクション"
     },
     "emptyTitle": "仲間はまだありません",
     "emptyDescription": "仲間は通常のタスクに長期 ID、イベント受信箱、自動化、メッセージチャンネルを追加します。",
@@ -5867,7 +5860,6 @@
     "automations": {
       "title": "仲間の自動化",
       "description": "この仲間が自分で実行する Routine。スケジュール、または「今すぐ実行」で動きます。",
-      "enableFirst": "先に能力設定で自動化を有効にして Profile を保存してください。",
       "trustedRequired": "無人実行は承認を待てません。「信頼された操作」を選択して保存してください。",
       "name": "名前",
       "dailyTime": "毎日の実行時刻",
@@ -6187,6 +6179,100 @@
         "exportEmpty": "まだエクスポートできるパートナーがいません。"
       },
       "rosterNote": "あらかじめ用意された顔ぶれは、バージョンごとに増えていきます。"
+    },
+    "settingsBlocks": {
+      "who": "プロフィール",
+      "can": "できること",
+      "understand": "把握しているフォルダ",
+      "schedule": "スケジュール",
+      "advanced": "詳細設定"
+    },
+    "advancedLinkLabel": "詳細設定(モデル・技術詳細・エクスポート) ›",
+    "persona": {
+      "title": "性格を調整",
+      "description": "3つ選ぶだけで話し方が変わります。",
+      "adjustButton": "性格を調整",
+      "stepStyle": "話し方",
+      "stepProactivity": "積極さ",
+      "stepCall": "呼び方",
+      "style": {
+        "concise": {
+          "label": "簡潔で率直",
+          "description": "一言で済むことは一言で。"
+        },
+        "lively": {
+          "label": "明るくおしゃべり",
+          "description": "砕けた口調で、表情も少し添える。"
+        },
+        "steady": {
+          "label": "落ち着いて丁寧",
+          "description": "先に説明してから取りかかる。"
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "必要な時だけ話す",
+          "description": "普段は話しかけません。"
+        },
+        "proactive": {
+          "label": "積極的に知らせる",
+          "description": "知らせるべきことは自分から話します。"
+        },
+        "reportAll": {
+          "label": "何でも報告する",
+          "description": "終わったことから順に報告します。"
+        }
+      },
+      "call": {
+        "name": "名前で呼ぶ",
+        "boss": "ボス",
+        "custom": "その他"
+      },
+      "customCallPlaceholder": "呼び方を入力",
+      "previewTitle": "今のプロフィール",
+      "summaryUnset": "未設定",
+      "summaryCallName": "名前で呼びます",
+      "summaryCallBoss": "ボスと呼びます",
+      "summaryCallCustom": "{{name}}と呼びます",
+      "rawToggle": "詳細設定：自分で書く",
+      "rawPlaceholder": "非推奨 — 上の選択で十分です。どうしても書きたい場合はここに。"
+    },
+    "memoryList": {
+      "title": "覚えていること",
+      "empty": "記憶を少しずつ蓄積しています。",
+      "clearAll": "記憶を消去",
+      "clearing": "消去中…",
+      "clearTitle": "記憶を消去",
+      "clearDescription": "消去すると、これらの内容を忘れます。これまでの会話には影響しません。続けますか？",
+      "clearConfirm": "消去",
+      "deleteTitle": "この記憶を削除",
+      "deleteDescription": "「{{title}}」を削除しますか？元に戻せません。",
+      "deleteConfirm": "削除",
+      "deleteAria": "「{{title}}」を削除"
+    },
+    "learned": {
+      "title": "学んだこと",
+      "empty": "これまでの作業から少しずつ得意なことを増やしていきます。"
+    },
+    "abilityWall": {
+      "builtinTitle": "標準搭載",
+      "connectableTitle": "接続できるもの",
+      "abilities": {
+        "writing": "✍️ 文章作成・ファイル",
+        "research": "🔍 調べもの",
+        "doing": "🛠 実作業",
+        "schedule": "⏰ スケジュール実行",
+        "collab": "🤝 仲間との連携"
+      },
+      "imBlocked": "チームメイトが接続できるIMは1つだけです — 先に{{channel}}を切断してください"
+    },
+    "folders": {
+      "addButton": "+ フォルダーを追加",
+      "adding": "追加中…",
+      "remove": "削除"
+    },
+    "advancedIdentity": {
+      "title": "説明と背景情報"
     }
   },
   "commonUi": {

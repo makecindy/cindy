@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BotCapabilities, BotProfile } from '../botStore';
+import type { BotCapabilities, BotChannelConnection, BotProfile } from '../botStore';
 
-// jsdom doesn't implement Element.scrollTo (real browsers/Electron do); the
-// settings content pane calls it to reset scroll position on tab switch.
-if (typeof Element.prototype.scrollTo !== 'function') {
-  Element.prototype.scrollTo = vi.fn();
-}
+// jsdom doesn't implement Element.scrollTo / scrollIntoView (real browsers/Electron
+// do); the settings page calls them to jump to a block on deep link, or reset scroll
+// on a top-of-page landing.
+const scrollToSpy = vi.fn();
+const scrollIntoViewSpy = vi.fn();
+Element.prototype.scrollTo = scrollToSpy;
+Element.prototype.scrollIntoView = scrollIntoViewSpy;
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
@@ -19,21 +21,37 @@ vi.mock('react-i18next', () => ({
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   initialSearch: '' as string,
-  /** Mirrors whatever the nav last wrote, so tests can assert on the deep-link value. */
+  /** Mirrors whatever the page last wrote, so tests can assert on the deep-link value. */
   currentSearch: '' as string,
   updateBotProfile: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({
     id: 'bot-1',
     currentVersion: 1,
     ...patch,
   })),
+  listBotChannelConnections: vi.fn(async () => [] as BotChannelConnection[]),
+  upsertBotProjectBinding: vi.fn(
+    async (
+      _botId: string,
+      _input: {
+        id?: string;
+        workingDir: string;
+        remoteHostId?: string | null;
+        defaultBranch?: string | null;
+        workspacePolicy: string;
+        isDefault: boolean;
+        allowedPaths?: string[];
+      },
+    ) => undefined,
+  ),
+  archiveBotProjectBinding: vi.fn(async (_botId: string, _bindingId: string) => undefined),
 }));
 
-// The Bot settings nav owns its own URL state via useSearchParams. A real
+// The Bot settings page owns its own URL state via useSearchParams. A real
 // Router is unnecessary here: this stub keeps genuine React state (so the
-// functional `setSearchParams((current) => ...)` form used by the nav
+// functional `setSearchParams((current) => ...)` form used by the page
 // actually re-renders the consumer, same as react-router-dom does) while
 // letting each test seed the starting `?settings=1&tab=<id>` deep link and
-// read back whatever the nav wrote via `mocks.currentSearch`.
+// read back whatever the page wrote via `mocks.currentSearch`.
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
   const { useCallback, useState } = await import('react');
@@ -67,7 +85,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 vi.mock('../botStore', () => ({
   updateBotProfile: mocks.updateBotProfile,
-  listBotChannelConnections: vi.fn(async () => []),
+  listBotChannelConnections: mocks.listBotChannelConnections,
   listBotImMigrations: vi.fn(async () => []),
   planBotImMigration: vi.fn(),
   rollbackBotImMigration: vi.fn(),
@@ -77,7 +95,17 @@ vi.mock('../botStore', () => ({
   exportBotBundle: vi.fn(async () => ({ canceled: true })),
   importBotBundle: vi.fn(async () => ({ canceled: true })),
   useBotProfiles: () => [],
+  upsertBotProjectBinding: mocks.upsertBotProjectBinding,
+  archiveBotProjectBinding: mocks.archiveBotProjectBinding,
 }));
+
+// Real BotMemoryList calls useConfirmDialog() unconditionally, and it is now
+// reachable by default (capabilities.memory defaults to true) — same pattern
+// botAutomationSettings.test.tsx already uses for RunHistory's retry flow.
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+}));
+
 vi.mock('../AddBotDialog', () => ({ AddBotDialog: () => null }));
 vi.mock('../BotAvatar', () => ({
   BotAvatar: () => <div data-testid="bot-avatar" />,
@@ -89,8 +117,17 @@ vi.mock('../BotCapabilitySettings', () => ({
 vi.mock('../BotProjectSettings', () => ({
   BotProjectSettings: () => <div data-testid="bot-project-settings" />,
 }));
+// The mock still exercises the real onEnableAutomation wiring so the "no
+// automation precondition" contract stays covered at the integration level,
+// without dragging in BotAutomationSettings' own (separately tested) internals.
 vi.mock('../BotAutomationSettings', () => ({
-  BotAutomationSettings: () => <div data-testid="bot-automation-settings" />,
+  BotAutomationSettings: (props: { onEnableAutomation: () => void }) => (
+    <div data-testid="bot-automation-settings">
+      <button type="button" onClick={() => props.onEnableAutomation()}>
+        fixture-create-routine
+      </button>
+    </div>
+  ),
 }));
 vi.mock('../BotRouteSettings', () => ({
   BotRouteSettings: () => <div data-testid="bot-route-settings" />,
@@ -101,8 +138,35 @@ vi.mock('../BotLifecycleSettings', () => ({
 vi.mock('../BotEventInboxSettings', () => ({
   BotEventInboxSettings: () => <div data-testid="bot-event-inbox-settings" />,
 }));
-vi.mock('../BotChannelCapabilitySummary', () => ({
-  BotChannelCapabilitySummary: () => <div data-testid="bot-channel-capability-summary" />,
+// The wizard's own compile/decompile/roundtrip behavior is covered exhaustively
+// by botPersona.test.ts; here we only need a fixture that proves BotsHomeView
+// wires `identitySource`/`onSave` through to the autosave pipeline correctly.
+vi.mock('../BotPersonaWizard', () => ({
+  BotPersonaWizard: ({
+    open,
+    onSave,
+  }: {
+    open: boolean;
+    identitySource: string;
+    onOpenChange: (open: boolean) => void;
+    onSave: (next: string) => void;
+  }) =>
+    open ? (
+      <div role="dialog" aria-label="persona-wizard-fixture">
+        <button
+          type="button"
+          onClick={() =>
+            onSave(
+              '<!--persona:v1:{"style":"lively","proactivity":"proactive","call":"boss"}-->\nzh\nen',
+            )
+          }
+        >
+          persona-wizard-save
+        </button>
+      </div>
+    ) : null,
+  personaSummaryText: (t: (key: string, opts?: Record<string, unknown>) => string, selection: unknown) =>
+    selection ? 'persona-summary-fixture' : t('bots.persona.summaryUnset'),
 }));
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: () => <div data-testid="model-selector" />,
@@ -180,6 +244,22 @@ function bot(overrides: Partial<BotProfile> = {}): BotProfile {
   };
 }
 
+function connection(overrides: Partial<BotChannelConnection> = {}): BotChannelConnection {
+  return {
+    id: 'conn-1',
+    kind: 'feishu',
+    ownership: 'local-adapter',
+    status: 'connected',
+    connected: true,
+    accountKey: 'acct-1',
+    accountName: 'Work Feishu',
+    scopeKey: null,
+    routable: true,
+    features: [],
+    ...overrides,
+  };
+}
+
 function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'settings=1') {
   mocks.initialSearch = initialSearch;
   const onBack = vi.fn();
@@ -201,203 +281,349 @@ const defaultUpdateBotProfile = async (_id: string, patch: Record<string, unknow
   ...patch,
 });
 
+const emptyMemoryApi = {
+  list: vi.fn(async () => []),
+  delete: vi.fn(async () => ({ ok: true as const })),
+  clear: vi.fn(async () => ({ removedCount: 0 })),
+};
+
 beforeEach(() => {
   mocks.navigate.mockReset();
   mocks.updateBotProfile.mockReset();
   // mockImplementation(Once) in the autosave suite must not leak into other tests.
   mocks.updateBotProfile.mockImplementation(defaultUpdateBotProfile as never);
+  mocks.listBotChannelConnections.mockReset();
+  mocks.listBotChannelConnections.mockResolvedValue([]);
+  mocks.upsertBotProjectBinding.mockReset();
+  mocks.upsertBotProjectBinding.mockResolvedValue(undefined as never);
+  mocks.archiveBotProjectBinding.mockReset();
+  mocks.archiveBotProjectBinding.mockResolvedValue(undefined as never);
   mocks.initialSearch = '';
   mocks.currentSearch = '';
+  scrollToSpy.mockClear();
+  scrollIntoViewSpy.mockClear();
+  emptyMemoryApi.list.mockReset();
+  emptyMemoryApi.list.mockResolvedValue([]);
+  emptyMemoryApi.delete.mockReset();
+  emptyMemoryApi.clear.mockReset();
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    showOpenDirectoryDialog: vi.fn(async () => ({ canceled: true, path: null })),
+    maker: { botMemory: emptyMemoryApi },
+  };
 });
 
 afterEach(() => {
   cleanup();
 });
 
-describe('Bot settings nav grouping', () => {
-  it('defaults to the Basic info (identity) tab with no ?tab= param', () => {
+describe('Bot settings page structure', () => {
+  it('shows all four blocks plus a collapsed Advanced link on one page, with no tab list', () => {
     renderSettings();
 
-    expect(
-      screen.getByRole('tab', { name: 'bots.settingsNav.identity' }).getAttribute('aria-selected'),
-    ).toBe('true');
-    expect(screen.getByTestId('bot-avatar-picker')).toBeTruthy();
-    // Other groups' unique content must not be mounted on the default tab.
-    expect(screen.queryByTestId('bot-route-settings')).toBeNull();
-    expect(screen.queryByTestId('bot-event-inbox-settings')).toBeNull();
-    expect(screen.queryByTestId('bot-lifecycle-settings')).toBeNull();
-  });
-
-  it('renders all seven groups in the canonical order', () => {
-    renderSettings();
-    const tabs = screen.getAllByRole('tab').map((el) => el.textContent);
-    expect(tabs).toEqual([
-      'bots.settingsNav.identity',
-      'bots.settingsNav.channels',
-      'bots.settingsNav.capabilities',
-      'bots.settingsNav.automation',
-      'bots.settingsNav.notifications',
-      'bots.settingsNav.projects',
-      'bots.settingsNav.advanced',
-    ]);
-  });
-
-  it('moves the Renew card and BotLifecycleSettings out of the first screen and into Advanced', () => {
-    renderSettings();
-    expect(screen.queryByText('bots.sessionLifecycleTitle')).toBeNull();
-    expect(screen.queryByTestId('bot-lifecycle-settings')).toBeNull();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.advanced' }));
-
-    expect(screen.getByText('bots.sessionLifecycleTitle')).toBeTruthy();
-    expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
-  });
-
-  it('switches panels on click without any per-tab save affordance', () => {
-    renderSettings();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.channels' }));
-    expect(screen.getByTestId('bot-route-settings')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.capabilities' }));
-    // 能力 tab 现在是人话芯片墙,技术明细面已经搬去高级。
-    expect(screen.getByText('bots.capabilityChips.title')).toBeTruthy();
-    expect(screen.queryByTestId('bot-capability-settings')).toBeNull();
-    expect(screen.queryByTestId('bot-route-settings')).toBeNull();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.automation' }));
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.getByText('bots.settingsBlocks.who')).toBeTruthy();
+    expect(screen.getByText('bots.settingsBlocks.can')).toBeTruthy();
+    expect(screen.getByText('bots.settingsBlocks.understand')).toBeTruthy();
+    // "TA 的日程" has no block heading of its own — BotAutomationSettings owns it.
     expect(screen.getByTestId('bot-automation-settings')).toBeTruthy();
+    expect(screen.getByText('bots.advancedLinkLabel')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.notifications' }));
-    expect(screen.getByTestId('bot-event-inbox-settings')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.projects' }));
-    expect(screen.getByTestId('bot-project-settings')).toBeTruthy();
-  });
-
-  it('has no bottom save bar at all — settings persist on their own', () => {
-    renderSettings();
-
-    // Chris's report: "I had no idea I needed to save." The fix is that there is
-    // nothing to press, on any tab — so the bar must not come back.
-    expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'bots.cancel' })).toBeNull();
-    for (const tab of ['channels', 'capabilities', 'automation', 'projects', 'advanced']) {
-      fireEvent.click(screen.getByRole('tab', { name: `bots.settingsNav.${tab}` }));
-      expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
-    }
-  });
-
-  it('updates the ?tab= URL param when a nav item is selected, for deep-linkability', () => {
-    renderSettings();
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.projects' }));
-    expect(new URLSearchParams(mocks.currentSearch).get('tab')).toBe('projects');
-
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.advanced' }));
-    expect(new URLSearchParams(mocks.currentSearch).get('tab')).toBe('advanced');
-  });
-
-  it('honors an initial ?settings=1&tab=capabilities deep link', () => {
-    renderSettings({}, 'settings=1&tab=capabilities');
-
-    expect(
-      screen.getByRole('tab', { name: 'bots.settingsNav.capabilities' }).getAttribute('aria-selected'),
-    ).toBe('true');
-    expect(screen.getByText('bots.capabilityChips.title')).toBeTruthy();
-    // harness / model / 明细勾选是专家逃生口,不再出现在能力页。
+    // Advanced starts collapsed: its heavy/technical content is not mounted.
+    expect(screen.queryByTestId('bot-lifecycle-settings')).toBeNull();
+    expect(screen.queryByTestId('bot-route-settings')).toBeNull();
+    expect(screen.queryByTestId('bot-project-settings')).toBeNull();
+    expect(screen.queryByTestId('bot-event-inbox-settings')).toBeNull();
     expect(screen.queryByTestId('model-selector')).toBeNull();
     expect(screen.queryByTestId('vendor-switcher')).toBeNull();
+    expect(screen.queryByTestId('bot-capability-settings')).toBeNull();
   });
 
-  it('moves harness, model and the raw capability pickers into Advanced', () => {
-    renderSettings({}, 'settings=1&tab=advanced');
+  it('lists the blocks top-to-bottom in canonical order', () => {
+    renderSettings();
+    const container = screen.getByRole('main');
+    const order = [
+      'bots.settingsBlocks.who',
+      'bots.settingsBlocks.can',
+      'bots.settingsBlocks.understand',
+      'bots.advancedLinkLabel',
+    ].map((text) => container.textContent!.indexOf(text));
+    expect(order.every((index) => index !== -1)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
 
-    expect(screen.getByText('bots.advancedCapabilities.title')).toBeTruthy();
+  it('expands Advanced in place on click, alongside (not instead of) the rest of the page', () => {
+    renderSettings();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.advancedLinkLabel' }));
+
+    expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
+    expect(screen.getByTestId('bot-route-settings')).toBeTruthy();
+    expect(screen.getByTestId('bot-project-settings')).toBeTruthy();
+    expect(screen.getByTestId('bot-event-inbox-settings')).toBeTruthy();
     expect(screen.getByTestId('model-selector')).toBeTruthy();
     expect(screen.getByTestId('vendor-switcher')).toBeTruthy();
     expect(screen.getByTestId('bot-capability-settings')).toBeTruthy();
+    // The other blocks are still on the page — this is one page, not a tab swap.
+    expect(screen.getByText('bots.settingsBlocks.who')).toBeTruthy();
+    expect(screen.getByText('bots.settingsBlocks.can')).toBeTruthy();
+    expect(screen.getByText('bots.settingsBlocks.understand')).toBeTruthy();
+    expect(screen.getByTestId('bot-automation-settings')).toBeTruthy();
   });
 
-  it('falls back to identity for an unknown ?tab= value instead of a blank panel', () => {
-    renderSettings({}, 'settings=1&tab=not-a-real-tab');
-
-    expect(
-      screen.getByRole('tab', { name: 'bots.settingsNav.identity' }).getAttribute('aria-selected'),
-    ).toBe('true');
-    expect(screen.getByTestId('bot-avatar-picker')).toBeTruthy();
-  });
-
-  it('resets the content scroll position when switching tabs', () => {
+  it('has no bottom save bar at all, collapsed or expanded — settings persist on their own', () => {
     renderSettings();
-    fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.channels' }));
-    // No throw: the scrollTo effect runs against the (jsdom, no-op) content ref.
-    expect(screen.getByTestId('bot-route-settings')).toBeTruthy();
-  });
-});
+    expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.cancel' })).toBeNull();
 
-describe('Bot capability chip wall', () => {
-  it('shows plain-language chips and no long-term memory switch at all', () => {
-    renderSettings({}, 'settings=1&tab=capabilities');
-
-    expect(screen.getByRole('switch', { name: 'bots.capabilityChips.act.name' })).toBeTruthy();
-    expect(
-      screen.getByRole('switch', { name: 'bots.capabilityChips.automation.name' }),
-    ).toBeTruthy();
-    // 长期记忆是伙伴的底层能力,不再有任何关闭入口。
-    expect(screen.queryByText('bots.memoryLabel')).toBeNull();
-    expect(screen.queryByRole('switch', { name: 'bots.memoryLabel' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.advancedLinkLabel' }));
+    expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.cancel' })).toBeNull();
   });
 
-  it('greys out a channel with no connected account and says where to connect it', () => {
-    renderSettings({}, 'settings=1&tab=capabilities');
-
-    const feishu = screen.getByRole('switch', { name: 'Feishu' }) as HTMLButtonElement;
-    expect(feishu.disabled).toBe(true);
-    expect(screen.getByText('bots.capabilityChips.channel.connectHint:{"channel":"Feishu"}'))
-      .toBeTruthy();
-  });
-
-  it('writes the automation capability straight through the chip', async () => {
-    renderSettings({}, 'settings=1&tab=capabilities');
-
-    fireEvent.click(screen.getByRole('switch', { name: 'bots.capabilityChips.automation.name' }));
-
-    // instant 档的防抖是 0ms,但仍走一次 setTimeout。
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    });
-    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
-    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
-      capabilities: expect.objectContaining({ automation: true }),
-    });
-  });
-});
-
-describe('Hands-on ⚠ badge', () => {
-  // 产品裁决 2026-08-18:设置页头部不再挂 ⚠。伙伴不是需要被常年警告的对象;
-  // 「放手做」这件事由能力陈列自己讲,不靠名字旁的黄三角。
   it('never marks the settings header, trusted or not', () => {
+    // 产品裁决 2026-08-18:设置页头部不再挂 ⚠。伙伴不是需要被常年警告的对象。
     renderSettings();
     expect(screen.queryByRole('button', { name: 'bots.trustedBadge.label' })).toBeNull();
 
     cleanup();
-    renderSettings(
-      { capabilities: capabilities({ permissions: 'trusted' }) },
-      'settings=1&tab=capabilities',
-    );
+    renderSettings({ capabilities: capabilities({ permissions: 'trusted' }) });
     expect(screen.queryByRole('button', { name: 'bots.trustedBadge.label' })).toBeNull();
-    // 能力陈列仍如实显示这位伙伴处在「放手做」。
-    const chip = screen.getByRole('switch', { name: 'bots.capabilityChips.act.name' });
-    expect(chip.getAttribute('aria-checked')).toBe('true');
+  });
+});
+
+describe('Bot settings deep links (legacy ?tab= and new ?anchor=)', () => {
+  it('lands at the top of the page with Advanced collapsed when there is no ?tab= param', () => {
+    renderSettings({}, 'settings=1');
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 0 });
+    expect(screen.queryByTestId('bot-lifecycle-settings')).toBeNull();
+  });
+
+  it('scrolls to the matching block for a current anchor id instead of switching panels', () => {
+    renderSettings({}, 'settings=1&anchor=understand');
+    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    expect(scrollToSpy).not.toHaveBeenCalledWith({ top: 0 });
+    // The rest of the page is still mounted — an anchor is a scroll target, not a filter.
+    expect(screen.getByText('bots.settingsBlocks.who')).toBeTruthy();
+  });
+
+  it('auto-expands Advanced for legacy ?tab=capabilities, ?tab=notifications and ?tab=advanced', () => {
+    for (const legacyTab of ['capabilities', 'notifications', 'advanced']) {
+      cleanup();
+      renderSettings({}, `settings=1&tab=${legacyTab}`);
+      expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
+    }
+  });
+
+  it('keeps Advanced collapsed for legacy tabs that map to a top-level block', () => {
+    for (const legacyTab of ['identity', 'channels', 'automation', 'projects']) {
+      cleanup();
+      renderSettings({}, `settings=1&tab=${legacyTab}`);
+      expect(screen.queryByTestId('bot-lifecycle-settings')).toBeNull();
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+    }
+  });
+
+  it('falls back to the top of the page for an unknown ?tab= value instead of a blank panel', () => {
+    renderSettings({}, 'settings=1&tab=not-a-real-tab');
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 0 });
+    expect(screen.queryByTestId('bot-lifecycle-settings')).toBeNull();
+    expect(screen.getByText('bots.settingsBlocks.who')).toBeTruthy();
+  });
+});
+
+describe('TA 是谁 — persona summary and adjust wizard', () => {
+  it('shows the unset summary and opens the wizard from the adjust button', () => {
+    renderSettings();
+    expect(screen.getByText('bots.persona.summaryUnset')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.persona.adjustButton' }));
+    expect(screen.getByRole('dialog', { name: 'persona-wizard-fixture' })).toBeTruthy();
+  });
+
+  it('shows a compiled summary once identitySource carries a persona marker', () => {
+    renderSettings({
+      identitySource:
+        '<!--persona:v1:{"style":"concise","proactivity":"reactive","call":"name"}-->\nzh\nen',
+    });
+    expect(screen.getByText('persona-summary-fixture')).toBeTruthy();
+    expect(screen.queryByText('bots.persona.summaryUnset')).toBeNull();
+  });
+});
+
+describe('TA 记得的 — memory list', () => {
+  it('renders the real, engine-backed memory list when capabilities.memory is on (the default)', async () => {
+    emptyMemoryApi.list.mockResolvedValue([
+      {
+        filename: 'a.md',
+        slug: 'a',
+        frontmatter: {
+          title: 'Likes short replies',
+          description: 'Noted from chat',
+          type: 'note',
+          updatedAt: '2026-01-01',
+        },
+        body: '',
+        sizeBytes: 12,
+      },
+    ] as never);
+    renderSettings();
+
+    expect(await screen.findByText('Likes short replies')).toBeTruthy();
+    expect(screen.queryByText('bots.memoryRecovery.title')).toBeNull();
+  });
+
+  it('shows an honest empty state rather than fabricated memories', async () => {
+    emptyMemoryApi.list.mockResolvedValue([]);
+    renderSettings();
+    expect(await screen.findByText('bots.memoryList.empty')).toBeTruthy();
+  });
+
+  it('offers a recovery affordance instead of the list when memory is off, and turns it back on', async () => {
+    renderSettings({ capabilities: capabilities({ memory: false }) });
+    expect(screen.getByText('bots.memoryRecovery.title')).toBeTruthy();
+    expect(screen.queryByText('bots.memoryList.title')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memoryRecovery.action' }));
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1));
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      capabilities: expect.objectContaining({ memory: true }),
+    });
+  });
+
+  it('shows an honest "TA 学会的" placeholder instead of fabricated learned-skill data', () => {
+    renderSettings();
+    expect(screen.getByText('bots.learned.title')).toBeTruthy();
+    expect(screen.getByText('bots.learned.empty')).toBeTruthy();
+  });
+});
+
+describe('TA 会的 — ability wall and single-IM mutual exclusion', () => {
+  it('shows built-in abilities as plain statements — no toggle for any of them', () => {
+    renderSettings();
+    expect(screen.getByText('bots.abilityWall.abilities.writing')).toBeTruthy();
+    expect(screen.getByText('bots.abilityWall.abilities.research')).toBeTruthy();
+    expect(screen.getByText('bots.abilityWall.abilities.doing')).toBeTruthy();
+    expect(screen.getByText('bots.abilityWall.abilities.schedule')).toBeTruthy();
+    expect(screen.getByText('bots.abilityWall.abilities.collab')).toBeTruthy();
+    // No permission/automation switches leak into the collapsed top-level page.
+    expect(screen.queryAllByRole('switch')).toHaveLength(0);
+  });
+
+  it('greys out the other IM channels once one is connected, with a disconnect hint', async () => {
+    mocks.listBotChannelConnections.mockResolvedValue([
+      connection({ id: 'feishu-conn', kind: 'feishu', accountKey: 'a' }),
+      connection({ id: 'telegram-conn', kind: 'telegram', accountKey: 'b', accountName: 'Ops TG' }),
+    ]);
+    renderSettings({
+      channels: [
+        {
+          id: 'ch-feishu',
+          kind: 'feishu',
+          enabled: true,
+          config: { accountKey: 'a', ownership: 'local-adapter' },
+        },
+      ] as never,
+    });
+
+    // Every other IM kind (including ones with no connected account at all) is
+    // also gated — applyImMutualExclusion blocks any non-mounted IM chip, not
+    // just ones with a live account. Scope the assertion to Telegram's own row.
+    const telegramLabel = await screen.findByText('Telegram · Ops TG');
+    const telegramRow = telegramLabel.closest('.min-w-0')!.parentElement as HTMLElement;
+    const telegramButton = within(telegramRow).getByRole('button');
+    expect((telegramButton as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      within(telegramRow).getByText('bots.abilityWall.imBlocked:{"channel":"Feishu"}'),
+    ).toBeTruthy();
+  });
+
+  it('never blocks a channel that is itself mounted — a pre-existing multi-IM bot keeps every connection', async () => {
+    mocks.listBotChannelConnections.mockResolvedValue([
+      connection({ id: 'feishu-conn', kind: 'feishu', accountKey: 'a' }),
+      connection({ id: 'telegram-conn', kind: 'telegram', accountKey: 'b', accountName: 'Ops TG' }),
+    ]);
+    renderSettings({
+      channels: [
+        { id: 'ch-feishu', kind: 'feishu', enabled: true, config: { accountKey: 'a', ownership: 'local-adapter' } },
+        { id: 'ch-telegram', kind: 'telegram', enabled: true, config: { accountKey: 'b', ownership: 'local-adapter' } },
+      ] as never,
+    });
+
+    const mountedButtons = await screen.findAllByRole('button', { name: 'bots.channelMounted' });
+    expect(mountedButtons).toHaveLength(2);
+    for (const button of mountedButtons) {
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    }
+    const feishuRow = screen.getByText('Feishu · Work Feishu').closest('.min-w-0')!
+      .parentElement as HTMLElement;
+    const telegramRow = screen.getByText('Telegram · Ops TG').closest('.min-w-0')!
+      .parentElement as HTMLElement;
+    expect(within(feishuRow).queryByText(/bots\.abilityWall\.imBlocked/)).toBeNull();
+    expect(within(telegramRow).queryByText(/bots\.abilityWall\.imBlocked/)).toBeNull();
+  });
+});
+
+describe('TA 懂的 — folder cards', () => {
+  it('shows bound folders and adds another via the directory picker', async () => {
+    renderSettings({
+      projectBindings: [
+        {
+          id: 'binding-1',
+          workingDir: '/Users/chris/Code/cindy',
+          defaultBranch: null,
+          workspacePolicy: 'none',
+          isDefault: true,
+          allowedPaths: [],
+          status: 'active',
+        } as never,
+      ],
+    });
+    expect(screen.getByText('cindy')).toBeTruthy();
+
+    (window.electronAPI.showOpenDirectoryDialog as ReturnType<typeof vi.fn>).mockResolvedValue({
+      canceled: false,
+      path: '/Users/chris/Code/other-repo',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.folders.addButton' }));
+
+    await waitFor(() => expect(mocks.upsertBotProjectBinding).toHaveBeenCalledTimes(1));
+    expect(mocks.upsertBotProjectBinding.mock.calls[0]?.[1]).toMatchObject({
+      workingDir: '/Users/chris/Code/other-repo',
+    });
+  });
+});
+
+describe('TA 的日程 — schedule embedded without an automation precondition', () => {
+  it('embeds automation settings directly even when automation is currently off', () => {
+    renderSettings({ capabilities: capabilities({ automation: false }) });
+    expect(screen.getByTestId('bot-automation-settings')).toBeTruthy();
+  });
+
+  it('flips capabilities.automation to true through the autosave pipeline when a Routine is created', async () => {
+    vi.useFakeTimers();
+    try {
+      renderSettings({ capabilities: capabilities({ automation: false }) });
+      fireEvent.click(screen.getByRole('button', { name: 'fixture-create-routine' }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+      expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+        capabilities: expect.objectContaining({ automation: true }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe('Bot settings archived-bot reachability', () => {
-  it('keeps the pre-existing archived-bot settings page untouched by the tab rework', () => {
+  it('keeps the pre-existing archived-bot settings page untouched by the one-page rework', () => {
     renderSettings({ status: 'archived' });
 
-    // The archived branch renders its own minimal page and never mounts the tab nav.
-    expect(screen.queryByRole('tablist')).toBeNull();
+    // The archived branch renders its own minimal page and never mounts the settings page.
+    expect(screen.queryByText('bots.settingsBlocks.who')).toBeNull();
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
     expect(screen.getByTestId('bot-event-inbox-settings')).toBeTruthy();
   });
@@ -441,16 +667,29 @@ describe('Bot settings autosave', () => {
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({ name: 'PR crew' });
   });
 
-  it('saves a chip toggle without waiting out the text debounce', async () => {
-    renderSettings({}, 'settings=1&tab=capabilities');
+  it('saves an instant edit (turning memory back on) without waiting out the text debounce', async () => {
+    renderSettings({ capabilities: capabilities({ memory: false }) });
 
-    fireEvent.click(screen.getByRole('switch', { name: 'bots.capabilityChips.act.name' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memoryRecovery.action' }));
     await advance(0);
 
     expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
-      capabilities: expect.objectContaining({ permissions: 'trusted' }),
+      capabilities: expect.objectContaining({ memory: true }),
     });
+  });
+
+  it('compiles a persona wizard save into identitySource and autosaves it instantly', async () => {
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.persona.adjustButton' }));
+    fireEvent.click(screen.getByRole('button', { name: 'persona-wizard-save' }));
+    await advance(0);
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      identitySource: expect.stringContaining('<!--persona:v1:'),
+    });
+    expect(screen.getByText('persona-summary-fixture')).toBeTruthy();
   });
 
   it('sends nothing when the page is only opened, or when an edit is reverted', async () => {
@@ -466,7 +705,7 @@ describe('Bot settings autosave', () => {
   });
 
   it('flushes a still-pending edit when the settings view unmounts', async () => {
-    const view = renderSettings();
+    const view = renderSettings({}, 'settings=1&tab=advanced');
     fireEvent.change(screen.getByDisplayValue('Delivery steward'), {
       target: { value: 'Reviews and merges' },
     });
@@ -480,16 +719,16 @@ describe('Bot settings autosave', () => {
     });
   });
 
-  it('flushes on blur so long identity prompts do not wait for the debounce', async () => {
-    renderSettings();
-    const textarea = screen.getByPlaceholderText('bots.identitySourcePlaceholder');
-    fireEvent.change(textarea, { target: { value: 'You review delivery PRs.' } });
+  it('flushes on blur so long user-profile prompts do not wait for the debounce', async () => {
+    renderSettings({}, 'settings=1&tab=advanced');
+    const textarea = screen.getByPlaceholderText('bots.userContextSourcePlaceholder');
+    fireEvent.change(textarea, { target: { value: 'Call me Chris, keep replies short.' } });
     fireEvent.blur(textarea);
     await advance(0);
 
     expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
-      identitySource: 'You review delivery PRs.',
+      userContextSource: 'Call me Chris, keep replies short.',
     });
   });
 

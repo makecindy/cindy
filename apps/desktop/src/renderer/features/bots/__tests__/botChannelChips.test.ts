@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyImMutualExclusion,
   botChannelDisplayName,
   buildBotChannelChips,
   MOUNTABLE_BOT_CHANNEL_KINDS,
@@ -74,5 +75,57 @@ describe('capability wall channel chips', () => {
   it('names channels the same way the Channels tab does', () => {
     expect(botChannelDisplayName('feishu')).toBe('Feishu');
     expect(botChannelDisplayName('telegram')).toBe('Telegram');
+  });
+});
+
+describe('single-IM mutual exclusion', () => {
+  it('blocks no chip when nothing is mounted', () => {
+    const chips = buildBotChannelChips([], () => false);
+    const gated = applyImMutualExclusion(chips);
+    expect(gated.every((chip) => chip.blockedByImKind == null)).toBe(true);
+  });
+
+  it('greys out every other IM row once one is mounted', () => {
+    const feishu = connection({ kind: 'feishu' });
+    const chips = buildBotChannelChips([feishu], (item) => item.id === 'conn-1');
+    const gated = applyImMutualExclusion(chips);
+
+    const feishuChip = gated.find((chip) => chip.kind === 'feishu');
+    expect(feishuChip?.blockedByImKind).toBeNull();
+    expect(feishuChip?.mounted).toBe(true);
+
+    for (const chip of gated) {
+      if (chip.kind === 'feishu') continue;
+      expect(chip.blockedByImKind).toBe('feishu');
+    }
+  });
+
+  it('never blocks a chip that is itself mounted, even for a pre-existing multi-IM bot', () => {
+    const feishu = connection({ id: 'a', kind: 'feishu', accountKey: 'a' });
+    const telegram = connection({ id: 'b', kind: 'telegram', accountKey: 'b' });
+    const chips = buildBotChannelChips(
+      [feishu, telegram],
+      (item) => item.id === 'a' || item.id === 'b',
+    );
+    const gated = applyImMutualExclusion(chips);
+
+    expect(gated.find((chip) => chip.kind === 'feishu')?.blockedByImKind).toBeNull();
+    expect(gated.find((chip) => chip.kind === 'telegram')?.blockedByImKind).toBeNull();
+    // A third, unconnected IM kind is still gated by one of the two live ones.
+    expect(gated.find((chip) => chip.kind === 'slack')?.blockedByImKind).toBeTruthy();
+  });
+
+  it('does not gate non-IM or non-mountable chips', () => {
+    const feishu = connection({ kind: 'feishu' });
+    const chips = buildBotChannelChips([feishu], (item) => item.id === 'conn-1');
+    const gated = applyImMutualExclusion(chips);
+    // 'x' is not in MOUNTABLE_BOT_CHANNEL_KINDS and never appears as a chip here,
+    // so this simply guards that every produced chip kind is IM-relevant only
+    // when actually gated.
+    for (const chip of gated) {
+      if (chip.blockedByImKind) {
+        expect(MOUNTABLE_BOT_CHANNEL_KINDS).toContain(chip.kind);
+      }
+    }
   });
 });

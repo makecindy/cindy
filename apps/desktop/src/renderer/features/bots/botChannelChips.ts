@@ -40,6 +40,13 @@ export interface BotChannelChip {
   mounted: boolean;
   /** A chip the user cannot flip right now: no account, or a non-routable one. */
   disabled: boolean;
+  /**
+   * Set by `applyImMutualExclusion` when a *different* IM kind is already
+   * mounted: the chip is greyed out and the UI should explain "disconnect
+   * that one first". `null` for chips that are not IM-gated (already mounted,
+   * a non-IM kind, or the one IM kind that is currently connected).
+   */
+  blockedByImKind?: MountableBotChannelKind | null;
 }
 
 function kindOrder(kind: BotChannel): number {
@@ -87,4 +94,29 @@ export function buildBotChannelChips(
 /** Human channel name for chip titles; matches the Channels tab labeling. */
 export function botChannelDisplayName(kind: BotChannel): string {
   return kind === 'local' ? 'Local' : kind[0].toUpperCase() + kind.slice(1);
+}
+
+function isMountableImKind(kind: BotChannel): kind is MountableBotChannelKind {
+  return (MOUNTABLE_BOT_CHANNEL_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * Single-IM mutual exclusion (UI-only gate; the engine still allows any mount).
+ *
+ * Product ruling: a teammate only ever has one *live* IM identity. Once any
+ * IM-class channel is mounted, every other IM row greys out until that one is
+ * disconnected. A row that is itself mounted is never blocked — the user can
+ * always disconnect it — which also keeps pre-existing multi-IM bots (created
+ * before this rule) showing every one of their real connections honestly,
+ * each individually disconnectable, with no forced tear-apart.
+ */
+export function applyImMutualExclusion(chips: readonly BotChannelChip[]): BotChannelChip[] {
+  const mountedKinds = new Set(chips.filter((chip) => chip.mounted).map((chip) => chip.kind));
+  const blockingKind = MOUNTABLE_BOT_CHANNEL_KINDS.find((kind) => mountedKinds.has(kind)) ?? null;
+  return chips.map((chip) => {
+    if (!blockingKind || chip.mounted || chip.kind === blockingKind || !isMountableImKind(chip.kind)) {
+      return { ...chip, blockedByImKind: null };
+    }
+    return { ...chip, blockedByImKind: blockingKind };
+  });
 }

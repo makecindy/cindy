@@ -5561,14 +5561,7 @@
     "sessionUnavailableDescription": "它可能已经 Renew、归档，或不再属于这个伙伴。请返回伙伴总览打开当前任务。",
     "settings": "伙伴设置",
     "settingsNav": {
-      "title": "设置分组",
-      "identity": "基本信息",
-      "channels": "通道",
-      "capabilities": "能力",
-      "automation": "自动化",
-      "notifications": "通知",
-      "projects": "项目",
-      "advanced": "高级"
+      "title": "设置分组"
     },
     "emptyTitle": "还没有伙伴",
     "emptyDescription": "伙伴比普通任务多一层长期身份、事件收件箱、自动化和消息通道。",
@@ -5867,7 +5860,6 @@
     "automations": {
       "title": "伙伴自动化",
       "description": "这个伙伴自己会跑的 Routine——按时间表跑，或者你点「立即运行」时跑。",
-      "enableFirst": "先在能力配置中启用自动化并保存 Profile。",
       "trustedRequired": "无人值守运行无法等待授权确认。请将权限模式设为“信任操作”并保存后再创建自动化。",
       "name": "名称",
       "dailyTime": "每天运行时间",
@@ -6187,6 +6179,100 @@
         "exportEmpty": "还没有伙伴可以导出。"
       },
       "rosterNote": "预置阵容会随版本更新。"
+    },
+    "settingsBlocks": {
+      "who": "TA 是谁",
+      "can": "TA 会的",
+      "understand": "TA 懂的",
+      "schedule": "TA 的日程",
+      "advanced": "高级"
+    },
+    "advancedLinkLabel": "高级(模型、技术细节、导出)›",
+    "persona": {
+      "title": "调整性格",
+      "description": "选三下就好，TA 会照着改口气。",
+      "adjustButton": "调整性格",
+      "stepStyle": "说话风格",
+      "stepProactivity": "主动程度",
+      "stepCall": "怎么称呼你",
+      "style": {
+        "concise": {
+          "label": "简洁利落",
+          "description": "一句能说完绝不说两句"
+        },
+        "lively": {
+          "label": "活泼爱聊",
+          "description": "语气轻松，带点表情"
+        },
+        "steady": {
+          "label": "稳重周到",
+          "description": "先讲清楚，再动手"
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "有事才说",
+          "description": "不主动打扰你"
+        },
+        "proactive": {
+          "label": "会主动提醒",
+          "description": "该提醒的会开口"
+        },
+        "reportAll": {
+          "label": "什么都汇报",
+          "description": "做完一件说一件"
+        }
+      },
+      "call": {
+        "name": "直呼名字",
+        "boss": "老板",
+        "custom": "自定义"
+      },
+      "customCallPlaceholder": "让 TA 怎么叫你",
+      "previewTitle": "现在的 TA",
+      "summaryUnset": "还没设置",
+      "summaryCallName": "直呼你名字",
+      "summaryCallBoss": "叫你老板",
+      "summaryCallCustom": "叫你{{name}}",
+      "rawToggle": "高级：自己写设定",
+      "rawPlaceholder": "不推荐——上面选完就够了。真要写就写在这。"
+    },
+    "memoryList": {
+      "title": "TA 记得的",
+      "empty": "TA 的记忆在积累中",
+      "clearAll": "清空记忆",
+      "clearing": "清空中…",
+      "clearTitle": "清空记忆",
+      "clearDescription": "清空后 TA 会忘掉这些事，聊过的内容不受影响。要继续吗？",
+      "clearConfirm": "清空",
+      "deleteTitle": "删除这条记忆",
+      "deleteDescription": "删除“{{title}}”？删除后无法恢复。",
+      "deleteConfirm": "删除",
+      "deleteAria": "删除“{{title}}”"
+    },
+    "learned": {
+      "title": "TA 学会的",
+      "empty": "TA 会从做过的事里自己长本事"
+    },
+    "abilityWall": {
+      "builtinTitle": "自带",
+      "connectableTitle": "可以连上",
+      "abilities": {
+        "writing": "✍️ 写作与文件",
+        "research": "🔍 查资料",
+        "doing": "🛠 动手做事",
+        "schedule": "⏰ 定时干活",
+        "collab": "🤝 和伙伴协作"
+      },
+      "imBlocked": "一个伙伴只能连一个 IM——先断开{{channel}}"
+    },
+    "folders": {
+      "addButton": "＋ 给 TA 一个文件夹",
+      "adding": "添加中…",
+      "remove": "移除"
+    },
+    "advancedIdentity": {
+      "title": "描述与背景"
     }
   },
   "commonUi": {

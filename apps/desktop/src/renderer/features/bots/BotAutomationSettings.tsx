@@ -789,11 +789,19 @@ export function BotAutomationSettings({
   enabled,
   trusted,
   onOpenTask,
+  onEnableAutomation,
 }: {
   bot: BotProfile;
   enabled: boolean;
   trusted: boolean;
   onOpenTask: (sessionId: string) => void;
+  /**
+   * Batch β: creating a Routine is no longer gated behind first turning
+   * Automation on in Capabilities — a first-time create silently flips it on
+   * through the profile autosave pipeline instead. Called once, right after a
+   * successful create, only when `enabled` was still `false` at that point.
+   */
+  onEnableAutomation: () => void;
 }) {
   const { t } = useTranslation();
   const bots = useBotProfiles();
@@ -802,7 +810,10 @@ export function BotAutomationSettings({
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AutomationFormValue | null>(null);
 
-  const canCreate = enabled && trusted;
+  // Trusted is the one precondition that stays: unattended runs cannot pause
+  // for approval, so an "ask" teammate cannot create a Routine at all.
+  // Automation-enabled is no longer a precondition — see onEnableAutomation.
+  const canCreate = trusted;
   const activeProjects = useMemo(
     () => (bot.projectBindings ?? []).filter((item) => item.status === 'active'),
     [bot.projectBindings],
@@ -869,11 +880,7 @@ export function BotAutomationSettings({
         </div>
       </div>
 
-      {!enabled ? (
-        <p className="mt-4 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-tertiary)]">
-          {t('bots.automations.enableFirst')}
-        </p>
-      ) : !trusted ? (
+      {!trusted ? (
         <p className="mt-4 rounded-xl bg-[var(--warning-bg-soft)] px-3 py-3 text-12 text-[var(--warning-fg)]">
           {t('bots.automations.trustedRequired')}
         </p>
@@ -893,6 +900,7 @@ export function BotAutomationSettings({
               botId: bot.id,
               ...submission,
             });
+            if (!enabled) onEnableAutomation();
             setDraft(null);
             await load();
           }}

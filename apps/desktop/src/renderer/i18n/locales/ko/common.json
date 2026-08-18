@@ -5561,14 +5561,7 @@
     "sessionUnavailableDescription": "갱신 또는 보관되었거나 이 동료에게서 제거되었을 수 있습니다. 동료 개요에서 현재 작업을 여세요.",
     "settings": "동료 설정",
     "settingsNav": {
-      "title": "설정 섹션",
-      "identity": "기본 정보",
-      "channels": "채널",
-      "capabilities": "기능",
-      "automation": "자동화",
-      "notifications": "알림",
-      "projects": "프로젝트",
-      "advanced": "고급"
+      "title": "설정 섹션"
     },
     "emptyTitle": "아직 동료가 없습니다",
     "emptyDescription": "동료는 일반 작업에 장기 정체성, 이벤트 수신함, 자동화와 메시지 채널을 더합니다.",
@@ -5867,7 +5860,6 @@
     "automations": {
       "title": "동료 자동화",
       "description": "이 동료가 스스로 실행하는 Routine입니다. 일정에 따라, 또는 [지금 실행]을 누를 때 실행됩니다.",
-      "enableFirst": "먼저 기능 설정에서 자동화를 켜고 Profile을 저장하세요.",
       "trustedRequired": "무인 실행은 승인을 기다릴 수 없습니다. '신뢰된 작업'을 선택하고 저장하세요.",
       "name": "이름",
       "dailyTime": "매일 실행 시간",
@@ -6187,6 +6179,100 @@
         "exportEmpty": "아직 내보낼 파트너가 없습니다."
       },
       "rosterNote": "기본 제공되는 구성원은 버전마다 늘어납니다."
+    },
+    "settingsBlocks": {
+      "who": "프로필",
+      "can": "할 수 있는 일",
+      "understand": "파악하고 있는 폴더",
+      "schedule": "일정",
+      "advanced": "고급"
+    },
+    "advancedLinkLabel": "고급(모델, 상세 정보, 내보내기) ›",
+    "persona": {
+      "title": "성격 조정",
+      "description": "세 가지만 고르면 말투가 바뀝니다.",
+      "adjustButton": "성격 조정",
+      "stepStyle": "말투",
+      "stepProactivity": "적극성",
+      "stepCall": "호칭",
+      "style": {
+        "concise": {
+          "label": "간결하고 명확하게",
+          "description": "한 마디로 끝낼 수 있으면 한 마디로."
+        },
+        "lively": {
+          "label": "밝고 수다스럽게",
+          "description": "편안한 말투에 표정도 살짝 담아요."
+        },
+        "steady": {
+          "label": "차분하고 꼼꼼하게",
+          "description": "먼저 설명하고 나서 시작해요."
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "필요할 때만 말해요",
+          "description": "먼저 말을 걸지 않아요."
+        },
+        "proactive": {
+          "label": "먼저 알려줘요",
+          "description": "알려야 할 일은 먼저 말해요."
+        },
+        "reportAll": {
+          "label": "전부 보고해요",
+          "description": "끝낸 일을 하나씩 알려줘요."
+        }
+      },
+      "call": {
+        "name": "이름으로 부르기",
+        "boss": "사장님",
+        "custom": "직접 입력"
+      },
+      "customCallPlaceholder": "어떻게 불러줄까요?",
+      "previewTitle": "지금 설정",
+      "summaryUnset": "아직 설정 안 함",
+      "summaryCallName": "이름으로 불러요",
+      "summaryCallBoss": "사장님이라고 불러요",
+      "summaryCallCustom": "{{name}}(이)라고 불러요",
+      "rawToggle": "고급: 직접 작성",
+      "rawPlaceholder": "권장하지 않아요 — 위 선택만으로 충분합니다. 꼭 쓰고 싶다면 여기에."
+    },
+    "memoryList": {
+      "title": "기억하고 있는 것",
+      "empty": "기억을 조금씩 쌓아가는 중이에요.",
+      "clearAll": "기억 지우기",
+      "clearing": "지우는 중…",
+      "clearTitle": "기억 지우기",
+      "clearDescription": "지우면 이 내용들을 잊게 돼요. 나눈 대화 내용에는 영향이 없어요. 계속할까요?",
+      "clearConfirm": "지우기",
+      "deleteTitle": "이 기억 삭제",
+      "deleteDescription": "\"{{title}}\"을(를) 삭제할까요? 되돌릴 수 없어요.",
+      "deleteConfirm": "삭제",
+      "deleteAria": "\"{{title}}\" 삭제"
+    },
+    "learned": {
+      "title": "배운 것",
+      "empty": "해온 일들에서 조금씩 실력을 쌓아갈 거예요."
+    },
+    "abilityWall": {
+      "builtinTitle": "기본 탑재",
+      "connectableTitle": "연결할 수 있는 것",
+      "abilities": {
+        "writing": "✍️ 글쓰기와 파일",
+        "research": "🔍 자료 조사",
+        "doing": "🛠 직접 처리",
+        "schedule": "⏰ 예약 작업",
+        "collab": "🤝 동료와 협업"
+      },
+      "imBlocked": "한 팀원은 IM을 하나만 연결할 수 있어요 — 먼저 {{channel}} 연결을 끊어주세요"
+    },
+    "folders": {
+      "addButton": "+ 폴더 추가하기",
+      "adding": "추가하는 중…",
+      "remove": "제거"
+    },
+    "advancedIdentity": {
+      "title": "설명과 배경 정보"
     }
   },
   "commonUi": {

@@ -5,13 +5,17 @@ import {
   BellRing,
   Bot,
   Check,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   Download,
-  ImagePlus,
+  FolderGit2,
   MessageCircleMore,
   Plus,
   RefreshCcw,
+  Settings2,
   Sparkles,
+  UserRound,
 } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -48,19 +52,19 @@ import {
 import { AddBotDialog } from './AddBotDialog';
 import { BotAvatar, BotAvatarPicker } from './BotAvatar';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
-import { BotCapabilityChips, type BotCapabilityChipId } from './BotCapabilityChips';
+import { BotCapabilityChips } from './BotCapabilityChips';
 import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
 import { shouldDeferCanonicalBotSessionNavigation } from './botNavigation';
 import { BotRouteSettings } from './BotRouteSettings';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotEventInboxSettings } from './BotEventInboxSettings';
-import { BotChannelCapabilitySummary } from './BotChannelCapabilitySummary';
-import {
-  BOT_SETTINGS_TABS,
-  parseBotSettingsTab,
-  type BotSettingsTabId,
-} from './botSettingsNav';
+import { BotAbilityWall } from './BotAbilityWall';
+import { BotFolderCards } from './BotFolderCards';
+import { BotMemoryList } from './BotMemoryList';
+import { BotPersonaWizard, personaSummaryText } from './BotPersonaWizard';
+import { extractPersonaFromIdentitySource } from './botPersona';
+import { resolveBotSettingsAnchor, type BotSettingsAnchorId } from './botSettingsNav';
 import type { BotSettingsPayload } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 
@@ -84,31 +88,37 @@ export function BotSettings({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [settingsSearchParams, setSettingsSearchParams] = useSearchParams();
-  const activeTab = useMemo(
-    () => parseBotSettingsTab(settingsSearchParams.get('tab')),
+  const [settingsSearchParams] = useSearchParams();
+  // 批次 β:7 tab 收成一页,`?tab=<id>` 深链变成"滚到某个区块",不再是"切换到某个
+  // 面板"。旧 `?settings=1&tab=<value>` 书签仍要落到合理位置——`resolveBotSettingsAnchor`
+  // 把旧 7 个 tab id 与新 5 个锚点都映射到同一套结果,未知/缺省值一律回落到页顶(`null`)。
+  const anchor = useMemo(
+    () => resolveBotSettingsAnchor(settingsSearchParams.get('tab') ?? settingsSearchParams.get('anchor')),
     [settingsSearchParams],
   );
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const anchorRefs = useRef<Record<BotSettingsAnchorId, HTMLElement | null>>({
+    who: null,
+    can: null,
+    understand: null,
+    schedule: null,
+    advanced: null,
+  });
+  // "高级" 默认收起;深链直接指向 advanced(旧 capabilities/notifications/advanced
+  // 三个 tab 都落在这)时自动展开,否则用户点了才展开。
+  const [advancedOpen, setAdvancedOpen] = useState(anchor === 'advanced');
   useEffect(() => {
-    contentRef.current?.scrollTo({ top: 0 });
-  }, [activeTab]);
-  // 能力芯片的深链焦点。⚠ 徽标点进来时指向「动手做事」芯片,换 tab 即失效——
-  // 高亮是一次性的指路,不是常驻状态。
-  const [focusChipId, setFocusChipId] = useState<BotCapabilityChipId | null>(null);
-  const handleSelectTab = useCallback(
-    (tab: BotSettingsTabId, chip: BotCapabilityChipId | null = null) => {
-      setFocusChipId(chip);
-      setSettingsSearchParams(
-        (current) => {
-          current.set('tab', tab);
-          return current;
-        },
-        { replace: true },
-      );
-    },
-    [setSettingsSearchParams],
-  );
+    if (anchor === 'advanced') setAdvancedOpen(true);
+  }, [anchor]);
+  useEffect(() => {
+    if (!anchor) {
+      contentRef.current?.scrollTo({ top: 0 });
+      return;
+    }
+    if (anchor === 'advanced' && !advancedOpen) return; // 等展开状态落定的下一轮再滚
+    anchorRefs.current[anchor]?.scrollIntoView({ block: 'start' });
+  }, [anchor, advancedOpen]);
+  const [personaOpen, setPersonaOpen] = useState(false);
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
@@ -504,247 +514,210 @@ export function BotSettings({
         </header>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <nav
-          role="tablist"
-          aria-label={t('bots.settingsNav.title')}
-          className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--border-default)] px-4 py-2 md:w-48 md:flex-col md:overflow-visible md:border-b-0 md:border-r md:px-3 md:py-4"
-        >
-          {BOT_SETTINGS_TABS.map((tabMeta) => {
-            const TabIcon = tabMeta.icon;
-            const selected = activeTab === tabMeta.id;
-            return (
+      <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+        <div className="mx-auto flex max-w-3xl flex-col gap-5 pb-10">
+          {/* "TA 是谁" */}
+          <section
+            ref={(el) => {
+              anchorRefs.current.who = el;
+            }}
+            className="scroll-mt-6 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
+          >
+            <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+              <UserRound size={16} />
+              {t('bots.settingsBlocks.who')}
+            </div>
+            <div className="mt-4 flex items-center gap-3">
+              <BotAvatarPicker
+                name={name}
+                avatar={avatar}
+                avatarColor={avatarColor}
+                onChange={(next) => {
+                  setAvatar(next.emoji);
+                  setAvatarColor(next.hue);
+                  autosave.onEdit('instant');
+                }}
+              />
+              <div className="min-w-0 flex-1">
+                <input
+                  value={name}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    autosave.onEdit('text');
+                  }}
+                  onBlur={() => void autosave.flush()}
+                  aria-label={t('bots.nameLabel')}
+                  className="h-9 w-full rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                />
+                <p className="mt-1.5 text-11 text-[var(--text-tertiary)]">
+                  {t('bots.channelLabel')}: {channelLabel(bot.channel)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--surface-chip)] px-3 py-2.5">
+              <p className="min-w-0 flex-1 text-12 text-[var(--text-primary)]">
+                {personaSummaryText(t, extractPersonaFromIdentitySource(identitySource))}
+              </p>
               <button
-                key={tabMeta.id}
                 type="button"
-                role="tab"
-                aria-selected={selected}
-                onClick={() => handleSelectTab(tabMeta.id)}
-                className={cn(
-                  'inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-12 font-medium transition-colors',
-                  selected
-                    ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-                )}
+                onClick={() => setPersonaOpen(true)}
+                className="h-8 shrink-0 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
               >
-                <TabIcon size={14} />
-                {t(tabMeta.labelKey)}
+                {t('bots.persona.adjustButton')}
               </button>
-            );
-          })}
-        </nav>
+            </div>
 
-        <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-          <div className="mx-auto flex max-w-3xl flex-col gap-5 pb-6">
-            {activeTab === 'identity' ? (
-              <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-                  <ImagePlus size={16} />
-                  {t('bots.identityTitle')}
-                </div>
-                <div className="mt-4 flex items-center gap-3">
-                  <BotAvatarPicker
-                    name={name}
-                    avatar={avatar}
-                    avatarColor={avatarColor}
-                    onChange={(next) => {
-                      setAvatar(next.emoji);
-                      setAvatarColor(next.hue);
-                      autosave.onEdit('instant');
-                    }}
-                  />
-                  <p className="text-11 leading-4 text-[var(--text-tertiary)]">
-                    {t('bots.avatarPicker.hint')}
-                  </p>
-                </div>
-                <div className="mt-5 grid gap-4 md:grid-cols-2">
-                  <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                    {t('bots.nameLabel')}
-                    <input
-                      value={name}
-                      onChange={(event) => {
-                        setName(event.target.value);
-                        autosave.onEdit('text');
-                      }}
-                      onBlur={() => void autosave.flush()}
-                      className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                    />
-                  </label>
-                  <div className="flex flex-col justify-end text-12 text-[var(--text-tertiary)]">
-                    {t('bots.channelLabel')}: {channelLabel(bot.channel)}
-                  </div>
-                </div>
-                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                  {t('bots.descriptionLabel')}
-                  <textarea
-                    value={description}
-                    onChange={(event) => {
-                      setDescription(event.target.value);
-                      autosave.onEdit('text');
-                    }}
-                    onBlur={() => void autosave.flush()}
-                    rows={3}
-                    className="resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                  />
-                </label>
-                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                  {t('bots.identitySourceLabel')}
-                  <textarea
-                    value={identitySource}
-                    onChange={(event) => {
-                      setIdentitySource(event.target.value);
-                      autosave.onEdit('text');
-                    }}
-                    onBlur={() => void autosave.flush()}
-                    placeholder={t('bots.identitySourcePlaceholder')}
-                    rows={6}
-                    className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                  />
-                  <span className="text-11 leading-5 text-[var(--text-tertiary)]">
-                    {t('bots.identitySourceDescription')}
+            {/* "TA 记得的" — memory=false 的历史伙伴留一条自己开回来的路,恒开后
+                走真实的 bot-memory 只读枚举 + 单删 + 清空。 */}
+            <div className="mt-5 border-t border-[var(--border-default)] pt-4">
+              {capabilities.memory ? (
+                <BotMemoryList botId={bot.id} />
+              ) : (
+                <div className="flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-3">
+                  <span className="min-w-0">
+                    <span className="block text-12 font-medium text-[var(--text-primary)]">
+                      {t('bots.memoryRecovery.title')}
+                    </span>
+                    <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
+                      {t('bots.memoryRecovery.description')}
+                    </span>
                   </span>
-                </label>
-                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                  {t('bots.userContextSourceLabel')}
-                  <textarea
-                    value={userContextSource}
-                    onChange={(event) => {
-                      setUserContextSource(event.target.value);
-                      autosave.onEdit('text');
-                    }}
-                    onBlur={() => void autosave.flush()}
-                    placeholder={t('bots.userContextSourcePlaceholder')}
-                    rows={4}
-                    className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                  />
-                  <span className="text-11 leading-5 text-[var(--text-tertiary)]">
-                    {t('bots.userContextSourceDescription')}
-                  </span>
-                </label>
-              </section>
-            ) : null}
+                  <button
+                    type="button"
+                    onClick={() => updateCapability('memory', true)}
+                    className="h-8 shrink-0 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                  >
+                    {t('bots.memoryRecovery.action')}
+                  </button>
+                </div>
+              )}
+            </div>
 
-            {activeTab === 'channels' ? (
-              <>
-                <BotRouteSettings bot={bot} onOpenTask={onOpenSession} />
+            {/* "TA 学会的" — 批次 ε 之前没有真实数据源,如实给占位而不是编造。 */}
+            <div className="mt-5 border-t border-[var(--border-default)] pt-4">
+              <p className="text-12 font-medium text-[var(--text-primary)]">
+                {t('bots.learned.title')}
+              </p>
+              <p className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
+                {t('bots.learned.empty')}
+              </p>
+            </div>
+          </section>
 
-                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-                    <Bot size={16} />
-                    {t('bots.channelsTitle')}
-                  </div>
-                  <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                    {t('bots.channelsDescription')}
-                  </p>
-                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    <div className="flex items-center justify-between rounded-xl border border-[var(--border-default)] px-3 py-2">
-                      <span>
-                        <span className="block text-12 text-[var(--text-primary)]">
-                          {channelLabel('local')}
-                        </span>
-                        <span className="block text-10 text-[var(--text-tertiary)]">
-                          {t('bots.channelLocalOwned')}
-                        </span>
-                      </span>
-                      <span className="text-11 text-[var(--text-secondary)]">
-                        {t('bots.channelMounted')}
-                      </span>
-                    </div>
-                    {visibleChannelConnections.map((connection) => {
-                      const mounted = mountedChannelFor(connection);
-                      const label =
-                        connection.accountName ||
-                        connection.accountKey ||
-                        channelLabel(connection.kind);
-                      return (
-                        <div
-                          key={connection.id}
-                          className="rounded-xl border border-[var(--border-default)] px-3 py-2"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <span className="min-w-0">
-                              <span className="block truncate text-12 text-[var(--text-primary)]">
-                                {channelLabel(connection.kind)} · {label}
-                              </span>
-                              <span className="block truncate text-10 text-[var(--text-tertiary)]">
-                                {connection.ownership === 'server-relay'
-                                  ? t('bots.channelServerRelay')
-                                  : t('bots.channelLocalAdapter')}
-                                {' · '}
-                                {connection.connected
-                                  ? t('bots.channelConnected')
-                                  : t('bots.channelOffline')}
-                              </span>
-                            </span>
-                            <button
-                              type="button"
-                              disabled={channelBusy !== null || !connection.routable}
-                              onClick={() => void toggleChannel(connection)}
-                              className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
-                            >
-                              {channelBusy === connection.id
-                                ? '…'
-                                : mounted
-                                  ? t('bots.channelMounted')
-                                  : t('bots.channelMount')}
-                            </button>
-                          </div>
-                          <BotChannelCapabilitySummary connection={connection} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {visibleChannelConnections.length === 0 ? (
-                    <p className="mt-3 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-tertiary)]">
-                      {t('bots.channelConnectionRequired', { channel: 'IM' })}
-                    </p>
-                  ) : null}
-                  {channelError ? (
-                    <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
-                  ) : null}
-                </section>
-              </>
-            ) : null}
-
-            {activeTab === 'capabilities' ? (
-              <BotCapabilityChips
-                capabilities={capabilities}
-                onCapabilitiesChange={applyCapabilities}
+          {/* "TA 会的" */}
+          <section
+            ref={(el) => {
+              anchorRefs.current.can = el;
+            }}
+            className="scroll-mt-6 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
+          >
+            <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+              <Sparkles size={16} />
+              {t('bots.settingsBlocks.can')}
+            </div>
+            <div className="mt-4">
+              <BotAbilityWall
                 connections={visibleChannelConnections}
                 isChannelMounted={(connection) => Boolean(mountedChannelFor(connection))}
                 channelBusyId={channelBusy}
                 onToggleChannel={(connection) => void toggleChannel(connection)}
-                focusChipId={focusChipId}
-                headerAside={
-                  <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 text-[var(--text-secondary)]">
-                    {t(`bots.runtimeState.${runtimeState}`)}
-                  </span>
-                }
-              >
-                <p className="mt-4 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
-                  {t('bots.capabilitiesDeferred')}
-                </p>
-                {channelError ? (
-                  <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
-                ) : null}
-              </BotCapabilityChips>
-            ) : null}
-
-            {activeTab === 'automation' ? (
-              <BotAutomationSettings
-                bot={bot}
-                enabled={bot.capabilities.automation}
-                trusted={bot.capabilities.permissions === 'trusted'}
-                onOpenTask={onOpenSession}
               />
+            </div>
+            {channelError ? (
+              <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
             ) : null}
+          </section>
 
-            {activeTab === 'notifications' ? <BotEventInboxSettings bot={bot} /> : null}
+          {/* "TA 懂的" */}
+          <section
+            ref={(el) => {
+              anchorRefs.current.understand = el;
+            }}
+            className="scroll-mt-6 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
+          >
+            <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+              <FolderGit2 size={16} />
+              {t('bots.settingsBlocks.understand')}
+            </div>
+            <div className="mt-4">
+              <BotFolderCards botId={bot.id} bindings={bot.projectBindings ?? []} />
+            </div>
+          </section>
 
-            {activeTab === 'projects' ? <BotProjectSettings bot={bot} /> : null}
+          {/* "TA 的日程" — 整体嵌入,不再要求「先开自动化」;首次创建 Routine 通过
+              onEnableAutomation 走自动保存把 capabilities.automation 悄悄翻开。 */}
+          <div
+            ref={(el) => {
+              anchorRefs.current.schedule = el;
+            }}
+            className="scroll-mt-6"
+          >
+            <BotAutomationSettings
+              bot={bot}
+              enabled={bot.capabilities.automation}
+              trusted={bot.capabilities.permissions === 'trusted'}
+              onOpenTask={onOpenSession}
+              onEnableAutomation={() => updateCapability('automation', true)}
+            />
+          </div>
 
-            {activeTab === 'advanced' ? (
-              <>
+          {/* "高级" — 单个文字链接展开的内联区块,不是弹窗;深链 ?tab=advanced 及旧
+              7-tab 里落在这里的 capabilities/notifications 会在挂载时自动展开。 */}
+          <section
+            ref={(el) => {
+              anchorRefs.current.advanced = el;
+            }}
+            className="scroll-mt-6"
+          >
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((current) => !current)}
+              aria-expanded={advancedOpen}
+              className="inline-flex items-center gap-1 text-12 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              {advancedOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {t('bots.advancedLinkLabel')}
+            </button>
+
+            {advancedOpen ? (
+              <div className="mt-4 flex flex-col gap-5">
+                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+                    <Settings2 size={16} />
+                    {t('bots.advancedIdentity.title')}
+                  </div>
+                  <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                    {t('bots.descriptionLabel')}
+                    <textarea
+                      value={description}
+                      onChange={(event) => {
+                        setDescription(event.target.value);
+                        autosave.onEdit('text');
+                      }}
+                      onBlur={() => void autosave.flush()}
+                      rows={3}
+                      className="resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                    />
+                  </label>
+                  <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                    {t('bots.userContextSourceLabel')}
+                    <textarea
+                      value={userContextSource}
+                      onChange={(event) => {
+                        setUserContextSource(event.target.value);
+                        autosave.onEdit('text');
+                      }}
+                      onBlur={() => void autosave.flush()}
+                      placeholder={t('bots.userContextSourcePlaceholder')}
+                      rows={4}
+                      className="resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                    />
+                    <span className="text-11 leading-5 text-[var(--text-tertiary)]">
+                      {t('bots.userContextSourceDescription')}
+                    </span>
+                  </label>
+                </section>
+
                 <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
                   <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
                     <Sparkles size={16} />
@@ -753,30 +726,6 @@ export function BotSettings({
                   <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
                     {t('bots.advancedCapabilities.description')}
                   </p>
-                  {/*
-                    历史数据里可能存在 memory=false 的伙伴。记忆开关已经从界面消失
-                    (恒开),所以必须给这些伙伴留一条自己开回来的路,否则它们永远
-                    停在关闭态而用户看不到任何入口。
-                  */}
-                  {capabilities.memory ? null : (
-                    <div className="mt-4 flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-3">
-                      <span className="min-w-0">
-                        <span className="block text-12 font-medium text-[var(--text-primary)]">
-                          {t('bots.memoryRecovery.title')}
-                        </span>
-                        <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
-                          {t('bots.memoryRecovery.description')}
-                        </span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => updateCapability('memory', true)}
-                        className="h-8 shrink-0 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-                      >
-                        {t('bots.memoryRecovery.action')}
-                      </button>
-                    </div>
-                  )}
                   <div className="mt-4 grid min-w-0 gap-4 md:grid-cols-2">
                     <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
                       <span>{t('bots.harnessLabel')}</span>
@@ -847,6 +796,33 @@ export function BotSettings({
                     onSelectedSkillsChange={applySelectedSkills}
                   />
                 </section>
+
+                <BotCapabilityChips
+                  capabilities={capabilities}
+                  onCapabilitiesChange={applyCapabilities}
+                  connections={visibleChannelConnections}
+                  isChannelMounted={(connection) => Boolean(mountedChannelFor(connection))}
+                  channelBusyId={channelBusy}
+                  onToggleChannel={(connection) => void toggleChannel(connection)}
+                  headerAside={
+                    <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 text-[var(--text-secondary)]">
+                      {t(`bots.runtimeState.${runtimeState}`)}
+                    </span>
+                  }
+                >
+                  <p className="mt-4 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
+                    {t('bots.capabilitiesDeferred')}
+                  </p>
+                  {channelError ? (
+                    <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
+                  ) : null}
+                </BotCapabilityChips>
+
+                <BotRouteSettings bot={bot} onOpenTask={onOpenSession} />
+
+                <BotProjectSettings bot={bot} />
+
+                <BotEventInboxSettings bot={bot} />
 
                 <section className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
                   <div>
@@ -919,16 +895,26 @@ export function BotSettings({
                       : t('bots.portability.export')}
                   </button>
                 </section>
-              </>
+              </div>
             ) : null}
-          </div>
+          </section>
         </div>
       </div>
 
+      <BotPersonaWizard
+        open={personaOpen}
+        identitySource={identitySource}
+        onOpenChange={setPersonaOpen}
+        onSave={(next) => {
+          setIdentitySource(next);
+          autosave.onEdit('instant');
+        }}
+      />
+
       {/*
-        挂载 / 卸载渠道现在同时来自「通道」tab 与能力芯片墙,所以迁移与回滚确认
-        必须挂在页面根上——留在 channels 分支里的话,从芯片墙点开的确认框会因为
-        当前 tab 不是 channels 而根本不渲染,用户会看到「点了没反应」。
+        挂载 / 卸载渠道现在同时来自「TA 会的」墙与高级里的能力芯片墙,所以迁移与
+        回滚确认必须挂在页面根上——两处都可能触发,任何一处都不能因为「高级」当前
+        收起就吞掉确认框,用户会看到「点了没反应」。
       */}
       <Dialog.Root
         open={migrationPlan !== null}

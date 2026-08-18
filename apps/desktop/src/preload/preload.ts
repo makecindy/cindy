@@ -5913,6 +5913,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:maker-memory:reset'),
 
     /**
+     * 单个伙伴的 Maker Memory 只读列表 + 单条删除 + 清空 ("TA 记得的" — 批次 β)。
+     * scope key 由 main 侧用 buildBotMemoryScopeKey(botId) 派生, 与 workdir 记忆
+     * 完全独立; 全局 Maker Memory 开关即使关闭也仍可查看/清理已有数据。
+     */
+    botMemory: {
+      list: (botId: string): Promise<import('@cindy/maker-core').MemoryRecord[]> =>
+        ipcRenderer.invoke('maker:bot-memory:list', botId),
+      delete: (botId: string, filename: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke('maker:bot-memory:delete', botId, filename),
+      clear: (botId: string): Promise<{ removedCount: number }> =>
+        ipcRenderer.invoke('maker:bot-memory:clear', botId),
+    },
+
+    /**
      * 启动期同步三个 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。
      * renderer localStorage 只是 UI 即时态镜像 — 启动时调一次, main 是 source of truth。
      */

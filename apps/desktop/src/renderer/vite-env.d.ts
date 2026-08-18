@@ -4776,6 +4776,16 @@ interface ElectronAPI {
         ) => void,
       ) => () => void;
     };
+    /**
+     * 单个伙伴的 Maker Memory 只读列表 + 单条删除 + 清空("TA 记得的" — 批次 β)。
+     * scope key 由 main 侧用 buildBotMemoryScopeKey(botId) 派生,与 workdir 记忆
+     * 完全独立;全局 Maker Memory 开关即使关闭也仍可查看/清理已有数据。
+     */
+    botMemory: {
+      list: (botId: string) => Promise<import('@cindy/maker-core').MemoryRecord[]>;
+      delete: (botId: string, filename: string) => Promise<{ ok: true }>;
+      clear: (botId: string) => Promise<{ removedCount: number }>;
+    };
     /** workflow 逐 agent 进度树(只读);读不到 / 解析失败返回 null → 回退 workflow 级卡片。 */
     getWorkflowProgress: (
       sessionId: string,

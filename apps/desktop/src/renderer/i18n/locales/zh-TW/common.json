@@ -5561,14 +5561,7 @@
     "sessionUnavailableDescription": "它可能已經 Renew、封存，或不再屬於這個夥伴。請返回夥伴總覽開啟目前任務。",
     "settings": "夥伴設定",
     "settingsNav": {
-      "title": "設定分組",
-      "identity": "基本資訊",
-      "channels": "通道",
-      "capabilities": "能力",
-      "automation": "自動化",
-      "notifications": "通知",
-      "projects": "專案",
-      "advanced": "高階"
+      "title": "設定分組"
     },
     "emptyTitle": "尚未建立夥伴",
     "emptyDescription": "夥伴比一般任務多一層長期身分、事件收件匣、自動化與訊息通道。",
@@ -5867,7 +5860,6 @@
     "automations": {
       "title": "夥伴自動化",
       "description": "這個夥伴自己會執行的 Routine——依時間表執行，或你按「立即執行」時執行。",
-      "enableFirst": "請先在能力設定中啟用自動化並儲存 Profile。",
       "trustedRequired": "無人值守執行無法等待授權確認。請設為「信任操作」並儲存。",
       "name": "名稱",
       "dailyTime": "每天執行時間",
@@ -6187,6 +6179,100 @@
         "exportEmpty": "還沒有伙伴可以匯出。"
       },
       "rosterNote": "預置陣容會隨版本更新。"
+    },
+    "settingsBlocks": {
+      "who": "TA 是誰",
+      "can": "TA 會的",
+      "understand": "TA 懂的",
+      "schedule": "TA 的日程",
+      "advanced": "進階"
+    },
+    "advancedLinkLabel": "進階(模型、技術細節、匯出)›",
+    "persona": {
+      "title": "調整性格",
+      "description": "選三下就好，TA 會照著改口氣。",
+      "adjustButton": "調整性格",
+      "stepStyle": "說話風格",
+      "stepProactivity": "主動程度",
+      "stepCall": "怎麼稱呼你",
+      "style": {
+        "concise": {
+          "label": "簡潔俐落",
+          "description": "一句能說完絕不說兩句"
+        },
+        "lively": {
+          "label": "活潑愛聊",
+          "description": "語氣輕鬆，帶點表情"
+        },
+        "steady": {
+          "label": "穩重周到",
+          "description": "先講清楚，再動手"
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "有事才說",
+          "description": "不主動打擾你"
+        },
+        "proactive": {
+          "label": "會主動提醒",
+          "description": "該提醒的會開口"
+        },
+        "reportAll": {
+          "label": "什麼都彙報",
+          "description": "做完一件說一件"
+        }
+      },
+      "call": {
+        "name": "直呼名字",
+        "boss": "老闆",
+        "custom": "自訂"
+      },
+      "customCallPlaceholder": "讓 TA 怎麼叫你",
+      "previewTitle": "現在的 TA",
+      "summaryUnset": "還沒設定",
+      "summaryCallName": "直呼你名字",
+      "summaryCallBoss": "叫你老闆",
+      "summaryCallCustom": "叫你{{name}}",
+      "rawToggle": "進階：自己寫設定",
+      "rawPlaceholder": "不建議——上面選完就夠了。真要寫就寫在這。"
+    },
+    "memoryList": {
+      "title": "TA 記得的",
+      "empty": "TA 的記憶正在累積中",
+      "clearAll": "清空記憶",
+      "clearing": "清空中…",
+      "clearTitle": "清空記憶",
+      "clearDescription": "清空後 TA 會忘掉這些事，聊過的內容不受影響。要繼續嗎？",
+      "clearConfirm": "清空",
+      "deleteTitle": "刪除這條記憶",
+      "deleteDescription": "刪除「{{title}}」？刪除後無法恢復。",
+      "deleteConfirm": "刪除",
+      "deleteAria": "刪除「{{title}}」"
+    },
+    "learned": {
+      "title": "TA 學會的",
+      "empty": "TA 會從做過的事裡自己長本事"
+    },
+    "abilityWall": {
+      "builtinTitle": "自帶",
+      "connectableTitle": "可以連上",
+      "abilities": {
+        "writing": "✍️ 寫作與檔案",
+        "research": "🔍 查資料",
+        "doing": "🛠 動手做事",
+        "schedule": "⏰ 定時幹活",
+        "collab": "🤝 和夥伴協作"
+      },
+      "imBlocked": "一個夥伴只能連一個 IM——先斷開{{channel}}"
+    },
+    "folders": {
+      "addButton": "＋ 給 TA 一個資料夾",
+      "adding": "新增中…",
+      "remove": "移除"
+    },
+    "advancedIdentity": {
+      "title": "描述與背景"
     }
   },
   "commonUi": {

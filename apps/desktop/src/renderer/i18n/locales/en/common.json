@@ -5563,14 +5563,7 @@
     "sessionUnavailableDescription": "It may have been renewed, archived, or removed from this teammate. Return to the teammate overview to open its current task.",
     "settings": "Teammate settings",
     "settingsNav": {
-      "title": "Settings sections",
-      "identity": "Basic info",
-      "channels": "Channels",
-      "capabilities": "Capabilities",
-      "automation": "Automation",
-      "notifications": "Notifications",
-      "projects": "Projects",
-      "advanced": "Advanced"
+      "title": "Settings sections"
     },
     "emptyTitle": "No teammates yet",
     "emptyDescription": "Teammates add persistent identity, an event inbox, automations, and message Channels to a normal task.",
@@ -5869,7 +5862,6 @@
     "automations": {
       "title": "Teammate automation",
       "description": "Routines this teammate runs on its own — on a schedule, or when you press Run now.",
-      "enableFirst": "Enable Automation in Capabilities and save the Profile first.",
       "trustedRequired": "Unattended runs cannot wait for approval. Select Trusted actions and save before creating automation.",
       "name": "Name",
       "dailyTime": "Daily time",
@@ -6189,6 +6181,100 @@
         "exportEmpty": "No teammate to export yet."
       },
       "rosterNote": "The shipped roster grows with each release."
+    },
+    "settingsBlocks": {
+      "who": "Who they are",
+      "can": "What they can do",
+      "understand": "What they understand",
+      "schedule": "Their schedule",
+      "advanced": "Advanced"
+    },
+    "advancedLinkLabel": "Advanced (model, technical details, export) ›",
+    "persona": {
+      "title": "Adjust their personality",
+      "description": "Three quick picks and they will change how they talk.",
+      "adjustButton": "Adjust personality",
+      "stepStyle": "Speaking style",
+      "stepProactivity": "How proactive",
+      "stepCall": "What they call you",
+      "style": {
+        "concise": {
+          "label": "Crisp and to the point",
+          "description": "Says it once, never twice."
+        },
+        "lively": {
+          "label": "Warm and chatty",
+          "description": "Relaxed tone, the odd bit of expression."
+        },
+        "steady": {
+          "label": "Steady and thorough",
+          "description": "Explains first, then gets to work."
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "Speaks up only when needed",
+          "description": "Won't interrupt you otherwise."
+        },
+        "proactive": {
+          "label": "Gives proactive reminders",
+          "description": "Speaks up when something needs a heads-up."
+        },
+        "reportAll": {
+          "label": "Reports everything",
+          "description": "Tells you as soon as something is done."
+        }
+      },
+      "call": {
+        "name": "Your first name",
+        "boss": "Boss",
+        "custom": "Something else"
+      },
+      "customCallPlaceholder": "What should they call you?",
+      "previewTitle": "They are now",
+      "summaryUnset": "Not set yet",
+      "summaryCallName": "uses your name",
+      "summaryCallBoss": "calls you Boss",
+      "summaryCallCustom": "calls you {{name}}",
+      "rawToggle": "Advanced: write it yourself",
+      "rawPlaceholder": "Not recommended — the picks above are usually enough. If you really want to, write it here."
+    },
+    "memoryList": {
+      "title": "What they remember",
+      "empty": "They're still building up memories.",
+      "clearAll": "Clear memory",
+      "clearing": "Clearing…",
+      "clearTitle": "Clear memory",
+      "clearDescription": "Once cleared, they'll forget these things. Past conversations are not affected. Continue?",
+      "clearConfirm": "Clear",
+      "deleteTitle": "Delete this memory",
+      "deleteDescription": "Delete \"{{title}}\"? This cannot be undone.",
+      "deleteConfirm": "Delete",
+      "deleteAria": "Delete \"{{title}}\""
+    },
+    "learned": {
+      "title": "What they've learned",
+      "empty": "They'll build up know-how from the things they do."
+    },
+    "abilityWall": {
+      "builtinTitle": "Built in",
+      "connectableTitle": "Can connect to",
+      "abilities": {
+        "writing": "✍️ Writing & files",
+        "research": "🔍 Research",
+        "doing": "🛠 Hands-on tasks",
+        "schedule": "⏰ Working on a schedule",
+        "collab": "🤝 Teaming up with other teammates"
+      },
+      "imBlocked": "A teammate can only connect to one IM — disconnect {{channel}} first"
+    },
+    "folders": {
+      "addButton": "+ Give them a folder",
+      "adding": "Adding…",
+      "remove": "Remove"
+    },
+    "advancedIdentity": {
+      "title": "Description & background"
     }
   },
   "commonUi": {

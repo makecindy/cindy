@@ -28,6 +28,7 @@ import type {
   SessionSendResult,
   UserMessage,
 } from '@cindy/maker-core';
+import { buildBotMemoryScopeKey } from '@cindy/maker-core';
 import { storedCustomProviderId } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
@@ -14587,6 +14588,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     log.info('maker-memory:reset');
     return maker.makerMemory.resetAll();
+  });
+
+  // Per-bot Maker Memory ("TA 记得的" — 批次 β). Bot memory lives in the same
+  // makerMemory engine as workdir memory, keyed by buildBotMemoryScopeKey(botId)
+  // (see botProfileRuntime.ts's startSession wiring) — completely independent
+  // of any workdir. skipDisabledCheck: true throughout, same choice
+  // MAKER_MEMORY_RESET/resetWorkdir already makes: a user who turned the
+  // global Maker Memory toggle off must still be able to see and clear a
+  // bot's already-written memory, not get MAKER_MEMORY_NOT_READY on their own
+  // data.
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_LIST, async (_e, botId: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
+      skipDisabledCheck: true,
+    });
+    return store.list();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_DELETE, async (_e, botId: unknown, filename: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (typeof filename !== 'string' || !filename.trim()) {
+      throwIpcError('INVALID_PARAMS', 'filename required (string)');
+    }
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
+      skipDisabledCheck: true,
+    });
+    await store.delete(filename);
+    log.info('bot-memory:delete', { botId });
+    return { ok: true };
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_CLEAR, async (_e, botId: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    log.info('bot-memory:clear', { botId });
+    return maker.makerMemory.resetWorkdir(buildBotMemoryScopeKey(botId));
   });
 
   // 占位：MetaAgent 入口
