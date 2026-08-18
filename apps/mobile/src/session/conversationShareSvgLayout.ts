@@ -175,7 +175,7 @@ export function buildConversationShareSvgLayout({
 function plainConversationShareText(message: ConversationShareMessage): string {
   const parts = message.bodyParts
     ? message.bodyParts
-        .map((part) => (part.kind === "text" ? part.text : `${part.label}:`))
+        .map((part) => (part.kind === "text" ? part.text : part.label))
         .join("\n")
     : message.body;
   const combined = [parts, message.secondaryBody].filter(Boolean).join("\n");
@@ -196,8 +196,12 @@ function plainMarkdownBlockText(block: MobileMarkdownBlock): string {
   switch (block.type) {
     case "paragraph":
     case "heading":
-    case "blockquote":
       return plainMarkdownInlineText(block.inlines);
+    case "blockquote":
+      return plainMarkdownInlineText(block.inlines)
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n");
     case "list_item": {
       const taskMarker =
         typeof block.checked === "boolean"
@@ -234,6 +238,9 @@ function plainMarkdownInlineText(
         return (
           inline.alt.trim() || i18n.t("message.renderer.imageFallbackTitle")
         );
+      }
+      if (inline.type === "strikethrough") {
+        return `~~${inline.text}~~`;
       }
       return inline.text;
     })

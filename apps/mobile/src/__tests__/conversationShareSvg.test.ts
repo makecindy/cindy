@@ -162,6 +162,42 @@ describe("ConversationShareSvg", () => {
     ]);
   });
 
+  it("preserves semantic plaintext markers without altering chip labels", () => {
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["chips", "markdown"],
+      colors,
+      messages: [
+        {
+          body: "ignored when structured parts are present",
+          bodyParts: [
+            { kind: "quote", label: "quoted context" },
+            { kind: "pasted", label: "pasted text" },
+            { kind: "slash", label: "/review" },
+          ],
+          clientId: "chips",
+          kind: "user",
+        },
+        {
+          body: "> do not deploy\n> until reviewed\n\nUse v2, ~~not v1~~",
+          clientId: "markdown",
+          kind: "assistant",
+        },
+      ],
+      width: 390,
+    });
+
+    expect(layout.bubbles[0]?.textBlocks[0]?.lines).toEqual([
+      "quoted context",
+      "pasted text",
+      "/review",
+    ]);
+    expect(layout.bubbles[1]?.textBlocks[0]?.lines).toEqual([
+      "> do not deploy",
+      "> until reviewed",
+      "Use v2, ~~not v1~~",
+    ]);
+  });
+
   it("waits for both footer assets before allowing export", async () => {
     const gate = createConversationShareFooterAssetGate();
     let ready = false;
