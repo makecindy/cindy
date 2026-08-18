@@ -31,7 +31,11 @@ import type { SessionClickHandler } from './SessionItem';
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from './menuStyles';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
-import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import { useAgentIslandActivity } from '@/state/agentIslandActivity';
+import {
+  projectSidebarSessionActivity,
+  resolveSidebarRightStatus,
+} from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
@@ -157,6 +161,7 @@ export function AutomationSessionGroupItem({
   // (性能不变量,别退回整组 / 整张表订阅)。
   const latestUrgentFromSchedule = useSessionAttentionUrgency(latestSessionId ?? '');
   const latestChatKind = useSessionAttentionKind(latestSessionId ?? '');
+  const latestLiveActivity = useAgentIslandActivity(latestSessionId ?? '');
   const scheduleId = group.scheduleId;
   // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
   // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
@@ -181,12 +186,17 @@ export function AutomationSessionGroupItem({
   // done 绿 / time 文字):四个 input 全部取「最新一条」运行,送进同一 resolveSidebarRightStatus,
   // 于是组头右侧状态与最新 session 子行像素级一致(色号 / 图标尺寸 / 判定完全同源)。
   const latestHasNotification = latestSessionId != null && notifications.has(latestSessionId);
-  const groupRightStatusKind = resolveSidebarRightStatus({
+  const groupActivity = projectSidebarSessionActivity({
+    sessionId: latestSessionId ?? '',
+    title: latestSession?.title,
+    recordStatus: latestSession?.status,
+    liveActivity: latestLiveActivity,
     attentionKind: latestChatKind,
     isUrgentFromContext: latestUrgentFromSchedule,
     isRunning,
     hasAttentionNotification: latestHasNotification,
   });
+  const groupRightStatusKind = resolveSidebarRightStatus(groupActivity);
   const showRightStatus = groupRightStatusKind !== 'time';
   const actionButtonToneClassName = hasActiveHidden
     ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'

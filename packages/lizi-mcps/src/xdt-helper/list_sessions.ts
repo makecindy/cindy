@@ -15,6 +15,7 @@ import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps } from './_history_types.js';
+import type { SessionQueueDeps } from './list_session_queue.js';
 import { okPayload, errorPayload } from './_payload.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
 
@@ -33,6 +34,7 @@ const DESCRIPTION = [
   '  - include_deleted: 默认 false (排除 status=deleted)',
   '',
   '【输出】messageCount 已过滤被 rewind 软删的消息, 是用户可见的真实条数。',
+  'queuedCount 是当前尚未消费的输入队列条数，可用 list_session_queue 查看明细。',
   '时间戳均为 ISO 8601 字符串(对应 DB 里的 unix ms 转换)。',
   'orcaRole / parentSessionId / userSendAt 仅在非 null 时出现(默认场景几乎全为 null, 已 omit)。',
   '',
@@ -41,6 +43,7 @@ const DESCRIPTION = [
 
 export interface ListSessionsToolDeps {
   history: XdtHelperHistoryDeps;
+  sessionQueue?: SessionQueueDeps;
 }
 
 export function registerListSessionsTool(
@@ -110,6 +113,22 @@ export function registerListSessionsTool(
         return errorPayload('INTERNAL', result.message);
       }
       const { page } = result;
+      let queuedCounts: Record<string, number> | null = null;
+      if (deps.sessionQueue && page.items.length > 0) {
+        const countsResult = await deps.sessionQueue.listSessionQueuedCounts(
+          page.items.map((session) => session.id),
+        );
+        if (!countsResult.ok) {
+          if (countsResult.errorCode === 'HOST_NOT_READY') {
+            return errorPayload(
+              'HOST_NOT_READY',
+              `${BRAND_NAME} 本机 session 队列服务尚未就绪，请稍后重试。`,
+            );
+          }
+          return errorPayload('INTERNAL', countsResult.message);
+        }
+        queuedCounts = countsResult.counts;
+      }
       // Token 优化: orcaRole / parentSessionId / userSendAt 这几个字段在绝大多数
       // session 上都是 null, 逐行带 null 会浪费 token。改成 omit-when-null。
       return okPayload({
@@ -127,6 +146,7 @@ export function registerListSessionsTool(
             updatedAt: new Date(s.updatedAt).toISOString(),
             messageCount: s.messageCount,
           };
+          if (queuedCounts !== null) out.queuedCount = queuedCounts[s.id] ?? 0;
           if (s.orcaRole !== null) out.orcaRole = s.orcaRole;
           if (s.parentSessionId !== null) out.parentSessionId = s.parentSessionId;
           if (s.userSendAt !== null) out.userSendAt = new Date(s.userSendAt).toISOString();

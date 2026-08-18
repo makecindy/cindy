@@ -217,10 +217,15 @@ export interface AskUserQuestionItem {
   multiSelect?: boolean;
 }
 
+type InteractionRequestBase = {
+  requestId: string;
+  /** Provider tool/item id that owns this interaction; distinct from transport request ids. */
+  toolUseId?: string;
+};
+
 export type InteractionRequest =
-  | {
+  | (InteractionRequestBase & {
       kind: 'permission';
-      requestId: string;
       toolName: string;
       input: Record<string, unknown>;
       title?: string;
@@ -228,18 +233,16 @@ export type InteractionRequest =
       description?: string;
       suggestions?: unknown[];
       metadata?: Record<string, unknown>;
-    }
-  | {
+    })
+  | (InteractionRequestBase & {
       kind: 'ask_user_question';
-      requestId: string;
       questions: AskUserQuestionItem[];
-    }
-  | {
+    })
+  | (InteractionRequestBase & {
       kind: 'plan_review';
-      requestId: string;
       plan: string;
       planFilePath?: string;
-    };
+    });
 
 export type InteractionDecision =
   | {

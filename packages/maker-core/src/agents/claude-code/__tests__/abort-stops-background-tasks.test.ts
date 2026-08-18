@@ -475,6 +475,283 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent abort stops background wake tasks', () => {
+  it('graceful stop cancels a Session send while Claude is still converting attachments', async () => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream();
+    const session = wrapInSession(handle);
+    let resolveResize!: (value: string) => void;
+    imageResizerMock.process.mockImplementationOnce(
+      () => new Promise<string>((resolve) => { resolveResize = resolve; }),
+    );
+
+    const imagePath = path.join(os.tmpdir(), 'graceful-stop-pre-acceptance.png');
+    const send = session.send({
+      type: 'user',
+      content: [{ type: 'image', path: imagePath }],
+    });
+    await waitFor(() => imageResizerMock.process.mock.calls.length > 0, 'attachment conversion started');
+
+    const firstStop = session.requestGracefulStop();
+    const secondStop = session.requestGracefulStop();
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+    resolveResize(imagePath);
+
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(Promise.all([firstStop, secondStop])).resolves.toEqual([
+      { status: 'requested', turnGeneration: 1 },
+      { status: 'requested', turnGeneration: 1 },
+    ]);
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+    stream.end();
+    await session.close().catch(() => undefined);
+  });
+
+  it('graceful stop sends only the SDK interrupt without closing or stopping background tasks', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'long turn' });
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+
+    stream.emit(turnResult('stopped'));
+    await waitFor(
+      () => events.some((event) => event.type === 'done'),
+      'graceful stop terminal',
+    );
+    await handle.close();
+  });
+
+  it('graceful stop cancels an awaiting wake continuation and rebuilds before the next send', async () => {
+    const { handle, stream, streams, events, fakeQuery, fakeQueries } =
+      await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+
+    expect(fakeQuery.stopTask).toHaveBeenCalledWith('task-agent');
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === 'done' &&
+            (event.data as { reason?: unknown } | null | undefined)?.reason ===
+              'turn_continuation_cancelled',
+        ),
+      'graceful continuation cancellation observed',
+    );
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    const eventCountAfterStop = events.length;
+    streams[0]?.emit(assistantText('late automatic continuation'));
+    streams[0]?.emit(turnResult('late automatic result'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toHaveLength(eventCountAfterStop);
+
+    await handle.send({ type: 'user', content: 'fresh turn after graceful stop' });
+    expect(fakeQueries).toHaveLength(2);
+    expect(fakeQuery.close).toHaveBeenCalledTimes(1);
+    stream.emit(turnResult('fresh turn complete'));
+    await waitFor(() => events.filter(isProductTerminal).length === 2, 'fresh terminal observed');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('graceful stop cancels an awaiting claim after its wake task already completed', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+    stream.emit(taskNotification('task-agent', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task completion observed');
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'cancellation terminal observed');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('graceful stop lets an already active continuation finish through its interrupted result', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+    stream.emit(taskNotification('task-agent', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task completion observed');
+    stream.emit(assistantText('automatic continuation started'));
+    await waitFor(() => handle.beginTurnContinuationWait?.(continuationId) === 'active', 'claim activated');
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    expect(events.filter(isProductTerminal)).toHaveLength(0);
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('active');
+
+    stream.emit(interruptedTurnResult());
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'interrupted continuation terminal');
+    await waitFor(() => handle.isTurnRunning?.() === false, 'active continuation settled');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('provider stopped notification may cancel the awaiting claim before graceful-stop ACK', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+
+    const stopTask = createDeferred<void>();
+    const interrupt = createDeferred<void>();
+    fakeQuery.stopTask!.mockImplementationOnce(() => stopTask.promise);
+    fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+    const stop = handle.requestGracefulStop?.();
+    await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'interrupt dispatched');
+
+    stream.emit(taskNotification('task-agent', 'stopped'));
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'provider stop terminal observed');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+
+    stopTask.resolve(undefined);
+    interrupt.resolve(undefined);
+    await expect(stop).resolves.toBeUndefined();
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it.each([
+    ['stopTask rejection', false],
+    ['legacy query without stopTask', true],
+  ] as const)(
+    'graceful stop stays unconfirmed without hard-closing on %s',
+    async (_label, omitStopTask) => {
+      const { handle, stream, events, fakeQuery } = await startSessionWithStream({ omitStopTask });
+
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+      const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+      expect(continuationId).toBeTypeOf('number');
+      if (!omitStopTask) {
+        fakeQuery.stopTask!.mockRejectedValueOnce(new Error('stop rejected'));
+      }
+
+      await expect(handle.requestGracefulStop?.()).rejects.toThrow(
+        'could not confirm all background task stops',
+      );
+
+      expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+      expect(fakeQuery.close).not.toHaveBeenCalled();
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+      expect(handle.isTurnRunning?.()).toBe(true);
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+
+      stream.end();
+      await handle.close().catch(() => undefined);
+    },
+  );
+
+  it('graceful stop stays unconfirmed when a new wake task appears before interrupt ACK', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'ordinary foreground turn' });
+    const interrupt = createDeferred<void>();
+    fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+    const stop = handle.requestGracefulStop?.();
+    await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'interrupt dispatched');
+
+    stream.emit(taskStarted('task-late', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'late wake task observed');
+    interrupt.resolve(undefined);
+
+    await expect(stop).rejects.toThrow('could not confirm all background task stops');
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(handle.listBackgroundTasks?.().map((task) => task.taskId)).toEqual(['task-late']);
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('concurrent Session graceful-stop requests share one continuation cancellation', async () => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream(undefined, {
+      autoCollect: false,
+    });
+    const session = wrapInSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+
+    await session.send('spawn background work');
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(seen).length >= 1, 'Session observed wake task');
+    stream.emit(turnResult('waiting'));
+    await waitFor(
+      () => seen.some((event) => event.type === 'done' && event.turnContinuationId !== undefined),
+      'Session observed claimed parent done',
+    );
+
+    const interrupt = createDeferred<void>();
+    fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+    const first = session.requestGracefulStop();
+    const second = session.requestGracefulStop();
+    await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'single interrupt dispatched');
+    expect(fakeQuery.stopTask).toHaveBeenCalledTimes(1);
+    interrupt.resolve(undefined);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { status: 'requested', turnGeneration: 1 },
+      { status: 'requested', turnGeneration: 1 },
+    ]);
+    await waitFor(() => session.isTurnRunning() === false, 'Session continuation settled');
+    expect(fakeQuery.interrupt).toHaveBeenCalledTimes(1);
+    expect(fakeQuery.stopTask).toHaveBeenCalledTimes(1);
+
+    stream.end();
+    await session.close().catch(() => undefined);
+  });
+
   it('只给会触发 SDK 自动续 turn 的 wake 任务对应 done 附 continuation claim', async () => {
     const { handle, stream, events } = await startSessionWithStream();
 
