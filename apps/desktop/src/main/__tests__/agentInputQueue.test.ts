@@ -281,6 +281,9 @@ describe('agentInputQueue', () => {
     expect(updateQueuedMessageText(entry, '/demo new args').agentSkillInvocation).toEqual(
       entry.agentSkillInvocation,
     );
+    expect(updateQueuedMessageText(entry, '  \n/demo new args').agentSkillInvocation).toEqual(
+      entry.agentSkillInvocation,
+    );
     expect(updateQueuedMessageText(entry, '/other new args').agentSkillInvocation).toBeUndefined();
   });
 
@@ -490,6 +493,12 @@ describe('agentInputQueue', () => {
     edited.text = '/demo new args';
     edited.chatMessage.content = edited.text;
     edited.agentSkillInvocation = { name: 'demo', runtimeCommandName: 'skill:other' };
+    expect(updateQueuedMessageContent(old, edited).agentSkillInvocation).toEqual(
+      old.agentSkillInvocation,
+    );
+
+    edited.text = '  \n/demo new args';
+    edited.chatMessage.content = edited.text;
     expect(updateQueuedMessageContent(old, edited).agentSkillInvocation).toEqual(
       old.agentSkillInvocation,
     );

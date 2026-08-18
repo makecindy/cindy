@@ -545,9 +545,10 @@ export function updateQueuedMessageText(
   };
   // 队列纯文本编辑若只改参数，仍可保持原 runtime 路由声明；一旦首个 token
   // 改名或被移除就 fail closed，绝不能让旧 Skill 身份附着到另一条正文上。
+  const leadingInvocation = leadingSlashInvocation(newText);
   if (
     entry.agentSkillInvocation
-    && newText.match(/^\/(\S+)/)?.[1]?.toLowerCase()
+    && leadingInvocation?.name.toLowerCase()
       === entry.agentSkillInvocation.name.toLowerCase()
   ) {
     updated.agentSkillInvocation = entry.agentSkillInvocation;
@@ -593,8 +594,9 @@ export function updateQueuedMessageContent(
   // Only the mapping frozen on the original queue item may survive, and only while
   // the visible alias is unchanged; never trust a replacement payload to introduce
   // or swap the command that will actually execute.
+  const leadingInvocation = leadingSlashInvocation(next.text);
   const retainedInvocation = entry.agentSkillInvocation
-    && next.text.match(/^\/(\S+)/)?.[1]?.toLowerCase()
+    && leadingInvocation?.name.toLowerCase()
       === entry.agentSkillInvocation.name.toLowerCase()
     ? entry.agentSkillInvocation
     : undefined;
