@@ -436,6 +436,11 @@ function boundedAppend(current: string, chunk: Buffer): string {
   ).toString('utf8');
 }
 
+interface RunPiPackageCommandOptions {
+  /** Reject successful commands whose stdout could not be retained in full. */
+  requireCompleteStdout?: boolean;
+}
+
 function truncateDisplayField(value: string, maxBytes: number): string {
   const trimmed = value.trim();
   if (Buffer.byteLength(trimmed, 'utf8') <= maxBytes) return trimmed;
@@ -454,6 +459,7 @@ function truncateDisplayField(value: string, maxBytes: number): string {
 export async function runPiPackageCommand(
   args: string[],
   timeoutMs = COMMAND_TIMEOUT_MS,
+  options: RunPiPackageCommandOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
   const binaryPath = getReadyBinaryPath('pi');
   if (!binaryPath) throw new Error('Pi is not installed in Cindy');
@@ -480,6 +486,8 @@ export async function runPiPackageCommand(
       },
     });
     let stdout = '';
+    let stdoutBytes = 0;
+    let stdoutTruncated = false;
     let stderr = '';
     let settled = false;
     let timedOut = false;
@@ -522,7 +530,11 @@ export async function runPiPackageCommand(
         requireWindowsIdentityBoundTermination: true,
       });
     }, timeoutMs);
-    child.stdout.on('data', (chunk: Buffer) => { stdout = boundedAppend(stdout, chunk); });
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      stdoutTruncated = stdoutTruncated || stdoutBytes > MAX_COMMAND_OUTPUT_BYTES;
+      stdout = boundedAppend(stdout, chunk);
+    });
     child.stderr.on('data', (chunk: Buffer) => { stderr = boundedAppend(stderr, chunk); });
     child.once('error', (error) => {
       if (settled) return;
@@ -540,7 +552,13 @@ export async function runPiPackageCommand(
       }
       settled = true;
       clearCommandTimers();
-      if (code === 0) resolve({ stdout, stderr });
+      if (code === 0) {
+        if (options.requireCompleteStdout && stdoutTruncated) {
+          reject(new Error('Pi package list output exceeded the safe limit'));
+          return;
+        }
+        resolve({ stdout, stderr });
+      }
       else reject(new Error(redactPackageCommandMessage(
         (stderr || stdout || `Pi package command failed (${code ?? 'unknown'})`).trim(),
       )));
@@ -1303,7 +1321,11 @@ async function inspectPackage(
 
 async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
   const [{ stdout }, state] = await Promise.all([
-    runPiPackageCommand(['list', '--no-approve']),
+    runPiPackageCommand(
+      ['list', '--no-approve'],
+      COMMAND_TIMEOUT_MS,
+      { requireCompleteStdout: true },
+    ),
     readState(),
   ]);
   // Snapshot failures are shared package-store state, not a property of one

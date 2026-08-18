@@ -293,6 +293,21 @@ describe('Pi package executable-code boundary', () => {
     expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(128 * 1_024);
   });
 
+  it('rejects a truncated Pi package list instead of parsing its retained tail', async () => {
+    const entries: string[] = ['User packages:'];
+    for (let index = 0; index < 128; index += 1) {
+      entries.push(
+        `  npm:package-${index}-${'s'.repeat(1_024)}`,
+        `    /managed/package-${index}/${'p'.repeat(1_024)}`,
+      );
+    }
+    runtime.listOutput = `${entries.join('\n')}\n`;
+    expect(Buffer.byteLength(runtime.listOutput, 'utf8')).toBeGreaterThan(128 * 1_024);
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.listPiPackages()).rejects.toThrow(/list output exceeded the safe limit/i);
+  });
+
   it.each(['darwin'] as const)(
     'waits for timed-out package trees to close on %s',
     async (platform) => {
