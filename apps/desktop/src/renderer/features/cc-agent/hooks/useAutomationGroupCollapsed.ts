@@ -40,17 +40,24 @@ interface StoredEntry {
 
 type Stored = Record<string, StoredEntry>;
 
-const listeners = new Set<() => void>();
+interface CollapseChange {
+  ownerId: string | null;
+  collapsedByGroup: Readonly<Record<string, boolean>>;
+}
 
-function subscribe(listener: () => void): () => void {
+type Listener = (change: CollapseChange) => void;
+
+const listeners = new Set<Listener>();
+
+function subscribe(listener: Listener): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
 
-function emitChange(): void {
-  for (const listener of listeners) listener();
+function emitChange(change: CollapseChange): void {
+  for (const listener of listeners) listener(change);
 }
 
 function loadStored(ownerId: string | null): Stored {
@@ -108,10 +115,13 @@ export function setAutomationGroupsCollapsed(
   collapsed: boolean,
   ownerId: string | null,
 ): void {
+  if (groupKeys.length === 0) return;
   const stored = loadStored(ownerId);
   const lastSeenAt = new Date().toISOString();
+  const collapsedByGroup: Record<string, boolean> = {};
   let changed = false;
   for (const groupKey of groupKeys) {
+    collapsedByGroup[groupKey] = collapsed;
     const wasCollapsed = isEntryCollapsed(stored[groupKey]);
     if (wasCollapsed === collapsed) continue;
     changed = true;
@@ -121,9 +131,10 @@ export function setAutomationGroupsCollapsed(
       stored[groupKey] = { collapsed: false, lastSeenAt };
     }
   }
-  if (!changed) return;
-  writeStored(stored, ownerId);
-  emitChange();
+  if (changed) writeStored(stored, ownerId);
+  // 即使 owner authority / localStorage 暂时不可写，也把本次明确操作同步给已挂载组件。
+  // 这里只传递本次涉及的组，不能用未更新的 storage 全量投影覆盖其它组的窗口内状态。
+  emitChange({ ownerId, collapsedByGroup });
 }
 
 /**
@@ -135,6 +146,7 @@ export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean
   const [collapsed, setCollapsedState] = useState(() =>
     isAutomationGroupCollapsed(groupKey, ownerId),
   );
+  const collapsedRef = useRef(collapsed);
   const committedBindingRef = useRef({ groupKey, ownerId });
 
   // AuthContext 先同步发布 data owner，再触发 React 重渲染。layout effect 在浏览器绘制前
@@ -142,19 +154,34 @@ export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean
   useLayoutEffect(() => {
     committedBindingRef.current = { groupKey, ownerId };
     const ownerAtEffect = { dataOwnerId: ownerId, generation: ownerGeneration };
-    const syncFromStorage = () => {
+    const isStaleBinding = () => {
       const committedBinding = committedBindingRef.current;
-      if (
+      return (
         committedBinding.groupKey !== groupKey ||
         committedBinding.ownerId !== ownerId ||
         !isDataOwnerGenerationCurrent(ownerAtEffect)
+      );
+    };
+    const syncState = (nextCollapsed: boolean) => {
+      collapsedRef.current = nextCollapsed;
+      setCollapsedState(nextCollapsed);
+    };
+    const syncFromStorage = () => {
+      if (isStaleBinding()) return;
+      syncState(isAutomationGroupCollapsed(groupKey, ownerId));
+    };
+    const syncFromChange = (change: CollapseChange) => {
+      if (
+        isStaleBinding() ||
+        change.ownerId !== ownerId ||
+        !Object.hasOwn(change.collapsedByGroup, groupKey)
       ) {
         return;
       }
-      setCollapsedState(isAutomationGroupCollapsed(groupKey, ownerId));
+      syncState(change.collapsedByGroup[groupKey]);
     };
     syncFromStorage();
-    return subscribe(syncFromStorage);
+    return subscribe(syncFromChange);
   }, [groupKey, ownerGeneration, ownerId]);
 
   const toggle = useCallback(() => {
@@ -168,14 +195,11 @@ export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean
       );
     };
     // Owner generation is published synchronously before React rerenders. Reject an old callback
-    // even during that boundary window. Storage is the source of truth; its change notification
-    // synchronizes every mounted instance of this group.
+    // even during that boundary window. The mounted projection is authoritative for the current
+    // window when persistence is temporarily unavailable, and the change notification synchronizes
+    // every mounted instance of this group.
     if (!isCurrentBinding()) return;
-    setAutomationGroupCollapsed(
-      groupKey,
-      !isAutomationGroupCollapsed(groupKey, ownerId),
-      ownerId,
-    );
+    setAutomationGroupCollapsed(groupKey, !collapsedRef.current, ownerId);
   }, [groupKey, ownerGeneration, ownerId]);
   return [collapsed, toggle] as const;
 }
@@ -185,19 +209,28 @@ export function useAutomationGroupsCollapsed(
   groupKeys: readonly string[],
 ): readonly [boolean, (collapsed: boolean) => void] {
   const { dataOwnerId: ownerId, generation: ownerGeneration } = getDataOwnerGeneration();
-  const [, setRevision] = useState(0);
+  const [memoryCollapsedByGroup, setMemoryCollapsedByGroup] = useState<Record<string, boolean>>({});
 
   useLayoutEffect(() => {
     const ownerAtEffect = { dataOwnerId: ownerId, generation: ownerGeneration };
-    return subscribe(() => {
-      if (!isDataOwnerGenerationCurrent(ownerAtEffect)) return;
-      setRevision((revision) => revision + 1);
+    setMemoryCollapsedByGroup({});
+    return subscribe((change) => {
+      if (change.ownerId !== ownerId || !isDataOwnerGenerationCurrent(ownerAtEffect)) {
+        return;
+      }
+      setMemoryCollapsedByGroup((current) => ({
+        ...current,
+        ...change.collapsedByGroup,
+      }));
     });
   }, [ownerGeneration, ownerId]);
 
-  const allCollapsed = groupKeys.every((groupKey) =>
-    isAutomationGroupCollapsed(groupKey, ownerId),
-  );
+  const allCollapsed = groupKeys.every((groupKey) => {
+    const memoryCollapsed = memoryCollapsedByGroup[groupKey];
+    return typeof memoryCollapsed === 'boolean'
+      ? memoryCollapsed
+      : isAutomationGroupCollapsed(groupKey, ownerId);
+  });
   const setAllCollapsed = useCallback(
     (collapsed: boolean) => {
       const ownerAtRender = { dataOwnerId: ownerId, generation: ownerGeneration };

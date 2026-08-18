@@ -7,7 +7,10 @@ import {
   __testing as dataOwnerGenerationTesting,
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
-import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
+import {
+  __testing as sidebarOwnerStorageTesting,
+  sidebarOwnerStorageKey,
+} from '@/lib/sidebarOwnerStorage';
 import {
   setAutomationGroupCollapsed,
   useAutomationGroupCollapsed,
@@ -19,6 +22,7 @@ const STORAGE_KEY = 'cc-agent.sidebar.collapsedAutomationGroups';
 beforeEach(() => {
   window.localStorage.clear();
   dataOwnerGenerationTesting.reset();
+  sidebarOwnerStorageTesting.setOwnerAuthorityReader(null);
 });
 
 describe('automation group collapsed owner binding', () => {
@@ -53,6 +57,58 @@ describe('automation group collapsed owner binding', () => {
       groupBCollapsed: true,
       allCollapsed: true,
     });
+  });
+
+  it('keeps mounted single and batch state when persistence is temporarily blocked', () => {
+    sidebarOwnerStorageTesting.setOwnerAuthorityReader((ownerId) => ({
+      dataOwnerId: ownerId,
+      ownerGeneration: 1,
+      claimed: false,
+      canInitialize: false,
+      pinnedLegacyConsumed: false,
+    }));
+    setDataOwnerGeneration('owner-a', 1);
+    const hook = renderHook(() => {
+      const [groupACollapsed, toggleGroupA] = useAutomationGroupCollapsed('schedule:a');
+      const [groupBCollapsed] = useAutomationGroupCollapsed('schedule:b');
+      const [allCollapsed, setAllCollapsed] = useAutomationGroupsCollapsed([
+        'schedule:a',
+        'schedule:b',
+      ]);
+      return {
+        groupACollapsed,
+        groupBCollapsed,
+        allCollapsed,
+        toggleGroupA,
+        setAllCollapsed,
+      };
+    });
+    const ownerStorageKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-a');
+
+    act(() => hook.result.current.toggleGroupA());
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: false,
+      groupBCollapsed: true,
+      allCollapsed: false,
+    });
+
+    act(() => hook.result.current.toggleGroupA());
+    expect(hook.result.current.groupACollapsed).toBe(true);
+
+    act(() => hook.result.current.setAllCollapsed(false));
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: false,
+      groupBCollapsed: false,
+      allCollapsed: false,
+    });
+
+    act(() => hook.result.current.setAllCollapsed(true));
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: true,
+      groupBCollapsed: true,
+      allCollapsed: true,
+    });
+    expect(window.localStorage.getItem(ownerStorageKey)).toBeNull();
   });
 
   it('reloads owner and group changes while stale callbacks cannot cross a generation boundary', () => {
