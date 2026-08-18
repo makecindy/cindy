@@ -170,5 +170,11 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(true)');
     expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(false)');
     expect(projectsSectionSource).toContain('allAutomationGroupsCollapsed');
+    expect(projectsSectionSource).toContain(
+      'automationGroupCollapsed={isAutomationGroupCollapsed}',
+    );
+    expect(projectsSectionSource).toContain(
+      'onAutomationGroupCollapsedChange={setAutomationGroupCollapsed}',
+    );
   });
 });

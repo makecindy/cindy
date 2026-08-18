@@ -15,8 +15,8 @@
  * 历史兼容:旧版默认展开、只持久化 `collapsed: true`。这类条目仍按「已收起」读;
  * 未写过条目的组不再被猜成「用户想展开」,而是跟随本版默认收起。
  *
- * 每个分组组件订阅同一份 owner-scoped 存储投影。单组 toggle 与段头批量操作都走
- * "读-改-写",写完同步通知已挂载的组,避免批量收起只改 storage、画面不更新。
+ * 普通分组组件各自持有 collapsed 状态；平铺列表的段头批量操作由 ProjectsSection
+ * 持有受控投影，再把同一份状态传给组行。两种入口都复用这里的持久化函数。
  */
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
@@ -39,26 +39,6 @@ interface StoredEntry {
 }
 
 type Stored = Record<string, StoredEntry>;
-
-interface CollapseChange {
-  ownerId: string | null;
-  collapsedByGroup: Readonly<Record<string, boolean>>;
-}
-
-type Listener = (change: CollapseChange) => void;
-
-const listeners = new Set<Listener>();
-
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-function emitChange(change: CollapseChange): void {
-  for (const listener of listeners) listener(change);
-}
 
 function loadStored(ownerId: string | null): Stored {
   try {
@@ -109,7 +89,7 @@ export function setAutomationGroupCollapsed(
   setAutomationGroupsCollapsed([groupKey], collapsed, ownerId);
 }
 
-/** 批量写入可见自动任务组的收起态,只落一次 storage 并统一唤醒已挂载组。 */
+/** 批量写入可见自动任务组的收起态，只落一次 storage。 */
 export function setAutomationGroupsCollapsed(
   groupKeys: readonly string[],
   collapsed: boolean,
@@ -118,10 +98,8 @@ export function setAutomationGroupsCollapsed(
   if (groupKeys.length === 0) return;
   const stored = loadStored(ownerId);
   const lastSeenAt = new Date().toISOString();
-  const collapsedByGroup: Record<string, boolean> = {};
   let changed = false;
   for (const groupKey of groupKeys) {
-    collapsedByGroup[groupKey] = collapsed;
     const wasCollapsed = isEntryCollapsed(stored[groupKey]);
     if (wasCollapsed === collapsed) continue;
     changed = true;
@@ -132,9 +110,6 @@ export function setAutomationGroupsCollapsed(
     }
   }
   if (changed) writeStored(stored, ownerId);
-  // 即使 owner authority / localStorage 暂时不可写，也把本次明确操作同步给已挂载组件。
-  // 这里只传递本次涉及的组，不能用未更新的 storage 全量投影覆盖其它组的窗口内状态。
-  emitChange({ ownerId, collapsedByGroup });
 }
 
 /**
@@ -146,43 +121,16 @@ export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean
   const [collapsed, setCollapsedState] = useState(() =>
     isAutomationGroupCollapsed(groupKey, ownerId),
   );
-  const collapsedRef = useRef(collapsed);
   const committedBindingRef = useRef({ groupKey, ownerId });
 
   // AuthContext 先同步发布 data owner，再触发 React 重渲染。layout effect 在浏览器绘制前
   // 装载新 binding，避免短暂展示上一账号或上一分组的折叠态。
   useLayoutEffect(() => {
+    const committedBinding = committedBindingRef.current;
+    if (committedBinding.groupKey === groupKey && committedBinding.ownerId === ownerId) return;
     committedBindingRef.current = { groupKey, ownerId };
-    const ownerAtEffect = { dataOwnerId: ownerId, generation: ownerGeneration };
-    const isStaleBinding = () => {
-      const committedBinding = committedBindingRef.current;
-      return (
-        committedBinding.groupKey !== groupKey ||
-        committedBinding.ownerId !== ownerId ||
-        !isDataOwnerGenerationCurrent(ownerAtEffect)
-      );
-    };
-    const syncState = (nextCollapsed: boolean) => {
-      collapsedRef.current = nextCollapsed;
-      setCollapsedState(nextCollapsed);
-    };
-    const syncFromStorage = () => {
-      if (isStaleBinding()) return;
-      syncState(isAutomationGroupCollapsed(groupKey, ownerId));
-    };
-    const syncFromChange = (change: CollapseChange) => {
-      if (
-        isStaleBinding() ||
-        change.ownerId !== ownerId ||
-        !Object.hasOwn(change.collapsedByGroup, groupKey)
-      ) {
-        return;
-      }
-      syncState(change.collapsedByGroup[groupKey]);
-    };
-    syncFromStorage();
-    return subscribe(syncFromChange);
-  }, [groupKey, ownerGeneration, ownerId]);
+    setCollapsedState(isAutomationGroupCollapsed(groupKey, ownerId));
+  }, [groupKey, ownerId]);
 
   const toggle = useCallback(() => {
     const ownerAtRender = { dataOwnerId: ownerId, generation: ownerGeneration };
@@ -195,49 +143,69 @@ export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean
       );
     };
     // Owner generation is published synchronously before React rerenders. Reject an old callback
-    // even during that boundary window. The mounted projection is authoritative for the current
-    // window when persistence is temporarily unavailable, and the change notification synchronizes
-    // every mounted instance of this group.
+    // even during that boundary window, then check again inside the state updater.
     if (!isCurrentBinding()) return;
-    setAutomationGroupCollapsed(groupKey, !collapsedRef.current, ownerId);
+    setCollapsedState((prev) => {
+      if (!isCurrentBinding()) return prev;
+      const next = !prev;
+      setAutomationGroupCollapsed(groupKey, next, ownerId);
+      return next;
+    });
   }, [groupKey, ownerGeneration, ownerId]);
   return [collapsed, toggle] as const;
 }
 
-/** 段头批量折叠所需的聚合状态与写入口。空集合视为已收起,便于与其它组层合取。 */
+/**
+ * 平铺列表段头使用的受控投影。状态留在 ProjectsSection 生命周期内，因此 storage
+ * 暂时不可写时，组行即使因筛选或「显示全部」卸载再挂载，也会继续读取本次明确操作。
+ * 这不是跨页面缓存；owner 代次变化时整份投影会在绘制前清空并重新回落到持久化值。
+ */
 export function useAutomationGroupsCollapsed(
   groupKeys: readonly string[],
-): readonly [boolean, (collapsed: boolean) => void] {
+): readonly [
+  boolean,
+  (collapsed: boolean) => void,
+  (groupKey: string) => boolean,
+  (groupKey: string, collapsed: boolean) => void,
+] {
   const { dataOwnerId: ownerId, generation: ownerGeneration } = getDataOwnerGeneration();
   const [memoryCollapsedByGroup, setMemoryCollapsedByGroup] = useState<Record<string, boolean>>({});
 
   useLayoutEffect(() => {
-    const ownerAtEffect = { dataOwnerId: ownerId, generation: ownerGeneration };
     setMemoryCollapsedByGroup({});
-    return subscribe((change) => {
-      if (change.ownerId !== ownerId || !isDataOwnerGenerationCurrent(ownerAtEffect)) {
-        return;
-      }
-      setMemoryCollapsedByGroup((current) => ({
-        ...current,
-        ...change.collapsedByGroup,
-      }));
-    });
   }, [ownerGeneration, ownerId]);
 
-  const allCollapsed = groupKeys.every((groupKey) => {
-    const memoryCollapsed = memoryCollapsedByGroup[groupKey];
-    return typeof memoryCollapsed === 'boolean'
-      ? memoryCollapsed
-      : isAutomationGroupCollapsed(groupKey, ownerId);
-  });
+  const isCollapsed = useCallback(
+    (groupKey: string): boolean => {
+      const memoryCollapsed = memoryCollapsedByGroup[groupKey];
+      return typeof memoryCollapsed === 'boolean'
+        ? memoryCollapsed
+        : isAutomationGroupCollapsed(groupKey, ownerId);
+    },
+    [memoryCollapsedByGroup, ownerId],
+  );
+  const allCollapsed = groupKeys.every(isCollapsed);
   const setAllCollapsed = useCallback(
     (collapsed: boolean) => {
       const ownerAtRender = { dataOwnerId: ownerId, generation: ownerGeneration };
       if (!isDataOwnerGenerationCurrent(ownerAtRender)) return;
+      setMemoryCollapsedByGroup((current) => {
+        const next = { ...current };
+        for (const groupKey of groupKeys) next[groupKey] = collapsed;
+        return next;
+      });
       setAutomationGroupsCollapsed(groupKeys, collapsed, ownerId);
     },
     [groupKeys, ownerGeneration, ownerId],
   );
-  return [allCollapsed, setAllCollapsed] as const;
+  const setCollapsed = useCallback(
+    (groupKey: string, collapsed: boolean) => {
+      const ownerAtRender = { dataOwnerId: ownerId, generation: ownerGeneration };
+      if (!isDataOwnerGenerationCurrent(ownerAtRender)) return;
+      setMemoryCollapsedByGroup((current) => ({ ...current, [groupKey]: collapsed }));
+      setAutomationGroupCollapsed(groupKey, collapsed, ownerId);
+    },
+    [ownerGeneration, ownerId],
+  );
+  return [allCollapsed, setAllCollapsed, isCollapsed, setCollapsed] as const;
 }

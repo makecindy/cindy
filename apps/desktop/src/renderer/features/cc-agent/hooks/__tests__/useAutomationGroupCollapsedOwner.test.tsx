@@ -29,12 +29,12 @@ describe('automation group collapsed owner binding', () => {
   it('synchronizes mounted groups with the batch collapse control', () => {
     setDataOwnerGeneration('owner-a', 1);
     const hook = renderHook(() => {
-      const [groupACollapsed] = useAutomationGroupCollapsed('schedule:a');
-      const [groupBCollapsed] = useAutomationGroupCollapsed('schedule:b');
-      const [allCollapsed, setAllCollapsed] = useAutomationGroupsCollapsed([
+      const [allCollapsed, setAllCollapsed, isCollapsed] = useAutomationGroupsCollapsed([
         'schedule:a',
         'schedule:b',
       ]);
+      const groupACollapsed = isCollapsed('schedule:a');
+      const groupBCollapsed = isCollapsed('schedule:b');
       return { groupACollapsed, groupBCollapsed, allCollapsed, setAllCollapsed };
     });
 
@@ -59,7 +59,7 @@ describe('automation group collapsed owner binding', () => {
     });
   });
 
-  it('keeps mounted single and batch state when persistence is temporarily blocked', () => {
+  it('keeps controlled single and batch state across remounts when persistence is blocked', () => {
     sidebarOwnerStorageTesting.setOwnerAuthorityReader((ownerId) => ({
       dataOwnerId: ownerId,
       ownerGeneration: 1,
@@ -68,34 +68,44 @@ describe('automation group collapsed owner binding', () => {
       pinnedLegacyConsumed: false,
     }));
     setDataOwnerGeneration('owner-a', 1);
-    const hook = renderHook(() => {
-      const [groupACollapsed, toggleGroupA] = useAutomationGroupCollapsed('schedule:a');
-      const [groupBCollapsed] = useAutomationGroupCollapsed('schedule:b');
-      const [allCollapsed, setAllCollapsed] = useAutomationGroupsCollapsed([
-        'schedule:a',
-        'schedule:b',
-      ]);
-      return {
-        groupACollapsed,
-        groupBCollapsed,
-        allCollapsed,
-        toggleGroupA,
-        setAllCollapsed,
-      };
-    });
+    const hook = renderHook(
+      ({ groupKeys }: { groupKeys: readonly string[] }) => {
+        const [allCollapsed, setAllCollapsed, isCollapsed, setCollapsed] =
+          useAutomationGroupsCollapsed(groupKeys);
+        const groupACollapsed = isCollapsed('schedule:a');
+        const groupBCollapsed = isCollapsed('schedule:b');
+        return {
+          groupACollapsed,
+          groupBCollapsed,
+          allCollapsed,
+          setGroupACollapsed: (collapsed: boolean) => setCollapsed('schedule:a', collapsed),
+          setAllCollapsed,
+        };
+      },
+      { initialProps: { groupKeys: ['schedule:a', 'schedule:b'] } },
+    );
     const ownerStorageKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-a');
 
-    act(() => hook.result.current.toggleGroupA());
+    act(() => hook.result.current.setGroupACollapsed(false));
     expect(hook.result.current).toMatchObject({
       groupACollapsed: false,
       groupBCollapsed: true,
       allCollapsed: false,
     });
 
-    act(() => hook.result.current.toggleGroupA());
-    expect(hook.result.current.groupACollapsed).toBe(true);
+    hook.rerender({ groupKeys: ['schedule:b'] });
+    hook.rerender({ groupKeys: ['schedule:a', 'schedule:b'] });
+    expect(hook.result.current.groupACollapsed).toBe(false);
 
     act(() => hook.result.current.setAllCollapsed(false));
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: false,
+      groupBCollapsed: false,
+      allCollapsed: false,
+    });
+
+    hook.rerender({ groupKeys: ['schedule:a'] });
+    hook.rerender({ groupKeys: ['schedule:a', 'schedule:b'] });
     expect(hook.result.current).toMatchObject({
       groupACollapsed: false,
       groupBCollapsed: false,
@@ -108,6 +118,34 @@ describe('automation group collapsed owner binding', () => {
       groupBCollapsed: true,
       allCollapsed: true,
     });
+    expect(window.localStorage.getItem(ownerStorageKey)).toBeNull();
+  });
+
+  it('keeps the uncontrolled group behavior local to its mounted component', () => {
+    sidebarOwnerStorageTesting.setOwnerAuthorityReader((ownerId) => ({
+      dataOwnerId: ownerId,
+      ownerGeneration: 1,
+      claimed: false,
+      canInitialize: false,
+      pinnedLegacyConsumed: false,
+    }));
+    setDataOwnerGeneration('owner-a', 1);
+    const hook = renderHook(() => {
+      const [groupACollapsed, toggleGroupA] = useAutomationGroupCollapsed('schedule:a');
+      return {
+        groupACollapsed,
+        toggleGroupA,
+      };
+    });
+    const ownerStorageKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-a');
+
+    act(() => hook.result.current.toggleGroupA());
+    expect(hook.result.current).toMatchObject({
+      groupACollapsed: false,
+    });
+
+    act(() => hook.result.current.toggleGroupA());
+    expect(hook.result.current.groupACollapsed).toBe(true);
     expect(window.localStorage.getItem(ownerStorageKey)).toBeNull();
   });
 

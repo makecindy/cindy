@@ -47,6 +47,9 @@ export interface AutomationSessionGroupItemProps {
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
+  /** 平铺列表由段头批量折叠状态机控制时传入；其它场景继续使用组件自身持久化状态。 */
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   indented?: boolean;
   /**
    * 展开的子 SessionItem 行 hover 时右侧浮层展示的"项目来源"标签映射(sessionId →
@@ -77,6 +80,8 @@ export function AutomationSessionGroupItem({
   onRename,
   onTogglePin,
   onScheduleAction,
+  collapsed: controlledCollapsed,
+  onCollapsedChange,
   indented = false,
   sourceLabelMap,
   sessionVariant = 'text',
@@ -84,7 +89,15 @@ export function AutomationSessionGroupItem({
   const { t } = useTranslation();
   const navigate = useNavigate();
   // 轴 1:文件夹开/关,持久化、记忆上次展开(默认收起)。
-  const [collapsed, toggleCollapsed] = useAutomationGroupCollapsed(group.id);
+  const [storedCollapsed, toggleStoredCollapsed] = useAutomationGroupCollapsed(group.id);
+  const collapsed = controlledCollapsed ?? storedCollapsed;
+  const toggleCollapsed = useCallback(() => {
+    if (onCollapsedChange) {
+      onCollapsedChange(!collapsed);
+      return;
+    }
+    toggleStoredCollapsed();
+  }, [collapsed, onCollapsedChange, toggleStoredCollapsed]);
   // 轴 2:展开后运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
   const [showAll, setShowAll] = useState(false);
   const [frozen, setFrozen] = useState<FrozenGroupState | null>(null);

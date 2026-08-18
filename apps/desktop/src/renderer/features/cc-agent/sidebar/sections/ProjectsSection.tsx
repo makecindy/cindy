@@ -542,8 +542,12 @@ export function ProjectsSection({
         .map((entry) => entry.group.id),
     [mixedEntries],
   );
-  const [allAutomationGroupsCollapsed, setAllAutomationGroupsCollapsed] =
-    useAutomationGroupsCollapsed(visibleAutomationGroupKeys);
+  const [
+    allAutomationGroupsCollapsed,
+    setAllAutomationGroupsCollapsed,
+    isAutomationGroupCollapsed,
+    setAutomationGroupCollapsed,
+  ] = useAutomationGroupsCollapsed(visibleAutomationGroupKeys);
   // 组层是否收齐必须看**当前范围**有没有项目行。allKnownProjects 是全机器宇宙,
   // 单机范围下本机只有对话组、远端仍有项目时 length>0;isAllCollapsed 却来自
   // 当前范围的 activeWorkingDirs,此时为空并恒为 false,foldState 会卡在
@@ -691,6 +695,8 @@ export function ProjectsSection({
           onMoveSession={onMoveSession}
           projectOptions={projectOptions}
           onScheduleAction={onScheduleAction}
+          automationGroupCollapsed={isAutomationGroupCollapsed}
+          onAutomationGroupCollapsedChange={setAutomationGroupCollapsed}
           sourceLabelMap={dialogueSourceLabelMap}
           sessionVariant={mainSessionVariant}
           // 混排下每条散排对话各是一个单条列表,若都补顶线,会与上一行的底线叠成
