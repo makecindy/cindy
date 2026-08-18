@@ -36,7 +36,6 @@ import {
   restoreSlashCommandRuntimeAlias,
   slashCommandRangeCoversToken,
 } from '@cindy/maker-shared/composer-palette';
-import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { ListComposerTextarea } from '@/components/new-chat/ListComposerTextarea';
@@ -179,16 +178,14 @@ export function UserMessageEditBox({
   const doCommit = useCallback(async () => {
     try {
       const visibleTextUnchanged = text === initialText;
-      const originalVisibleText = quotesEncoded
-        ? stripChatQuoteMarkerLines(initialSubmitText ?? initialText)
-        : (initialSubmitText ?? initialText);
+      const originalWireText = initialSubmitText ?? initialText;
       const originalHadConfirmedRange = slashCommandRangeCoversToken(
         slashCommandRanges,
-        findSlashCommandToken(originalVisibleText),
+        findSlashCommandToken(originalWireText),
       );
       const submitText = visibleTextUnchanged
-        ? (initialSubmitText ?? text)
-        : restoreSlashCommandRuntimeAlias(originalVisibleText, text, slashCommandRanges);
+        ? originalWireText
+        : restoreSlashCommandRuntimeAlias(originalWireText, text, slashCommandRanges);
       const preserveQuoteMetadata = quotesEncoded && visibleTextUnchanged;
       const preservedAgentReferences =
         visibleTextUnchanged && agentReferences && agentReferences.length > 0

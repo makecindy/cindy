@@ -221,6 +221,27 @@ describe('UserMessageEditBox — idle 发送', () => {
     expect(commitMock.mock.calls[0][0].slashCommandRanges).toEqual([{ start: 0, end: 10 }]);
   });
 
+  it('引用 marker 落库坐标仍能恢复可见 /git',
+    async () => {
+    const wire = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up',
+    ].join('\n');
+    const skillStart = wire.indexOf('/skill:git');
+    const box = renderBox({
+      initialText: 'quoted\n\n/git follow-up',
+      initialSubmitText: wire,
+      quotesEncoded: true,
+      slashCommandRanges: [{ start: skillStart, end: skillStart + 10 }],
+    });
+    fireEvent.change(box.textarea, { target: { value: 'quoted\n\n/git please' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('quoted\n\n/skill:git please');
+  });
+
   it('被拦消息覆盖重发在文本未修改时透传语义引用与 chip ranges', async () => {
     const override = vi.fn(async () => {});
     const agentReferences = [{

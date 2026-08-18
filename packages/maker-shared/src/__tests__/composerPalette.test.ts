@@ -3,6 +3,7 @@ import {
   detectComposerTrigger,
   filterAtResources,
   filterSlashCommands,
+  findSlashCommandToken,
   insertAtResource,
   insertSlashCommand,
   leadingSlashCommandRange,
@@ -144,6 +145,32 @@ describe('shared composer palette model', () => {
         [{ start: helpStart, end: helpStart + 5 }],
       ),
     ).toBe('/unknown\n/help later');
+    expect(findSlashCommandToken('  /skill:git old')).toEqual({
+      start: 2,
+      end: 12,
+      name: 'skill:git',
+    });
+    expect(
+      restoreSlashCommandRuntimeAlias(
+        '  /skill:git old',
+        '  /git new',
+        [{ start: 2, end: 12 }],
+      ),
+    ).toBe('  /skill:git new');
+    const wireQuote = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up',
+    ].join('\n');
+    const wireSkillStart = wireQuote.indexOf('/skill:git');
+    expect(
+      restoreSlashCommandRuntimeAlias(
+        wireQuote,
+        'quoted\n\n/git please',
+        [{ start: wireSkillStart, end: wireSkillStart + 10 }],
+      ),
+    ).toBe('quoted\n\n/skill:git please');
     expect(leadingSlashCommandRange('/skill:git please review')).toEqual({ start: 0, end: 10 });
     const quotedRuntime = '> quoted\n\n/skill:git please';
     const quotedRuntimeStart = quotedRuntime.indexOf('/skill:git');

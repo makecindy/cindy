@@ -136,7 +136,7 @@ export function projectSlashCommandsInText(
 export function findSlashCommandToken(
   text: string,
 ): { start: number; end: number; name: string } | undefined {
-  const match = /(?:^|\n)(\/\S+)/.exec(text);
+  const match = /(?:^|\n)[^\S\n]*(\/\S+)/.exec(text);
   if (!match || match.index === undefined) return undefined;
   const start = match.index + match[0].length - match[1].length;
   return { start, end: start + match[1].length, name: match[1].slice(1) };
