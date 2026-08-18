@@ -1934,29 +1934,40 @@ async function copySnapshotEntryBounded(
   }
 }
 
-function mapSnapshotPath(
+interface SnapshotPathOwner {
+  source: string;
+  target?: string;
+  directory: boolean;
+  skipped: boolean;
+}
+
+function mostSpecificSnapshotOwner(
   sourcePath: string,
   mappings: Array<{ source: string; target: string; directory: boolean }>,
-): string | undefined {
+  skippedPackageRoots: string[],
+): SnapshotPathOwner | undefined {
   const resolved = path.resolve(sourcePath);
-  let containingDirectory: (typeof mappings)[number] | undefined;
-  for (const mapping of mappings) {
-    if (!mapping.directory && resolved === mapping.source) return mapping.target;
+  let owner: SnapshotPathOwner | undefined;
+  const consider = (candidate: SnapshotPathOwner): void => {
     if (
-      mapping.directory
-      && isWithinPath(mapping.source, resolved)
-      && (!containingDirectory || mapping.source.length > containingDirectory.source.length)
+      !owner
+      || candidate.source.length > owner.source.length
+      || (candidate.source.length === owner.source.length && candidate.skipped && !owner.skipped)
     ) {
-      containingDirectory = mapping;
+      owner = candidate;
     }
+  };
+  for (const mapping of mappings) {
+    if (!mapping.directory && resolved !== mapping.source) continue;
+    if (mapping.directory && !isWithinPath(mapping.source, resolved)) continue;
+    consider({ ...mapping, skipped: false });
   }
-  if (containingDirectory) {
-    return path.join(
-      containingDirectory.target,
-      path.relative(containingDirectory.source, resolved),
-    );
+  for (const skippedRoot of skippedPackageRoots) {
+    const source = path.resolve(skippedRoot);
+    if (resolved !== source && !isWithinPath(source, resolved)) continue;
+    consider({ source, directory: resolved !== source, skipped: true });
   }
-  return undefined;
+  return owner;
 }
 
 function mapSnapshotPathOrSkip(
@@ -1964,10 +1975,14 @@ function mapSnapshotPathOrSkip(
   mappings: Array<{ source: string; target: string; directory: boolean }>,
   skippedPackageRoots: string[],
 ): string | undefined {
-  const mapped = mapSnapshotPath(sourcePath, mappings);
-  if (mapped) return mapped;
-  if (skippedPackageRoots.some((root) => isWithinPath(root, sourcePath))) return undefined;
-  throw new Error('Pi extension resource is outside its inspected package root');
+  const resolved = path.resolve(sourcePath);
+  const owner = mostSpecificSnapshotOwner(resolved, mappings, skippedPackageRoots);
+  if (!owner) throw new Error('Pi extension resource is outside its inspected package root');
+  if (owner.skipped) return undefined;
+  if (!owner.target) throw new Error('Pi extension snapshot root mapping is incomplete');
+  return owner.directory
+    ? path.join(owner.target, path.relative(owner.source, resolved))
+    : owner.target;
 }
 
 interface SnapshotStageMetadata {
@@ -1992,7 +2007,9 @@ export async function stageManagedPackageSnapshot(
     await fs.mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const [index, rawRoot] of resources.packageRoots.entries()) {
       if (aggregateLimitReached) {
-        skippedPackageRoots.push(path.resolve(rawRoot));
+        skippedPackageRoots.push(
+          await fs.realpath(rawRoot).catch(() => path.resolve(rawRoot)),
+        );
         continue;
       }
       let source: string | undefined;

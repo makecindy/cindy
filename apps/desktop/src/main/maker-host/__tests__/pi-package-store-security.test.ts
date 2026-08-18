@@ -833,6 +833,43 @@ describe('Pi package executable-code boundary', () => {
     await expect(fs.stat(path.join(snapshotRoot, '1'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('omits resources owned by a skipped descendant instead of mapping them through a copied ancestor', async () => {
+    const ancestorRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-budget-overlap-'));
+    roots.push(ancestorRoot);
+    const descendantRoot = path.join(ancestorRoot, 'extension');
+    const extensionFile = path.join(descendantRoot, 'extensions', 'index.js');
+    const ancestorPrompt = path.join(ancestorRoot, 'prompts', 'ancestor.md');
+    await fs.mkdir(path.dirname(extensionFile), { recursive: true });
+    await fs.mkdir(path.dirname(ancestorPrompt), { recursive: true });
+    await fs.writeFile(extensionFile, 'module.exports = function setup() {};\n');
+    await fs.writeFile(ancestorPrompt, 'Ancestor prompt\n');
+
+    const store = await import('../pi-package-store.js');
+    const snapshotRoot = path.join(runtime.userData, 'overlapping-package-budget');
+    const snapshot = await store.stageManagedPackageSnapshot({
+      extensions: [extensionFile],
+      skills: [],
+      promptTemplates: [ancestorPrompt],
+      packageRoots: [ancestorRoot, descendantRoot],
+    }, snapshotRoot, {
+      // The ancestor tree itself has six entries. Copying the descendant as a
+      // second package root must therefore hit the shared aggregate limit.
+      maxEntries: 6,
+      maxBytes: 1024 * 1024,
+      maxDurationMs: 10_000,
+    });
+
+    expect(snapshot).toEqual({
+      extensions: [],
+      skills: [],
+      promptTemplates: [path.join(snapshotRoot, '0', 'prompts', 'ancestor.md')],
+      packageRoots: [path.join(snapshotRoot, '0')],
+    });
+    await expect(fs.readFile(snapshot.promptTemplates[0]!, 'utf8'))
+      .resolves.toBe('Ancestor prompt\n');
+    await expect(fs.stat(path.join(snapshotRoot, '1'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('projects aggregate snapshot limits without persisting package disables', async () => {
     const sources = [
       await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-budget-local-')),
@@ -890,6 +927,86 @@ describe('Pi package executable-code boundary', () => {
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
     )).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not run a skipped descendant extension from an unverified ancestor snapshot', async () => {
+    const ancestorRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-approved-overlap-'));
+    roots.push(ancestorRoot);
+    const descendantRoot = path.join(ancestorRoot, 'extension');
+    const ancestorSkill = path.join(ancestorRoot, 'skills', 'ancestor', 'SKILL.md');
+    const extensionFile = path.join(descendantRoot, 'extensions', 'index.js');
+    await fs.mkdir(path.dirname(ancestorSkill), { recursive: true });
+    await fs.mkdir(path.dirname(extensionFile), { recursive: true });
+    await fs.writeFile(path.join(ancestorRoot, 'package.json'), JSON.stringify({
+      name: 'ancestor-data-package',
+      version: '1.0.0',
+      pi: { skills: ['./skills'] },
+    }));
+    await fs.writeFile(ancestorSkill, '# Ancestor\n');
+    await fs.writeFile(path.join(descendantRoot, 'package.json'), JSON.stringify({
+      name: 'approved-descendant-extension',
+      version: '1.0.0',
+      pi: { extensions: ['./extensions/index.js'] },
+    }));
+    await fs.writeFile(extensionFile, 'module.exports = function approvedSetup() {};\n');
+    runtime.listOutput = [
+      'User packages:',
+      `  ${ancestorRoot}`,
+      `    ${ancestorRoot}`,
+      `  ${descendantRoot}`,
+      `    ${descendantRoot}`,
+      '',
+    ].join('\n');
+
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: descendantRoot,
+      enabled: true,
+    });
+    const snapshotRoot = path.join(runtime.userData, 'approved-overlapping-package-budget');
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(snapshotRoot)) {
+        await fs.writeFile(
+          path.join(String(from), '0', 'extension', 'extensions', 'index.js'),
+          'module.exports = function changedAfterApproval() {};\n',
+        );
+      }
+      return originalRename(from, to);
+    });
+    let snapshot;
+    try {
+      snapshot = await store.resolveManagedPiPackageResources({
+        snapshotRoot,
+        snapshotLimits: {
+          // The ancestor tree has nine entries. Its nested extension root is
+          // skipped when the same tree is encountered as the next package.
+          maxEntries: 9,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 10_000,
+        },
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(snapshot).toMatchObject({
+      extensions: [],
+      skills: [{ path: path.join(snapshotRoot, '0', 'skills', 'ancestor', 'SKILL.md') }],
+      packageRoots: [path.join(snapshotRoot, '0')],
+    });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [
+        { source: ancestorRoot, enabled: true },
+        { source: descendantRoot, enabled: false, warning: 'inspection-limit' },
+      ],
+    });
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { disabledSources: string[] };
+    expect(state.disabledSources).toEqual([]);
   });
 
   it.runIf(process.platform !== 'win32').each([
