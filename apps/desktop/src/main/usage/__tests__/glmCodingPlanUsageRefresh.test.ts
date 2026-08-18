@@ -150,14 +150,22 @@ describe('read() — cached-first + 读路径不删', () => {
     expect(h.calls.record[0].keyFingerprint).toBe('fp-key-a');
   });
 
-  it('returns null without side effects on stale-owner reads', async () => {
+  it('九轮 P1: no-source reads return null without touching the snapshot store', async () => {
+    // 无源 = 业务上不可查询(无 provider / 无 usage 能力 / 无 key)——返回 null 且
+    // **不调 readCachedSnapshot**:否则每个语法合法但不存在的 slug 都会在 store 侧
+    // hydrated Set 落一个永久槽 + 一次 DB 查询,被注入的 renderer 可无限撑大 main 内存。
     const seed = snapshotOf();
     const h = makeHarness({ source: null, cached: seed });
-    // readSource null 但库里有快照:读路径不删(A 修复),返回缓存
     const result = await h.reader.read(SOURCE_A.providerId);
-    expect(result).toBe(seed);
+    expect(result).toBeNull();
+    expect(h.deps.readCachedSnapshot).not.toHaveBeenCalled();
     expect(h.calls.clear).toBe(0);
     expect(h.deps.fetchSnapshot).not.toHaveBeenCalled();
+    // 重复读不同 slug:存储面零接触(内存有界的关键断言)
+    for (const slug of ['a', 'b', 'c', 'd']) {
+      await h.reader.read(slug);
+    }
+    expect(h.deps.readCachedSnapshot).not.toHaveBeenCalled();
   });
 
   it('T1: transient readSource failure keeps the snapshot — zero clear, cache returned', async () => {
@@ -432,6 +440,29 @@ describe('八轮 PTJ — source 读取失败 ≠ provider 不存在', () => {
     const result = await h.reader.read(SOURCE_A.providerId);
     expect(result).toBe(seed); // 瞬时故障返回缓存,不中断显示
     expect(h.calls.clear).toBe(0);
+  });
+});
+
+describe('九轮 P2 — turn-done 触发路径的 reader 语义', () => {
+  it('triggerRefresh on a provider without usage capability is a quiet no-op (no fetch, no leak)', async () => {
+    // register 的 turn-done 钩子会对**任何**显式供应商调用触发:非 GLM 供应商必须
+    // 静默 no-op——无出网、无状态槽残留(states 自清理),不逐 turn 付费。
+    const h = makeHarness({ source: null });
+    h.reader.triggerRefresh('some-other-provider');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.deps.fetchSnapshot).not.toHaveBeenCalled();
+    expect(h.deps.readCachedSnapshot).not.toHaveBeenCalled();
+    expect(h.calls.clear).toBe(0);
+  });
+
+  it('triggerRefresh refreshes a real GLM provider under the 180s throttle', async () => {
+    const h = makeHarness();
+    h.reader.triggerRefresh(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    expect(h.calls.record[0]?.keyFingerprint).toBe('fp-key-a');
+    h.reader.triggerRefresh(SOURCE_A.providerId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.calls.fetch).toBe(1); // 节流窗内不重打
   });
 });
 

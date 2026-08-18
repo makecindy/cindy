@@ -281,6 +281,18 @@ const glmCodingPlanUsageReader = createGlmCodingPlanUsageReader({
  * onCustomProviderMutated 消费):删除 / 失去能力 → 清快照;换 key → 指纹失配清
  * 快照 + 立即刷新。fire-and-forget,不阻塞 CRUD。
  */
+/**
+ * GLM Coding Plan turn-done 钩子:显式选定了供应商的本地会话轮结束后触发一次
+ * 受 180s 节流保护的余量刷新(#2768 九轮)——长会话连续多 turn 不会一直顶着挂载
+ * 时的旧快照。非 GLM 供应商 readSource 为 no source → 静默 no-op 且不触及快照
+ * 存储;代价是每轮一次配置查询(人类 turn 节奏,可忽),状态槽位有意不保留——
+ * 这正是同轮 P1 保持 states Map 有界的做法。远程会话由调用方抑制(额度事实在
+ * 被控端)。
+ */
+export function triggerGlmCodingPlanUsageRefresh(providerId: string): void {
+  glmCodingPlanUsageReader.triggerRefresh(providerId);
+}
+
 export function syncGlmCodingPlanUsageForProviderChange(providerId: string): void {
   void glmCodingPlanUsageReader.syncForProviderChange(providerId).catch(() => {
     /* reader 内部已把错误交给 onRefreshError, 这里只兜底 promise 拒绝。 */

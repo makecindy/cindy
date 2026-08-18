@@ -314,11 +314,12 @@ export function createGlmCodingPlanUsageReader(
           // states Map 只随真实 provider 增长(#2768 review r3788644122)。
           states.delete(providerId);
         }
-        // 读路径**不删除任何东西**(审计 A):「读不到」≠「不存在」——safeStorage /
-        // DB 瞬时故障同样走 null,清了就把用户余量从磁盘抹掉且 180s 不补刷。真删
-        // 除归 CRUD 钩子(syncForProviderChange 知道真的发生了变更);此处返回
-        // 缓存快照,瞬时故障下显示不中断。
-        return await deps.readCachedSnapshot(providerId);
+        // 读路径不删除任何东西;无源 = 业务上不可查询(无该 provider / 无 usage 能力 /
+        // 无 key):返回 null,**不触碰快照存储**(九轮 P1)——此前返回缓存会为每个
+        // 语法合法但不存在的 slug 都调 readCachedSnapshot,把 store 的 hydrated Set
+        // 与 DB 查询面撑到无限大。「瞬时故障不断显示」由 'read-failed' 哨兵独立
+        // 承担(八轮 PTJ);真删除归 CRUD 钩子与 read 身份失配路径。
+        return null;
       }
       s.noSourceUntil = 0;
       s.hadSource = true;

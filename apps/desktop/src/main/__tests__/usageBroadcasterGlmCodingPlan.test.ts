@@ -159,7 +159,9 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     // 的新连接」——若补偿重新 getDbClient() 就会拿到它(代表新账号的 DB 切片)。
     let resolveInsert!: () => void;
     const capturedExec = vi.fn(async () => undefined);
-    capturedExec.mockImplementationOnce(() => new Promise<void>((res) => { resolveInsert = res; }));
+    capturedExec.mockImplementationOnce(
+      () => new Promise<undefined>((res) => { resolveInsert = () => res(undefined); }),
+    );
     const postSwitch = { queryOne: vi.fn(), exec: vi.fn(async () => undefined), drizzle: {} };
     mocks.clientQueue.push(
       { queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} },
