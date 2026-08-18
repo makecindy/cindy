@@ -5,7 +5,7 @@ export interface GhostOwnerScope {
   capture(): unknown;
   /** Check the captured in-process owner and generation. */
   isCurrent(scope: unknown): boolean;
-  /** Check the durable projection marker for the captured owner. */
+  /** Check that the captured process-local owner boundary is still settled. */
   isStable(scope: unknown): boolean;
   /** Stop stale runtime work and discard owner-bound buffered work. */
   onInvalidated?(ghostId: string): void;

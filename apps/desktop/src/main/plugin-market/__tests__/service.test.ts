@@ -27,6 +27,11 @@ const runtime = vi.hoisted(() => ({
   runningErrand: false,
   cindyWork: false,
   boundaryPending: false,
+  approvedInstallEvidence: vi.fn(() => null as {
+    packageSha256: string | null;
+    approvedManifest: GhostManifest;
+    legacyMigrated: boolean;
+  } | null),
   pluginApiBaseUrl: 'https://plugin.test.invalid' as string | null,
   session: {
     mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
@@ -69,6 +74,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
           revision: '00000000-0000-4000-8000-000000000001',
         },
       })),
+    approvedInstallEvidence: runtime.approvedInstallEvidence,
   }),
   isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: runtime.install,
@@ -100,6 +106,7 @@ import type { PluginMarketApi } from '../api';
 
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
+const RELEASE_ID = `c${'b'.repeat(24)}`;
 const APPROVED_INSTALL_TOKEN = 'approved:00000000-0000-4000-8000-000000000001';
 
 /** 手动可控 deferred,用于精确编排"安装在飞行中"的交错。 */
@@ -121,6 +128,8 @@ afterEach(() => {
   runtime.runningErrand = false;
   runtime.cindyWork = false;
   runtime.boundaryPending = false;
+  runtime.approvedInstallEvidence.mockReset();
+  runtime.approvedInstallEvidence.mockReturnValue(null);
   runtime.pluginApiBaseUrl = 'https://plugin.test.invalid';
   runtime.session = {
     mode: 'cloud',
@@ -561,6 +570,289 @@ describe('PluginMarketService migration and defaultInstall', () => {
       sha256: 'legacy-unverified',
     });
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('silently reconnects an unchanged approved package to its historical market release', async () => {
+    const canonicalManifest = normalizedManifest(manifest());
+    const item = summary({
+      currentRelease: {
+        ...summary().currentRelease,
+        id: RELEASE_ID,
+      },
+    });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-recovery-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(canonicalManifest));
+    runtime.ghosts = [{
+      manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: installDir,
+      enabled: false,
+    }];
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: item.currentRelease.sha256,
+      approvedManifest: canonicalManifest,
+      legacyMigrated: false,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: true,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      manifestDigest: ghostManifestDigest(canonicalManifest),
+    });
+    h.ledger.markRemoved(item.ghostId, 'user-1');
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]).toMatchObject({
+      installState: 'installed',
+      enabled: false,
+    });
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+      installed: true,
+      source: 'market',
+      releaseId: RELEASE_ID,
+    });
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('restores an organization update route without restoring market-only authorization', async () => {
+    const canonicalManifest = normalizedManifest(manifest());
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      currentRelease: {
+        ...summary().currentRelease,
+        id: RELEASE_ID,
+      },
+    });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-org-recovery-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(canonicalManifest));
+    runtime.ghosts = [{
+      manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: installDir,
+      enabled: true,
+    }];
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: item.currentRelease.sha256,
+      approvedManifest: canonicalManifest,
+      legacyMigrated: false,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: true,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      manifestDigest: ghostManifestDigest(canonicalManifest),
+    });
+    h.ledger.markRemoved(item.ghostId, 'user-1');
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]).toMatchObject({ installState: 'installed', enabled: true });
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+      installed: true,
+      source: 'legacy-adopted',
+      releaseId: RELEASE_ID,
+    });
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { receiptCase: 'missing', receiptSha: null },
+    { receiptCase: 'different', receiptSha: 'f'.repeat(64) },
+  ])('keeps a disconnected market route detached when its receipt hash is $receiptCase', async ({
+    receiptSha,
+  }) => {
+    const canonicalManifest = normalizedManifest(manifest());
+    const item = summary({
+      currentRelease: {
+        ...summary().currentRelease,
+        id: RELEASE_ID,
+      },
+    });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-mismatch-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(canonicalManifest));
+    runtime.ghosts = [{
+      manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: installDir,
+      enabled: true,
+    }];
+    runtime.approvedInstallEvidence.mockReturnValue(
+      receiptSha === null
+        ? null
+        : {
+            packageSha256: receiptSha,
+            approvedManifest: canonicalManifest,
+            // A retained migration entry must never override a present-but-different hash.
+            legacyMigrated: true,
+          },
+    );
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: false,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      manifestDigest: ghostManifestDigest(canonicalManifest),
+    });
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]?.installState).toBe('conflict');
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('reconnects an explicitly migrated legacy receipt whose approved manifest is unchanged', async () => {
+    const canonicalManifest = normalizedManifest(manifest());
+    const item = summary({
+      currentRelease: {
+        ...summary().currentRelease,
+        id: RELEASE_ID,
+      },
+    });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-legacy-recovery-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(canonicalManifest));
+    runtime.ghosts = [{
+      manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: installDir,
+      enabled: true,
+    }];
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: null,
+      approvedManifest: canonicalManifest,
+      legacyMigrated: true,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: false,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      // Old market records such as TapTap Maker predate manifestDigest.
+    });
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]?.installState).toBe('installed');
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+      installed: true,
+      source: 'market',
+      releaseId: RELEASE_ID,
+    });
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('keeps a migrated legacy route detached when its raw manifest changed after approval', async () => {
+    const canonicalManifest = normalizedManifest(manifest());
+    const item = summary({
+      currentRelease: {
+        ...summary().currentRelease,
+        id: RELEASE_ID,
+      },
+    });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-legacy-tampered-'));
+    roots.push(installDir);
+    fs.writeFileSync(
+      path.join(installDir, 'ghost.json'),
+      JSON.stringify({ ...canonicalManifest, description: 'changed after migration' }),
+    );
+    runtime.ghosts = [{
+      manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: installDir,
+      enabled: true,
+    }];
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: null,
+      approvedManifest: canonicalManifest,
+      legacyMigrated: true,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: false,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    });
+
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]?.installState).toBe('conflict');
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('does not guess a Release for a synthetic legacy-adopted record', async () => {
+    const canonicalManifest = normalizedManifest(manifest());
+    const item = summary();
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-legacy-unresolved-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(canonicalManifest));
+    runtime.ghosts = [{
+      manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: installDir,
+      enabled: true,
+    }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: `legacy-unresolved:${item.currentRelease.version}`,
+      version: item.currentRelease.version,
+      sha256: 'legacy-unverified',
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'legacy-adopted',
+      installed: false,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      manifestDigest: ghostManifestDigest(canonicalManifest),
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ installState: 'conflict' }],
+    });
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
   });
 
   it('installs and enables a unique defaultInstall package and records its release', async () => {

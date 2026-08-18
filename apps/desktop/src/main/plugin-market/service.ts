@@ -20,6 +20,7 @@ import {
   ghostIconMimeType,
   isSafeGhostRelativePath,
   isOfficialGhostId,
+  isValidGhostId,
   validateGhostManifest,
   validateNormalizedGhostManifest,
   type GhostManifest,
@@ -471,6 +472,27 @@ function sameMarketInstallation(
   );
 }
 
+function sameDisconnectedMarketInstallation(
+  current: PluginMarketInstallationRecord | null,
+  expected: PluginMarketInstallationRecord,
+): current is PluginMarketInstallationRecord {
+  return Boolean(
+    current
+    && !current.installed
+    && current.pluginId === expected.pluginId
+    && current.ghostId === expected.ghostId
+    && current.releaseId === expected.releaseId
+    && current.version === expected.version
+    && current.sha256 === expected.sha256
+    && current.scope === expected.scope
+    && current.organizationId === expected.organizationId
+    && current.source === expected.source
+    && current.updatedAt === expected.updatedAt
+    && current.sourceKey === expected.sourceKey
+    && current.manifestDigest === expected.manifestDigest,
+  );
+}
+
 /** Stable local facts reused while projecting one market catalog response. */
 interface LocalInstallSnapshot {
   /** Installed Ghost runtime facts indexed once for one market operation. */
@@ -603,6 +625,7 @@ export class PluginMarketService {
     requireSameMarketOwner(owner);
     const ledger = this.ledgerForOwner(owner);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
+    await this.recoverDisconnectedMarketInstallations(plugins, ledger, owner);
     await this.backfillOfficialCindyGithubTrust(ledger, owner);
     // A snapshot is passive discovery: an empty runtime list can be caused by
     // startup, an owner transition, or a transient filesystem view. Only an
@@ -2072,6 +2095,142 @@ export class PluginMarketService {
         pluginId: matches[0].id,
         exactCurrentRelease: record.releaseId === matches[0].currentRelease.id,
       });
+    }
+  }
+
+  /**
+   * Repair an existing server provenance record that an older client left
+   * disconnected while its approved package remained installed.
+   * Recovery is entirely local. Modern receipts must retain the exact Release
+   * package hash. Legacy receipts intentionally omitted that audit-only hash, so
+   * they additionally require the completed one-time migration to name this id
+   * and the raw installed manifest to equal the manifest frozen in that receipt.
+   * This evidence reconnects the server update route, not current code bytes;
+   * the ledger therefore demotes recovered organization records to
+   * legacy-adopted until a verified market update restores stronger trust.
+   */
+  private async recoverDisconnectedMarketInstallations(
+    plugins: readonly VisiblePluginSummary[],
+    ledger: PluginMarketLedger,
+    owner: ActiveAppSession,
+  ): Promise<void> {
+    const pluginIdCounts = new Map<string, number>();
+    const ghostCounts = ghostIdCounts(plugins);
+    for (const plugin of plugins) {
+      pluginIdCounts.set(plugin.id, (pluginIdCounts.get(plugin.id) ?? 0) + 1);
+    }
+    const summariesById = new Map(plugins.map((plugin) => [plugin.id, plugin]));
+    const records = Object.values(ledger.read().installations);
+    const installSubject = defaultInstallSubject(owner);
+
+    for (const record of records) {
+      const summary = summariesById.get(record.pluginId);
+      if (
+        record.installed
+        || (record.source !== 'market' && record.source !== 'legacy-adopted')
+        || !isValidPluginResourceId(record.pluginId)
+        || !isValidPluginResourceId(record.releaseId)
+        || !isValidGhostId(record.ghostId)
+        || !/^[a-f0-9]{64}$/.test(record.sha256)
+        || pluginIdCounts.get(record.pluginId) !== 1
+        || ghostCounts.get(record.ghostId) !== 1
+        || !summary
+        || summary.ghostId !== record.ghostId
+        || summary.scope !== record.scope
+        || summary.organizationId !== record.organizationId
+      ) {
+        continue;
+      }
+
+      const installed = getGhostManager()
+        .list()
+        .find((ghost) => ghost.manifest.id === record.ghostId);
+      if (!installed || installed.approval.state !== 'approved') continue;
+
+      try {
+        await this.withMutation(record.pluginId, async () => {
+          requireSameMarketOwner(owner);
+          await withGhostInstallLock(record.ghostId, async () => {
+            requireSameMarketOwner(owner);
+            const lockedRecord = ledger.installationForGhost(record.ghostId);
+            if (!sameDisconnectedMarketInstallation(lockedRecord, record)) return;
+            const currentInstalled = getGhostManager()
+              .list()
+              .find((ghost) => ghost.manifest.id === record.ghostId);
+            if (
+              !currentInstalled
+              || currentInstalled.approval.state !== 'approved'
+              || currentInstalled.manifest.version !== record.version
+            ) {
+              return;
+            }
+            const approvalEvidence = getGhostManager().approvedInstallEvidence(record.ghostId);
+            if (!approvalEvidence) return;
+            if (
+              approvalEvidence.packageSha256 !== null
+              && approvalEvidence.packageSha256 !== record.sha256
+            ) {
+              log.info('disconnected market recovery skipped', {
+                pluginId: record.pluginId,
+                ghostId: record.ghostId,
+                reason: 'receipt-package-sha-mismatch',
+              });
+              return;
+            }
+            const installedManifestDigest = installedGhostRawManifestDigest(currentInstalled.dir);
+            if (approvalEvidence.packageSha256 === null) {
+              if (!approvalEvidence.legacyMigrated) {
+                log.info('disconnected market recovery skipped', {
+                  pluginId: record.pluginId,
+                  ghostId: record.ghostId,
+                  reason: 'approved-source-evidence-missing',
+                });
+                return;
+              }
+              if (
+                installedManifestDigest === null
+                || installedManifestDigest !== ghostManifestDigest(
+                  approvalEvidence.approvedManifest,
+                )
+              ) {
+                log.info('disconnected market recovery skipped', {
+                  pluginId: record.pluginId,
+                  ghostId: record.ghostId,
+                  reason: 'legacy-approved-manifest-mismatch',
+                });
+                return;
+              }
+            }
+            if (
+              record.manifestDigest !== undefined
+              && installedManifestDigest !== record.manifestDigest
+            ) {
+              log.info('disconnected market recovery skipped', {
+                pluginId: record.pluginId,
+                ghostId: record.ghostId,
+                reason: 'installed-manifest-mismatch',
+              });
+              return;
+            }
+            const restored = await this.withLedgerMutation(owner, () =>
+              ledger.restoreDisconnectedInstallation(record, installSubject));
+            if (restored) {
+              log.info('disconnected market installation recovered', {
+                pluginId: record.pluginId,
+                ghostId: record.ghostId,
+                releaseId: record.releaseId,
+              });
+            }
+          });
+        });
+      } catch (error) {
+        if (isIpcError(error) && error.code === 'PRECONDITION_FAILED') throw error;
+        log.warn('disconnected market recovery deferred', {
+          pluginId: record.pluginId,
+          ghostId: record.ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
