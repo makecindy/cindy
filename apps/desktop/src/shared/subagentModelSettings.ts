@@ -5,12 +5,12 @@
  *
  * 派发通道按 agent 分两条：
  * - Claude Code：env `CLAUDE_CODE_SUBAGENT_MODEL`，每会话独立 spawn，新会话即生效。
- * - Codex：spawn 时 `-c agents.*` 注入（见 maker-host/codex-subagent-config.ts）。
+ * - Codex：护栏仍通过 spawn 时 `-c agents.*` 注入；锁定模型、Provider 与 effort 由
+ *   本地 Proxy 对已确认的子线程请求强制应用（见 maker-host/codex-subagent-config.ts）。
  *   本地 codex app-server 跨会话共享，变更经 DeferredCodexRestartService 在全部本地
- *   Codex 会话空闲后重启生效；remote 会话不注入。`codexEffort` 与模型成对暴露：上游
- *   只设 default_subagent_model 时子代理 effort 会被重置为目标模型目录默认档而非继承
- *   父级，故 UI 侧选模型时原子写入 effort。default_subagent_model 是兜底默认（模型仍
- *   可在 spawn 参数里显式覆盖），与「设置不静默覆盖 agent 自己声明的 model」语义一致。
+ *   Codex 会话空闲后重启生效；remote 会话不注入。用户指定 Codex 模型后，它与 effort
+ *   作为强制路由冻结在本地 Proxy：Codex 创建子线程时继承父模型，不接收 model/effort
+ *   override，从而避开 spawn_agent 的目录白名单；真正请求只在已确认的子线程上改写。
  *
  * `*ProviderId` 是标准模型选择面板的「来源」维度（2026-07 用户定稿基准：全软件一个
  * 模型选择面板，处处同行为）。它是纯客户端偏好：派发通道只带模型 id；订阅前缀模型
@@ -23,7 +23,7 @@ export interface SubagentModelSettings {
   claudeCodeProviderId: string | null;
   codex: string | null;
   codexProviderId: string | null;
-  /** null = 不注入，子代理沿用目标模型的目录默认档。 */
+  /** null = 锁定路由移除父线程继承的 effort，让目标模型使用默认档。 */
   codexEffort: CodexSubagentEffort | null;
   /** false → 注入 `-c agents.enabled=false`，对旧版多代理(V1)与 Sol/Terra(V2)都硬生效。 */
   codexSubagentsEnabled: boolean;
@@ -83,13 +83,23 @@ export const SUBAGENT_MODEL_SETTINGS_DEFAULTS: SubagentModelSettings = {
   codexAllowNestedSubagents: false,
 };
 
-/** 设置 UI 的「默认模型」卡片键组（DefaultOverrideControls 按卡片分组判 isCustomized）。 */
-export const SUBAGENT_MODEL_CARD_KEYS = [
+/** 设置 UI 的 Claude Code 模型行键组。 */
+export const CLAUDE_SUBAGENT_MODEL_KEYS = [
   'claudeCode',
   'claudeCodeProviderId',
+] as const satisfies readonly (keyof SubagentModelSettings)[];
+
+/** 设置 UI 的 Codex 模型行键组。 */
+export const CODEX_SUBAGENT_MODEL_KEYS = [
   'codex',
   'codexProviderId',
   'codexEffort',
+] as const satisfies readonly (keyof SubagentModelSettings)[];
+
+/** 设置 UI 的「Subagent 模型」卡片全部键组。 */
+export const SUBAGENT_MODEL_CARD_KEYS = [
+  ...CLAUDE_SUBAGENT_MODEL_KEYS,
+  ...CODEX_SUBAGENT_MODEL_KEYS,
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
 
 /** 设置 UI 的「Codex 子代理护栏」卡片键组。 */
@@ -101,11 +111,12 @@ export const SUBAGENT_GUARDRAIL_KEYS = [
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
 
 /**
- * 影响 codex spawn `-c` 注入的键。codexProviderId 是纯客户端展示维度、claude* 走
- * env 通道，均不在内——它们变更不需要重启共享的 codex app-server。
+ * 影响 Codex spawn `-c` 护栏或锁定 Subagent Proxy 路由的键。claude* 走 env 通道，
+ * 不在此列表内；Codex 模型、Provider 或 effort 变化都需要重启共享的 app-server。
  */
 export const CODEX_SPAWN_AFFECTING_KEYS = [
   'codex',
+  'codexProviderId',
   'codexEffort',
   'codexSubagentsEnabled',
   'codexUseCindySubagentPolicy',
@@ -167,10 +178,9 @@ export function normalizeSubagentModelId(value: unknown): string | null {
  * review),以及模型本就未指定时的 provider-only patch(codex review,会造成
  * 「显示不指定却 isCustomized=true」)。UI 已原子写,这里是 IPC 契约边界的兜底。
  *
- * codexEffort 有意不参与配对清理:`agents.default_subagent_reasoning_effort` 单独
- * 注入在上游是合法配置(子代理继承父模型、只改档位),手改设置文件表达它的能力按
- * 「隐藏配置也是正式契约」保留;UI 侧选「不指定」时会原子清 {codex, codexProviderId,
- * codexEffort} 三键,不产生意外孤儿。护栏四键互相独立,同样不参与。
+ * codexEffort 有意不参与配对清理：没有指定模型时，它仍可作为上游原生隐藏配置单独
+ * 注入；指定模型时则随冻结路由由 Proxy 强制应用。UI 侧选「不指定」会原子清
+ * {codex, codexProviderId, codexEffort} 三键，不产生意外孤儿。护栏四键互相独立。
  */
 export function reconcileSubagentModelSettingsPatch(
   patch: SubagentModelSettingsPatch,

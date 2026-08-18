@@ -62,6 +62,7 @@ import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,
   DynamicToolSpec,
+  ReasoningEffort,
 } from './codex/app-server/protocol.js';
 import type {
   ScanAtResourcesOptions,
@@ -317,8 +318,16 @@ export interface CodexExtraSpawnConfig {
   extraEnv: Record<string, string>;
   /** Cindy-side display fallback for Codex subagent cards. */
   subagentModelFallback?: string;
+  /** Provider route frozen alongside the locked subagent model for this app-server. */
+  subagentRoute?: {
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort: ReasoningEffort | null;
+  };
   /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
   codexBrowserUseAvailable?: boolean;
+  /** Whether the OpenAI identity provider on this app-server may use Responses WebSocket. */
+  codexOpenAiWebSocketsEnabled?: boolean;
   /** Exact verified Chrome plugin version provisioned into this app-server. */
   codexBrowserUseVersion?: string;
   /** Maximum startup wait copied from the verified companion descriptor. */
@@ -923,6 +932,11 @@ export interface AgentDeps {
     sessionId: string;
     threadId: string;
     text: string;
+    subagentRoute?: {
+      providerId: string;
+      catalogModel: string;
+      reasoningEffort: ReasoningEffort | null;
+    };
   }) => void;
 
   /**
