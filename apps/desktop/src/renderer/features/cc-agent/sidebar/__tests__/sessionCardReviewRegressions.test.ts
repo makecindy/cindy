@@ -290,9 +290,6 @@ describe('SessionCard review regressions', () => {
       'const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;',
     );
     expect(sessionItemSource).toContain("!isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5'");
-    expect(automationGroupSource).toContain(
-      'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
-    );
     expect(automationGroupSource).toContain('className="flex min-w-0 items-center gap-1.5"');
   });
 

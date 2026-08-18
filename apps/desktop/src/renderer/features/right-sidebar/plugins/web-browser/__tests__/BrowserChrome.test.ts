@@ -51,6 +51,7 @@ function renderChrome(
     isLoading?: boolean;
     canGoBack?: boolean;
     canGoForward?: boolean;
+    commentActive?: boolean;
     onReload?: () => void;
     onStop?: () => void;
   } = {},
@@ -72,7 +73,7 @@ function renderChrome(
       onGoBack: vi.fn(),
       onGoForward: vi.fn(),
       onCaptureScreenshot: vi.fn(),
-      commentActive: false,
+      commentActive: extra.commentActive ?? false,
       onToggleComment: vi.fn(),
       onOpenInSystemBrowser,
       onCopyLink,
@@ -105,6 +106,15 @@ describe('BrowserChrome', () => {
   it('renders the page-comment button by default (commentSupported defaults to true)', () => {
     renderChrome();
     expect(screen.getByRole('button', { name: 'rightSidebar.browser.comment' })).toBeTruthy();
+  });
+
+  it('describes exiting comment mode while the page-comment tool is active', () => {
+    renderChrome('https://www.taptap.cn/', { commentActive: true });
+
+    expect(
+      screen.getByRole('button', { name: 'rightSidebar.browser.exitCommentMode' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'rightSidebar.browser.comment' })).toBeNull();
   });
 
   it('hides the page-comment button when commentSupported is false (detached sidebar window has no composer)', () => {

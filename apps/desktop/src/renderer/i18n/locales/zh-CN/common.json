@@ -4870,6 +4870,7 @@
       "screenshotCopied": "已复制截图到剪贴板",
       "screenshotFailed": "截图失败",
       "comment": "页面评论",
+      "exitCommentMode": "退出评论模式",
       "commentModeHint": "点击元素或 Shift 拖拽框选区域 · Cmd/Ctrl+点击直接添加 · Esc 退出",
       "commentPlaceholder": "描述这里需要怎么改…",
       "commentSubmit": "添加评论",

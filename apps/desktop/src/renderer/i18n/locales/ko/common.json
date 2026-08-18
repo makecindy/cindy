@@ -4870,6 +4870,7 @@
       "screenshotCopied": "스크린샷을 클립보드에 복사했습니다",
       "screenshotFailed": "스크린샷에 실패했습니다",
       "comment": "페이지에 코멘트",
+      "exitCommentMode": "코멘트 모드 종료",
       "commentModeHint": "요소 클릭 / Shift 드래그로 영역 선택 · Cmd/Ctrl+클릭 시 바로 추가 · Esc로 종료",
       "commentPlaceholder": "여기를 어떻게 바꿀지 설명하세요…",
       "commentSubmit": "코멘트 추가",

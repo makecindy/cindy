@@ -4870,6 +4870,7 @@
       "screenshotCopied": "已複製截圖到剪貼簿",
       "screenshotFailed": "截圖失敗",
       "comment": "頁面評論",
+      "exitCommentMode": "退出評論模式",
       "commentModeHint": "點選元素或 Shift 拖拽框選區域 · Cmd/Ctrl+點選直接新增 · Esc 退出",
       "commentPlaceholder": "描述這裡需要怎麼改…",
       "commentSubmit": "新增評論",

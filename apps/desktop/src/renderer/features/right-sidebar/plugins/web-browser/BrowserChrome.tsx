@@ -294,7 +294,11 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
             icon={MessageSquarePlus}
             active={commentActive}
             onClick={onToggleComment}
-            tooltip={t('rightSidebar.browser.comment')}
+            tooltip={
+              commentActive
+                ? t('rightSidebar.browser.exitCommentMode')
+                : t('rightSidebar.browser.comment')
+            }
           />
         )}
         {/* 更多菜单:trigger 复用 chrome 图标按钮视觉(默认态 + 菜单打开时 active 高亮,

@@ -4870,6 +4870,7 @@
       "screenshotCopied": "スクリーンショットをクリップボードにコピーしました",
       "screenshotFailed": "スクリーンショットに失敗しました",
       "comment": "ページにコメント",
+      "exitCommentMode": "コメントモードを終了",
       "commentModeHint": "要素をクリック / Shift ドラッグで範囲選択 · Cmd/Ctrl+クリックで即追加 · Esc で終了",
       "commentPlaceholder": "ここをどう変えたいか記述してください…",
       "commentSubmit": "コメントを追加",
