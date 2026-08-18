@@ -219,6 +219,8 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): () => void;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /** Provider route mutation release 后通知依赖方重算最终路由。 */
+  afterRouteMutation?(providerId: string): void;
   /** Current selectable catalog ids, used to validate visible provider order entries. */
   listProviderIds(): string[];
   /** Merge the currently visible order into the persisted observed-provider order. */
@@ -607,6 +609,14 @@ export function registerProviderHandlers(
       }
       finishProviderConfigMutation(providerId);
       finishRouteMutation();
+      try {
+        deps.afterRouteMutation?.(providerId);
+      } catch (error) {
+        log.warn('provider route mutation follow-up failed', {
+          providerId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   };
   type KeySnapshot = { agent: AgentKind; previous: string | null };

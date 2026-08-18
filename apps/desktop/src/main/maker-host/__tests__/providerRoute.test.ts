@@ -20,7 +20,9 @@ import {
   beginProviderRouteMutation,
   buildLocalHandlerHeaders,
   buildRouteDecision,
+  getProviderRouteMutationGeneration,
   getSessionRoutingDescriptor,
+  hasAnyProviderRouteMutationInProgress,
   resolveSessionRoute,
   resolveSessionRouteDecision,
   resolveImplicitLocalBridgeRoute,
@@ -31,6 +33,7 @@ import {
   setProviderOAuthTokenReader,
   setProviderViewsReader,
   resolveImplicitProviderOAuthRouteDecision,
+  resolveCodexRouteCapabilities,
   resolveVisionBackendRoute,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
@@ -38,6 +41,7 @@ import {
 } from '../provider-route.js';
 import {
   getActiveCatalog,
+  setActiveCatalog,
   setAnthropicDiscoveredModels,
   setCustomProviders,
   setDiscoveredCodexModels,
@@ -75,14 +79,19 @@ afterEach(() => {
   mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: true });
   setProviderOAuthTokenReader(() => null);
   setPendingCredentialSwitchReader(() => undefined);
+  setActiveCatalog(BUNDLED_CATALOG);
   clearSessionProvider('s-xai');
   clearSessionProvider('s-xai-rewrite');
   clearSessionProvider('s-anthropic-codex');
   clearSessionProvider('s-xd-model-wire');
   setXdGatewayModels([]);
   setAnthropicDiscoveredModels([]);
+  setCustomProviders([]);
   setProviderViewsReader(async () => []);
+  setVisionGatewayKeyReader(() => KEY);
 });
+
+setVisionGatewayKeyReader(() => KEY);
 
 describe('implicit local bridge resume routing', () => {
   it('keeps the connected source when a running session model becomes retired', async () => {
@@ -118,6 +127,167 @@ describe('local mode Cindy gateway gate', () => {
     expect(inferProviderIdForModel('gpt-local-gate', 'codex')).toBeNull();
 
     clearSessionProvider('s-local-xd');
+  });
+});
+
+describe('Codex CodeModeOnly route capability', () => {
+  it('follows the final catalog route and not the provider id', async () => {
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'xd',
+      model: 'codex/gpt-5.5',
+      credentialMode: 'gateway-key',
+    })).resolves.toEqual({ requiresCodeModeOnly: true });
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'openai',
+      model: 'gpt-5.5',
+      credentialMode: 'oauth-bearer',
+    })).resolves.toEqual({ requiresCodeModeOnly: false });
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'openai',
+      model: 'gpt-5.5',
+      credentialMode: 'gateway-key',
+    })).resolves.toEqual({ requiresCodeModeOnly: true });
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      credentialMode: 'provider-oauth',
+    })).resolves.toEqual({ requiresCodeModeOnly: false });
+  });
+
+  it('uses the OAuth spawn fallback when an explicit Gateway route has no key', async () => {
+    setVisionGatewayKeyReader(() => null);
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'xd',
+      model: 'gpt-5.5',
+      credentialMode: 'oauth-bearer',
+    })).resolves.toBeUndefined();
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'xd',
+      model: 'codex/gpt-5.5',
+      credentialMode: 'oauth-bearer',
+    })).resolves.toEqual({ requiresCodeModeOnly: true });
+  });
+
+  it('uses the fallback route when an explicit provider does not serve the model', async () => {
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'xai',
+      model: 'codex/gpt-5.5',
+      credentialMode: 'gateway-key',
+    })).resolves.toEqual({ requiresCodeModeOnly: true });
+  });
+
+  it('uses the Gateway capability when env-key ignores a disabled builtin provider', async () => {
+    setActiveCatalog({
+      ...BUNDLED_CATALOG,
+      providers: BUNDLED_CATALOG.providers.map((provider) =>
+        provider.id === 'openai'
+          ? {
+              ...provider,
+              routing: {
+                ...provider.routing,
+                codex: { ...provider.routing.codex!, disabled: true },
+              },
+            }
+          : provider,
+      ),
+    });
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'openai',
+      model: 'gpt-5.5',
+      credentialMode: 'gateway-key',
+    })).resolves.toEqual({ requiresCodeModeOnly: true });
+
+    // OAuth sessions still enter the explicit route branch and receive the
+    // disabled-provider error, so they must not be classified as Gateway.
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'openai',
+      model: 'gpt-5.5',
+      credentialMode: 'oauth-bearer',
+    })).resolves.toEqual({ requiresCodeModeOnly: false });
+  });
+
+  it.each([
+    ['deepseek', 'deepseek-v4-pro', 'deepseek-v4-pro'],
+    ['zhipu-glm', 'glm-5.2', 'glm-5.2'],
+    ['zhipu-glm', 'glm-5.2', 'glm-5.2[1m]'],
+  ])('uses the connected implicit %s Chat bridge instead of the spawn fallback', async (
+    providerId,
+    catalogModel,
+    wireModel,
+  ) => {
+    setCustomProviders([
+      buildUserProvider({
+        id: providerId,
+        name: providerId,
+        runtimes: {
+          codex: {
+            baseUrl: `https://${providerId}.example.com`,
+            wireProtocol: 'openai-chat',
+            models: [{ id: catalogModel, name: catalogModel }],
+          },
+        },
+      }),
+    ]);
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { [providerId]: true, xd: true }, {}),
+    );
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: null,
+      model: wireModel,
+      credentialMode: 'gateway-key',
+    })).resolves.toEqual({ requiresCodeModeOnly: false });
+  });
+
+  it('uses the connected implicit Anthropic Messages bridge instead of the spawn fallback', async () => {
+    setAnthropicDiscoveredModels([{
+      id: 'claude-sonnet-route-capability',
+      name: 'Claude Sonnet Route Capability',
+      contextWindow: 200_000,
+      efforts: [],
+      defaultEffort: null,
+      status: 'active',
+    }]);
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { anthropic: true, xd: true }, {}),
+    );
+
+    await expect(resolveCodexRouteCapabilities({
+      providerId: null,
+      model: 'claude-sonnet-route-capability',
+      credentialMode: 'gateway-key',
+    })).resolves.toEqual({ requiresCodeModeOnly: false });
+  });
+
+  it('keeps an implicit native xAI Responses route out of CodeModeOnly', async () => {
+    await expect(resolveCodexRouteCapabilities({
+      providerId: null,
+      model: 'xai/grok-4.3',
+      credentialMode: 'provider-oauth',
+    })).resolves.toEqual({ requiresCodeModeOnly: false });
+  });
+
+  it('does not infer an implicit OAuth route while an explicit Provider is selected', async () => {
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'removed-provider',
+      model: 'xai/grok-4.3',
+      credentialMode: 'gateway-key',
+    })).resolves.toEqual({ requiresCodeModeOnly: true });
+  });
+
+  it('does not claim the gateway capability when the gateway is unavailable', async () => {
+    mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: false });
+    await expect(resolveCodexRouteCapabilities({
+      providerId: 'xd',
+      model: 'codex/gpt-5.5',
+      credentialMode: 'gateway-key',
+    })).resolves.toBeUndefined();
   });
 });
 
@@ -1078,6 +1248,21 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       upstreamOverride: 'https://new.example/v1',
       headerOverride: { authorization: 'Bearer new-key' },
     });
+  });
+
+  it('keeps the global mutation guard active until every provider route is released', () => {
+    const generationBefore = getProviderRouteMutationGeneration();
+    const finishOpenRouter = beginProviderRouteMutation('openrouter');
+    expect(getProviderRouteMutationGeneration()).toBe(generationBefore + 1);
+    const finishDeepSeek = beginProviderRouteMutation('deepseek');
+    expect(getProviderRouteMutationGeneration()).toBe(generationBefore + 2);
+
+    expect(hasAnyProviderRouteMutationInProgress()).toBe(true);
+    finishOpenRouter();
+    expect(hasAnyProviderRouteMutationInProgress()).toBe(true);
+    finishDeepSeek();
+    expect(hasAnyProviderRouteMutationInProgress()).toBe(false);
+    expect(getProviderRouteMutationGeneration()).toBe(generationBefore + 2);
   });
 
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {

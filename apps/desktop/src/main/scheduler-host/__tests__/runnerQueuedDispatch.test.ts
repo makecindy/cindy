@@ -312,6 +312,8 @@ function createRunnerHarness(
     metaModel?: string;
     /** 停用轴裁决桩(缺省 = 不裁决,与生产未接线时一致)。 */
     checkModelRoute?: MakerScheduleRunnerDeps['checkModelRoute'];
+    resolveCodexRouteCapabilities?: MakerScheduleRunnerDeps['resolveCodexRouteCapabilities'];
+    getCodexAuthInjection?: MakerScheduleRunnerDeps['getCodexAuthInjection'];
   } = {},
 ) {
   const logger = createLogger();
@@ -342,6 +344,8 @@ function createRunnerHarness(
     logger,
     schedulerQueue,
     checkModelRoute: opts.checkModelRoute,
+    resolveCodexRouteCapabilities: opts.resolveCodexRouteCapabilities,
+    getCodexAuthInjection: opts.getCodexAuthInjection,
   });
   return { runner, logger, notifier, maker };
 }
@@ -703,6 +707,43 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     );
     expect(harness.session.abort).toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+  });
+
+  it('排队 Codex 跨 CodeModeOnly 边界时保留当前路由，等待空闲后重建', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      userSendAt: null,
+      providerId: 'xd',
+    });
+    mocks.getSessionProvider.mockReturnValue('xd');
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    (harness.session as { agentKind: string }).agentKind = 'codex';
+    (harness.session as { model: string }).model = 'shared-model';
+    (harness.session as { codexProxyActive: boolean }).codexProxyActive = true;
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+      metaModel: 'shared-model',
+      getCodexAuthInjection: () => 'env-key',
+      resolveCodexRouteCapabilities: async ({ providerId }) => ({
+        requiresCodeModeOnly: providerId === 'xd',
+      }),
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        model: 'shared-model',
+        providerId: 'deepseek',
+      }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    expect(harness.setModel).not.toHaveBeenCalled();
+    expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+    harness.emit({ type: 'done', data: {}, source: 'codex' });
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
 
   it('排队 Pi 每次派发都写 Fast=false，清掉复用会话的旧 bridge 状态', async () => {

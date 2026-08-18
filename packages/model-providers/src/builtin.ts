@@ -229,6 +229,7 @@ const XD_PROVIDER: Provider = {
     codex: {
       upstream: 'https://xd-gateway.invalid/v1',
       authStrategy: 'gateway-key',
+      requiresCodeModeOnly: true,
     },
     // pi 直连网关 anthropic-messages 面(与 claude-code 同可达面);upstream 同为占位。
     pi: {

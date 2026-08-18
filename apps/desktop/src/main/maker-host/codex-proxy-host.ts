@@ -53,6 +53,7 @@ import {
   buildLocalHandlerHeaders,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
+  isProviderRouteMutationInProgress,
   isUserProviderSession,
   getUserProviderIdForSession,
   readProviderOAuthToken,
@@ -2217,6 +2218,10 @@ export function createModelRoutingTransform(
       authInjection === 'oauth-bearer' ||
       isUserProviderSession(sessionId) ||
       isHostInjectedAuthSession(sessionId, 'codex') ||
+      // The catalog entry can disappear mid-mutation, making the other
+      // explicit-route predicates false. Keep the mutation's 503 fail-closed.
+      (explicitProviderId !== null &&
+        isProviderRouteMutationInProgress(explicitProviderId)) ||
       selectedUsesLocalBridge
     )) {
       if (selectedUsesLocalBridge && model) {

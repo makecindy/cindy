@@ -251,6 +251,37 @@ function backfillPresetMetadata(
 }
 
 /**
+ * Backfill the Cindy Gateway's thread capability for catalogs produced before
+ * `requiresCodeModeOnly` existed. An explicit value, including false, remains
+ * an intentional catalog override and is never replaced.
+ */
+function backfillCodexRouteCapabilities(primary: Provider, bundled: Provider): Provider {
+  if (primary.id !== 'xd') return primary;
+  const primaryCodex = primary.routing.codex;
+  const bundledCodex = bundled.routing.codex;
+  if (
+    !primaryCodex
+    || bundledCodex?.requiresCodeModeOnly === undefined
+    || primaryCodex.requiresCodeModeOnly !== undefined
+    || primaryCodex.authStrategy !== bundledCodex.authStrategy
+    || (primaryCodex.wireProtocol ?? 'openai-responses')
+      !== (bundledCodex.wireProtocol ?? 'openai-responses')
+  ) {
+    return primary;
+  }
+  return {
+    ...primary,
+    routing: {
+      ...primary.routing,
+      codex: {
+        ...primaryCodex,
+        requiresCodeModeOnly: bundledCodex.requiresCodeModeOnly,
+      },
+    },
+  };
+}
+
+/**
  * 把远端 / 本地目录与内置 bundled 合并：以输入目录为主，bundled 补它缺失的
  * provider（按 id），并给旧目录中同 id provider 补缺失的 access 与媒体能力元数据。
  * primary 明确提供的值（包括显式空媒体清单）永远优先，不被 bundled 覆盖。
@@ -265,18 +296,19 @@ export function mergeWithBundled(primary: Catalog): Catalog {
     const bundled = bundledById.get(p.id);
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
     if (!bundled) return p;
+    const withRouteCapabilities = backfillCodexRouteCapabilities(p, bundled);
     const inheritImage =
-      p.id === 'xai' &&
-      p.imageModels === undefined &&
+      withRouteCapabilities.id === 'xai' &&
+      withRouteCapabilities.imageModels === undefined &&
       bundled.imageModels !== undefined &&
       bundledAccess !== undefined &&
-      allowsBundledImageInheritance(p.access, bundledAccess);
+      allowsBundledImageInheritance(withRouteCapabilities.access, bundledAccess);
     const inheritVideo =
-      p.id === 'xai' &&
-      p.videoModels === undefined &&
+      withRouteCapabilities.id === 'xai' &&
+      withRouteCapabilities.videoModels === undefined &&
       bundled.videoModels !== undefined &&
       bundledAccess !== undefined &&
-      allowsBundledImageInheritance(p.access, bundledAccess);
+      allowsBundledImageInheritance(withRouteCapabilities.access, bundledAccess);
     // 向量清单与 xai 的图像清单同一个道理(PR #1707 review):xd 段的向量能力是
     // 客户端新增的 bundled 元数据,而远端 / 本地目录里同 id 的 xd 可能还是升级前
     // 的结构、根本没有 embeddingModels 这个字段。primary 整体优先的规则会让那份
@@ -286,26 +318,26 @@ export function mergeWithBundled(primary: Catalog): Catalog {
     // 只在字段**缺席**时补,显式 `[]` 仍然是"这个供应商不提供向量"的停用语义,
     // 与图像清单的既有契约一致。
     const inheritEmbedding =
-      p.id === 'xd' &&
-      p.embeddingModels === undefined &&
+      withRouteCapabilities.id === 'xd' &&
+      withRouteCapabilities.embeddingModels === undefined &&
       bundled.embeddingModels !== undefined &&
       bundledAccess !== undefined &&
-      allowsBundledImageInheritance(p.access, bundledAccess);
+      allowsBundledImageInheritance(withRouteCapabilities.access, bundledAccess);
     if (
-      !(p.access === undefined && bundledAccess !== undefined) &&
+      !(withRouteCapabilities.access === undefined && bundledAccess !== undefined) &&
       !inheritImage &&
       !inheritVideo &&
       !inheritEmbedding
     ) {
-      return p;
+      return withRouteCapabilities;
     }
     return {
-      ...p,
-      ...(p.access === undefined && bundledAccess !== undefined ? { access: bundledAccess } : {}),
+      ...withRouteCapabilities,
+      ...(withRouteCapabilities.access === undefined && bundledAccess !== undefined ? { access: bundledAccess } : {}),
       ...(inheritImage
         ? {
             imageModels: bundled.imageModels,
-            ...(p.imageDefaults === undefined && bundled.imageDefaults !== undefined
+            ...(withRouteCapabilities.imageDefaults === undefined && bundled.imageDefaults !== undefined
               ? { imageDefaults: bundled.imageDefaults }
               : {}),
           }
@@ -321,7 +353,7 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       ...(inheritEmbedding
         ? {
             embeddingModels: bundled.embeddingModels,
-            ...(p.embeddingDefaults === undefined && bundled.embeddingDefaults !== undefined
+            ...(withRouteCapabilities.embeddingDefaults === undefined && bundled.embeddingDefaults !== undefined
               ? { embeddingDefaults: bundled.embeddingDefaults }
               : {}),
           }

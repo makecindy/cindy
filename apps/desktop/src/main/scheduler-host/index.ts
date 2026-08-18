@@ -30,6 +30,8 @@ import {
   resolveRouteCopyCapabilities,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
+import { getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
+import { resolveCodexRouteCapabilities } from '../maker-host/provider-route.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
@@ -42,6 +44,7 @@ import {
   isSchedulerPromptTracked,
   isSchedulerTargetSessionBusy,
   onSchedulerAutoResumeFailed,
+  prepareCodexThreadRotationForSession,
   removeQueuedSchedulerPrompt,
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
@@ -95,6 +98,9 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
     resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: resolveDefaultScheduleRoute,
+    resolveCodexRouteCapabilities,
+    getCodexAuthInjection: getCodexProxyAuthInjectionState,
+    prepareCodexThreadRotation: prepareCodexThreadRotationForSession,
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
     // (holder 未就绪时 isSessionBusy 返回 false → runner 走原直发路径)。
     schedulerQueue: {

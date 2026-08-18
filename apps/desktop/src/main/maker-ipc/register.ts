@@ -253,6 +253,7 @@ import {
   getSessionRowSnapshot,
   getSessionRowSnapshotStrict,
   persistSessionFields,
+  replaceSessionSdkSessionIdIfCurrent,
   recycleSessionWorktreeForStatusChange,
 } from '../localDb/ipc/sessions.js';
 // sidebar-card-mode: turn-done 后触发任务现状摘要生成
@@ -703,12 +704,18 @@ import {
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
-import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import {
+  getActiveCatalog,
+  getActiveCatalogRevision,
+  setDiscoveredProviderModels,
+} from '../maker-host/active-catalog.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
 import {
   beginProviderRouteMutation,
+  getProviderRouteMutationGeneration,
+  hasAnyProviderRouteMutationInProgress,
   isUserProviderSession,
   setPendingCredentialSwitchReader,
 } from '../maker-host/provider-route.js';
@@ -788,10 +795,18 @@ import {
   isCredentialModeSwitchBusyError,
   isLocalSessionBusy,
 } from '../maker-host/codex-credential-switch.js';
-import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
+import {
+  applyRuntimeSetModelChange,
+  resolveCodexCodeModeOnlyForRoute,
+} from './runtimeSetModel.js';
 import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
 import { normalizeDeviceLinkSetModelWireArgs } from './setModelWireArgs.js';
 import { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
+import { CodexRouteRebuildService } from './codexRouteRebuild.js';
+import {
+  createCodexThreadRotationPreparer,
+  type PrepareCodexThreadRotation,
+} from './codexThreadRotation.js';
 import {
   DeferredCodexRestartService,
   runMemoryChangeWithCodexRestart,
@@ -2531,11 +2546,24 @@ const rewindInputSessions = new Set<string>();
 const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;
 let pendingCredentialSwitchHolder: PendingCredentialSwitchService | null = null;
+let prepareCodexThreadRotationHolder: PrepareCodexThreadRotation | null = null;
 function settlePendingCredentialSwitch(sessionId: string, source: string): void {
   const pending = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
   if (!pending) return;
   void pending.catch((err) => {
     log.warn('pending credential switch settle failed', {
+      sessionId,
+      source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+let codexRouteRebuildHolder: CodexRouteRebuildService | null = null;
+function settlePendingCodexRouteRebuild(sessionId: string, source: string): void {
+  const pending = codexRouteRebuildHolder?.onTurnSettled(sessionId);
+  if (!pending) return;
+  void pending.catch((err) => {
+    log.warn('pending Codex catalog route rebuild settle failed', {
       sessionId,
       source,
       error: err instanceof Error ? err.message : String(err),
@@ -2685,8 +2713,27 @@ export function isSessionTurnPendingCompletion(sessionId: string): boolean {
  * 重启、关掉新 owner 的会话(review P1 2026-07-23)。bootstrap 的 owner 边界
  * 收口在 maker.shutdown()/resetMaker() 前调用。
  */
-export function clearDeferredCodexRestartForOwnerBoundary(): void {
+export async function clearDeferredCodexRestartForOwnerBoundary(): Promise<void> {
   deferredCodexRestartHolder?.clear();
+  await Promise.all([
+    pendingCredentialSwitchHolder?.clearAll() ?? Promise.resolve(),
+    codexRouteRebuildHolder?.clearAsync() ?? Promise.resolve(),
+  ]);
+}
+
+/** Reconcile live local Codex threads after catalog or Provider access changes. */
+export function reconcileCodexRouteRebuildsAfterProviderChange(
+  revision = getActiveCatalogRevision(),
+): void {
+  if (hasAnyProviderRouteMutationInProgress()) return;
+  const reconciliation = codexRouteRebuildHolder?.reconcile(revision);
+  if (!reconciliation) return;
+  void reconciliation.catch((error) => {
+    log.warn('Codex catalog route rebuild reconciliation failed', {
+      revision,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 /**
@@ -2718,7 +2765,11 @@ export function cancelPendingAgentSwitchForSession(sessionId: string): void {
  */
 export async function registerPendingCredentialSwitchForSession(
   sessionId: string,
-  target: { model: string; providerId: string | null },
+  target: {
+    model: string;
+    providerId: string | null;
+    codexThreadRotation?: import('./codexThreadRotation.js').CodexThreadRotationSnapshot;
+  },
 ): Promise<void> {
   const service = pendingCredentialSwitchHolder;
   if (!service) {
@@ -2756,7 +2807,7 @@ export async function registerPendingCredentialSwitchForSession(
     prevRow = null;
   }
   const prevModel = live?.model ?? prevRow?.model ?? null;
-  service.register(sessionId, {
+  await service.register(sessionId, {
     ...target,
     ...(dbAgentKind ? { agentKind: dbToMakerAgentKind(dbAgentKind) } : {}),
     ...(prevModel
@@ -2769,14 +2820,26 @@ export async function registerPendingCredentialSwitchForSession(
           },
         }
       : {}),
+    ...(target.codexThreadRotation
+      ? { codexThreadRotation: target.codexThreadRotation }
+      : {}),
   });
 }
 
-export function clearPendingCredentialSwitchForSession(
+export async function prepareCodexThreadRotationForSession(
+  snapshot: import('./codexThreadRotation.js').CodexThreadRotationSnapshot,
+) {
+  if (!prepareCodexThreadRotationHolder) {
+    throw new Error('Codex thread rotation service is not initialized');
+  }
+  return prepareCodexThreadRotationHolder(snapshot);
+}
+
+export async function clearPendingCredentialSwitchForSession(
   sessionId: string,
   opts?: { wake?: boolean },
-): void {
-  pendingCredentialSwitchHolder?.clear(sessionId);
+): Promise<void> {
+  await pendingCredentialSwitchHolder?.clear(sessionId);
   // pending 门解除后 coordinator 没有其它唤醒源；wake:false 由调用方在
   // close + route 写入完成后显式唤醒，避免队首趁窗口派发到旧凭证。
   if (opts?.wake !== false) {
@@ -3383,6 +3446,7 @@ async function settleSilentStopDone(
   noteClaudeSessionTurnState(sessionId, false);
   agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
   settlePendingCredentialSwitch(sessionId, `silent-stop:${reason}`);
+  settlePendingCodexRouteRebuild(sessionId, `silent-stop:${reason}`);
   deferredCodexRestartHolder?.onSessionSettled();
   agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
   refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -4060,6 +4124,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // (review P2 2026-07-04)。apply 内部串行 + 幂等,fire-and-forget 安全;
         // planned upgrade close 等场景多唤一次也只是 no-op。
         settlePendingCredentialSwitch(session.id, `event:${event.type}`);
+        settlePendingCodexRouteRebuild(session.id, `event:${event.type}`);
         deferredCodexRestartHolder?.onSessionSettled();
         agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
         refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
@@ -5091,6 +5156,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           });
           // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
           pendingCredentialSwitchHolder?.onSessionClosed(session.id);
+          codexRouteRebuildHolder?.onSessionClosed(session.id);
           deferredCodexRestartHolder?.onSessionSettled();
           agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
           refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
@@ -5751,7 +5817,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     beginRouteMutation: (providerId) => beginProviderRouteMutation(providerId),
-    broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
+    broadcastChanged: () => {
+      reconcileCodexRouteRebuildsAfterProviderChange();
+      broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+    },
+    afterRouteMutation: () => reconcileCodexRouteRebuildsAfterProviderChange(),
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),
     setProviderOrder: (providerIds) => setProviderOrder(providerIds),
     getProviderOrder: () => readProviderOrder(),
@@ -5899,7 +5969,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } catch {
           /* 发现失败保持纯静态目录，不影响登录结果 */
         }
-        if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        if (isCurrent()) {
+          reconcileCodexRouteRebuildsAfterProviderChange();
+          broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        }
       }
       return {
         ...result,
@@ -10610,6 +10683,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       resetTurnPersistState(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
       settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
+      settlePendingCodexRouteRebuild(sessionId, `reconcile:${source}`);
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
       refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -11230,7 +11304,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 晚绑定。
     hasPendingCredentialSwitch: createDeferredRestartQueueGate({
       hasPendingCredentialSwitchEntry: (sessionId) =>
-        pendingCredentialSwitchHolder?.has(sessionId) === true,
+        pendingCredentialSwitchHolder?.has(sessionId) === true ||
+        codexRouteRebuildHolder?.has(sessionId) === true,
       isDeferredRestartPending: () => deferredCodexRestartHolder?.isPending() === true,
       listActiveSessions: () => maker.listActiveSessions(),
     }),
@@ -11423,6 +11498,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await getDbClient().drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId));
       broadcastSessionPatched(sessionId, patch);
     },
+    prepareCodexThreadRotation: prepareCodexThreadRotationForSession,
     logger: log,
   });
   pendingCredentialSwitchHolder = pendingCredentialSwitchService;
@@ -11438,6 +11514,62 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       : undefined;
   });
+  prepareCodexThreadRotationHolder = createCodexThreadRotationPreparer({
+    maker,
+    replaceSdkSessionIdIfCurrent: replaceSessionSdkSessionIdIfCurrent,
+  });
+
+  // active catalog 热更新后，proxy 会立刻读取新路由；已存活 Codex thread 的
+  // CodeModeOnly 是 start/resume 级冻结值。只重建能力跨边界的本地会话，busy
+  // 时先中断当前 turn，再在终态关闭旧 thread；不改 Provider/model 持久状态。
+  codexRouteRebuildHolder?.clear();
+  const codexRouteRebuildService = new CodexRouteRebuildService({
+    maker,
+    abortSession: async (sessionId) => {
+      // Catalog routes are live per request but CodeModeOnly is thread-sticky.
+      // Treat this as an intentional stop so interrupted-turn auto-resume
+      // cannot continue the old turn through a changed proxy route.
+      resetAutomaticRecoveryForExplicitStop(sessionId);
+      const session = getStableSessionForTurnBoundary(sessionId);
+      if (!session) return;
+      handleAgentIslandSessionStopped(session);
+      const directAbortBoundary = beginDirectAbortReconciliation(sessionId, session);
+      try {
+        await session.abort();
+      } finally {
+        try {
+          reconcileDirectAbortBoundary(
+            sessionId,
+            directAbortBoundary,
+            'catalog-route-rebuild-abort',
+          );
+        } finally {
+          cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+        }
+      }
+    },
+    withSessionLock: withSendToSessionLock,
+    isSessionInTurn,
+    isReconciliationBlocked: hasAnyProviderRouteMutationInProgress,
+    getReconciliationGeneration: getProviderRouteMutationGeneration,
+    resolveRequiresCodeModeOnly: (session) =>
+      resolveCodexCodeModeOnlyForRoute({
+        providerId: getSessionProvider(session.id),
+        model: session.model,
+        // Reviewer uses an isolated proxy whose auth shape can differ from the
+        // ordinary local host. Prefer the thread-frozen per-session snapshot;
+        // the process-global injection remains a compatibility fallback.
+        credentialMode: session.codexRouteCredentialMode,
+        codexAuthInjection: getCodexProxyAuthInjectionState(),
+      }),
+    getProviderId: getSessionProvider,
+    prepareCodexThreadRotation: prepareCodexThreadRotationForSession,
+    onApplied: (sessionId) => {
+      inputCoordinator.wakeSession(sessionId, 'codex-catalog-route-rebuild-applied');
+    },
+    logger: log,
+  });
+  codexRouteRebuildHolder = codexRouteRebuildService;
 
   // Memory 设置变更撞上 Codex busy 时的延迟软重启登记(见 deferredCodexRestart.ts)。
   // 与 pendingCredentialSwitchService 共用 turn 结束 / 会话关闭边界接线;pending
@@ -12940,6 +13072,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
                 // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
                 codexAuthInjection: getCodexProxyAuthInjectionState(),
+                prepareCodexThreadRotation: prepareCodexThreadRotationForSession,
                 logger: log,
               }),
             (id) =>

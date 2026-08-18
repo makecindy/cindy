@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   executeDetach: vi.fn(),
   generateTakeoverSummary: vi.fn(),
   getMaker: vi.fn(),
+  getCodexProxyAuthInjectionState: vi.fn(() => 'env-key' as const),
   closeSession: vi.fn(async () => {}),
   getDesktopCcPrefs: vi.fn<() => DesktopCcPrefs | null>(() => null),
   resolveLenientSessionRoute: vi.fn(),
@@ -27,6 +28,10 @@ const mocks = vi.hoisted(() => ({
   clearPendingCredentialSwitchForSession: vi.fn(),
   wakeSessionInputAfterCredentialSwitch: vi.fn(),
   getPendingCredentialSwitchTarget: vi.fn(() => undefined),
+  prepareCodexThreadRotationForSession: vi.fn(async () => ({
+    newSdkSessionId: 'thread-new',
+    rollback: vi.fn(async () => undefined),
+  })),
   readModelRouteSnapshot: vi.fn(
     async (): Promise<{ model: string; effort: string; providerId: string | null } | null> => null,
   ),
@@ -57,6 +62,9 @@ vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
 vi.mock('../../../maker-host/model-route-guard-live', () => ({
   resolveLenientSessionRoute: mocks.resolveLenientSessionRoute,
+}));
+vi.mock('../../../maker-host/codex-proxy-host', () => ({
+  getCodexProxyAuthInjectionState: mocks.getCodexProxyAuthInjectionState,
 }));
 vi.mock('../../index', () => ({ getDesktopCcPrefs: mocks.getDesktopCcPrefs }));
 vi.mock('../controlProjects', () => ({
@@ -101,6 +109,7 @@ vi.mock('../../../maker-ipc/register', () => ({
   clearPendingCredentialSwitchForSession: mocks.clearPendingCredentialSwitchForSession,
   wakeSessionInputAfterCredentialSwitch: mocks.wakeSessionInputAfterCredentialSwitch,
   getPendingCredentialSwitchTarget: mocks.getPendingCredentialSwitchTarget,
+  prepareCodexThreadRotationForSession: mocks.prepareCodexThreadRotationForSession,
   withSendToSessionLock: mocks.withSendToSessionLock,
 }));
 vi.mock('../pendingInteractions', () => ({
@@ -214,6 +223,7 @@ beforeEach(() => {
   mocks.readPermissionMode.mockResolvedValue('auto');
   mocks.updatePermissionMode.mockResolvedValue(undefined);
   mocks.applyRuntimeSetModelChange.mockResolvedValue({ status: 'applied' });
+  mocks.getCodexProxyAuthInjectionState.mockReturnValue('env-key');
   mocks.getMaker.mockReturnValue({
     createSession: vi.fn(async () => ({ id: 'sess-new' })),
     closeSession: mocks.closeSession,
@@ -641,7 +651,10 @@ describe('model:pick 持久化失败', () => {
       'anthropic',
     );
     expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledWith(
-      expect.objectContaining({ providerId: 'anthropic' }),
+      expect.objectContaining({
+        providerId: 'anthropic',
+        codexAuthInjection: 'env-key',
+      }),
     );
   });
 

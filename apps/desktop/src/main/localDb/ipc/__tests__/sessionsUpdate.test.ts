@@ -66,7 +66,7 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
 
-import { registerSessionIpc } from '../sessions';
+import { registerSessionIpc, replaceSessionSdkSessionIdIfCurrent } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 
 function createDb(): void {
@@ -167,6 +167,43 @@ afterEach(() => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('replaces sdkSessionId with a database-level compare-and-swap and broadcasts the new id', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(
+      'sdk-old',
+      'codex-local',
+    );
+
+    await expect(
+      replaceSessionSdkSessionIdIfCurrent('codex-local', 'sdk-old', 'sdk-new'),
+    ).resolves.toBe(true);
+
+    const persisted = h
+      .sqlite!.prepare('SELECT sdk_session_id AS sdkSessionId FROM sessions WHERE id = ?')
+      .get('codex-local') as { sdkSessionId: string | null };
+    expect(persisted.sdkSessionId).toBe('sdk-new');
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { sdkSessionId: 'sdk-new' },
+    });
+  });
+
+  it('rejects a stale sdkSessionId replacement without overwriting the current value', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(
+      'sdk-current',
+      'codex-local',
+    );
+
+    await expect(
+      replaceSessionSdkSessionIdIfCurrent('codex-local', 'sdk-stale', 'sdk-new'),
+    ).resolves.toBe(false);
+
+    const persisted = h
+      .sqlite!.prepare('SELECT sdk_session_id AS sdkSessionId FROM sessions WHERE id = ?')
+      .get('codex-local') as { sdkSessionId: string | null };
+    expect(persisted.sdkSessionId).toBe('sdk-current');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
   it('does not resurrect a deleted task through the generic status writer', async () => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
 

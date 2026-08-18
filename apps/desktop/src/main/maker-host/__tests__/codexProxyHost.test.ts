@@ -298,6 +298,66 @@ describe('withCodexUpstreamRecording', () => {
     }
   });
 
+  it('fails closed when a selected Provider disappears during its route mutation', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { beginProviderRouteMutation } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-under-update',
+        name: 'Provider Under Update',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://provider.example/v1',
+            models: [{ id: 'provider-model', name: 'Provider Model' }],
+          },
+        },
+      }),
+    ]);
+    host.registerComposed('session-provider-update', 'thread-provider-update', 'PRODUCT_PROMPT');
+    setSessionProvider('session-provider-update', 'provider-under-update');
+    host.setCodexProxyAuthInjection('env-key');
+    const finishMutation = beginProviderRouteMutation('provider-under-update');
+
+    try {
+      // Catalog refresh can temporarily remove the selected Provider while the
+      // mutation flag is still active. The request must not fall through to Gateway.
+      setCustomProviders([]);
+      const body = { model: 'provider-model', input: 'hello' };
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-provider-update' },
+      };
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision!.localHandler!({
+        rawBody: Buffer.from(JSON.stringify(body)),
+        parsedBody: body,
+        ctx,
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(
+        503,
+        expect.objectContaining({ 'retry-after': '1' }),
+      );
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'provider_route_updating' },
+      });
+    } finally {
+      finishMutation();
+      host.unregister('session-provider-update');
+      clearSessionProvider('session-provider-update');
+      setCustomProviders([]);
+    }
+  });
+
   it('never lets a recording failure affect forwarding', async () => {
     // 诊断旁路:默认上游取值抛错也不能影响 decision。
     const host = await freshCodexProxyHost();
@@ -313,12 +373,12 @@ describe('withCodexUpstreamRecording', () => {
 });
 
 describe('codex gateway config', () => {
-  it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {
+  it('不在 spawn 层全局注入 CodeModeOnly', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
     for (const mode of ['oauth-bearer', 'env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
-      expect(args).toContain('features.code_mode_only=true');
+      expect(args).not.toContain('features.code_mode_only=true');
     }
   });
 

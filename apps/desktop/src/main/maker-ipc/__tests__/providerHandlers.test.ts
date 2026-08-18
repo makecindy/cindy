@@ -81,6 +81,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     refreshCatalog: vi.fn(async () => {}),
     beginRouteMutation: vi.fn(() => () => {}),
     broadcastChanged: vi.fn(() => {}),
+    afterRouteMutation: vi.fn(() => {}),
     listProviderIds: () => [],
     setProviderOrder: vi.fn(() => true),
     getProviderOrder: () => [],
@@ -922,6 +923,35 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(await listCustomProviders()).toHaveLength(1);
     expect(deps.refreshCatalog).toHaveBeenCalledOnce();
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('notifies route dependents only after the provider route mutation is released', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const calls: string[] = [];
+    const deps = makeDeps({
+      beginRouteMutation: vi.fn(() => {
+        calls.push('begin');
+        return () => calls.push('finish');
+      }),
+      refreshCatalog: vi.fn(async () => {
+        calls.push('refresh');
+      }),
+      broadcastChanged: vi.fn(() => {
+        calls.push('broadcast');
+      }),
+      afterRouteMutation: vi.fn(() => {
+        calls.push('reconcile');
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig),
+    ).resolves.toEqual({ ok: true });
+
+    expect(calls).toEqual(['begin', 'refresh', 'broadcast', 'finish', 'reconcile']);
+    expect(deps.afterRouteMutation).toHaveBeenCalledWith(validConfig.id);
   });
 
   it('accepts and stages a Pi-native runtime key', async () => {

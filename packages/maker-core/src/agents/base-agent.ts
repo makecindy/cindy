@@ -621,6 +621,25 @@ export interface AgentDeps {
   ) => number | null;
 
   /**
+   * Resolve whether the Codex thread's final route requires CodeModeOnly.
+   *
+   * The host owns provider catalogs and default/bridge routing; maker-core only
+   * carries the resulting route capability into thread/start and thread/resume.
+   * Missing or throwing resolution is fail-safe and treats the route as not
+   * requiring CodeModeOnly.
+   */
+  resolveCodexRouteCapabilities?: (ctx: {
+    sessionId?: string;
+    providerId?: string | null;
+    model: string;
+    credentialMode?: AgentCredentialMode;
+    remoteHostId?: string | null;
+  }) =>
+    | { requiresCodeModeOnly?: boolean }
+    | undefined
+    | Promise<{ requiresCodeModeOnly?: boolean } | undefined>;
+
+  /**
    * Agent 起 session 时追加到 system prompt 末尾的字符串（host 注入）。
    * **本轮一阶段不消费**，仅占位。后续接通后 desktop 可以传项目级 prompt。
    */
@@ -1469,6 +1488,10 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /** Codex-only: 当前 thread 创建/恢复时冻结的 CodeModeOnly 路由能力。 */
+  readonly codexRouteRequiresCodeModeOnly?: boolean;
+  /** Codex-only: 当前 thread 解析最终路由时采用的会话级凭证形态。 */
+  readonly codexRouteCredentialMode?: AgentCredentialMode;
   /**
    * Codex-only: start/resume 成功后,产品 prompt 这一次到底有没有进入
    * codex thread history。Maker 用这个事实更新 host 持久化 bit,避免再从

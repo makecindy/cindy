@@ -274,6 +274,65 @@ describe('mergeWithBundled', () => {
     ).toEqual([]);
   });
 
+  it('旧远端 XD 路由缺少 CodeModeOnly 时继承 bundled;显式 false 仍可覆盖', () => {
+    const bundledXd = BUNDLED_CATALOG.providers.find((p) => p.id === 'xd')!;
+    const oldRemoteXd = JSON.parse(JSON.stringify(bundledXd)) as Provider;
+    delete oldRemoteXd.routing.codex?.requiresCodeModeOnly;
+
+    const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXd] });
+    expect(inherited.providers.find((p) => p.id === 'xd')?.routing.codex?.requiresCodeModeOnly)
+      .toBe(true);
+
+    const explicitlyDisabled = mergeWithBundled({
+      version: '2',
+      providers: [{
+        ...oldRemoteXd,
+        routing: {
+          ...oldRemoteXd.routing,
+          codex: {
+            ...oldRemoteXd.routing.codex!,
+            requiresCodeModeOnly: false,
+          },
+        },
+      }],
+    });
+    expect(explicitlyDisabled.providers.find((p) => p.id === 'xd')?.routing.codex?.requiresCodeModeOnly)
+      .toBe(false);
+
+    const directResponsesXd = mergeWithBundled({
+      version: '2',
+      providers: [{
+        ...oldRemoteXd,
+        routing: {
+          ...oldRemoteXd.routing,
+          codex: {
+            ...oldRemoteXd.routing.codex!,
+            authStrategy: 'api-key-header',
+            wireProtocol: 'openai-responses',
+          },
+        },
+      }],
+    });
+    expect(directResponsesXd.providers.find((p) => p.id === 'xd')?.routing.codex?.requiresCodeModeOnly)
+      .toBeUndefined();
+
+    const chatBridgeXd = mergeWithBundled({
+      version: '2',
+      providers: [{
+        ...oldRemoteXd,
+        routing: {
+          ...oldRemoteXd.routing,
+          codex: {
+            ...oldRemoteXd.routing.codex!,
+            wireProtocol: 'openai-chat',
+          },
+        },
+      }],
+    });
+    expect(chatBridgeXd.providers.find((p) => p.id === 'xd')?.routing.codex?.requiresCodeModeOnly)
+      .toBeUndefined();
+  });
+
   it('旧远端改变鉴权或路由形状时不继承 bundled 图像能力', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;

@@ -178,6 +178,13 @@ export interface RoutingDescriptor {
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
   /**
+   * Whether the Codex thread using this route must enable CodeModeOnly.
+   *
+   * This is a client-side route capability, not model metadata. It is optional
+   * so older catalogs and user providers keep their existing behavior.
+   */
+  requiresCodeModeOnly?: boolean;
+  /**
    * 配置保留用于展示/修复，但运行时不得向该上游路由。用于把升级前不再满足安全边界的
    * 历史配置留在设置页，同时让所有路由解析 fail closed。
    */

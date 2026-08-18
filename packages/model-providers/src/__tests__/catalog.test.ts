@@ -453,6 +453,24 @@ describe('routing modelPrefixes 服务范围契约 (issue #886)', () => {
   });
 });
 
+describe('routing requiresCodeModeOnly capability validation', () => {
+  it('accepts a boolean route capability', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const xd = catalog.providers.find((provider) => provider.id === 'xd');
+    if (!xd?.routing.codex) throw new Error('missing XD Codex route');
+    xd.routing.codex.requiresCodeModeOnly = false;
+    expect(() => parseCatalog(catalog)).not.toThrow();
+  });
+
+  it('rejects a non-boolean route capability', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG) as typeof BUNDLED_CATALOG;
+    const xd = catalog.providers.find((provider) => provider.id === 'xd');
+    if (!xd?.routing.codex) throw new Error('missing XD Codex route');
+    xd.routing.codex.requiresCodeModeOnly = 'true' as never;
+    expect(() => parseCatalog(catalog)).toThrow(/requiresCodeModeOnly/);
+  });
+});
+
 describe('routing wireProtocol per-agent 契约', () => {
   it('parseCatalog 拒绝 claude-code 使用 openai-chat', () => {
     const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;

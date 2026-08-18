@@ -6,6 +6,12 @@ import {
   prepareLocalSessionCredentialModeSwitch,
 } from '../maker-host/codex-credential-switch.js';
 import { setSessionProvider } from '../maker-host/session-provider-store.js';
+import type {
+  CodexThreadRotationSnapshot,
+  PrepareCodexThreadRotation,
+  PreparedCodexThreadRotation,
+} from './codexThreadRotation.js';
+import { isCodexThreadRotationSupersededError } from './codexThreadRotation.js';
 
 /**
  * PendingCredentialSwitchService —— 会话凭证形态切换的「延迟生效」登记表。
@@ -47,6 +53,10 @@ export interface PendingCredentialSwitch {
    * 缺席 = 无从回滚,退化为只清显式来源。
    */
   previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+  /** CodeModeOnly is sticky to a native Codex thread; rotate it before closing. */
+  codexThreadRotation?: CodexThreadRotationSnapshot;
+  /** The DB binding already points at the fork. Do not fork again on retry. */
+  preparedCodexThreadRotation?: PreparedCodexThreadRotation;
   requestedAt: number;
 }
 
@@ -102,6 +112,7 @@ export interface PendingCredentialSwitchDeps {
     sessionId: string,
     route: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean },
   ) => Promise<void>;
+  prepareCodexThreadRotation?: PrepareCodexThreadRotation;
   /** 自愈兜底重试间隔覆写(测试用)。 */
   retryDelayMs?: number;
   logger?: {
@@ -115,25 +126,34 @@ export class PendingCredentialSwitchService {
   private readonly pending = new Map<string, PendingCredentialSwitch>();
   /** 同一会话的 apply 串行化:turn done/error 双事件可能背靠背触发。 */
   private readonly applying = new Set<string>();
+  private readonly rotationTasks = new Set<Promise<boolean>>();
+  private readonly rotationTasksBySession = new Map<string, Promise<boolean>>();
+  private readonly rotationCleanupTasks = new Map<string, Promise<void>>();
+  /** clear 已取消登记,但旧 close / rotation 尚未收口;期间输入队列必须继续 gated。 */
+  private readonly cancelling = new Set<string>();
+  private readonly applySettledWaiters = new Map<string, Set<() => void>>();
   /** 自愈兜底定时器(per session,pending 收口即清)。 */
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly deps: PendingCredentialSwitchDeps) {}
 
-  register(
+  async register(
     sessionId: string,
     target: {
       model: string;
       providerId: string | null;
       agentKind?: AgentKind;
       previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+      codexThreadRotation?: CodexThreadRotationSnapshot;
     },
-  ): void {
+  ): Promise<void> {
+    const previous = this.pending.get(sessionId);
     this.pending.set(sessionId, {
       model: target.model,
       providerId: target.providerId,
       ...(target.agentKind ? { agentKind: target.agentKind } : {}),
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
+      ...(target.codexThreadRotation ? { codexThreadRotation: target.codexThreadRotation } : {}),
       requestedAt: Date.now(),
     });
     this.scheduleRetry(sessionId);
@@ -142,19 +162,197 @@ export class PendingCredentialSwitchService {
       model: target.model,
       providerId: target.providerId,
     });
+    if (previous?.preparedCodexThreadRotation) {
+      this.enqueueRotationCleanup(sessionId, previous.preparedCodexThreadRotation);
+      previous.preparedCodexThreadRotation = undefined;
+    }
+    await this.waitForRotationWork(sessionId);
   }
 
   has(sessionId: string): boolean {
-    return this.pending.has(sessionId);
+    return (
+      this.pending.has(sessionId) ||
+      this.cancelling.has(sessionId) ||
+      this.rotationCleanupTasks.has(sessionId)
+    );
   }
 
   get(sessionId: string): PendingCredentialSwitch | undefined {
     return this.pending.get(sessionId);
   }
 
-  clear(sessionId: string): void {
+  async clear(sessionId: string): Promise<void> {
+    const target = this.pending.get(sessionId);
+    const hasLifecycleWork =
+      target !== undefined ||
+      this.applying.has(sessionId) ||
+      this.rotationTasksBySession.has(sessionId) ||
+      this.rotationCleanupTasks.has(sessionId);
+    if (hasLifecycleWork) this.cancelling.add(sessionId);
     this.pending.delete(sessionId);
     this.clearRetry(sessionId);
+    if (target?.preparedCodexThreadRotation) {
+      this.enqueueRotationCleanup(sessionId, target.preparedCodexThreadRotation);
+      target.preparedCodexThreadRotation = undefined;
+    }
+    try {
+      await this.waitForRotationWork(sessionId);
+      await this.waitForApplyToSettle(sessionId);
+      await this.waitForRotationWork(sessionId);
+    } finally {
+      this.cancelling.delete(sessionId);
+    }
+  }
+
+  /** Drop every owner-scoped deferred switch without applying it. */
+  async clearAll(): Promise<void> {
+    const prepared = [...this.pending.values()]
+      .map((pending) => pending.preparedCodexThreadRotation)
+      .filter((rotation): rotation is PreparedCodexThreadRotation => rotation !== undefined);
+    this.pending.clear();
+    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    this.retryTimers.clear();
+    await Promise.allSettled([
+      ...prepared.map((rotation) => rotation.rollback()),
+      ...this.rotationTasks,
+      ...this.rotationCleanupTasks.values(),
+    ]);
+    // Owner replacement makes every old session binding unreachable. Drop
+    // fail-closed cleanup gates as part of the same owner-scoped reset.
+    this.rotationTasksBySession.clear();
+    this.rotationCleanupTasks.clear();
+    this.cancelling.clear();
+  }
+
+  private enqueueRotationCleanup(
+    sessionId: string,
+    rotation: PreparedCodexThreadRotation,
+  ): Promise<void> {
+    const previous = this.rotationCleanupTasks.get(sessionId);
+    const task = (async () => {
+      await previous;
+      await rotation.rollback();
+    })();
+    this.rotationCleanupTasks.set(sessionId, task);
+    void task.then(
+      () => {
+        if (this.rotationCleanupTasks.get(sessionId) === task) {
+          this.rotationCleanupTasks.delete(sessionId);
+        }
+      },
+      (error) => {
+        // Keep the failed cleanup as a gate: releasing queued input after a
+        // lost rollback would resume an indeterminate native thread binding.
+        this.clearRetry(sessionId);
+        const meta = {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        if (this.deps.logger?.error) {
+          this.deps.logger.error(
+            'pending credential switch: thread rotation rollback failed; keeping queue gated',
+            meta,
+          );
+        } else {
+          this.deps.logger?.warn(
+            'pending credential switch: thread rotation rollback failed; keeping queue gated',
+            meta,
+          );
+        }
+      },
+    );
+    return task;
+  }
+
+  private async waitForRotationWork(sessionId: string): Promise<boolean> {
+    try {
+      while (true) {
+        const cleanup = this.rotationCleanupTasks.get(sessionId);
+        const preparation = this.rotationTasksBySession.get(sessionId);
+        if (!cleanup && !preparation) return true;
+        await Promise.all([cleanup ?? Promise.resolve(), preparation ?? Promise.resolve()]);
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  private waitForApplyToSettle(sessionId: string): Promise<void> {
+    if (!this.applying.has(sessionId)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiters = this.applySettledWaiters.get(sessionId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.applySettledWaiters.set(sessionId, waiters);
+    });
+  }
+
+  private markApplySettled(sessionId: string): void {
+    this.applying.delete(sessionId);
+    const waiters = this.applySettledWaiters.get(sessionId);
+    if (!waiters) return;
+    this.applySettledWaiters.delete(sessionId);
+    for (const resolve of waiters) resolve();
+  }
+
+  private async prepareThreadRotation(
+    sessionId: string,
+    target: PendingCredentialSwitch,
+  ): Promise<boolean> {
+    if (!(await this.waitForRotationWork(sessionId))) return false;
+    if (this.pending.get(sessionId) !== target) return false;
+    if (!target.codexThreadRotation || target.preparedCodexThreadRotation) return true;
+    if (!this.deps.prepareCodexThreadRotation) {
+      this.deps.logger?.warn('pending credential switch: Codex thread rotation unavailable; keeping queue gated', {
+        sessionId,
+      });
+      this.scheduleRetry(sessionId);
+      return false;
+    }
+    const task = (async (): Promise<boolean> => {
+      try {
+        const prepared = await this.deps.prepareCodexThreadRotation!(target.codexThreadRotation!);
+        if (this.pending.get(sessionId) !== target) {
+          await prepared.rollback();
+          return false;
+        }
+        target.preparedCodexThreadRotation = prepared;
+        return true;
+      } catch (err) {
+        if (isCodexThreadRotationSupersededError(err)) {
+          // A newer lifecycle already owns the session binding. Retrying this
+          // stale snapshot would keep the input queue gated forever.
+          if (this.pending.get(sessionId) === target) {
+            this.pending.delete(sessionId);
+            this.clearRetry(sessionId);
+            try {
+              this.deps.onApplied?.(sessionId);
+            } catch (wakeError) {
+              this.deps.logger?.warn('pending credential switch: superseded wake failed', {
+                sessionId,
+                error: wakeError instanceof Error ? wakeError.message : String(wakeError),
+              });
+            }
+          }
+          return false;
+        }
+        this.deps.logger?.warn('pending credential switch: Codex thread rotation failed; keeping queue gated for retry', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (this.pending.get(sessionId) === target) this.scheduleRetry(sessionId);
+        return false;
+      }
+    })();
+    this.rotationTasks.add(task);
+    this.rotationTasksBySession.set(sessionId, task);
+    try {
+      return await task;
+    } finally {
+      this.rotationTasks.delete(task);
+      if (this.rotationTasksBySession.get(sessionId) === task) {
+        this.rotationTasksBySession.delete(sessionId);
+      }
+    }
   }
 
   /**
@@ -173,6 +371,7 @@ export class PendingCredentialSwitchService {
 
     this.applying.add(sessionId);
     try {
+      if (!(await this.prepareThreadRotation(sessionId, target))) return;
       if (session) {
         try {
           await prepareLocalSessionCredentialModeSwitch({
@@ -182,7 +381,23 @@ export class PendingCredentialSwitchService {
           });
         } catch (err) {
           if (isCredentialModeSwitchBusyError(err)) {
+            if (target.preparedCodexThreadRotation) {
+              await target.preparedCodexThreadRotation.rollback();
+              target.preparedCodexThreadRotation = undefined;
+            }
             // turn done 与新 turn start 竞态:保留 pending,等下一个边界。
+            return;
+          }
+          if (target.preparedCodexThreadRotation) {
+            await target.preparedCodexThreadRotation.rollback();
+            target.preparedCodexThreadRotation = undefined;
+          }
+          if (target.codexThreadRotation) {
+            this.deps.logger?.warn('pending credential switch: thread rotation/close failed; keeping queue gated for retry', {
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            this.scheduleRetry(sessionId);
             return;
           }
           // 关闭失败也要落 route:下一次发送的 getHost 仲裁仍会按新来源协调,
@@ -197,9 +412,10 @@ export class PendingCredentialSwitchService {
       // 收口,不能用进入函数时捕获的 stale target 覆盖后选(后选覆盖先选)。
       const latest = this.pending.get(sessionId);
       if (!latest) return;
+      if (latest !== target && !(await this.prepareThreadRotation(sessionId, latest))) return;
       await this.finalizeApplyChecked(sessionId, latest, 'turn end');
     } finally {
-      this.applying.delete(sessionId);
+      this.markApplySettled(sessionId);
     }
   }
 
@@ -215,8 +431,17 @@ export class PendingCredentialSwitchService {
     const target = this.pending.get(sessionId);
     if (!target) return;
     this.applying.add(sessionId);
-    void this.finalizeApplyChecked(sessionId, target, 'session close').finally(() => {
-      this.applying.delete(sessionId);
+    if (!target.codexThreadRotation) {
+      void this.finalizeApplyChecked(sessionId, target, 'session close').finally(() => {
+        this.markApplySettled(sessionId);
+      });
+      return;
+    }
+    void (async () => {
+      if (!(await this.prepareThreadRotation(sessionId, target))) return;
+      await this.finalizeApplyChecked(sessionId, target, 'session close');
+    })().finally(() => {
+      this.markApplySettled(sessionId);
     });
   }
 

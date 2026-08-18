@@ -49,6 +49,7 @@ import { getSessionProvider } from './session-provider-store.js';
 type CustomProviderKeyReader = (providerId: string, agent: AgentKind) => string | null;
 let customProviderKeyReader: CustomProviderKeyReader = () => null;
 const providerRouteMutationCounts = new Map<string, number>();
+let providerRouteMutationGeneration = 0;
 
 /** host 启动期接通真实 safeStorage 读取（按 `provider_key_<id>_<agent>`，per-runtime 独立密钥）。 */
 export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): void {
@@ -64,6 +65,7 @@ export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): voi
  */
 export function beginProviderRouteMutation(providerId: string): () => void {
   providerId = runtimeCustomProviderId(providerId);
+  providerRouteMutationGeneration += 1;
   providerRouteMutationCounts.set(
     providerId,
     (providerRouteMutationCounts.get(providerId) ?? 0) + 1,
@@ -80,6 +82,16 @@ export function beginProviderRouteMutation(providerId: string): () => void {
 
 export function isProviderRouteMutationInProgress(providerId: string): boolean {
   return providerRouteMutationCounts.has(runtimeCustomProviderId(providerId));
+}
+
+/** True while any Provider config/credential route is between its old and new snapshots. */
+export function hasAnyProviderRouteMutationInProgress(): boolean {
+  return providerRouteMutationCounts.size > 0;
+}
+
+/** Monotonic token used to discard capability reads that overlap any Provider mutation. */
+export function getProviderRouteMutationGeneration(): number {
+  return providerRouteMutationGeneration;
 }
 
 /**
@@ -508,6 +520,116 @@ export function providerRoutingServesWireModel(
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing) return false;
   return routingServesWireModel(routing, wireModel);
+}
+
+/**
+ * Resolve route capabilities for a Codex thread from the same final-route
+ * inputs used by the proxy.  This deliberately returns a capability rather
+ * than inferring from provider ids: an explicit provider can decline a model
+ * via modelPrefixes, in which case the request falls back to the spawn
+ * default route.
+ */
+export async function resolveCodexRouteCapabilities(args: {
+  providerId?: string | null;
+  model: string;
+  credentialMode?: 'gateway-key' | 'oauth-bearer' | 'provider-oauth';
+}): Promise<{ requiresCodeModeOnly?: boolean } | undefined> {
+  const model = args.model.trim();
+  const providerId = args.providerId?.trim() || null;
+  let explicitRouteWasOutOfScope = false;
+  let explicitRouteWasIgnored = false;
+
+  if (providerId) {
+    const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+    if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return undefined;
+    const routing = provider?.routing.codex;
+    if (isProviderRouteMutationInProgress(providerId)) return undefined;
+    if (routing) {
+      // The proxy applies builtin per-session routes only for the OAuth spawn,
+      // host-injected auth, user providers, or local protocol bridges. An
+      // explicit builtin provider can therefore be present while env-key has
+      // already fallen back to the default Cindy Gateway route.
+      const routeUsesLocalBridge =
+        routing.wireProtocol === 'openai-chat'
+        || routing.wireProtocol === 'anthropic-messages';
+      const routeUsesHostInjectedAuth =
+        routing.authStrategy === 'provider-oauth-header'
+        || routing.authStrategy === 'oauth-token';
+      if (routing.disabled) {
+        // getSessionRoutingDescriptor filters disabled routes, so a builtin
+        // env-key route is ignored and the proxy falls through to its Gateway
+        // default. OAuth, user, and host-injected-auth sessions still enter
+        // resolveSessionRouteDecision and receive the explicit disabled-route
+        // error instead of falling through.
+        const disabledRouteIsIntercepted =
+          args.credentialMode === 'oauth-bearer'
+          || provider?.source === 'user'
+          || routeUsesHostInjectedAuth;
+        if (disabledRouteIsIntercepted) {
+          return { requiresCodeModeOnly: false };
+        }
+        explicitRouteWasIgnored = true;
+      } else if (routingServesWireModel(routing, model || undefined)) {
+        const explicitRouteApplies =
+          args.credentialMode === 'oauth-bearer'
+          || provider?.source === 'user'
+          || routeUsesLocalBridge
+          || routeUsesHostInjectedAuth;
+        if (explicitRouteApplies) {
+          // An OAuth host can only take an explicit gateway-key route when the
+          // proxy can replace its subscription bearer with the live Gateway key.
+          // Without that key, the proxy falls through to its spawn-default route.
+          if (routing.authStrategy !== 'gateway-key' || gatewayKeyReader()) {
+            return { requiresCodeModeOnly: routing.requiresCodeModeOnly === true };
+          }
+        } else {
+          explicitRouteWasIgnored = true;
+        }
+      }
+    }
+    explicitRouteWasOutOfScope = routing !== null && routing !== undefined;
+  }
+
+  // The proxy resolves implicit Chat / Anthropic Messages routes from the
+  // connected ProviderView snapshot, not from catalog membership alone. Keep
+  // the capability decision on that same source so an implicit DeepSeek, GLM,
+  // or Anthropic bridge never inherits the spawn host's Gateway capability.
+  const catalogModel = model.replace(/\[1m\]$/, '');
+  if (!providerId && catalogModel && hasImplicitLocalBridgeCandidate(catalogModel, 'codex')) {
+    const provider = await connectedDefaultProviderForModel(catalogModel, 'codex');
+    const routing = provider
+      ? providerRoutingForModel(provider, 'codex', model)
+      : null;
+    if (
+      routing?.wireProtocol === 'openai-chat'
+      || routing?.wireProtocol === 'anthropic-messages'
+    ) {
+      return { requiresCodeModeOnly: false };
+    }
+  }
+
+  // xAI and future uniquely namespaced provider-OAuth routes are handled
+  // before the default Gateway/ChatGPT branch even without a session provider.
+  const implicitProviderOAuth = providerId
+    ? undefined
+    : uniqueProviderForModel(model, 'codex')?.routing.codex;
+  if (implicitProviderOAuth?.authStrategy === 'provider-oauth-header') {
+    return { requiresCodeModeOnly: implicitProviderOAuth.requiresCodeModeOnly === true };
+  }
+
+  // An explicit route that does not serve this model follows the same default
+  // route as codex-proxy-host: codex/* and gateway-key requests use Cindy
+  // Gateway; an out-of-scope provider-OAuth route also falls back there.
+  const usesCindyGateway = getAppCapabilities().canUseCindyGateway && (
+    args.credentialMode === 'gateway-key'
+    || model.startsWith('codex/')
+    || explicitRouteWasIgnored
+    || (explicitRouteWasOutOfScope && args.credentialMode === 'provider-oauth')
+  );
+  if (!usesCindyGateway) return undefined;
+  const gatewayRoute = getActiveCatalog().providers.find((p) => p.id === 'xd')?.routing.codex;
+  if (!gatewayRoute || gatewayRoute.disabled) return undefined;
+  return { requiresCodeModeOnly: gatewayRoute.requiresCodeModeOnly === true };
 }
 
 /**

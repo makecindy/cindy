@@ -9,6 +9,7 @@ import {
   PendingCredentialSwitchService,
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
+import { CodexThreadRotationSupersededError } from '../codexThreadRotation.js';
 
 const touchedSessions = new Set<string>();
 
@@ -24,6 +25,14 @@ function rememberSession(sessionId: string): string {
   return sessionId;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 interface HarnessSession {
   id: string;
   agentKind: 'claude-code' | 'codex';
@@ -33,7 +42,11 @@ interface HarnessSession {
 
 function createHarness(
   sessions: HarnessSession[],
-  opts?: { retryDelayMs?: number; resolveRoute?: PendingCredentialSwitchDeps['resolveRoute'] },
+  opts?: {
+    retryDelayMs?: number;
+    resolveRoute?: PendingCredentialSwitchDeps['resolveRoute'];
+    prepareCodexThreadRotation?: PendingCredentialSwitchDeps['prepareCodexThreadRotation'];
+  },
 ) {
   const closeSession = vi.fn(async (_sessionId: string) => {});
   const broadcastApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['broadcastApplied']>>();
@@ -50,6 +63,9 @@ function createHarness(
     onApplied,
     persistRoute,
     ...(opts?.resolveRoute ? { resolveRoute: opts.resolveRoute } : {}),
+    ...(opts?.prepareCodexThreadRotation
+      ? { prepareCodexThreadRotation: opts.prepareCodexThreadRotation }
+      : {}),
     ...(opts?.retryDelayMs !== undefined ? { retryDelayMs: opts.retryDelayMs } : {}),
   });
   return { service, closeSession, broadcastApplied, onApplied, persistRoute, sessions };
@@ -207,6 +223,341 @@ describe('PendingCredentialSwitchService', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
     expect(h.broadcastApplied).toHaveBeenCalledTimes(1);
     expect(h.onApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it('rotates a deferred CodeModeOnly thread before closing and applying the route', async () => {
+    const sessionId = rememberSession('pending-switch-codemode-rotate');
+    setSessionProvider(sessionId, 'deepseek');
+    const rollback = vi.fn(async () => undefined);
+    const prepareCodexThreadRotation = vi.fn(async () => ({
+      newSdkSessionId: 'thread-new',
+      rollback,
+    }));
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { prepareCodexThreadRotation },
+    );
+
+    h.service.register(sessionId, {
+      model: 'qwen3.8-max',
+      providerId: 'xd',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(prepareCodexThreadRotation).toHaveBeenCalledTimes(1);
+    expect(prepareCodexThreadRotation.mock.invocationCallOrder[0]).toBeLessThan(
+      h.closeSession.mock.invocationCallOrder[0],
+    );
+    expect(rollback).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
+  it('rolls back and retries a deferred CodeModeOnly rotation when close fails', async () => {
+    const sessionId = rememberSession('pending-switch-codemode-close-fail');
+    setSessionProvider(sessionId, 'deepseek');
+    const firstRollback = vi.fn(async () => undefined);
+    const prepareCodexThreadRotation = vi
+      .fn<NonNullable<PendingCredentialSwitchDeps['prepareCodexThreadRotation']>>()
+      .mockResolvedValueOnce({ newSdkSessionId: 'thread-new-1', rollback: firstRollback })
+      .mockResolvedValueOnce({
+        newSdkSessionId: 'thread-new-2',
+        rollback: vi.fn(async () => undefined),
+      });
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { prepareCodexThreadRotation, retryDelayMs: 60_000 },
+    );
+    h.closeSession.mockRejectedValueOnce(new Error('close failed'));
+
+    h.service.register(sessionId, {
+      model: 'qwen3.8-max',
+      providerId: 'xd',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(firstRollback).toHaveBeenCalledTimes(1);
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(getSessionProvider(sessionId)).toBe('deepseek');
+
+    await h.service.onTurnSettled(sessionId);
+    expect(prepareCodexThreadRotation).toHaveBeenCalledTimes(2);
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(getSessionProvider(sessionId)).toBe('xd');
+  });
+
+  it('keeps the queue gated until a cancelled rotation and its obsolete close both settle', async () => {
+    const sessionId = rememberSession('pending-switch-codemode-clear-during-close');
+    setSessionProvider(sessionId, 'deepseek');
+    const closeStarted = deferred<void>();
+    const releaseClose = deferred<void>();
+    const rollbackStarted = deferred<void>();
+    const releaseRollback = deferred<void>();
+    const rollback = vi.fn(async () => {
+      rollbackStarted.resolve();
+      await releaseRollback.promise;
+    });
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        prepareCodexThreadRotation: vi.fn(async () => ({
+          newSdkSessionId: 'thread-new',
+          rollback,
+        })),
+        retryDelayMs: 60_000,
+      },
+    );
+    h.closeSession.mockImplementationOnce(async () => {
+      closeStarted.resolve();
+      await releaseClose.promise;
+    });
+
+    await h.service.register(sessionId, {
+      model: 'qwen3.8-max',
+      providerId: 'xd',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    const applying = h.service.onTurnSettled(sessionId);
+    await closeStarted.promise;
+
+    const clearing = h.service.clear(sessionId);
+    await rollbackStarted.promise;
+    expect(h.service.get(sessionId)).toBeUndefined();
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.onApplied).not.toHaveBeenCalled();
+
+    releaseRollback.resolve();
+    await Promise.resolve();
+    expect(h.service.has(sessionId)).toBe(true);
+
+    releaseClose.resolve();
+    await Promise.all([applying, clearing]);
+
+    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(getSessionProvider(sessionId)).toBe('deepseek');
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+    expect(h.onApplied).not.toHaveBeenCalled();
+  });
+
+  it('keeps the queue fail-closed without rejecting when a cancelled rotation cannot roll back', async () => {
+    const sessionId = rememberSession('pending-switch-codemode-clear-rollback-fail');
+    setSessionProvider(sessionId, 'deepseek');
+    const closeStarted = deferred<void>();
+    const releaseClose = deferred<void>();
+    const rollback = vi.fn(async () => {
+      throw new Error('rollback lost binding');
+    });
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      {
+        prepareCodexThreadRotation: vi.fn(async () => ({
+          newSdkSessionId: 'thread-new',
+          rollback,
+        })),
+        retryDelayMs: 60_000,
+      },
+    );
+    h.closeSession.mockImplementationOnce(async () => {
+      closeStarted.resolve();
+      await releaseClose.promise;
+    });
+
+    await h.service.register(sessionId, {
+      model: 'qwen3.8-max',
+      providerId: 'xd',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    const applying = h.service.onTurnSettled(sessionId);
+    await closeStarted.promise;
+    const clearing = h.service.clear(sessionId);
+    await vi.waitFor(() => expect(rollback).toHaveBeenCalledTimes(1));
+
+    releaseClose.resolve();
+    await expect(Promise.all([applying, clearing])).resolves.toBeDefined();
+
+    expect(h.service.get(sessionId)).toBeUndefined();
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+
+    await h.service.clearAll();
+    expect(h.service.has(sessionId)).toBe(false);
+  });
+
+  it('rolls back a prepared rotation before a replacement target is rotated and applied', async () => {
+    const sessionId = rememberSession('pending-switch-codemode-replace-during-close');
+    setSessionProvider(sessionId, 'deepseek');
+    const closeStarted = deferred<void>();
+    const releaseClose = deferred<void>();
+    const rollbackStarted = deferred<void>();
+    const releaseRollback = deferred<void>();
+    const events: string[] = [];
+    const firstRollback = vi.fn(async () => {
+      events.push('rollback-old-start');
+      rollbackStarted.resolve();
+      await releaseRollback.promise;
+      events.push('rollback-old-end');
+    });
+    const secondRollback = vi.fn(async () => undefined);
+    const prepareCodexThreadRotation = vi
+      .fn<NonNullable<PendingCredentialSwitchDeps['prepareCodexThreadRotation']>>()
+      .mockImplementationOnce(async () => {
+        events.push('prepare-old');
+        return { newSdkSessionId: 'thread-old-fork', rollback: firstRollback };
+      })
+      .mockImplementationOnce(async () => {
+        events.push('prepare-latest');
+        return { newSdkSessionId: 'thread-latest-fork', rollback: secondRollback };
+      });
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { prepareCodexThreadRotation, retryDelayMs: 60_000 },
+    );
+    h.closeSession.mockImplementationOnce(async () => {
+      events.push('close-start');
+      closeStarted.resolve();
+      await releaseClose.promise;
+      events.push('close-end');
+    });
+
+    await h.service.register(sessionId, {
+      model: 'qwen3.8-max',
+      providerId: 'xd',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    const applying = h.service.onTurnSettled(sessionId);
+    await closeStarted.promise;
+
+    const replacing = h.service.register(sessionId, {
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    await rollbackStarted.promise;
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(prepareCodexThreadRotation).toHaveBeenCalledTimes(1);
+
+    releaseRollback.resolve();
+    await replacing;
+    expect(prepareCodexThreadRotation).toHaveBeenCalledTimes(1);
+
+    releaseClose.resolve();
+    await applying;
+
+    expect(events).toEqual([
+      'prepare-old',
+      'close-start',
+      'rollback-old-start',
+      'rollback-old-end',
+      'close-end',
+      'prepare-latest',
+    ]);
+    expect(firstRollback).toHaveBeenCalledTimes(1);
+    expect(secondRollback).not.toHaveBeenCalled();
+    expect(prepareCodexThreadRotation).toHaveBeenCalledTimes(2);
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(getSessionProvider(sessionId)).toBe('openai');
+    expect(h.onApplied).toHaveBeenCalledWith(sessionId);
+  });
+
+  it('releases a stale deferred switch when a newer lifecycle owns the thread binding', async () => {
+    const sessionId = rememberSession('pending-switch-codemode-superseded');
+    setSessionProvider(sessionId, 'deepseek');
+    const prepareCodexThreadRotation = vi.fn(async () => {
+      throw new CodexThreadRotationSupersededError(sessionId);
+    });
+    const h = createHarness(
+      [{ id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false }],
+      { prepareCodexThreadRotation, retryDelayMs: 60_000 },
+    );
+
+    h.service.register(sessionId, {
+      model: 'qwen3.8-max',
+      providerId: 'xd',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    await h.service.onTurnSettled(sessionId);
+
+    expect(prepareCodexThreadRotation).toHaveBeenCalledTimes(1);
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('deepseek');
+    expect(h.onApplied).toHaveBeenCalledWith(sessionId);
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+  });
+
+  it('drops every deferred rotation without applying it at an owner boundary', async () => {
+    const sessionId = rememberSession('pending-switch-owner-boundary-clear');
+    setSessionProvider(sessionId, 'deepseek');
+    const prepareCodexThreadRotation = vi.fn(async () => ({
+      newSdkSessionId: 'thread-new',
+      rollback: vi.fn(async () => undefined),
+    }));
+    const h = createHarness([], { prepareCodexThreadRotation, retryDelayMs: 60_000 });
+
+    h.service.register(sessionId, {
+      model: 'qwen3.8-max',
+      providerId: 'xd',
+      codexThreadRotation: {
+        sessionId,
+        sourceSdkSessionId: 'thread-old',
+        sourceModel: 'deepseek-v4',
+        sourceProviderId: 'deepseek',
+        workingDir: '/work',
+      },
+    });
+    h.service.clearAll();
+    h.service.onSessionClosed(sessionId);
+    await h.service.onTurnSettled(sessionId);
+
+    expect(prepareCodexThreadRotation).not.toHaveBeenCalled();
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(getSessionProvider(sessionId)).toBe('deepseek');
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
   });
 
   it('self-heals via the retry timer when the turn ends without a done/error event', async () => {

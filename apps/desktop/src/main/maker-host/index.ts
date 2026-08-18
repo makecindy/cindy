@@ -42,6 +42,7 @@ import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
   isSessionInTurn,
+  reconcileCodexRouteRebuildsAfterProviderChange,
   wireSessionToIpc,
 } from '../maker-ipc/register.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
@@ -234,6 +235,7 @@ import {
 } from './rehydrateCloseSuppression.js';
 import { hydrateSessionProvider } from './session-provider-store.js';
 import { prepareLocalCodexCredentialModeSwitch } from './codex-credential-switch.js';
+import { resolveCodexRouteCapabilities } from './provider-route.js';
 import { createDesktopOrcaTeamStoreAdapter } from './orcaTeamStoreAdapter.js';
 import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
 import {
@@ -288,6 +290,7 @@ let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
 
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
+  reconcileCodexRouteRebuildsAfterProviderChange();
   if (_maker) refreshCatalogDerivedModels(_maker, getDesktopSelectableCatalog());
   try {
     providerAccessRuntimeRefreshListener?.();
@@ -1281,6 +1284,8 @@ export function getMaker(): Maker {
       // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
+      resolveCodexRouteCapabilities: ({ providerId, model, credentialMode }) =>
+        resolveCodexRouteCapabilities({ providerId, model, credentialMode }),
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
       },

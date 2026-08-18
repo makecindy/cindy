@@ -56,6 +56,7 @@ import {
 } from './agents/base-agent.js';
 import { formatManagedImageReferences } from './agents/shared/managed-image-reference.js';
 import type { Logger } from './interfaces/logger.js';
+import type { AgentCredentialMode } from './interfaces/auth-adapter.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
 
@@ -950,6 +951,16 @@ export class Session {
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   get codexProxyActive(): boolean | undefined {
     return this.handle.codexProxyActive;
+  }
+
+  /** Codex-only: 当前 thread 生命周期内冻结的 CodeModeOnly 路由能力。 */
+  get codexRouteRequiresCodeModeOnly(): boolean | undefined {
+    return this.handle.codexRouteRequiresCodeModeOnly;
+  }
+
+  /** Codex-only: 当前 thread 最终路由冻结时采用的会话级凭证形态。 */
+  get codexRouteCredentialMode(): AgentCredentialMode | undefined {
+    return this.handle.codexRouteCredentialMode;
   }
 
   /** Snapshot used by temporary host overrides to avoid undoing a newer user change. */

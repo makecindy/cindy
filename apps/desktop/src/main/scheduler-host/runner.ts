@@ -31,7 +31,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, resolveAgentCredentialMode } from '@cindy/maker-core';
 import type {
   Maker,
   AgentEvent,
@@ -69,8 +69,18 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
+import {
+  crossesCodexCodeModeOnlyBoundary,
+  type CodexRouteCapabilitiesResolver,
+} from '../maker-ipc/runtimeSetModel.js';
+import type {
+  CodexThreadRotationSnapshot,
+  PrepareCodexThreadRotation,
+  PreparedCodexThreadRotation,
+} from '../maker-ipc/codexThreadRotation.js';
 import {
   wireSessionToIpc,
   isSessionInTurn,
@@ -277,6 +287,12 @@ export interface MakerScheduleRunnerDeps {
     preferredProviderId?: string | null,
     modelId?: string,
   ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
+  /** Codex thread-level route capability; production reads the active provider catalog. */
+  resolveCodexRouteCapabilities?: CodexRouteCapabilitiesResolver;
+  /** Current local Codex spawn credential shape, used for implicit final-route fallback. */
+  getCodexAuthInjection?: () => CodexProxyAuthInjection | null;
+  /** Rotate a sticky native Codex thread before resuming it across CodeModeOnly. */
+  prepareCodexThreadRotation?: PrepareCodexThreadRotation;
 }
 
 /**
@@ -321,6 +337,11 @@ interface SchedulerRunContextOwner {
   runId: string;
 }
 
+interface SchedulerRouteRebuildRequirement {
+  reason: 'credential-mode' | 'code-mode-only';
+  requiresCodeModeThreadRotation: boolean;
+}
+
 export class MakerScheduleRunner implements ScheduleRunner {
   private scheduler: Scheduler | null = null;
   /**
@@ -331,6 +352,65 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private readonly schedulerRunContextOwners = new Map<string, SchedulerRunContextOwner>();
 
   constructor(private readonly deps: MakerScheduleRunnerDeps) {}
+
+  private async routeRebuildReason(
+    session: Pick<Session, 'agentKind' | 'remoteHostId' | 'codexProxyActive'>,
+    currentProviderId: string | null,
+    nextProviderId: string | null,
+    currentModel: string,
+    nextModel: string,
+  ): Promise<SchedulerRouteRebuildRequirement | null> {
+    const codexAuthInjection = this.deps.getCodexAuthInjection?.();
+    const crossesCredentialMode = shouldCloseSessionForCredentialSwitch({
+      agentKind: session.agentKind,
+      remoteHostId: session.remoteHostId,
+      currentProviderId,
+      nextProviderId,
+      currentModel,
+      nextModel,
+      currentCodexProxyActive: session.codexProxyActive,
+      codexAuthInjection,
+    });
+    // A credential-family rebuild discards the live proxy auth shape, so the
+    // destination capability must be resolved from the target request.
+    const nextCredentialMode =
+      crossesCredentialMode && session.agentKind === 'codex'
+        ? resolveAgentCredentialMode({
+            agentKind: 'codex',
+            providerId: nextProviderId,
+            model: nextModel,
+          })
+        : undefined;
+    let crossesCodeModeOnly = false;
+    if (
+      session.agentKind === 'codex' &&
+      !session.remoteHostId &&
+      this.deps.resolveCodexRouteCapabilities
+    ) {
+      try {
+        crossesCodeModeOnly = await crossesCodexCodeModeOnlyBoundary({
+          currentProviderId,
+          nextProviderId,
+          currentModel,
+          nextModel,
+          nextCredentialMode,
+          codexAuthInjection,
+          resolver: this.deps.resolveCodexRouteCapabilities,
+        });
+      } catch (error) {
+        this.deps.logger.warn?.(
+          '[runner] failed to compare Codex route capabilities; rebuilding the session',
+          error,
+        );
+        crossesCodeModeOnly = true;
+      }
+    }
+    if (!crossesCredentialMode && !crossesCodeModeOnly) return null;
+    return {
+      reason: crossesCredentialMode ? 'credential-mode' : 'code-mode-only',
+      requiresCodeModeThreadRotation: crossesCodeModeOnly,
+    };
+  }
 
   /** scheduler-host/index.ts 在 startScheduler 内调一次，让 runner 反向 pause schedule */
   attachScheduler(scheduler: Scheduler): void {
@@ -911,24 +991,42 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reroutedProviderId ??
         materializedDefaultProviderId ??
         currentProviderId;
-      if (
-        liveSession &&
-        shouldCloseSessionForCredentialSwitch({
-          agentKind: liveSession.agentKind,
-          remoteHostId: liveSession.remoteHostId,
+      const rebuildReason = liveSession
+        ? await this.routeRebuildReason(
+          liveSession,
           currentProviderId,
           nextProviderId,
-          currentModel: liveSession.model,
-          nextModel: model,
-          currentCodexProxyActive: liveSession.codexProxyActive,
-        })
-      ) {
+          liveSession.model,
+          model,
+        )
+        : null;
+      if (liveSession && rebuildReason) {
         if (isHeartbeat && isSessionInTurn(sessionId)) {
           return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
         }
+        let preparedRotation: PreparedCodexThreadRotation | undefined;
+        const sourceResumeSessionId = resumeSessionId;
         try {
-          throwIfFireAborted(ctx.signal, 'credential mode switch');
-          if (liveSession.agentKind === 'codex') {
+          throwIfFireAborted(ctx.signal, 'session route rebuild');
+          if (rebuildReason.requiresCodeModeThreadRotation) {
+            if (resumeSessionId && resumeSessionId !== '<pending>') {
+              if (!heartbeatWorkingDir || !this.deps.prepareCodexThreadRotation) {
+                throw new Error(
+                  'Scheduler CodeModeOnly route rebuild requires Codex thread rotation',
+                );
+              }
+              const snapshot: CodexThreadRotationSnapshot = {
+                sessionId,
+                sourceSdkSessionId: resumeSessionId,
+                sourceModel: liveSession.model,
+                sourceProviderId: currentProviderId,
+                workingDir: heartbeatWorkingDir,
+              };
+              preparedRotation = await this.deps.prepareCodexThreadRotation(snapshot);
+              resumeSessionId = preparedRotation.newSdkSessionId;
+            }
+          }
+          if (liveSession.agentKind === 'codex' && rebuildReason.reason === 'credential-mode') {
             await prepareLocalCodexCredentialModeSwitch({
               maker: this.deps.maker,
               isSessionInTurn,
@@ -942,21 +1040,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
               signal: ctx.signal,
             });
           }
-          throwIfFireAborted(ctx.signal, 'credential mode switch');
+          throwIfFireAborted(ctx.signal, 'session route rebuild');
         } catch (err) {
+          if (preparedRotation) {
+            await preparedRotation.rollback();
+            resumeSessionId = sourceResumeSessionId;
+          }
           if (err instanceof CredentialModeSwitchBusyError) {
             return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
           }
           throw err;
         }
         reusedLiveSession = false;
-        this.deps.logger.info?.('[runner] closed live session after credential mode switch', {
+        this.deps.logger.info?.('[runner] closed live session after route rebuild boundary', {
           sessionId,
           agentKind: liveSession.agentKind,
           currentProviderId,
           nextProviderId,
           fromModel: liveSession.model,
           toModel: model,
+          reason: rebuildReason.reason,
+          rotatedCodexThread: rebuildReason.requiresCodeModeThreadRotation,
         });
       }
     }
@@ -1315,18 +1419,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // fire 在入口改道(reroutedProviderId)并经凭证切换重建正确收敛;同凭证
           // 形态的改道热换即可生效(PR #744 review 第二十七轮)。
           if (
-            shouldCloseSessionForCredentialSwitch({
-              agentKind: session.agentKind,
-              remoteHostId: session.remoteHostId,
-              currentProviderId: dispatchProviderId,
-              nextProviderId: verdict.providerId,
-              currentModel: runtimeModel,
-              nextModel: runtimeModel,
-              currentCodexProxyActive: session.codexProxyActive,
-            })
+            await this.routeRebuildReason(
+              session,
+              dispatchProviderId,
+              verdict.providerId,
+              runtimeModel,
+              runtimeModel,
+            ) !== null
           ) {
             throw new Error(
-              `schedule route rerouted across credential modes after session creation; failing this run so the next fire rebuilds the session (model "${runtimeModel}" → provider "${verdict.providerId}")`,
+              `schedule route rerouted across a session rebuild boundary after session creation; failing this run so the next fire rebuilds the session (model "${runtimeModel}" → provider "${verdict.providerId}")`,
             );
           }
           if (effectiveAgentKind === 'pi') {
@@ -2035,7 +2137,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /**
    * 排队派发时刻的路由热同步:schedule 显式设置的 model / effort / 来源(供应商)
    * 优先于绑定会话当前值(与直发路径 4.4.1/4.4.2 同语义);留空沿用会话当前值。
-   * 凭证形态需要关会话重建的组合(shouldCloseSessionForCredentialSwitch)无法在
+   * 凭证形态或 thread 级路由能力需要关会话重建的组合无法在
    * 派发时刻热切 —— 跳过本轮同步,沿用会话当前路由,下次空闲直发照常收敛。
    * setModel / setEffort 成功才落库 meta,失败保留旧值让下轮重试(与直发路径的
    * 复用会话语义一致)。
@@ -2085,15 +2187,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     const nextProviderId = applyProviderId ?? currentProviderId;
     if (
-      shouldCloseSessionForCredentialSwitch({
-        agentKind: live.agentKind,
-        remoteHostId: live.remoteHostId,
+      await this.routeRebuildReason(
+        live,
         currentProviderId,
         nextProviderId,
-        currentModel: live.model,
-        nextModel: targetModel,
-        currentCodexProxyActive: live.codexProxyActive,
-      })
+        live.model,
+        targetModel,
+      ) !== null
     ) {
       // 早退 = 本轮沿用 live 当前路由派发:这条保留路由自己也要过停用裁决 ——
       // 目标来源启用但需要凭证切换、而**当前**来源在排队等待期间被停用时,不裁决
@@ -2111,7 +2211,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
       }
       this.deps.logger.info?.(
-        '[runner] queued heartbeat routing needs credential mode switch; keeping session routing this round',
+        '[runner] queued heartbeat routing needs session rebuild; keeping session routing this round',
         {
           scheduleId: schedule.id,
           sessionId: live.id,
@@ -2580,7 +2680,8 @@ type FireAbortStage =
   | 'session creation'
   | 'agent turn dispatch'
   | 'credential switch setup'
-  | 'credential mode switch';
+  | 'credential mode switch'
+  | 'session route rebuild';
 
 function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
   if (signal.aborted) {

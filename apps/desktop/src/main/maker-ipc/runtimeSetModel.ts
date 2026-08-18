@@ -1,4 +1,9 @@
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import {
+  resolveAgentCredentialMode,
+  type AgentCredentialMode,
+  type AgentKind,
+  type Effort,
+} from '@cindy/maker-core';
 
 import {
   getSessionProvider,
@@ -8,6 +13,7 @@ import {
 } from '../maker-host/session-provider-store.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
 import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
+import { resolveCodexRouteCapabilities } from '../maker-host/provider-route.js';
 import {
   CredentialModeSwitchBusyError,
   isCredentialModeSwitchBusyError,
@@ -15,12 +21,20 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import {
+  codexThreadRotationSnapshotFromSession,
+  type CodexThreadRotationSnapshot,
+  type PrepareCodexThreadRotation,
+} from './codexThreadRotation.js';
 
 interface RuntimeSetModelSession {
+  id?: string;
   agentKind: AgentKind;
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   model: string;
+  sdkSessionId?: string | null;
+  workDir?: string | null;
   setModel: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => Promise<void>;
 }
 
@@ -42,6 +56,13 @@ interface RuntimeSetModelLogger {
   info: (message: string, meta?: Record<string, unknown>) => void;
 }
 
+export type CodexRouteCapabilitiesResolver = (args: Parameters<
+  typeof resolveCodexRouteCapabilities
+>[0]) =>
+  | { requiresCodeModeOnly?: boolean }
+  | undefined
+  | Promise<{ requiresCodeModeOnly?: boolean } | undefined>;
+
 export interface ApplyRuntimeSetModelChangeInput {
   maker: RuntimeSetModelMaker;
   sessionId: string;
@@ -55,7 +76,11 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   registerPendingCredentialSwitch?: (
     sessionId: string,
-    target: { model: string; providerId: string | null },
+    target: {
+      model: string;
+      providerId: string | null;
+      codexThreadRotation?: CodexThreadRotationSnapshot;
+    },
   ) => void | Promise<void>;
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
@@ -63,7 +88,10 @@ export interface ApplyRuntimeSetModelChangeInput {
    * model-only 变更后 pending 的目标形态与当前进程重新同族(如从折扣模型切回
    * 普通模型)—— 不清会让已被放弃的 pending 在 turn 结束时照样生效。
    */
-  clearPendingCredentialSwitch?: (sessionId: string, opts?: { wake?: boolean }) => void;
+  clearPendingCredentialSwitch?: (
+    sessionId: string,
+    opts?: { wake?: boolean },
+  ) => void | Promise<void>;
   /**
    * 空闲切换分支收尾唤醒:关会话 + 写新 route 完成后恢复该会话输入队列的派发。
    * 不能依赖 clear 钩子的默认唤醒 —— 那发生在 close **之前**,drain 会趁 await
@@ -85,6 +113,10 @@ export interface ApplyRuntimeSetModelChangeInput {
    * 是否跨「远端压缩身份」边界;不传时该判定按未知保守处理(倾向关会话重建)。
    */
   codexAuthInjection?: CodexProxyAuthInjection | null;
+  /** Test seam for the final-route capability resolver. Production uses the active catalog. */
+  resolveCodexRouteCapabilitiesForSwitch?: CodexRouteCapabilitiesResolver;
+  /** Fork and atomically rebind a Codex thread before crossing CodeModeOnly. */
+  prepareCodexThreadRotation?: PrepareCodexThreadRotation;
   logger?: RuntimeSetModelLogger;
 }
 
@@ -93,6 +125,74 @@ export type ApplyRuntimeSetModelChangeResult =
   | { status: 'applied' }
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
   | { status: 'deferred' };
+
+function credentialModeForCodexRoute(
+  providerId: string | null,
+  model: string,
+  authInjection: CodexProxyAuthInjection | null | undefined,
+): AgentCredentialMode | undefined {
+  // The already-spawned proxy shape is authoritative. An explicit builtin
+  // provider may remain on the session even when env-key/provider-oauth makes
+  // the proxy ignore that per-session route and use its actual default route.
+  if (authInjection === 'oauth-bearer') return 'oauth-bearer';
+  if (authInjection === 'env-key') return 'gateway-key';
+  if (authInjection === 'provider-oauth') return 'provider-oauth';
+  return resolveAgentCredentialMode({
+    agentKind: 'codex',
+    providerId,
+    model,
+  });
+}
+
+/** Resolve the final route's sticky CodeModeOnly value using the live proxy auth shape. */
+export async function resolveCodexCodeModeOnlyForRoute(args: {
+  providerId: string | null;
+  model: string;
+  credentialMode?: AgentCredentialMode;
+  codexAuthInjection?: CodexProxyAuthInjection | null;
+  resolver?: CodexRouteCapabilitiesResolver;
+}): Promise<boolean> {
+  const resolver = args.resolver ?? resolveCodexRouteCapabilities;
+  const capability = await resolver({
+    providerId: args.providerId,
+    model: args.model,
+    credentialMode:
+      args.credentialMode ??
+      credentialModeForCodexRoute(
+        args.providerId,
+        args.model,
+        args.codexAuthInjection,
+      ),
+  });
+  return capability?.requiresCodeModeOnly === true;
+}
+
+export async function crossesCodexCodeModeOnlyBoundary(args: {
+  currentProviderId: string | null;
+  nextProviderId: string | null;
+  currentModel: string;
+  nextModel: string;
+  nextCredentialMode?: AgentCredentialMode;
+  codexAuthInjection?: CodexProxyAuthInjection | null;
+  resolver?: CodexRouteCapabilitiesResolver;
+}): Promise<boolean> {
+  const [current, next] = await Promise.all([
+    resolveCodexCodeModeOnlyForRoute({
+      providerId: args.currentProviderId,
+      model: args.currentModel,
+      codexAuthInjection: args.codexAuthInjection,
+      resolver: args.resolver,
+    }),
+    resolveCodexCodeModeOnlyForRoute({
+      providerId: args.nextProviderId,
+      model: args.nextModel,
+      credentialMode: args.nextCredentialMode,
+      codexAuthInjection: args.codexAuthInjection,
+      resolver: args.resolver,
+    }),
+  ]);
+  return current !== next;
+}
 
 /**
  * 应用本地运行时 model/provider 切换。
@@ -130,7 +230,7 @@ export async function applyRuntimeSetModelChange(
       : pendingTarget !== undefined
         ? pendingTarget.providerId
         : currentProviderId;
-  const shouldCloseSession = sess
+  const shouldCloseSessionForCredentials = sess
     ? shouldCloseSessionForCredentialSwitch({
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
@@ -142,6 +242,55 @@ export async function applyRuntimeSetModelChange(
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;
+  // A credential-family close means the destination will no longer use the
+  // currently spawned proxy shape. Resolve that post-switch route from the
+  // target request; hot-reused hosts keep the live injection as before.
+  const nextCredentialMode =
+    shouldCloseSessionForCredentials && sess?.agentKind === 'codex'
+      ? resolveAgentCredentialMode({
+          agentKind: 'codex',
+          providerId: nextProviderId,
+          model,
+        })
+      : undefined;
+  let shouldCloseSessionForCodeModeOnly = false;
+  if (sess?.agentKind === 'codex' && !sess.remoteHostId) {
+    try {
+      shouldCloseSessionForCodeModeOnly = await crossesCodexCodeModeOnlyBoundary({
+        currentProviderId,
+        nextProviderId,
+        currentModel: sess.model,
+        nextModel: model,
+        nextCredentialMode,
+        codexAuthInjection: input.codexAuthInjection,
+        resolver: input.resolveCodexRouteCapabilitiesForSwitch ?? resolveCodexRouteCapabilities,
+      });
+    } catch (error) {
+      // A live thread keeps its previous thread-level value. If the final
+      // route cannot be compared, rebuild this session instead of hot-switching
+      // into a potentially incompatible sticky CodeModeOnly state.
+      shouldCloseSessionForCodeModeOnly = true;
+      logger?.debug('set-model: failed to compare CodeModeOnly route capabilities', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const shouldCloseSession =
+    shouldCloseSessionForCredentials || shouldCloseSessionForCodeModeOnly;
+  const codexThreadRotation = shouldCloseSessionForCodeModeOnly && sess
+    ? codexThreadRotationSnapshotFromSession(
+        {
+          id: sessionId,
+          agentKind: sess.agentKind,
+          remoteHostId: sess.remoteHostId,
+          sdkSessionId: sess.sdkSessionId,
+          model: sess.model,
+          workDir: sess.workDir,
+        },
+        currentProviderId,
+      )
+    : null;
   let selfBusyMemo: boolean | undefined;
   const isSelfBusy = (): boolean => {
     if (selfBusyMemo !== undefined) return selfBusyMemo;
@@ -170,6 +319,7 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(codexThreadRotation ? { codexThreadRotation } : {}),
       });
       logger?.info('set-model: Codex provider route switch deferred until turn end', {
         sessionId,
@@ -191,6 +341,7 @@ export async function applyRuntimeSetModelChange(
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(codexThreadRotation ? { codexThreadRotation } : {}),
       });
       logger?.info('set-model: credential switch deferred until turn end', {
         sessionId,
@@ -210,8 +361,17 @@ export async function applyRuntimeSetModelChange(
     // 记下清除前的值:后续失败(非 busy)时恢复,不让用户的待定选择随异常丢失
     // (Greptile review #1035)。
     const clearedPending = input.getPendingCredentialSwitch?.(sessionId);
-    input.clearPendingCredentialSwitch?.(sessionId, { wake: false });
+    await input.clearPendingCredentialSwitch?.(sessionId, { wake: false });
+    let preparedRotation: Awaited<ReturnType<PrepareCodexThreadRotation>> | undefined;
     try {
+      if (shouldCloseSessionForCodeModeOnly) {
+        if (codexThreadRotation && !input.prepareCodexThreadRotation) {
+          throw new Error('Codex CodeModeOnly boundary requires thread rotation');
+        }
+        if (codexThreadRotation) {
+          preparedRotation = await input.prepareCodexThreadRotation!(codexThreadRotation);
+        }
+      }
       await prepareLocalSessionCredentialModeSwitch({
         maker,
         sessionId,
@@ -221,9 +381,11 @@ export async function applyRuntimeSetModelChange(
       // 空闲判定与 close 之间的竞态(恰好起了新 turn):有 pending 通道就转延迟,
       // 没有(老调用方)保持抛 busy 的旧语义。
       if (isCredentialModeSwitchBusyError(err) && input.registerPendingCredentialSwitch) {
-        input.registerPendingCredentialSwitch(sessionId, {
+        await preparedRotation?.rollback();
+        await input.registerPendingCredentialSwitch(sessionId, {
           model,
           providerId: nextProviderId,
+          ...(codexThreadRotation ? { codexThreadRotation } : {}),
         });
         logger?.info('set-model: credential switch deferred after busy race', {
           sessionId,
@@ -233,8 +395,9 @@ export async function applyRuntimeSetModelChange(
       }
       // 非 busy 失败:恢复被清除的 pending,用户的待定来源选择不随异常丢失。
       if (clearedPending && input.registerPendingCredentialSwitch) {
-        input.registerPendingCredentialSwitch(sessionId, clearedPending);
+        await input.registerPendingCredentialSwitch(sessionId, clearedPending);
       }
+      await preparedRotation?.rollback();
       throw err;
     }
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
@@ -254,12 +417,12 @@ export async function applyRuntimeSetModelChange(
   if (providerId !== undefined) {
     setSessionProvider(sessionId, nextProviderId);
     // 显式选源且无需切换 → 取消尚未兑现的 pending(后选覆盖先选)。
-    input.clearPendingCredentialSwitch?.(sessionId);
+    await input.clearPendingCredentialSwitch?.(sessionId);
   } else if (pendingTarget !== undefined) {
     // model-only 变更 + 已有 pending:能走到无需切换分支,说明按 pending 来源 +
     // 新模型评估后凭证形态已与当前进程同族(典型:折扣模型 pending 后切回普通
     // 模型)→ 切换意图不复存在,取消 pending(review P1)。
-    input.clearPendingCredentialSwitch?.(sessionId);
+    await input.clearPendingCredentialSwitch?.(sessionId);
     logger?.info('set-model: cancelled stale pending credential switch after model-only change', {
       sessionId,
       pendingProviderId: pendingTarget.providerId,
@@ -289,7 +452,7 @@ export async function applyRuntimeSetModelChange(
     // (providerId !== undefined)时旧 pending 已被本次明确选择覆盖,恢复它会静默
     // 撤销用户最后一次选择(Greptile review #1035 七轮)。
     if (pendingTarget && input.registerPendingCredentialSwitch) {
-      input.registerPendingCredentialSwitch(sessionId, pendingTarget);
+      await input.registerPendingCredentialSwitch(sessionId, pendingTarget);
     }
     throw err;
   }

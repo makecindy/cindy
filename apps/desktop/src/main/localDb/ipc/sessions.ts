@@ -490,6 +490,35 @@ export async function persistSessionFields(
   if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, clean, ownerScope);
 }
 
+/**
+ * Replace a session's native SDK thread id only when it is still the expected
+ * value (database-level compare-and-swap).
+ *
+ * Thread rotation is deliberately an internal main-process operation rather
+ * than another remotely persistable session field.  The CAS prevents a slow
+ * fork/close sequence from overwriting a newer `/clear`, agent switch, or
+ * another route transition.  A successful replacement is broadcast so all
+ * local/device-link session mirrors converge on the id that will be resumed.
+ */
+export async function replaceSessionSdkSessionIdIfCurrent(
+  sessionId: string,
+  expectedSdkSessionId: string,
+  nextSdkSessionId: string,
+): Promise<boolean> {
+  const ownerScope = captureOwnerScope();
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(sessions)
+    .set({ sdkSessionId: nextSdkSessionId })
+    .where(and(eq(sessions.id, sessionId), eq(sessions.sdkSessionId, expectedSdkSessionId)))
+    .run();
+  const applied = result.changes === 1;
+  if (applied && isOwnerScopeCurrent(ownerScope)) {
+    broadcastSessionPatched(sessionId, { sdkSessionId: nextSdkSessionId }, ownerScope);
+  }
+  return applied;
+}
+
 const MAX_LIMIT = 1000;
 
 /**

@@ -13,7 +13,7 @@ import {
   type AgentSessionHandle,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
-import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
+import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent as CoreAgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
 import {
@@ -3414,6 +3414,146 @@ describe('CodexAgent.startSession developerInstructions', () => {
     };
     expect(xaiParams.modelProvider).toBeUndefined();
     await xaiHandle.close();
+  });
+
+  it('scopes CodeModeOnly to Cindy Gateway threads, not native Responses providers', async () => {
+    const resolveCodexRouteCapabilities = vi.fn(async (input: {
+      sessionId?: string;
+      providerId?: string | null;
+      model: string;
+      credentialMode?: AgentCredentialMode;
+    }) => ({
+      requiresCodeModeOnly: input.providerId === 'xd',
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexRouteCapabilities,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ExperimentalFeatureEnablementSet) return {};
+      return undefined;
+    }, { userAgent: 'mock-codex/0.145.0' });
+
+    const nativeHandle = await agent.startSession({
+      sessionId: 'session-native-responses',
+      model: 'xai/grok-4.3',
+      providerId: 'xai',
+      workingDir: '/repo',
+    });
+    const nativeParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      config?: Record<string, unknown>;
+    };
+    expect(nativeParams.config?.['features.code_mode_only']).toBeUndefined();
+    expect(nativeHandle.codexRouteRequiresCodeModeOnly).toBe(false);
+    expect(nativeHandle.codexRouteCredentialMode).toBe('provider-oauth');
+    await nativeHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const gatewayHandle = await agent.startSession({
+      sessionId: 'session-cindy-gateway-codemode',
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const gatewayParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      config?: Record<string, unknown>;
+    };
+    expect(gatewayParams.config?.['features.code_mode_only']).toBe(true);
+    expect(gatewayHandle.codexRouteRequiresCodeModeOnly).toBe(true);
+    expect(gatewayHandle.codexRouteCredentialMode).toBe('gateway-key');
+    await gatewayHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const reviewDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-codemode-'));
+    tempRoots.push(reviewDir);
+    const reviewGatewayHandle = await agent.startSession({
+      sessionId: 'session-cindy-gateway-review-codemode',
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      workingDir: reviewDir,
+      reviewMode: true,
+    });
+    const reviewGatewayParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as {
+      config?: Record<string, unknown>;
+    };
+    expect(reviewGatewayParams.config?.['features.code_mode_only']).toBe(true);
+    expect(reviewGatewayHandle.codexRouteCredentialMode).toBe('gateway-key');
+    await reviewGatewayHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const reviewOpenAiHandle = await agent.startSession({
+      sessionId: 'session-openai-review-codemode',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      workingDir: reviewDir,
+      reviewMode: true,
+    });
+    expect(reviewOpenAiHandle.codexRouteRequiresCodeModeOnly).toBe(false);
+    expect(reviewOpenAiHandle.codexRouteCredentialMode).toBe('oauth-bearer');
+    expect(resolveCodexRouteCapabilities).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 'session-openai-review-codemode',
+      providerId: 'openai',
+      credentialMode: 'oauth-bearer',
+    }));
+    await reviewOpenAiHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const resumedNativeHandle = await agent.startSession({
+      sessionId: 'session-native-responses-resume',
+      model: 'xai/grok-4.3',
+      providerId: 'xai',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+    const resumedNativeParams = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      config?: Record<string, unknown>;
+    };
+    expect(resumedNativeParams.config?.['features.code_mode_only']).toBe(false);
+    await resumedNativeHandle.close();
+
+    host.request.mock.calls.length = 0;
+    const remoteGatewayHandle = await agent.startSession({
+      sessionId: 'session-remote-cindy-gateway-model',
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-1',
+    });
+    const remoteGatewayParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      config?: Record<string, unknown>;
+    };
+    expect(remoteGatewayParams.config?.['features.code_mode_only']).toBeUndefined();
+    expect(remoteGatewayHandle.codexRouteRequiresCodeModeOnly).toBeUndefined();
+    expect(remoteGatewayHandle.codexRouteCredentialMode).toBeUndefined();
+    await remoteGatewayHandle.close();
+  });
+
+  it('snapshots the effective reused host mode for route capability reconciliation', async () => {
+    const resolveCodexRouteCapabilities = vi.fn(async () => ({
+      requiresCodeModeOnly: false,
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexRouteCapabilities,
+    }));
+    installFakeHost(agent, undefined, { codexProxyActive: true });
+    (agent as unknown as {
+      hostEffectiveCredentialModes: Map<string, AgentCredentialMode>;
+    }).hostEffectiveCredentialModes.set('local', 'gateway-key');
+
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-oauth-on-gateway-host',
+      model: 'xai/grok-4.3',
+      providerId: 'xai',
+      workingDir: '/repo',
+    });
+
+    expect(resolveCodexRouteCapabilities).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-provider-oauth-on-gateway-host',
+      credentialMode: 'gateway-key',
+    }));
+    expect(handle.codexRouteCredentialMode).toBe('gateway-key');
+    await handle.close();
   });
 
   it('passes the OpenAI compaction provider for implicit-source sessions on an oauth-effective host', async () => {

@@ -435,4 +435,27 @@ describe('register.ts 真实接线经由共享工厂(源码断言,#2506)', () =>
     );
     expect(wakeBlock.slice(0, 300)).toContain('inputCoordinator.wakeSession(sessionId, reason)');
   });
+
+  it('Codex route rebuild 使用 thread 冻结的会话级凭证形态', () => {
+    const rebuildBlock = registerSource.slice(
+      registerSource.indexOf('const codexRouteRebuildService = new CodexRouteRebuildService'),
+    );
+    expect(rebuildBlock.slice(0, 2_500)).toContain(
+      'credentialMode: session.codexRouteCredentialMode',
+    );
+    expect(rebuildBlock.slice(0, 2_500)).toContain('await session.abort()');
+    expect(rebuildBlock.slice(0, 2_500)).toContain('reconcileDirectAbortBoundary(');
+    expect(rebuildBlock.slice(0, 2_500)).toContain("'catalog-route-rebuild-abort'");
+    expect(rebuildBlock.slice(0, 2_500)).toContain(
+      "cleanupPendingInteractionsForSession(sessionId, 'session_aborted')",
+    );
+  });
+
+  it('owner boundary 同时清理逐会话凭证切换和 catalog rebuild 登记', () => {
+    const boundaryBlock = registerSource.slice(
+      registerSource.indexOf('export async function clearDeferredCodexRestartForOwnerBoundary'),
+    );
+    expect(boundaryBlock.slice(0, 400)).toContain('pendingCredentialSwitchHolder?.clearAll()');
+    expect(boundaryBlock.slice(0, 400)).toContain('codexRouteRebuildHolder?.clearAsync()');
+  });
 });
