@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { GhostManifest } from '../../../shared/ghost';
 import {
+  marketPackageHostReviewDiff,
   marketPackageManualSummaryChanged,
   marketPackageNeedsHostReview,
   marketPackageOauthIdentityChanged,
@@ -163,7 +164,29 @@ describe('marketPackageOauthIdentityChanged', () => {
       ),
     ).toBe(false);
   });
+
+  it('reviews when a reviewed tokenBroker slot becomes a direct clientId', () => {
+    expect(
+      marketPackageOauthIdentityChanged(
+        oauthBrokerManifest(),
+        oauthBrokerManifest(),
+        oauthManifest('direct-client'),
+      ),
+    ).toBe(true);
+    expect(
+      marketPackageOauthIdentityChanged(oauthBrokerManifest(), null, oauthManifest('direct-client')),
+    ).toBe(true);
+  });
 });
+
+function oauthBrokerManifest(): GhostManifest {
+  const manifest = oauthManifest('broker-client');
+  const secret = manifest.network?.secrets?.[0];
+  if (secret?.oauth) {
+    secret.oauth.tokenBroker = 'cindy';
+  }
+  return manifest;
+}
 
 function manualManifest(items: Array<{ name: string; dir: string; description: string }>): GhostManifest {
   return {
@@ -210,5 +233,58 @@ describe('marketPackageManualSummaryChanged', () => {
 
   it('does not invent a reviewed baseline when the caller omitted the catalog', () => {
     expect(marketPackageManualSummaryChanged(undefined, manualManifest([guide]))).toBe(false);
+  });
+});
+
+const emptyDiff = {
+  added: [],
+  removed: [],
+  unchanged: [],
+  builtinOauthClientChanged: false,
+};
+
+describe('marketPackageHostReviewDiff', () => {
+  it('does not synthesize an empty update diff on first install', () => {
+    expect(
+      marketPackageHostReviewDiff({
+        permissionDiff: null,
+        extrasVersusReviewedCount: 1,
+        builtinOauthClientChanged: true,
+        manualSummaryChanged: false,
+      }),
+    ).toBeNull();
+  });
+
+  it('uses the full package card when extras exist even if the installed diff is empty', () => {
+    expect(
+      marketPackageHostReviewDiff({
+        permissionDiff: emptyDiff,
+        extrasVersusReviewedCount: 2,
+        builtinOauthClientChanged: false,
+        manualSummaryChanged: false,
+      }),
+    ).toBeNull();
+  });
+
+  it('uses the full package card when only the manual summary changed', () => {
+    expect(
+      marketPackageHostReviewDiff({
+        permissionDiff: emptyDiff,
+        extrasVersusReviewedCount: 0,
+        builtinOauthClientChanged: false,
+        manualSummaryChanged: true,
+      }),
+    ).toBeNull();
+  });
+
+  it('keeps an update diff when only the OAuth identity changed', () => {
+    expect(
+      marketPackageHostReviewDiff({
+        permissionDiff: emptyDiff,
+        extrasVersusReviewedCount: 0,
+        builtinOauthClientChanged: true,
+        manualSummaryChanged: false,
+      }),
+    ).toEqual({ ...emptyDiff, builtinOauthClientChanged: true });
   });
 });

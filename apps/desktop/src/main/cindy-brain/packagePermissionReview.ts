@@ -1,6 +1,7 @@
 import {
   changedBuiltinOauthClientSecretKeys,
   type GhostManifest,
+  type GhostPermissionDiff,
 } from '../../shared/ghost.js';
 import type { PluginMarketPackageReviewFacts } from '../../shared/pluginMarket.js';
 
@@ -49,15 +50,38 @@ export function marketPackageOauthIdentityChanged(
 ): boolean {
   if (
     installedBaseline &&
-    changedBuiltinOauthClientSecretKeys(installedBaseline, actual).length > 0
+    (changedBuiltinOauthClientSecretKeys(installedBaseline, actual).length > 0 ||
+      oauthSlotBecameDirect(installedBaseline, actual))
   ) {
     return true;
   }
   if (!reviewed) return false;
   if (changedBuiltinOauthClientSecretKeys(reviewed, actual).length > 0) return true;
+  if (oauthSlotBecameDirect(reviewed, actual)) return true;
   // 已装基线的空 clientId→默认值不算迁移(令牌仍有效)。已审预览清单则相反:
   // 用户没见过的具体 clientId 必须再确认。
   return reviewedOauthClientBecameConcrete(reviewed, actual);
+}
+
+/**
+ * Host 卡要展示触发复核的全部事实。没有已装基线、真实包相对已审清单多了权限、
+ * 或手册摘要变了时,回 null,让界面改走完整真实包清单,不要合成「权限无变化」。
+ */
+export function marketPackageHostReviewDiff(input: {
+  permissionDiff: GhostPermissionDiff | null;
+  extrasVersusReviewedCount: number | null;
+  builtinOauthClientChanged: boolean;
+  manualSummaryChanged: boolean;
+}): GhostPermissionDiff | null {
+  const extrasExist = (input.extrasVersusReviewedCount ?? 0) > 0;
+  if (input.permissionDiff === null || extrasExist || input.manualSummaryChanged) {
+    return null;
+  }
+  return {
+    ...input.permissionDiff,
+    builtinOauthClientChanged:
+      input.permissionDiff.builtinOauthClientChanged || input.builtinOauthClientChanged,
+  };
 }
 
 /**
@@ -77,6 +101,20 @@ function manualSummaryKey(manifest: GhostManifest): string {
     .map((item) => `${item.name}\0${item.dir}\0${item.description}`)
     .sort()
     .join('\n');
+}
+
+function oauthSlotBecameDirect(previousManifest: GhostManifest, actual: GhostManifest): boolean {
+  if (previousManifest.id !== actual.id) return false;
+  const previousSecrets = new Map(
+    (previousManifest.network?.secrets ?? []).map((secret) => [secret.key, secret]),
+  );
+  for (const current of actual.network?.secrets ?? []) {
+    if (current.source !== 'oauth' || !current.oauth || current.oauth.tokenBroker) continue;
+    const previous = previousSecrets.get(current.key);
+    if (previous?.source !== 'oauth' || !previous.oauth?.tokenBroker) continue;
+    return true;
+  }
+  return false;
 }
 
 function reviewedOauthClientBecameConcrete(

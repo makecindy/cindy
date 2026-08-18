@@ -83,6 +83,7 @@ import { createOneShotTicketStore } from './oneShotTickets.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
 import {
   GhostPackagePermissionReviewRequiredError,
+  marketPackageHostReviewDiff,
   marketPackageManualSummaryChanged,
   marketPackageNeedsHostReview,
   marketPackageOauthIdentityChanged,
@@ -4737,20 +4738,13 @@ async function installOrUpdateMarketGhostPackageLocked(
             : expected.permissionPolicy.mode === 'manual'
               ? (permissionDiff?.added.map((item) => item.key) ?? [])
               : unreviewed.map((item) => item.key);
-        const reviewDiff = permissionDiff
-          ? {
-              ...permissionDiff,
-              builtinOauthClientChanged:
-                permissionDiff.builtinOauthClientChanged || builtinOauthClientChanged,
-            }
-          : builtinOauthClientChanged
-            ? {
-                added: [],
-                removed: [],
-                unchanged: [],
-                builtinOauthClientChanged: true,
-              }
-            : null;
+        const reviewDiff = marketPackageHostReviewDiff({
+          permissionDiff,
+          extrasVersusReviewedCount:
+            extrasVersusReviewed === null ? null : extrasVersusReviewed.length,
+          builtinOauthClientChanged,
+          manualSummaryChanged,
+        });
         const review: PluginMarketPackageReviewFacts = {
           manifest: inspected.manifest,
           permissionDiff: reviewDiff,
