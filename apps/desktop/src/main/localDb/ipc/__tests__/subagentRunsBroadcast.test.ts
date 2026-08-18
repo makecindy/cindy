@@ -152,6 +152,62 @@ describe('Subagent runs broadcast boundary', () => {
     expect(h.persistSubagentTaskUpdate).toHaveBeenCalledTimes(order.length);
   });
 
+  it('prefers the newest generation when health and diagnostics disagree', async () => {
+    // The healthy and unreadable sets are walked separately. Walking health
+    // first and dropping any diagnostic for a task already seen showed last
+    // run's completed result while this run's crash stayed hidden.
+    registerSubagentRunsIpc();
+    const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+    const healthy = {
+      version: 1, runId: '123e4567-e89b-42d3-a456-426614174000', taskId: 'parent-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'completed',
+      context: 'fresh', title: 'Older healthy generation', startedAt: 1_000, updatedAt: 2_000,
+      endedAt: 2_000,
+      tasks: [{
+        childId: 'child-1', sessionId: 'session-child', agent: 'worker',
+        status: 'completed', output: 'previous result',
+      }],
+    };
+    h.listPiSubagentRuns.mockResolvedValue([healthy]);
+    // A *newer* generation is unreadable: this run crashed.
+    h.listPiSubagentRunDiagnostics.mockResolvedValue([{
+      kind: 'stale', runId: '123e4567-e89b-42d3-a456-426614174001', taskId: 'parent-tool',
+      parentSessionId: 'session-1', title: 'Crashed resume',
+      startedAt: 3_000, updatedAt: 4_000, message: 'runner stopped unexpectedly',
+    }]);
+
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledOnce();
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        taskId: 'parent-tool',
+        taskType: 'pi_subagent_diagnostic',
+        summary: 'runner stopped unexpectedly',
+      }),
+      'pi',
+      4_000,
+    );
+
+    // The mirror case: an older diagnostic must not shout down a newer healthy
+    // generation.
+    __resetSubagentReconcileFingerprintsForTests();
+    h.persistSubagentTaskUpdate.mockClear();
+    h.listPiSubagentRuns.mockResolvedValue([{
+      ...healthy, runId: '123e4567-e89b-42d3-a456-426614174002',
+      title: 'Newer healthy generation', startedAt: 5_000, updatedAt: 6_000, endedAt: 6_000,
+    }]);
+
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledOnce();
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ taskId: 'parent-tool', taskType: 'pi_subagent' }),
+      'pi',
+      6_000,
+    );
+  });
+
   it('skips reconciliation writes while durable state is unchanged', async () => {
     // The remote detail view polls list + detail once a second and both
     // reconcile, so every readable run used to re-write its alias rows and main

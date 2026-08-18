@@ -3,9 +3,23 @@
  *
  * The generated CommonJS file runs outside the parent PI process. It owns every
  * child process handle, writes bounded durable status/transcript artifacts, and
- * accepts stop/steer control requests through an atomic file protocol. The host
- * never signals a PID read from disk: only this runner terminates processes it
- * actually spawned, which avoids stale-PID reuse and path-traversal process kills.
+ * accepts stop/steer control requests through an atomic file protocol.
+ *
+ * **PID signalling rule.** The host does not signal a PID read from disk: only
+ * this runner terminates the *children* it actually spawned, because a recycled
+ * pid would otherwise let a stale record kill an unrelated process.
+ *
+ * **Account-boundary exception (deliberate).** Logout and account switch are a
+ * credential-safety boundary: a durable child inherits direct BYOM credentials
+ * through its spawn env, and those cannot be revoked the way a proxy token can.
+ * A runner that stops consuming its stop mailbox therefore has to be killable
+ * from the host. That is allowed for *this runner's own pid* only, and only
+ * after strong identity verification: `runnerScript` below records the absolute
+ * path of this generated file, which lives inside the run's UUID directory, and
+ * the host must confirm the live process's command line still contains it
+ * before signalling. Identity mismatch, or any inability to read the command
+ * line, means the host does not signal (fail conservative). See
+ * `verifyPiSubagentRunnerIdentity` in `pi-subagent-runs.ts`.
  */
 
 export const CINDY_SUBAGENT_RUNNER_FILENAME = 'cindy-subagent-runner.cjs';
@@ -18,6 +32,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const STATUS_VERSION = 1;
+// Absolute path of this generated runner file, as the OS sees it in argv.
+const runnerScriptPath = typeof process.argv[1] === 'string' ? process.argv[1] : '';
 const CONTROL_VERSION = 1;
 const MAX_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
 const MAX_RESULT_BYTES = 256 * 1024;
@@ -261,6 +277,10 @@ function main() {
       interactiveOwner: config.interactiveOwner,
       runnerInstanceId: runnerInstanceId,
       runnerPid: process.pid,
+      // OS-verifiable identity for the account-boundary kill (see file header).
+      // This path contains the run's UUID directory, so a recycled pid running
+      // something else cannot match it.
+      runnerScript: runnerScriptPath,
       state: state.state,
       title: config.title,
       description: config.description,

@@ -92,6 +92,7 @@ import {
   isPiSubagentTerminal,
   listPiSubagentRuns,
   piSubagentRunRoot,
+  piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
   resumePiSubagentRun,
   stopPiSubagentRunsForAccountBoundary,
@@ -2375,8 +2376,23 @@ export class PiAgent extends BaseAgent {
     ): Promise<void> => {
       if (closed && !detachedApprovalSupervisorActive) return;
       // Shared userData can contain active runs from another Desktop instance.
-      // Missing ownership is legacy metadata and must fail closed here.
-      if (status.runtimeOwnerId !== subagentRuntimeOwnerId) return;
+      // Missing ownership is legacy metadata and must fail closed here. A
+      // reopened task's new handle may *adopt* an approval parked by an earlier
+      // handle of the same session (same host process, or an owner that is
+      // gone) — otherwise navigation-close approvals stay unreachable forever.
+      // Adoption moves the delivery surface only; the verdict path below forces
+      // explicit confirmation for it.
+      const approvalScope = piSubagentApprovalScope(
+        status,
+        subagentRuntimeOwnerId,
+        process.pid,
+        sid,
+      );
+      if (approvalScope === 'refused') return;
+      const adopted = approvalScope === 'adopted';
+      // Controls must carry the run's own owner id, not ours, or the mailbox
+      // owner filter would reject an adopted answer.
+      const controlOwnerId = status.runtimeOwnerId ?? subagentRuntimeOwnerId;
       const approval = task.pendingApproval;
       if (!approval || status.interactiveOwner === 'extension') return;
       const turnChangeCapture = approval.method === 'confirm'
@@ -2434,7 +2450,7 @@ export class PiAgent extends BaseAgent {
             childId: task.childId,
             approvalId: approval.id,
             confirmed: true,
-            runtimeOwnerId: subagentRuntimeOwnerId,
+            runtimeOwnerId: controlOwnerId,
           });
           if (controlled > 0) piSubagentApprovalDeliveries.add(key);
         } catch (error) {
@@ -2561,6 +2577,12 @@ export class PiAgent extends BaseAgent {
         });
       };
       const resolveConfirmation = async (): Promise<PiPermissionResolution | null> => {
+        // Adoption changed who can *deliver* this card, not who decided the
+        // child's permissions. The child was spawned under an earlier session's
+        // mode, so reopening the task under Full Access must not launder its
+        // pending approvals, and this session's Auto reviewer must not rule on
+        // them either. Always ask the user explicitly; denial stays fail-closed.
+        if (adopted) return requestUserDecision({ forcePrompt: true });
         if (permissionMode === 'bypassPermissions') {
           return turnPolicyForcePrompt ? 'system-deny' : 'allow';
         }
@@ -2657,7 +2679,7 @@ export class PiAgent extends BaseAgent {
           ...(approval.method === 'input'
             ? { value: resolution }
             : { confirmed: resolution === 'allow' }),
-          runtimeOwnerId: subagentRuntimeOwnerId,
+          runtimeOwnerId: controlOwnerId,
         });
         if (controlled > 0) {
           piSubagentApprovalDeliveries.add(key);

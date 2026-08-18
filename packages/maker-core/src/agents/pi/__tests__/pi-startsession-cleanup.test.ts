@@ -849,7 +849,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   it('never answers durable Subagent approvals owned by another runtime', async () => {
     const run = pendingSubagentRun(
       { toolName: 'write', input: { path: 'a.txt' } },
-      { runtimeOwnerId: piSubagentRuns.piSubagentRuntimeOwnerId(process.pid, 'another-runtime') },
+      // A *different live* Cindy process: adoption requires same-process or a
+      // dead owner, so this stays refused.
+      { runtimeOwnerId: piSubagentRuns.piSubagentRuntimeOwnerId(process.ppid, 'another-runtime') },
     );
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
@@ -861,6 +863,95 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(control).not.toHaveBeenCalled();
     expect(resolver).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  it('refuses an approval whose run belongs to a different parent task', async () => {
+    const run = pendingSubagentRun(
+      { toolName: 'write', input: { path: 'a.txt' } },
+      {
+        runtimeOwnerId: ownerId('other-instance'),
+        parentSessionId: 'some-other-session',
+      },
+    );
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    expect(control).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+    await handle.close({ reason: 'navigation' });
+  });
+
+  it('adopts an approval parked by an earlier handle of the same task', async () => {
+    // The reopened task gets a fresh sessionInstanceId, so the strict owner
+    // fence used to make the parked approval permanently unanswerable.
+    //
+    // Own session id: adoption keys on parentSessionId, so a detached supervisor
+    // left polling a never-terminal mock from an earlier case in this file would
+    // otherwise be a second, legitimate answerer.
+    const run = pendingSubagentRun(
+      { toolName: 'write', input: { path: 'a.txt' } },
+      { runtimeOwnerId: ownerId('earlier-handle-instance'), parentSessionId: 'adopt-1' },
+    );
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps())
+      .startSession({ ...opts(), sessionId: 'adopt-1', sessionInstanceId: 'reopened-instance' });
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({
+        confirmed: true,
+        // The answer must carry the *run's* owner id or the mailbox filter
+        // would reject it.
+        runtimeOwnerId: ownerId('earlier-handle-instance'),
+      }),
+    ), { timeout: 3_000 });
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'write',
+      metadata: expect.objectContaining({ subagent: true }),
+    }));
+    await handle.close({ reason: 'navigation' });
+  });
+
+  it('never lets a Full Access session auto-allow an adopted approval', async () => {
+    // Delivery surface only: the child was spawned under an earlier session's
+    // mode, so reopening under Full Access must not launder its pending
+    // approvals into a silent allow.
+    const run = pendingSubagentRun(
+      { toolName: 'bash', input: { command: 'rm -rf /tmp/x' } },
+      { runtimeOwnerId: ownerId('earlier-handle-instance'), parentSessionId: 'adopt-2' },
+    );
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review }))
+      .startSession({
+        ...opts(),
+        sessionId: 'adopt-2',
+        sessionInstanceId: 'reopened-instance-2',
+        permissionMode: 'bypassPermissions',
+      });
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: false }),
+    ), { timeout: 3_000 });
+    // The user was asked, and neither Full Access nor the Auto reviewer ruled.
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    await handle.close({ reason: 'navigation' });
   });
 
   it('reuses Auto-review for a safe durable Subagent workspace write without prompting', async () => {

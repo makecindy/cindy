@@ -20,10 +20,10 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 import {
   controlPiSubagentRuns,
   isPiSubagentTerminal,
+  stopPiSubagentRunsForAccountBoundary as stopForAccountBoundary,
   listPiSubagentRuns,
   resumePiSubagentRun,
   stopAndRemovePiSubagentRuns,
-  stopPiSubagentRunsForAccountBoundary,
 } from '../pi-subagent-runs.js';
 
 const roots: string[] = [];
@@ -149,6 +149,8 @@ async function makeFixture(options: {
    * in for the runner actually reaping it.
    */
   surviveStdinEnd?: boolean;
+  /** Model a wedged runner: publish status, never consume the stop mailbox. */
+  ignoreStopControl?: boolean;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -158,7 +160,13 @@ async function makeFixture(options: {
   await mkdir(sessions, { recursive: true });
   await mkdir(childConfigHome, { recursive: true });
   await writeFile(path.join(childConfigHome, 'models.json'), '{"providers":{}}\n');
-  const runnerFile = await sharedRunnerFile();
+  // A wedged runner: publishes a heartbeating running status and never reads
+  // the control mailbox. Written *into the run dir* so its argv path carries the
+  // run UUID, exactly as the production runner does — that path is the identity
+  // the host verifies before signalling.
+  const runnerFile = options.ignoreStopControl
+    ? path.join(runDir, 'runner.cjs')
+    : await sharedRunnerFile();
   const fakePiFile = path.join(root, 'fake-pi.cjs');
   const bridgeFile = path.join(runDir, 'cindy-bridge.ts');
   const permissionFile = path.join(runDir, 'permission.json');
@@ -169,6 +177,37 @@ async function makeFixture(options: {
   const tokensFile = path.join(root, 'tokens.jsonl');
   const pidsFile = path.join(root, 'child-pids.jsonl');
   const poisonedSessionDir = path.join(root, 'poisoned-session-dir');
+  if (options.ignoreStopControl) {
+    await writeFile(runnerFile, `
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+function publish() {
+  const now = Date.now();
+  fs.writeFileSync(path.join(config.runDir, 'status.json'), JSON.stringify({
+    version: 1,
+    runId: config.runId,
+    taskId: config.taskId,
+    parentSessionId: config.parentSessionId,
+    runtimeOwnerId: config.runtimeOwnerId,
+    runnerInstanceId: 'wedged-runner',
+    runnerPid: process.pid,
+    runnerScript: process.argv[1],
+    state: 'running',
+    startedAt: now,
+    updatedAt: now,
+    tasks: config.tasks.map((task) => ({
+      childId: task.childId, sessionId: task.sessionId, agent: task.agent, status: 'running',
+    })),
+  }) + '\\n');
+}
+publish();
+setInterval(publish, 1000);
+setTimeout(() => process.exit(0), 60000).unref();
+`, { mode: 0o700 });
+    await chmod(runnerFile, 0o700);
+  }
   await writeFile(bridgeFile, 'export default function () {}\n');
   await writeFile(permissionFile, '{"mode":"ask"}\n');
   const fixtureOutput = JSON.stringify(options.outputText ?? 'fixture result');
@@ -996,7 +1035,7 @@ describe('Cindy durable PI Subagent runner', () => {
       return run?.state === 'running' ? run : null;
     });
 
-    await expect(stopPiSubagentRunsForAccountBoundary(fixture.root, {
+    await expect(stopForAccountBoundary(fixture.root, {
       runtimeOwnerId: 'owner-a',
     })).resolves.toBe(true);
 
@@ -1014,7 +1053,7 @@ describe('Cindy durable PI Subagent runner', () => {
       return run?.state === 'running' ? run : null;
     });
 
-    await expect(stopPiSubagentRunsForAccountBoundary(fixture.root, {
+    await expect(stopForAccountBoundary(fixture.root, {
       runtimeOwnerId: 'owner-b',
       timeoutMs: 300,
     })).resolves.toBe(true);
@@ -1135,6 +1174,83 @@ describe('Cindy durable PI Subagent runner', () => {
       );
       expect(stopped.tasks[0]?.error).toMatch(/stopped by SIGTERM/i);
       await waitForClose(fixture.child, fixture.stderr);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'kills an unresponsive runner at the account boundary once its identity checks out',
+    async () => {
+      // Credential-safety boundary: a durable child inherits direct BYOM
+      // credentials that no token revocation reaches, so a runner that stops
+      // consuming its stop mailbox cannot just be logged and left running.
+      const fixture = await makeFixture({ hang: true, ignoreStopControl: true, runtimeOwnerId: 'owner-a' });
+      const running = await waitFor(
+        async () => {
+          const [run] = await listPiSubagentRuns(fixture.root);
+          return run?.state === 'running' ? run : null;
+        },
+        undefined,
+        'the unresponsive runner to publish a running status',
+      );
+      // Identity is recorded and is the generated script inside this run's dir.
+      expect(running.runnerScript).toContain(fixture.runId);
+      expect(running.runnerPid).toBe(fixture.child.pid);
+
+      await expect(stopForAccountBoundary(fixture.root, {
+        runtimeOwnerId: 'owner-a',
+        timeoutMs: 500,
+      })).resolves.toBe(true);
+
+      await waitFor(
+        async () => {
+          try {
+            process.kill(fixture.child.pid!, 0);
+            return null;
+          } catch (error) {
+            return (error as NodeJS.ErrnoException).code === 'ESRCH' ? true : null;
+          }
+        },
+        undefined,
+        'the unresponsive runner process to be gone',
+      );
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses to signal when the recorded pid is no longer that runner',
+    async () => {
+      // The pid-reuse guard: a stale record pointing at an unrelated live
+      // process must never be signalled.
+      const fixture = await makeFixture({ hang: true, ignoreStopControl: true, runtimeOwnerId: 'owner-a' });
+      await waitFor(
+        async () => {
+          const [run] = await listPiSubagentRuns(fixture.root);
+          return run?.state === 'running' ? run : null;
+        },
+        undefined,
+        'the unresponsive runner to publish a running status',
+      );
+      // An unrelated live process stands in for a recycled pid.
+      const bystander = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: 'ignore',
+      });
+      try {
+        const statusPath = path.join(fixture.runDir, 'status.json');
+        const status = JSON.parse(await readFile(statusPath, 'utf8')) as Record<string, unknown>;
+        status.runnerPid = bystander.pid;
+        await writeFile(statusPath, `${JSON.stringify(status)}\n`, { mode: 0o600 });
+
+        await expect(stopForAccountBoundary(fixture.root, {
+          runtimeOwnerId: 'owner-a',
+          timeoutMs: 500,
+        })).resolves.toBe(false);
+
+        // The bystander survived: identity did not match, so nothing was sent.
+        expect(() => process.kill(bystander.pid!, 0)).not.toThrow();
+      } finally {
+        bystander.kill('SIGKILL');
+        try { process.kill(fixture.child.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      }
     },
   );
 

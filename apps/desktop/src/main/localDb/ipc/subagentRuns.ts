@@ -139,9 +139,30 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
       persistSubagentTaskUpdate(sessionId, update, 'pi', observedAt));
     fingerprints.set(key, fingerprint);
   };
+  // One logical task can have several durable generations after resume, and the
+  // healthy and unreadable sets are walked separately. Pick per task by
+  // generation recency across *both* sets: the newest generation is the truth,
+  // whether it is a healthy status or a stale/corrupt diagnostic. Walking health
+  // first and dropping any diagnostic for a task already seen showed last run's
+  // completed result while this run's crash stayed hidden.
+  const diagnostics = (await listPiSubagentRunDiagnostics(piSubagentRunRoot(agentHome, sessionId)))
+    .filter((diagnostic) => Boolean(diagnostic.taskId))
+    .filter((diagnostic) => !diagnostic.parentSessionId || diagnostic.parentSessionId === sessionId);
+  const newestDiagnosticUpdatedAt = new Map<string, number>();
+  for (const diagnostic of diagnostics) {
+    const taskId = diagnostic.taskId!;
+    const current = newestDiagnosticUpdatedAt.get(taskId);
+    if (current === undefined || diagnostic.updatedAt > current) {
+      newestDiagnosticUpdatedAt.set(taskId, diagnostic.updatedAt);
+    }
+  }
   const seenTaskIds = new Set<string>();
   for (const status of statuses) {
     if (seenTaskIds.has(status.taskId)) continue;
+    // A strictly newer unreadable generation wins: this run crashed, and the
+    // previous generation's result must not stand in for it.
+    const newerDiagnostic = newestDiagnosticUpdatedAt.get(status.taskId);
+    if (newerDiagnostic !== undefined && newerDiagnostic > status.updatedAt) continue;
     seenTaskIds.add(status.taskId);
     const terminal = isPiSubagentTerminal(status.state);
     const projectedStatus = status.state === 'queued' ? 'running' : status.state;
@@ -192,21 +213,17 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
       updatedAt: new Date(status.updatedAt).toISOString(),
     }, status.updatedAt);
   }
-  const diagnostics = await listPiSubagentRunDiagnostics(piSubagentRunRoot(agentHome, sessionId));
+  // A durable diagnostic without the original parent tool-use id cannot be
+  // placed in the current message generation safely; it was filtered out above.
+  // Keeping it on disk lets doctor/cleanup inspect it, while omitting it here
+  // prevents a corrupt run from reappearing after its branch was rewound.
   const seenDiagnosticTaskIds = new Set<string>();
   for (const diagnostic of diagnostics.sort((left, right) => right.updatedAt - left.updatedAt)) {
-    if (diagnostic.parentSessionId && diagnostic.parentSessionId !== sessionId) continue;
-    // A durable diagnostic without the original parent tool-use id cannot be
-    // placed in the current message generation safely. Keeping it on disk lets
-    // doctor/cleanup inspect it, while omitting it here prevents a corrupt run
-    // from reappearing after its branch was rewound or cleared.
-    if (!diagnostic.taskId) continue;
-    // One logical task may have several durable generations after resume. A
-    // corrupt/stale older generation must not overwrite a healthy current
-    // generation (or a newer diagnostic) merely because reconciliation walks
-    // both directory sets in sequence.
-    if (seenTaskIds.has(diagnostic.taskId) || seenDiagnosticTaskIds.has(diagnostic.taskId)) continue;
-    seenDiagnosticTaskIds.add(diagnostic.taskId);
+    // `seenTaskIds` now only holds tasks whose healthy generation was the
+    // newest, so an older diagnostic still loses to it — and a newer one no
+    // longer gets dropped just because health was walked first.
+    if (seenTaskIds.has(diagnostic.taskId!) || seenDiagnosticTaskIds.has(diagnostic.taskId!)) continue;
+    seenDiagnosticTaskIds.add(diagnostic.taskId!);
     await persistIfChanged(`diagnostic:${diagnostic.taskId}`, {
       provider: 'pi',
       taskId: diagnostic.taskId,

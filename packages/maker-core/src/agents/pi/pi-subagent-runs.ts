@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
@@ -80,6 +80,14 @@ export interface PiSubagentRunStatus {
   runtimeOwnerId?: string;
   runnerInstanceId: string;
   runnerPid?: number;
+  /**
+   * Absolute path of the generated runner script, as the OS reports it in the
+   * process command line. It lives inside the run's UUID directory, so it is
+   * the identity proof that lets an account boundary signal `runnerPid`
+   * without risking a recycled pid. Absent on records written before this
+   * field existed — those are never signalled.
+   */
+  runnerScript?: string;
   interactiveOwner?: 'host' | 'extension';
   state: PiSubagentRunState;
   title?: string;
@@ -145,6 +153,7 @@ function parseStatus(value: unknown, expectedRunId: string): PiSubagentRunStatus
   if (typeof raw.parentSessionId !== 'string' || !raw.parentSessionId) return null;
   if (raw.runtimeOwnerId !== undefined && (typeof raw.runtimeOwnerId !== 'string' || !raw.runtimeOwnerId)) return null;
   if (typeof raw.runnerInstanceId !== 'string' || !raw.runnerInstanceId) return null;
+  if (raw.runnerScript !== undefined && typeof raw.runnerScript !== 'string') return null;
   if (!isState(raw.state) || !finiteNonNegative(raw.startedAt) || !finiteNonNegative(raw.updatedAt)) return null;
   if (!Array.isArray(raw.tasks)) return null;
   const tasks: PiSubagentTaskStatus[] = [];
@@ -175,6 +184,88 @@ async function readSmallJson(file: string): Promise<unknown> {
 
 export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
   return state === 'completed' || state === 'failed' || state === 'stopped';
+}
+
+/**
+ * Read the live command line for `pid`, or null when it cannot be established.
+ *
+ * Bounded and best-effort: an unreadable command line is indistinguishable from
+ * a hostile one for our purposes, and both must stop the kill.
+ */
+function readProcessCommandLine(pid: number): string | null {
+  try {
+    const probe = process.platform === 'win32'
+      ? spawnSync(
+          'powershell.exe',
+          [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+          ],
+          { encoding: 'utf8', timeout: 5_000, windowsHide: true },
+        )
+      : spawnSync('ps', ['-p', String(pid), '-o', 'args='], {
+          encoding: 'utf8',
+          timeout: 5_000,
+        });
+    if (probe.error || probe.status !== 0) return null;
+    const text = typeof probe.stdout === 'string' ? probe.stdout.trim() : '';
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is the process at `status.runnerPid` really this run's runner?
+ *
+ * The proof is the generated runner script path, which contains the run's UUID
+ * directory — a recycled pid running something else cannot match it. Anything
+ * we cannot establish (no recorded path, no readable command line, no match)
+ * answers false, because the caller's next step is SIGKILL.
+ */
+export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boolean {
+  const pid = status.runnerPid;
+  if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return false;
+  const script = status.runnerScript;
+  if (typeof script !== 'string' || script.length === 0) return false;
+  const commandLine = readProcessCommandLine(pid!);
+  return commandLine !== null && commandLine.includes(script);
+}
+
+/**
+ * Account-boundary escalation: kill a runner that never consumed its stop
+ * mailbox, but only after proving the pid is still that runner.
+ *
+ * This is the documented exception to "never signal a pid read from disk" (see
+ * the runner file header). It exists because a durable child inherits direct
+ * BYOM credentials that, unlike the proxy token, cannot be revoked — so leaving
+ * it running past a logout keeps the outgoing account's credentials in use.
+ *
+ * The runner is spawned detached, so it leads its own process group; killing
+ * the group reaps the Pi children it owns too.
+ */
+export function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus): boolean {
+  if (!verifyPiSubagentRunnerIdentity(status)) return false;
+  const pid = status.runnerPid!;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+        timeout: 5_000,
+      });
+      return true;
+    }
+    process.kill(-pid, 'SIGKILL');
+    return true;
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 /**
@@ -238,6 +329,42 @@ export function piSubagentControlOwnership(
   // Unknown liveness counts as live: refusing is recoverable (the user is told
   // which window owns it), silently steering someone else's run is not.
   return isProcessAlive(ownerPid) === false ? 'orphaned' : 'foreign-live';
+}
+
+/**
+ * May a *newly built* handle answer an approval parked by an earlier handle of
+ * the same task?
+ *
+ * Navigation close leaves approvals parked by generation, and a reopened task
+ * gets a fresh `sessionInstanceId`, so the strict owner fence made those
+ * approvals permanently unreachable — the sidebar showed "waiting" with no
+ * allow/deny entry and the child waited out its whole run timeout.
+ *
+ * Adoption is deliberately narrow: same parent session, and either the same
+ * host process (provable from the owner id's pid segment) or an owner process
+ * that is gone. A legacy owner id with no pid segment cannot prove either, so
+ * it is refused.
+ *
+ * **This changes the delivery surface only, never the verdict.** Callers must
+ * put an adopted approval through explicit user confirmation — see
+ * `resolvePiSubagentApproval`, where `adopted` bypasses both the Auto-review
+ * dispatcher and the `bypassPermissions` auto-allow. Otherwise reopening a task
+ * under a Full Access session would launder the pending approvals of a child
+ * spawned under `ask`.
+ */
+export type PiSubagentApprovalScope = 'own' | 'adopted' | 'refused';
+
+export function piSubagentApprovalScope(
+  status: PiSubagentRunStatus,
+  runtimeOwnerId: string,
+  hostPid: number,
+  parentSessionId: string | undefined,
+): PiSubagentApprovalScope {
+  if (status.runtimeOwnerId === runtimeOwnerId) return 'own';
+  if (!status.runtimeOwnerId) return 'refused';
+  if (!parentSessionId || status.parentSessionId !== parentSessionId) return 'refused';
+  const ownership = piSubagentControlOwnership(status, hostPid);
+  return ownership === 'self' || ownership === 'orphaned' ? 'adopted' : 'refused';
 }
 
 /** True when this host may write control requests for the run. */
@@ -1378,6 +1505,13 @@ export function requestStopAllPiSubagentRunsSync(
 export interface PiSubagentSweepScope {
   runtimeOwnerId?: string;
   hostPid?: number;
+  /**
+   * Account boundary only: when the stop mailbox is still unconsumed at the
+   * deadline, escalate to killing the runner itself after verifying its
+   * identity. Ordinary quit does not set this — there the process is going away
+   * anyway, and a mailbox timeout is not a credential-safety problem.
+   */
+  killUnresponsiveRunners?: boolean;
 }
 
 /**
@@ -1434,7 +1568,28 @@ async function stopPiSubagentRunsUnderRoots(
       }
     }
     if (activeCount === 0) return true;
-    if (Date.now() >= deadline) return false;
+    if (Date.now() >= deadline) {
+      // The mailbox was never consumed. At an account boundary that is not
+      // something we can log and walk away from: the child holds direct BYOM
+      // credentials that no token revocation can reach, so it would keep
+      // spending the outgoing account and editing the workspace. Escalate to a
+      // verified kill; anything we cannot positively identify is left alone.
+      if (!scope.killUnresponsiveRunners) return false;
+      let killedAll = true;
+      for (const root of roots) {
+        for (const status of await listPiSubagentRuns(root)) {
+          if (isPiSubagentTerminal(status.state)) continue;
+          if (
+            scope.runtimeOwnerId !== undefined
+            && status.runtimeOwnerId !== undefined
+            && status.runtimeOwnerId !== scope.runtimeOwnerId
+          ) continue;
+          if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
+          if (!killVerifiedPiSubagentRunner(status)) killedAll = false;
+        }
+      }
+      return killedAll;
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
 }
@@ -1479,6 +1634,7 @@ export async function stopPiSubagentRunsForAccountBoundary(
 ): Promise<boolean> {
   return stopPiSubagentRunsUnderRoots([root], options.timeoutMs ?? 4_000, {
     ...(options.runtimeOwnerId !== undefined ? { runtimeOwnerId: options.runtimeOwnerId } : {}),
+    killUnresponsiveRunners: true,
   });
 }
 

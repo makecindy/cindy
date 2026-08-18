@@ -1403,11 +1403,15 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
         const stopped = await stopAllPiSubagentRunsForExit(
           path.join(app.getPath('userData'), 'pi-agent-home'),
           undefined,
-          { hostPid: process.pid },
+          // A runner that never consumes its mailbox still holds direct BYOM
+          // credentials from the outgoing account, and those cannot be revoked
+          // the way the proxy token can. Escalate to a verified kill rather than
+          // logging and handing the account over.
+          { hostPid: process.pid, killUnresponsiveRunners: true },
         );
         if (!stopped) {
           authBoundaryLog.warn(
-            `PI Subagent runners did not all acknowledge stop on ${reason} before timeout`,
+            `PI Subagent runners survived stop and identity-verified kill on ${reason}`,
           );
         }
       } catch (err) {
