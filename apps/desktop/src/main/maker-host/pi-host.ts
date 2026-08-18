@@ -563,11 +563,16 @@ export function buildPiSubscriptionNativeProviders(
         // 探针失败(bundledModelsByProvider == null)不能当成「全部 xAI 都不在二进制里」,
         // 否则 grok-4.3 / grok-build-0.1 会被改写成 openai-responses。只在探针成功且
         // 明确缺 grok-4.6 时才合成 addition。
-        const xaiProbeKnown = bundledModelsByProvider != null;
+        const listedIds =
+          listedModelIdsByProvider?.get(piProviderId)
+          ?? listedPiModelIds(bundledModelsByProvider)?.get(piProviderId);
         const isKnownMissingXaiModel =
           wireId === 'grok-4.6' || model.id === 'grok-4.6' || model.id.endsWith('/grok-4.6');
         const isXaiCatalogAddition =
-          sourceProviderId === 'xai' && xaiProbeKnown && !bundledModel && isKnownMissingXaiModel;
+          sourceProviderId === 'xai'
+          && listedIds != null
+          && !listedIds.has(wireId)
+          && isKnownMissingXaiModel;
         const isAnnotatedAddition = (!!model.piApi && !bundledModel) || isXaiCatalogAddition;
         const isContextProfileAddition =
           sourceProviderId === 'openai' && wireId.endsWith('[1m]') && !bundledModel;

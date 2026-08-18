@@ -4,6 +4,7 @@
     "SESSION_RUNNING": "當前任務正在執行，請稍後再試。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後新建 Pi 任務。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任務中執行，本次來源切換未生效（本任務仍使用原來源）。等它結束後再試。",
+    "PI_CATALOG_RELOAD_UNCONFIRMED": "模型目錄重載未確認，已終止本任務。請重新開啟任務後再切換模型。",
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "目標模型或來源需要不同的遠端路由，請關閉並重新建立遠端任務後生效。",
     "REMOTE_PROVIDER_UPDATING": "供應商憑證正在更新，請稍後重試",
     "REMOTE_PROVIDER_UNSUPPORTED": "該供應商不支援 SSH 遠端會話，請更換來源",

@@ -2766,8 +2766,7 @@ export class PiAgent extends BaseAgent {
               );
             }
             throw new Error(
-              'pi: 模型目录重载请求未收到确认(超时或链路错误),无法确定 Pi 侧是否已加载新 models.json;'
-              + '已终止本会话。请重开会话后再切换模型。',
+              '[PI_CATALOG_RELOAD_UNCONFIRMED] 模型目录重载未确认，已终止本任务。请重新打开任务后再切换模型。',
             );
           }
           if (!reloaded.success) {

@@ -1070,7 +1070,7 @@ describe('Pi provider-aware model routing', () => {
       providerId: 'native-a',
     });
     includeXai = true;
-    await expect(handle.setModel!('xai/grok-4.6', { providerId: 'xai' })).rejects.toThrow(/未收到确认/);
+    await expect(handle.setModel!('xai/grok-4.6', { providerId: 'xai' })).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
     expect(captured.closes).toBeGreaterThan(0);
   });
 

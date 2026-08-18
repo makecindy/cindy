@@ -651,7 +651,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       catalogAddition: true,
       cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
     });
-    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.api).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.api).toBe('openai-responses');
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
   });
 
@@ -999,6 +999,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       catalog,
       'http://127.0.0.1:4567/',
       new Map([['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-responses')]])]]),
+      new Map([['xai', new Set(['grok-4.5'])]]),
     ).providers.find((candidate) => candidate.id === 'xai');
     expect(provider?.models).toEqual([
       expect.objectContaining({
