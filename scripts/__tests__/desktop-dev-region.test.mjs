@@ -451,17 +451,21 @@ test("isolation injection must truly delete inherited keys (Object.assign would 
     XDT_USER_DATA_DIR: "C:\\host\\sandbox",
     XDT_USER_DATA_DIR_EPOCH: "1",
     XDT_DEVICE_ID_OVERRIDE: "dev-host-abc",
+    XDT_SCHEDULER_PASSIVE: "1",
     XDT_ISOLATED_NAME: "old",
   };
   // 模拟 dev-remote-env 命中自动隔离的注入块
   delete env.XDT_USER_DATA_DIR;
   delete env.XDT_USER_DATA_DIR_EPOCH;
   delete env.XDT_DEVICE_ID_OVERRIDE;
+  delete env.XDT_SCHEDULER_PASSIVE;
   env.XDT_ISOLATED = "1";
   env.XDT_ISOLATED_NAME = "epic-thompson";
   assert.equal(env.XDT_USER_DATA_DIR, undefined);
   assert.equal(env.XDT_USER_DATA_DIR_EPOCH, undefined);
   assert.equal(env.XDT_DEVICE_ID_OVERRIDE, undefined);
+  // 继承的 passive 也清除：独立沙箱无 primary，不该被动模式（review-pr P1）
+  assert.equal(env.XDT_SCHEDULER_PASSIVE, undefined);
   assert.equal(env.XDT_ISOLATED, "1");
   assert.equal(env.XDT_ISOLATED_NAME, "epic-thompson");
 });
