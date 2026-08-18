@@ -558,8 +558,6 @@ interface SessionInputState {
   steeringQueueClientIds: string[];
   /** Identity of the currently owned steer transaction for each visible clientId. */
   steeringRequestTokens: Map<string, symbol>;
-  /** Monotonic owner identity for late callbacks after the visible marker is gone. */
-  latestSteerRequestSequence: number;
   /** Direct composer steers have no pendingQueue row while delivery is still reversible. */
   directSteeringItems: AgentInputQueuedMessage[];
   queuePaused: boolean;
@@ -654,7 +652,6 @@ function createInitialInputState(
     pendingCompacts: [],
     steeringQueueClientIds: [],
     steeringRequestTokens: new Map(),
-    latestSteerRequestSequence: 0,
     directSteeringItems: [],
     queuePaused: false,
     queuePausedByRestore: false,
@@ -1804,8 +1801,6 @@ export class AgentInputCoordinator {
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
     const steerRequestToken = Symbol('agent-input-steer-request');
-    const steerRequestSequence = state.latestSteerRequestSequence + 1;
-    state.latestSteerRequestSequence = steerRequestSequence;
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
@@ -1945,14 +1940,11 @@ export class AgentInputCoordinator {
       });
     } catch (err) {
       const latest = this.getState(sessionId);
-      if (
-        latest.generation !== steerGeneration ||
-        latest.latestSteerRequestSequence !== steerRequestSequence
-      ) {
-        // A clear/new steer owns the current state. The old callback may only release its own
-        // controller; it must not alter the replacement turn, projection, or Stop boundary.
+      if (latest.generation !== steerGeneration) {
+        // clearSession owns the replacement state. The old callback may only release its own
+        // controller; it must not alter the replacement generation or Stop boundary.
         this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
-        log.info('ignoring stale steer completion after request ownership changed', {
+        log.info('ignoring stale steer completion after input generation changed', {
           sessionId,
           clientId: item.clientId,
           steerGeneration,
@@ -2049,7 +2041,6 @@ export class AgentInputCoordinator {
       } else if (
         isSteerDeliveryUncertainError(err) &&
         latest.generation === steerGeneration &&
-        latest.latestSteerRequestSequence === steerRequestSequence &&
         (steerVendorTurnGeneration === null ||
           this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration) &&
         !latest.steeringRequestTokens.has(item.clientId)

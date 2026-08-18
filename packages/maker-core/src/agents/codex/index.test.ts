@@ -2161,6 +2161,105 @@ describe('CodexAgent capability routing', () => {
     await handle.close();
   });
 
+  it('tracks and tombstones descendant MCP items when compatibility events omit turnId', async () => {
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => method === Method.TurnStart
+        ? { turn: { id: 'root-missing-turn-id' } }
+        : undefined,
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-descendant-missing-turn-id',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '请用 $feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification || !handlers.mcpServerElicitation) {
+      throw new Error('expected descendant capability handlers');
+    }
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'root-missing-turn-id',
+      item: {
+        id: 'root-spawn-missing-turn-id',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-missing-turn-id',
+      },
+    });
+    const childItem = {
+      id: 'child-routed-mcp-missing-turn-id',
+      type: 'mcpToolCall',
+      server: 'cindy-routed-feishu-delegate',
+      tool: 'feishu_read_messages',
+      pluginId: 'feishu-delegate@personal',
+    };
+    handlers.descendantNotification('child-missing-turn-id', 'item/started', {
+      threadId: 'child-missing-turn-id',
+      item: childItem,
+    });
+
+    const childRequest = {
+      threadId: 'child-missing-turn-id',
+      turnId: undefined as never,
+      serverName: 'cindy-routed-feishu-delegate',
+      mode: 'form' as const,
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_name: 'feishu_read_messages',
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    };
+    await expect(handlers.mcpServerElicitation(childRequest)).resolves.toEqual({
+      action: 'accept',
+      content: null,
+      _meta: null,
+    });
+
+    handlers.descendantNotification('child-missing-turn-id', 'item/completed', {
+      threadId: 'child-missing-turn-id',
+      item: childItem,
+    });
+    await expect(handlers.mcpServerElicitation(childRequest)).resolves.toEqual({
+      action: 'decline',
+      content: null,
+      _meta: null,
+    });
+
+    // A late duplicate start/update with the same compatibility shape must not
+    // resurrect provenance after the explicit completed-item tombstone.
+    for (const method of ['item/started', 'item/updated']) {
+      handlers.descendantNotification('child-missing-turn-id', method, {
+        threadId: 'child-missing-turn-id',
+        item: childItem,
+      });
+    }
+    await expect(handlers.mcpServerElicitation(childRequest)).resolves.toEqual({
+      action: 'decline',
+      content: null,
+      _meta: null,
+    });
+
+    await handle.close();
+  });
+
   it('falls back to inherited thread selection when a child item predates turn binding', async () => {
     const pendingTurnStart = deferred<{ turn: { id: string } }>();
     const agent = new CodexAgent(

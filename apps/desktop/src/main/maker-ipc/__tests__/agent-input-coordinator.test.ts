@@ -6282,6 +6282,60 @@ describe('AgentInputCoordinator steer transaction', () => {
     newGate.resolve();
     await expect(newSteerPromise).resolves.toBe(true);
   });
+
+  it('cleans only the rejected steer when another request owns the same generation', async () => {
+    const h = createHarness();
+    const sid = 'steer-overlap-request-identity';
+    const active = makeItem('active-turn', 'active turn');
+    const firstSteer = makeItem('steer-a', 'first steer');
+    const secondSteer = makeItem('steer-b', 'second steer');
+    const firstGate = deferred<void>();
+
+    h.setAgentKind('codex');
+    h.steerToAgent.mockImplementationOnce(() => firstGate.promise);
+
+    h.coordinator.enqueue(sid, active);
+    await flush();
+    const firstSteerPromise = h.coordinator.steer(sid, firstSteer);
+    await flush();
+
+    const state = (
+      h.coordinator as unknown as {
+        getState: (sessionId: string) => {
+          generation: number;
+          steeringQueueClientIds: string[];
+          steeringRequestTokens: Map<string, symbol>;
+          directSteeringItems: AgentInputQueuedMessage[];
+        };
+      }
+    ).getState(sid);
+    const generation = state.generation;
+    const secondToken = Symbol('second-steer-request');
+    // Reproduce the late-callback window after a second request has acquired its own
+    // identity. Each request must settle only its clientId/token within this generation.
+    state.steeringQueueClientIds.push(secondSteer.clientId);
+    state.steeringRequestTokens.set(secondSteer.clientId, secondToken);
+    state.directSteeringItems.push(secondSteer);
+
+    firstGate.reject(new Error('first steer rejected'));
+    await expect(firstSteerPromise).resolves.toBe(false);
+    await flush();
+
+    expect(state.generation).toBe(generation);
+    expect(state.steeringQueueClientIds).toEqual([secondSteer.clientId]);
+    expect(state.steeringRequestTokens.has(firstSteer.clientId)).toBe(false);
+    expect(state.steeringRequestTokens.get(secondSteer.clientId)).toBe(secondToken);
+    expect(state.directSteeringItems.map((item) => item.clientId)).toEqual([
+      secondSteer.clientId,
+    ]);
+    expect(h.coordinator.getQueueInspection(sid)).toEqual([
+      expect.objectContaining({
+        queuedMessageId: secondSteer.clientId,
+        content: secondSteer.text,
+        consuming: true,
+      }),
+    ]);
+  });
 });
 
 describe('AgentInputCoordinator queue mutations', () => {
