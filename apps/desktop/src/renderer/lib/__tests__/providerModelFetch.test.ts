@@ -7,6 +7,7 @@ import {
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
+  resolveProviderConnectionProbeRoute,
   restoreHydratedApiKey,
   type SavedProviderProbeBaseline,
 } from '../providerModelFetch';
@@ -71,7 +72,7 @@ describe('providerModelFetchRequestSignature', () => {
 describe('providerConnectionTestRequestSignature', () => {
   const connectionFields = {
     ...fields,
-    wireProtocol: 'openai-responses',
+    wireProtocol: 'openai-responses' as const,
     models: [{ id: ' model-a ' }, { id: 'model-b' }],
   };
 
@@ -119,6 +120,51 @@ describe('providerConnectionTestRequestSignature', () => {
         'apiKey',
       ),
     ).not.toBe(original);
+  });
+});
+
+describe('resolveProviderConnectionProbeRoute', () => {
+  it.each(['claude-code', 'codex'] as const)(
+    'uses the first model route for %s instead of the provider default',
+    (agent) => {
+      const modelWireProtocol =
+        agent === 'claude-code' ? ('anthropic-messages' as const) : ('openai-responses' as const);
+      expect(
+        resolveProviderConnectionProbeRoute(agent, {
+          baseUrl: 'https://api.example/provider',
+          requestPath: '/provider-path',
+          wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
+          models: [
+            {
+              id: 'model-a',
+              route: {
+                baseUrl: 'https://api.example/model',
+                wireProtocol: modelWireProtocol,
+                requestPath: '/model-responses',
+              },
+            },
+          ],
+        }),
+      ).toEqual({
+        baseUrl: 'https://api.example/model',
+        wireProtocol: modelWireProtocol,
+        requestPath: '/model-responses',
+      });
+    },
+  );
+
+  it('keeps Pi on its explicit per-model protocol resolver', () => {
+    expect(
+      resolveProviderConnectionProbeRoute('pi', {
+        baseUrl: 'https://api.example/provider',
+        requestPath: '/ignored',
+        wireProtocol: 'openai-chat',
+        models: [{ id: 'model-a', piApi: 'openai-responses' }],
+      }),
+    ).toEqual({
+      baseUrl: 'https://api.example/provider',
+      wireProtocol: 'openai-responses',
+    });
   });
 });
 
@@ -328,7 +374,7 @@ describe('connectionTestCanUseSaved', () => {
     modelsUrl: 'https://gw.example/v1/models',
     apiKey: '',
     headers: [] as ReadonlyArray<{ name: string; value: string }>,
-    wireProtocol: 'openai-responses',
+    wireProtocol: 'openai-responses' as const,
     models: [{ id: 'm-1' }],
   };
 

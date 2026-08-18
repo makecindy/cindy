@@ -59,6 +59,7 @@ import {
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
+  resolveProviderConnectionProbeRoute,
   restoreHydratedApiKey,
   stripCredentialHeaders,
   type CustomProviderAuthMode,
@@ -87,7 +88,6 @@ import {
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
   presetDisplayName,
-  resolvePiModelRoute,
   sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
@@ -686,11 +686,9 @@ export function CustomProviderDialog({
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
         ...(agent === 'pi'
-          ? {
-              modelPiApi: rc.models.find((model) => model.id.trim().length > 0)?.piApi,
-              modelRoute: rc.models.find((model) => model.id.trim().length > 0)?.route,
-            }
+          ? { modelPiApi: rc.models.find((model) => model.id.trim().length > 0)?.piApi }
           : {}),
+        modelRoute: rc.models.find((model) => model.id.trim().length > 0)?.route,
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
@@ -1109,19 +1107,12 @@ export function CustomProviderDialog({
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
     }
-    const piRoute =
-      agent === 'pi'
-        ? resolvePiModelRoute(firstModelConfig, {
-            baseUrl: defaultBaseUrl,
-            wireProtocol: rf.wireProtocol,
-          })
-        : null;
-    const baseUrl = piRoute?.baseUrl.trim() ?? defaultBaseUrl;
-    const probeWireProtocol = agent === 'pi' ? piRoute?.wireProtocol : rf.wireProtocol;
-    if (!probeWireProtocol) {
+    const probeRoute = resolveProviderConnectionProbeRoute(agent, probeFields);
+    if (!probeRoute) {
       toast.error(t('settings.providers.custom.test.unsupportedProtocol'));
       return;
     }
+    const { baseUrl, wireProtocol: probeWireProtocol, requestPath: probeRequestPath } = probeRoute;
     if (!areProviderRequestUrlsAllowed(authMode, baseUrl)) {
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
       return;
@@ -1164,9 +1155,7 @@ export function CustomProviderDialog({
                 modelId: firstModel,
                 authMethod: authMode,
                 wireProtocol: probeWireProtocol,
-                ...(agent !== 'pi' && rf.requestPath.trim()
-                  ? { requestPath: rf.requestPath.trim() }
-                  : {}),
+                ...(probeRequestPath ? { requestPath: probeRequestPath } : {}),
                 apiKey: authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
                 ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
               },

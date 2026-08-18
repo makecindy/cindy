@@ -1,4 +1,11 @@
-import { isLoopbackProviderUrl, type ProviderModelRouteConfig } from '@cindy/model-providers';
+import {
+  isLoopbackProviderUrl,
+  resolvePiModelRoute,
+  type AgentKind,
+  type PiModelApi,
+  type ProviderModelRouteConfig,
+  type ProviderWireProtocol,
+} from '@cindy/model-providers';
 
 export type CustomProviderAuthMode = 'apiKey' | 'oauth' | 'none';
 
@@ -11,8 +18,42 @@ export interface ProviderModelFetchSignatureFields {
 }
 
 export interface ProviderConnectionTestSignatureFields extends ProviderModelFetchSignatureFields {
-  wireProtocol: string;
-  models: ReadonlyArray<{ id: string; piApi?: string; route?: ProviderModelRouteConfig }>;
+  wireProtocol: ProviderWireProtocol;
+  models: ReadonlyArray<{ id: string; piApi?: PiModelApi; route?: ProviderModelRouteConfig }>;
+}
+
+type ProviderProbeAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
+
+export interface ProviderConnectionProbeRoute {
+  baseUrl: string;
+  wireProtocol: ProviderWireProtocol;
+  requestPath?: string;
+}
+
+/** Resolve the first model's effective inference route using the same override order as runtime. */
+export function resolveProviderConnectionProbeRoute(
+  agent: ProviderProbeAgent,
+  fields: Pick<
+    ProviderConnectionTestSignatureFields,
+    'baseUrl' | 'requestPath' | 'wireProtocol' | 'models'
+  >,
+): ProviderConnectionProbeRoute | null {
+  const firstModel = fields.models.find((model) => model.id.trim().length > 0);
+  if (agent === 'pi') {
+    const route = resolvePiModelRoute(firstModel, {
+      baseUrl: fields.baseUrl,
+      wireProtocol: fields.wireProtocol,
+    });
+    return route ? { baseUrl: route.baseUrl.trim(), wireProtocol: route.wireProtocol } : null;
+  }
+
+  const modelRoute = firstModel?.route;
+  const requestPath = (modelRoute?.requestPath ?? fields.requestPath).trim();
+  return {
+    baseUrl: (modelRoute?.baseUrl ?? fields.baseUrl).trim(),
+    wireProtocol: modelRoute?.wireProtocol ?? fields.wireProtocol,
+    ...(requestPath ? { requestPath } : {}),
+  };
 }
 
 export function stripCredentialHeaders(headers: Record<string, string>): Record<string, string> {
