@@ -183,7 +183,10 @@ export function BrowserCommentPopover({
       const styles: Record<string, string> = {};
       for (const [property, value] of Object.entries(nextEdits)) {
         const trimmed = value.trim();
-        if (trimmed && !isSameStyleValue(property, trimmed, designBaseline.styles[property] ?? '')) {
+        if (
+          trimmed &&
+          !isSameStyleValue(property, trimmed, designBaseline.styles[property] ?? '')
+        ) {
           styles[property] = trimmed;
         }
       }
@@ -268,7 +271,11 @@ export function BrowserCommentPopover({
     'placeholder:text-[var(--text-tertiary)] outline-none',
     'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
   );
-  const styleTweaksLabel = t('rightSidebar.browser.styleTweaks');
+  const styleTweaksLabel = submitting
+    ? t('rightSidebar.browser.styleTweaksSubmitting')
+    : showStyles
+      ? t('rightSidebar.browser.styleTweaksCollapse')
+      : t('rightSidebar.browser.styleTweaksExpand');
   const styleTweaksButton = (
     <button
       type="button"

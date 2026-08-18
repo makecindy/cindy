@@ -94,6 +94,18 @@ describe('UserInfoSection — Canary avatar badge', () => {
     expect(source).not.toContain("user.role === 'admin'");
     expect(locale.sidebar.user.canaryBadge).toBe('灰度用户');
   });
+
+  it('keeps the collapsed settings Tip from overlapping the Canary native title', () => {
+    expect(
+      source.match(/title=\{isCanary \? t\('sidebar\.user\.canaryBadge'\) : undefined\}/g),
+    ).toHaveLength(1);
+    expect(source).toMatch(
+      /className="relative h-\[27px\] w-\[27px\] shrink-0"\s+title=\{isCanary \? t\('sidebar\.user\.canaryBadge'\) : undefined\}/,
+    );
+    expect(source).not.toMatch(
+      /className="relative h-9 w-9 shrink-0"\s+title=\{isCanary \? t\('sidebar\.user\.canaryBadge'\) : undefined\}/,
+    );
+  });
 });
 
 describe('UserInfoSection — 未登录态头像兜底', () => {

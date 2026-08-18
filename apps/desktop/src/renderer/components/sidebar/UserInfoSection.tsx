@@ -121,10 +121,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               aria-label={settingsLinkLabel}
               className="flex min-w-0 items-center justify-center text-left"
             >
-              <div
-                className="relative h-9 w-9 shrink-0"
-                title={isCanary ? t('sidebar.user.canaryBadge') : undefined}
-              >
+              <div className="relative h-9 w-9 shrink-0">
                 {user?.avatar && !avatarError ? (
                   <img
                     src={user.avatar}
