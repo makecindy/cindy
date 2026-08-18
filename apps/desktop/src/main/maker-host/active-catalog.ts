@@ -232,6 +232,48 @@ function isOfficialGrok46Id(modelId: string): boolean {
   return modelId === 'grok-4.6' || modelId.endsWith('/grok-4.6');
 }
 
+function pickXaiDefaultEffort(
+  efforts: readonly Effort[],
+  candidates: ReadonlyArray<Effort | null | undefined>,
+  fallback: 'official-high' | 'first',
+): Effort | null {
+  for (const candidate of candidates) {
+    if (candidate != null && efforts.includes(candidate)) return candidate;
+  }
+  if (efforts.length === 0) return null;
+  if (fallback === 'official-high' && efforts.includes('high')) return 'high';
+  return fallback === 'official-high'
+    ? (efforts[efforts.length - 1] ?? null)
+    : (efforts[0] ?? null);
+}
+
+/** SuperGrok 账号档位：官方梯子/默认 high 只作用于 Grok 4.6；其余以 discovery 为准。 */
+function resolveXaiAccountCapabilities(
+  entry: XaiDiscoveredModel,
+  baselineEfforts: readonly Effort[] | undefined,
+  registryDefault: Effort | null | undefined,
+  catalogDefault: Effort | null | undefined,
+): { efforts: Effort[]; defaultEffort: Effort | null } {
+  const isGrok46 = isOfficialGrok46Id(entry.id);
+  const efforts = isGrok46
+    ? mergeKnownXaiEfforts(entry.efforts, baselineEfforts)
+    : entry.efforts !== undefined
+      ? [...entry.efforts]
+      : [...(baselineEfforts ?? [])];
+  const defaultEffort = isGrok46
+    ? pickXaiDefaultEffort(
+        efforts,
+        [registryDefault, catalogDefault, entry.defaultEffort],
+        'official-high',
+      )
+    : pickXaiDefaultEffort(
+        efforts,
+        [entry.defaultEffort, registryDefault, catalogDefault],
+        'first',
+      );
+  return { efforts, defaultEffort };
+}
+
 /** Registry overlay 会写回静态档位;非 4.6 的 discovery 显式值必须压过它。 */
 function preserveNonGrok46DiscoveryEfforts(
   models: readonly CatalogModel[],
@@ -240,14 +282,13 @@ function preserveNonGrok46DiscoveryEfforts(
   const byId = new Map(discovered.map((entry) => [entry.id, entry]));
   return models.map((model) => {
     const entry = byId.get(model.id) ?? byId.get(`xai/${model.id}`);
-    if (!entry || entry.efforts === undefined || isOfficialGrok46Id(entry.id)) return model;
-    const efforts = [...entry.efforts];
-    const defaultEffort =
-      entry.defaultEffort != null && efforts.includes(entry.defaultEffort)
-        ? entry.defaultEffort
-        : efforts.length === 0
-          ? null
-          : efforts[0]!;
+    if (!entry || isOfficialGrok46Id(entry.id)) return model;
+    const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
+      entry,
+      model.efforts,
+      model.defaultEffort,
+      model.defaultEffort,
+    );
     return { ...model, efforts, defaultEffort };
   });
 }
@@ -650,29 +691,12 @@ function materializeXaiAccountModels(
       xaiCatalogModelById(provider, entry.id, agent) ??
       xaiCatalogModelById(provider, entry.id, 'pi');
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
-    const baseline = registry?.efforts ?? catalogModel?.efforts;
-    const isGrok46 = isOfficialGrok46Id(entry.id);
-    // 官方梯子只对 Grok 4.6 补 xhigh。其它 SuperGrok 模型保留 discovery 原值
-    // (含空数组),避免给 4.5 等模型宣传账号并未报告的档位。
-    const efforts = isGrok46
-      ? mergeKnownXaiEfforts(entry.efforts, baseline)
-      : entry.efforts !== undefined
-        ? [...entry.efforts]
-        : [...(baseline ?? [])];
-    const requestedDefault =
-      registry?.defaultEffort != null && efforts.includes(registry.defaultEffort)
-        ? registry.defaultEffort
-        : catalogModel?.defaultEffort != null && efforts.includes(catalogModel.defaultEffort)
-          ? catalogModel.defaultEffort
-          : entry.defaultEffort !== undefined
-            ? entry.defaultEffort
-            : null;
-    const defaultEffort =
-      requestedDefault !== null && efforts.includes(requestedDefault)
-        ? requestedDefault
-        : efforts.includes('high')
-          ? 'high'
-          : (efforts[efforts.length - 1] ?? null);
+    const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
+      entry,
+      registry?.efforts ?? catalogModel?.efforts,
+      registry?.defaultEffort,
+      catalogModel?.defaultEffort,
+    );
     const contextWindow =
       entry.contextWindow ?? registry?.contextWindow ?? catalogModel?.contextWindow ?? 200_000;
     const contextWindowVerified =
@@ -1017,10 +1041,14 @@ function computeMerged(): Catalog {
         delete rest.piApi;
         return rest;
       };
-      const piModels = applyPiApiAnnotations(
+      const piProjected = applyPiApiAnnotations(
         'xai',
         claudeAccountRoot.map((model) => projectXaiPiModel(p, model)),
       );
+      // Pi 投影会写回静态 official map;非 4.6 的 discovery 显式档位/默认值仍须压过它。
+      const piModels = useAccountMembership
+        ? preserveNonGrok46DiscoveryEfforts(piProjected, accountModels)
+        : piProjected;
       return {
         ...p,
         agents: p.agents.includes('pi') ? p.agents : [...p.agents, 'pi' as AgentKind],
