@@ -168,11 +168,14 @@ function stopPiPackageChangeTokenWatcher(): void {
   unwatchFile(changeTokenPath(), changeTokenWatchListener);
 }
 
+type SnapshotUnavailableWarning = 'inspection-failed' | 'inspection-limit';
+
 interface PiPackageState {
   version: typeof STATE_VERSION;
   disabledSources: string[];
   approvedExtensionSources: string[];
   approvedExtensionFingerprints: Record<string, string>;
+  snapshotUnavailableRoots: Record<string, SnapshotUnavailableWarning>;
 }
 
 interface ListedPackage {
@@ -248,7 +251,6 @@ let mutationTail: Promise<void> = Promise.resolve();
 let inspectionPromise: Promise<InspectedPackage[]> | undefined;
 let inspectionCache: { expiresAt: number; value: InspectedPackage[] } | undefined;
 let inspectionGeneration = 0;
-type SnapshotUnavailableWarning = 'inspection-failed' | 'inspection-limit';
 const snapshotUnavailableRoots = new Map<string, SnapshotUnavailableWarning>();
 
 function packageHome(): string {
@@ -327,12 +329,41 @@ function parseApprovedExtensionFingerprints(value: unknown): Record<string, stri
   return Object.fromEntries(entries) as Record<string, string>;
 }
 
+function parseSnapshotUnavailableRoots(
+  value: unknown,
+): Record<string, SnapshotUnavailableWarning> | undefined {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (
+    entries.length > MAX_INSPECTED_PACKAGES
+    || !entries.every(([root, warning]) => (
+      root.length > 0
+      && root.length <= MAX_SOURCE_LENGTH
+      && (warning === 'inspection-failed' || warning === 'inspection-limit')
+    ))
+  ) return undefined;
+  return Object.fromEntries(
+    entries.sort(([left], [right]) => left.localeCompare(right)),
+  ) as Record<string, SnapshotUnavailableWarning>;
+}
+
+function applySharedSnapshotUnavailableRoots(
+  roots: Readonly<Record<string, SnapshotUnavailableWarning>>,
+): void {
+  snapshotUnavailableRoots.clear();
+  for (const [root, warning] of Object.entries(roots)) {
+    snapshotUnavailableRoots.set(path.resolve(root), warning);
+  }
+}
+
 async function readState(): Promise<PiPackageState> {
   try {
     const parsed = JSON.parse(await fs.readFile(statePath(), 'utf8')) as Record<string, unknown>;
     const fingerprints = parseApprovedExtensionFingerprints(
       parsed.approvedExtensionFingerprints,
     );
+    const unavailableRoots = parseSnapshotUnavailableRoots(parsed.snapshotUnavailableRoots) ?? {};
     if (
       parsed.version === STATE_VERSION
       && Array.isArray(parsed.disabledSources)
@@ -350,6 +381,7 @@ async function readState(): Promise<PiPackageState> {
         approvedExtensionFingerprints: Object.fromEntries(
           approvedExtensionSources.map((source) => [source, fingerprints[source]!]),
         ),
+        snapshotUnavailableRoots: unavailableRoots,
       };
     }
     if (
@@ -364,6 +396,7 @@ async function readState(): Promise<PiPackageState> {
         disabledSources: [...new Set(parsed.disabledSources)],
         approvedExtensionSources: [],
         approvedExtensionFingerprints: {},
+        snapshotUnavailableRoots: {},
       };
     }
   } catch {
@@ -375,6 +408,7 @@ async function readState(): Promise<PiPackageState> {
     disabledSources: [],
     approvedExtensionSources: [],
     approvedExtensionFingerprints: {},
+    snapshotUnavailableRoots: {},
   };
 }
 
@@ -470,9 +504,8 @@ export async function runPiPackageCommand(
         treeTerminationSettled = true;
         settleTimedOutCommand();
         if (settled || childClosedAfterTimeout) return;
-        // Windows taskkill (and descendants retaining inherited stdio) does
-        // not guarantee that Node will ever emit `close`. Once the bounded
-        // tree-termination routine has finished, give stdio one final grace
+        // A platform tree-termination routine that can prove descendants are
+        // gone may still leave inherited stdio open. Give it one final grace
         // window, then reject so the cross-process mutation lock is released.
         forceSettleTimer = setTimeout(() => {
           childClosedAfterTimeout = true;
@@ -482,9 +515,10 @@ export async function runPiPackageCommand(
       }, {
         // A timed-out package manager may outlive the direct Pi child while
         // retaining inherited stdio and write access to the shared store.
-        // Do not release the mutation lock until Windows positively reaps the
-        // remaining descendants; an unavailable verifier fails closed.
-        requireWindowsDescendantConfirmation: true,
+        // Windows strict mode never sends taskkill to a reusable PID; without
+        // a launch-time Job Object it withholds onSettled so this mutation lock
+        // remains fail closed until restart rather than risking another process.
+        requireWindowsIdentityBoundTermination: true,
       });
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => { stdout = boundedAppend(stdout, chunk); });
@@ -1271,6 +1305,11 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
     runPiPackageCommand(['list', '--no-approve']),
     readState(),
   ]);
+  // Snapshot failures are shared package-store state, not a property of one
+  // Main process. Every fresh inspection replaces the local projection with
+  // the atomically persisted view so packaged/dev peers agree after the
+  // existing change-token invalidation.
+  applySharedSnapshotUnavailableRoots(state.snapshotUnavailableRoots);
   const listed = parsePiPackageListOutput(stdout);
   const startedAt = Date.now();
   const inspected: InspectedPackage[] = [];
@@ -1424,25 +1463,28 @@ export async function capturePiPackageEnableIdentity(source: string): Promise<Pi
   });
 }
 
-function updateSnapshotUnavailableRoots(
-  packageRoots: Iterable<string>,
-  warning: SnapshotUnavailableWarning,
-): boolean {
-  let changed = false;
-  for (const root of packageRoots) {
-    const resolved = path.resolve(root);
-    if (snapshotUnavailableRoots.get(resolved) === warning) continue;
-    snapshotUnavailableRoots.set(resolved, warning);
-    changed = true;
+async function persistSnapshotUnavailableProjection(
+  unavailableRoots: Iterable<readonly [string, SnapshotUnavailableWarning]>,
+): Promise<boolean> {
+  const state = await readState();
+  const next: Record<string, SnapshotUnavailableWarning> = {};
+  for (const [root, warning] of unavailableRoots) {
+    next[path.resolve(root)] = warning;
   }
-  return changed;
-}
-
-function clearSnapshotUnavailableRoots(packageRoots: Iterable<string>): boolean {
-  let changed = false;
-  for (const root of packageRoots) {
-    changed = snapshotUnavailableRoots.delete(path.resolve(root)) || changed;
+  const entries = Object.entries(next).sort(([left], [right]) => left.localeCompare(right));
+  const currentEntries = Object.entries(state.snapshotUnavailableRoots)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const changed = entries.length !== currentEntries.length
+    || entries.some(([root, warning], index) => (
+      root !== currentEntries[index]?.[0] || warning !== currentEntries[index]?.[1]
+    ));
+  if (changed) {
+    await writeState({
+      ...state,
+      snapshotUnavailableRoots: Object.fromEntries(entries),
+    });
   }
+  applySharedSnapshotUnavailableRoots(next);
   return changed;
 }
 
@@ -1505,13 +1547,11 @@ export async function resolveManagedPiPackageResources(
         const stageMetadata = snapshotStageMetadata.get(staged);
         const changedSources = new Set<string>();
         const copiedSourceRoots = stageMetadata?.sourcePackageRoots ?? resources.packageRoots;
-        let snapshotProjectionChanged = clearSnapshotUnavailableRoots(copiedSourceRoots);
-        if (stageMetadata?.skippedPackageRoots.length) {
-          snapshotProjectionChanged = updateSnapshotUnavailableRoots(
-            stageMetadata.skippedPackageRoots,
-            'inspection-limit',
-          ) || snapshotProjectionChanged;
-        }
+        const snapshotProjectionChanged = await persistSnapshotUnavailableProjection(
+          (stageMetadata?.skippedPackageRoots ?? []).map((root) => (
+            [root, 'inspection-limit'] as const
+          )),
+        );
         const verificationBudget = createSnapshotBudgetCounters(snapshotLimits);
         for (const [index, sourceRoot] of copiedSourceRoots.entries()) {
           const approvals = approvalsByRoot.get(sourceRoot);
@@ -1539,11 +1579,11 @@ export async function resolveManagedPiPackageResources(
         return staged;
       } catch (error) {
         await fs.rm(options.snapshotRoot, { recursive: true, force: true }).catch(() => undefined);
-        if (updateSnapshotUnavailableRoots(
-          resources.packageRoots,
-          error instanceof PiPackageSnapshotLimitError
-            ? 'inspection-limit'
-            : 'inspection-failed',
+        const warning = error instanceof PiPackageSnapshotLimitError
+          ? 'inspection-limit'
+          : 'inspection-failed';
+        if (await persistSnapshotUnavailableProjection(
+          resources.packageRoots.map((root) => [root, warning] as const),
         )) {
           await publishPiPackagesChanged({ invalidateCache: false });
         }
@@ -2229,6 +2269,7 @@ export async function mutatePiPackage(
           Object.entries(state.approvedExtensionFingerprints)
             .filter(([item]) => !removedSources.has(item)),
         ),
+        snapshotUnavailableRoots: state.snapshotUnavailableRoots,
       });
     } else if (request.action === 'update') {
       mutationMayHaveChangedState = true;
@@ -2296,6 +2337,7 @@ export async function mutatePiPackage(
         approvedExtensionFingerprints: Object.fromEntries(
           Object.entries(approvedFingerprints).sort(([left], [right]) => left.localeCompare(right)),
         ),
+        snapshotUnavailableRoots: state.snapshotUnavailableRoots,
       });
     }
     invalidateInspectionCache();

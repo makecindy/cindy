@@ -20,175 +20,26 @@ export function capAppend(current: string, chunk: string, cap: number): string {
  * 连孙子一起——只 kill shell 会漏成后台孤儿)。失败静默(进程可能已退出)。
  *
  * ⚠️ taskkill 是异步 fire-and-forget,调用方**不能**假设 close 一定跟上——
- * kill 后必须自备"强制 settle"计时兜底。**该计时不能与本函数并行起跑**:
- * 必须等 `onSettled` 回调触发(严格模式下还包括存活期身份快照的只读消失确认)
- * 才去武装,否则会在收敛动作真正生效前抢跑。
+ * kill 后必须自备"强制 settle"计时兜底。安全敏感的严格模式不使用
+ * taskkill:Windows 没有可从纯 Node/TypeScript 原子绑定整棵后代树的接口,因此只
+ * 通过 ChildProcess 持有的原始进程句柄终止直接子进程,并故意不触发 onSettled,
+ * 让调用方的共享锁保持 fail closed,直到应用重启或未来接入启动时 Job Object。
  */
 const WIN32_TASKKILL_MAX_ATTEMPTS = 3;
 const WIN32_TASKKILL_RETRY_DELAY_MS = 150;
 
 export interface KillProcessTreeOptions {
   /**
-   * Security-sensitive stores may not release their lock until a process-tree
-   * snapshot captured while the direct child was alive has been confirmed gone.
+   * Security-sensitive stores must not send taskkill to a reusable numeric PID.
+   * Strict mode terminates only the original ChildProcess handle and deliberately
+   * withholds onSettled because pure Node cannot prove every descendant is gone.
    * The default keeps the generic, best-effort cleanup behavior.
    */
-  requireWindowsDescendantConfirmation?: boolean;
-}
-
-const WIN32_PROCESS_QUERY_TIMEOUT_MS = 3_000;
-const WIN32_SNAPSHOT_CONFIRM_RETRY_DELAY_MS = 150;
-const WIN32_SNAPSHOT_CONFIRM_MAX_UNAVAILABLE_ATTEMPTS = 3;
-
-interface Win32ProcessRow {
-  pid: number;
-  ppid: number;
-  created: string;
-}
-
-interface Win32TreeSnapshot {
-  rootIdentity: string;
-  identities: Set<string>;
+  requireWindowsIdentityBoundTermination?: boolean;
 }
 
 function childExited(child: ChildProcess): boolean {
   return typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
-}
-
-function win32ProcessIdentity(row: Pick<Win32ProcessRow, 'pid' | 'created'>): string {
-  return `${row.pid}:${row.created}`;
-}
-
-/**
- * Windows 严格收尾只使用完整进程表做**只读身份观察**。PID 与 CreationDate
- * 组成稳定身份；父 PID 被复用时，新进程不会匹配旧快照，也绝不会成为 kill 目标。
- */
-function queryWindowsProcessTable(onResult: (rows: Win32ProcessRow[] | null) => void): void {
-  let finished = false;
-  let query: ChildProcess | undefined;
-  const finish = (rows: Win32ProcessRow[] | null): void => {
-    if (finished) return;
-    finished = true;
-    clearTimeout(watchdog);
-    onResult(rows);
-  };
-  const watchdog = setTimeout(() => {
-    try {
-      query?.kill();
-    } catch {
-      /* 查询进程已经结束 */
-    }
-    finish(null);
-  }, WIN32_PROCESS_QUERY_TIMEOUT_MS);
-  watchdog.unref?.();
-  try {
-    query = spawn(
-      'powershell',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CreationDate)" }',
-      ],
-      { windowsHide: true },
-    );
-    let output = '';
-    query.stdout?.on('data', (chunk: Buffer) => {
-      output += chunk.toString('utf8');
-    });
-    query.on('close', (code) => {
-      if (finished) return;
-      if (code !== 0) {
-        finish(null);
-        return;
-      }
-      const rows = output.split(/\r?\n/).flatMap((line) => {
-        const [pidText, ppidText, created = ''] = line.trim().split('\t');
-        const pid = Number(pidText);
-        const ppid = Number(ppidText);
-        return Number.isInteger(pid) && Number.isInteger(ppid) && created
-          ? [{ pid, ppid, created }]
-          : [];
-      });
-      finish(rows);
-    });
-    query.on('error', () => finish(null));
-  } catch {
-    finish(null);
-  }
-}
-
-function captureWindowsTreeWhileParentLives(
-  pid: number,
-  child: ChildProcess,
-  previous: Win32TreeSnapshot | undefined,
-  onCaptured: (snapshot: Win32TreeSnapshot) => void,
-  onUnavailable: () => void,
-): void {
-  if (childExited(child)) {
-    onUnavailable();
-    return;
-  }
-  queryWindowsProcessTable((rows) => {
-    if (!rows || childExited(child)) {
-      onUnavailable();
-      return;
-    }
-    const root = rows.find((row) => row.pid === pid);
-    if (!root) {
-      onUnavailable();
-      return;
-    }
-    const rootIdentity = win32ProcessIdentity(root);
-    if (previous && previous.rootIdentity !== rootIdentity) {
-      onUnavailable();
-      return;
-    }
-    const identities = new Set(previous?.identities ?? []);
-    identities.add(rootIdentity);
-    const treePids = new Set<number>([pid]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const row of rows) {
-        if (!treePids.has(row.ppid) || treePids.has(row.pid)) continue;
-        treePids.add(row.pid);
-        identities.add(win32ProcessIdentity(row));
-        grew = true;
-      }
-    }
-    onCaptured({ rootIdentity, identities });
-  });
-}
-
-function confirmWindowsSnapshotGone(
-  snapshot: Win32TreeSnapshot,
-  onSettled?: () => void,
-  unavailableAttempts = 0,
-): void {
-  queryWindowsProcessTable((rows) => {
-    const retry = (nextUnavailableAttempts: number): void => {
-      if (nextUnavailableAttempts >= WIN32_SNAPSHOT_CONFIRM_MAX_UNAVAILABLE_ATTEMPTS) {
-        // 进程表连续不可用时，无法证明共享 store 已安全静止。明确终止
-        // 观察但不调用 onSettled，让安全敏感调用方保持 fail closed。
-        return;
-      }
-      setTimeout(
-        () => confirmWindowsSnapshotGone(snapshot, onSettled, nextUnavailableAttempts),
-        WIN32_SNAPSHOT_CONFIRM_RETRY_DELAY_MS,
-      ).unref?.();
-    };
-    if (!rows) {
-      retry(unavailableAttempts + 1);
-      return;
-    }
-    const present = new Set(rows.map(win32ProcessIdentity));
-    if ([...snapshot.identities].every((identity) => !present.has(identity))) {
-      onSettled?.();
-      return;
-    }
-    retry(0);
-  });
 }
 
 function killDirectChild(child: ChildProcess): void {
@@ -246,115 +97,21 @@ function killWindowsTreeBestEffort(
   }
 }
 
-function confirmSnapshotAfterDirectExit(
-  child: ChildProcess,
-  snapshot: Win32TreeSnapshot,
-  onSettled?: () => void,
-): void {
-  const confirm = (): void => confirmWindowsSnapshotGone(snapshot, onSettled);
-  if (childExited(child)) {
-    confirm();
-    return;
-  }
-  child.once('exit', confirm);
-  if (childExited(child)) {
-    child.removeListener('exit', confirm);
-    confirm();
-  }
-}
-
-function killWindowsTreeConfirmedAttempt(
-  pid: number,
-  child: ChildProcess,
-  snapshot: Win32TreeSnapshot,
-  attempt: number,
-  onSettled?: () => void,
-): void {
-  if (childExited(child)) {
-    confirmWindowsSnapshotGone(snapshot, onSettled);
-    return;
-  }
-  try {
-    const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-    let attemptFinished = false;
-    const onFailure = (): void => {
-      if (attemptFinished) return;
-      attemptFinished = true;
-      if (childExited(child)) {
-        confirmWindowsSnapshotGone(snapshot, onSettled);
-        return;
-      }
-      if (attempt < WIN32_TASKKILL_MAX_ATTEMPTS) {
-        setTimeout(() => {
-          captureWindowsTreeWhileParentLives(
-            pid,
-            child,
-            snapshot,
-            (refreshed) =>
-              killWindowsTreeConfirmedAttempt(pid, child, refreshed, attempt + 1, onSettled),
-            () => {
-              // 父进程已退出、PID 身份变化或进程表不可用时，不能再对这个
-              // 数字 PID 动手。Node ChildProcess 保留原进程句柄，可安全终止
-              // 直接子进程；之后仅凭已捕获的稳定身份做只读消失确认。
-              if (!childExited(child)) killDirectChild(child);
-              confirmWindowsSnapshotGone(snapshot, onSettled);
-            },
-          );
-        }, WIN32_TASKKILL_RETRY_DELAY_MS).unref?.();
-        return;
-      }
-      // 最后一次 taskkill 失败时仍持有经存活期刷新过的身份快照。只终止 Node
-      // 直接子进程；其 exit 后按稳定身份只读确认，不枚举或杀任何 PID。
-      confirmSnapshotAfterDirectExit(child, snapshot, onSettled);
-      killDirectChild(child);
-    };
-    killer.on('exit', (code) => {
-      if (code !== 0) {
-        onFailure();
-        return;
-      }
-      if (attemptFinished) return;
-      attemptFinished = true;
-      confirmWindowsSnapshotGone(snapshot, onSettled);
-    });
-    killer.on('error', onFailure);
-  } catch {
-    // spawn 本身失败时身份仍已确认，但没有安全的树杀动作；直接子进程退出后
-    // 只读核验快照。核验不可用或仍有成员存活时保持 fail closed。
-    confirmSnapshotAfterDirectExit(child, snapshot, onSettled);
-    killDirectChild(child);
-  }
-}
-
 /**
- * 严格调用方先在原始子进程存活时捕获 PID+CreationDate 树快照，再执行树杀。
- * 后续只核验已捕获身份是否消失，绝不拿已释放的父 PID 枚举或杀新进程。
+ * Windows 的 ChildProcess 持有原始进程句柄，kill 不会命中复用后的同号 PID。
+ * 纯 Node 没有启动时 Job Object，也无法原子证明整棵后代树都归属该句柄；安全
+ * 敏感调用方因此只终止直接子进程且永不回调 settled，让共享锁保持 fail closed。
  */
-function killWindowsTreeConfirmed(pid: number, child: ChildProcess, onSettled?: () => void): void {
-  let settled = false;
-  const settleOnce = (): void => {
-    if (settled) return;
-    settled = true;
-    onSettled?.();
-  };
-  captureWindowsTreeWhileParentLives(
-    pid,
-    child,
-    undefined,
-    (snapshot) => killWindowsTreeConfirmedAttempt(pid, child, snapshot, 1, settleOnce),
-    () => {
-      // 无法证明 PID 仍属于原始子进程时不再对数字 PID 发 taskkill。只使用
-      // Node 保存的原进程句柄终止直接子进程，并保持安全锁 fail closed。
-      if (!childExited(child)) killDirectChild(child);
-    },
-  );
+function killWindowsIdentityBoundFailClosed(child: ChildProcess): void {
+  if (!childExited(child)) killDirectChild(child);
 }
 
 /**
  * @param onSettled 可选:本函数已经完成安全的树杀与必要确认时调用一次。调用方
  *   应该**只在这个回调里**武装"强制 settle"
  *   计时器,不要在调用 killProcessTree 后立即武装——否则计时器和收敛动作并行
- *   赛跑,大概率在真正收敛前就抢跑判定超时(Greptile review)。
+ *   赛跑,大概率在真正收敛前就抢跑判定超时。Windows 严格模式故意不回调,
+ *   因为没有 Job Object 时无法安全证明后代树已静止。
  */
 export function killProcessTree(
   pid: number | undefined,
@@ -363,8 +120,8 @@ export function killProcessTree(
   options: KillProcessTreeOptions = {},
 ): void {
   if (process.platform === 'win32' && pid) {
-    if (options.requireWindowsDescendantConfirmation) {
-      killWindowsTreeConfirmed(pid, child, onSettled);
+    if (options.requireWindowsIdentityBoundTermination) {
+      killWindowsIdentityBoundFailClosed(child);
     } else {
       killWindowsTreeBestEffort(pid, child, 1, onSettled);
     }

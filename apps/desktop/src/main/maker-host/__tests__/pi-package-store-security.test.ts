@@ -293,7 +293,7 @@ describe('Pi package executable-code boundary', () => {
     expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(128 * 1_024);
   });
 
-  it.each(['darwin', 'win32'] as const)(
+  it.each(['darwin'] as const)(
     'waits for timed-out package trees to close on %s',
     async (platform) => {
       const originalPlatform = process.platform;
@@ -312,9 +312,9 @@ describe('Pi package executable-code boundary', () => {
           4242,
           expect.any(Object),
           expect.any(Function),
-          { requireWindowsDescendantConfirmation: true },
+          { requireWindowsIdentityBoundTermination: true },
         );
-        expect(runtime.spawns.at(-1)?.detached).toBe(platform !== 'win32');
+        expect(runtime.spawns.at(-1)?.detached).toBe(true);
         expect(settled).toBe(false);
         runtime.pendingClose?.(1);
         await Promise.resolve();
@@ -327,7 +327,7 @@ describe('Pi package executable-code boundary', () => {
     },
   );
 
-  it.each(['darwin', 'win32'] as const)(
+  it.each(['darwin'] as const)(
     'force-settles a timed-out package tree when stdio never closes on %s',
     async (platform) => {
       const originalPlatform = process.platform;
@@ -355,6 +355,36 @@ describe('Pi package executable-code boundary', () => {
       }
     },
   );
+
+  it('keeps a timed-out Windows package mutation fail closed without a proven tree termination', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const store = await import('../pi-package-store.js');
+      runtime.holdMutationCommand = true;
+      let settled = false;
+      void store.runPiPackageCommand(['install', 'npm:test'], 1).finally(() => {
+        settled = true;
+      });
+
+      await vi.waitFor(() => {
+        expect(processRuntime.killTree).toHaveBeenCalledOnce();
+      }, { timeout: 1_000 });
+      expect(processRuntime.killTree).toHaveBeenCalledWith(
+        4242,
+        expect.any(Object),
+        expect.any(Function),
+        { requireWindowsIdentityBoundTermination: true },
+      );
+      expect(runtime.spawns.at(-1)?.detached).toBe(false);
+
+      runtime.pendingClose?.(1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
 
   it('binds mutation grants to one exact request and rejects replay', async () => {
     const { source } = await createPackage();
@@ -1056,10 +1086,15 @@ describe('Pi package executable-code boundary', () => {
         { enabled: false, warning: 'inspection-limit' },
       ],
     });
-    await expect(fs.readFile(
+    const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
-    )).rejects.toMatchObject({ code: 'ENOENT' });
+    )) as { disabledSources: string[]; snapshotUnavailableRoots: Record<string, string> };
+    expect(state.disabledSources).toEqual([]);
+    expect(state.snapshotUnavailableRoots).toEqual({
+      [await fs.realpath(packageRoots[1]!)]: 'inspection-limit',
+      [await fs.realpath(packageRoots[2]!)]: 'inspection-limit',
+    });
   });
 
   it('does not run a skipped descendant extension from an unverified ancestor snapshot', async () => {
@@ -1214,6 +1249,63 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('shares snapshot failures across instances and clears them after a successful staging', async () => {
+    const { source } = await createPackage();
+    const firstStore = await import('../pi-package-store.js');
+    await mutateAuthorized(firstStore, { action: 'set-enabled', source, enabled: true });
+
+    vi.resetModules();
+    const secondStore = await import('../pi-package-store.js');
+    const secondListener = vi.fn();
+    const unsubscribeSecond = secondStore.onPiPackagesChanged(secondListener);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    try {
+      await expect(firstStore.resolveManagedPiPackageResources({
+        snapshotRoot: path.join(runtime.userData, 'first-instance-failed-snapshot'),
+        snapshotLimits: {
+          maxEntries: 100,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 0,
+        },
+      })).resolves.toEqual({
+        extensions: [],
+        skills: [],
+        promptTemplates: [],
+        packageRoots: [],
+      });
+      await vi.waitFor(() => expect(secondListener).toHaveBeenCalled(), { timeout: 2_000 });
+      await expect(secondStore.listPiPackages()).resolves.toMatchObject({
+        packages: [{ source, enabled: false, warning: 'inspection-limit' }],
+      });
+
+      const firstListener = vi.fn();
+      const unsubscribeFirst = firstStore.onPiPackagesChanged(firstListener);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      try {
+        const recoveredRoot = path.join(runtime.userData, 'second-instance-recovered-snapshot');
+        await expect(secondStore.resolveManagedPiPackageResources({
+          snapshotRoot: recoveredRoot,
+        })).resolves.toMatchObject({
+          extensions: [path.join(recoveredRoot, '0', 'extensions', 'index.ts')],
+          packageRoots: [path.join(recoveredRoot, '0')],
+        });
+        await vi.waitFor(() => expect(firstListener).toHaveBeenCalled(), { timeout: 2_000 });
+        await expect(firstStore.listPiPackages()).resolves.toMatchObject({
+          packages: [{ source, enabled: true }],
+        });
+        const state = JSON.parse(await fs.readFile(
+          path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+          'utf8',
+        )) as { snapshotUnavailableRoots: Record<string, string> };
+        expect(state.snapshotUnavailableRoots).toEqual({});
+      } finally {
+        unsubscribeFirst();
+      }
+    } finally {
+      unsubscribeSecond();
+    }
+  });
+
   it.runIf(process.platform !== 'win32').each([
     { layout: 'local' as const, source: 'local' },
     { layout: 'npm' as const, source: 'npm:mode-preserving-extension' },
@@ -1324,6 +1416,7 @@ describe('Pi package executable-code boundary', () => {
       disabledSources: string[];
       approvedExtensionSources: string[];
       approvedExtensionFingerprints: Record<string, string>;
+      snapshotUnavailableRoots: Record<string, string>;
     };
     expect(migrated).toEqual({
       version: 3,
@@ -1332,6 +1425,7 @@ describe('Pi package executable-code boundary', () => {
       approvedExtensionFingerprints: {
         [source]: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
+      snapshotUnavailableRoots: {},
     });
 
     await mutateAuthorized(store, { action: 'install', source });
