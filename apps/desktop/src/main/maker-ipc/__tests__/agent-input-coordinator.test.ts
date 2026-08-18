@@ -6283,6 +6283,66 @@ describe('AgentInputCoordinator steer transaction', () => {
     await expect(newSteerPromise).resolves.toBe(true);
   });
 
+  it('does not resurrect a delivery-uncertain steer after a same-generation replacement succeeds', async () => {
+    const h = createHarness();
+    const sid = 'steer-uncertain-superseded-same-generation';
+    const oldTurn = makeItem('old-turn', 'old turn');
+    const newTurn = makeItem('new-turn', 'new turn');
+    const oldSteer = makeItem('reused-steer', 'old steer');
+    const newSteer = makeItem('reused-steer', 'new steer');
+    const oldGate = deferred<void>();
+
+    h.setAgentKind('codex');
+    h.steerToAgent
+      .mockImplementationOnce(() => oldGate.promise)
+      .mockImplementationOnce(async () => {});
+
+    h.coordinator.enqueue(sid, oldTurn);
+    await flush();
+    const oldSteerPromise = h.coordinator.steer(sid, oldSteer);
+    await flush();
+
+    const generationBeforeStop = (
+      h.coordinator as unknown as {
+        getState: (sessionId: string) => { generation: number };
+      }
+    ).getState(sid).generation;
+    h.coordinator.stop(sid);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    h.coordinator.enqueue(sid, newTurn);
+    await flush();
+    await expect(h.coordinator.steer(sid, newSteer)).resolves.toBe(true);
+    await flush();
+
+    oldGate.reject(
+      new Error(
+        'Codex steer cancelled before acceptance; delivery uncertain (request already dispatched)',
+      ),
+    );
+    await expect(oldSteerPromise).resolves.toBe(false);
+    await flush();
+
+    const state = (
+      h.coordinator as unknown as {
+        getState: (sessionId: string) => {
+          generation: number;
+          activeTurn: { item: AgentInputQueuedMessage | null } | null;
+        };
+      }
+    ).getState(sid);
+    expect(state.generation).toBe(generationBeforeStop);
+    expect(state.activeTurn?.item?.text).toBe('new steer');
+    expect(latestProjection(h.projections)).toMatchObject({
+      pendingQueue: [],
+      queuePaused: false,
+      steeringQueueClientIds: [],
+      error: null,
+    });
+  });
+
   it('cleans only the rejected steer when another request owns the same generation', async () => {
     const h = createHarness();
     const sid = 'steer-overlap-request-identity';

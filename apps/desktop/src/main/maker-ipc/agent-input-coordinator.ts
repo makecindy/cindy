@@ -864,6 +864,15 @@ export class AgentInputCoordinator {
   private readonly states = new Map<string, SessionInputState>();
   private readonly steerAbortControllers = new Map<string, Map<string, AbortController>>();
   /**
+   * Stop clears visible steer markers before the provider promise necessarily settles. Retain
+   * the latest request identity until every older request with the same clientId has settled so
+   * a cancelled request cannot regain ownership after a replacement request has already won.
+   */
+  private readonly steerRequestLineages = new Map<
+    string,
+    Map<string, { latestToken: symbol; unsettledTokens: Set<symbol> }>
+  >();
+  /**
    * One clear/stop-scoped cancellation boundary per session generation.  The
    * vendor adapters can spend time converting attachments after the final
    * synchronous fence; aborting this signal keeps that late work from reaching
@@ -1800,7 +1809,11 @@ export class AgentInputCoordinator {
     const messageUuid = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
-    const steerRequestToken = Symbol('agent-input-steer-request');
+    const steerRequestToken = this.beginSteerRequest(sessionId, item.clientId);
+    const finishSteerRequest = (result: boolean): boolean => {
+      this.settleSteerRequest(sessionId, item.clientId, steerRequestToken);
+      return result;
+    };
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
@@ -1857,7 +1870,7 @@ export class AgentInputCoordinator {
           this.emit(sessionId);
         }
         this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
-        return false;
+        return finishSteerRequest(false);
       }
       if (verdict.action === 'block') {
         // 拦截即终态:不注入、不落库,气泡由 onUserMessageBlocked 广播降级;
@@ -1880,7 +1893,7 @@ export class AgentInputCoordinator {
         this.scheduleDrain(sessionId, 'steer-ghost-blocked');
         // 普通 UI steer 的 true 表示“已处置”，避免 renderer 把被策略拦截的内容
         // 重新入队；控制面要求严格的 same-turn 投递结果，不能把 blocked 报成成功。
-        return opts?.fallbackToTurn === false ? false : true;
+        return finishSteerRequest(opts?.fallbackToTurn === false ? false : true);
       }
       if (verdict.action === 'rewrite') {
         // 与 drain 的 rewrite 同构:JSON-aware 只换 text 字段并保留附件信封；
@@ -1917,7 +1930,7 @@ export class AgentInputCoordinator {
           this.emit(sessionId);
         }
         this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
-        return false;
+        return finishSteerRequest(false);
       }
       item.persistedContent = attachSessionReferenceMetadata(
         item.persistedContent,
@@ -1950,7 +1963,7 @@ export class AgentInputCoordinator {
           steerGeneration,
           currentGeneration: latest.generation,
         });
-        return false;
+        return finishSteerRequest(false);
       }
       const markerStillPresent = this.clearSteeringMarker(latest, item.clientId, {
         generation: steerGeneration,
@@ -1963,7 +1976,7 @@ export class AgentInputCoordinator {
           this.clearDirectSteeringItem(latest, item.clientId);
           this.emit(sessionId);
         }
-        return false;
+        return finishSteerRequest(false);
       }
 
       if (isNoActiveTurnError(err)) {
@@ -1975,7 +1988,7 @@ export class AgentInputCoordinator {
             clientId: item.clientId,
           });
           this.emit(sessionId);
-          return false;
+          return finishSteerRequest(false);
         }
         // maker-core 权威判定无活跃 turn — 先让 host 校准可能 stale 的 busy
         // tracker, 否则下面 fallback / drain 仍会被假忙挡住 (见 deps 注释)。
@@ -1999,12 +2012,12 @@ export class AgentInputCoordinator {
         if (opts?.fallbackToTurn === false) {
           this.clearDirectSteeringItem(latest, item.clientId);
           this.emit(sessionId);
-          return false;
+          return finishSteerRequest(false);
         }
         this.emit(sessionId);
         this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
         if (opts?.touchUserSend) this.touchUserSend(sessionId);
-        return true;
+        return finishSteerRequest(true);
       }
 
       log.warn('steer hard failure', {
@@ -2043,12 +2056,13 @@ export class AgentInputCoordinator {
         latest.generation === steerGeneration &&
         (steerVendorTurnGeneration === null ||
           this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration) &&
-        !latest.steeringRequestTokens.has(item.clientId)
+        this.isLatestSteerRequest(sessionId, item.clientId, steerRequestToken)
       ) {
         // Stop/close 赢在 ack 返回前(marker 已被 stop 清):RPC 已发出,结果同样
         // 不确定,消息必须有落点(尤其 composer 入口无队列行的场景,review #939
-        // 第四轮)。物化进暂停队列交用户处置。generation 守卫:clearSession 是
-        // 用户显式重置,不把消息塞回已清空的会话。
+        // 第四轮)。只有本请求仍是该 clientId 的最新身份时才物化；同 generation
+        // 内的后续请求一旦取代它，迟到结果不得复活旧消息或暂停新队列。
+        // generation 守卫:clearSession 是用户显式重置,不把消息塞回已清空的会话。
         this.prependQueueHeadIfMissing(latest, item);
         latest.queuePaused = true;
         // 同上:不确定投递的保护性暂停,不许新输入静默放行。
@@ -2060,7 +2074,7 @@ export class AgentInputCoordinator {
       }
       this.emit(sessionId);
       this.scheduleDrain(sessionId, 'steer-hard-failure');
-      return false;
+      return finishSteerRequest(false);
     }
     const accepted = this.getState(sessionId);
     if (
@@ -2080,7 +2094,7 @@ export class AgentInputCoordinator {
         },
       );
       this.emit(sessionId);
-      return false;
+      return finishSteerRequest(false);
     }
     this.clearDirectSteeringItem(accepted, item.clientId);
     this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
@@ -2152,7 +2166,7 @@ export class AgentInputCoordinator {
       // error，但不能向调用方报告“未投递”诱导它用新 clientId 重发，造成模型
       // 在同一 turn 内消费两份。accepted clientId 已在 rememberEnqueuedClientId
       // 登记，原 id 的幂等重试也会直接收口。
-      return true;
+      return finishSteerRequest(true);
     }
     if (opts?.touchUserSend) this.touchUserSend(sessionId);
     // 已投递收口(review #939 第二轮 P1):steer ack 可能与 turn 终态乱序——
@@ -2191,7 +2205,7 @@ export class AgentInputCoordinator {
       this.clearSessionRunningRetry(accepted);
     }
     this.scheduleDrain(sessionId, 'steer-accepted');
-    return true;
+    return finishSteerRequest(true);
   }
 
   stop(
@@ -4582,6 +4596,39 @@ export class AgentInputCoordinator {
     // injecting the message after the user has already stopped the task.
     for (const controller of byClientId.values()) controller.abort();
     this.steerAbortControllers.delete(sessionId);
+  }
+
+  private beginSteerRequest(sessionId: string, clientId: string): symbol {
+    const token = Symbol('agent-input-steer-request');
+    let byClientId = this.steerRequestLineages.get(sessionId);
+    if (!byClientId) {
+      byClientId = new Map();
+      this.steerRequestLineages.set(sessionId, byClientId);
+    }
+    const existing = byClientId.get(clientId);
+    if (existing) {
+      existing.latestToken = token;
+      existing.unsettledTokens.add(token);
+    } else {
+      byClientId.set(clientId, { latestToken: token, unsettledTokens: new Set([token]) });
+    }
+    return token;
+  }
+
+  private isLatestSteerRequest(sessionId: string, clientId: string, token: symbol): boolean {
+    return this.steerRequestLineages.get(sessionId)?.get(clientId)?.latestToken === token;
+  }
+
+  private settleSteerRequest(sessionId: string, clientId: string, token: symbol): void {
+    const byClientId = this.steerRequestLineages.get(sessionId);
+    const lineage = byClientId?.get(clientId);
+    if (!byClientId || !lineage) return;
+    lineage.unsettledTokens.delete(token);
+    // Keep latestToken as a tombstone while an older callback is still pending. Otherwise a
+    // replacement that settles first would make the old request look current again.
+    if (lineage.unsettledTokens.size > 0) return;
+    byClientId.delete(clientId);
+    if (byClientId.size === 0) this.steerRequestLineages.delete(sessionId);
   }
 
   private touchUserSend(sessionId: string, atMs?: number): void {
