@@ -39,11 +39,11 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
 
   // Keep the route policy aligned with modelList.ts: disabled/non-chat capability entries do not
   // enter a new worker route, while the model registry identity remains provider-specific.
-  const routableModels = (provider: ProviderView, agent: AgentKind) =>
+  const routableModels = (provider: ProviderView, agent: Exclude<AgentKind, 'dsh'>) =>
     (provider.models[agent] ?? []).filter((model) =>
       isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
     );
-  const availabilityFor = (agent: AgentKind) =>
+  const availabilityFor = (agent: Exclude<AgentKind, 'dsh'>) =>
     connectedProvidersForAgent(views, agent).map((provider) => {
       const models = routableModels(provider, agent);
       const registryIdentityByModel = Object.fromEntries(

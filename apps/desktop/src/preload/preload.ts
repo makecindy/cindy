@@ -5243,7 +5243,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:review:start', input),
 
     listAgentCommands: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
     ): Promise<{
       success: boolean;
       error?: string;
@@ -5387,7 +5387,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */
       id?: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
       workingDir: string;
       model: string;
       title?: string;
@@ -5642,14 +5642,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // switched=false 且无 deferred = 同引擎 no-op(用户选回当前引擎,意图已清)。
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
       model: string,
       providerId?: string | null,
       effort?: string,
       fastMode?: boolean,
     ): Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
       model: string;
       engineReady: boolean;
       deferred?: boolean;
@@ -6172,7 +6172,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),

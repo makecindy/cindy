@@ -87,6 +87,10 @@ export function RunHistoryPane({
   const sessionAgentMap = useMemo(() => {
     const m = new Map<string, AgentKind>();
     for (const sess of allSessions) {
+      // Scheduler has no DSH execution protocol. Historic DSH sessions must
+      // fall back to the schedule's own supported agent instead of being
+      // mislabeled as Codex.
+      if (sess.agentKind === 'dsh') continue;
       m.set(sess.id, sess.agentKind === 'cc' ? 'claude-code' : sess.agentKind === 'pi' ? 'pi' : 'codex');
     }
     return m;
@@ -97,7 +101,7 @@ export function RunHistoryPane({
       const referenceAgent = sessionReferences.get(run.sessionId)?.agentKind;
       return (
         sessionAgentMap.get(run.sessionId) ||
-        (referenceAgent === 'cc' ? 'claude-code' : referenceAgent) ||
+        (referenceAgent === 'cc' ? 'claude-code' : referenceAgent === 'dsh' ? undefined : referenceAgent) ||
         s.agentKind
       );
     },

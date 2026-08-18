@@ -361,16 +361,7 @@ describe('performSessionAgentSwitch', () => {
 describe('deferred switch (turn running)', () => {
   function makeDepsWithPending(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}) {
     const base = makeDeps(overrides);
-    const store = new Map<
-      string,
-      {
-        targetAgentKind: 'claude-code' | 'codex' | 'pi';
-        model: string;
-        providerId: string | null | undefined;
-        effort?: string;
-        fastMode?: boolean;
-      }
-    >();
+    const store = new Map<string, PendingAgentSwitchIntent>();
     base.deps.pendingSwitches = {
       set: (id, intent) => void store.set(id, intent),
       get: (id) => store.get(id),

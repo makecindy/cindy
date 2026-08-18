@@ -430,7 +430,7 @@ function modelRegistryMetaFields(
 ): RegistryMetaFields | undefined {
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
-  const registryAgent = agent === 'pi' ? undefined : agent;
+  const registryAgent = agent === 'pi' || agent === 'dsh' ? undefined : agent;
   const catalog = base ?? BUNDLED_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
   if (!matched) return undefined;

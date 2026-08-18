@@ -107,6 +107,8 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
+import { buildDshAgent, createDesktopRemoteDshTransport, prepareDshVendorOptions } from './dsh-host.js';
+import { ensureDshRuntime } from './dsh-remote-installer.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -1904,6 +1906,17 @@ export function getMaker(): Maker {
         return getRemoteAgentProxyEnv(remoteHost);
       },
     });
+    const dshAgent = buildDshAgent(desktopMakerLogger, async (input) => {
+      const remoteHost = getRemoteSshPool().get(input.remoteHostId);
+      if (!remoteHost) {
+        throw new Error(`remote SSH host "${input.remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+      }
+      if (remoteHost.getStatus() !== 'ready') {
+        throw new Error(`remote SSH host "${input.remoteHostId}" is not connected (status=${remoteHost.getStatus()}) — connect it under Settings → Remote first`);
+      }
+      await ensureDshRuntime(remoteHost);
+      return createDesktopRemoteDshTransport(remoteHost, input, desktopMakerLogger);
+    });
 
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
@@ -1932,6 +1945,7 @@ export function getMaker(): Maker {
         'claude-code': claudeAgent,
         codex: codexAgent,
         ...(piAgent ? { pi: piAgent } : {}),
+        ...(dshAgent ? { dsh: dshAgent } : {}),
       },
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
@@ -1952,6 +1966,9 @@ export function getMaker(): Maker {
             throw new Error('Account provider models are not ready for this app session; retry.');
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
+          if (opts.agentKind === 'dsh') {
+            opts.vendorOptions = { ...(opts.vendorOptions ?? {}), ...prepareDshVendorOptions(opts.remoteHostId) };
+          }
           if (opts.agentKind === 'codex') {
             const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(
               opts.workingDir,

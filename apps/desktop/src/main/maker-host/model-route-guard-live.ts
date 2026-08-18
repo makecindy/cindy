@@ -282,6 +282,8 @@ const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
   codex: 'gpt-5.4-mini',
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
   pi: 'claude-haiku-4-5',
+  // DSH oneShot 尚未实现；保留明确默认值，避免通用路由守卫访问缺失键。
+  dsh: 'deepseek-v4-flash',
 };
 
 /**

@@ -2131,6 +2131,9 @@ export function ProvidersSection() {
         let added = 0;
         let anyOk = false;
         for (const agent of p.agents) {
+          // DSH uses its dedicated DeepSeek credential/runtime path rather
+          // than the generic custom-provider model-discovery protocol.
+          if (agent === 'dsh') continue;
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
           const authMethod =

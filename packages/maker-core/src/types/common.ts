@@ -5,7 +5,8 @@
  * 故意保持兼容以便 desktop adapter 层零代码翻译。
  */
 
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+/** Every locally runnable base harness. Feature-specific routes may narrow this set. */
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'dsh';
 export type WorkspaceKind = 'project' | 'dialogue';
 
 /**

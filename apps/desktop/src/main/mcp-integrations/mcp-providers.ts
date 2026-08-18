@@ -8,7 +8,7 @@ import {
   type LiziMcpSessionContext,
   type LspServerPool,
 } from '@cindy/mcps';
-import type { OrcaMcpDeps } from '@cindy/mcps';
+import type { ControlWorkerAgent, OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
@@ -375,7 +375,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             || model !== undefined
             || effort !== undefined
             || fast !== undefined;
-          return await svc.sendToSession({
+          const result = await svc.sendToSession({
             targetSessionId,
             message,
             dispatcherSessionId,
@@ -393,6 +393,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                 }
               : {}),
           });
+          // Workers deliberately support only the three established runtimes.
+          // Keep the MCP callback's narrower contract even though the session
+          // service now also knows about DSH lead sessions.
+          if (result.ok && result.agentKind === 'dsh') {
+            return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'DSH cannot be a worker target' };
+          }
+          if (result.ok) {
+            // Rebuild the success result after the DSH guard so TypeScript
+            // retains the callback's ControlWorkerAgent narrowing.
+            return { ...result, agentKind: result.agentKind as ControlWorkerAgent };
+          }
+          return result;
         } catch (err) {
           return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
         }
@@ -452,6 +464,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return {
       ...p,
       isEnabled: (ctx: LiziMcpSessionContext) => {
+        // DSH has no Cindy MCP injection protocol. Keep this fail-closed even
+        // if a future caller reuses the provider list for a DSH session.
+        if (ctx.agentKind === 'dsh') return false;
         // Codex 与 Pi 的共享 app-server / bridge 在还没有 thread/workdir 的阶段构建
         // MCP 工具清单。普通工具必须先全部注册，真正调用时由 HTTP bridge 按新会话
         // 冻结的策略阻断；否则某个用户默认会错误地影响所有项目（空 workdir 快照被缓存后，

@@ -216,6 +216,7 @@ function makeDefault(): NewMakerDraft {
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
       pi: defaultVendorPrefs('pi'),
+      dsh: defaultVendorPrefs('dsh'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
     },
@@ -383,6 +384,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
+      dsh: sanitizeVendorPrefs(lastByVendorRaw.dsh, 'dsh'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },

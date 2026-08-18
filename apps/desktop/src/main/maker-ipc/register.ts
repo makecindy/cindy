@@ -1781,7 +1781,7 @@ export function stopOrcaIdleWatcher(): void {
 }
 
 function requireAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'dsh') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -5168,6 +5168,9 @@ export async function beginTurnChangeSetAtDispatch(
   session: SendToSessionDispatchSession,
   anchorClientId: string,
 ): Promise<void> {
+  // DSH has no compatible file-change capture protocol yet. Leave the turn
+  // untracked rather than attributing its filesystem activity to another harness.
+  if (session.agentKind === 'dsh') return;
   await waitForTurnChangeSetSeal(session.id);
   await finalizeTurnChangeSet(session.id, null, 'partial');
   await waitForTurnChangeSetSeal(session.id);
@@ -5552,7 +5555,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // (model/effort/fast/permission/source/是否显式选过模型)。控制端经隧道调用 → seed 远程项目草稿。
   // 缓存未就绪 / 该 vendor 无草稿 model → 返回 {},控制端按 capabilities 默认兜底。
   ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, (_e, agentKind: unknown) => {
-    return getRemoteNewMakerDefaults(requireAgentKind(agentKind));
+    const kind = requireAgentKind(agentKind);
+    // Device-link has a three-vendor wire contract today. DSH remote sessions
+    // use the desktop SSH transport instead, so do not serialize it as a
+    // misleading legacy vendor.
+    if (kind === 'dsh') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'DSH defaults are unavailable through device-link');
+    }
+    return getRemoteNewMakerDefaults(kind);
   });
 
   // device-link 草稿「模型 effort/fast」写穿:控制端经隧道调用 → 跑在**被控端**。被控端不直接改

@@ -16,8 +16,9 @@
 import { cn } from '@/lib/utils';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { DshMark } from '@/components/icons/DshMark';
 
-export type VendorIconKind = 'cc' | 'codex' | 'pi';
+export type VendorIconKind = 'cc' | 'codex' | 'pi' | 'dsh';
 
 /**
  * agentKind → VendorIcon vendor 的唯一映射。所有渲染 agent 身份图标的调用点
@@ -25,7 +26,7 @@ export type VendorIconKind = 'cc' | 'codex' | 'pi';
  * 吞成 Claude 脸,2026-07-30 实测 bug)。兼容 'claude-code' 别名与 null。
  */
 export function agentKindToVendor(kind: string | null | undefined): VendorIconKind {
-  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : kind === 'dsh' ? 'dsh' : 'cc';
 }
 
 interface VendorIconProps {
@@ -67,6 +68,8 @@ export function VendorIcon({
         >
           π
         </span>
+      ) : vendor === 'dsh' ? (
+        <DshMark size={size} />
       ) : (
         <ClaudeMark size={size} />
       )}

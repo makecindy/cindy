@@ -119,6 +119,9 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       // model/provider 可能已被用户停用 —— 宽松降级(丢弃被停用的来源/模型,
       // 退回默认路由),不让 /learn 因停用整体失败。
       const agentKind = originMeta?.agentKind ?? 'claude-code';
+      if (agentKind === 'dsh') {
+        throw new Error('DeepSeek Harness does not support /learn sessions yet');
+      }
       const desiredModel = originMeta?.model ?? defaultModelFor(agentKind);
       const route = await resolveLenientSessionRoute(
         agentKind,

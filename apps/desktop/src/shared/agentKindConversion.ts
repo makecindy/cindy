@@ -9,23 +9,25 @@
  */
 
 /** DB(sessions.agent_kind)与 renderer 侧的 agent 形态。 */
-export type DbAgentKind = 'cc' | 'codex' | 'pi';
+export type DbAgentKind = 'cc' | 'codex' | 'pi' | 'dsh';
 /** maker-core / IPC 契约侧的 agent 形态。 */
-export type MakerAgentKindWire = 'claude-code' | 'codex' | 'pi';
+export type MakerAgentKindWire = 'claude-code' | 'codex' | 'pi' | 'dsh';
 
 export function dbToMakerAgentKind(db: string | null | undefined): MakerAgentKindWire {
   if (db === 'codex') return 'codex';
   if (db === 'pi') return 'pi';
+  if (db === 'dsh') return 'dsh';
   return 'claude-code'; // 'cc' 与历史缺省
 }
 
 export function makerToDbAgentKind(maker: string | null | undefined): DbAgentKind {
   if (maker === 'codex') return 'codex';
   if (maker === 'pi') return 'pi';
+  if (maker === 'dsh') return 'dsh';
   return 'cc'; // 'claude-code' 与历史缺省
 }
 
 /** 宽输入归一成 DbAgentKind;非法值回落 'cc'(与 sessions 表 default 同语义)。 */
 export function normalizeDbAgentKind(value: string | null | undefined): DbAgentKind {
-  return value === 'codex' || value === 'pi' ? value : 'cc';
+  return value === 'codex' || value === 'pi' || value === 'dsh' ? value : 'cc';
 }

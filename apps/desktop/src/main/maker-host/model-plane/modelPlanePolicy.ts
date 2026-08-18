@@ -70,6 +70,9 @@ export function isRegistryTombstoneForConsumer(
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!registry || !policy) return false;
 
+  // DSH is an independent runtime; it has no model-registry wire contract.
+  if (agent === 'dsh') return false;
+
   let registryAgent: RootAgentKind | null;
   if (agent === 'pi') {
     registryAgent = providerId === 'openai' ? 'codex' : 'claude-code';

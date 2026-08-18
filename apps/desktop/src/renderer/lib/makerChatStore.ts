@@ -585,7 +585,7 @@ export interface ChatMessage {
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface AgentTaskUpdate {
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'dsh';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -2258,7 +2258,7 @@ export type MessageDeliveryMode = 'queue' | 'steer';
 
 /** 仅影响 selector/chip 的乐观展示；agentKind 始终保留真实 reducer 路由。 */
 export interface AgentSwitchIntentRecord {
-  target: 'claude-code' | 'codex' | 'pi';
+  target: 'claude-code' | 'codex' | 'pi' | 'dsh';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -2274,7 +2274,7 @@ export interface SessionChatState {
    * Codex reducer。ensureInitialMessages 从 DB sessions.agent_kind 读出来灌进。
    * 默认 'claude-code' 兼容老路径(老 session row 没有此字段时按 Claude 处理)。
    */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
   /** 下一条消息发送时才由 main 应用的跨引擎切换意图。 */
   agentSwitchIntent: AgentSwitchIntentRecord | null;
   /**
@@ -5951,7 +5951,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+    source?: 'claude-code' | 'codex' | 'pi' | 'dsh' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
   };
@@ -5999,7 +5999,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+  source?: 'claude-code' | 'codex' | 'pi' | 'dsh' | 'vision-bridge';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -8303,7 +8303,7 @@ setRemoteTerminalErrorProbe(hasSessionTerminalError);
 
 interface ActiveSessionSnapshot {
   sessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
   isTurnRunning: boolean;
 }
 
@@ -8312,7 +8312,7 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
+    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'dsh') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -9119,16 +9119,15 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   if (existing) return existing;
   // Self-reference is intentional: a detached clear/owner generation must not
   // keep draining after a newer pump replaces this Promise in the registry.
-  // eslint-disable-next-line prefer-const
-  let run!: Promise<void>;
-  run = (async () => {
+  const runRef: { current: Promise<void> | null } = { current: null };
+  const run: Promise<void> = (async () => {
     while (true) {
       const record = firstUnacceptedRemoteOptimisticSend(sessionId);
       if (!record || record.dispatching) return;
       const prepared = await prepareRemoteOptimisticSend(sessionId, record);
       if (prepared.kind === 'deferred') return;
       if (prepared.kind === 'cancelled') {
-        if (remoteOptimisticPumps.get(sessionId) !== run) return;
+        if (remoteOptimisticPumps.get(sessionId) !== runRef.current) return;
         continue;
       }
       if (prepared.kind === 'failed') {
@@ -9143,7 +9142,7 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
       // the active pump to dispatch them deterministically. A clear/owner boundary,
       // however, detaches the old pump so it cannot race a newer generation.
       if (result.kind === 'cancelled') {
-        if (remoteOptimisticPumps.get(sessionId) !== run) return;
+        if (remoteOptimisticPumps.get(sessionId) !== runRef.current) return;
         continue;
       }
       if (result.kind === 'failed') {
@@ -9154,6 +9153,7 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   })().finally(() => {
     if (remoteOptimisticPumps.get(sessionId) === run) remoteOptimisticPumps.delete(sessionId);
   });
+  runRef.current = run;
   remoteOptimisticPumps.set(sessionId, run);
   return run;
 }
@@ -9272,18 +9272,19 @@ function retryInvalidatedInitialHistoryFetchIfNeeded(
 }
 
 /**
- * DB sessions.agent_kind('cc' / 'codex' / 'pi')→ maker-core AgentKind 的唯一映射点。
+ * DB sessions.agent_kind('cc' / 'codex' / 'pi' / 'dsh')→ maker-core AgentKind 的唯一映射点。
  * 缺失 / 异常值走 fallback(默认 'claude-code',老 row 兼容)。所有从 session
  * row 派生 agentKind 的地方必须走这里,不要在调用点手写三元(历史上多处各写
  * 一份,遗漏 fallback 语义差异被 review 逐个揪出)。
  */
 function dbAgentKindToMakerKind(
   dbKind: string | null | undefined,
-  fallback: 'claude-code' | 'codex' | 'pi' = 'claude-code',
-): 'claude-code' | 'codex' | 'pi' {
+  fallback: 'claude-code' | 'codex' | 'pi' | 'dsh' = 'claude-code',
+): 'claude-code' | 'codex' | 'pi' | 'dsh' {
   if (dbKind === 'codex') return 'codex';
   if (dbKind === 'cc') return 'claude-code';
   if (dbKind === 'pi') return 'pi';
+  if (dbKind === 'dsh') return 'dsh';
   return fallback;
 }
 
@@ -11407,7 +11408,7 @@ function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
 function scheduleAutoName(
   sessionId: string,
   text: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
   isUserText = true,
 ): void {
   // 与 main 共用 normalizeAutoTitle,两端算出的占位串逐字一致,回流时不跳变。
@@ -11523,7 +11524,7 @@ function clearAutoTitlePreviewSafely(sessionId: string): void {
 function maybeAutoNameUnnamedSession(
   sessionId: string,
   seed: AutoTitleSeed | null,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
 ): void {
   if (!seed?.isUserText) return;
   scheduleAutoName(sessionId, seed.text, agentKind, true);
@@ -13976,7 +13977,7 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
  * sdkSessionId——否则 buildCreateOpts 会把旧引擎的原生会话 id 当 resume 目标
  * (main 侧 reconcileCreateOptsWithDb 是兜底,这里是第一现场收敛)。
  */
-function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi'): void {
+function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh'): void {
   if (!sessionId) return;
   setState(sessionId, (s) =>
     s.agentKind === agentKind && s.sdkSessionId === null && s.agentSwitchIntent === null
@@ -14002,7 +14003,7 @@ function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex'
  */
 function noteAgentSwitchIntent(
   sessionId: string,
-  target: 'claude-code' | 'codex' | 'pi',
+  target: 'claude-code' | 'codex' | 'pi' | 'dsh',
   opts: { model: string; providerId: string | null; effort?: string; fastMode?: boolean },
 ): void {
   if (!sessionId) return;
@@ -14112,7 +14113,7 @@ function mirrorAgentSwitchIntent(sessionId: string, value: unknown): void {
 function setSessionRuntime(
   sessionId: string,
   opts: {
-    agentKind?: 'claude-code' | 'codex' | 'pi';
+    agentKind?: 'claude-code' | 'codex' | 'pi' | 'dsh';
     fastMode?: boolean;
     planModeEnabled?: boolean;
   },
@@ -14192,7 +14193,7 @@ function mirrorSessionFields(
   // 新引擎的事件会被旧引擎 reducer 错误处理(2026-07-20 审计实锤)。随引擎翻转
   // 同步清 sdkSessionId(旧引擎的原生会话 id 对新引擎无意义,与 noteAgentSwitched
   // 口径一致)。幂等:发起窗口已 noteAgentSwitched → 同值 no-op。
-  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi') {
+  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi' || patch.agentKind === 'dsh') {
     const nextKind = dbToMakerAgentKind(patch.agentKind);
     setState(sessionId, (s) => {
       const intentApplied = s.agentSwitchIntent?.target === nextKind;

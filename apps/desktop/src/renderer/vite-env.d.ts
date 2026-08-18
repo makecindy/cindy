@@ -4128,7 +4128,7 @@ interface ElectronAPI {
         permissionMode?: string;
         fastMode?: boolean;
         planModeEnabled?: boolean;
-        agentKind?: 'cc' | 'codex' | 'pi';
+        agentKind?: 'cc' | 'codex' | 'pi' | 'dsh';
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
         extraDirs?: string[];
@@ -4847,7 +4847,7 @@ interface ElectronAPI {
     }>;
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
       params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
     ) => Promise<{
       success: boolean;
@@ -4951,7 +4951,7 @@ interface ElectronAPI {
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */
       id?: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
       workingDir: string;
       model: string;
       title?: string;
@@ -5255,14 +5255,14 @@ interface ElectronAPI {
      */
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
       model: string,
       providerId?: string | null,
       effort?: string,
       fastMode?: boolean,
     ) => Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
       model: string;
       engineReady: boolean;
       deferred?: boolean;
@@ -5593,7 +5593,7 @@ interface ElectronAPI {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'dsh';
       isUserText?: boolean;
     }) => Promise<{ applied: boolean; done: boolean }>;
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入。 */

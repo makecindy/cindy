@@ -70,7 +70,9 @@ function registryEffortMetadata(
   modelId: string,
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  if (agent === 'pi' || !registry) return undefined;
+  // DSH owns its small fixed DeepSeek model contract and does not consume the
+  // cross-provider Model Access registry.
+  if (agent === 'pi' || agent === 'dsh' || !registry) return undefined;
 
   const candidates = new Set([modelId]);
   if (modelId.startsWith('chatgpt/')) {
@@ -101,7 +103,7 @@ function registryEffortMetadata(
 }
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
-const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'dsh'];
 
 /** 单个用户填写的模型 → CatalogModel（补默认元数据；effort 按所属 agent 参考内置默认）。 */
 function toCatalogModel(
@@ -155,7 +157,7 @@ function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
   // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
   // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
   if (agent === 'claude-code') return 'anthropic-messages';
-  if (agent === 'pi') return 'openai-chat';
+  if (agent === 'pi' || agent === 'dsh') return 'openai-chat';
   return 'openai-responses';
 }
 

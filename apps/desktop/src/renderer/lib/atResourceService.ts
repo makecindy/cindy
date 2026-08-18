@@ -82,7 +82,7 @@ const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
   new Set(['plugin-command']),
 ];
 
-export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi';
+export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi' | 'dsh';
 
 export interface AtResourceScanContext {
   /** Current local task. Its built-in browser tabs are the only tabs exposed. */
@@ -342,6 +342,8 @@ export async function scanAtResources(
   deviceId?: string,
   context?: AtResourceScanContext,
 ): Promise<ScanResult> {
+  // DSH does not implement Cindy's @-resource attachment protocol yet.
+  if (agentKind === 'dsh') return { success: true, items: [], truncated: false };
   const includeLocalContext = context?.includeLocalContext === true;
   const includeTaskHistory = context?.includeTaskHistory === true;
   if (!workingDir && !includeLocalContext && !includeTaskHistory) {

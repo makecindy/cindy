@@ -78,6 +78,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  dsh: 'DeepSeek Harness',
 };
 
 function presetRuntimeBaseUrl(
@@ -657,6 +658,9 @@ export function AddProviderWizard({
     );
     const results = await Promise.all(
       agents.flatMap((agent) => {
+        // DSH currently uses Cindy's fixed DeepSeek runtime, rather than the
+        // generic custom-provider discovery wire used by the other harnesses.
+        if (agent === 'dsh') return [];
         const rt = preset.runtimes[agent];
         if (!rt) {
           return [];

@@ -26,7 +26,8 @@ export type ProviderSecretId =
   | 'xai'
   | 'voice-asr'
   | 'gemini'
-  | 'openai-images';
+  | 'openai-images'
+  | 'deepseek';
 
 /**
  * providerId → safeStorage 存储键名(.enc 文件名,不含后缀)。
@@ -51,6 +52,8 @@ const STORAGE_KEYS: Record<ProviderSecretId, string> = {
   // (codex-home/auth.json)是两套凭证:订阅 token 调不了平台 images API(实测
   // 401/403 缺 scope),聊天照旧走订阅,图像走这把平台 key。
   'openai-images': 'provider_key_openai_images',
+  // DeepSeek Harness uses this key only in the trusted desktop main process.
+  deepseek: 'provider_key_deepseek',
   // 未来新增示例(届时在 ProviderSecretId 与此处同步添加):
   //   anthropic: 'provider_key_anthropic',
   //   openai:    'provider_key_openai',

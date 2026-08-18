@@ -612,7 +612,7 @@ interface ChatInputProps {
    * M35: Vendor lock — when provided, ModelSelector only shows models
    * belonging to this vendor ('cc' for Claude, 'codex' for OpenAI Codex).
    */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'dsh';
   /**
    * Optional override for the composerDraftStore key used to persist editor
    * content (and via attachmentState, attachments) across mount/unmount.
@@ -704,10 +704,11 @@ interface ChatInputProps {
   collaboration?: CollaborationMenuConfig;
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi' | 'dsh'): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'dsh') return 'dsh';
   return null;
 }
 
@@ -1218,6 +1219,8 @@ export function ChatInput({
       // 冷加载帧:runtimeAgentKind 尚未确认时就默认 claude-code,会将其他引擎的会话内容
       // 发给 Claude Code provider —— 跳过预测,等 agent 身份确认后再恢复。
       if (runtimeAgentKind == null) return;
+      // 下一步提示词服务尚未实现 DSH 路由；不应把 DSH 对话内容交给其它引擎预测。
+      if (runtimeAgentKind === 'dsh') return;
       const latestMessages = messagesRef.current;
       const ed = editorRef.current;
       if (
@@ -5503,6 +5506,9 @@ export function ChatInput({
     ) => {
       const agentKind = opts.agentKind ?? currentModelAgentKind;
       if (!sessionId || !agentKind || !modelId) return;
+      // DSH's fixed provider route has no shared draft/provider-memory slot.
+      // Its model choice is persisted with the session-switch intent instead.
+      if (agentKind === 'dsh') return;
       const activeProviderId =
         opts.activeProviderId !== undefined ? opts.activeProviderId : selectedProviderId;
       const memoryProviderId =
@@ -5723,7 +5729,7 @@ export function ChatInput({
   );
   const performAgentSwitch = useCallback(
     async (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
       newModelId: string,
       providerId: string | null = null,
       // 意图期内的档位/Fast 改动经此显式覆盖(用户手选优先于记忆/默认解析)。
@@ -5771,7 +5777,8 @@ export function ChatInput({
         const targetFast =
           overrides?.fastMode !== undefined
             ? overrides.fastMode
-            : !!providerId &&
+            : targetAgentKind !== 'dsh' &&
+              !!providerId &&
               !!modelMemory &&
               resolveFastSupported({
                 deviceId: deviceLinkDeviceId ?? undefined,

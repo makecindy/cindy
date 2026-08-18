@@ -210,7 +210,7 @@ describe('resolveSendToSessionExecutionConfig', () => {
 
   it('pins the default Pi BYOM route when another provider exposes the same model', () => {
     const routing = providerRouting({ pi: 'local-pi' });
-    routing.availability.pi.push({
+    routing.availability.pi?.push({
       id: 'local-pi',
       name: 'Local Pi',
       models: ['pi-model'],

@@ -257,7 +257,7 @@ const AUTO_TITLE_TEXT_MAX = 2000;
 /** sessionId 长度上限(UUID / cuid 都远小于此)。 */
 const SESSION_ID_MAX = 128;
 
-const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const satisfies readonly AgentKind[];
+const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi', 'dsh'] as const satisfies readonly AgentKind[];
 
 interface GenerateTitleRequest {
   message: string;

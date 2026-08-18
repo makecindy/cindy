@@ -2770,10 +2770,10 @@ export function CCAgentSessionView({
         insertSystemCard('context', { usage: null });
         return true;
       }
-      if (session?.agentKind === 'codex') {
+      if (session?.agentKind === 'codex' || session?.agentKind === 'dsh') {
         insertSystemCard('context', {
           usage: null,
-          error: t('chat.systemCard.context.unsupportedAgent', { agent: 'Codex' }),
+          error: t('chat.systemCard.context.unsupportedAgent', { agent: session.agentKind === 'dsh' ? 'DeepSeek Harness' : 'Codex' }),
         });
         return true;
       }
@@ -5102,7 +5102,7 @@ function formatTokenCount(n: number): string {
  */
 function getModelContextWindow(
   model: string,
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'dsh',
   deviceId?: string,
 ): number | undefined {
   const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
@@ -5119,7 +5119,7 @@ function ContextCapacityRing({
 }: {
   contextTokens: number;
   model: string;
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: 'cc' | 'codex' | 'pi' | 'dsh';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
   /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */

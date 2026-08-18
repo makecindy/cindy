@@ -56,6 +56,15 @@ describe('session IPC request parsing', () => {
     ).toThrow('[INVALID_PARAMS]');
   });
 
+  it('allows DSH remote sessions for the SSH transport host', () => {
+    expect(readCreateSessionOpts({
+      agentKind: 'dsh',
+      workingDir: '/remote/repo',
+      model: 'deepseek-v4-flash',
+      remoteHostId: 'host-1',
+    })).toMatchObject({ agentKind: 'dsh', remoteHostId: 'host-1' });
+  });
+
   it('allocates a controlled-side cwd for folderless dialogue sessions when wired by the host', () => {
     const allocateDialogueWorkspace = vi.fn((sessionId: string, nowMs: number) =>
       `/userData/dialogues/${nowMs}/${sessionId}`,

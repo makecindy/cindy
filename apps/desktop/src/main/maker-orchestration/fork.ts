@@ -178,7 +178,14 @@ async function resolveForkNativeSource(
     if (!source.sdkSessionId) {
       throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
     }
-    const agentKind: DbAgentKind = normalizeDbAgentKind(source.agentKind);
+    const normalizedAgentKind = normalizeDbAgentKind(source.agentKind);
+    // DSH has no native fork/rewind protocol. Do not let the generic session
+    // record fall through to the Claude fork path merely because it is a
+    // non-Codex/non-Pi agent.
+    if (normalizedAgentKind === 'dsh') {
+      throw forkError('UNSUPPORTED_HISTORY', 'DSH sessions cannot be forked yet');
+    }
+    const agentKind: DbAgentKind = normalizedAgentKind;
     return {
       agentKind,
       sdkSessionId: source.sdkSessionId,

@@ -27,6 +27,12 @@ import { createLogger } from '../logger';
 
 const log = createLogger('skillhub:scanner');
 
+function isSkillHubEngine(
+  engine: AgentCustomization['engine'],
+): engine is Skill['engine'] {
+  return engine === 'claude-code' || engine === 'codex' || engine === 'pi';
+}
+
 export type SkillKind = 'skill' | 'command' | 'agent';
 export type SkillScope = 'global' | 'project';
 
@@ -228,11 +234,14 @@ export async function scanAllSkills(
   const isGenericPath = (p: string) => /\/\.agents\/skills\//.test(p.replace(/\\/g, '/'));
   const seenItems = new Map<string, { winner: AgentCustomization; all: AgentCustomization[]; realPath: string }>();
   for (const item of listed.items) {
+    // DSH has no customization/SkillHub discovery contract yet. Exclude it
+    // before this three-engine projection rather than mislabeling it.
+    if (!isSkillHubEngine(item.engine)) continue;
     const c = normalizeSkillEntityPath(item);
     if (HIDDEN_SCOPES.has(c.scope)) continue;
     if (isBackupPath(c.absolutePath)) continue;
     const realKey = realPathOrNormalized(c.absolutePath);
-    const normalizedScope = normalizeScope(c.engine, c.scope);
+    const normalizedScope = normalizeScope(item.engine, c.scope);
     const project = normalizedScope === 'project' ? projectForWorkingDir(c.workingDir) : undefined;
     const dedupeKey = project ? `${realKey}\0project:${project.hash}` : realKey;
     const existing = seenItems.get(dedupeKey);
@@ -248,8 +257,11 @@ export async function scanAllSkills(
   const deduped = Array.from(seenItems.values());
 
   // ── AgentCustomization → SkillhubSkill ──────────────────────────────────────
-  const candidates = deduped.map(({ winner: c, all, realPath }) => {
-    const engine = c.engine as Skill['engine'];
+  const candidates = deduped.flatMap(({ winner: c, all, realPath }) => {
+    // `normalizeSkillEntityPath` preserves the broad discovery type, so repeat
+    // the boundary check before projecting to the three-engine SkillHub model.
+    if (!isSkillHubEngine(c.engine)) return [];
+    const engine = c.engine;
     const project = projectForWorkingDir(c.workingDir);
     const projectHash = project?.hash;
     // skill 类型的 identity 始终是目录名（= market slug），不依赖 frontmatter name。
@@ -263,7 +275,7 @@ export async function scanAllSkills(
     const urlKey = scope === 'global'
       ? `${c.kind}:global:${canonicalName}`
       : `${c.kind}:project:${projectHash}:${canonicalName}`;
-    return { c, all, realPath, engine, project, projectHash, canonicalName, scope, urlKey };
+    return [{ c, all, realPath, engine, project, projectHash, canonicalName, scope, urlKey }];
   });
   const identityCounts = new Map<string, number>();
   for (const candidate of candidates) {
@@ -294,6 +306,7 @@ export async function scanAllSkills(
     const engineSet = new Map<Skill['engine'], Skill['linkedEngines'][number]>();
     for (const item of all) {
       const eng = item.engine;
+      if (!isSkillHubEngine(eng)) continue;
       if (!engineSet.has(eng)) {
         engineSet.set(eng, {
           engine: eng,

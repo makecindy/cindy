@@ -770,8 +770,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 都空时按 agentKind 兜底 (与 renderer schedulerFallbackModel 同源)，
     // 不留空字符串 — UI picker 显示 placeholder。
     // permissionMode: schedule 没字段，runner 强制 'bypassPermissions'（headless 唯一可行）。
+    // DSH does not have the headless/background execution contract required by schedules.
+    const schedulableHeartbeatAgentKind = heartbeatAgentKind === 'dsh' ? undefined : heartbeatAgentKind;
+    if (isHeartbeat && heartbeatAgentKind === 'dsh') {
+      const errMsg = 'schedule heartbeat does not support DeepSeek Harness sessions';
+      await this.notifyFailureSilent(schedule, ctx, errMsg);
+      throw new Error(errMsg);
+    }
     const effectiveAgentKind = isHeartbeat
-      ? (heartbeatAgentKind ?? schedule.agentKind)
+      ? (schedulableHeartbeatAgentKind ?? schedule.agentKind)
       : schedule.agentKind;
     const rawModel = schedule.model?.trim()
       ? schedule.model

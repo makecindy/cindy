@@ -1369,7 +1369,8 @@ export function CustomProviderDialog({
       if (isCommittableWindowText(draftText)) continue;
       const sep = draftKey.lastIndexOf(':');
       const draftAgent = draftKey.slice(0, sep) as AgentKind;
-      if (!VISIBLE_AGENTS.includes(draftAgent)) continue;
+      // Custom-provider runtime editing has no DSH route contract yet.
+      if (draftAgent === 'dsh' || !VISIBLE_AGENTS.includes(draftAgent)) continue;
       // 该 runtime 未配置 baseUrl、或该行 id/name 为空:两者都会在下面序列化时
       // 被丢弃,不会写进最终配置,草稿再非法也不该挡住一个原本有效的保存
       // (review P1)。

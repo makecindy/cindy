@@ -657,8 +657,10 @@ export function NewMakerDraftRoute() {
   // 当前 vendor 对应的 prefs(切 vendor 后这里自动重算 → 透传到 ChatInput initial*)
   const currentPrefs = draft.lastByVendor[draft.vendor];
   const chatPrefs = currentPrefs;
-  const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
-  const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
+  const persistedAgentKind = normalizeDbAgentKind(draft.vendor);
+  // DSH credentials are owned by the DeepSeek provider store and are checked
+  // by the main-process start hook, not by the legacy harness auth dialog.
+  const authVendor = persistedAgentKind === 'dsh' ? null : persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
 
   // 品牌区跟随当前主题；icon / logo 的固定布局统一由 ThemeBrandLockup 负责。
@@ -2111,7 +2113,7 @@ export function NewMakerDraftRoute() {
   const handleRemoteProjectAdded = useCallback(
     async (target: RemoteProjectTarget) => {
       // vendor 由外层 VendorSegmentedSwitcher (draft.vendor) 单一决策 —— dialog 不再让用户选。
-      const draftVendor: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
+      const draftVendor = normalizeDbAgentKind(draft.vendor);
 
       if (target.kind === 'device-link') {
         // device-link:**不**像 SSH 立即建会话(会在被控端留空会话)。改为把当前草稿指向该被控
@@ -3039,9 +3041,9 @@ export function NewMakerDraftRoute() {
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
-          const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-            deviceId: effectiveDeviceLinkDeviceId,
-          });
+          const { proceed } = authVendor
+            ? await vendorAuthGate.checkAndConfirm(authVendor, { deviceId: effectiveDeviceLinkDeviceId })
+            : { proceed: true };
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
 
@@ -3208,6 +3210,9 @@ export function NewMakerDraftRoute() {
             }
             // 提出来存一份:交接收尾要按**实际提交的** model / effort / permission / workspaceKind
             // 组装临时会话行(见 commitRemoteSessionHandoff),不能再各自推一遍。
+            if (persistedAgentKind === 'dsh') {
+              throw new Error('DSH is unavailable through device-link');
+            }
             const createArgs = resolveDeviceLinkSubmission({
               agentKind: persistedAgentKind,
               // 远程 worktree:workingDir 换成刚建好的 worktree 路径(真实存在,被控端
@@ -3334,7 +3339,7 @@ export function NewMakerDraftRoute() {
           // agent 启动时看到的工作区已是迁移后的状态。fail-soft：检测错误只 warn，不阻塞 send。
           try {
             const wd = effectiveWorkingDir;
-            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
+            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi' && persistedAgentKind !== 'dsh') {
               const r = await crossAgentConvertService.detect(
                 wd,
                 persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
@@ -3886,9 +3891,9 @@ export function NewMakerDraftRoute() {
         ) {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
-        const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          deviceId: effectiveDeviceLinkDeviceId,
-        });
+        const { proceed } = authVendor
+          ? await vendorAuthGate.checkAndConfirm(authVendor, { deviceId: effectiveDeviceLinkDeviceId })
+          : { proceed: true };
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
         if (isDeviceLinkDraft) {
           // partial state 防御:只要 deviceId 就够 —— #807 起「选了设备但没选项目」是合法状态
@@ -3996,6 +4001,9 @@ export function NewMakerDraftRoute() {
             }
           }
           // 与 handleSend 同口径先存一份 args:临时行要按实际提交的值组装(见 commitRemoteSessionHandoff)。
+          if (persistedAgentKind === 'dsh') {
+            throw new Error('DSH is unavailable through device-link');
+          }
           const createArgs = resolveDeviceLinkSubmission({
             agentKind: persistedAgentKind,
             // 无项目 → 不传,由 workingDir 派生 workspaceKind:'dialogue'。

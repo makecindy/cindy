@@ -2151,6 +2151,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const escapedLinkName = 'innocent\\q';
         const cdRedirectLinkName = 'cd-innocent';
         mkdirSync(path.dirname(secretPath), { recursive: true });
+        // On Windows the adversarial backslash name below is a nested path;
+        // create its parent so this portability fixture reaches the actual
+        // symlink-security assertion instead of failing during setup.
+        mkdirSync(path.dirname(path.join(workingDir, escapedLinkName)), { recursive: true });
         mkdirSync(subDir);
         mkdirSync(stackOtherDir);
         writeFileSync(secretPath, 'FAKE_REDIRECT_DOTENV_SECRET=must-not-leak');

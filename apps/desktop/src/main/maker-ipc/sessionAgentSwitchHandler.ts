@@ -64,6 +64,7 @@ export function toMakerAgentKind(dbKind: string): AgentKind {
 export function agentEngineLabel(dbKind: DbAgentKind): string {
   if (dbKind === 'codex') return 'Codex';
   if (dbKind === 'pi') return 'Pi';
+  if (dbKind === 'dsh') return 'DeepSeek Harness';
   return 'Claude Code';
 }
 
@@ -114,7 +115,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    * (测试最小 harness)。
    */
   assertModelRouteUsable?(
-    agent: 'claude-code' | 'codex' | 'pi',
+    agent: 'claude-code' | 'codex' | 'pi' | 'dsh',
     model: string,
     providerId: string | null,
   ): Promise<string | undefined>;
@@ -359,8 +360,8 @@ export async function performSessionAgentSwitch(
   if (typeof sessionId !== 'string' || sessionId.length === 0) {
     throwIpcError('INVALID_PARAMS', 'sessionId required');
   }
-  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi') {
-    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi');
+  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi' && targetAgentKind !== 'dsh') {
+    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi | dsh');
   }
   if (typeof model !== 'string' || model.length === 0) {
     throwIpcError('INVALID_PARAMS', 'model required');

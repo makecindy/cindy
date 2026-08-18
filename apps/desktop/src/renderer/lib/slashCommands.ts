@@ -267,6 +267,12 @@ export async function loadAllCommands(
   // 从被控端读(channel 已 allowlist,workingDir 是被控端路径,扫描在被控端跑正确)。
   // desktop 命令**始终本地** —— 它是控制端 app 的 UI 动作(execute-desktop-command 不可隧道,见 D2)。
   const desktopP: Promise<CmdRes> = api.listDesktopCommands().catch(() => ({ success: false }));
+  // DSH has neither the built-in-command nor skill discovery wire. Desktop
+  // commands remain available because they are local UI actions.
+  if (agentKind === 'dsh') {
+    const desktop = await desktopP;
+    return (desktop.success && desktop.commands ? desktop.commands : []) as UnifiedCommand[];
+  }
   const builtinP: Promise<CmdRes> = (
     deviceId
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [agentKind]) as Promise<CmdRes>)

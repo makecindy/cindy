@@ -75,6 +75,7 @@ import type {
   ListCustomizationsResult,
 } from '../types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
+import type { DshTransport } from './dsh/transport.js';
 import type { PiProjectTrustInputSnapshot } from '../types/pi-project-trust.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
 import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
@@ -429,6 +430,19 @@ export interface AgentDeps {
    */
   binaryPath: string;
   logger: Logger;
+
+  /**
+   * Host-owned SSH bridge for DSH. Core supplies only ephemeral configuration
+   * and a secret in memory; the host owns every remote filesystem/process action.
+   */
+  createRemoteDshTransport?: (input: {
+    remoteHostId: string;
+    workingDir: string;
+    configYaml: string;
+    bridgeSource: string;
+    apiKey: string;
+    sessionRoot: string;
+  }) => Promise<DshTransport>;
 
   /**
    * 解析某 session 的 cc-debug raw 文件落盘路径 (host 注入)。host 用 logger 的 logDir 拼

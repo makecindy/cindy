@@ -360,6 +360,10 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         // remembered 保留旧快照 —— 用户切走再切回还能还原上一个真实绑定。
         return { ...f, targetSessionId: PENDING_SESSION_ID };
       }
+      // DSH does not implement the scheduler/heartbeat protocol yet. Keep the
+      // existing binding unchanged instead of silently creating a schedule
+      // that would later route to a legacy engine.
+      if (session.agentKind === 'dsh') return f;
       const next: ScheduleFormState = {
         ...f,
         targetSessionId: session.id,

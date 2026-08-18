@@ -102,7 +102,7 @@ describe('Orca provider routing snapshot wiring', () => {
     releaseDiscovery();
 
     const routing = await routingPromise;
-    const anthropicSnapshot = routing.availability['claude-code'].find(
+    const anthropicSnapshot = routing.availability['claude-code']?.find(
       (provider) => provider.id === 'anthropic',
     );
     expect(anthropicSnapshot?.models).toContain('claude-first-fire');

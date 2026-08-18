@@ -206,11 +206,11 @@ export function providerReferencePriceQuote(
     variant?: 'standard' | 'priority' | 'batch' | 'fast';
   } = {},
 ): ModelPriceQuote | undefined {
-  // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
-  // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
+  // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi 与 DSH 都按
+  // agent 无关的参考价解析，避免将它们传给不认识的 registry wire。
   const resolved = resolveModelReferencePrice(registry, providerId, modelId, {
     ...options,
-    agent: options.agent === 'pi' ? undefined : options.agent,
+    agent: options.agent === 'pi' || options.agent === 'dsh' ? undefined : options.agent,
   });
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);

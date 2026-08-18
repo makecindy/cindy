@@ -340,7 +340,7 @@ export function CreateWorkerPopover({
     }
   }, [currentModel, currentModelSupportsFast, fast]);
 
-  const vendorKey = agentKindToVendor(agent);
+  const vendorKey = agentKindToVendor(agent) as 'cc' | 'codex' | 'pi';
   const updateAgent = useCallback(
     (nextAgent: 'claude-code' | 'codex' | 'pi') => {
       if (nextAgent === agent) return;

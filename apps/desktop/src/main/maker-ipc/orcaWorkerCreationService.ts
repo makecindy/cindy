@@ -97,7 +97,8 @@ export function providerRouteRequiresExplicitSelection(
 
 /** 同一次 provider registry 快照派生出的可用性与默认模型路由，避免两次读取产生竞态。 */
 export interface OrcaWorkerProviderRoutingContext {
-  availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>;
+  /** DSH deliberately has no Orca worker route until its worker protocol exists. */
+  availability: Partial<Record<AgentKind, OrcaWorkerProviderSnapshot[]>>;
   resolveDefaultProviderIdForModel(agent: AgentKind, model: string): string | null;
 }
 
@@ -540,7 +541,7 @@ function agentConsumesExplicitFast(agent: AgentKind): boolean {
  */
 export function buildNoProviderMessage(
   agent: AgentKind,
-  availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>,
+  availability: Partial<Record<AgentKind, OrcaWorkerProviderSnapshot[]>>,
 ): string {
   const base = `${agentDisplayName(agent)} 当前没有可用的模型供应商(provider)。请在「设置 → 模型供应商」连接一个支持 ${agentDisplayName(agent)} 的供应商后重试`;
   const others = (['claude-code', 'codex', 'pi'] as AgentKind[]).filter(
@@ -548,7 +549,7 @@ export function buildNoProviderMessage(
   );
   if (others.length === 0) return `${base}。`;
   const suggestion = others
-    .map((a) => `${agentDisplayName(a)}(已连接:${availability[a].map((provider) => provider.name).join(' / ')})`)
+    .map((a) => `${agentDisplayName(a)}(已连接:${availability[a]?.map((provider) => provider.name).join(' / ') ?? ''})`)
     .join('、');
   return `${base},或改用已连接供应商的 agent 创建 worker(可用:${suggestion})。`;
 }
@@ -588,6 +589,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
   }
 
   async function createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult> {
+    if (params.agent === 'dsh') {
+      return {
+        ok: false,
+        errorCode: 'INVALID_PARAMS',
+        message: 'DSH does not support Orca workers yet',
+      };
+    }
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };

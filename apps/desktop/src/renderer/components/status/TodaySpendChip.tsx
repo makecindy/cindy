@@ -1051,7 +1051,7 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
 }
 
 interface TodaySpendChipProps {
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'dsh';
   /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
   modelId?: string | null;
   /**

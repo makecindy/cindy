@@ -48,6 +48,7 @@ import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLo
 import { FastModeToggle } from './FastModeToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
+import type { SelectableVendor } from '@/lib/agentVendors';
 import {
   evictDeviceCapabilities,
   prefetchDeviceCapabilities,
@@ -524,7 +525,7 @@ function RemoteModelLoadNotice({
 }
 
 export interface ModelSelectorAgentIdentity {
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: SelectableVendor;
   /**
    * current = 已由会话/runtime 元数据确认的当前 Agent；
    * pending = 已登记、将在下一条消息应用的切换目标。
@@ -536,8 +537,8 @@ export function resolveModelSelectorAgentIdentity(
   runtimeAgentKind: AgentKind | null | undefined,
   pendingTarget: AgentKind | null | undefined,
 ): ModelSelectorAgentIdentity | undefined {
-  const toVendorKey = (kind: AgentKind): 'cc' | 'codex' | 'pi' =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+  const toVendorKey = (kind: AgentKind): SelectableVendor =>
+    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : kind === 'dsh' ? 'dsh' : 'cc';
   if (pendingTarget) {
     return {
       vendorKey: toVendorKey(pendingTarget),
@@ -586,7 +587,7 @@ interface ModelSelectorProps {
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'dsh';
   /**
    * 已创建会话的 trigger 同时展示 Agent 与模型，避免 Claude Code 使用 OpenAI 模型时
    * 只看来源图标而误判成 Codex。必须由权威 session/runtime 身份或明确切换 intent 提供，
@@ -664,11 +665,11 @@ interface ModelSelectorProps {
    * device-link / SSH 远程不传(v1 不支持切换)。
    */
   agentSwitch?: {
-    currentVendor: 'cc' | 'codex' | 'pi';
+    currentVendor: SelectableVendor;
     /** 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。 */
     confirmBrowseSwitch?: () => Promise<boolean>;
     onSwitch: (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
       modelId: string,
       providerId: string | null,
     ) => void | Promise<void>;
@@ -683,7 +684,7 @@ interface ModelSelectorContentProps {
   fastMode?: boolean;
   onFastModeChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: SelectableVendor;
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
   /** SSH 远程会话隐藏订阅直连模型(语义同 ModelSelectorProps 同名字段)。 */
@@ -734,10 +735,10 @@ interface ModelSelectorContentProps {
   fluidWidth?: boolean;
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
-    currentVendor: 'cc' | 'codex' | 'pi';
+    currentVendor: SelectableVendor;
     confirmBrowseSwitch?: () => Promise<boolean>;
     onSwitch: (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
       modelId: string,
       providerId: string | null,
     ) => void | Promise<void>;
@@ -758,10 +759,11 @@ interface ModelSelectorContentProps {
   interactionDisabled?: boolean;
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: SelectableVendor): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'dsh') return 'dsh';
   return null;
 }
 
@@ -885,11 +887,11 @@ function ModelSelectorContentView({
   const modelTagDensity = modelTagDensityForWidth(paneWidth ?? (fluidWidth ? null : 320));
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
-  const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex' | 'pi'>(
+  const [browseVendor, setBrowseVendor] = useState<SelectableVendor>(
     agentSwitch?.currentVendor ?? vendorKey ?? 'cc',
   );
   const browseSwitchPendingRef = useRef(false);
-  const handleBrowseVendorChange = async (next: 'cc' | 'codex' | 'pi') => {
+  const handleBrowseVendorChange = async (next: SelectableVendor) => {
     if (interactionDisabled || next === browseVendor || browseSwitchPendingRef.current) return;
     // 返回当前引擎（含已有意图时浏览原引擎准备撤销）不需要确认；只有从
     // currentVendor 进入另一 Agent 浏览态才调用上层风险确认。确认前绝不翻分段。
@@ -912,9 +914,9 @@ function ModelSelectorContentView({
     ? vendorKeyToAgentKind(browseVendor)
     : vendorKeyToAgentKind(vendorKey);
   const browseTargetLabel =
-    browseVendor === 'codex' ? 'Codex' : browseVendor === 'pi' ? 'Pi' : 'Claude Code';
+    browseVendor === 'codex' ? 'Codex' : browseVendor === 'pi' ? 'Pi' : browseVendor === 'dsh' ? 'DeepSeek Harness' : 'Claude Code';
   const enqueueAgentSwitch = (
-    targetAgentKind: 'claude-code' | 'codex' | 'pi',
+    targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'dsh',
     targetModelId: string,
     targetProviderId: string | null,
   ) => {
@@ -1503,7 +1505,7 @@ function ModelSelectorContentView({
     // trigger 来源 icon / 路由立即正确(null = flat 退化行,交给默认路由)。
     if (browsing && agentSwitch) {
       enqueueAgentSwitch(
-        browseVendor === 'codex' ? 'codex' : browseVendor === 'pi' ? 'pi' : 'claude-code',
+        browseVendor === 'codex' ? 'codex' : browseVendor === 'pi' ? 'pi' : browseVendor === 'dsh' ? 'dsh' : 'claude-code',
         id,
         providerId,
       );

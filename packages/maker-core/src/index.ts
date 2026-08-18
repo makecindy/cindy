@@ -50,6 +50,15 @@ export type {
 // pi 远端 agentHome 文件操作原语(host 经 SSH 实现)。
 export type { PiRemoteFileOps } from './agents/base-agent.js';
 
+// DSH transport interface — host implementations bridge local child process
+// or SSH stdio without exposing desktop concerns to maker-core.
+export type {
+  DshTransport,
+  DshTransportCloseInfo,
+  DshLineHandler,
+  DshCloseHandler,
+} from './agents/dsh/transport.js';
+
 // core
 export * from './session.js';
 export * from './session-send-outcome.js';
