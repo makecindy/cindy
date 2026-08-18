@@ -578,6 +578,116 @@ describe('SubagentsBody', () => {
     });
   });
 
+  it('still renders the durable result when the transcript holds no assistant reply', async () => {
+    // A long run can hit the 50MB transcript cap, or keep its reply outside the
+    // eagerly paged window, leaving only task and tool items behind. Gating the
+    // durable-result fallback on "any conversation item" swallowed a finished
+    // result the durable record still had — and counted it as a reply, so the
+    // missing-reply notice did not appear either.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'durable completed result',
+    };
+    loadTranscript.mockResolvedValueOnce({
+      supported: true,
+      entries: [
+        entry({ id: 'entry-parent', role: 'parent', content: 'go and research' }),
+        entry({
+          id: 'entry-tool', role: 'tool', toolPhase: 'start',
+          toolName: 'read', content: 'read a.txt',
+        }),
+      ],
+      tailCursor: 'cursor-tail-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // The tool card is still on screen, and so is the result the record kept.
+    expect(await screen.findByText('durable completed result')).toBeTruthy();
+    expect(screen.getByText('go and research')).toBeTruthy();
+    // A reply is visible, so the "no reply" notice must stay away.
+    expect(screen.queryByText('rightSidebar.subagents.completedNoReply')).toBeNull();
+  });
+
+  it('does not render the result twice when the transcript already ends with it', async () => {
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'the final answer',
+    };
+    loadTranscript.mockResolvedValueOnce({
+      supported: true,
+      entries: [
+        entry({ id: 'entry-parent', role: 'parent', content: 'go and research' }),
+        entry({ id: 'entry-answer', content: 'the final answer' }),
+      ],
+      tailCursor: 'cursor-tail-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('the final answer')).toBeTruthy();
+    expect(screen.getAllByText('the final answer')).toHaveLength(1);
+  });
+
+  it('keeps the missing-reply notice when neither the transcript nor the record has one', async () => {
+    currentDetail = {
+      ...detail(''),
+      status: 'completed',
+      summary: '',
+      capabilities: { ...detail('unused').capabilities, viewFullTranscript: true },
+    };
+    loadTranscript.mockResolvedValueOnce({
+      supported: true,
+      entries: [
+        entry({
+          id: 'entry-tool', role: 'tool', toolPhase: 'start',
+          toolName: 'read', content: 'read a.txt',
+        }),
+      ],
+      tailCursor: 'cursor-tail-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('rightSidebar.subagents.completedNoReply')).toBeTruthy();
+  });
+
   it('appends from tailCursor after a change instead of duplicating entries', async () => {
     currentDetail = {
       ...detail('running'),

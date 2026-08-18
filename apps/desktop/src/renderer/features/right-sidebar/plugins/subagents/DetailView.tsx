@@ -11,9 +11,12 @@
  *    subagent lines are assistant prose, tool frames are folded cards, and
  *    runtime noise (`role: 'system'`) is routed to technical details.
  *  - Nothing is rendered twice: `returnedResult` is the transcript's last
- *    assistant message, so it only renders on the fallback path (transcript
- *    unavailable / empty — older records, truncated storage, remote devices
- *    that do not expose it).
+ *    assistant message, so it only renders when the transcript did not supply
+ *    one. The test is "no assistant item", not "no items at all" — a run that
+ *    hit the 50MB transcript cap, or whose reply sits outside the eagerly paged
+ *    window, still shows task and tool items, and gating on those swallowed a
+ *    result the durable record had (older records, truncated storage, remote
+ *    devices that do not expose the transcript).
  *  - Run meta (harness · model · duration · tokens) is one quiet line at the
  *    top instead of a divider stripe cutting through the conversation.
  */
@@ -359,14 +362,24 @@ function PiDurableDetailView({
     && selectedChildActive;
 
   const hasConversation = conversation.items.length > 0;
+  // Whether the transcript actually carries the agent's reply — not merely
+  // *some* item. A long run can hit the 50MB transcript cap, or keep its reply
+  // outside the eagerly paged window, leaving only task and tool items behind.
+  // Gating the durable-result fallback on "any item" then swallowed a finished
+  // result that the durable record still had.
+  const hasAssistantItem = conversation.items.some((item) => item.kind === 'subagent');
   // Old or truncated records can start mid-run. The assignment is still the
   // first thing the user needs, so it is prepended when the transcript itself
   // carries no parent line.
   const assignment = selectedChild?.task ?? detail.description ?? '';
   const showAssignmentFallback = Boolean(assignment)
     && !conversation.items.some((item) => item.kind === 'parent');
-  const hasAssistantReply = conversation.items.some((item) => item.kind === 'subagent')
-    || Boolean(visibleResult);
+  // Same criterion as the fallback below, so "a reply is on screen" and "we
+  // rendered one" cannot disagree: previously this counted a `visibleResult`
+  // that the suppressed fallback never drew, so neither the result nor the
+  // missing-reply notice appeared.
+  const showDurableResultFallback = !hasAssistantItem && Boolean(visibleResult);
+  const hasAssistantReply = hasAssistantItem || showDurableResultFallback;
   // A parallel run stays `running` until its last child settles, so the run
   // status alone would keep a waiting spinner under a child that already
   // finished — contradicting that child's own terminal label and its disabled
@@ -463,7 +476,12 @@ function PiDurableDetailView({
               workdir={workdir}
               actionBarItemId={actionBarItemId}
             />
-          ) : visibleResult ? (
+          ) : null}
+
+          {/* The durable result, only when the transcript did not already carry
+              the reply — a complete transcript ending in that result must not
+              render it a second time. */}
+          {showDurableResultFallback ? (
             <AssistantMessage
               workingDir={workdir}
               content={visibleResult}

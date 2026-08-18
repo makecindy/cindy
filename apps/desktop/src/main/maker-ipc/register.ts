@@ -5593,7 +5593,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     stopDetachedTask: async (sessionId, taskId) => {
       const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
       const runRoot = piSubagentRunRoot(agentHome, sessionId);
-      return (await controlPiSubagentRuns(runRoot, taskId, 'stop')) > 0;
+      // This fallback enumerates durable runs out of a `pi-agent-home` shared
+      // with any concurrent dev / packaged / --passive instance, so it reaches
+      // runs another live window is driving. Both Subagent stop buttons land
+      // here when no handle is loaded, so it needs the same gate as
+      // CONTROL_PI_SUBAGENT: discover first, refuse before writing anything.
+      const run = (await listPiSubagentRuns(runRoot)).find(
+        (candidate) => candidate.taskId === taskId || candidate.runId === taskId,
+      );
+      if (!run) return false;
+      // A terminal run has nothing to write, so gating it would only turn an
+      // idempotent stop into an error. Refuse only where a control would land.
+      if (!isPiSubagentTerminal(run.state) && !canHostControlPiSubagentRun(run, process.pid)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'This Subagent run belongs to another running Cindy instance. Control it from that window.',
+        );
+      }
+      return (await controlPiSubagentRuns(runRoot, run.runId, 'stop')) > 0;
     },
   });
 

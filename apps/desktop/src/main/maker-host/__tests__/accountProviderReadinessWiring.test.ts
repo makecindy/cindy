@@ -268,6 +268,21 @@ describe('account provider readiness wiring', () => {
     );
   });
 
+  it('gates the detached stop fallback on the same ownership check', () => {
+    // Both Subagent stop buttons reach STOP_AGENT_TASK, which falls back to
+    // enumerating durable runs when no handle is loaded. That fallback bypassed
+    // the gate that only guarded CONTROL_PI_SUBAGENT.
+    const fallback = makerIpcSource.indexOf('stopDetachedTask: async (sessionId, taskId)');
+    const discovery = makerIpcSource.indexOf('await listPiSubagentRuns(runRoot)', fallback);
+    const gate = makerIpcSource.indexOf('canHostControlPiSubagentRun(run, process.pid)', fallback);
+    const stopWrite = makerIpcSource.indexOf("controlPiSubagentRuns(runRoot, run.runId, 'stop')", fallback);
+
+    expect(fallback).toBeGreaterThanOrEqual(0);
+    expect(discovery).toBeGreaterThan(fallback);
+    expect(gate).toBeGreaterThan(discovery);
+    expect(stopWrite).toBeGreaterThan(gate);
+  });
+
   it('names the quit boundary so it is never mistaken for an ownership change', () => {
     expect(bootstrapSource).toContain("await m.shutdown({ reason: 'app-quit' })");
     expect(bootstrapSource).not.toContain('await m.shutdown();');

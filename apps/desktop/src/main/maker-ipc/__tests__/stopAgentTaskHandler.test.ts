@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createIpcError } from '../../../shared/ipc-errors';
 import { MAKER_INVOKE } from '../channels';
 import { registerStopAgentTaskHandler } from '../stopAgentTaskHandler';
 import { IpcHarness } from './helpers/ipcHarness';
@@ -68,6 +69,29 @@ describe('stop agent task IPC handler', () => {
       harness.invoke(MAKER_INVOKE.STOP_AGENT_TASK, 'session-1', 'old-pi-task'),
     ).resolves.toEqual({ ok: true });
     expect(stopDetachedTask).toHaveBeenCalledWith('session-1', 'old-pi-task');
+    expect(stopBackgroundTask).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a detached-fallback refusal instead of relabelling it INTERNAL', async () => {
+    // The fallback enumerates durable runs out of a shared pi-agent-home, so it
+    // can find one another live instance owns. Its refusal is a user-facing
+    // verdict and must reach the UI with its own code.
+    const harness = new IpcHarness();
+    const stopBackgroundTask = vi.fn().mockResolvedValue(undefined);
+    registerStopAgentTaskHandler(harness, {
+      getLiveSession: vi.fn(() => ({ stopBackgroundTask })),
+      stopDetachedTask: vi.fn(async () => {
+        throw createIpcError(
+          'PRECONDITION_FAILED',
+          'This Subagent run belongs to another running Cindy instance.',
+        );
+      }),
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_AGENT_TASK, 'session-1', 'task-1'),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    // A refused stop must not silently fall through to the live handle either.
     expect(stopBackgroundTask).not.toHaveBeenCalled();
   });
 

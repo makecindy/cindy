@@ -1,3 +1,4 @@
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
@@ -40,6 +41,11 @@ export function registerStopAgentTaskHandler(
         if (!session) return { ok: true as const };
         await session.stopBackgroundTask(taskId);
       } catch (e) {
+        // A deliberate IPC error from the detached fallback (currently: the run
+        // belongs to another live instance) is already a user-facing verdict
+        // with its own code. Relabelling it INTERNAL would hide why the stop
+        // did not land.
+        if (isIpcError(e)) throw e;
         // NotSupportedError(Session 层)与 claude handle 的 'not supported' 明文
         // 都归一到 UNSUPPORTED_CAPABILITY;其余(stopTask RPC 失败等)走 INTERNAL,
         // 不把内部堆栈原样透出。
