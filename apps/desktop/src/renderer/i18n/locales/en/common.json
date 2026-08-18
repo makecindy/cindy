@@ -148,7 +148,8 @@
       "remoteControl": "Remote Connection",
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
-      "mcpServers": "Custom MCP"
+      "mcpServers": "Custom MCP",
+      "bots": "Teammates"
     },
     "remote": {
       "title": "Remote machines",
@@ -5456,39 +5457,49 @@
     "addTitle": "Add a teammate",
     "addDescription": "Create a local teammate first, then mount IM message channels when needed.",
     "createWizard": {
-      "chooseTemplateDescription": "Choose a starting point. The teammate is created locally first; message channels mount later.",
-      "submit": "Create Teammate and Start Chatting",
-      "channelsHint": "Mount Telegram and other message channels later in teammate settings.",
-      "identityOptionalLabel": "Custom Identity (Optional)",
-      "identityOptionalHint": "The template already carries an identity — leave this alone and it still works.",
-      "identityRequiredLabel": "Identity and Role",
-      "identityRequiredHint": "A blank teammate has no template text, so describe who it is and what it owns.",
-      "creating": "Creating…",
       "createFailed": "The teammate could not be created. Try again.",
-      "roleLabel": "Persistent identity and role",
-      "roleHint": "This defines who the teammate is and what it owns long-term. User context, Skills, MCP, tools, permissions, automations, and Channels remain separate.",
       "templates": {
-        "control": {
-          "title": "Control teammate",
-          "summary": "Receives task completion, failure, and decision events, then coordinates or reports.",
-          "defaultName": "Control teammate",
-          "defaultDescription": "Watch important task state so work never waits unnoticed for coordination."
+        "cindy": {
+          "description": "Your personal assistant",
+          "intro": "Hi, I'm Cindy. Hand me the odds and ends of work and life — writing, research, your calendar, your messages. You do your thing; call me when you need me.",
+          "name": "Cindy",
+          "skill": "A bit of everything",
+          "welcome": "Hi, I'm Cindy 👋 From now on, hand me the writing, the research and the file tidying.\n\nConnect a messaging channel and I can keep an eye on things while you are away."
         },
-        "prSteward": {
-          "title": "PR steward",
-          "summary": "Uses task events and automations to follow reviews, checks, and delivery state.",
-          "defaultName": "PR steward",
-          "defaultDescription": "Keep pull requests moving and route actionable changes back to their owning tasks."
+        "shiba": {
+          "description": "Your everyday helper",
+          "intro": "Woof! I'm Xiaochai. Reminders, schedules, errands, expenses — leave the household side to me.",
+          "name": "Xiaochai",
+          "skill": "Everyday life",
+          "welcome": "Woof! I'm Xiaochai 🐕 Reminders, schedules, errands, expenses — leave the household side to me.\n\nJust tell me anything you need remembered and I will keep watch."
         },
-        "assistant": {
-          "title": "Assistant",
-          "summary": "Keeps a persistent identity and private memory without observing other tasks by default.",
-          "defaultName": "Cindy",
-          "defaultDescription": "A persistent personal assistant with capabilities and message Channels you can add later."
+        "melody": {
+          "description": "Your engineering buddy",
+          "intro": "I'm Melody. Code, deploys and bugs come to me. Few words, careful work.",
+          "name": "Melody",
+          "skill": "Engineering",
+          "welcome": "I'm Melody. Code, deploys and bugs come to me. Few words, careful work.\n\nPoint me at the project folder and I will learn my way around it first."
         },
-        "custom": {
-          "title": "Custom",
-          "summary": "Start from a blank identity you write yourself."
+        "butler": {
+          "description": "Your delivery steward",
+          "intro": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.",
+          "name": "Benben",
+          "skill": "Delivery",
+          "welcome": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.\n\nTell me what is in flight and I will chase it for you."
+        },
+        "star": {
+          "description": "Your content buddy",
+          "intro": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.",
+          "name": "Xingxing",
+          "skill": "Content",
+          "welcome": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.\n\nWhat do you want to publish? Just give me a topic."
+        },
+        "ashu": {
+          "description": "Your coordinator",
+          "intro": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.",
+          "name": "Ashu",
+          "skill": "Coordination",
+          "welcome": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.\n\nCarry on — I will speak up when something needs you."
         }
       }
     },
@@ -5752,9 +5763,16 @@
             "transition": "Task state changed",
             "guardian-anomaly": "A task looks stuck"
           },
-          "turn": { "completed": "Task turn completed", "failed": "Task turn failed" },
-          "metadata": { "changed": "Task state changed" },
-          "decision": { "required": "Task needs a decision" }
+          "turn": {
+            "completed": "Task turn completed",
+            "failed": "Task turn failed"
+          },
+          "metadata": {
+            "changed": "Task state changed"
+          },
+          "decision": {
+            "required": "Task needs a decision"
+          }
         }
       }
     },
@@ -6128,6 +6146,49 @@
         "invalid": "The project or path settings are invalid.",
         "generic": "Couldn’t update the project binding. Try again."
       }
+    },
+    "roster": {
+      "backToRoster": "Back to the roster",
+      "customAction": "Shape your own",
+      "customHint": "Personality, memory and schedules can all be tuned later in their own settings.",
+      "customIntro": "Start from scratch: a name, a face, a personality.",
+      "customName": "Custom",
+      "customNameLabel": "Name",
+      "customNamePlaceholder": "e.g. Juju",
+      "customSkill": "Whatever you say",
+      "customSubtitle": "A name and a face. They bring the rest.",
+      "customTitle": "Shape your own teammate",
+      "footerHint": "They will say hello as soon as they join. A messaging channel can be connected later in their own settings (one per teammate).",
+      "goodAt": "Good at · {{skill}}",
+      "importLink": "Already have a teammate file? Import one",
+      "join": "Bring them in",
+      "joined": "Already here",
+      "subtitle": "Pick one you click with, or shape your own.",
+      "title": "Meet your teammates"
+    },
+    "chat": {
+      "composerPlaceholder": "Say something to {{name}}…",
+      "composerPlaceholderLatin": "Say something to {{name}}…"
+    },
+    "globalSettings": {
+      "title": "Teammates",
+      "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
+      "notifications": {
+        "banner": "New message banner",
+        "sound": "Sound",
+        "quietHours": "Quiet hours",
+        "footnote": "A coordinator keeps an eye on task activity by itself — that is a capability of theirs, not a setting here."
+      },
+      "portability": {
+        "importTitle": "Import a teammate",
+        "importHint": "Restore someone from a teammate file.",
+        "importAction": "Choose a file",
+        "exportTitle": "Export a teammate",
+        "exportHint": "Pack up their personality and settings and take them with you.",
+        "exportAction": "Export",
+        "exportEmpty": "No teammate to export yet."
+      },
+      "rosterNote": "The shipped roster grows with each release."
     }
   },
   "commonUi": {

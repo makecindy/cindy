@@ -7,12 +7,30 @@ import { Spinner } from '@/components/ui/spinner';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { markBotRead } from './botReadState';
+import type { BotChatIdentity } from './BotSessionContentHeader';
+import { deliverPendingBotWelcome } from './botWelcome';
 
 type BotSessionGate =
   | { kind: 'loading' }
-  | { kind: 'ready'; mentions: ComposerBotMention[] }
+  | {
+      kind: 'ready';
+      mentions: ComposerBotMention[];
+      identity: BotChatIdentity;
+      /** True only for the Bot's own canonical chat (not a mounted channel route). */
+      isCanonical: boolean;
+    }
   | { kind: 'unavailable' }
   | { kind: 'error'; message: string };
+
+function readBotChatIdentity(bot: unknown, botId: string): BotChatIdentity {
+  const candidate = (bot ?? {}) as { name?: unknown; avatar?: unknown; avatarColor?: unknown };
+  return {
+    id: botId,
+    name: typeof candidate.name === 'string' ? candidate.name : '',
+    avatar: typeof candidate.avatar === 'string' ? candidate.avatar : null,
+    avatarColor: typeof candidate.avatarColor === 'string' ? candidate.avatarColor : null,
+  };
+}
 
 function readBotMention(value: unknown, currentBotId: string): ComposerBotMention | null {
   if (!value || typeof value !== 'object') return null;
@@ -91,6 +109,10 @@ export function BotSessionView() {
         }
         setGate({
           kind: 'ready',
+          // 欢迎语只属于主任务:渠道路由任务是「别处的对话被接进来」,
+          // 在那里冒出一句自我介绍是插话,不是打招呼。
+          isCanonical: (bot as { canonicalSessionId?: unknown }).canonicalSessionId === sessionId,
+          identity: readBotChatIdentity(bot, botId),
           mentions: Array.isArray(bots)
             ? bots
                 .map((candidate) => readBotMention(candidate, botId))
@@ -128,6 +150,18 @@ export function BotSessionView() {
       unsubscribe?.();
     };
   }, [botId, gate.kind, sessionId]);
+
+  // 入伙即打招呼:创建时寄存的欢迎语,在 TA 的主任务第一次真正打开时落成一条
+  // assistant 消息。幂等三重保险见 botWelcome.ts;这里只负责「什么时候交付」。
+  const welcomeReady = gate.kind === 'ready' && gate.isCanonical;
+  useEffect(() => {
+    if (!welcomeReady || !botId || !sessionId) return;
+    void deliverPendingBotWelcome(botId, sessionId, {
+      listMessages: (id) => window.electronAPI.localDb.messages.list(id, { limit: 1 }),
+      createMessage: (id, body) => window.electronAPI.localDb.messages.create(id, body),
+      translate: (key) => t(key),
+    });
+  }, [botId, sessionId, t, welcomeReady]);
 
   if (gate.kind === 'loading') {
     return (
@@ -186,5 +220,5 @@ export function BotSessionView() {
       </main>
     );
   }
-  return <CCAgentSessionView botMentions={gate.mentions} />;
+  return <CCAgentSessionView botMentions={gate.mentions} botIdentity={gate.identity} />;
 }

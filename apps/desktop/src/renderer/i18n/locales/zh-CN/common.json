@@ -148,7 +148,8 @@
       "remoteControl": "远程连接",
       "windowBehavior": "应用行为",
       "shortcuts": "键盘快捷键",
-      "mcpServers": "自定义 MCP"
+      "mcpServers": "自定义 MCP",
+      "bots": "伙伴"
     },
     "remote": {
       "title": "远端机器",
@@ -5454,39 +5455,49 @@
     "addTitle": "添加伙伴",
     "addDescription": "先创建一个本地伙伴，再按需挂载 IM 消息通道。",
     "createWizard": {
-      "chooseTemplateDescription": "选择一个起点。伙伴会先创建为本地长期助手，消息通道稍后挂载。",
-      "submit": "创建并开始对话",
-      "channelsHint": "Telegram 等消息通道可以创建后在伙伴设置里挂载。",
-      "identityOptionalLabel": "自定义身份（可选）",
-      "identityOptionalHint": "模板已自带身份设定，不改也能用。",
-      "identityRequiredLabel": "身份与职责",
-      "identityRequiredHint": "空白伙伴没有模板文案，请写清它是谁、长期负责什么。",
-      "creating": "正在创建…",
       "createFailed": "无法创建伙伴，请重试。",
-      "roleLabel": "长期身份与职责",
-      "roleHint": "这里只定义伙伴是谁、长期负责什么。你的资料、Skills、MCP、工具、权限、自动化和消息通道仍分别管理。",
       "templates": {
-        "control": {
-          "title": "总控",
-          "summary": "自动接收其它任务完成、失败和待决策事件，并继续协调或汇报。",
-          "defaultName": "总控",
-          "defaultDescription": "盯住所有重要任务状态，消灭“停在待总控但没人知道”。"
+        "cindy": {
+          "description": "你的贴身助理",
+          "intro": "嗨，我是 Cindy。工作生活里的杂事都可以丢给我——写东西、查资料、盯日程、看消息。你忙你的，需要就叫我。",
+          "name": "Cindy",
+          "skill": "什么都会一点",
+          "welcome": "嗨，我是 Cindy 👋 以后写东西、查资料、整理文件这些事直接丢给我。\n\n把消息通道连上的话，你不在的时候我还能帮你盯着消息。"
         },
-        "prSteward": {
-          "title": "PR 总管",
-          "summary": "通过任务事件和自动化跟进评审、检查与交付状态。",
-          "defaultName": "PR 总管",
-          "defaultDescription": "持续跟进 PR 与交付任务，并把可行动变化交还给负责的任务。"
+        "shiba": {
+          "description": "你的生活管家",
+          "intro": "汪！我是小柴。提醒、日程、代办、记账，家里的事包在我身上。",
+          "name": "小柴",
+          "skill": "生活管家",
+          "welcome": "汪！我是小柴 🐕 提醒、日程、代办、记账，家里的事包在我身上。\n\n有什么要记的直接跟我说，我给你盯着。"
         },
-        "assistant": {
-          "title": "普通助理",
-          "summary": "拥有长期身份与独立记忆，不默认观察或控制其它任务。",
-          "defaultName": "Cindy",
-          "defaultDescription": "一个可长期使用、按需挂载能力和消息通道的个人助理。"
+        "melody": {
+          "description": "你的技术搭子",
+          "intro": "我是 Melody。代码、部署、修 bug 找我，话不多，活很细。",
+          "name": "Melody",
+          "skill": "技术搭子",
+          "welcome": "我是 Melody。代码、部署、修 bug 找我，话不多，活很细。\n\n把项目文件夹给我，我先摸清楚结构。"
         },
-        "custom": {
-          "title": "自定义",
-          "summary": "从空白身份开始，自己写设定。"
+        "butler": {
+          "description": "你的项目管家",
+          "intro": "我是本本。流程我来盯：评审、检查、交付，你只看结果。",
+          "name": "本本",
+          "skill": "项目管家",
+          "welcome": "我是本本。流程我来盯：评审、检查、交付，你只看结果。\n\n有在跑的事跟我说一声，我替你追。"
+        },
+        "star": {
+          "description": "你的内容搭子",
+          "intro": "我是星星✨ 文案、配图、发帖子，保证有网感。",
+          "name": "星星",
+          "skill": "内容创作",
+          "welcome": "我是星星✨ 文案、配图、发帖子，保证有网感。\n\n想发什么？给我个主题就行～"
+        },
+        "ashu": {
+          "description": "你的总控",
+          "intro": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。",
+          "name": "阿枢",
+          "skill": "总控调度",
+          "welcome": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。\n\n先忙你的，有要你定的事我再开口。"
         }
       }
     },
@@ -5746,10 +5757,20 @@
       },
       "events": {
         "session": {
-          "state": { "transition": "任务状态已变迁", "guardian-anomaly": "任务像是卡住了" },
-          "turn": { "completed": "任务回合已完成", "failed": "任务回合失败" },
-          "metadata": { "changed": "任务状态已变化" },
-          "decision": { "required": "任务需要决策" }
+          "state": {
+            "transition": "任务状态已变迁",
+            "guardian-anomaly": "任务像是卡住了"
+          },
+          "turn": {
+            "completed": "任务回合已完成",
+            "failed": "任务回合失败"
+          },
+          "metadata": {
+            "changed": "任务状态已变化"
+          },
+          "decision": {
+            "required": "任务需要决策"
+          }
         }
       }
     },
@@ -6123,6 +6144,49 @@
         "invalid": "项目或路径设置无效。",
         "generic": "项目绑定更新失败，请重试。"
       }
+    },
+    "roster": {
+      "backToRoster": "返回阵容",
+      "customAction": "自己捏一个",
+      "customHint": "性格、记忆和日程都可以加入之后在 TA 的设置里慢慢调。",
+      "customIntro": "从零捏一个：起名、挑头像、写性格。",
+      "customName": "自定义",
+      "customNameLabel": "叫什么",
+      "customNamePlaceholder": "比如：阿橘",
+      "customSkill": "你说了算",
+      "customSubtitle": "起个名字，挑张脸。剩下的 TA 自带。",
+      "customTitle": "捏一个自己的伙伴",
+      "footerHint": "加入后 TA 会先跟你打个招呼。消息通道可以之后在 TA 的设置里连（每个伙伴一个）。",
+      "goodAt": "擅长 · {{skill}}",
+      "importLink": "已经有伙伴文件？导入一个",
+      "join": "让 TA 加入",
+      "joined": "已加入",
+      "subtitle": "挑一个合拍的，或者自己捏一个。",
+      "title": "认识你的伙伴"
+    },
+    "chat": {
+      "composerPlaceholder": "跟{{name}}说点什么…",
+      "composerPlaceholderLatin": "跟 {{name}} 说点什么…"
+    },
+    "globalSettings": {
+      "title": "伙伴",
+      "description": "和伙伴有关的通用设置。单个伙伴的设置在 TA 自己的页面里。",
+      "notifications": {
+        "banner": "新消息横幅",
+        "sound": "声音",
+        "quietHours": "勿扰时段",
+        "footnote": "像总控这类伙伴会自己关注任务动静——那是 TA 的本事，不在这里设置。"
+      },
+      "portability": {
+        "importTitle": "导入伙伴",
+        "importHint": "从一个伙伴文件里恢复 TA。",
+        "importAction": "选择文件",
+        "exportTitle": "导出伙伴",
+        "exportHint": "把 TA 的性格和设置打包带走。",
+        "exportAction": "导出",
+        "exportEmpty": "还没有伙伴可以导出。"
+      },
+      "rosterNote": "预置阵容会随版本更新。"
     }
   },
   "commonUi": {

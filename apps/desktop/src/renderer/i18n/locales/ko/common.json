@@ -148,7 +148,8 @@
       "remoteControl": "원격 연결",
       "windowBehavior": "앱 동작",
       "shortcuts": "키보드 단축키",
-      "mcpServers": "사용자 지정 MCP"
+      "mcpServers": "사용자 지정 MCP",
+      "bots": "파트너"
     },
     "remote": {
       "title": "원격 머신",
@@ -5454,39 +5455,49 @@
     "addTitle": "동료 추가",
     "addDescription": "먼저 로컬 동료를 만들고 필요할 때 IM 메시지 채널을 연결합니다.",
     "createWizard": {
-      "chooseTemplateDescription": "시작 템플릿을 선택하세요. 동료는 먼저 로컬 장기 어시스턴트로 생성되고 메시지 채널은 나중에 연결합니다.",
-      "submit": "동료 만들고 대화 시작",
-      "channelsHint": "Telegram 등 메시지 채널은 만든 뒤 동료 설정에서 연결할 수 있습니다.",
-      "identityOptionalLabel": "사용자 지정 정체성(선택)",
-      "identityOptionalHint": "템플릿에 이미 정체성이 있습니다. 그대로 두어도 작동합니다.",
-      "identityRequiredLabel": "정체성과 역할",
-      "identityRequiredHint": "빈 동료에게는 템플릿 문구가 없습니다. 누구이고 무엇을 장기적으로 담당하는지 적어 주세요.",
-      "creating": "생성 중…",
       "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
-      "roleLabel": "장기 정체성과 역할",
-      "roleHint": "여기서는 동료의 정체성과 장기 책임만 정의합니다. 사용자 정보, Skills, MCP, 도구, 권한, 자동화와 채널은 각각 별도로 관리됩니다.",
       "templates": {
-        "control": {
-          "title": "총괄 동료",
-          "summary": "다른 작업의 완료, 실패, 결정 대기 이벤트를 받고 조정하거나 보고합니다.",
-          "defaultName": "총괄 동료",
-          "defaultDescription": "중요한 작업 상태를 지켜보고 조정을 기다리다 잊히는 일을 없앱니다."
+        "cindy": {
+          "description": "당신의 전담 비서",
+          "intro": "안녕하세요, Cindy예요. 일이든 생활이든 자잘한 일은 저에게 던지세요 — 글쓰기, 자료 조사, 일정 관리, 메시지 확인까지요. 당신은 당신 일을 하세요. 필요하면 부르시고요.",
+          "name": "Cindy",
+          "skill": "두루두루 다 조금씩",
+          "welcome": "안녕하세요, Cindy예요 👋 앞으로 글쓰기, 자료 조사, 파일 정리는 저에게 맡기세요.\n\n메시지 채널을 연결해 두면 자리를 비운 동안에도 메시지를 지켜볼 수 있어요."
         },
-        "prSteward": {
-          "title": "PR 관리자",
-          "summary": "작업 이벤트와 자동화로 리뷰, 검사, 전달 상태를 추적합니다.",
-          "defaultName": "PR 관리자",
-          "defaultDescription": "PR과 전달 작업을 계속 추적하고 실행 가능한 변화를 담당 작업으로 돌려보냅니다."
+        "shiba": {
+          "description": "생활 집사",
+          "intro": "멍! 샤오차이예요. 알림, 일정, 할 일, 가계부까지 집안일은 제게 맡기세요.",
+          "name": "샤오차이",
+          "skill": "생활 관리",
+          "welcome": "멍! 샤오차이예요 🐕 알림, 일정, 할 일, 가계부까지 집안일은 제게 맡기세요.\n\n기억해 둘 게 있으면 그냥 말씀하세요. 제가 챙길게요."
         },
-        "assistant": {
-          "title": "일반 어시스턴트",
-          "summary": "장기 정체성과 전용 메모리를 가지며 기본으로 다른 작업을 관찰하지 않습니다.",
-          "defaultName": "Cindy",
-          "defaultDescription": "필요할 때 기능과 메시지 채널을 추가할 수 있는 장기 개인 어시스턴트입니다."
+        "melody": {
+          "description": "개발 파트너",
+          "intro": "Melody예요. 코드, 배포, 버그 수정은 저에게 오세요. 말은 적고 일은 꼼꼼합니다.",
+          "name": "Melody",
+          "skill": "개발",
+          "welcome": "Melody예요. 코드, 배포, 버그 수정은 저에게 오세요. 말은 적고 일은 꼼꼼합니다.\n\n프로젝트 폴더를 주세요. 먼저 구조부터 파악할게요."
         },
-        "custom": {
-          "title": "사용자 지정",
-          "summary": "빈 정체성에서 직접 작성해 시작합니다."
+        "butler": {
+          "description": "프로젝트 집사",
+          "intro": "벤벤이에요. 리뷰, 점검, 납품 — 과정은 제가 지켜볼 테니 당신은 결과만 보세요.",
+          "name": "벤벤",
+          "skill": "프로젝트 관리",
+          "welcome": "벤벤이에요. 리뷰, 점검, 납품 — 과정은 제가 지켜볼 테니 당신은 결과만 보세요.\n\n진행 중인 일이 있으면 말씀해 주세요. 제가 대신 챙기겠습니다."
+        },
+        "star": {
+          "description": "콘텐츠 파트너",
+          "intro": "싱싱이에요✨ 카피, 이미지, 게시물까지. 확실히 먹히게 만들어 드려요.",
+          "name": "싱싱",
+          "skill": "콘텐츠 제작",
+          "welcome": "싱싱이에요✨ 카피, 이미지, 게시물까지. 확실히 먹히게 만들어 드려요.\n\n뭘 올릴까요? 주제만 주시면 돼요."
+        },
+        "ashu": {
+          "description": "총괄 조정자",
+          "intro": "아수예요. 여기저기 작업의 움직임은 제가 다 지켜봅니다. 무슨 일이 생기면 제가 가장 먼저 알고, 가장 먼저 알려드려요.",
+          "name": "아수",
+          "skill": "총괄 조정",
+          "welcome": "아수예요. 여기저기 작업의 움직임은 제가 다 지켜봅니다. 무슨 일이 생기면 제가 가장 먼저 알고, 가장 먼저 알려드려요.\n\n하던 일 하세요. 결정이 필요할 때만 말 걸겠습니다."
         }
       }
     },
@@ -5750,9 +5761,16 @@
             "transition": "작업 상태 전환",
             "guardian-anomaly": "작업이 멈춘 것 같습니다"
           },
-          "turn": { "completed": "작업 턴 완료", "failed": "작업 턴 실패" },
-          "metadata": { "changed": "작업 상태 변경" },
-          "decision": { "required": "작업에 결정 필요" }
+          "turn": {
+            "completed": "작업 턴 완료",
+            "failed": "작업 턴 실패"
+          },
+          "metadata": {
+            "changed": "작업 상태 변경"
+          },
+          "decision": {
+            "required": "작업에 결정 필요"
+          }
         }
       }
     },
@@ -6126,6 +6144,49 @@
         "invalid": "프로젝트 또는 경로 설정이 올바르지 않습니다.",
         "generic": "프로젝트 연결을 업데이트하지 못했습니다. 다시 시도하세요."
       }
+    },
+    "roster": {
+      "backToRoster": "목록으로 돌아가기",
+      "customAction": "직접 만들기",
+      "customHint": "성격, 기억, 일정은 합류한 뒤 각자의 설정에서 천천히 조정할 수 있어요.",
+      "customIntro": "처음부터 만들기: 이름, 얼굴, 성격.",
+      "customName": "직접 만들기",
+      "customNameLabel": "이름",
+      "customNamePlaceholder": "예: 아주",
+      "customSkill": "당신 마음대로",
+      "customSubtitle": "이름과 얼굴만 정하세요. 나머지는 본인이 가져옵니다.",
+      "customTitle": "나만의 파트너 만들기",
+      "footerHint": "합류하면 먼저 인사를 건넵니다. 메시지 채널은 나중에 각자의 설정에서 연결할 수 있어요(한 명당 하나).",
+      "goodAt": "잘하는 것 · {{skill}}",
+      "importLink": "파트너 파일이 있나요? 하나 가져오기",
+      "join": "합류시키기",
+      "joined": "이미 합류함",
+      "subtitle": "마음 맞는 친구를 고르거나, 직접 만들어 보세요.",
+      "title": "파트너를 만나보세요"
+    },
+    "chat": {
+      "composerPlaceholder": "{{name}}에게 말 걸기…",
+      "composerPlaceholderLatin": "{{name}} 에게 말 걸기…"
+    },
+    "globalSettings": {
+      "title": "파트너",
+      "description": "파트너 전체에 적용되는 설정입니다. 개별 파트너 설정은 각자의 페이지에 있어요.",
+      "notifications": {
+        "banner": "새 메시지 배너",
+        "sound": "소리",
+        "quietHours": "방해 금지 시간",
+        "footnote": "총괄 조정자 같은 파트너는 스스로 작업 상황을 지켜봅니다 — 그건 그 친구의 능력이지 여기서 켜고 끄는 설정이 아니에요."
+      },
+      "portability": {
+        "importTitle": "파트너 가져오기",
+        "importHint": "파트너 파일에서 그 친구를 복원합니다.",
+        "importAction": "파일 선택",
+        "exportTitle": "파트너 내보내기",
+        "exportHint": "성격과 설정을 묶어서 가져갈 수 있어요.",
+        "exportAction": "내보내기",
+        "exportEmpty": "아직 내보낼 파트너가 없습니다."
+      },
+      "rosterNote": "기본 제공되는 구성원은 버전마다 늘어납니다."
     }
   },
   "commonUi": {

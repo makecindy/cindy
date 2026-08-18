@@ -6,8 +6,6 @@ import {
   LoaderCircle,
   PauseCircle,
   Plus,
-  Settings2,
-  Upload,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -17,8 +15,6 @@ import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-co
 import type { BotHealthStatus } from '../../../shared/botLifecycle';
 import type { BotInboxItemView } from '../../../shared/botSessionEvents';
 import { BotAvatar } from './BotAvatar';
-import { BotTrustedBadge } from './BotTrustedBadge';
-import { isBotTrusted } from './botCapabilityDefaults';
 import {
   botListSubtitle,
   formatBotListTimestamp,
@@ -167,14 +163,6 @@ function BotsSidebarContent() {
         >
           <Plus size={16} />
         </button>
-        <button
-          type="button"
-          onClick={() => navigate('/bots?import=1')}
-          className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover"
-          aria-label={t('bots.portability.import')}
-        >
-          <Upload size={15} />
-        </button>
       </div>
     );
   }
@@ -186,24 +174,16 @@ function BotsSidebarContent() {
           <Bot size={14} />
           <span>{t('bots.title')}</span>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => navigate('/bots?import=1')}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
-            aria-label={t('bots.portability.import')}
-          >
-            <Upload size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/bots?add=1')}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
-            aria-label={t('bots.add')}
-          >
-            <Plus size={15} />
-          </button>
-        </div>
+        {/* 小节头只留「加一个」。导入下沉到创建面板的文字链与「设置 › 伙伴」——
+            它一年用一次,不该常年占着这行最贵的位置。 */}
+        <button
+          type="button"
+          onClick={() => navigate('/bots?add=1')}
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
+          aria-label={t('bots.add')}
+        >
+          <Plus size={15} />
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
@@ -259,11 +239,8 @@ function BotsSidebarContent() {
                         >
                           {bot.name}
                         </span>
-                        {/* 放手做的伙伴带一个细小的 ⚠(icon-only,与既有状态徽标同一
-                            口径);这一行已经是按钮,所以这里只用不可点的标记形态。 */}
-                        {isBotTrusted(bot.capabilities) ? (
-                          <BotTrustedBadge className="self-center" />
-                        ) : null}
+                        {/* 产品裁决 2026-08-18:侧栏行不挂「放手做」⚠。伙伴列表是
+                            聊天列表,不是权限看板;风险表达留在设置里的能力陈列。 */}
                         {timestamp ? (
                           <span className={cn('shrink-0 text-10', mutedClass)}>
                             {timestamp}
@@ -331,19 +308,8 @@ function BotsSidebarContent() {
                         aria-label={t('bots.lifecycle.healthStatus.paused')}
                       />
                     ) : null}
-                    {/* Kept in the DOM (opacity, not display) so the gear stays
-                        keyboard reachable and the row never shifts on hover. */}
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        navigate(`/bots/${bot.id}?settings=1`);
-                      }}
-                      aria-label={t('bots.settings')}
-                      className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] opacity-0 transition-opacity hover:text-[var(--sidebar-nav-text)] focus-visible:opacity-100 group-hover:opacity-100"
-                    >
-                      <Settings2 size={13} />
-                    </button>
+                    {/* 行内不再挂齿轮:进设置的入口收敛到对话顶栏(伙伴名字 / 头像,
+                        以及顶栏右侧的齿轮)。一个功能一个入口。 */}
                   </span>
                 </div>
               );

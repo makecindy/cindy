@@ -49,8 +49,6 @@ import { AddBotDialog } from './AddBotDialog';
 import { BotAvatar, BotAvatarPicker } from './BotAvatar';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotCapabilityChips, type BotCapabilityChipId } from './BotCapabilityChips';
-import { BotTrustedBadge } from './BotTrustedBadge';
-import { isBotTrusted } from './botCapabilityDefaults';
 import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
 import { shouldDeferCanonicalBotSessionNavigation } from './botNavigation';
@@ -458,15 +456,9 @@ export function BotSettings({
             <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
               <h1 className="text-24 font-medium text-[var(--text-primary)]">{bot.name}</h1>
               {/*
-                放手做的伙伴在名字旁挂一个细小的 ⚠:风险不靠事前门槛表达,靠事后透明。
-                点它直接落到「动手做事」芯片,收紧的路径永远只有一步。
+                产品裁决 2026-08-18:设置页头部不挂「放手做」⚠。伙伴不是一个需要
+                被随时警告的对象;能力与风险由「TA 会的」那面陈列自己说清楚。
               */}
-              {isBotTrusted(capabilities) ? (
-                <BotTrustedBadge
-                  className="self-center"
-                  onClick={() => handleSelectTab('capabilities', 'permissions')}
-                />
-              ) : null}
               {/*
                 自动保存的可观测状态。空闲不显示 —— 常驻的「已保存」是噪音,不是信息。
                 失败才落到下一行,并自带重试入口。
@@ -1185,14 +1177,28 @@ export function BotsHomeView() {
     }
   }, [botId, bots, navigate, searchParams]);
 
+  // 顶栏注入区:选中伙伴时是「头像 + 名字」,点它进 TA 的设置(与对话顶栏同一入口
+  // 语义);没有选中伙伴才退回功能名。
   const headerContent = useMemo(
-    () => (
-      <div className="flex items-center gap-2 text-13 font-medium text-[var(--text-primary)]">
-        <Bot size={15} />
-        {selectedBot?.name ?? t('bots.title')}
-      </div>
-    ),
-    [selectedBot?.name, t],
+    () =>
+      selectedBot ? (
+        <button
+          type="button"
+          onClick={() => navigate(`/bots/${selectedBot.id}?settings=1`)}
+          title={t('bots.settings')}
+          className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <BotAvatar bot={selectedBot} size="xs" />
+          <span className="min-w-0 truncate">{selectedBot.name}</span>
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 text-13 font-medium text-[var(--text-primary)]">
+          <Bot size={15} />
+          {t('bots.title')}
+        </div>
+      ),
+    [navigate, selectedBot, t],
   );
   useRegisterContentHeader(headerContent);
 
@@ -1348,6 +1354,14 @@ export function BotsHomeView() {
       );
   };
   const handleCreated = (bot: BotProfile) => navigate(`/bots/${bot.id}`);
+  // 「已经有伙伴文件？导入一个」——复用既有 ?import=1 流程,不另开一条导入路径。
+  const requestImport = useCallback(() => {
+    setSearchParams((current) => {
+      current.delete('add');
+      current.set('import', '1');
+      return current;
+    });
+  }, [setSearchParams]);
 
   if (!selectedBot) {
     return (
@@ -1395,7 +1409,12 @@ export function BotsHomeView() {
             {t('bots.add')}
           </button>
         </div>
-        <AddBotDialog open={addOpen} onOpenChange={closeAdd} onCreated={handleCreated} />
+        <AddBotDialog
+        open={addOpen}
+        onOpenChange={closeAdd}
+        onCreated={handleCreated}
+        onImport={requestImport}
+      />
       </main>
     );
   }
@@ -1432,7 +1451,12 @@ export function BotsHomeView() {
             );
           }}
         />
-        <AddBotDialog open={addOpen} onOpenChange={closeAdd} onCreated={handleCreated} />
+        <AddBotDialog
+        open={addOpen}
+        onOpenChange={closeAdd}
+        onCreated={handleCreated}
+        onImport={requestImport}
+      />
       </>
     );
   }
@@ -1455,7 +1479,12 @@ export function BotsHomeView() {
           />
         )}
       </main>
-      <AddBotDialog open={addOpen} onOpenChange={closeAdd} onCreated={handleCreated} />
+      <AddBotDialog
+        open={addOpen}
+        onOpenChange={closeAdd}
+        onCreated={handleCreated}
+        onImport={requestImport}
+      />
     </>
   );
 }

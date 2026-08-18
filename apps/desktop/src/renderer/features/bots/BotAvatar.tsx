@@ -150,9 +150,13 @@ const HUE_TOKENS: Record<BotAvatarHue, string> = {
 };
 
 const SIZE_CLASSES = {
+  /** 20px — the ContentHeader lockup, where the mark sits next to 13px text. */
+  xs: 'h-5 w-5 text-11',
   sm: 'h-7 w-7 text-14',
   md: 'h-10 w-10 text-20',
   lg: 'h-14 w-14 text-28',
+  /** 64px — the roster card portrait. `text-28` is the top of the numeric scale. */
+  xl: 'h-16 w-16 text-28',
 } as const;
 
 export type BotAvatarSize = keyof typeof SIZE_CLASSES;

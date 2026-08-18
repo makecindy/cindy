@@ -1,119 +1,112 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Check, ChevronDown, Pencil, Plus, X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { DEFAULT_CONTROL_BOT_EVENT_RULE } from '../../../shared/botSessionEvents';
-import { addBotProfileAndWait, type BotProfile } from './botStore';
+import { addBotProfileAndWait, useBotProfiles, type BotProfile } from './botStore';
 import {
-  botAvatarArtworkSrc,
+  BotAvatar,
   botAvatarAssignment,
   BotAvatarPicker,
-  isCindyAvatarSentinel,
   type BotAvatarAssignment,
   type BotAvatarHue,
 } from './BotAvatar';
+import { rememberPendingBotWelcome } from './botWelcome';
 import {
-  BOT_TEMPLATE_CHOICE_IDS,
+  BOT_TEMPLATES,
   CUSTOM_BOT_TEMPLATE_ID,
-  getBotTemplate,
-  isBotTemplateId,
-  type BotTemplateChoiceId,
+  type BotTemplateDefinition,
 } from './botTemplates';
 
 interface AddBotDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (bot: BotProfile) => void;
-}
-
-/** i18n leaf for a template card; 'pr-steward' is camelCased in the catalog. */
-function templateCopyKey(id: BotTemplateChoiceId): string {
-  return id === 'pr-steward' ? 'prSteward' : id;
+  /** "Already have a teammate file?" — hands off to the existing import flow. */
+  onImport?: () => void;
 }
 
 /**
- * Create a Bot in one screen: pick a card, keep or edit the name, hit create.
+ * Meet the roster.
  *
- * Everything an ordinary user does not need to decide up front stays out:
- * harness, task control, event subscriptions and Channels are template
- * defaults, configurable afterwards in Bot settings. Only the blank "custom"
- * card asks for an identity, because there is no template text to inherit.
+ * Picking a card *is* the creation: no name field, no description field, no
+ * identity textarea. Everything a template already knows (voice, avatar,
+ * capabilities, event subscription, greeting) comes with the character, and
+ * anything an ordinary user does not need to decide up front — harness, task
+ * control, Channels — stays a template default, configurable afterwards in the
+ * teammate's own settings. Only the blank card asks anything, and only the two
+ * things nobody can pick for you: a name and a face.
  */
-export function AddBotDialog({ open, onOpenChange, onCreated }: AddBotDialogProps) {
+export function AddBotDialog({ open, onOpenChange, onCreated, onImport }: AddBotDialogProps) {
   const { t } = useTranslation();
-  const [templateId, setTemplateId] = useState<BotTemplateChoiceId>('control');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [identitySource, setIdentitySource] = useState('');
-  const [identityOpen, setIdentityOpen] = useState(false);
-  const [avatar, setAvatar] = useState('🤖');
-  const [avatarColor, setAvatarColor] = useState<BotAvatarHue>('violet');
-  const [creating, setCreating] = useState(false);
+  const bots = useBotProfiles();
+  const [view, setView] = useState<'roster' | 'custom'>('roster');
+  const [customName, setCustomName] = useState('');
+  const [customAvatar, setCustomAvatar] = useState<BotAvatarAssignment>({
+    emoji: '🤖',
+    hue: 'violet',
+  });
+  /** Which card is mid-flight — also the "one create at a time" latch. */
+  const [creatingId, setCreatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** Auto-assigned mark for the blank card, refreshed on every dialog opening. */
-  const autoAvatarRef = useRef<BotAvatarAssignment>({ emoji: '🤖', hue: 'violet' });
-
-  const customSelected = templateId === CUSTOM_BOT_TEMPLATE_ID;
-
-  const applyTemplate = (id: BotTemplateChoiceId, fallback: BotAvatarAssignment) => {
-    setTemplateId(id);
-    setError(null);
-    if (!isBotTemplateId(id)) {
-      setName('');
-      setDescription('');
-      setIdentitySource('');
-      setAvatar(fallback.emoji);
-      setAvatarColor(fallback.hue);
-      // A blank identity has nothing to inherit, so the field must be visible.
-      setIdentityOpen(true);
-      return;
-    }
-    const next = getBotTemplate(id);
-    setName(t(next.nameKey));
-    setDescription(t(next.descriptionKey));
-    setIdentitySource(next.identitySource);
-    setAvatar(next.avatar);
-    setAvatarColor(next.avatarColor);
-    setIdentityOpen(false);
-  };
 
   useEffect(() => {
     if (!open) return;
-    setCreating(false);
-    // Every dialog opening gets a fresh good-looking avatar for the blank card;
-    // template cards overwrite it with their own mark.
-    autoAvatarRef.current = botAvatarAssignment(`${Date.now()}:${Math.random()}`);
-    applyTemplate('control', autoAvatarRef.current);
-    // The translation function changes with locale; opening the dialog is the
-    // intentional point at which localized defaults are refreshed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, t]);
+    setView('roster');
+    setCustomName('');
+    setCreatingId(null);
+    setError(null);
+    // Every dialog opening mints a fresh good-looking mark for the blank card.
+    setCustomAvatar(botAvatarAssignment(`${Date.now()}:${Math.random()}`));
+  }, [open]);
 
-  const submittable = name.trim().length > 0 && (!customSelected || identitySource.trim().length > 0);
+  // "Already joined" is matched on the displayed name: a Bot profile stores no
+  // template id, and the name is exactly what the user recognizes on the card.
+  // Archived teammates do not count — their card must be joinable again.
+  const joinedNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const bot of bots) {
+      if (bot.status === 'archived') continue;
+      const name = bot.name.trim().toLowerCase();
+      if (name) names.add(name);
+    }
+    return names;
+  }, [bots]);
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!submittable || creating) return;
-    setCreating(true);
+  const isJoined = (template: BotTemplateDefinition) =>
+    joinedNames.has(t(template.nameKey).trim().toLowerCase());
+
+  const create = async (
+    id: string,
+    input: {
+      name: string;
+      description: string;
+      identitySource: string;
+      avatar: string;
+      avatarColor: BotAvatarHue | string;
+      template: BotTemplateDefinition | null;
+    },
+  ) => {
+    if (creatingId) return;
+    setCreatingId(id);
     setError(null);
     try {
-      const template = isBotTemplateId(templateId) ? getBotTemplate(templateId) : null;
       const bot = await addBotProfileAndWait({
-        name,
+        name: input.name,
         channel: 'local',
-        description,
-        identitySource,
+        description: input.description,
+        identitySource: input.identitySource,
         // Hermes keeps USER context separate from SOUL. Templates do not
         // invent facts about the owner; users can add them in Bot Settings.
         userContextSource: '',
-        avatar,
-        avatarColor,
+        avatar: input.avatar,
+        avatarColor: input.avatarColor,
         skills: [],
-        ...(template ? { capabilities: template.capabilities } : {}),
-        ...(template?.autoSubscribeToTaskEvents
+        ...(input.template ? { capabilities: input.template.capabilities } : {}),
+        ...(input.template?.autoSubscribeToTaskEvents
           ? {
               eventSubscription: {
                 id: 'control-events',
@@ -124,27 +117,43 @@ export function AddBotDialog({ open, onOpenChange, onCreated }: AddBotDialogProp
             }
           : {}),
       });
+      // Park the greeting; the canonical chat delivers it on first open.
+      if (input.template) rememberPendingBotWelcome(bot.id, input.template.welcomeKey);
       onOpenChange(false);
       onCreated(bot);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('bots.createWizard.createFailed'));
     } finally {
-      setCreating(false);
+      setCreatingId(null);
     }
+  };
+
+  const submitCustom = (event: FormEvent) => {
+    event.preventDefault();
+    const name = customName.trim();
+    if (!name) return;
+    void create(CUSTOM_BOT_TEMPLATE_ID, {
+      name,
+      description: '',
+      identitySource: '',
+      avatar: customAvatar.emoji,
+      avatarColor: customAvatar.hue,
+      template: null,
+    });
   };
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(640px,calc(100vh-32px))] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] outline-none">
-          <div className="flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-4 py-3">
-            <div>
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(680px,calc(100vh-32px))] w-[min(720px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] outline-none">
+          <div className="flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-5 py-4">
+            <div className="min-w-0">
               <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
-                {t('bots.addTitle')}
+                {view === 'custom' ? t('bots.roster.customTitle') : t('bots.roster.title')}
               </Dialog.Title>
               <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                {t('bots.createWizard.chooseTemplateDescription')}
+                {view === 'custom' ? t('bots.roster.customSubtitle') : t('bots.roster.subtitle')}
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>
@@ -158,169 +167,169 @@ export function AddBotDialog({ open, onOpenChange, onCreated }: AddBotDialogProp
             </Dialog.Close>
           </div>
 
-          <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {BOT_TEMPLATE_CHOICE_IDS.map((id) => {
-                  const selected = id === templateId;
-                  const definition = isBotTemplateId(id) ? getBotTemplate(id) : null;
-                  const artwork = definition ? botAvatarArtworkSrc(definition.avatar) : null;
-                  const copyKey = templateCopyKey(id);
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => applyTemplate(id, autoAvatarRef.current)}
-                      aria-pressed={selected}
-                      className={cn(
-                        'flex flex-col gap-1 rounded-xl border p-3 text-left transition-colors',
-                        selected
-                          ? 'border-[var(--text-primary)] bg-[var(--surface-hover)]'
-                          : 'border-[var(--border-default)] hover:bg-[var(--surface-hover)]',
-                      )}
-                    >
-                      <span className="flex h-5 items-center justify-between gap-2">
-                        {definition ? (
-                          // A sentinel avatar is artwork, not a grapheme; painting
-                          // the raw string here would leak `cindy://avatar/…`, so an
-                          // unresolvable sentinel renders nothing at all.
-                          artwork ? (
-                            <img
-                              src={artwork}
-                              alt=""
-                              aria-hidden
-                              draggable={false}
-                              className="pointer-events-none h-5 w-5 select-none rounded-full object-cover"
-                            />
-                          ) : isCindyAvatarSentinel(definition.avatar) ? null : (
-                            <span className="text-16" aria-hidden>
-                              {definition.avatar}
-                            </span>
-                          )
-                        ) : (
-                          <Plus size={16} className="text-[var(--text-secondary)]" aria-hidden />
-                        )}
-                        {selected ? (
-                          <Check size={14} className="text-[var(--text-primary)]" />
-                        ) : null}
-                      </span>
-                      <span className="text-13 font-medium text-[var(--text-primary)]">
-                        {t(`bots.createWizard.templates.${copyKey}.title`)}
-                      </span>
-                      <span className="text-11 leading-4 text-[var(--text-secondary)]">
-                        {t(`bots.createWizard.templates.${copyKey}.summary`)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-4 flex items-end gap-3">
-                <BotAvatarPicker
-                  name={name}
-                  avatar={avatar}
-                  avatarColor={avatarColor}
-                  onChange={(next) => {
-                    setAvatar(next.emoji);
-                    setAvatarColor(next.hue);
-                  }}
-                  triggerLabel={
-                    <Pencil
-                      size={10}
-                      className="absolute -bottom-0.5 -right-0.5 rounded-full bg-[var(--surface-elevated)] text-[var(--text-secondary)]"
-                      aria-hidden
-                    />
-                  }
-                />
-                <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                  {t('bots.nameLabel')}
-                  <input
-                    autoFocus
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder={t('bots.namePlaceholder')}
-                    className="h-9 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]"
-                    required
+          {view === 'custom' ? (
+            <form className="flex min-h-0 flex-1 flex-col" onSubmit={submitCustom}>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                <div className="flex items-end gap-3">
+                  <BotAvatarPicker
+                    name={customName}
+                    avatar={customAvatar.emoji}
+                    avatarColor={customAvatar.hue}
+                    onChange={setCustomAvatar}
                   />
-                </label>
+                  <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                    {t('bots.roster.customNameLabel')}
+                    <input
+                      autoFocus
+                      value={customName}
+                      onChange={(event) => setCustomName(event.target.value)}
+                      placeholder={t('bots.roster.customNamePlaceholder')}
+                      className="h-9 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]"
+                      required
+                    />
+                  </label>
+                </div>
+                <p className="mt-3 text-11 leading-4 text-[var(--text-tertiary)]">
+                  {t('bots.roster.customHint')}
+                </p>
+                {error ? (
+                  <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
+                    {error}
+                  </p>
+                ) : null}
               </div>
-
-              <label className="mt-3 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                {t('bots.descriptionLabel')}
-                <input
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  placeholder={t('bots.descriptionPlaceholder')}
-                  className="h-9 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]"
-                />
-              </label>
-
-              <div className="mt-4 rounded-xl border border-[var(--border-default)]">
+              <div className="flex items-center justify-end gap-2 border-t border-[var(--border-default)] px-5 py-3">
                 <button
                   type="button"
-                  onClick={() => setIdentityOpen((value) => !value)}
-                  aria-expanded={identityOpen}
-                  className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[var(--surface-hover)]"
+                  onClick={() => setView('roster')}
+                  className="h-9 rounded-full px-4 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
                 >
-                  <span className="min-w-0">
-                    <span className="block text-12 font-medium text-[var(--text-primary)]">
-                      {customSelected
-                        ? t('bots.createWizard.identityRequiredLabel')
-                        : t('bots.createWizard.identityOptionalLabel')}
-                    </span>
-                    <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
-                      {customSelected
-                        ? t('bots.createWizard.identityRequiredHint')
-                        : t('bots.createWizard.identityOptionalHint')}
-                    </span>
-                  </span>
-                  <ChevronDown
-                    size={14}
-                    className={cn(
-                      'shrink-0 text-[var(--text-tertiary)] transition-transform',
-                      identityOpen && 'rotate-180',
-                    )}
-                    aria-hidden
-                  />
+                  {t('bots.roster.backToRoster')}
                 </button>
-                {identityOpen ? (
-                  <div className="px-3 pb-3">
-                    <textarea
-                      value={identitySource}
-                      onChange={(event) => setIdentitySource(event.target.value)}
-                      rows={5}
-                      aria-label={t('bots.createWizard.roleLabel')}
-                      className="w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 leading-5 text-[var(--text-primary)] outline-none focus:border-[var(--focus-ring)]"
-                      required={customSelected}
-                    />
-                    <p className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
-                      {t('bots.createWizard.roleHint')}
+                <button
+                  type="submit"
+                  disabled={creatingId !== null || customName.trim().length === 0}
+                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+                >
+                  {creatingId !== null ? <Spinner size={14} /> : null}
+                  {t('bots.roster.join')}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {BOT_TEMPLATES.map((template) => {
+                    const joined = isJoined(template);
+                    const name = t(template.nameKey);
+                    return (
+                      <div
+                        key={template.id}
+                        className={cn(
+                          'flex flex-col rounded-xl border border-[var(--border-default)] p-4',
+                          joined && 'opacity-60',
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <BotAvatar
+                            bot={{
+                              name,
+                              avatar: template.avatar,
+                              avatarColor: template.avatarColor,
+                            }}
+                            size="xl"
+                          />
+                          <div className="min-w-0">
+                            <p className="truncate text-14 font-medium text-[var(--text-primary)]">
+                              {name}
+                            </p>
+                            <p className="mt-0.5 truncate text-11 text-[var(--text-tertiary)]">
+                              {t('bots.roster.goodAt', { skill: t(template.skillKey) })}
+                            </p>
+                          </div>
+                        </div>
+                        <p className="mt-3 min-h-[60px] flex-1 text-12 leading-5 text-[var(--text-secondary)]">
+                          {t(template.introKey)}
+                        </p>
+                        <button
+                          type="button"
+                          disabled={joined || creatingId !== null}
+                          onClick={() =>
+                            void create(template.id, {
+                              name,
+                              description: t(template.descriptionKey),
+                              identitySource: template.identitySource,
+                              avatar: template.avatar,
+                              avatarColor: template.avatarColor,
+                              template,
+                            })
+                          }
+                          className={cn(
+                            'mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-full text-12 font-medium transition-opacity',
+                            joined
+                              ? 'cursor-default border border-[var(--border-default)] text-[var(--text-tertiary)]'
+                              : 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90 disabled:opacity-50',
+                          )}
+                        >
+                          {creatingId === template.id ? <Spinner size={14} /> : null}
+                          {joined ? t('bots.roster.joined') : t('bots.roster.join')}
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  <div className="flex flex-col rounded-xl border border-dashed border-[var(--border-default)] p-4">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border border-dashed border-[var(--border-default)] text-[var(--text-tertiary)]">
+                        <Plus size={22} aria-hidden />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-14 font-medium text-[var(--text-primary)]">
+                          {t('bots.roster.customName')}
+                        </p>
+                        <p className="mt-0.5 truncate text-11 text-[var(--text-tertiary)]">
+                          {t('bots.roster.goodAt', { skill: t('bots.roster.customSkill') })}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-3 min-h-[60px] flex-1 text-12 leading-5 text-[var(--text-secondary)]">
+                      {t('bots.roster.customIntro')}
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => setView('custom')}
+                      className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-full border border-[var(--border-default)] text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                    >
+                      {t('bots.roster.customAction')}
+                    </button>
                   </div>
+                </div>
+
+                {error ? (
+                  <p className="mt-4 text-12 text-[var(--text-danger)]" role="alert">
+                    {error}
+                  </p>
                 ) : null}
               </div>
 
-              {error ? (
-                <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
-                  {error}
+              <div className="flex flex-col gap-2 border-t border-[var(--border-default)] px-5 py-3">
+                <p className="text-11 leading-4 text-[var(--text-tertiary)]">
+                  {t('bots.roster.footerHint')}
                 </p>
-              ) : null}
-            </div>
-
-            <div className="flex items-center justify-between gap-3 border-t border-[var(--border-default)] px-4 py-3">
-              <p className="min-w-0 text-11 leading-4 text-[var(--text-tertiary)]">
-                {t('bots.createWizard.channelsHint')}
-              </p>
-              <button
-                type="submit"
-                disabled={creating || !submittable}
-                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
-              >
-                {creating ? <Spinner size={14} /> : null}
-                {creating ? t('bots.createWizard.creating') : t('bots.createWizard.submit')}
-              </button>
-            </div>
-          </form>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onImport?.();
+                  }}
+                  className="w-fit rounded-lg text-11 text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)]"
+                >
+                  {t('bots.roster.importLink')}
+                </button>
+              </div>
+            </>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

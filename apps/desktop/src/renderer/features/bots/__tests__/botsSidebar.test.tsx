@@ -149,7 +149,7 @@ describe('BotsSidebar rows', () => {
     expect(screen.getByText('bots.list.startChat')).toBeTruthy();
   });
 
-  it('marks only the hands-on teammates with the ⚠ badge', async () => {
+  it('never marks a row with the hands-on ⚠ badge', async () => {
     mocks.profiles = [
       bot({ id: 'bot-asks', name: 'Asks first' }),
       { ...bot({ id: 'bot-trusted', name: 'Hands on' }), capabilities: { permissions: 'trusted' } },
@@ -157,8 +157,8 @@ describe('BotsSidebar rows', () => {
 
     await renderSidebar();
 
-    // icon-only,没有文字标签(既有状态徽标裁决);一行一个,不是每行都挂。
-    expect(screen.getAllByLabelText('bots.trustedBadge.label')).toHaveLength(1);
+    // 产品裁决 2026-08-18:伙伴列表是聊天列表,不是权限看板。
+    expect(screen.queryAllByLabelText('bots.trustedBadge.label')).toHaveLength(0);
   });
 
   it('shows a health icon only for abnormal Bots', async () => {
@@ -176,19 +176,17 @@ describe('BotsSidebar rows', () => {
     expect(screen.queryByLabelText('bots.lifecycle.healthStatus.healthy')).toBeNull();
   });
 
-  it('opens Bot settings from the row gear without opening the chat', async () => {
+  it('has no per-row gear and no section-header import: a row only opens the chat', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
 
     await renderSidebar();
 
-    const gear = screen.getByRole('button', { name: 'bots.settings' });
-    fireEvent.click(gear);
-    expect(mocks.navigate).toHaveBeenCalledTimes(1);
-    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1?settings=1');
+    // 进设置的入口收敛到对话顶栏;导入下沉到创建面板与「设置 › 伙伴」。
+    expect(screen.queryByRole('button', { name: 'bots.settings' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.portability.import' })).toBeNull();
 
-    // The row itself still opens the conversation.
-    mocks.navigate.mockClear();
     fireEvent.click(screen.getByText('PR steward'));
+    expect(mocks.navigate).toHaveBeenCalledTimes(1);
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1');
   });
 

@@ -318,6 +318,15 @@ interface MessageStreamProps {
    *  MessageStream via the `key={sessionId}` parent prop), so it never
    *  triggers extra re-renders mid-session. */
   workingDir: string;
+  /**
+   * Identity mark drawn to the left of every assistant bubble.
+   *
+   * Only a Bot conversation passes one — a normal Cindy task has no "who is
+   * speaking" question to answer, so it stays undefined and the layout is
+   * byte-identical to before. The node must be stable across renders (memoize
+   * it at the owner): it is a prop of the memoized `MessageItem`.
+   */
+  assistantAvatar?: ReactNode;
   messages: ChatMessage[];
   historyLoaded: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
@@ -2654,6 +2663,8 @@ function renderWorkGroupChild(
     );
   }
 
+  // 工作组里的中间过程文字不挂 assistantAvatar:折叠块里逐条画脸只会变噪音,
+  // 身份标记只属于对话流里真正的那句回复(见 MessageItem 的 assistantAvatar)。
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
@@ -2778,6 +2789,7 @@ export function MessageStream({
   agentKind,
   remoteHostId,
   workingDir,
+  assistantAvatar,
   messages,
   historyLoaded,
   taskUpdates,
@@ -5520,6 +5532,7 @@ export function MessageStream({
                           }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
+                          assistantAvatar={assistantAvatar}
                         />
                       </div>
                     );
@@ -5594,6 +5607,24 @@ export function MessageStream({
 // thinking messages are now rendered inline by MessageStream (above) so they
 // can receive the live isSessionStreaming flag without breaking this memo.
 // The thinking branch below is kept as a defensive fallback only.
+/**
+ * Hang an identity mark to the left of an assistant bubble.
+ *
+ * Without a mark (every normal Cindy task) the bubble is returned untouched —
+ * no extra wrapper element, so the existing layout and its measurements are
+ * bit-for-bit what they were. With one (a Bot conversation) the row becomes the
+ * IM shape everyone already knows: avatar, then what they said.
+ */
+function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
+  if (!avatar) return bubble;
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="mt-0.5 shrink-0">{avatar}</span>
+      <div className="min-w-0 flex-1">{bubble}</div>
+    </div>
+  );
+}
+
 const MessageItem = memo(function MessageItem({
   message,
   toolResult,
@@ -5613,6 +5644,7 @@ const MessageItem = memo(function MessageItem({
   continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
+  assistantAvatar,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -5660,6 +5692,8 @@ const MessageItem = memo(function MessageItem({
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
+  /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
+  assistantAvatar?: ReactNode;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -5723,7 +5757,8 @@ const MessageItem = memo(function MessageItem({
           />
         );
       }
-      return (
+      return withAssistantAvatar(
+        assistantAvatar,
         <AssistantMessage
           workingDir={workingDir}
           localFileRefs={localFileRefs}
@@ -5750,7 +5785,7 @@ const MessageItem = memo(function MessageItem({
           userTurnUsageDetails={userTurnUsageDetails}
           modelMismatch={message.modelMismatch}
           ghostReplyPending={message.ghostReplyPending}
-        />
+        />,
       );
     case 'tool_use':
       return (

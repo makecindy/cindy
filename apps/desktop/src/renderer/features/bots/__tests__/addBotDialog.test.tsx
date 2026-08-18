@@ -3,8 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// A stable `t` identity, like real i18next: the dialog refreshes its localized
-// defaults when `t` changes, so a new function per render would reset the form.
+// A stable `t` identity, like real i18next.
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
 vi.mock('react-i18next', () => ({
@@ -13,9 +12,11 @@ vi.mock('react-i18next', () => ({
 
 const mocks = vi.hoisted(() => ({
   addBotProfileAndWait: vi.fn(),
+  profiles: [] as Array<{ id: string; name: string; status?: string }>,
 }));
 vi.mock('../botStore', () => ({
   addBotProfileAndWait: mocks.addBotProfileAndWait,
+  useBotProfiles: () => mocks.profiles,
 }));
 
 import { AddBotDialog } from '../AddBotDialog';
@@ -25,165 +26,160 @@ import {
   CINDY_OFFICIAL_AVATAR,
   parsePresetAvatarId,
 } from '../BotAvatar';
-import { getBotTemplate } from '../botTemplates';
+import { BOT_TEMPLATES, getBotTemplate } from '../botTemplates';
+import { peekPendingBotWelcome, resetPendingBotWelcomeForTests } from '../botWelcome';
 
 function renderDialog() {
   const onCreated = vi.fn();
   const onOpenChange = vi.fn();
-  render(<AddBotDialog open onOpenChange={onOpenChange} onCreated={onCreated} />);
-  return { onCreated, onOpenChange };
+  const onImport = vi.fn();
+  render(
+    <AddBotDialog
+      open
+      onOpenChange={onOpenChange}
+      onCreated={onCreated}
+      onImport={onImport}
+    />,
+  );
+  return { onCreated, onOpenChange, onImport };
 }
 
-function nameInput(): HTMLInputElement {
-  return screen.getByLabelText('bots.nameLabel', { selector: 'input' }) as HTMLInputElement;
+/** The join button that belongs to one roster card. */
+function joinButtonFor(templateId: string): HTMLButtonElement {
+  const card = screen
+    .getByText(`bots.createWizard.templates.${templateId}.name`)
+    .closest('div.rounded-xl') as HTMLElement;
+  return card.querySelector('button') as HTMLButtonElement;
 }
 
 beforeEach(() => {
   mocks.addBotProfileAndWait.mockReset();
-  mocks.addBotProfileAndWait.mockResolvedValue({ id: 'bot-new', name: 'Control Bot' });
+  mocks.addBotProfileAndWait.mockResolvedValue({ id: 'bot-new', name: 'Cindy' });
+  mocks.profiles = [];
+  resetPendingBotWelcomeForTests();
 });
 
 afterEach(() => cleanup());
 
-describe('AddBotDialog', () => {
-  it('creates in one screen: four cards, no wizard step, no developer sidebar', () => {
+describe('AddBotDialog — the roster', () => {
+  it('shows every character with a face, a skill, a self-introduction and a join button', () => {
     renderDialog();
 
-    for (const key of ['control', 'prSteward', 'assistant', 'custom']) {
-      expect(screen.getByText(`bots.createWizard.templates.${key}.title`)).toBeTruthy();
+    for (const template of BOT_TEMPLATES) {
+      expect(screen.getByText(`bots.createWizard.templates.${template.id}.name`)).toBeTruthy();
+      expect(screen.getByText(`bots.createWizard.templates.${template.id}.intro`)).toBeTruthy();
     }
-    // The two-step wizard and the harness / task-control aside are gone.
-    expect(screen.queryByText('bots.createWizard.continue')).toBeNull();
-    expect(screen.queryByText('bots.createWizard.back')).toBeNull();
-    expect(screen.queryByText('bots.createWizard.recommendedConfiguration')).toBeNull();
-    expect(screen.queryByText('bots.harnessLabel')).toBeNull();
-    expect(screen.queryByText('bots.sessionControl.title')).toBeNull();
-    // The submit button lives on the same screen.
-    expect(screen.getByRole('button', { name: 'bots.createWizard.submit' })).toBeTruthy();
-    expect(screen.getByText('bots.createWizard.channelsHint')).toBeTruthy();
-  });
-
-  it('prefills name, description and avatar from the selected template', () => {
-    renderDialog();
-
-    expect(nameInput().value).toBe('bots.createWizard.templates.control.defaultName');
-
-    fireEvent.click(screen.getByText('bots.createWizard.templates.assistant.title'));
-    expect(nameInput().value).toBe('bots.createWizard.templates.assistant.defaultName');
-    // The standard assistant carries the official Cindy mark: the trigger shows
-    // the bundled artwork, never the raw `cindy://avatar/…` sentinel as text.
-    const trigger = screen.getByRole('button', { name: 'bots.avatarPicker.open' });
-    expect(trigger.querySelector('img')?.getAttribute('src')).toContain('cindy-avatar-account');
-    expect(trigger.textContent).not.toContain('cindy://');
-
-    fireEvent.click(screen.getByText('bots.createWizard.templates.prSteward.title'));
-    expect(
-      screen.getByRole('button', { name: 'bots.avatarPicker.open' }).textContent,
-    ).toContain(getBotTemplate('pr-steward').avatar);
-  });
-
-  it('never paints the avatar sentinel as text on a template card', () => {
-    renderDialog();
-
-    // The dialog lives in a portal, so assert against the whole document.
-    expect(document.body.textContent).not.toContain('cindy://');
-    const card = screen
-      .getByText('bots.createWizard.templates.assistant.title')
-      .closest('button') as HTMLButtonElement;
-    expect(card.querySelector('img')?.getAttribute('src')).toContain('cindy-avatar-account');
-  });
-
-  it('submits the official avatar for the standard assistant template', async () => {
-    renderDialog();
-
-    fireEvent.click(screen.getByText('bots.createWizard.templates.assistant.title'));
-    fireEvent.click(screen.getByRole('button', { name: 'bots.createWizard.submit' }));
-
-    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
-    const payload = mocks.addBotProfileAndWait.mock.calls[0][0];
-    expect(payload).toMatchObject({
-      name: 'bots.createWizard.templates.assistant.defaultName',
-      avatar: CINDY_OFFICIAL_AVATAR,
-      avatarColor: getBotTemplate('assistant').avatarColor,
-    });
-    expect(payload.eventSubscription).toBeUndefined();
-  });
-
-  it('keeps the identity field collapsed for templates and required for the blank card', () => {
-    renderDialog();
-
-    const toggle = screen.getByText('bots.createWizard.identityOptionalLabel');
+    // 阵容有六张角色卡 + 一张自定义卡。
+    expect(BOT_TEMPLATES).toHaveLength(6);
+    expect(screen.getByText('bots.roster.customName')).toBeTruthy();
+    expect(screen.getAllByText('bots.roster.join').length).toBe(BOT_TEMPLATES.length);
+    // 阵容式创建没有名字 / 描述 / 身份表单。
+    expect(screen.queryByText('bots.nameLabel')).toBeNull();
+    expect(screen.queryByText('bots.descriptionLabel')).toBeNull();
     expect(screen.queryByLabelText('bots.createWizard.roleLabel')).toBeNull();
-
-    fireEvent.click(toggle);
-    expect(screen.getByLabelText('bots.createWizard.roleLabel')).toBeTruthy();
-
-    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
-    // Blank card: identity is expanded, mandatory, and submit is blocked until
-    // both a name and an identity exist.
-    expect(screen.getByText('bots.createWizard.identityRequiredLabel')).toBeTruthy();
-    const identity = screen.getByLabelText('bots.createWizard.roleLabel') as HTMLTextAreaElement;
-    expect(identity.value).toBe('');
-    const submit = screen.getByRole('button', { name: 'bots.createWizard.submit' });
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.change(nameInput(), { target: { value: 'Ops buddy' } });
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(identity, { target: { value: 'You watch the deploy queue.' } });
-    expect((submit as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText('bots.roster.footerHint')).toBeTruthy();
   });
 
-  it('submits the template identity, capabilities and an avatar from the curated set', async () => {
+  it('never paints an avatar sentinel as text', () => {
+    renderDialog();
+    expect(document.body.textContent).not.toContain('cindy://');
+  });
+
+  it('greys out a character that is already on the crew, and only that one', () => {
+    mocks.profiles = [
+      { id: 'bot-1', name: 'bots.createWizard.templates.cindy.name', status: 'active' },
+      // 归档的伙伴不算数:那张卡必须还能再加回来。
+      { id: 'bot-2', name: 'bots.createWizard.templates.shiba.name', status: 'archived' },
+    ];
+    renderDialog();
+
+    expect(joinButtonFor('cindy').disabled).toBe(true);
+    expect(joinButtonFor('cindy').textContent).toContain('bots.roster.joined');
+    expect(joinButtonFor('shiba').disabled).toBe(false);
+    expect(joinButtonFor('melody').disabled).toBe(false);
+  });
+
+  it('creates straight from the card, with that character\'s identity and capabilities', async () => {
     const { onCreated, onOpenChange } = renderDialog();
 
-    fireEvent.click(screen.getByRole('button', { name: 'bots.createWizard.submit' }));
+    fireEvent.click(joinButtonFor('butler'));
 
     await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
     const payload = mocks.addBotProfileAndWait.mock.calls[0][0];
-    const template = getBotTemplate('control');
+    const template = getBotTemplate('butler');
     expect(payload).toMatchObject({
       channel: 'local',
-      name: 'bots.createWizard.templates.control.defaultName',
+      name: 'bots.createWizard.templates.butler.name',
+      description: 'bots.createWizard.templates.butler.description',
       identitySource: template.identitySource,
       capabilities: template.capabilities,
       userContextSource: '',
       avatar: template.avatar,
       avatarColor: template.avatarColor,
     });
+    // 本本会盯任务动静,所以带事件订阅。
     expect(payload.eventSubscription).toMatchObject({ id: 'control-events', status: 'active' });
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(onCreated).toHaveBeenCalledWith({ id: 'bot-new', name: 'Control Bot' });
+    expect(onCreated).toHaveBeenCalledWith({ id: 'bot-new', name: 'Cindy' });
   });
 
-  it('creates the blank card without capabilities or an event subscription', async () => {
+  it('parks the character greeting so the canonical chat can say hello', async () => {
     renderDialog();
 
-    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
-    fireEvent.change(nameInput(), { target: { value: 'Ops buddy' } });
-    fireEvent.change(screen.getByLabelText('bots.createWizard.roleLabel'), {
-      target: { value: 'You watch the deploy queue.' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'bots.createWizard.submit' }));
+    fireEvent.click(joinButtonFor('star'));
+
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(peekPendingBotWelcome('bot-new')).toBe(getBotTemplate('star').welcomeKey),
+    );
+  });
+
+  it('gives an ordinary assistant no event subscription', async () => {
+    renderDialog();
+
+    fireEvent.click(joinButtonFor('cindy'));
 
     await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
     const payload = mocks.addBotProfileAndWait.mock.calls[0][0];
+    expect(payload.avatar).toBe(CINDY_OFFICIAL_AVATAR);
+    expect(payload.eventSubscription).toBeUndefined();
+  });
+
+  it('asks the blank card for a name and a face, and nothing else', async () => {
+    renderDialog();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.customAction' }));
+    const submit = screen.getByRole('button', { name: 'bots.roster.join' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    // 自定义卡不再逼用户先写一段身份设定。
+    expect(screen.queryByLabelText('bots.createWizard.roleLabel')).toBeNull();
+
+    const name = screen.getByLabelText('bots.roster.customNameLabel', {
+      selector: 'input',
+    }) as HTMLInputElement;
+    fireEvent.change(name, { target: { value: 'Ops buddy' } });
+    expect(submit.disabled).toBe(false);
+
+    fireEvent.click(submit);
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
+    const payload = mocks.addBotProfileAndWait.mock.calls[0][0];
     expect(payload.name).toBe('Ops buddy');
-    expect(payload.identitySource).toBe('You watch the deploy queue.');
     expect(payload.capabilities).toBeUndefined();
     expect(payload.eventSubscription).toBeUndefined();
-    // The blank card still gets a good-looking auto-assigned mark: a shipped
-    // character this build can draw, never the official Cindy portrait.
+    // 空白卡拿到的是这版能画出来的立绘,不是官方 Cindy 头像。
     expect(BOT_PRESET_AVATAR_IDS).toContain(parsePresetAvatarId(payload.avatar)!);
     expect(payload.avatar).not.toBe(CINDY_OFFICIAL_AVATAR);
     expect(BOT_AVATAR_HUES).toContain(payload.avatarColor);
+    // 自己捏的伙伴没有预置欢迎语,不会凭空冒出一句别人的台词。
+    expect(peekPendingBotWelcome('bot-new')).toBeNull();
   });
 
-  it('shows the auto-assigned character on the blank card, never the raw sentinel', () => {
-    renderDialog();
+  it('hands the import link to the existing import flow', () => {
+    const { onImport, onOpenChange } = renderDialog();
 
-    fireEvent.click(screen.getByText('bots.createWizard.templates.custom.title'));
-    const trigger = screen.getByRole('button', { name: 'bots.avatarPicker.open' });
-    expect(trigger.querySelector('img')?.getAttribute('src')).toContain('bot-avatar-preset-');
-    expect(document.body.textContent).not.toContain('cindy://');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.importLink' }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onImport).toHaveBeenCalledTimes(1);
   });
 });

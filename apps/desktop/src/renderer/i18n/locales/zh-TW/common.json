@@ -148,7 +148,8 @@
       "remoteControl": "遠端連線",
       "windowBehavior": "應用行為",
       "shortcuts": "鍵盤快捷鍵",
-      "mcpServers": "自定義 MCP"
+      "mcpServers": "自定義 MCP",
+      "bots": "伙伴"
     },
     "remote": {
       "title": "遠端機器",
@@ -5454,39 +5455,49 @@
     "addTitle": "新增夥伴",
     "addDescription": "先建立本地夥伴，再依需要掛載 IM 訊息通道。",
     "createWizard": {
-      "chooseTemplateDescription": "選擇一個起點。夥伴會先建立為本地長期助理，訊息通道稍後掛載。",
-      "submit": "建立並開始對話",
-      "channelsHint": "Telegram 等訊息通道可以在建立後於夥伴設定裡掛載。",
-      "identityOptionalLabel": "自訂身分（選填）",
-      "identityOptionalHint": "範本已自帶身分設定，不改也能用。",
-      "identityRequiredLabel": "身分與職責",
-      "identityRequiredHint": "空白夥伴沒有範本文案，請寫清楚它是誰、長期負責什麼。",
-      "creating": "正在建立…",
       "createFailed": "無法建立夥伴，請重試。",
-      "roleLabel": "長期身分與職責",
-      "roleHint": "這裡只定義夥伴是誰、長期負責什麼。你的資料、Skills、MCP、工具、權限、自動化與訊息通道仍分開管理。",
       "templates": {
-        "control": {
-          "title": "總控",
-          "summary": "自動接收其他任務完成、失敗與待決策事件，再繼續協調或回報。",
-          "defaultName": "總控",
-          "defaultDescription": "盯住所有重要任務狀態，避免工作停在待總控卻沒人知道。"
+        "cindy": {
+          "description": "你的貼身助理",
+          "intro": "嗨，我是 Cindy。工作生活裡的雜事都可以丟給我——寫東西、查資料、盯行程、看訊息。你忙你的，需要就叫我。",
+          "name": "Cindy",
+          "skill": "什麼都會一點",
+          "welcome": "嗨，我是 Cindy 👋 以後寫東西、查資料、整理檔案這些事直接丟給我。\n\n把訊息通道接上的話，你不在的時候我還能幫你盯著訊息。"
         },
-        "prSteward": {
-          "title": "PR 總管",
-          "summary": "透過任務事件與自動化跟進評審、檢查與交付狀態。",
-          "defaultName": "PR 總管",
-          "defaultDescription": "持續跟進 PR 與交付任務，將可行動變化交回負責的任務。"
+        "shiba": {
+          "description": "你的生活管家",
+          "intro": "汪！我是小柴。提醒、行程、待辦、記帳，家裡的事包在我身上。",
+          "name": "小柴",
+          "skill": "生活管家",
+          "welcome": "汪！我是小柴 🐕 提醒、行程、待辦、記帳，家裡的事包在我身上。\n\n有什麼要記的直接跟我說，我幫你盯著。"
         },
-        "assistant": {
-          "title": "一般助理",
-          "summary": "擁有長期身分與獨立記憶，預設不觀察或控制其他任務。",
-          "defaultName": "Cindy",
-          "defaultDescription": "可長期使用，並能按需掛載能力與訊息通道的個人助理。"
+        "melody": {
+          "description": "你的技術搭檔",
+          "intro": "我是 Melody。程式、部署、修 bug 找我，話不多，活很細。",
+          "name": "Melody",
+          "skill": "技術搭檔",
+          "welcome": "我是 Melody。程式、部署、修 bug 找我，話不多，活很細。\n\n把專案資料夾給我，我先摸清楚結構。"
         },
-        "custom": {
-          "title": "自訂",
-          "summary": "從空白身分開始，自己撰寫設定。"
+        "butler": {
+          "description": "你的專案管家",
+          "intro": "我是本本。流程我來盯：審查、檢查、交付，你只看結果。",
+          "name": "本本",
+          "skill": "專案管家",
+          "welcome": "我是本本。流程我來盯：審查、檢查、交付，你只看結果。\n\n有在跑的事跟我說一聲，我替你追。"
+        },
+        "star": {
+          "description": "你的內容搭檔",
+          "intro": "我是星星✨ 文案、配圖、發文，保證有網感。",
+          "name": "星星",
+          "skill": "內容創作",
+          "welcome": "我是星星✨ 文案、配圖、發文，保證有網感。\n\n想發什麼？給我一個主題就行～"
+        },
+        "ashu": {
+          "description": "你的總控",
+          "intro": "我是阿樞。各處任務的動靜我都盯著，出事我第一個知道，也第一個告訴你。",
+          "name": "阿樞",
+          "skill": "總控調度",
+          "welcome": "我是阿樞。各處任務的動靜我都盯著，出事我第一個知道，也第一個告訴你。\n\n先忙你的，有要你決定的事我再開口。"
         }
       }
     },
@@ -5746,10 +5757,20 @@
       },
       "events": {
         "session": {
-          "state": { "transition": "任務狀態已變遷", "guardian-anomaly": "任務看起來卡住了" },
-          "turn": { "completed": "任務回合已完成", "failed": "任務回合失敗" },
-          "metadata": { "changed": "任務狀態已變更" },
-          "decision": { "required": "任務需要決策" }
+          "state": {
+            "transition": "任務狀態已變遷",
+            "guardian-anomaly": "任務看起來卡住了"
+          },
+          "turn": {
+            "completed": "任務回合已完成",
+            "failed": "任務回合失敗"
+          },
+          "metadata": {
+            "changed": "任務狀態已變更"
+          },
+          "decision": {
+            "required": "任務需要決策"
+          }
         }
       }
     },
@@ -6123,6 +6144,49 @@
         "invalid": "專案或路徑設定無效。",
         "generic": "專案連結更新失敗，請再試一次。"
       }
+    },
+    "roster": {
+      "backToRoster": "返回陣容",
+      "customAction": "自己捏一個",
+      "customHint": "個性、記憶和行程都可以加入之後在 TA 的設定裡慢慢調。",
+      "customIntro": "從零捏一個：取名、挑頭像、寫個性。",
+      "customName": "自訂",
+      "customNameLabel": "叫什麼",
+      "customNamePlaceholder": "例如：阿橘",
+      "customSkill": "你說了算",
+      "customSubtitle": "取個名字，挑張臉。剩下的 TA 自備。",
+      "customTitle": "捏一個自己的伙伴",
+      "footerHint": "加入後 TA 會先跟你打聲招呼。訊息通道可以之後在 TA 的設定裡接（每個伙伴一個）。",
+      "goodAt": "擅長 · {{skill}}",
+      "importLink": "已經有伙伴檔案？匯入一個",
+      "join": "讓 TA 加入",
+      "joined": "已加入",
+      "subtitle": "挑一個合拍的，或者自己捏一個。",
+      "title": "認識你的伙伴"
+    },
+    "chat": {
+      "composerPlaceholder": "跟{{name}}說點什麼…",
+      "composerPlaceholderLatin": "跟 {{name}} 說點什麼…"
+    },
+    "globalSettings": {
+      "title": "伙伴",
+      "description": "和伙伴有關的通用設定。單個伙伴的設定在 TA 自己的頁面裡。",
+      "notifications": {
+        "banner": "新訊息橫幅",
+        "sound": "聲音",
+        "quietHours": "勿擾時段",
+        "footnote": "像總控這類伙伴會自己關注任務動靜——那是 TA 的本事，不在這裡設定。"
+      },
+      "portability": {
+        "importTitle": "匯入伙伴",
+        "importHint": "從一個伙伴檔案裡還原 TA。",
+        "importAction": "選擇檔案",
+        "exportTitle": "匯出伙伴",
+        "exportHint": "把 TA 的個性和設定打包帶走。",
+        "exportAction": "匯出",
+        "exportEmpty": "還沒有伙伴可以匯出。"
+      },
+      "rosterNote": "預置陣容會隨版本更新。"
     }
   },
   "commonUi": {

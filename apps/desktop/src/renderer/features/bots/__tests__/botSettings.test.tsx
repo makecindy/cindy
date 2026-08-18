@@ -374,21 +374,21 @@ describe('Bot capability chip wall', () => {
 });
 
 describe('Hands-on ⚠ badge', () => {
-  it('stays hidden while the teammate still asks before acting', () => {
+  // 产品裁决 2026-08-18:设置页头部不再挂 ⚠。伙伴不是需要被常年警告的对象;
+  // 「放手做」这件事由能力陈列自己讲,不靠名字旁的黄三角。
+  it('never marks the settings header, trusted or not', () => {
     renderSettings();
     expect(screen.queryByRole('button', { name: 'bots.trustedBadge.label' })).toBeNull();
-  });
 
-  it('marks a trusted teammate and jumps to the hands-on chip when clicked', () => {
-    renderSettings({ capabilities: capabilities({ permissions: 'trusted' }) });
-
-    const badge = screen.getByRole('button', { name: 'bots.trustedBadge.label' });
-    fireEvent.click(badge);
-
-    expect(new URLSearchParams(mocks.currentSearch).get('tab')).toBe('capabilities');
+    cleanup();
+    renderSettings(
+      { capabilities: capabilities({ permissions: 'trusted' }) },
+      'settings=1&tab=capabilities',
+    );
+    expect(screen.queryByRole('button', { name: 'bots.trustedBadge.label' })).toBeNull();
+    // 能力陈列仍如实显示这位伙伴处在「放手做」。
     const chip = screen.getByRole('switch', { name: 'bots.capabilityChips.act.name' });
     expect(chip.getAttribute('aria-checked')).toBe('true');
-    expect(document.activeElement).toBe(chip);
   });
 });
 

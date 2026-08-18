@@ -167,6 +167,12 @@ import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgro
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { openBotDelegationsTab } from '@/features/right-sidebar/lib/openBotDelegationsTab';
 import { BotDelegationActivityIndicator } from '@/features/bots/BotDelegationActivityIndicator';
+import { BotAvatar } from '@/features/bots/BotAvatar';
+import {
+  BotSessionContentHeaderRegistration,
+  type BotChatIdentity,
+} from '@/features/bots/BotSessionContentHeader';
+import { botComposerPlaceholderKey } from '@/features/bots/botChatPresentation';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -423,6 +429,12 @@ interface CCAgentSessionViewProps {
   readOnly?: boolean;
   /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
   botMentions?: readonly ComposerBotMention[];
+  /**
+   * 本对话所属的伙伴身份（仅 Bot 路由传）。传入即把这个聊天当成「跟 TA 聊天」渲染：
+   * 顶栏换成伙伴 lockup、assistant 气泡挂 TA 的头像、输入框收起权限/模型控件。
+   * 判定仍与 `session.source === 'bot'` 双重成立才生效——URL 不是身份。
+   */
+  botIdentity?: BotChatIdentity;
 }
 
 /**
@@ -547,6 +559,7 @@ export function CCAgentSessionView({
   disableAutofocus = false,
   readOnly = false,
   botMentions,
+  botIdentity,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
@@ -770,6 +783,20 @@ export function CCAgentSessionView({
       ? sessionSnapshotPatchBufferRef.current.merge(sessionId, sessionBase)
       : null;
   const isOrcaLeadSessionView = session?.orcaRole === 'lead';
+
+  // 「这是一场跟伙伴的对话」的单一判据:路由声明的身份 + 任务自己的 source 双重成立。
+  // 只有 URL 说了不算 —— 那是导航投影,不是身份。
+  const botChatIdentity: BotChatIdentity | null =
+    botIdentity && session?.source === 'bot' ? botIdentity : null;
+  // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
+  // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
+  const botAssistantAvatar = useMemo(
+    () =>
+      botChatIdentity ? (
+        <BotAvatar bot={botChatIdentity} size="sm" />
+      ) : null,
+    [botChatIdentity],
+  );
 
   // Every Cindy Bot task owns one durable Bot-collaboration tab. Registration
   // is silent: it never expands the sidebar or replaces the user's active tab.
@@ -3870,6 +3897,8 @@ export function CCAgentSessionView({
       // The spec guarantees `session.workingDir` is set; `?? ''` is purely
       // a TS-narrowing fallback, never expected to fire at runtime.
       workingDir={session?.workingDir ?? ''}
+      // 伙伴对话:assistant 气泡挂 TA 的头像(普通任务传 null,渲染完全不变)。
+      assistantAvatar={botAssistantAvatar}
       messages={messages}
       historyLoaded={historyLoaded}
       taskUpdates={taskUpdates}
@@ -3899,13 +3928,19 @@ export function CCAgentSessionView({
     <>
       {/* ContentHeader 注入：仅 ownsRoute 实例注册。普通路由仍由历史判据获得主权；
           SplitGroup 则把主权交给活动 pane，非活动 pane 不覆盖 header。 */}
-      {ownsRoute && session && (
-        <SessionContentHeaderRegistration
-          session={session}
-          remoteSessionUnavailable={remoteSessionUnavailable}
-          readOnly={readOnly}
-        />
-      )}
+      {ownsRoute && session ? (
+        // 伙伴对话不是用户经营的任务:它拿的是「跟谁说话 + 进 TA 的设置」,
+        // 不是重命名/置顶/归档/导出那一套任务菜单。
+        botChatIdentity ? (
+          <BotSessionContentHeaderRegistration bot={botChatIdentity} />
+        ) : (
+          <SessionContentHeaderRegistration
+            session={session}
+            remoteSessionUnavailable={remoteSessionUnavailable}
+            readOnly={readOnly}
+          />
+        )
+      ) : null}
       {/* 右栏在场声明：与上方 header 注册同一「主实例」判据。仅全屏聊天视图声明，
           内嵌实例不声明（否则会在 doc rail / 协同面板上误开右栏）。 */}
       {ownsRoute && !readOnly && setRightSidebarAvailable && (
@@ -4508,7 +4543,16 @@ export function CCAgentSessionView({
                   onQueueEditLock={setQueueEditLock}
                   steeringQueueClientIds={steeringQueueClientIds}
                   messages={messages}
-                  placeholder={t('ccAgent.layout.chatPlaceholder')}
+                  placeholder={
+                    botChatIdentity
+                      ? t(botComposerPlaceholderKey(botChatIdentity.name), {
+                          name: botChatIdentity.name,
+                        })
+                      : t('ccAgent.layout.chatPlaceholder')
+                  }
+                  // 伙伴对话的工具行只留输入本身:引擎跟 TA 的 Profile 走,
+                  // 权限与模型的入口在「设置 › 高级」,不在每天说话的地方。
+                  hideRuntimeSelectors={botChatIdentity !== null}
                   folderPickerOpen={folderPickerOpen}
                   onFolderPickerOpenChange={handleFolderPickerOpenChange}
                   showFolderPicker={false}

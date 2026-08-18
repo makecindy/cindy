@@ -491,6 +491,17 @@ interface ChatInputProps {
   disabled?: boolean;
   /** Freeze model/provider/effort/permission controls for audit-only tasks. */
   settingsLocked?: boolean;
+  /**
+   * Drop the permission chip and the model selector from the toolbar entirely.
+   *
+   * Not the same thing as `settingsLocked`: locked means "you may look but not
+   * touch" (an audit task still has to show which engine produced the answer).
+   * Hidden means this conversation is not the place to configure a runtime at
+   * all — a Bot chat runs on its own Profile, and both controls already live in
+   * that teammate's Settings › Advanced. Keyboard cycling follows the chip:
+   * hiding it also removes Shift+Tab permission cycling for this composer.
+   */
+  hideRuntimeSelectors?: boolean;
   /** When true, shows Stop button instead of Send button. */
   isStreaming?: boolean;
   /**
@@ -973,6 +984,7 @@ export function ChatInput({
   onWorkingDirChange,
   disabled,
   settingsLocked = false,
+  hideRuntimeSelectors = false,
   isStreaming = false,
   isAgentBusy,
   onStop,
@@ -1719,8 +1731,11 @@ export function ChatInput({
   // 与下拉菜单看到的顺序一致。vendorKey 未锁定时按 PermissionSelector 的
   // 默认取 cc。editorProps.handleKeyDown 是稳定闭包, 走 ref 取值。
   const permissionCycleOptions = useMemo(
-    () => (settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])),
-    [activeAgentCapabilities, settingsLocked],
+    () =>
+      settingsLocked || hideRuntimeSelectors
+        ? []
+        : (activeAgentCapabilities?.permissionModes ?? []),
+    [activeAgentCapabilities, hideRuntimeSelectors, settingsLocked],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -7349,16 +7364,18 @@ export function ChatInput({
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
-                <PermissionSelector
-                  permissionMode={activePermissionMode}
-                  onPermissionModeChange={handlePermissionModeChange}
-                  vendorKey={vendorKey}
-                  deviceId={deviceLinkDeviceId ?? undefined}
-                  disabled={composerEditorLocked || settingsLocked}
-                  dense={effectiveDenseToolbar}
-                  iconOnly={useUltraCompactToolbar}
-                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                />
+                {hideRuntimeSelectors ? null : (
+                  <PermissionSelector
+                    permissionMode={activePermissionMode}
+                    onPermissionModeChange={handlePermissionModeChange}
+                    vendorKey={vendorKey}
+                    deviceId={deviceLinkDeviceId ?? undefined}
+                    disabled={composerEditorLocked || settingsLocked}
+                    dense={effectiveDenseToolbar}
+                    iconOnly={useUltraCompactToolbar}
+                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                  />
+                )}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               <div
@@ -7380,7 +7397,13 @@ export function ChatInput({
                   ) : (
                     <>{middleToolbarSlot}</>
                   ))}
-                <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
+                {/* 模型选择器:伙伴对话不显示(引擎跟 TA 的 Profile 走)。用 [hidden]
+                    而不是卸载 —— 控件内部持有模型记忆/供应商同步,收起入口不该顺手
+                    改掉这些状态;[hidden] 既不占位也不进无障碍树。 */}
+                <div
+                  className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}
+                  hidden={hideRuntimeSelectors}
+                >
                   <ModelSelector
                     modelId={activeModel}
                     effort={activeEffort}

@@ -37,8 +37,17 @@ describe('Bot task route recovery', () => {
     expect(source).toContain('bots.sessionLoadFailedTitle');
   });
 
-  it('passes the live Bot roster into the shared task composer', () => {
+  it('passes the live Bot roster and the teammate identity into the shared task composer', () => {
     expect(source).toContain('window.electronAPI.localDb.bots.list()');
-    expect(source).toContain('<CCAgentSessionView botMentions={gate.mentions} />');
+    expect(source).toContain(
+      '<CCAgentSessionView botMentions={gate.mentions} botIdentity={gate.identity} />',
+    );
+  });
+
+  it('delivers the parked greeting only once the durable Bot link has been verified', () => {
+    // 交付点必须在 gate 通过之后:URL 不是身份,先落一条消息再校验就等于让
+    // 任意 /bots/:id/session/:id 链接往别人的任务里写话。
+    expect(source).toContain('deliverPendingBotWelcome');
+    expect(source).toContain("if (gate.kind !== 'ready'");
   });
 });
