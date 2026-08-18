@@ -44,30 +44,53 @@ describe('workLouderCodexTaskActions', () => {
 
   it('forks at the latest assistant reply and opens the new task', async () => {
     mocks.listMessagesFor.mockResolvedValue([
-      { role: 'user', clientId: 'u1', content: 'hello' },
-      { role: 'assistant', clientId: 'a1', content: 'hi' },
+      { role: 'assistant', clientId: 'a2', content: 'later', id: 'm2', createdAt: '2026-08-18T01:00:00.000Z' },
+      { role: 'user', clientId: 'u2', content: 'again', id: 'm3', createdAt: '2026-08-18T00:30:00.000Z' },
+      { role: 'assistant', clientId: 'a1', content: 'hi', id: 'm1', createdAt: '2026-08-18T00:00:00.000Z' },
     ]);
     mocks.forkAtMessage.mockResolvedValue({ id: 'forked' });
     const navigate = vi.fn();
 
     await forkCurrentTaskFromKeyboard('session-1', { navigate, t: (key) => key });
 
-    expect(mocks.forkAtMessage).toHaveBeenCalledWith('session-1', 'a1');
+    expect(mocks.forkAtMessage).toHaveBeenCalledWith('session-1', 'a2');
     expect(mocks.emitRefresh).toHaveBeenCalledOnce();
     expect(navigate).toHaveBeenCalledWith('/cc-agent/forked');
   });
 
   it('copies readable conversation markdown', async () => {
-    mocks.listMessagesFor.mockResolvedValue([
-      { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'world' },
-    ]);
+    const newestPage: Array<{
+      role: 'user' | 'assistant';
+      content: string;
+      id: string;
+      createdAt: string;
+    }> = Array.from({ length: 100 }, (_, index) => ({
+      role: 'user',
+      content: `later-${index}`,
+      id: `later-${index}`,
+      createdAt: '2026-08-18T02:00:00.000Z',
+    }));
+    newestPage[0] = {
+      role: 'assistant',
+      content: 'latest',
+      id: 'latest',
+      createdAt: '2026-08-18T02:01:00.000Z',
+    };
+    mocks.listMessagesFor
+      .mockResolvedValueOnce(newestPage)
+      .mockResolvedValueOnce([
+        { role: 'assistant', content: 'world', id: 'old-2', createdAt: '2026-08-18T00:01:00.000Z' },
+        { role: 'user', content: 'hello', id: 'old-1', createdAt: '2026-08-18T00:00:00.000Z' },
+      ]);
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
 
     await copyCurrentTaskMarkdown('session-1', { navigate: vi.fn(), t: (key) => key });
 
-    expect(writeText).toHaveBeenCalledWith('## User\n\nhello\n\n## Cindy\n\nworld');
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringMatching(/^## User\n\nhello\n\n## Cindy\n\nworld[\s\S]*## Cindy\n\nlatest$/),
+    );
+    expect(mocks.listMessagesFor).toHaveBeenCalledTimes(2);
     expect(mocks.toast.success).toHaveBeenCalled();
   });
 

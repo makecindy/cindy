@@ -654,6 +654,11 @@ interface ChatInputProps {
    */
   focusOnStorageKeyChange?: boolean;
   /**
+   * Whether this composer should consume hardware send / voice / text commands.
+   * Split panes keep every ChatInput mounted; only the focused owner may act.
+   */
+  ownsHardwareComposerActions?: boolean;
+  /**
    * 附加只读引用目录列表(绝对路径)。
    * 与 onExtraDirsChange 成对出现:
    *   - 创建时(NewMakerDraftRoute):传 draft.extraDirs + 写 newMakerDraft store
@@ -1014,6 +1019,7 @@ export function ChatInput({
   draftKey,
   disableAutofocus = false,
   focusOnStorageKeyChange = false,
+  ownsHardwareComposerActions = true,
   extraDirs,
   onExtraDirsChange,
   onNewGoal,
@@ -6517,6 +6523,7 @@ export function ChatInput({
 
   useEffect(() => {
     return subscribeWorkLouderCodexAction((action) => {
+      if (!ownsHardwareComposerActions) return false;
       if (action.type === 'skill') {
         if (!editor || editor.isDestroyed || composerMutationLocked) return false;
         editor.chain().focus().insertContent(`$${action.name} `).run();
@@ -6572,6 +6579,7 @@ export function ChatInput({
     activeModel,
     composerMutationLocked,
     editor,
+    ownsHardwareComposerActions,
     effectiveSourceId,
     fastMode,
     handleClickSend,

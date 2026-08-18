@@ -705,4 +705,41 @@ describe('WorkLouderCodexLightingController', () => {
     expect(sink.setConnectionStatusHandler).toHaveBeenLastCalledWith(null);
     expect(sink.dispose).toHaveBeenCalledOnce();
   });
+
+  it('stops leftover stick scrolling and encoder presses when the account suspends', () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      setJoystickInputHandler: vi.fn((handler: typeof joystickRef.current) => {
+        joystickRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+    controller.start();
+    joystickRef.current?.({ angle: 0.25, distance: 1 });
+    hidRef.current?.({ key: 'ENC', act: 1 });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'scroll', direction: 'down' }),
+    );
+    dispatch.mockClear();
+
+    controller.suspendTaskSlots();
+    hidRef.current?.({ key: 'ENC', act: 0 });
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'keyboard' }));
+  });
 });

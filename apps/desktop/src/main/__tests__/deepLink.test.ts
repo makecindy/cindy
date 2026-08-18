@@ -75,6 +75,7 @@ describe('internal main-window navigation', () => {
       isMinimized: () => true,
       show: vi.fn(),
       restore: vi.fn(),
+      moveTop: vi.fn(),
       focus: vi.fn(),
       setAlwaysOnTop: vi.fn(),
       webContents: {

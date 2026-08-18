@@ -256,6 +256,9 @@ export class WorkLouderCodexLightingController {
   suspendTaskSlots(): void {
     this.clearSlotRefreshTimer();
     this.clearEncoderLongPressTimer();
+    this.encoderPressed = false;
+    this.encoderLongPressed = false;
+    this.stopJoystickScroll();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
     this.slotRefreshQueued = false;

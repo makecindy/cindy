@@ -701,7 +701,6 @@ export function CCAgentSessionView({
     ownsRoute ||
     (Boolean(sessionId) &&
       viewVisible &&
-      navigationMode !== 'split-pane' &&
       navigationMode !== 'sidebar-embedded');
   const showComposerControlledBanner = ownsRoute || showControlledBanner;
   const controlledBy = useControlledBy();
@@ -1471,6 +1470,7 @@ export function CCAgentSessionView({
   useEffect(() => {
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type !== 'command') return false;
+      if (!sessionId || !ownsHardwareTaskActions) return false;
       if (action.commandId === 'approval.approve') {
         if (pendingPermission) {
           respondToPermission({ behavior: 'allow' });
@@ -1496,9 +1496,6 @@ export function CCAgentSessionView({
           return true;
         }
       }
-      // Only the focused split pane / route owner should consume hardware
-      // task commands; other mounted panes stay subscribed for approvals.
-      if (!sessionId || !ownsHardwareTaskActions) return false;
       if (action.commandId === 'forkTask') {
         if (!canNavigateSession) return false;
         void forkCurrentTaskFromKeyboard(sessionId, {
@@ -4463,6 +4460,7 @@ export function CCAgentSessionView({
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                   sessionId={sessionId}
+                  ownsHardwareComposerActions={ownsHardwareTaskActions}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}

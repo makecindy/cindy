@@ -21,10 +21,10 @@ export async function forkCurrentTaskFromKeyboard(
   host: WorkLouderCodexTaskActionHost,
 ): Promise<void> {
   try {
-    const messages = await listMessagesFor(sessionId, { limit: 200 });
-    const latestAssistant = [...messages]
-      .reverse()
-      .find((message) => message.role === 'assistant' && message.clientId);
+    const messages = await listRecentMessages(sessionId);
+    const latestAssistant = messages.find(
+      (message) => message.role === 'assistant' && message.clientId,
+    );
     if (!latestAssistant?.clientId) {
       toast.error(host.t('chat.userMessage.forkErrors.noPriorAssistant'));
       return;
@@ -46,7 +46,7 @@ export async function copyCurrentTaskMarkdown(
   host: WorkLouderCodexTaskActionHost,
 ): Promise<void> {
   try {
-    const messages = await listMessagesFor(sessionId, { limit: 500 });
+    const messages = [...(await listAllMessagesNewestFirst(sessionId))].reverse();
     const lines = messages.flatMap((message) => {
       const text = sessionMessageDisplayText(message);
       if (!text) return [];
@@ -64,6 +64,35 @@ export async function copyCurrentTaskMarkdown(
     log.warn('copy conversation markdown failed', error);
     toast.error(host.t('settings.shortcuts.workLouderCodex.commands.copyConversationMarkdown.failed'));
   }
+}
+
+const MESSAGE_PAGE_LIMIT = 100;
+
+/** Newest-first pages from `listMessagesFor`, walking older with `before`. */
+async function listRecentMessages(
+  sessionId: string,
+): Promise<Awaited<ReturnType<typeof listMessagesFor>>> {
+  return listMessagesFor(sessionId, { limit: MESSAGE_PAGE_LIMIT });
+}
+
+async function listAllMessagesNewestFirst(
+  sessionId: string,
+): Promise<Awaited<ReturnType<typeof listMessagesFor>>> {
+  const pages: Awaited<ReturnType<typeof listMessagesFor>> = [];
+  let cursor: { before?: string; beforeTs?: number } = {};
+  for (;;) {
+    const page = await listMessagesFor(sessionId, { limit: MESSAGE_PAGE_LIMIT, ...cursor });
+    pages.push(...page);
+    if (page.length < MESSAGE_PAGE_LIMIT) break;
+    const oldest = page[page.length - 1];
+    if (!oldest?.id) break;
+    const nextBeforeTs = Date.parse(oldest.createdAt);
+    cursor = {
+      before: oldest.id,
+      ...(Number.isFinite(nextBeforeTs) ? { beforeTs: nextBeforeTs } : {}),
+    };
+  }
+  return pages;
 }
 
 function forkErrorMessage(error: unknown, t: (key: string) => string): string {
