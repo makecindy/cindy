@@ -314,7 +314,12 @@ describe('SubagentsBody', () => {
     expect(await screen.findByText('immutable completed result')).toBeTruthy();
     expect(screen.queryByLabelText('rightSidebar.subagents.controlActions.steer')).toBeNull();
     expect(screen.getByLabelText('rightSidebar.subagents.controlActions.follow_up')).toBeTruthy();
-    expect(screen.getByText('rightSidebar.subagents.completedOutputFollowUpHint')).toBeTruthy();
+    // The composer never asks the user to pick a delivery mode; the settled
+    // reply flips the placeholder to the follow-up wording instead.
+    expect(
+      screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.follow_up'),
+    ).toBeTruthy();
+    expect(screen.queryByText('rightSidebar.subagents.controlActions.follow_up')).toBeNull();
   });
 
   it.each(['claude-code', 'codex'] as const)(
@@ -345,7 +350,7 @@ describe('SubagentsBody', () => {
       expect(screen.queryByText('legacy result')).toBeNull();
       expect(screen.queryByTestId('session-user-message')).toBeNull();
       expect(screen.queryByTestId('session-assistant-message')).toBeNull();
-      expect(screen.queryByPlaceholderText('rightSidebar.subagents.directionPlaceholder')).toBeNull();
+      expect(screen.queryByLabelText('rightSidebar.subagents.sendDirection')).toBeNull();
       expect(container.textContent).not.toContain('$9.99');
     },
   );
@@ -412,16 +417,16 @@ describe('SubagentsBody', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Scout' }));
-    const scoutInput = screen.getByPlaceholderText('rightSidebar.subagents.directionPlaceholder');
+    const scoutInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
     fireEvent.change(scoutInput, { target: { value: 'scout draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Reviewer' }));
-    const reviewerInput = screen.getByPlaceholderText('rightSidebar.subagents.directionPlaceholder');
+    const reviewerInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
     expect((reviewerInput as HTMLTextAreaElement).value).toBe('');
     fireEvent.change(reviewerInput, { target: { value: 'reviewer draft' } });
     fireEvent.keyDown(reviewerInput, { key: 'Enter', shiftKey: true });
     expect(controlPiSubagent).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Scout' }));
-    const restoredScoutInput = screen.getByPlaceholderText('rightSidebar.subagents.directionPlaceholder');
+    const restoredScoutInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
     expect((restoredScoutInput as HTMLTextAreaElement).value).toBe('scout draft');
     fireEvent.keyDown(restoredScoutInput, { key: 'Enter' });
     await waitFor(() => {
@@ -458,12 +463,12 @@ describe('SubagentsBody', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Finished Scout' }));
-    expect(screen.queryByPlaceholderText('rightSidebar.subagents.directionPlaceholder')).toBeNull();
+    expect(screen.queryByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer')).toBeNull();
     expect(screen.getByText('rightSidebar.subagents.childEndedControlHint')).toBeTruthy();
     expect(screen.queryByLabelText('chat.agentTask.stop')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Running Reviewer' }));
-    expect(screen.getByPlaceholderText('rightSidebar.subagents.directionPlaceholder')).toBeTruthy();
+    expect(screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer')).toBeTruthy();
     expect(screen.getByLabelText('chat.agentTask.stop')).toBeTruthy();
   });
 
@@ -909,7 +914,7 @@ describe('SubagentsBody', () => {
         }}
       />,
     );
-    const input = await screen.findByPlaceholderText('rightSidebar.subagents.directionPlaceholder');
+    const input = await screen.findByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
     fireEvent.change(input, { target: { value: 'check the fallback too' } });
     fireEvent.click(screen.getByLabelText('rightSidebar.subagents.controlActions.steer'));
     await waitFor(() => {
@@ -920,10 +925,14 @@ describe('SubagentsBody', () => {
     });
   });
 
-  it('sends a follow-up after the current PI work finishes', async () => {
+  it('dispatches a follow-up automatically once the child has settled output', async () => {
     currentDetail = {
       ...detail('running'),
       capabilities: { ...detail('running').capabilities, viewFullTranscript: true, steer: true },
+      children: [{
+        id: 'child-1', role: 'worker', title: 'Worker', status: 'running',
+        output: 'settled reply',
+      }],
     };
     render(
       <SubagentsBody
@@ -935,14 +944,49 @@ describe('SubagentsBody', () => {
         }}
       />,
     );
-    fireEvent.click(await screen.findByText('rightSidebar.subagents.controlActions.follow_up'));
-    const input = screen.getByPlaceholderText('rightSidebar.subagents.directionPlaceholder');
+    const input = await screen.findByPlaceholderText(
+      'rightSidebar.subagents.composerPlaceholders.follow_up',
+    );
     fireEvent.change(input, { target: { value: 'run the final verification' } });
     fireEvent.click(screen.getByLabelText('rightSidebar.subagents.controlActions.follow_up'));
     await waitFor(() => {
       expect(controlPiSubagent).toHaveBeenCalledWith({
         sessionId: 'session-1', taskId: 'task-1', action: 'follow_up',
-        message: 'run the final verification',
+        message: 'run the final verification', childId: 'child-1',
+      });
+    });
+  });
+
+  it('dispatches resume when composing into a finished run', async () => {
+    currentDetail = {
+      ...detail('finished summary'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        resume: true,
+      },
+      returnedResult: 'finished result',
+    };
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    const input = await screen.findByPlaceholderText(
+      'rightSidebar.subagents.composerPlaceholders.resume',
+    );
+    fireEvent.change(input, { target: { value: 'pick this back up' } });
+    fireEvent.click(screen.getByLabelText('rightSidebar.subagents.controlActions.resume'));
+    await waitFor(() => {
+      expect(controlPiSubagent).toHaveBeenCalledWith({
+        sessionId: 'session-1', taskId: 'task-1', action: 'resume',
+        message: 'pick this back up',
       });
     });
   });

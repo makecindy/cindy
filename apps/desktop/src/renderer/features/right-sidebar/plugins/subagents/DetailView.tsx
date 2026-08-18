@@ -265,7 +265,6 @@ function PiDurableDetailView({
   const { t } = useTranslation();
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const [controlDrafts, setControlDrafts] = useState<Record<string, string>>({});
-  const [controlAction, setControlAction] = useState<SubagentControlIntent>('steer');
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState(false);
@@ -312,18 +311,19 @@ function PiDurableDetailView({
     || selectedChild.status === 'running'
     || selectedChild.status === 'queued';
   const selectedChildHasCompletedOutput = Boolean(selectedChild?.output?.trim());
-  const controlActions: SubagentControlIntent[] =
+  // The composer works like the session's: one box, one send. The delivery
+  // semantics are decided by the run's state, never picked by the user —
+  // running reads as an interjection, a settled reply reads as a follow-up
+  // that must not overwrite it, and a finished run reads as continuing it.
+  const activeControlAction: SubagentControlIntent | undefined =
     detail.status === 'running' && detail.capabilities.steer && selectedChildActive
       ? selectedChildHasCompletedOutput
-        ? ['follow_up']
-        : ['steer', 'follow_up']
+        ? 'follow_up'
+        : 'steer'
       : detail.status !== 'running' && detail.capabilities.resume
-        ? ['resume']
-        : [];
-  const selectedControlAction = controlActions.includes(controlAction)
-    ? controlAction
-    : controlActions[0];
-  const controlDraftKey = `${selectedChild?.id ?? 'all'}:${selectedControlAction ?? 'none'}`;
+        ? 'resume'
+        : undefined;
+  const controlDraftKey = selectedChild?.id ?? 'all';
   const controlMessage = controlDrafts[controlDraftKey] ?? '';
   const setControlMessage = (message: string): void => {
     setControlDrafts((current) => ({ ...current, [controlDraftKey]: message }));
@@ -334,7 +334,7 @@ function PiDurableDetailView({
   );
   const submitControl = (): void => {
     const message = controlMessage.trim();
-    const action = selectedControlAction;
+    const action = activeControlAction;
     if (!message || !action || controlBusy) return;
     setControlBusy(true);
     setControlError(false);
@@ -549,41 +549,9 @@ function PiDurableDetailView({
         </div>
       </div>
 
-      {controlActions.length > 0 ? (
+      {activeControlAction ? (
         <div className="shrink-0 border-t border-[var(--border-default)] p-3">
           <div className="mx-auto flex max-w-[720px] flex-col gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2">
-            <p className="select-none px-2 text-10 leading-4 text-[var(--text-tertiary)]">
-              {t('rightSidebar.subagents.controlTarget', {
-                target: selectedChild?.title
-                  ?? selectedChild?.role
-                  ?? t('rightSidebar.subagents.allChildren'),
-              })}
-            </p>
-            {selectedChildHasCompletedOutput ? (
-              <p className="px-2 text-11 leading-4 text-[var(--text-tertiary)]">
-                {t('rightSidebar.subagents.completedOutputFollowUpHint')}
-              </p>
-            ) : null}
-            {controlActions.length > 1 ? (
-              <div className="flex w-fit gap-0.5 rounded-lg bg-[var(--surface-chip)] p-0.5" role="group">
-                {controlActions.map((action) => (
-                  <button
-                    key={action}
-                    type="button"
-                    aria-pressed={selectedControlAction === action}
-                    onClick={() => setControlAction(action)}
-                    className={cn(
-                      'h-7 select-none rounded-lg px-2 text-11 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                      selectedControlAction === action
-                        ? 'bg-[var(--surface-elevated)] text-[var(--text-primary)]'
-                        : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
-                    )}
-                  >
-                    {t(`rightSidebar.subagents.controlActions.${action}`)}
-                  </button>
-                ))}
-              </div>
-            ) : null}
             <div className="flex items-end gap-2">
               <textarea
                 value={controlMessage}
@@ -604,21 +572,17 @@ function PiDurableDetailView({
                 disabled={controlBusy}
                 maxLength={32_000}
                 rows={2}
-                placeholder={t('rightSidebar.subagents.directionPlaceholder')}
+                placeholder={t(`rightSidebar.subagents.composerPlaceholders.${activeControlAction}`)}
                 aria-label={t('rightSidebar.subagents.sendDirection')}
-                aria-describedby="pi-subagent-send-hint"
+                title={t('rightSidebar.subagents.sendShortcutHint', { shortcut: sendShortcutLabel })}
                 className="min-h-10 min-w-0 flex-1 resize-none rounded-lg bg-transparent px-2 py-1.5 text-13 leading-5 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
               />
               <button
                 type="button"
                 disabled={controlBusy || !controlMessage.trim()}
                 onClick={submitControl}
-                title={selectedControlAction
-                  ? t(`rightSidebar.subagents.controlActions.${selectedControlAction}`)
-                  : undefined}
-                aria-label={selectedControlAction
-                  ? t(`rightSidebar.subagents.controlActions.${selectedControlAction}`)
-                  : undefined}
+                title={t(`rightSidebar.subagents.controlActions.${activeControlAction}`)}
+                aria-label={t(`rightSidebar.subagents.controlActions.${activeControlAction}`)}
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {controlBusy ? (
@@ -628,9 +592,6 @@ function PiDurableDetailView({
                 )}
               </button>
             </div>
-            <p id="pi-subagent-send-hint" className="select-none px-2 text-10 leading-4 text-[var(--text-tertiary)]">
-              {t('rightSidebar.subagents.sendShortcutHint', { shortcut: sendShortcutLabel })}
-            </p>
             {controlError ? (
               <p role="alert" className="px-2 text-11 text-[var(--error-fg)]">
                 {t('rightSidebar.subagents.controlFailed')}
