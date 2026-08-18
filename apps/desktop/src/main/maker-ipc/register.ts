@@ -4903,6 +4903,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
       if (event.type === 'done' && event.source === 'pi') {
         const sessionProvider = getSessionProvider(session.id);
+        // GLM Coding Plan 走 pi runtime 的会话轮: turn 后刷新该 provider 的订阅余量
+        // (#2768 十轮;两个 GLM 预设都声明 pi runtime。非 GLM 供应商在 reader 内静默
+        // no-op,远程会话与 chip 同口径抑制——与 claude-code/codex 两分支同款)。
+        if (sessionProvider && !session.remoteHostId) {
+          triggerGlmCodingPlanUsageRefresh(sessionProvider);
+        }
         const modelPromise =
           turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);

@@ -11,10 +11,24 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// owner 代际由测试侧可控切换(直接 mock 数据源)。
-const ownerState = vi.hoisted(() => ({ dataOwnerId: 'owner-1' as string | null }));
+// owner 代际由测试侧可控切换(直接 mock 数据源);generation 字段用于十轮 P1-b 的完整世代比对。
+const ownerState = vi.hoisted(() => ({
+  dataOwnerId: 'owner-1' as string | null,
+  generation: 0,
+}));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => ({ dataOwnerId: ownerState.dataOwnerId }),
+  getDataOwnerGeneration: () => ({
+    dataOwnerId: ownerState.dataOwnerId,
+    generation: ownerState.generation,
+  }),
+  isDataOwnerGenerationCurrent: (owner: { dataOwnerId: string | null; generation: number }) =>
+    owner.dataOwnerId === ownerState.dataOwnerId && owner.generation === ownerState.generation,
+  isDataOwnerPushStampCurrent: (stamp: unknown) => {
+    const value = stamp as { dataOwnerId?: unknown; ownerGeneration?: unknown };
+    return Boolean(value && typeof value === 'object')
+      && value.dataOwnerId === ownerState.dataOwnerId
+      && value.ownerGeneration === ownerState.generation;
+  },
 }));
 
 import {
@@ -47,6 +61,7 @@ function stubUsageApi(
 beforeEach(() => {
   // 切 owner 触发清空再回到基准,隔离用例间 module 缓存残留。
   ownerState.dataOwnerId = 'reset-owner';
+  ownerState.generation += 1;
   ownerScopedGlmSnapshots();
   ownerState.dataOwnerId = 'owner-1';
   ownerScopedGlmSnapshots();
@@ -73,6 +88,18 @@ describe('warm read owner 复核(#2768 七轮 ②)', () => {
     ownerState.dataOwnerId = 'owner-2';
     await act(async () => { resolveRead(SNAPSHOT_A); });
     expect(result.current).toBeNull(); // 旧账号余量不 seed 新账号的 chip
+    expect(ownerScopedGlmSnapshots().has('zhipu-coding-plan')).toBe(false);
+  });
+
+  it('十轮 P1-b: drops the result on a same-id re-login (generation bump) while pending', async () => {
+    // 同账号重登/档案恢复:dataOwnerId 不变、generation 前进 —— 只比 id 的旧实现
+    // 会放行重登前排队的暖读结果,把上一会话的余量 seed 进新会话缓存。
+    let resolveRead!: (value: unknown | null) => void;
+    stubUsageApi(() => new Promise((res) => { resolveRead = res; }));
+    const { result } = renderHook(() => useGlmCodingPlanUsage('zhipu-coding-plan', true));
+    ownerState.generation += 1; // 同 id 重登
+    await act(async () => { resolveRead(SNAPSHOT_A); });
+    expect(result.current).toBeNull();
     expect(ownerScopedGlmSnapshots().has('zhipu-coding-plan')).toBe(false);
   });
 

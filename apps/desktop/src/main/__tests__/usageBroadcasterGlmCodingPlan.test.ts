@@ -45,6 +45,13 @@ vi.mock('../localDb/client/current', () => ({
 vi.mock('../localDb/index', () => ({
   getCurrentUserId: mocks.getCurrentUserId,
 }));
+// 广播出口的完整 owner 戳(appSessionState)与 getCurrentUserId 同源,十轮 P1-b。
+vi.mock('../appSessionState', () => ({
+  getActiveDataOwnerPushStamp: () => ({
+    dataOwnerId: mocks.getCurrentUserId(),
+    ownerGeneration: 7,
+  }),
+}));
 
 function snapshotOf(utilization: number) {
   return {

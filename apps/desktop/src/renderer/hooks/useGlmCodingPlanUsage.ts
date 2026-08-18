@@ -18,7 +18,11 @@
 
 import { useEffect, useState } from 'react';
 
-import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  isDataOwnerPushStampCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import type { GlmCodingPlanUsageSnapshot } from '../../shared/glmCodingPlanUsage';
 
 export type { GlmCodingPlanUsageSnapshot };
@@ -26,40 +30,53 @@ export type { GlmCodingPlanUsageSnapshot };
 /** push payload 形状(与 usageBroadcaster.GlmCodingPlanUsagePushPayload 同构)。 */
 interface GlmCodingPlanUsagePushPayload {
   providerId: string;
-  /** 广播时刻的 data owner —— 与当前 owner 不符的迟到推送整体丢弃(#2768 r3788720174)。 */
+  /** 旧字段:仅 id 的 owner 戳,新 main 的完整 ownerStamp 存在时以完整戳为准。 */
   ownerId?: string | null;
+  /** 完整 owner 戳(id+ownerGeneration,#2768 十轮):同账号重登后世代前进,只比 id 挡不住重登前排队的迟到推送。 */
+  ownerStamp?: unknown;
   snapshot: GlmCodingPlanUsageSnapshot | null;
 }
 
 /**
- * module 缓存按 data owner 隔离(#2768 首轮 review r3785828841):双账号各有同名 GLM
- * provider 时,provider id 复用而归属换了 —— owner 变化必须整体清空,否则新账号的
- * chip 会先 seed 上一个账号的余量(IPC 读失败时无限期)。口径对齐
- * providersSnapshotStore.getCachedProvidersSnapshot 的 owner 校验。
+ * module 缓存按 data owner **完整世代**隔离(#2768 首轮 r3785828841 + 十轮 P1-b):
+ * 双账号各有同名 GLM provider 时,provider id 复用而归属换了 —— owner 变化必须整体
+ * 清空,否则新账号的 chip 会先 seed 上一个账号的余量。十轮起比对的维度从 id 升为
+ * (id, generation):同账号重登/本地档案恢复同样属于「上一会话的数据不可直接给下一
+ * 会话用」。口径对齐 providersSnapshotStore.getCachedProvidersSnapshot 的 owner 校验。
  * 导出仅供单测直接验证 owner 切换语义,组件代码走 ownerScopedGlmSnapshots()。
  */
-let glmSnapshotsOwnerId: string | null = null;
+let glmSnapshotsOwner: { dataOwnerId: string | null; generation: number } | null = null;
 const glmSnapshots = new Map<string, GlmCodingPlanUsageSnapshot | null>();
 
 export function ownerScopedGlmSnapshots(): Map<string, GlmCodingPlanUsageSnapshot | null> {
-  const { dataOwnerId } = getDataOwnerGeneration();
-  if (glmSnapshotsOwnerId !== dataOwnerId) {
-    glmSnapshotsOwnerId = dataOwnerId;
+  const { dataOwnerId, generation } = getDataOwnerGeneration();
+  if (
+    glmSnapshotsOwner === null
+    || glmSnapshotsOwner.dataOwnerId !== dataOwnerId
+    || glmSnapshotsOwner.generation !== generation
+  ) {
+    glmSnapshotsOwner = { dataOwnerId, generation };
     glmSnapshots.clear();
   }
   return glmSnapshots;
 }
 
-/** owner id 是否仍是当前 data owner(warm read 与迟到推送判定共用同一口径)。 */
+/** owner id 是否仍是当前 data owner(legacy 口径,见 isGlmPushOwnerCurrent 的降级链)。 */
 export function isDataOwnerIdCurrent(ownerId: string | null): boolean {
   return ownerId === getDataOwnerGeneration().dataOwnerId;
 }
 
 /**
- * 推送世代戳是否仍然当前:ownerId 缺失(旧版 main / 异常)按未知沿用不误丢;
- * 携带 ownerId 且与当前 data owner 不符 → 过期(旧账号排队的迟到推送)。
+ * 推送 owner 戳是否仍然当前(#2768 十轮 P1-b):
+ *   - 携带完整 ownerStamp(id+ownerGeneration,新 main)→ 交给房子的世代感知校验
+ *     isDataOwnerPushStampCurrent:既比 id 也比世代,同 id 重登前排队的迟到推送被拒;
+ *     形状非法的戳 fail-closed(不再无条件接受 null/畸形戳)。
+ *   - 仅 ownerId(旧版 main)→ 降级为 id 比对;完全无戳的超旧推送按未知沿用不误丢。
  */
 export function isGlmPushOwnerCurrent(payload: GlmCodingPlanUsagePushPayload): boolean {
+  if (payload.ownerStamp !== undefined) {
+    return isDataOwnerPushStampCurrent(payload.ownerStamp);
+  }
   if (payload.ownerId === undefined || payload.ownerId === null) return true;
   return isDataOwnerIdCurrent(payload.ownerId);
 }
@@ -145,15 +162,15 @@ export function useGlmCodingPlanUsage(
     if (!api?.getGlmCodingPlan) return;
 
     let cancelled = false;
-    // 读发起时的 data owner:resolve 时复核 —— IPC 挂起期间切账号的话,结果属于旧
-    // owner,不得写进新 owner 的缓存(chip 会先 seed 旧账号余量;#2768 七轮 Codex
-    // P1)。与迟到推送判定(isGlmPushOwnerCurrent)同口径。
-    const readOwnerId = getDataOwnerGeneration().dataOwnerId;
+    // 读发起时的完整 owner 世代:resolve 时复核 —— IPC 挂起期间切账号**或同账号
+    // 重登**(世代前进)的话,结果属于旧会话,不得写进当前缓存(chip 会先 seed 旧
+    // 会话余量;#2768 七轮 Codex P1 + 十轮 P1-b 升级为完整世代比对)。
+    const readOwner = getDataOwnerGeneration();
     void api
       .getGlmCodingPlan(providerId)
       .then((persisted) => {
         if (cancelled) return;
-        if (!isDataOwnerIdCurrent(readOwnerId)) return;
+        if (!isDataOwnerGenerationCurrent(readOwner)) return;
         const resolved = resolvePersistedGlmCodingPlanRead(persisted);
         if (resolved.action === 'clear') {
           ownerScopedGlmSnapshots().set(providerId, null);

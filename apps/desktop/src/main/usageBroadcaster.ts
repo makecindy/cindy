@@ -31,6 +31,8 @@ import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 import { incrementDailyModelUsage, type DailyModelUsageDelta } from './localDb/dailyModelUsage';
 import { getDbClient } from './localDb/client/current';
 import { getCurrentUserId } from './localDb/index';
+import { getActiveDataOwnerPushStamp } from './appSessionState';
+import type { DataOwnerPushStamp } from '../shared/dataOwnerPush';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
   type ClaudeSubscriptionUsageSnapshot,
@@ -906,13 +908,16 @@ export async function readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubsc
 //     旧行,冷启动 hydration 自然为空。
 
 /**
- * push payload:renderer 按 providerId 过滤自己关心的那份。ownerId 是广播时刻的
- * data owner 标识(#2768 review r3788720174)—— 换号瞬间的迟到推送(旧账号排队、
- * 回调在新账号执行)会被 renderer 按世代戳丢弃,不写进新账号的 module cache。
+ * push payload:renderer 按 providerId 过滤自己关心的那份。ownerStamp 是广播时刻的
+ * 完整 owner 戳(#2768 十轮 P1-b:id + ownerGeneration)—— 同账号重登/本地档案恢复
+ * 会让 renderer 的世代号前进,只比 id 的旧戳挡不住重登前排队的迟到推送。ownerId
+ * 为旧版 renderer 的兼容字段保留(有 ownerStamp 时 renderer 以完整戳为准)。
  */
 export interface GlmCodingPlanUsagePushPayload {
   providerId: string;
+  /** 完整 owner 戳(主导);旧字段,新 renderer 在 ownerStamp 存在时忽略。 */
   ownerId: string | null;
+  ownerStamp?: DataOwnerPushStamp;
   snapshot: GlmCodingPlanUsageSnapshot | null;
 }
 
@@ -1337,12 +1342,15 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
 }
 
 function broadcastGlmCodingPlanUsage(
-  payload: Omit<GlmCodingPlanUsagePushPayload, 'ownerId'>,
+  payload: Omit<GlmCodingPlanUsagePushPayload, 'ownerId' | 'ownerStamp'>,
 ): void {
-  // owner 戳在广播出口统一盖:快照归属 = 广播时刻的 data owner。
+  // owner 戳在广播出口统一盖:快照归属 = 广播时刻的 data owner。完整戳
+  // (id+generation)让 renderer 能拒绝同 id 重登前排队的迟到推送(#2768 十轮)。
+  const ownerStamp = getActiveDataOwnerPushStamp();
   const stamped: GlmCodingPlanUsagePushPayload = {
     ...payload,
-    ownerId: currentAccountUsageOwner(),
+    ownerStamp,
+    ownerId: ownerStamp.dataOwnerId,
   };
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
