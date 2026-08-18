@@ -1,6 +1,6 @@
 import {
-  changedBuiltinOauthClientSecretKeys,
   type GhostManifest,
+  type GhostSecretDecl,
   type GhostPermissionDiff,
 } from '../../shared/ghost.js';
 import type { PluginMarketPackageReviewFacts } from '../../shared/pluginMarket.js';
@@ -48,19 +48,15 @@ export function marketPackageOauthIdentityChanged(
   installedBaseline: GhostManifest | null,
   actual: GhostManifest,
 ): boolean {
+  // 已装基线空 clientId→默认值不算迁移(令牌仍有效)。已审预览则相反。
   if (
     installedBaseline &&
-    (changedBuiltinOauthClientSecretKeys(installedBaseline, actual).length > 0 ||
-      oauthSlotBecameDirect(installedBaseline, actual))
+    oauthIdentitiesChanged(installedBaseline, actual, { emptyDirectToConcreteCounts: false })
   ) {
     return true;
   }
   if (!reviewed) return false;
-  if (changedBuiltinOauthClientSecretKeys(reviewed, actual).length > 0) return true;
-  if (oauthSlotBecameDirect(reviewed, actual)) return true;
-  // 已装基线的空 clientId→默认值不算迁移(令牌仍有效)。已审预览清单则相反:
-  // 用户没见过的具体 clientId 必须再确认。
-  return reviewedOauthClientBecameConcrete(reviewed, actual);
+  return oauthIdentitiesChanged(reviewed, actual, { emptyDirectToConcreteCounts: true });
 }
 
 /**
@@ -97,44 +93,49 @@ export function marketPackageManualSummaryChanged(
 }
 
 function manualSummaryKey(manifest: GhostManifest): string {
-  return (manifest.manual?.items ?? [])
-    .map((item) => `${item.name}\0${item.dir}\0${item.description}`)
-    .sort()
-    .join('\n');
+  const items = (manifest.manual?.items ?? []).map((item) => ({
+    name: item.name,
+    dir: item.dir,
+    description: item.description,
+  }));
+  items.sort((left, right) => {
+    if (left.name !== right.name) return left.name < right.name ? -1 : 1;
+    if (left.dir !== right.dir) return left.dir < right.dir ? -1 : 1;
+    return 0;
+  });
+  return JSON.stringify(items);
 }
 
-function oauthSlotBecameDirect(previousManifest: GhostManifest, actual: GhostManifest): boolean {
+function oauthIdentityKey(secret: GhostSecretDecl): string | null {
+  if (secret.source !== 'oauth' || !secret.oauth) return null;
+  if (secret.oauth.tokenBroker) return `broker:${secret.oauth.tokenBroker}`;
+  return `direct:${secret.oauth.clientId?.trim() || ''}`;
+}
+
+function oauthIdentitiesChanged(
+  previousManifest: GhostManifest,
+  actual: GhostManifest,
+  options: { emptyDirectToConcreteCounts: boolean },
+): boolean {
   if (previousManifest.id !== actual.id) return false;
-  const previousSecrets = new Map(
+  const previousByKey = new Map(
     (previousManifest.network?.secrets ?? []).map((secret) => [secret.key, secret]),
   );
   for (const current of actual.network?.secrets ?? []) {
-    if (current.source !== 'oauth' || !current.oauth || current.oauth.tokenBroker) continue;
-    const previous = previousSecrets.get(current.key);
-    if (previous?.source !== 'oauth' || !previous.oauth?.tokenBroker) continue;
-    return true;
-  }
-  return false;
-}
-
-function reviewedOauthClientBecameConcrete(
-  reviewed: GhostManifest,
-  actual: GhostManifest,
-): boolean {
-  if (reviewed.id !== actual.id) return false;
-  const reviewedSecrets = new Map(
-    (reviewed.network?.secrets ?? []).map((secret) => [secret.key, secret]),
-  );
-  for (const current of actual.network?.secrets ?? []) {
-    if (current.source !== 'oauth' || !current.oauth) continue;
-    if (current.oauth.tokenBroker) continue;
-    const currentClientId = current.oauth.clientId?.trim() || null;
-    if (!currentClientId) continue;
-    const previous = reviewedSecrets.get(current.key);
-    if (previous?.source !== 'oauth' || !previous.oauth || previous.oauth.tokenBroker) {
+    const currentIdentity = oauthIdentityKey(current);
+    if (!currentIdentity) continue;
+    const previous = previousByKey.get(current.key);
+    if (!previous) continue;
+    const previousIdentity = oauthIdentityKey(previous);
+    if (!previousIdentity || previousIdentity === currentIdentity) continue;
+    if (
+      !options.emptyDirectToConcreteCounts &&
+      previousIdentity === 'direct:' &&
+      currentIdentity.startsWith('direct:')
+    ) {
       continue;
     }
-    if (!(previous.oauth.clientId?.trim() || null)) return true;
+    return true;
   }
   return false;
 }

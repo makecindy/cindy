@@ -40,6 +40,7 @@ export class PluginMarketPackagePermissionReviewBridge {
           permissionDiff: facts.permissionDiff,
           isUpdate: facts.isUpdate,
           sourceType: facts.sourceType,
+          builtinOauthClientChanged: facts.builtinOauthClientChanged,
         });
       } finally {
         if (!delivered) this.settle(requestId, false);

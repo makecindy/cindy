@@ -177,6 +177,16 @@ describe('marketPackageOauthIdentityChanged', () => {
       marketPackageOauthIdentityChanged(oauthBrokerManifest(), null, oauthManifest('direct-client')),
     ).toBe(true);
   });
+
+  it('reviews when a reviewed direct clientId becomes a tokenBroker', () => {
+    expect(
+      marketPackageOauthIdentityChanged(
+        oauthManifest('direct-client'),
+        oauthManifest('direct-client'),
+        oauthBrokerManifest(),
+      ),
+    ).toBe(true);
+  });
 });
 
 function oauthBrokerManifest(): GhostManifest {
@@ -233,6 +243,20 @@ describe('marketPackageManualSummaryChanged', () => {
 
   it('does not invent a reviewed baseline when the caller omitted the catalog', () => {
     expect(marketPackageManualSummaryChanged(undefined, manualManifest([guide]))).toBe(false);
+  });
+
+  it('does not treat a newline inside one description as two manuals', () => {
+    expect(
+      marketPackageManualSummaryChanged(
+        manualManifest([
+          { name: 'a', dir: 'x', description: 'd\nb\0y\0e' },
+        ]),
+        manualManifest([
+          { name: 'a', dir: 'x', description: 'd' },
+          { name: 'b', dir: 'y', description: 'e' },
+        ]),
+      ),
+    ).toBe(true);
   });
 });
 
