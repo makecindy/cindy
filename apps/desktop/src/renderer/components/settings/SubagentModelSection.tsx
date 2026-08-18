@@ -1,18 +1,17 @@
 /**
- * Settings -> Personalization 的 Subagent 设置:默认模型(Claude Code / Codex)+
- * Codex 子代理护栏(总开关 / Cindy 策略 / 并发上限 / 嵌套开关)。
+ * Settings -> Personalization 的 Subagent 设置：Claude Code 默认模型、Codex 历史
+ * 默认值恢复入口，以及 Codex 子代理护栏（总开关 / Cindy 策略 / 并发上限 / 嵌套开关）。
  *
  * main 进程 JSON store 是事实源;renderer 只展示并通过 IPC 提交覆盖值。
- * codex spawn 注入键的变更可能延迟生效(返回体 codexRestartDeferred=true 时
+ * Codex 护栏注入键的变更可能延迟生效（返回体 codexRestartDeferred=true 时
  * 提示「运行中的 Codex 对话将在任务结束后应用」,与 Memory 设置同款语义)。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
   connectedProvidersForAgent,
-  effectiveSourceIdForModel,
   getModel,
   isModelSelectableForNewRoute,
   visibleModelUnion,
@@ -20,20 +19,12 @@ import {
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
-import { ModelSelector, type ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
+import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
-import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
-import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
-import {
-  getProviderModelEffort,
-  getProviderModelFast,
-  setProviderModelEffort,
-  setProviderModelFast,
-} from '@/state/providerModelMemory';
 import {
   CODEX_SUBAGENT_CONCURRENCY_INITIAL,
   CODEX_SUBAGENT_CONCURRENCY_MAX,
@@ -41,8 +32,6 @@ import {
   SUBAGENT_GUARDRAIL_KEYS,
   SUBAGENT_MODEL_CARD_KEYS,
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
-  isCodexSubagentEffort,
-  type CodexSubagentEffort,
   type SubagentModelSettingsPatch,
   type SubagentModelSettingsState,
 } from '../../../shared/subagentModelSettings';
@@ -51,15 +40,10 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 const log = createLogger('SubagentModelSection');
 
 /**
- * 标准模型面板把非选中行的配置写进模型级全局预设;Subagent 仍把实际派发值
- * 原子落进自己的 settings store。Fast 回调未开启,这里只复用完整适配器契约。
+ * Codex 尚未公开按会话校验「原生子代理白名单 × provider/account 权限」的契约。
+ * 空 allowlist 让标准面板仅保留「不指定」恢复入口；旧模型 ID 继续在 trigger 中回显。
  */
-const CODEX_SUBAGENT_MODEL_MEMORY: ModelMemoryAccessors = {
-  getEffort: getProviderModelEffort,
-  setEffort: setProviderModelEffort,
-  getFast: getProviderModelFast,
-  setFast: setProviderModelFast,
-};
+const NO_CODEX_SUBAGENT_DEFAULT_MODELS: ReadonlySet<string> = new Set();
 
 type SubagentAgentKind = 'claude-code' | 'codex';
 
@@ -71,16 +55,13 @@ function defaultsPatchFor(keys: readonly (keyof SubagentModelSettingsPatch)[]): 
   }
   return patch;
 }
-
-
-/** 展示各 Agent 运行时的子代理模型覆盖能力;模型供应商由运行时模型目录决定。 */
+/** 展示 Claude 默认模型、Codex 历史默认值恢复入口与 Codex 子代理护栏。 */
 export function SubagentModelSection() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [settings, setSettings] = useState<SubagentModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
   const { providers, loading: providersLoading } = useProviders();
-  const codexCaps = useAgentCapabilities('codex');
 
   // 并发滑杆的本地乐观值:拖动即时反馈,300ms debounce 提交(useCompactionSettings 模式)。
   const [concurrencyDraft, setConcurrencyDraft] = useState<number | null>(null);
@@ -169,30 +150,6 @@ export function SubagentModelSection() {
     [providers],
   );
 
-  // codex 模型目录(含每模型 efforts):providers 派生优先,目录空时回落运行时能力
-  // 快照 —— 与 ImDefaultSettingsSection.modelsByAgent 同规则。
-  const codexModels = useMemo(() => {
-    const fromProviders = deriveModelsFromProviders(providers, 'codex', { admissionFiltered: true });
-    return fromProviders.length ? fromProviders : (codexCaps.capabilities?.availableModels ?? []);
-  }, [providers, codexCaps.capabilities]);
-
-  // 选模型时解析成对的 effort:上游只设 default_subagent_model 时子代理 effort 会被
-  // 重置为目标模型目录默认档而非继承父级,所以模型与 effort 必须原子成对写入,UI 上
-  // 也始终显示一个确定档位。优先保留当前档 → 目录默认档 → 末档(codex-model-discovery
-  // 的 fallback 约定)→ 目录无 effort 数据时 null(= 跟随模型默认,注入层跳过)。
-  const resolveCodexEffort = useCallback(
-    (modelId: string, current: CodexSubagentEffort | null): CodexSubagentEffort | null => {
-      const model = codexModels.find((m) => m.id === modelId);
-      const efforts = (model?.efforts ?? []).filter(isCodexSubagentEffort);
-      if (efforts.length === 0) return null;
-      if (current && efforts.includes(current)) return current;
-      const def = model?.defaultEffort;
-      if (def && isCodexSubagentEffort(def) && efforts.includes(def)) return def;
-      return efforts[efforts.length - 1] ?? null;
-    },
-    [codexModels],
-  );
-
   // (model, providerId) 原子落库:模型与来源是同一次选择的两个维度,分两次写会在
   // 写入间隙出现「新模型 + 旧来源」的不可能组合被派发读到。清除模型时来源一并清除。
   const setClaudeModel = useCallback(
@@ -210,68 +167,16 @@ export function SubagentModelSection() {
     [persistPatch],
   );
 
-  // Codex 三元组 (model, providerId, effort) 原子落库;「不指定」三键同清,
-  // 不给 effort 留孤儿(IPC 层有意不强清 effort,见 shared 契约注释)。
-  const setCodexModel = useCallback(
-    async (model: string | null, providerId: string | null, reconciledEffort?: string) => {
-      const current = settingsRef.current;
-      if (!current) return;
-      if (model === null) {
-        if (current.codex === null && current.codexProviderId === null && current.codexEffort === null) {
-          return;
-        }
-        await persistPatch({ codex: null, codexProviderId: null, codexEffort: null });
-        return;
-      }
-      const nextProviderId = providerId;
-      // 标准面板编辑非选中行时会先写模型级预设,再回调选中该行。这里必须优先
-      // 读取刚写入的 effort,才能把 (model, providerId, effort) 收敛成一次原子 patch。
-      const rememberedEffort = nextProviderId
-        ? getProviderModelEffort('codex', nextProviderId, model)
-        : undefined;
-      // ModelSelector 已按目标来源行的 catalog/记忆解析出统一选择结果；优先消费它，
-      // 只有旧调用方未提供第三参时才回落本地记忆/当前值。
-      const preferredEffort = reconciledEffort ?? rememberedEffort;
-      // 空串是共享选择器对“目标来源不支持 effort”的明确回传，不能被旧 effort 复活。
-      const nextEffort = reconciledEffort === ''
-        ? null
-        : resolveCodexEffort(
-          model,
-          isCodexSubagentEffort(preferredEffort) ? preferredEffort : current.codexEffort,
-        );
-      if (
-        model === current.codex &&
-        nextProviderId === current.codexProviderId &&
-        nextEffort === current.codexEffort
-      ) {
-        return;
-      }
-      await persistPatch({ codex: model, codexProviderId: nextProviderId, codexEffort: nextEffort });
-    },
-    [persistPatch, resolveCodexEffort],
-  );
-
-  const setCodexEffort = useCallback(
-    async (effort: string) => {
-      const current = settingsRef.current;
-      if (!current || !current.codex) return;
-      if (!isCodexSubagentEffort(effort) || effort === current.codexEffort) return;
-      const saved = await persistPatch({ codexEffort: effort });
-      // 活跃行编辑走 onEffortChange,ModelSelector 不会代写 modelMemory。保存成功后
-      // 按选择器同一准入口径解析实际来源并同步全局模型预设;providerId=null 是合法
-      // 隐式来源,不能因此漏写,否则切走再切回会恢复旧档位。
-      const memoryProviderId = effectiveSourceIdForModel(
-        providers,
-        current.codexProviderId,
-        current.codex,
-        'codex',
-      );
-      if (saved && memoryProviderId) {
-        setProviderModelEffort('codex', memoryProviderId, current.codex, effort);
-      }
-    },
-    [persistPatch, providers],
-  );
+  // 历史 Codex 三元组无损保留，用户显式选择「不指定」时一次性清除。新非 null
+  // 默认值在 UI 不提供入口，main IPC 也会拒绝，避免手工调用绕过此边界。
+  const clearCodexDefault = useCallback(async () => {
+    const current = settingsRef.current;
+    if (!current) return;
+    if (current.codex === null && current.codexProviderId === null && current.codexEffort === null) {
+      return;
+    }
+    await persistPatch({ codex: null, codexProviderId: null, codexEffort: null });
+  }, [persistPatch]);
 
   const resetCard = useCallback(
     async (keys: readonly (keyof SubagentModelSettingsPatch)[]) => {
@@ -400,7 +305,6 @@ export function SubagentModelSection() {
   // 不接线,保留诊断显示(codex review 前轮)。
   const hasCatalogClaudeModel =
     visibleModelUnion(providers, 'claude-code', () => true).length > 0;
-  const hasCatalogCodexModel = visibleModelUnion(providers, 'codex', () => true).length > 0;
 
   // DefaultOverrideControls 按卡片键组分组判 isCustomized;卡级恢复 = 写该卡全键
   // 默认值 patch(configuration-and-overrides §4 的「相应粒度恢复入口」)。
@@ -514,53 +418,31 @@ export function SubagentModelSection() {
             <span className="text-14 font-medium text-[var(--text-primary)]">Codex</span>
           </div>
           <div className="min-w-0 flex-1">
-            {/* Codex 行与 Claude 行同一块标准面板,差异只有两点:configurationEnabled
-                默认开启(codex 派发通道有 effort 维度:agents.default_subagent_reasoning_effort,
-                且上游只设模型会把子代理 effort 重置为目标模型默认档,必须成对写);
-                以及 (model, providerId, effort) 三元组原子落库。 */}
+            {/* Codex 行继续复用标准面板，但当前只提供「不指定」：Codex 没有公开
+                可同时验证 native allowlist 与当前 provider/account 权限的会话级契约。
+                历史值通过 unknownModelLabel 回显并可清除，不再进入候选或被注入。 */}
             <ModelSelector
               modelId={settings.codex ?? ''}
-              effort={settings.codexEffort ?? ''}
-              modelMemory={CODEX_SUBAGENT_MODEL_MEMORY}
-              onModelChange={(modelId) => {
-                void setCodexModel(modelId, settings.codexProviderId);
-              }}
-              onEffortChange={(effort) => {
-                void setCodexEffort(effort);
-              }}
+              effort=""
+              onModelChange={() => undefined}
+              onEffortChange={() => undefined}
               vendorKey="codex"
-              // 隐藏 Chat 桥接的 Codex 供应商模型(DeepSeek/Kimi/GLM 等 openai-chat
-              // wire):原生 spawn 按 Codex 自身目录解析子代理默认模型,桥接模型必被
-              // 拒(greptile review P1)。统一面板基准下的功能特殊化,理由=上游硬约束;
-              // codexV2ModelHint 仍保留说明(手改设置文件仍可写入任意值)。
+              modelIdAllowlist={NO_CODEX_SUBAGENT_DEFAULT_MODELS}
+              // 空 allowlist 当前已拦截全部候选；仍保留 Chat bridge 排除作为防御性
+              // 约束，未来若恢复经验证的白名单，兼容桥模型也不能成为原生默认值。
               excludeChatBridgedCodex
               currentProviderId={settings.codexProviderId}
               sourceDisconnected={codexSourceDisconnected}
-              onNavigateToProviders={
-                providersLoading || hasCatalogCodexModel
-                  ? undefined
-                  : () => navigate('/settings?tab=providers')
-              }
-              reselectEmitsChange
-              onProviderChange={(providerId, modelId, reconciledEffort) => {
-                const nextModel = modelId ?? settings.codex;
-                if (!nextModel) return;
-                void setCodexModel(
-                  nextModel,
-                  resolveProviderId('codex', nextModel, providerId),
-                  reconciledEffort,
-                );
-              }}
               switching={pending}
-              disabled={providersLoading}
               triggerVariant="field"
               popoverSide="bottom"
+              configurationEnabled={false}
               unknownModelLabel={(id) => id}
               fallbackOption={{
                 active: settings.codex === null,
                 label: unspecifiedLabel,
                 onSelect: () => {
-                  void setCodexModel(null, null);
+                  void clearCodexDefault();
                 },
               }}
             />

@@ -2343,10 +2343,10 @@
     },
     "subagentModels": {
       "title": "Subagents",
-      "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
+      "description": "Choose the default model for Claude Code sub-tasks, review any previously saved Codex default, and set guardrails for Codex subagents. Settings apply per entry, not per model.",
       "unspecified": "Not specified (use default behavior)",
-      "hint": "Claude Code subagents only support choosing a model; reasoning effort follows Claude Code's native behavior. Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
-      "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
+      "hint": "Claude Code subagents only support choosing a model; reasoning effort follows Claude Code's native behavior. Available Claude Code models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex guardrail changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
+      "codexV2ModelHint": "Codex does not currently expose a per-session contract for validating a default subagent model against both its native allowlist and the active provider/account. To prevent allowlist failures or 403 responses, new settings are temporarily limited to Unspecified so Codex keeps its native selection. Previously saved model IDs remain visible; choose Unspecified to clear all saved Codex default fields.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {
         "title": "Codex subagent guardrails",

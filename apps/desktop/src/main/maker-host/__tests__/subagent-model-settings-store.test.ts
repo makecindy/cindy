@@ -33,6 +33,7 @@ import {
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   codexSpawnConfigChanged,
+  isCodexSubagentDefaultPatchSupported,
   reconcileSubagentModelSettingsPatch,
   type SubagentModelSettings,
 } from '../../../shared/subagentModelSettings';
@@ -93,7 +94,8 @@ describe('subagent model settings store', () => {
     );
   });
 
-  it('persists the codex (model, providerId, effort) triple written in one patch', () => {
+  it('preserves a historical Codex triple for display and explicit recovery', () => {
+    // store 读取保持无损；新非 null 值由 main IPC 边界拒绝。
     writeSubagentModelSettingsPatch({
       codex: 'gpt-5.6-terra',
       codexProviderId: 'openai',
@@ -188,9 +190,8 @@ describe('subagent model settings store', () => {
     expect(normalized.codexEffort).toBeNull();
   });
 
-  it('keeps an effort-only override without a model (legitimate upstream config)', () => {
-    // effort 不依附模型:agents.default_subagent_reasoning_effort 单独注入在上游
-    // 合法(子代理继承父模型、只改档位),手改文件表达它的能力按契约保留。
+  it('preserves a historical effort-only override for explicit recovery', () => {
+    // 旧配置无损读取但不再注入；设置页可通过「不指定」清除。
     expect(__testing.normalize({ codexEffort: 'high' })).toEqual(
       withDefaults({ codexEffort: 'high' }),
     );
@@ -247,8 +248,8 @@ describe('subagent model settings store', () => {
       claudeCode: null,
       claudeCodeProviderId: null,
     });
-    // codexEffort 有意不参与配对清理(effort-only 是合法上游配置);UI 层负责在
-    // 「不指定」时原子清三键。
+    // codexEffort 为无损读取历史值而不参与配对清理；UI 层负责在「不指定」时
+    // 原子清三键。
     expect(
       reconcileSubagentModelSettingsPatch({ codex: null, claudeCode: 'claude-opus-5' }, current),
     ).toEqual({
@@ -277,16 +278,30 @@ describe('subagent model settings store', () => {
 
   it('codexSpawnConfigChanged tracks spawn-affecting keys only', () => {
     const base = withDefaults();
-    // codexProviderId 是纯客户端展示维度,claude* 走 env 通道:都不触发重启。
+    // Codex 模型三元组当前只保留历史展示，不再注入；claude* 走 env 通道。
     expect(codexSpawnConfigChanged(base, withDefaults({ codexProviderId: 'openai' }))).toBe(false);
     expect(codexSpawnConfigChanged(base, withDefaults({ claudeCode: 'claude-opus-5' }))).toBe(false);
-    expect(codexSpawnConfigChanged(base, withDefaults({ codex: 'gpt-5.6-terra' }))).toBe(true);
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexEffort: 'low' }))).toBe(true);
+    expect(codexSpawnConfigChanged(base, withDefaults({ codex: 'gpt-5.6-terra' }))).toBe(false);
+    expect(codexSpawnConfigChanged(base, withDefaults({ codexEffort: 'low' }))).toBe(false);
     expect(codexSpawnConfigChanged(base, withDefaults({ codexSubagentsEnabled: false }))).toBe(true);
     expect(
       codexSpawnConfigChanged(base, withDefaults({ codexUseCindySubagentPolicy: false })),
     ).toBe(true);
     expect(codexSpawnConfigChanged(base, withDefaults({ codexMaxConcurrentSubagents: 3 }))).toBe(true);
     expect(codexSpawnConfigChanged(base, withDefaults({ codexAllowNestedSubagents: true }))).toBe(true);
+  });
+
+  it('allows only no-op or clearing patches for Codex defaults', () => {
+    expect(isCodexSubagentDefaultPatchSupported({ claudeCode: 'claude-opus-5' })).toBe(true);
+    expect(
+      isCodexSubagentDefaultPatchSupported({
+        codex: null,
+        codexProviderId: null,
+        codexEffort: null,
+      }),
+    ).toBe(true);
+    expect(isCodexSubagentDefaultPatchSupported({ codex: 'gpt-5.6-terra' })).toBe(false);
+    expect(isCodexSubagentDefaultPatchSupported({ codexProviderId: 'openai' })).toBe(false);
+    expect(isCodexSubagentDefaultPatchSupported({ codexEffort: 'high' })).toBe(false);
   });
 });

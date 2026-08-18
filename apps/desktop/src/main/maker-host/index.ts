@@ -216,10 +216,7 @@ import {
   buildCodexProxySpawnArgs,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
-import {
-  buildCodexSubagentSpawnArgs,
-  resolveCodexSubagentModelFallback,
-} from './codex-subagent-config.js';
+import { buildCodexSubagentSpawnArgs } from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
   registerAgentProcess,
@@ -1423,21 +1420,17 @@ export function getMaker(): Maker {
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
         const subagentModelSettings = readSubagentModelSettings();
-        const subagentModelFallback = resolveCodexSubagentModelFallback(
-          subagentModelSettings,
-          ctx.remoteHostId,
-        );
         return {
-          // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
+          // 子代理护栏每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
-          // model/list 无影响,不加 hostPurpose 分支。
+          // model/list 无影响,不加 hostPurpose 分支。默认模型不再注入或投影到
+          // live card:共享进程无法证明会话级 provider/account 的执行权限。
           extraArgs: [
             ...mcpExtraArgs,
             ...(!isReview ? buildCodexSubagentSpawnArgs(subagentModelSettings) : []),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
-          ...(subagentModelFallback ? { subagentModelFallback } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,

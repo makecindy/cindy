@@ -596,6 +596,7 @@ import {
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
 } from './maker-host/subagent-model-settings-store.js';
+import { parseSubagentModelSettingsPatch } from './maker-host/parse-subagent-model-settings-patch.js';
 import {
   readVisionBridgeSettings,
   readVisionBridgeSettingsState,
@@ -714,12 +715,7 @@ import { parseImDefaultSettingsPatch } from './im/parseDefaultSettingsPatch.js';
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   codexSpawnConfigChanged,
-  isCodexSubagentEffort,
-  isValidCodexSubagentConcurrencyInput,
-  isValidSubagentModelIdInput,
-  normalizeSubagentModelId,
   reconcileSubagentModelSettingsPatch,
-  type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
 import {
@@ -7541,58 +7537,6 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
       throwIpcError('INVALID_PARAMS', `vision bridge ${key} providerId/modelId must not be blank`);
     }
     patch[key] = { providerId, modelId };
-  }
-  return patch;
-}
-
-function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPatch {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'subagent model settings patch required (object)');
-  }
-  const input = raw as Record<string, unknown>;
-  const patch: SubagentModelSettingsPatch = {};
-  // providerId 与 model id 同约束(短标识串),共用同一套校验/归一化。
-  for (const key of ['claudeCode', 'claudeCodeProviderId', 'codex', 'codexProviderId'] as const) {
-    if (!(key in input)) continue;
-    const value = input[key];
-    if (!isValidSubagentModelIdInput(value)) {
-      throwIpcError('INVALID_PARAMS', `subagent model ${key} must be a valid string or null`);
-    }
-    patch[key] = normalizeSubagentModelId(value);
-  }
-  // 护栏/effort 字段类型各异(enum / boolean / number|null),逐字段分支校验。
-  if ('codexEffort' in input) {
-    if (input.codexEffort !== null && !isCodexSubagentEffort(input.codexEffort)) {
-      throwIpcError('INVALID_PARAMS', 'subagent codexEffort must be a known effort or null');
-    }
-    patch.codexEffort = input.codexEffort as SubagentModelSettingsPatch['codexEffort'];
-  }
-  if ('codexSubagentsEnabled' in input) {
-    if (typeof input.codexSubagentsEnabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'subagent codexSubagentsEnabled must be boolean');
-    }
-    patch.codexSubagentsEnabled = input.codexSubagentsEnabled;
-  }
-  if ('codexUseCindySubagentPolicy' in input) {
-    if (typeof input.codexUseCindySubagentPolicy !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'subagent codexUseCindySubagentPolicy must be boolean');
-    }
-    patch.codexUseCindySubagentPolicy = input.codexUseCindySubagentPolicy;
-  }
-  if ('codexMaxConcurrentSubagents' in input) {
-    if (!isValidCodexSubagentConcurrencyInput(input.codexMaxConcurrentSubagents)) {
-      throwIpcError(
-        'INVALID_PARAMS',
-        'subagent codexMaxConcurrentSubagents must be an integer in range or null',
-      );
-    }
-    patch.codexMaxConcurrentSubagents = input.codexMaxConcurrentSubagents;
-  }
-  if ('codexAllowNestedSubagents' in input) {
-    if (typeof input.codexAllowNestedSubagents !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'subagent codexAllowNestedSubagents must be boolean');
-    }
-    patch.codexAllowNestedSubagents = input.codexAllowNestedSubagents;
   }
   return patch;
 }

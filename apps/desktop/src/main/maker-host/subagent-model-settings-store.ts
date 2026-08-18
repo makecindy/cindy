@@ -40,7 +40,7 @@ function normalize(raw: unknown): SubagentModelSettings {
       claudeCode === null ? null : normalizeSubagentModelId(input.claudeCodeProviderId),
     codex,
     codexProviderId: codex === null ? null : normalizeSubagentModelId(input.codexProviderId),
-    // effort 不依附模型(effort-only 是合法上游配置,见 shared 契约注释)。
+    // 历史 effort-only 值无损保留供设置页诊断和清除；当前不会注入 Codex。
     codexEffort: isCodexSubagentEffort(input.codexEffort) ? input.codexEffort : null,
     // 垃圾值回退方向按语义定:总开关 fail-open(保能力),Cindy 策略 fail-open
     // (兼容升级前行为),嵌套 fail-closed(少放权)。
@@ -62,11 +62,10 @@ const store = createOverrideSettingsFile<SubagentModelSettings>({
 });
 
 /**
- * 每次新建 agent 会话 / codex app-server spawn 时读取。外部手改设置文件的生效
- * 时机按派发通道分:Claude 每会话独立 spawn,下一会话即生效;codex 共享
- * app-server,手改值在**下一次 app-server spawn**(应用重启或任一触发重启的
- * 设置变更)才进 `-c` 注入 —— 手改是逃生舱,不接文件监听换即时性;受支持的
- * 即时应用入口是设置 UI(变更会走 DeferredCodexRestart)。
+ * 每次新建 Agent 会话 / Codex app-server spawn 时读取。Claude 模型覆盖在下一次
+ * 独立 spawn 生效。Codex 的模型、来源与 effort 仅无损保留历史值，不会进入
+ * `-c` 注入；护栏值仍在下一次 app-server spawn 生效，受支持的即时入口是设置 UI
+ * （护栏变更会走 DeferredCodexRestart）。
  */
 export function readSubagentModelSettings(): SubagentModelSettings {
   store.invalidateIfChanged();

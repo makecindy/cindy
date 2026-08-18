@@ -15,10 +15,12 @@
  *   CODEX_ON_DEMAND_DELEGATION_HINT;后者保持开启,让模型可显式选择子代理模型,
  *   不改变上游何时委托的调度策略。
  * - `agents.max_depth` 仅旧版多代理(V1)生效,V2 忽略(UI hint 已注明)。
- * - `agents.default_subagent_model` 是兜底默认,模型仍可在 spawn 参数里显式覆盖。
- *   注入 Cindy 存储的 model id 原文:codex vendor 候选只有原生 slug 与 `codex/`
- *   折扣路由 id,`codex/` 前缀由 loopback proxy 在 HTTP 边界分流(decideCodexRoute),
- *   剥前缀反而会把折扣路由静默改道。
+ * - 刻意不注入 `agents.default_subagent_model` 与
+ *   `agents.default_subagent_reasoning_effort`:这两个默认值是共享 app-server 的
+ *   进程级配置,而设置中保存的 providerId 是会话级客户端偏好。Codex 0.145 的
+ *   model/list 又不公开当前 turn 的 Multi-Agent 版本或 provider/account 权限,
+ *   Cindy 无法在 spawn 前证明某个默认模型既通过原生目录校验又可实际执行。
+ *   fail-closed 保留 Codex 原生选择,避免未知模型错误或随后发生 403。
  *
  * TOML 值形态与 mcp-integrations/codexEnvironment.ts 一致:字符串带双引号,
  * 数字/布尔裸写。
@@ -61,7 +63,7 @@ export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): st
     return args;
   }
   // 自定义策略关闭时不设置 multi_agent_mode_hint_text,由上游按 effort 选择原生
-  // multi-agent 模式。模型覆盖能力与调度策略正交,仍保持暴露。
+  // multi-agent 模式。显式 spawn 参数能力与进程级默认正交,仍保持暴露。
   if (settings.codexUseCindySubagentPolicy) {
     args.push(
       '-c',
@@ -69,12 +71,6 @@ export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): st
     );
   }
   args.push('-c', 'features.multi_agent_v2.expose_spawn_agent_model_overrides=true');
-  if (settings.codex) {
-    args.push('-c', `agents.default_subagent_model=${tomlString(settings.codex)}`);
-  }
-  if (settings.codexEffort) {
-    args.push('-c', `agents.default_subagent_reasoning_effort=${tomlString(settings.codexEffort)}`);
-  }
   if (settings.codexMaxConcurrentSubagents !== null) {
     args.push(
       '-c',
@@ -85,18 +81,4 @@ export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): st
     args.push('-c', 'agents.max_depth=2');
   }
   return args;
-}
-
-/**
- * A display fallback is truthful only for the local app-server that receives
- * the matching `agents.default_subagent_model` override. SSH remote daemons
- * use their own isolated CODEX_HOME, so the local setting must not be shown as
- * if it were the remote thread's actual model.
- */
-export function resolveCodexSubagentModelFallback(
-  settings: SubagentModelSettings,
-  remoteHostId?: string,
-): string | undefined {
-  if (remoteHostId || !settings.codexSubagentsEnabled) return undefined;
-  return settings.codex?.trim() || undefined;
 }

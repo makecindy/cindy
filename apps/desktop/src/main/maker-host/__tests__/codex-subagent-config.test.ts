@@ -4,10 +4,7 @@ import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   type SubagentModelSettings,
 } from '../../../shared/subagentModelSettings';
-import {
-  buildCodexSubagentSpawnArgs,
-  resolveCodexSubagentModelFallback,
-} from '../codex-subagent-config';
+import { buildCodexSubagentSpawnArgs } from '../codex-subagent-config';
 
 function settings(partial: Partial<SubagentModelSettings> = {}): SubagentModelSettings {
   return { ...SUBAGENT_MODEL_SETTINGS_DEFAULTS, ...partial };
@@ -47,6 +44,33 @@ describe('buildCodexSubagentSpawnArgs', () => {
     }
   });
 
+  it('does not inject a stored Codex default before native and provider eligibility are known', () => {
+    const args = buildCodexSubagentSpawnArgs(
+      settings({
+        codex: 'codex/gpt-5.6-luna',
+        codexProviderId: 'xd',
+        codexEffort: 'high',
+      }),
+    );
+
+    expect(args).not.toContain('agents.default_subagent_model="codex/gpt-5.6-luna"');
+    expect(args).not.toContain('agents.default_subagent_reasoning_effort="high"');
+    expectDelegationArgs(args);
+  });
+
+  it.each(['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'codex/gpt-5.6-sol'])(
+    'does not treat an apparently native model as provider-authorized: %s',
+    (model) => {
+      const args = buildCodexSubagentSpawnArgs(
+        settings({ codex: model, codexProviderId: 'openai', codexEffort: 'high' }),
+      );
+      expect(args.some((arg) => arg.startsWith('agents.default_subagent_model='))).toBe(false);
+      expect(
+        args.some((arg) => arg.startsWith('agents.default_subagent_reasoning_effort=')),
+      ).toBe(false);
+    },
+  );
+
   it('uses Codex native scheduling when the Cindy policy is off', () => {
     const args = buildCodexSubagentSpawnArgs(
       settings({
@@ -64,10 +88,6 @@ describe('buildCodexSubagentSpawnArgs', () => {
     ).toBe(false);
     expect(args).toContain('features.multi_agent_v2.expose_spawn_agent_model_overrides=true');
     expect(withoutDelegationArgs(args)).toEqual([
-      '-c',
-      'agents.default_subagent_model="gpt-5.6-terra"',
-      '-c',
-      'agents.default_subagent_reasoning_effort="high"',
       '-c',
       'agents.max_concurrent_threads_per_session=4',
       '-c',
@@ -100,7 +120,7 @@ describe('buildCodexSubagentSpawnArgs', () => {
     ).toEqual(['-c', 'agents.enabled=false']);
   });
 
-  it('quotes string values and keeps numbers bare (TOML forms)', () => {
+  it('keeps numeric guardrail values bare while ignoring legacy model defaults', () => {
     const args = buildCodexSubagentSpawnArgs(
       settings({
         codex: 'gpt-5.6-terra',
@@ -111,19 +131,14 @@ describe('buildCodexSubagentSpawnArgs', () => {
     expectDelegationArgs(args);
     expect(withoutDelegationArgs(args)).toEqual([
       '-c',
-      'agents.default_subagent_model="gpt-5.6-terra"',
-      '-c',
-      'agents.default_subagent_reasoning_effort="medium"',
-      '-c',
       'agents.max_concurrent_threads_per_session=3',
     ]);
   });
 
-  it('injects discounted-route model ids verbatim (no prefix stripping)', () => {
-    // codex/ 前缀由 loopback proxy 在 HTTP 边界分流,剥前缀会把折扣路由静默改道。
+  it('does not inject or rewrite a discounted-route model id', () => {
     expect(
       withoutDelegationArgs(buildCodexSubagentSpawnArgs(settings({ codex: 'codex/gpt-5.5' }))),
-    ).toEqual(['-c', 'agents.default_subagent_model="codex/gpt-5.5"']);
+    ).toEqual([]);
   });
 
   it('maps the nested-subagents switch to agents.max_depth=2', () => {
@@ -177,36 +192,4 @@ describe('buildCodexSubagentSpawnArgs', () => {
     }
   });
 
-  it('escapes TOML-breaking characters defensively', () => {
-    expect(
-      withoutDelegationArgs(
-        buildCodexSubagentSpawnArgs(settings({ codex: 'weird"model\\id' })),
-      ),
-    ).toEqual(['-c', 'agents.default_subagent_model="weird\\"model\\\\id"']);
-  });
-});
-
-describe('resolveCodexSubagentModelFallback', () => {
-  it('returns the configured model for the local app-server', () => {
-    expect(resolveCodexSubagentModelFallback(settings({ codex: 'codex/gpt-5.5' }))).toBe(
-      'codex/gpt-5.5',
-    );
-  });
-
-  it('does not project a local model setting onto an SSH remote daemon', () => {
-    expect(
-      resolveCodexSubagentModelFallback(
-        settings({ codex: 'codex/gpt-5.5' }),
-        'remote-host-1',
-      ),
-    ).toBeUndefined();
-  });
-
-  it('returns no fallback when Codex subagents are disabled', () => {
-    expect(
-      resolveCodexSubagentModelFallback(
-        settings({ codexSubagentsEnabled: false, codex: 'codex/gpt-5.5' }),
-      ),
-    ).toBeUndefined();
-  });
 });

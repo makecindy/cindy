@@ -588,6 +588,11 @@ interface ModelSelectorProps {
   /** When provided, only models with this vendorKey are shown in the dropdown. */
   vendorKey?: 'cc' | 'codex' | 'pi';
   /**
+   * 调用方额外允许展示的模型 id。空集合表示只保留 fallback 行；已持久化但被排除的
+   * modelId 仍可通过 unknownModelLabel 在 trigger 回显，但不得被 keepSelected 放回列表。
+   */
+  modelIdAllowlist?: ReadonlySet<string>;
+  /**
    * 已创建会话的 trigger 同时展示 Agent 与模型，避免 Claude Code 使用 OpenAI 模型时
    * 只看来源图标而误判成 Codex。必须由权威 session/runtime 身份或明确切换 intent 提供，
    * 不得从用于模型列表过滤的 vendorKey 推断。紧凑布局仅视觉收起，aria/title 保留完整语义。
@@ -684,6 +689,8 @@ interface ModelSelectorContentProps {
   onFastModeChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
   vendorKey?: 'cc' | 'codex' | 'pi';
+  /** 语义同 ModelSelectorProps.modelIdAllowlist。 */
+  modelIdAllowlist?: ReadonlySet<string>;
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
   /** SSH 远程会话隐藏订阅直连模型(语义同 ModelSelectorProps 同名字段)。 */
@@ -831,6 +838,7 @@ function ModelSelectorContentView({
   onFastModeChange,
   modelMemory,
   vendorKey,
+  modelIdAllowlist,
   deviceId,
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
@@ -1075,7 +1083,7 @@ function ModelSelectorContentView({
         devicePiModels: pi.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
-      }),
+      }).filter((model) => !modelIdAllowlist || modelIdAllowlist.has(model.id)),
     [
       agentKind,
       deviceId,
@@ -1085,6 +1093,7 @@ function ModelSelectorContentView({
       pi.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
+      modelIdAllowlist,
     ],
   );
 
@@ -1302,6 +1311,7 @@ function ModelSelectorContentView({
     [deviceId, localProviders.providerOrder, sectionProviders],
   );
   const suspendedActiveSourceId = sectionProviders === connected ? null : activeSourceId;
+  const selectedModelAllowed = !modelIdAllowlist || modelIdAllowlist.has(modelId);
   // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是外部可见性偏好的刷新信号,需要强制重算分段列表。
   const sections = useMemo(() => {
     if (!sourcesEnabled || !currentAgentKind) return null;
@@ -1315,12 +1325,15 @@ function ModelSelectorContentView({
     return buildProviderSections({
       providers: orderedSectionProviders,
       agent: currentAgentKind,
-      selectedModelId: modelId,
-      selectedProviderId: activeSourceId,
+      // buildProviderSections 的 keepSelected 会绕过 isVisible。被调用方 deny 的历史值
+      // 只允许留在 trigger 供诊断和清除，不能借该豁免重新进入候选列表。
+      selectedModelId: selectedModelAllowed ? modelId : undefined,
+      selectedProviderId: selectedModelAllowed ? activeSourceId : undefined,
       // device-link 远程会话使用被控端随 provider:list 返回的 override 快照，绝不套
       // 控制端本机 modelVisibilityPrefs。旧被控端不回传快照时 fail-open，保持兼容。
       isVisible: deviceId
         ? (pid, mid) => {
+            if (modelIdAllowlist && !modelIdAllowlist.has(mid)) return false;
             if (!restrictSuspended(pid, mid)) return false;
             const p = sectionProviders.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
@@ -1332,6 +1345,7 @@ function ModelSelectorContentView({
             );
           }
         : (pid, mid) => {
+            if (modelIdAllowlist && !modelIdAllowlist.has(mid)) return false;
             if (!restrictSuspended(pid, mid)) return false;
             const p = sectionProviders.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
@@ -1351,6 +1365,8 @@ function ModelSelectorContentView({
     currentAgentKind,
     modelId,
     activeSourceId,
+    selectedModelAllowed,
+    modelIdAllowlist,
     query,
     visibilityVersion,
     deviceId,
@@ -2372,6 +2388,7 @@ export function ModelSelector({
   onFastModeChange,
   modelMemory,
   vendorKey,
+  modelIdAllowlist,
   agentIdentity,
   deviceId,
   excludeSubscriptionDirect,
@@ -2515,7 +2532,7 @@ export function ModelSelector({
         devicePiModels: pi.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
-      }),
+      }).filter((model) => !modelIdAllowlist || modelIdAllowlist.has(model.id)),
     [
       agentKind,
       deviceId,
@@ -2525,6 +2542,7 @@ export function ModelSelector({
       pi.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
+      modelIdAllowlist,
     ],
   );
 
@@ -2974,6 +2992,7 @@ export function ModelSelector({
       onFastModeChange={onFastModeChange}
       modelMemory={modelMemory}
       vendorKey={vendorKey}
+      modelIdAllowlist={modelIdAllowlist}
       deviceId={deviceId}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}

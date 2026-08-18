@@ -351,6 +351,35 @@ async function waitForSearchInputFocus(): Promise<HTMLElement> {
 }
 
 describe('ModelSelector provider groups', () => {
+  it('applies an explicit allowlist before provider keepSelected can restore a stale value', async () => {
+    renderSelector({
+      modelId: 'claude-sonnet-4-6',
+      modelIdAllowlist: new Set(['claude-opus-4-8']),
+    });
+    await openDropdown();
+
+    const popover = screen.getByTestId('model-options-popover');
+    expect(within(popover).getByText('Opus 4.8')).toBeTruthy();
+    expect(within(popover).queryByText('Sonnet 4.6')).toBeNull();
+    expect(within(popover).queryByText('qwen3.7-plus')).toBeNull();
+  });
+
+  it('supports a fallback-only flat selector when the allowlist is empty', async () => {
+    renderSelector({
+      modelId: 'claude-sonnet-4-6',
+      modelIdAllowlist: new Set(),
+      onProviderChange: undefined,
+      fallbackOption: { active: false, label: 'Unspecified', onSelect: vi.fn() },
+    });
+    await openDropdown();
+
+    const popover = screen.getByTestId('model-options-popover');
+    expect(within(popover).getByText('Unspecified')).toBeTruthy();
+    expect(within(popover).queryByText('Opus 4.8')).toBeNull();
+    expect(within(popover).queryByText('Sonnet 4.6')).toBeNull();
+    expect(within(popover).queryByText('qwen3.7-plus')).toBeNull();
+  });
+
   it('renders a group heading for each provider', async () => {
     renderSelector();
     await openDropdown();
