@@ -706,7 +706,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(createCalls[0][1].content).toBe('hello');
   });
 
-  it('Telegram 新会话使用 provider-aware 标记、提示和持久化来源', async () => {
+  it('官方 Telegram 新会话保留 provider 标记并把包命令留给 Desktop 确认', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
@@ -727,7 +727,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       content: `hello\n\n${buildHookPromptNote('telegram')}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
-      origin: { kind: 'im', channel: 'telegram' },
+      origin: { kind: 'hook', source: 'telegram' },
       rawChannelText: 'hello',
     });
     expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', 'telegram');
@@ -735,6 +735,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
 
   it.each([
     ['slack', { kind: 'im', channel: 'slack' }],
+    ['telegram', { kind: 'hook', source: 'telegram' }],
     ['x', { kind: 'hook', source: 'x' }],
   ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
     const runner = createMakerHookSessionRunner({ log });

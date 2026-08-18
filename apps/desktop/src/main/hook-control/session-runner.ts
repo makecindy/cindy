@@ -119,11 +119,15 @@ type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel
 
 function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
   switch (value) {
+    case 'telegram':
+      // `source.im=telegram` identifies the official server-backed hook here,
+      // not the authenticated personal-bot adapter. Keep managed package
+      // mutations on the Desktop confirmation path.
+      return { kind: 'hook', source: value };
     case 'feishu':
     case 'discord':
     case 'slack':
     case 'wechat':
-    case 'telegram':
     case 'dingtalk':
     case 'wecom':
       return { kind: 'im', channel: value as MainOwnedImChannel };
