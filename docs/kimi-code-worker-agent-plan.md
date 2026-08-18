@@ -175,6 +175,17 @@ Kimi 会员授权，凭据落在 `~/.kimi-code/`。Cindy 侧仅做：
 
 ## 开放问题
 
+0. **桥接选型（已裁决，记录备查）**：曾评估 `kimi acp`（ACP 标准协议） vs
+   `kimi web`（官方本地服务）。结论取后者，与 Cindy 既有架构传统一致——
+   现有三个 agent 全部使用官方程序化 / 服务化接口而非 ACP：Claude Code 用
+   `@anthropic-ai/claude-agent-sdk`（SDK Query + canUseTool），Codex 用官方
+   `codex app-server`（Codex 自身支持 ACP 但 Cindy 未采用），Pi 用
+   `pi --mode rpc`。Cindy 需要的能力面（fast mode / effort / permission mode /
+   usage / fork / rewind / detach-reattach / SSH 远端桥）超出 ACP 标准 12 方法
+   的覆盖。ACP 作为「一次实现、多 agent 复用」的统一客户端方向仍有长期价值，
+   若未来 Cindy 决策引入 ACP 客户端，本 manager 的桥接层可整体替换，不影响
+   本方案其余部分。
+
 1. **实验性 API 稳定性**：Kimi 服务 API 标注为实验性，桥接层需要按
    `/openapi.json` 做版本能力探测，还是锁定已验证的 kimi-code 版本区间？
 2. **审批桥接深度**：Kimi CLI 的「修改文件 / 执行 Shell 前确认」模型与
