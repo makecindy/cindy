@@ -314,7 +314,7 @@ describe('WorkLouderCodexLightingController', () => {
     }
   });
 
-  it('turns the encoder through the task list in its default mode', () => {
+  it('turns the encoder through the task list in its default mode', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -331,6 +331,7 @@ describe('WorkLouderCodexLightingController', () => {
     };
     const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
     controller.start();
+    await controller.resumeTaskSlots();
 
     // The knob follows the sidebar list: turning right walks down it, turning
     // left walks up. ENC_CW is the clockwise/right direction, the same one
@@ -348,7 +349,7 @@ describe('WorkLouderCodexLightingController', () => {
     });
   });
 
-  it('mirrors physical presses onto the settings preview without changing actions', () => {
+  it('mirrors physical presses onto the settings preview without changing actions', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -372,6 +373,7 @@ describe('WorkLouderCodexLightingController', () => {
       preview,
     );
     controller.start();
+    await controller.resumeTaskSlots();
 
     hidRef.current?.({ key: 'ACT06', act: 1 });
     hidRef.current?.({ key: 'ACT06', act: 0 });
@@ -453,12 +455,18 @@ describe('WorkLouderCodexLightingController', () => {
       return { stickRef, dispatch, controller, preview };
     }
 
+    async function makeReadyStick() {
+      const stick = makeStick();
+      await stick.controller.resumeTaskSlots();
+      return stick;
+    }
+
     // Angles come from joystickDirection(): up is 0.625–0.875.
     const up = (distance: number) => ({ angle: 0.75, distance });
     const centre = { angle: 0.75, distance: 0 };
 
-    it('keeps scrolling while the stick is held, carrying how hard it is pushed', () => {
-      const { stickRef, dispatch } = makeStick();
+    it('keeps scrolling while the stick is held, carrying how hard it is pushed', async () => {
+      const { stickRef, dispatch } = await makeReadyStick();
 
       stickRef.current?.(up(0.75));
       stickRef.current?.(up(1));
@@ -472,10 +480,10 @@ describe('WorkLouderCodexLightingController', () => {
       expect(scrolls[1][0].intensity).toBeGreaterThan(scrolls[0][0].intensity);
     });
 
-    it('scrolls for the whole push and stops on release, as the hardware reports it', () => {
+    it('scrolls for the whole push and stops on release, as the hardware reports it', async () => {
       vi.useFakeTimers();
       try {
-        const { stickRef, dispatch } = makeStick();
+        const { stickRef, dispatch } = await makeReadyStick();
 
         // A real push, taken from device logs: it ramps in, sits silent while
         // held, eases off, then lands on zero when let go. The 0.24 lead-in is
@@ -494,8 +502,8 @@ describe('WorkLouderCodexLightingController', () => {
       }
     });
 
-    it('stops when the stick returns to centre', () => {
-      const { stickRef, dispatch } = makeStick();
+    it('stops when the stick returns to centre', async () => {
+      const { stickRef, dispatch } = await makeReadyStick();
 
       stickRef.current?.(up(1));
       dispatch.mockClear();
@@ -504,10 +512,10 @@ describe('WorkLouderCodexLightingController', () => {
       expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
     });
 
-    it('keeps scrolling through the long silences a held stick produces', () => {
+    it('keeps scrolling through the long silences a held stick produces', async () => {
       vi.useFakeTimers();
       try {
-        const { stickRef, dispatch } = makeStick();
+        const { stickRef, dispatch } = await makeReadyStick();
 
         stickRef.current?.(up(1));
         dispatch.mockClear();
@@ -522,10 +530,10 @@ describe('WorkLouderCodexLightingController', () => {
       }
     });
 
-    it('gives up if the device disappears mid-push', () => {
+    it('gives up if the device disappears mid-push', async () => {
       vi.useFakeTimers();
       try {
-        const { stickRef, dispatch } = makeStick();
+        const { stickRef, dispatch } = await makeReadyStick();
 
         stickRef.current?.(up(1));
         dispatch.mockClear();
@@ -540,8 +548,8 @@ describe('WorkLouderCodexLightingController', () => {
       }
     });
 
-    it('leaves the sideways directions as one-shot actions', () => {
-      const { stickRef, dispatch } = makeStick();
+    it('leaves the sideways directions as one-shot actions', async () => {
+      const { stickRef, dispatch } = await makeReadyStick();
 
       // Left is 0.375–0.625; it toggles a sidebar, which must not repeat.
       stickRef.current?.({ angle: 0.5, distance: 1 });
@@ -706,7 +714,7 @@ describe('WorkLouderCodexLightingController', () => {
     expect(sink.dispose).toHaveBeenCalledOnce();
   });
 
-  it('stops leftover stick scrolling and encoder presses when the account suspends', () => {
+  it('stops leftover stick scrolling and encoder presses when the account suspends', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -729,6 +737,7 @@ describe('WorkLouderCodexLightingController', () => {
     };
     const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
     controller.start();
+    await controller.resumeTaskSlots();
     joystickRef.current?.({ angle: 0.25, distance: 1 });
     hidRef.current?.({ key: 'ENC', act: 1 });
     expect(dispatch).toHaveBeenCalledWith(
@@ -750,7 +759,7 @@ describe('WorkLouderCodexLightingController', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('releases a held microphone when the account suspends or the key is later released', () => {
+  it('releases a held microphone when the account suspends or the key is later released', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -767,6 +776,7 @@ describe('WorkLouderCodexLightingController', () => {
     };
     const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
     controller.start();
+    await controller.resumeTaskSlots();
     hidRef.current?.({ key: 'ACT10', act: 1 });
     expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'press' });
 
@@ -873,5 +883,27 @@ describe('WorkLouderCodexLightingController', () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'command', commandId: 'toggleSidebar' }),
     );
+  });
+
+  it('does not dispatch hardware actions until the account resumes', () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+    controller.start();
+    hidRef.current?.({ key: 'ACT06', act: 1 });
+    hidRef.current?.({ key: 'ENC_CW', act: 2 });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

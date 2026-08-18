@@ -107,7 +107,7 @@ export class WorkLouderCodexLightingController {
   private scrollActive = false;
   private started = false;
   private layoutPreviewActive = false;
-  private inputActionsEnabled = true;
+  private inputActionsEnabled = false;
   private joystickNeedsCenter = false;
   private voicePressed = false;
 

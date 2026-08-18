@@ -16,6 +16,12 @@ vi.mock('electron', () => ({
   },
 }));
 
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => 'cloud:owner-a:1',
+  ownerScopedUserDataPath: (...parts: string[]) =>
+    path.join(electronMock.userDataDir, 'owners', 'owner-a', ...parts),
+}));
+
 vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: {
     child: () => ({
@@ -93,7 +99,12 @@ describe('Work Louder Codex settings store', () => {
     expect(
       JSON.parse(
         fs.readFileSync(
-          path.join(electronMock.userDataDir, 'worklouder-codex-settings.json'),
+          path.join(
+            electronMock.userDataDir,
+            'owners',
+            'owner-a',
+            'worklouder-codex-settings.json',
+          ),
           'utf-8',
         ),
       ),

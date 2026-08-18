@@ -37,6 +37,10 @@ import {
   noteWorkLouderCodexWindowVisibility,
 } from './windowReveal.js';
 import {
+  activeOwnerScopeKey,
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
+import {
   readWorkLouderCodexSettings,
   resetWorkLouderCodexSettings,
   writeWorkLouderCodexSettingsPatch,
@@ -117,14 +121,32 @@ const hostClient = new WorkLouderCodexHostClient({
  * sees. Null until it reports — until then the local table is the best guess.
  */
 let rendererTaskCatalog: WorkLouderCodexTaskCatalogInput[] | null = null;
+let rendererTaskCatalogScope: string | null = null;
+
+function currentTaskCatalogScope(): string | null {
+  if (isAppSessionBoundaryPending()) return null;
+  return activeOwnerScopeKey();
+}
+
+function currentRendererTaskCatalog(): WorkLouderCodexTaskCatalogInput[] | null {
+  if (!rendererTaskCatalog) return null;
+  if (rendererTaskCatalogScope !== currentTaskCatalogScope()) {
+    rendererTaskCatalog = null;
+    rendererTaskCatalogScope = null;
+    return null;
+  }
+  return rendererTaskCatalog;
+}
 
 export const workLouderCodexLightingController = new WorkLouderCodexLightingController(
   hostClient,
   (sessionId, focus = true) => openMainWindowSession(sessionId, { focus }),
-  async () =>
-    rendererTaskCatalog
-      ? buildWorkLouderCodexTaskCatalog(rendererTaskCatalog, { publishedVisibleOrder: true })
-      : listWorkLouderCodexTaskCatalog(),
+  async () => {
+    const catalog = currentRendererTaskCatalog();
+    return catalog
+      ? buildWorkLouderCodexTaskCatalog(catalog, { publishedVisibleOrder: true })
+      : listWorkLouderCodexTaskCatalog();
+  },
   dispatchRendererAction,
   dispatchPreviewInput,
 );
@@ -147,9 +169,13 @@ export function registerWorkLouderCodexInputDevice(): void {
     playWindowReveal: () => {
       workLouderCodexLightingController.playWindowReveal();
     },
-    resumeTaskSlots: () => workLouderCodexLightingController.resumeTaskSlots(),
+    resumeTaskSlots: async () => {
+      workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
+      await workLouderCodexLightingController.resumeTaskSlots();
+    },
     suspendTaskSlots: () => {
       rendererTaskCatalog = null;
+      rendererTaskCatalogScope = null;
       workLouderCodexLightingController.suspendTaskSlots();
     },
     dispose: () => workLouderCodexLightingController.dispose(),
@@ -177,7 +203,10 @@ export function registerWorkLouderCodexSettingsIpc(): void {
     },
     probeDevice: () => hostClient.probe(),
     publishTasks: (tasks) => {
+      const scope = currentTaskCatalogScope();
+      if (!scope) return;
       rendererTaskCatalog = tasks.map((task) => ({ ...task }));
+      rendererTaskCatalogScope = scope;
       void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
     },
     setLayoutPreviewActive: (active) => {

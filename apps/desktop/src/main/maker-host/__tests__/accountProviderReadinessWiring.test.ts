@@ -140,6 +140,13 @@ describe('account provider readiness wiring', () => {
       bootstrapSource.indexOf('ensureCurrentAccountProviderReadiness()', waitFn),
     ).toBeGreaterThan(waitFn);
 
+    const failed = bootstrapSource.indexOf("dbClientTakeover.mode === 'failed'");
+    const failedResume = bootstrapSource.indexOf('await resumeInputDeviceTaskSlots();', failed);
+    const failedReturn = bootstrapSource.indexOf('return;', failedResume);
+    expect(failed).toBeGreaterThanOrEqual(0);
+    expect(failedResume).toBeGreaterThan(failed);
+    expect(failedReturn).toBeGreaterThan(failedResume);
+
     const unchanged = bootstrapSource.indexOf("dbClientTakeover.mode === 'unchanged'");
     const unchangedEnsure = bootstrapSource.indexOf(
       'ensureCurrentAccountProviderReadiness()',

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -189,6 +191,14 @@ describe('Work Louder Codex settings IPC business body', () => {
       ),
     ).toThrow('too long');
     expect(publishTasks).not.toHaveBeenCalled();
+  });
+
+  it('drops a published catalog that belongs to another account generation', () => {
+    const source = readFileSync(resolve(__dirname, '../index.ts'), 'utf8');
+    expect(source).toContain('if (isAppSessionBoundaryPending()) return null;');
+    expect(source).toContain('if (rendererTaskCatalogScope !== currentTaskCatalogScope())');
+    expect(source).toContain('if (!scope) return;');
+    expect(source).toContain('workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());');
   });
 
   it('still accepts a layout saved before voiceButtonMode was removed', () => {

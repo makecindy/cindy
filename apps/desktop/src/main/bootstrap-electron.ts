@@ -6966,6 +6966,15 @@ app.on('ready', async () => {
           userId,
           mode: dbClientTakeover.mode,
         });
+        // Teardown already closed the keyboard. The renderer still enters the
+        // main UI, so restore hardware even when the lifecycle client did not.
+        try {
+          await resumeInputDeviceTaskSlots();
+        } catch (error) {
+          dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       }
       if (dbClientTakeover.mode === 'unchanged') {

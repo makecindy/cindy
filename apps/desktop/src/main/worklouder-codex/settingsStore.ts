@@ -1,7 +1,6 @@
 /** Main-process persistence for Work Louder Codex Micro device preferences. */
 
-import { app } from 'electron';
-import path from 'node:path';
+import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
@@ -27,7 +26,7 @@ const log = desktopMakerLogger.child('worklouder-codex-settings-store');
 const MAX_SETTINGS_BYTES = 64 * 1024;
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'worklouder-codex-settings.json');
+  return ownerScopedUserDataPath('worklouder-codex-settings.json');
 }
 
 function normalizeAction(raw: unknown): WorkLouderCodexAction | null {
@@ -147,6 +146,7 @@ const store = createOverrideSettingsFile<WorkLouderCodexSettings>({
   normalize,
   log,
   label: 'worklouder-codex',
+  scopeKey: activeOwnerScopeKey,
   maxBytes: MAX_SETTINGS_BYTES,
   preserveUnreadableFile: true,
   logLoadedValue: false,
