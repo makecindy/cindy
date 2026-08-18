@@ -75,3 +75,34 @@ describe('输入框收起运行时控件', () => {
     expect(chatInput).toContain('hideRuntimeSelectors = false,');
   });
 });
+
+/**
+ * 批次 ε:成长尾注。判定层(botGrowth.ts)有真实单测,这里只锁**接线**——尾注
+ * 是否真的只对伙伴对话生效、是否只挂在收尾正文上。
+ */
+describe('成长尾注的接线', () => {
+  it('只有伙伴对话把 botId 传进消息流,普通任务连判定都不跑', () => {
+    expect(sessionView).toContain('botGrowthBotId={botChatIdentity?.id}');
+    // 普通任务拿模块级空表,不遍历消息,也不产生新对象引用。
+    expect(messageStream).toContain('if (!botGrowthBotId) {');
+    expect(messageStream).toContain('return EMPTY_BOT_GROWTH_NOTES;');
+    expect(messageStream).toContain('const EMPTY_BOT_GROWTH_NOTES');
+  });
+
+  it('尾注挂在 assistant 收尾正文上,判定复用 action bar 那套 turn 口径', () => {
+    expect(messageStream).toContain(
+      'collectBotGrowthNotes(visibleMessages, turnFinalAssistantClientIds)',
+    );
+    expect(messageStream).toContain('<BotGrowthNote botId={growthBotId} note={growthNote} />');
+  });
+
+  it('两个条件都成立才渲染:是伙伴对话,且这轮真的写了记忆', () => {
+    expect(messageStream).toContain('{growthBotId && growthNote ? (');
+  });
+
+  it('工作组里的中间过程文字不挂尾注(与头像同一条口径)', () => {
+    // MessageItem 有两个调用点,只有对话流那处传 growth 相关 prop。
+    expect(messageStream.match(/growthNote=\{/g)?.length).toBe(1);
+    expect(messageStream.match(/growthBotId=\{/g)?.length).toBe(1);
+  });
+});

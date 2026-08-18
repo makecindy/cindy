@@ -6582,6 +6582,15 @@
       "title": "学んだこと",
       "empty": "これまでの作業から少しずつ得意なことを増やしていきます。"
     },
+    "growth": {
+      "rememberedOne": "覚えました：{{title}}",
+      "rememberedMany": "{{count}} 件覚えました",
+      "rememberedFallback": "ひとつ覚えました",
+      "learnedOne": "できることが増えました：{{title}}",
+      "learnedMany": "できることが {{count}} 個増えました",
+      "learnedFallback": "できることが増えました",
+      "hint": "何をメモしたか見る"
+    },
     "abilityWall": {
       "builtinTitle": "標準搭載",
       "connectableTitle": "接続できるもの",

@@ -219,6 +219,12 @@ export function buildBotProfileContextPrompt(displayName: string): string {
  * MCP remains the source of truth: this section describes capability classes
  * and tells the Bot to discover the live surface instead of freezing tool
  * names into a prompt that can drift from the registered server.
+ *
+ * 批次 ε 只加了一句 `learned-` slug 约定。它必须待在 prompt 层:哪一条经验值得
+ * 留成可复用的做法,是语言理解问题,代码判不了(见 maker-core-and-agent-behavior.md
+ * §2 的分界)。代码这边只负责确定性的那一半 —— 前缀检出与两个列表的切分,见
+ * Renderer 的 `botGrowth.partitionBotMemoryRecords`。文本是常量,不含会话变量,
+ * 因此 prompt 前缀保持稳定,不影响缓存率。
  */
 export function buildBotCapabilityContextPrompt(): string {
   return [
@@ -227,6 +233,7 @@ export function buildBotCapabilityContextPrompt(): string {
     'Before claiming that Cindy cannot do something, inspect the current tool surface. Use `list_tools` to discover the relevant capability category and only report a capability as unavailable after checking the live result.',
     'Cindy Bot collaboration can discover other available Bots, hand off a bounded objective to one of them, receive the result back in this task, inspect ongoing or completed handoffs, and cancel a handoff that is still active.',
     'A Bot handoff is task delegation with a result return path. It does not rewrite another Bot\'s identity or make that Bot obey. If the user asks for obedience or control, explain this boundary and immediately offer the available delegation path instead of redirecting them to a separate team workflow.',
+    'When you finish something and a reusable way of working came out of it — a habit worth keeping, not a fact about the user — record it in your own memory with a `learned-` name prefix (for example `learned-weekly-report-shape`). Everything else you remember keeps its ordinary name. Both stay in your memory; the prefix only tells the two apart when they are shown to the user.',
   ].join('\n');
 }
 

@@ -6582,6 +6582,15 @@
       "title": "배운 것",
       "empty": "해온 일들에서 조금씩 실력을 쌓아갈 거예요."
     },
+    "growth": {
+      "rememberedOne": "기억했어요: {{title}}",
+      "rememberedMany": "{{count}}가지를 기억했어요",
+      "rememberedFallback": "한 가지를 기억했어요",
+      "learnedOne": "새로운 요령을 익혔어요: {{title}}",
+      "learnedMany": "새로운 요령 {{count}}가지를 익혔어요",
+      "learnedFallback": "새로운 요령을 익혔어요",
+      "hint": "무엇을 적어 두었는지 보기"
+    },
     "abilityWall": {
       "builtinTitle": "기본 탑재",
       "connectableTitle": "연결할 수 있는 것",

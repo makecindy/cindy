@@ -61,6 +61,27 @@ export function resolveBotSettingsAnchor(value: string | null | undefined): BotS
   return LEGACY_TAB_TO_ANCHOR[value] ?? null;
 }
 
+/**
+ * 批次 ε:消息气泡尾注点进设置时,除了滚到「TA 是谁」,还要告诉页面**高亮哪一个
+ * 列表** —— 「TA 记得的」还是「TA 学会的」。走 query 参数(而不是路由 state)是为了
+ * 深链、刷新、复制链接都一致,并且与既有的 `?settings=1&anchor=` 同一套机制。
+ */
+export type BotSettingsHighlightId = 'memory' | 'learned';
+
+export function resolveBotSettingsHighlight(
+  value: string | null | undefined,
+): BotSettingsHighlightId | null {
+  return value === 'memory' || value === 'learned' ? value : null;
+}
+
+/** 尾注的跳转目标:滚到「TA 是谁」并高亮对应列表。 */
+export function buildBotGrowthSettingsPath(
+  botId: string,
+  highlight: BotSettingsHighlightId,
+): string {
+  return `/bots/${encodeURIComponent(botId)}?settings=1&anchor=who&highlight=${highlight}`;
+}
+
 export interface BotSettingsAnchorMeta {
   id: BotSettingsAnchorId;
   labelKey: string;

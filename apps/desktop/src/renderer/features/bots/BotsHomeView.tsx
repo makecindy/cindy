@@ -61,12 +61,20 @@ import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotEventInboxSettings } from './BotEventInboxSettings';
 import { BotAbilityWall } from './BotAbilityWall';
 import { BotFolderCards } from './BotFolderCards';
-import { BotMemoryList } from './BotMemoryList';
+import { BotGrowthLists } from './BotGrowthLists';
 import { BotPersonaWizard, personaSummaryText } from './BotPersonaWizard';
 import { extractPersonaFromIdentitySource } from './botPersona';
-import { resolveBotSettingsAnchor, type BotSettingsAnchorId } from './botSettingsNav';
+import {
+  resolveBotSettingsAnchor,
+  resolveBotSettingsHighlight,
+  type BotSettingsAnchorId,
+  type BotSettingsHighlightId,
+} from './botSettingsNav';
 import type { BotSettingsPayload } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
+
+/** 成长尾注跳转后的高亮停留时长。 */
+const BOT_SETTINGS_HIGHLIGHT_MS = 2400;
 
 function channelLabel(channel: BotChannel): string {
   return channel === 'local' ? 'Local Bot' : channel[0].toUpperCase() + channel.slice(1);
@@ -96,6 +104,19 @@ export function BotSettings({
     () => resolveBotSettingsAnchor(settingsSearchParams.get('tab') ?? settingsSearchParams.get('anchor')),
     [settingsSearchParams],
   );
+  // 批次 ε:从消息气泡的成长尾注跳进来时,除了滚到「TA 是谁」还要指出**是哪一条**
+  // 列表刚长了东西。高亮是一次性的落点提示,几秒后自己退掉——常驻描边会变成噪音。
+  const requestedHighlight = useMemo(
+    () => resolveBotSettingsHighlight(settingsSearchParams.get('highlight')),
+    [settingsSearchParams],
+  );
+  const [highlight, setHighlight] = useState<BotSettingsHighlightId | null>(requestedHighlight);
+  useEffect(() => {
+    setHighlight(requestedHighlight);
+    if (!requestedHighlight) return;
+    const timer = window.setTimeout(() => setHighlight(null), BOT_SETTINGS_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [requestedHighlight]);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const anchorRefs = useRef<Record<BotSettingsAnchorId, HTMLElement | null>>({
     who: null,
@@ -567,11 +588,12 @@ export function BotSettings({
               </button>
             </div>
 
-            {/* "TA 记得的" — memory=false 的历史伙伴留一条自己开回来的路,恒开后
-                走真实的 bot-memory 只读枚举 + 单删 + 清空。 */}
+            {/* "TA 记得的" + "TA 学会的" — memory=false 的历史伙伴留一条自己开回来的
+                路,恒开后走真实的 bot-memory 只读枚举 + 单删 + 清空。记忆关掉时两个
+                列表一起消失:没有记忆分域,伙伴也长不出本事。 */}
             <div className="mt-5 border-t border-[var(--border-default)] pt-4">
               {capabilities.memory ? (
-                <BotMemoryList botId={bot.id} />
+                <BotGrowthLists botId={bot.id} highlight={highlight} />
               ) : (
                 <div className="flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-3">
                   <span className="min-w-0">
@@ -591,16 +613,6 @@ export function BotSettings({
                   </button>
                 </div>
               )}
-            </div>
-
-            {/* "TA 学会的" — 批次 ε 之前没有真实数据源,如实给占位而不是编造。 */}
-            <div className="mt-5 border-t border-[var(--border-default)] pt-4">
-              <p className="text-12 font-medium text-[var(--text-primary)]">
-                {t('bots.learned.title')}
-              </p>
-              <p className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
-                {t('bots.learned.empty')}
-              </p>
             </div>
           </section>
 

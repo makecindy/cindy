@@ -189,6 +189,8 @@ const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
 /** shell-first mount 的首帧空窗口。模块级常量保证引用稳定,不触发下游 memo 重算。 */
 const EMPTY_RENDER_ITEMS: RenderItem[] = [];
+/** 普通任务永远拿这一张空表,引用稳定 —— 成长尾注的 memo 不会因它重算。 */
+const EMPTY_BOT_GROWTH_NOTES: ReadonlyMap<string, BotGrowthNoteData> = new Map();
 
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
@@ -215,6 +217,11 @@ function hasNestedScrollableAncestorThatCanScrollUp(
 }
 
 import { BotGuestMessage } from '@/features/bots/BotGuestMessage';
+import { BotGrowthNote } from '@/features/bots/BotGrowthNote';
+import {
+  collectBotGrowthNotes,
+  type BotGrowthNote as BotGrowthNoteData,
+} from '@/features/bots/botGrowth';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
@@ -332,6 +339,11 @@ interface MessageStreamProps {
    * 并带上「在仓库中查看」。普通任务保持 undefined,渲染路径不变。
    */
   botArtifactSessionId?: string | undefined;
+  /**
+   * 非空 = 这是一场跟伙伴的对话（值 = 该伙伴 id）。批次 ε 的成长尾注只在伙伴对话里
+   * 出现:普通任务的消息流一行不变,连判定都不跑。
+   */
+  botGrowthBotId?: string | undefined;
   messages: ChatMessage[];
   historyLoaded: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
@@ -2801,6 +2813,7 @@ export function MessageStream({
   workingDir,
   assistantAvatar,
   botArtifactSessionId,
+  botGrowthBotId,
   messages,
   historyLoaded,
   taskUpdates,
@@ -3058,6 +3071,31 @@ export function MessageStream({
     () => collectTurnFinalAssistantClientIds(visibleMessages),
     [visibleMessages],
   );
+  // 成长尾注:哪句收尾正文的末尾该挂「✦ 记住了：…」。判定完全在 Renderer 侧
+  // (记忆写入就是一次 tool_use,见 botGrowth.ts),不新增事件也不改引擎。
+  // 普通任务 botGrowthBotId 为空 —— 直接空表,不遍历消息。
+  //
+  // `growthNote` 是 memo 过的 MessageItem 的 prop,所以这里必须做值稳定:流式期间
+  // messages 每个 token 都换数组,若每次都产出新对象,历史气泡会跟着整流重渲染。
+  // 内容没变就复用上一轮的对象引用,把重渲染重新收敛回"只有正在流的那条"。
+  const previousBotGrowthNotesRef =
+    useRef<ReadonlyMap<string, BotGrowthNoteData>>(EMPTY_BOT_GROWTH_NOTES);
+  const botGrowthNotes = useMemo(() => {
+    if (!botGrowthBotId) {
+      previousBotGrowthNotesRef.current = EMPTY_BOT_GROWTH_NOTES;
+      return EMPTY_BOT_GROWTH_NOTES;
+    }
+    const next = collectBotGrowthNotes(visibleMessages, turnFinalAssistantClientIds);
+    const previous = previousBotGrowthNotesRef.current;
+    for (const [clientId, note] of next) {
+      const old = previous.get(clientId);
+      if (old && old.count === note.count && old.title === note.title && old.target === note.target) {
+        next.set(clientId, old);
+      }
+    }
+    previousBotGrowthNotesRef.current = next;
+    return next;
+  }, [botGrowthBotId, visibleMessages, turnFinalAssistantClientIds]);
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
   const subagentModelByToolUseId = useMemo(() => buildSubagentModelMap(messages), [messages]);
@@ -5636,6 +5674,8 @@ export function MessageStream({
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
                           assistantAvatar={assistantAvatar}
+                          growthBotId={botGrowthBotId}
+                          growthNote={botGrowthNotes.get(msg.clientId)}
                         />
                       </div>
                     );
@@ -5748,6 +5788,8 @@ const MessageItem = memo(function MessageItem({
   isLastMessage,
   localFileRefs,
   assistantAvatar,
+  growthBotId,
+  growthNote,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -5797,6 +5839,10 @@ const MessageItem = memo(function MessageItem({
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
   assistantAvatar?: ReactNode;
+  /** Bot 对话:成长尾注点击后要跳去谁的设置页。普通任务不传。 */
+  growthBotId?: string | undefined;
+  /** 这句收尾正文的末尾要挂的成长尾注;没写记忆的轮次为 undefined。 */
+  growthNote?: BotGrowthNoteData | undefined;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -5874,33 +5920,39 @@ const MessageItem = memo(function MessageItem({
       }
       return withAssistantAvatar(
         assistantAvatar,
-        <AssistantMessage
-          workingDir={workingDir}
-          localFileRefs={localFileRefs}
-          currentSessionId={sessionId}
-          currentSessionTitle={sessionTitle}
-          content={message.content}
-          isStreaming={message.isStreaming}
-          createdAt={message.createdAt}
-          messageClientId={message.clientId}
-          agentKind={agentKind}
-          remoteHostId={remoteHostId}
-          forkBlocked={assistantForkBlocked}
-          sessionRunning={sessionRunning}
-          // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
-          // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
-          showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
-          turnMoney={message.turnMoney}
-          turnCostUsd={message.turnCostUsd}
-          turnCostIsEstimate={message.turnCostIsEstimate}
-          userTurnMoney={message.userTurnMoney}
-          userTurnCostUsd={message.userTurnCostUsd}
-          userTurnCostIsEstimate={message.userTurnCostIsEstimate}
-          turnUsageDetails={message.turnUsageDetails}
-          userTurnUsageDetails={userTurnUsageDetails}
-          modelMismatch={message.modelMismatch}
-          ghostReplyPending={message.ghostReplyPending}
-        />,
+        <>
+          <AssistantMessage
+            workingDir={workingDir}
+            localFileRefs={localFileRefs}
+            currentSessionId={sessionId}
+            currentSessionTitle={sessionTitle}
+            content={message.content}
+            isStreaming={message.isStreaming}
+            createdAt={message.createdAt}
+            messageClientId={message.clientId}
+            agentKind={agentKind}
+            remoteHostId={remoteHostId}
+            forkBlocked={assistantForkBlocked}
+            sessionRunning={sessionRunning}
+            // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
+            // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
+            showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
+            turnMoney={message.turnMoney}
+            turnCostUsd={message.turnCostUsd}
+            turnCostIsEstimate={message.turnCostIsEstimate}
+            userTurnMoney={message.userTurnMoney}
+            userTurnCostUsd={message.userTurnCostUsd}
+            userTurnCostIsEstimate={message.userTurnCostIsEstimate}
+            turnUsageDetails={message.turnUsageDetails}
+            userTurnUsageDetails={userTurnUsageDetails}
+            modelMismatch={message.modelMismatch}
+            ghostReplyPending={message.ghostReplyPending}
+          />
+          {/* 成长尾注:只在伙伴对话、且这轮真的写了记忆时出现(见 botGrowth.ts)。 */}
+          {growthBotId && growthNote ? (
+            <BotGrowthNote botId={growthBotId} note={growthNote} />
+          ) : null}
+        </>,
       );
     case 'tool_use':
       return (

@@ -4007,6 +4007,8 @@ export function CCAgentSessionView({
       assistantAvatar={botAssistantAvatar}
       // 伙伴对话:本轮产出文件升级成交付物卡 + 「在仓库中查看」。
       botArtifactSessionId={botChatIdentity && sessionId ? sessionId : undefined}
+      // 伙伴对话:写了记忆的那一轮,收尾正文末尾挂一条极淡的成长尾注。
+      botGrowthBotId={botChatIdentity?.id}
       messages={messages}
       historyLoaded={historyLoaded}
       taskUpdates={taskUpdates}

@@ -61,6 +61,19 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).not.toContain('list_bot_delegations');
   });
 
+  /**
+   * 批次 ε:设置页的「TA 学会的」按 `learned-` slug 前缀切片。前缀只有在这条约定
+   * 还在 prompt 里时才会被写出来 —— 删掉它,那个列表就永远是空的。
+   */
+  it('teaches the learned- naming convention that feeds "TA 学会的"', () => {
+    const prompt = buildBotCapabilityContextPrompt();
+    expect(prompt).toContain('`learned-` name prefix');
+    // 判断"什么值得记成可复用做法"留给模型;代码只做确定性的前缀检出。
+    expect(prompt).toContain('a reusable way of working');
+    // 不许暗示这是另一个存储:它就是同一份记忆,只是名字不同。
+    expect(prompt).toContain('Both stay in your memory');
+  });
+
   it('keeps the same affirmative delegation guidance beside the default and every preset SOUL', () => {
     const identities = [
       { name: 'Default Bot', identitySource: buildDefaultBotIdentity('Default Bot') },

@@ -6582,6 +6582,15 @@
       "title": "TA 学会的",
       "empty": "TA 会从做过的事里自己长本事"
     },
+    "growth": {
+      "rememberedOne": "记住了：{{title}}",
+      "rememberedMany": "记住了 {{count}} 件事",
+      "rememberedFallback": "记住了一件事",
+      "learnedOne": "学会了一个新本事：{{title}}",
+      "learnedMany": "学会了 {{count}} 个新本事",
+      "learnedFallback": "学会了一个新本事",
+      "hint": "点开看 TA 记下了什么"
+    },
     "abilityWall": {
       "builtinTitle": "自带",
       "connectableTitle": "可以连上",

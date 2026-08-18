@@ -6584,6 +6584,15 @@
       "title": "What they've learned",
       "empty": "They'll build up know-how from the things they do."
     },
+    "growth": {
+      "rememberedOne": "Remembered: {{title}}",
+      "rememberedMany": "Remembered {{count}} things",
+      "rememberedFallback": "Remembered something",
+      "learnedOne": "Picked up a new knack: {{title}}",
+      "learnedMany": "Picked up {{count}} new knacks",
+      "learnedFallback": "Picked up a new knack",
+      "hint": "See what they wrote down"
+    },
     "abilityWall": {
       "builtinTitle": "Built in",
       "connectableTitle": "Can connect to",

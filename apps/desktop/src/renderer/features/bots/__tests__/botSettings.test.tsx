@@ -99,7 +99,7 @@ vi.mock('../botStore', () => ({
   archiveBotProjectBinding: mocks.archiveBotProjectBinding,
 }));
 
-// Real BotMemoryList calls useConfirmDialog() unconditionally, and it is now
+// The real growth lists call useConfirmDialog() unconditionally, and they are now
 // reachable by default (capabilities.memory defaults to true) — same pattern
 // botAutomationSettings.test.tsx already uses for RunHistory's retry flow.
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -491,10 +491,98 @@ describe('TA 记得的 — memory list', () => {
     });
   });
 
-  it('shows an honest "TA 学会的" placeholder instead of fabricated learned-skill data', () => {
+  it('keeps an honest "TA 学会的" empty state when nothing carries the learned- convention', async () => {
+    emptyMemoryApi.list.mockResolvedValue([]);
     renderSettings();
     expect(screen.getByText('bots.learned.title')).toBeTruthy();
+    expect(await screen.findByText('bots.learned.empty')).toBeTruthy();
+  });
+});
+
+/**
+ * 批次 ε:「TA 学会的」不再是占位——它和「TA 记得的」是同一份伙伴记忆分域的两个
+ * 切片,按 `learned-` slug 前缀切开(见 botGrowth.partitionBotMemoryRecords)。
+ */
+describe('TA 学会的 — learned list', () => {
+  const record = (slug: string, title: string, type = 'user') => ({
+    filename: `${type}_${slug}.md`,
+    slug,
+    frontmatter: {
+      title,
+      description: 'from a real task',
+      type,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+    body: '',
+    sizeBytes: 12,
+  });
+
+  it('splits one memory fetch into 记得的 / 学会的 instead of showing a memory twice', async () => {
+    emptyMemoryApi.list.mockResolvedValue([
+      record('reply-style', 'Likes short replies'),
+      record('learned-shrink-email', 'Shrinks long mail to three lines', 'reference'),
+    ] as never);
+    renderSettings();
+
+    const learned = await screen.findByTestId('bot-learned-list');
+    expect(within(learned).getByText('Shrinks long mail to three lines')).toBeTruthy();
+    expect(within(learned).queryByText('Likes short replies')).toBeNull();
+
+    const memory = screen.getByTestId('bot-memory-list');
+    expect(within(memory).getByText('Likes short replies')).toBeTruthy();
+    expect(within(memory).queryByText('Shrinks long mail to three lines')).toBeNull();
+    // 一次 IPC 供两个列表,删除后两边同步刷新。
+    expect(emptyMemoryApi.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the digest shard from both lists — it is a system compaction artifact', async () => {
+    emptyMemoryApi.list.mockResolvedValue([
+      record('auto-1', 'Internal digest', 'digest'),
+      record('learned-auto', 'Internal learned digest', 'digest'),
+    ] as never);
+    renderSettings();
+
+    expect(await screen.findByText('bots.memoryList.empty')).toBeTruthy();
     expect(screen.getByText('bots.learned.empty')).toBeTruthy();
+    expect(screen.queryByText('Internal digest')).toBeNull();
+    expect(screen.queryByText('Internal learned digest')).toBeNull();
+  });
+
+  it('highlights the list the growth footnote pointed at, then lets the highlight fade', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      emptyMemoryApi.list.mockResolvedValue([]);
+      renderSettings({}, 'settings=1&anchor=who&highlight=learned');
+
+      await waitFor(() =>
+        expect(screen.getByTestId('bot-learned-list').className).toContain('ring-2'),
+      );
+      expect(screen.getByTestId('bot-memory-list').className).not.toContain('ring-2');
+
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      await waitFor(() =>
+        expect(screen.getByTestId('bot-learned-list').className).not.toContain('ring-2'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('highlights 记得的 when the footnote was about a plain memory', async () => {
+    emptyMemoryApi.list.mockResolvedValue([]);
+    renderSettings({}, 'settings=1&anchor=who&highlight=memory');
+    await waitFor(() => expect(screen.getByTestId('bot-memory-list').className).toContain('ring-2'));
+    expect(screen.getByTestId('bot-learned-list').className).not.toContain('ring-2');
+  });
+
+  it('does not highlight anything on an ordinary settings visit', async () => {
+    emptyMemoryApi.list.mockResolvedValue([]);
+    renderSettings();
+    await screen.findByText('bots.memoryList.empty');
+    expect(screen.getByTestId('bot-memory-list').className).not.toContain('ring-2');
+    expect(screen.getByTestId('bot-learned-list').className).not.toContain('ring-2');
   });
 });
 
