@@ -19,6 +19,8 @@ export interface PiSkillInvocationValidationDeps {
   deadlineMs?: number;
 }
 
+type PiSkillScanError = { path?: string; message: string };
+
 const defaultValidationDeps: PiSkillInvocationValidationDeps = {
   realpath: (candidate) => fsp.realpath(candidate),
 };
@@ -27,6 +29,42 @@ const PI_SKILL_INVOCATION_VALIDATION_TIMEOUT = 'PI_SKILL_INVOCATION_VALIDATION_T
 const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
   'cindy.pi.runtime-user-skill-canonical-source',
 );
+
+function localPathContains(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+/**
+ * Scanner-wide errors have no path and invalidate every receipt. Path-scoped
+ * errors only invalidate the selected Skill when the two local paths overlap;
+ * a changed sibling Skill must not block an otherwise current runtime proof.
+ */
+export function piSkillScanErrorsBlockInvocation(
+  errors: readonly PiSkillScanError[] | undefined,
+  sourcePath: unknown,
+): boolean {
+  if (!errors?.length) return false;
+  if (
+    typeof sourcePath !== 'string'
+    || !path.isAbsolute(sourcePath)
+    || sourcePath.includes('\0')
+  ) return true;
+  const selected = path.resolve(sourcePath);
+  return errors.some((error) => {
+    if (
+      typeof error.path !== 'string'
+      || !path.isAbsolute(error.path)
+      || error.path.includes('\0')
+    ) return true;
+    const failed = path.resolve(error.path);
+    return localPathContains(failed, selected) || localPathContains(selected, failed);
+  });
+}
 
 async function awaitValidationStep<T>(
   operation: () => Promise<T>,

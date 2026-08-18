@@ -13,6 +13,7 @@ import {
   assertCurrentPiSkillInvocationSession,
   isCurrentPiSkillInvocation,
   isStalePiSkillInvocationError,
+  piSkillScanErrorsBlockInvocation,
 } from '../piSkillInvocationValidation.js';
 
 const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-skill-validation-'));
@@ -464,6 +465,7 @@ describe('Pi Skill invocation validation', () => {
     const end = registerSource.indexOf('\n  const inputCoordinator:', start);
     const validation = registerSource.slice(start, end);
     const proof = validation.indexOf('const invocationIsCurrent = await isCurrentPiSkillInvocation(');
+    const scopedErrorCheck = validation.indexOf('piSkillScanErrorsBlockInvocation(');
     const sessionRecheck = validation.indexOf('maker.getSession(sessionId) === session', proof);
     const manifestRecheck = validation.indexOf(
       'session.getRuntimeCapabilities() === manifest',
@@ -472,8 +474,33 @@ describe('Pi Skill invocation validation', () => {
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
+    expect(scopedErrorCheck).toBeGreaterThanOrEqual(0);
+    expect(validation).not.toContain('if (currentSkills.errors?.length) return false;');
     expect(proof).toBeGreaterThanOrEqual(0);
     expect(sessionRecheck).toBeGreaterThan(proof);
     expect(manifestRecheck).toBeGreaterThan(proof);
+  });
+
+  it('does not let a changed sibling Skill block the selected runtime proof', () => {
+    const selected = path.resolve('/repo/.pi/skills/stable');
+    const sibling = path.resolve('/repo/.pi/skills/changed');
+
+    expect(piSkillScanErrorsBlockInvocation([
+      { path: sibling, message: 'Project skill changed after this Pi session started' },
+    ], selected)).toBe(false);
+    expect(piSkillScanErrorsBlockInvocation([
+      { path: selected, message: 'Project skill changed after this Pi session started' },
+    ], selected)).toBe(true);
+  });
+
+  it('keeps scanner-wide and selected source-root failures fail closed', () => {
+    const selected = path.resolve('/repo/.pi/skills/stable');
+
+    expect(piSkillScanErrorsBlockInvocation([
+      { message: 'Pi customization scan deadline expired' },
+    ], selected)).toBe(true);
+    expect(piSkillScanErrorsBlockInvocation([
+      { path: path.dirname(selected), message: 'Unable to scan project Skills' },
+    ], selected)).toBe(true);
   });
 });
