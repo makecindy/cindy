@@ -3888,6 +3888,7 @@ export function CCAgentSessionView({
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
+      ownsHardwareScrollActions={ownsHardwareTaskActions}
     />
   );
 

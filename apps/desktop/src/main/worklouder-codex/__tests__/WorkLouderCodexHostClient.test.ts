@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { WORKLOUDER_CODEX_EMPTY_DEVICE_STATE } from '../../../shared/workLouderCodex.js';
@@ -354,5 +356,15 @@ describe('WorkLouderCodexHostClient', () => {
     expect(children[0].kill).toHaveBeenCalledOnce();
     expect(fork).toHaveBeenCalledTimes(2);
     expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+});
+
+describe('Work Louder SDK resolution', () => {
+  it('looks for ChatGPT and Codex installs on Windows as well as macOS', () => {
+    const source = readFileSync(resolve(__dirname, '..', 'index.ts'), 'utf8');
+    expect(source).toContain("process.platform === 'win32'");
+    expect(source).toContain('LOCALAPPDATA');
+    expect(source).toContain("path.join(root, 'Programs', appName, packageTail)");
+    expect(source).not.toContain("if (process.platform !== 'darwin') return null;");
   });
 });

@@ -276,6 +276,10 @@ export function MainLayout() {
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
+  const isRightSidebarCollapsedRef = useRef(isRightSidebarCollapsed);
+  isRightSidebarCollapsedRef.current = isRightSidebarCollapsed;
+  const rsbDetachedRef = useRef(rsbDetached);
+  rsbDetachedRef.current = rsbDetached;
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
@@ -1219,6 +1223,17 @@ export function MainLayout() {
           void ensureHydrated(sessionId)
             .then(async () => {
               if (rightSidebarSessionIdRef.current !== sessionId) return;
+              const bucket = getBucket(sessionId);
+              const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');
+              const reviewIsActive =
+                !rsbDetachedRef.current &&
+                !isRightSidebarCollapsedRef.current &&
+                reviewTab != null &&
+                bucket.activeTabId === reviewTab.id;
+              if (reviewIsActive && reviewTab) {
+                await closeTab(sessionId, reviewTab.id);
+                return;
+              }
               requestRightSidebarVisibility('open', { sessionId });
               await addOrFocusSingletonTab(sessionId, 'review', null);
             })

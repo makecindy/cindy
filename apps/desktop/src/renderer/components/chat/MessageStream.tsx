@@ -362,6 +362,11 @@ interface MessageStreamProps {
    * behavior of treating every new tail user message as a local send.
    */
   isLocalUserSend?: (clientId: string) => boolean;
+  /**
+   * Whether this stream should consume hardware scroll commands.
+   * Split panes keep every MessageStream mounted; only the focused owner may act.
+   */
+  ownsHardwareScrollActions?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2794,6 +2799,7 @@ export function MessageStream({
   forkOrigin,
   onOpenForkOrigin,
   isLocalUserSend,
+  ownsHardwareScrollActions = true,
 }: MessageStreamProps) {
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
@@ -4326,11 +4332,13 @@ export function MessageStream({
   useEffect(() => stopJoystickScroll, [stopJoystickScroll]);
 
   useEffect(() => {
+    if (!ownsHardwareScrollActions) stopJoystickScroll();
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type === 'scroll-stop') {
         stopJoystickScroll();
-        return true;
+        return ownsHardwareScrollActions;
       }
+      if (!ownsHardwareScrollActions) return false;
       if (action.type === 'scroll') {
         joystickScrollRef.current = { direction: action.direction, intensity: action.intensity };
         if (joystickScrollFrameRef.current !== null) return true;
@@ -4377,7 +4385,12 @@ export function MessageStream({
       });
       return true;
     });
-  }, [scrollToBottomSmooth, stopJoystickScroll, unpinAutoFollowForUserUpIntent]);
+  }, [
+    ownsHardwareScrollActions,
+    scrollToBottomSmooth,
+    stopJoystickScroll,
+    unpinAutoFollowForUserUpIntent,
+  ]);
 
   // F2: messages diff → 按角色累计 unreadCount
   //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、

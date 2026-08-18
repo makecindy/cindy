@@ -60,23 +60,39 @@ function resolveWorkLouderSdk(): WorkLouderSdkLocation | null {
     // The official SDK is optional until Work Louder grants Cindy registry access.
   }
 
-  if (process.platform !== 'darwin') return null;
-  for (const appName of ['ChatGPT.app', 'Codex.app']) {
-    const packageDir = path.join(
-      '/Applications',
-      appName,
-      'Contents',
-      'Resources',
-      'app.asar',
-      'node_modules',
-      '@worklouder',
-      'device-kit-oai',
-    );
+  for (const packageDir of listBundledWorkLouderSdkDirs()) {
     if (fs.existsSync(path.join(packageDir, 'package.json'))) {
       return { entry: packageDir, source: 'openai-app' };
     }
   }
   return null;
+}
+
+function listBundledWorkLouderSdkDirs(): string[] {
+  const packageTail = path.join(
+    'resources',
+    'app.asar',
+    'node_modules',
+    '@worklouder',
+    'device-kit-oai',
+  );
+  if (process.platform === 'darwin') {
+    return ['ChatGPT.app', 'Codex.app'].map((appName) =>
+      path.join('/Applications', appName, 'Contents', packageTail),
+    );
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA;
+    const programFiles = process.env.ProgramFiles;
+    const roots = [localAppData, programFiles].filter((root): root is string => Boolean(root));
+    return roots.flatMap((root) =>
+      ['ChatGPT', 'Codex'].flatMap((appName) => [
+        path.join(root, appName, packageTail),
+        path.join(root, 'Programs', appName, packageTail),
+      ]),
+    );
+  }
+  return [];
 }
 
 function forkWorkLouderHost(_sdkEntry: string): ReturnType<typeof utilityProcess.fork> {

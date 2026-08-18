@@ -12,6 +12,16 @@ const sessionViewSource = readFileSync(
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
+const messageStreamSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'chat', 'MessageStream.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
+const mainLayoutSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'layout', 'MainLayout.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 const newMakerDraftRouteSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'),
   'utf8',
@@ -70,6 +80,14 @@ describe('ChatInput session switch focus contract', () => {
     expect(sessionViewSource).toContain(
       'ownsHardwareComposerActions={ownsHardwareTaskActions}',
     );
+    expect(sessionViewSource).toContain(
+      'ownsHardwareScrollActions={ownsHardwareTaskActions}',
+    );
+    expect(messageStreamSource).toContain('ownsHardwareScrollActions?: boolean;');
+    expect(messageStreamSource).toContain('if (!ownsHardwareScrollActions) return false;');
+    expect(mainLayoutSource).toContain("const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');");
+    expect(mainLayoutSource).toContain('if (reviewIsActive && reviewTab) {');
+    expect(mainLayoutSource).toContain('await closeTab(sessionId, reviewTab.id);');
     expect(newMakerDraftRouteSource).toContain('focusOnStorageKeyChange');
   });
 

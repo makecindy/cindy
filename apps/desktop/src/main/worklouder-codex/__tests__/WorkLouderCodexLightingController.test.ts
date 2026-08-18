@@ -741,5 +741,12 @@ describe('WorkLouderCodexLightingController', () => {
 
     expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'keyboard' }));
+
+    dispatch.mockClear();
+    joystickRef.current?.({ angle: 0.25, distance: 1 });
+    hidRef.current?.({ key: 'ACT06', act: 1 });
+    hidRef.current?.({ key: 'ENC_CW', act: 2 });
+
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

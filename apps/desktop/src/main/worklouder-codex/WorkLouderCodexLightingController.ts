@@ -107,6 +107,7 @@ export class WorkLouderCodexLightingController {
   private scrollActive = false;
   private started = false;
   private layoutPreviewActive = false;
+  private inputActionsEnabled = true;
 
   constructor(
     private readonly sink: WorkLouderCodexLightingSink,
@@ -242,12 +243,14 @@ export class WorkLouderCodexLightingController {
       if (refreshVersion !== this.slotRefreshVersion) return;
       this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
       this.taskSlotsEnabled = true;
+      this.inputActionsEnabled = true;
       this.publishAgentSlots();
       this.updateLightingFrame(true);
       this.scheduleTaskSlotRefresh();
       throw error;
     }
     this.taskSlotsEnabled = true;
+    this.inputActionsEnabled = true;
     this.publishAgentSlots();
     this.updateLightingFrame(true);
     this.emitState();
@@ -261,6 +264,7 @@ export class WorkLouderCodexLightingController {
     this.stopJoystickScroll();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
+    this.inputActionsEnabled = false;
     this.slotRefreshQueued = false;
     this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
     this.agentSlots = emptyAgentSlots();
@@ -282,6 +286,7 @@ export class WorkLouderCodexLightingController {
     this.stopJoystickScroll();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
+    this.inputActionsEnabled = false;
     this.slotRefreshQueued = false;
     this.started = false;
     this.sink.setAgentKeyPressHandler(null);
@@ -305,7 +310,7 @@ export class WorkLouderCodexLightingController {
         event.act,
       );
     }
-    if (this.layoutPreviewActive) return;
+    if (this.layoutPreviewActive || !this.inputActionsEnabled) return;
     const agentMatch = /^AG0([0-5])$/.exec(event.key);
     if (agentMatch) {
       if (event.act === 1) this.handleAgentKeyPress(Number(agentMatch[1]));
@@ -455,7 +460,7 @@ export class WorkLouderCodexLightingController {
     this.handleDeviceActivity();
     const direction = joystickDirection(event);
     this.emitStickPreview(event);
-    if (this.layoutPreviewActive) return;
+    if (this.layoutPreviewActive || !this.inputActionsEnabled) return;
 
     // Scrolling follows the stick continuously — held means keep scrolling, and
     // pushing further means faster — so it cannot go through the one-shot path
