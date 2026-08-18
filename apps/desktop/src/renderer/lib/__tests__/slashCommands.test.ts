@@ -12,6 +12,7 @@ import {
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
+  rewritePiSkillMessageForSend,
   slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -71,6 +72,13 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
       runtimeStatus: 'loaded',
     })).toBe('/other');
     expect(rewriteAgentSkillInvocationForDispatch('/demo', desktop)).toBe('/demo');
+  });
+
+  it('leaves non-Pi first messages untouched without loading a roster', async () => {
+    await expect(rewritePiSkillMessageForSend({
+      agentKind: 'codex',
+      message: '/git please',
+    })).resolves.toBe('/git please');
   });
 });
 

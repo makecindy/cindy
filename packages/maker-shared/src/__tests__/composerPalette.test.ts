@@ -132,6 +132,11 @@ describe('shared composer palette model', () => {
         { runtimeCommandName: 'skill:git' },
       ]),
     ).toBe('/git and /skill:unknown');
+    expect(
+      projectKnownRuntimeSlashCommands('docs/skill:git and x/skill:git text', [
+        { runtimeCommandName: 'skill:git' },
+      ]),
+    ).toBe('docs/skill:git and x/skill:git text');
     const quoted = [
       '> <!-- cindy-composer-quote -->',
       '> quoted',

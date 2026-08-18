@@ -174,9 +174,9 @@ export function projectKnownRuntimeSlashCommands(
       .filter((name): name is string => Boolean(name?.startsWith(PI_SKILL_RUNTIME_PREFIX))),
   );
   if (known.size === 0) return text;
-  return text.replace(/\/skill:\S+/gi, (token) => {
+  return text.replace(/(^|[\s\n])(\/skill:\S+)/gi, (full, prefix: string, token: string) => {
     const name = token.slice(1).toLowerCase();
-    return known.has(name) ? slashCommandDisplayLabel(token) : token;
+    return known.has(name) ? `${prefix}${slashCommandDisplayLabel(token)}` : full;
   });
 }
 

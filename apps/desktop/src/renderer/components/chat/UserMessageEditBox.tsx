@@ -193,11 +193,17 @@ export function UserMessageEditBox({
           ? [...pastedTextRanges]
           : undefined;
       const rebuiltSlashRange = leadingSlashCommandRange(submitText);
+      const submitTokenIsRuntimeAlias = rebuiltSlashRange
+        ? submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end).toLowerCase().startsWith('/skill:')
+        : false;
+      const originalHadConfirmedRange = Boolean(slashCommandRanges && slashCommandRanges.length > 0);
       const preservedSlashCommandRanges = visibleTextUnchanged && slashCommandRanges !== undefined
         ? [...slashCommandRanges]
-        : rebuiltSlashRange
+        : submitTokenIsRuntimeAlias && originalHadConfirmedRange && rebuiltSlashRange
           ? [rebuiltSlashRange]
-          : undefined;
+          : slashCommandRanges !== undefined
+            ? []
+            : undefined;
       if (onCommitOverride) {
         // 被拦消息:普通重发(不 rewind)。失败抛错落入下方 catch 保留编辑态。
         await onCommitOverride({

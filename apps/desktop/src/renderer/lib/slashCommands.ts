@@ -64,6 +64,23 @@ export function rewriteAgentSkillInvocationForDispatch(
   return `/${command.runtimeCommandName}${match[2]}`;
 }
 
+/** First-message / worktree send paths that skip SessionView dispatch. */
+export async function rewritePiSkillMessageForSend(params: {
+  agentKind: AgentKind;
+  message: string;
+  workingDir?: string | null;
+  sessionId?: string;
+}): Promise<string> {
+  if (params.agentKind !== 'pi') return params.message;
+  const token = params.message.match(/^\/(\S+)/)?.[1];
+  if (!token) return params.message;
+  const commands = await loadAllCommands(params.agentKind, params.workingDir, {
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  });
+  const hit = commands.find((command) => command.name.toLowerCase() === token.toLowerCase());
+  return rewriteAgentSkillInvocationForDispatch(params.message, hit);
+}
+
 /**
  * Rebase persisted/render-only inline ranges after the leading slash-command
  * token grows or shrinks during runtime alias rewriting.
