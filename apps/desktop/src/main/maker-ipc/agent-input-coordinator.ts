@@ -1796,6 +1796,7 @@ export class AgentInputCoordinator {
         const originalText = item.text;
         const rewritten = updateQueuedMessageText(item, verdict.text);
         Object.assign(item, rewritten);
+        if (!rewritten.agentSkillInvocation) delete item.agentSkillInvocation;
         if (!rewritten.sessionRefs) delete item.sessionRefs;
         if (!rewritten.trustedSessionReferenceContexts) delete item.trustedSessionReferenceContexts;
         if (!rewritten.sessionReferencesRequireTrustedSnapshot) {
@@ -3301,6 +3302,7 @@ export class AgentInputCoordinator {
           const originalText = head.text;
           const rewritten = updateQueuedMessageText(head, verdict.text);
           Object.assign(head, rewritten);
+          if (!rewritten.agentSkillInvocation) delete head.agentSkillInvocation;
           if (!rewritten.sessionRefs) delete head.sessionRefs;
           if (!rewritten.trustedSessionReferenceContexts)
             delete head.trustedSessionReferenceContexts;

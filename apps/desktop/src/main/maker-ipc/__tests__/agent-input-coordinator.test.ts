@@ -7169,6 +7169,60 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
     expect(h.onUserMessageBlocked).not.toHaveBeenCalled();
   });
 
+  it('rewrite:removes a stale Pi Skill receipt from turn and steer dispatch', async () => {
+    const skillItem = (clientId: string) => makeItem(clientId, '/demo inspect', {
+      agentSkillInvocation: {
+        name: 'demo',
+        runtimeCommandName: 'skill:demo',
+        scope: 'repo',
+        sourcePath: '/repo/.pi/skills/demo',
+      },
+      createOpts: {
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'pi-model',
+      },
+    });
+    const rewrite = async () => ({
+      action: 'rewrite' as const,
+      ghostId: 'g1',
+      ghostName: '哨兵',
+      text: 'ordinary rewritten prompt',
+    });
+
+    const turn = createHarness();
+    const turnValidate = vi.fn(() => false);
+    turn.setValidateAgentSkillInvocation(turnValidate);
+    turn.setScreenUserMessage(rewrite);
+    turn.coordinator.enqueue('rewrite-skill-turn', skillItem('rewrite-skill-turn-item'));
+    await flush();
+
+    expect(turnValidate).not.toHaveBeenCalled();
+    expect(turn.sendToAgent).toHaveBeenCalledWith(
+      'rewrite-skill-turn',
+      { type: 'user', content: 'ordinary rewritten prompt' },
+      expect.anything(),
+      expect.anything(),
+    );
+
+    const steer = createHarness();
+    const steerValidate = vi.fn(() => false);
+    steer.setRunning(true);
+    steer.setValidateAgentSkillInvocation(steerValidate);
+    steer.setScreenUserMessage(rewrite);
+    await expect(
+      steer.coordinator.steer('rewrite-skill-steer', skillItem('rewrite-skill-steer-item')),
+    ).resolves.toBe(true);
+
+    expect(steerValidate).not.toHaveBeenCalled();
+    expect(steer.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(steer.steerToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'ordinary rewritten prompt',
+    });
+    expect(steer.steerToAgent.mock.calls[0]?.[3].agentSkillInvocation).toBeUndefined();
+  });
+
   it('rewrite:persistedContent 是 JSON 信封(带附件/引用)时只换 text 字段,引用不丢', async () => {
     const h = createHarness();
     h.setScreenUserMessage(
