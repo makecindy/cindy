@@ -354,7 +354,7 @@ export function RailNav({
                 // 反相胶囊主题下混用功能钮 chip-bg 会得到白字浮浅灰的断层)。
                 isActive
                   ? 'bg-sidebar-item-active border border-[var(--sidebar-item-active-border)]'
-                  : 'text-[hsl(var(--titlebar-icon))] group-hover/pin:bg-[var(--update-btn-hover)]',
+                  : 'text-[hsl(var(--titlebar-icon))] group-hover/pin:bg-sidebar-item-hover',
               )}
             >
               <SessionStatusIcon
@@ -425,7 +425,7 @@ export function RailNav({
             'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors duration-150',
             panelState.openSection === key
               ? 'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]'
-              : 'text-[hsl(var(--titlebar-icon))] hover:bg-[var(--update-btn-hover)]',
+              : 'text-[hsl(var(--titlebar-icon))] hover:bg-sidebar-item-hover',
           )}
         >
           <span

@@ -699,10 +699,15 @@ describe('automation-generated sessions', () => {
       new URL('../features/cc-agent/sidebar/AutomationSessionGroupItem.tsx', import.meta.url),
       'utf8',
     );
+    const entryListSource = readTextLf(
+      new URL('../features/cc-agent/sidebar/SessionEntryList.tsx', import.meta.url),
+      'utf8',
+    );
 
     expect(source).toContain('setFrozen(null)');
     // 轴 1:箭头切换的是持久化 disclosure(useAutomationGroupCollapsed),不是「显示全部」。
-    expect(source).toContain('useAutomationGroupCollapsed(group.id)');
+    expect(source).toContain('useAutomationGroupCollapsed(');
+    expect(source).toContain('group.legacyId');
     expect(source).toContain('toggleCollapsed()');
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
@@ -732,6 +737,13 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('onSessionClick(latestSession.id)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
+    // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。
+    expect(source).toContain('onMoveSession,');
+    expect(source).toContain('projectOptions,');
+    expect(source).toContain('matchIndices: matchMap?.get(session.id)');
+    expect(entryListSource).toContain('onMoveSession={onMoveSession}');
+    expect(entryListSource).toContain('projectOptions={projectOptions}');
+    expect(entryListSource).toContain('matchMap={matchMap}');
     expect(source).toContain('originActiveSessionId: activeSessionId ?? null');
     expect(source).toContain('hasBeenActive: false');
     expect(source).toContain('hasBeenActive: true');

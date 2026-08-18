@@ -363,7 +363,7 @@ describe('setDetached', () => {
 });
 
 describe('native minimize', () => {
-  it('routes native minimize to the renderer bubble action', () => {
+  it('routes native minimize to the renderer panel-minimize action', () => {
     const h = makeHarness(new Set(['a']));
     h.controller.setDetached('a', true);
     const win = h.created[0].win;

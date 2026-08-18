@@ -543,6 +543,7 @@ describe('mobile remote-control headless UI flow smoke', () => {
       deviceLinkDeviceId: DEVICE_ID,
       deviceLinkDeviceName: 'Studio Mac',
     });
+    let messageAuthority = remoteSessionStore.enterSessionMessageDetail(SESSION_ID);
 
     const syncSession = createRemoteSyncRunner(async () => {
       await openLink(DEVICE_ID);
@@ -552,7 +553,7 @@ describe('mobile remote-control headless UI flow smoke', () => {
         maker.getPendingInteractions(SESSION_ID),
         maker.input.getProjection(SESSION_ID),
       ]);
-      remoteSessionStore.mergeMessages(SESSION_ID, history);
+      remoteSessionStore.mergeMessages(SESSION_ID, history, { authority: messageAuthority });
       remoteSessionStore.setPendingInteractions(SESSION_ID, interactions);
       remoteSessionStore.setInputProjection(SESSION_ID, projection);
     });
@@ -778,6 +779,12 @@ describe('mobile remote-control headless UI flow smoke', () => {
       'CaroldeMacBook-Pro.local',
       await maker.getSession(SESSION_ID),
     );
+    messageAuthority = remoteSessionStore.enterSessionMessageDetail(SESSION_ID);
+    remoteSessionStore.setMessages(
+      SESSION_ID,
+      await maker.listMessages(SESSION_ID, { limit: 80 }),
+      { authority: messageAuthority },
+    );
     expect(remoteSessionStore.getSessions().some((item) => item.id === SESSION_ID)).toBe(true);
 
     const forked = await maker.fork(SESSION_ID, 'm2');
@@ -881,7 +888,11 @@ describe('mobile remote-control headless UI flow smoke', () => {
     expect(isCommitReadyRewindState(rewindPreview)).toBe(true);
     const rewound = await maker.rewindCommit(SESSION_ID, 'm3');
     remoteSessionStore.applySessionPatch(DEVICE_ID, SESSION_ID, rewound);
-    remoteSessionStore.setMessages(SESSION_ID, await maker.listMessages(SESSION_ID, { limit: 80 }));
+    remoteSessionStore.setMessages(
+      SESSION_ID,
+      await maker.listMessages(SESSION_ID, { limit: 80 }),
+      { authority: messageAuthority },
+    );
     expect(normalizeRemoteMessages(remoteSessionStore.getMessages(SESSION_ID)).map((item) => item.body)).toEqual([
       'hello from desktop',
       'ready from desktop',

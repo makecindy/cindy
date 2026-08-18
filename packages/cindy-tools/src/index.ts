@@ -8,6 +8,7 @@ export {
   handleGhostInfo,
   handleGhostList,
   handleGhostManual,
+  handleMedia,
   sanitizeGhostSetupAssessment,
 } from './ghost/mcpServer.js';
 export type {
@@ -31,4 +32,6 @@ export type {
   CindyGhostSetupRequirementState,
   CindyGhostToolInfo,
   CindyGhostsMcpDeps,
+  CindyMediaCapability,
+  CindyMediaToolRequest,
 } from './types.js';

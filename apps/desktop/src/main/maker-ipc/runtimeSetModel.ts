@@ -2,6 +2,7 @@ import type { AgentKind, Effort } from '@cindy/maker-core';
 
 import {
   getSessionProvider,
+  hasSessionProvider,
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
@@ -271,7 +272,13 @@ export async function applyRuntimeSetModelChange(
   }
   try {
     await sess.setModel(model, {
-      providerId: nextProviderId,
+      // model-only 且内存尚未确认来源时不要把 providerId:null 传进 runtime,
+      // 否则未 hydrate 的 custom 会话会被清成默认网关。
+      ...(normalizedProviderId !== undefined
+        || hasSessionProvider(sessionId)
+        || pendingTarget !== undefined
+        ? { providerId: nextProviderId }
+        : {}),
       ...(effort !== undefined ? { effort } : {}),
     });
   } catch (err) {

@@ -224,6 +224,20 @@
   并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
   再次核对根与目标真身；保存文件必须排他创建且不跟随最终 symlink，不能让短命票据留下消费期
   TOCTOU。附件继续使用裁决前已读入的字节，不得在批准后重新跟随原始路径。
+- 媒体模型接入分成两层：插件声明并封装业务能力，Cindy Core 提供低级目录和调用能力。
+  插件设置页／panel 只能通过同源只读 `/media-models?type=image|video` 配置模型；Host 按
+  Gateway `mode` 切图片／视频大类，并结合插件 `cindy.image/video` 声明、Gateway
+  `modalities`、Guide operation 与当前客户端协议支持度，只投影当前可执行模型。单模型
+  Guide 失败必须局部隔离，不能阻断其余模型或插件面板。响应仍只把归一化后的
+  `modalities.input/output` 原样交给插件，不得包含 Guide、endpoint、凭证或内部兼容判定；
+  付费请求前 Core 必须再次校验。新媒体生成请求只能由当前 Agent 调用永久 Core `media`
+  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办仅作
+  兼容，不得作为新 Guide 模型的接入路径。插件工具通过现有 `tool-result` 返回普通 JSON，
+  Agent 读取后自行决定下一次 `media` 调用；Host 不识别插件专用媒体意图字段，也不自动
+  转发。插件需要结果时，Agent 调用普通接收工具，并通过顶层
+  `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
+  `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
+  Host 不自动回调插件，也不得新增画廊等插件业务语义。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
 - `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配

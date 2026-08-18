@@ -21,8 +21,10 @@
 
 import {
   actualSourceIdForModel,
+  isExclusiveXaiModelId,
   runtimeCustomProviderId,
   storedCustomProviderId,
+  XAI_MODEL_PREFIX,
   type AgentKind,
   type Provider,
   type ProviderView,
@@ -452,7 +454,11 @@ function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | 
   if (routing.disabled) return false;
   if (!routing.modelPrefixes?.length) return true;
   if (!wireModel) return true;
-  return routing.modelPrefixes.some((prefix) => wireModel.startsWith(prefix));
+  return routing.modelPrefixes.some(
+    (prefix) =>
+      wireModel.startsWith(prefix)
+      || (prefix === XAI_MODEL_PREFIX && isExclusiveXaiModelId(wireModel)),
+  );
 }
 
 /**

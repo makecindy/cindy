@@ -22,7 +22,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
-import { PiAgent, type AgentDeps, type AuthAdapter, type AuthState } from '@cindy/maker-core';
+import {
+  PiAgent,
+  type AgentDeps,
+  type AuthAdapter,
+  type AuthState,
+  type ModelDescriptor,
+} from '@cindy/maker-core';
 import type {
   AgentRuntimeConfig,
   AuthAdapterOptions,
@@ -67,7 +73,12 @@ import {
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
-import { getActiveCatalog, resolveXdPiGatewayWireProtocol } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  getLocalCatalogOverridesSnapshot,
+  resolveXdPiGatewayWireProtocol,
+} from './active-catalog.js';
+import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
 
 const log = createLogger('pi-host');
 
@@ -445,15 +456,16 @@ function catalogCostForPiNative(cost: {
 
 /**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
- * provider catalog. No model is copied into models.json unless the daily Cindy
- * catalog explicitly carries a piApi correction/addition; the version-matched
- * PI binary remains the baseline authority for model-specific APIs and quirks.
+ * provider catalog. Registry metadata is authoritative for OpenAI subscription
+ * models; the version-matched PI binary remains authoritative for native API and
+ * compat details that Cindy must preserve when materializing the overlay.
  */
 export function buildPiSubscriptionNativeProviders(
   catalog: Catalog,
   endpoint: string,
   bundledModelsByProvider?: PiBundledModelCatalog,
   listedModelIdsByProvider?: PiListedModelIds,
+  retainedOpenAiModel?: ModelDescriptor | null,
 ): PiNativeProvidersResult {
   const providers: PiNativeProviderSpec[] = [];
   const env: Record<string, string> = {
@@ -467,7 +479,32 @@ export function buildPiSubscriptionNativeProviders(
     stripPrefix?: string,
   ): void => {
     const source = catalog.providers.find((provider) => provider.id === sourceProviderId);
-    const models = source?.models.pi ?? [];
+    const models = [...(source?.models.pi ?? [])];
+    if (
+      sourceProviderId === 'openai' &&
+      retainedOpenAiModel?.id.startsWith('chatgpt/') &&
+      !models.some((model) => model.id === retainedOpenAiModel.id)
+    ) {
+      // A retired context profile is intentionally absent from the public Pi catalog, but a
+      // persisted session still needs the exact alias in the ChatGPT native provider. Keeping the
+      // alias here preserves both its canonical identity and its subscription endpoint; it remains
+      // private to this one resume and never re-enters availableModels.
+      models.push({
+        id: retainedOpenAiModel.id,
+        name: retainedOpenAiModel.displayName,
+        contextWindow: retainedOpenAiModel.contextWindow,
+        ...(retainedOpenAiModel.maxOutputTokens !== undefined
+          ? { maxOutput: retainedOpenAiModel.maxOutputTokens }
+          : {}),
+        efforts: [...retainedOpenAiModel.efforts],
+        defaultEffort: retainedOpenAiModel.defaultEffort,
+        ...(retainedOpenAiModel.supportsFastMode !== undefined
+          ? { supportsFastMode: retainedOpenAiModel.supportsFastMode }
+          : {}),
+        status: 'retired',
+        defaultEnabled: false,
+      });
+    }
     if (models.length === 0) return;
     providers.push({
       id: piProviderId,
@@ -484,17 +521,57 @@ export function buildPiSubscriptionNativeProviders(
             : model.id;
         const bundledModels = bundledModelsByProvider?.get(piProviderId);
         const bundledModel = bundledModels?.get(wireId);
+        const contextProfileTemplate =
+          sourceProviderId === 'openai' && wireId.endsWith('[1m]')
+            ? bundledModels?.get(wireId.slice(0, -'[1m]'.length))
+            : undefined;
         // A missing/empty/partial PI probe is not evidence that the daily
         // catalog annotation is wrong. Keep annotated rows in the overlay so
         // inheritModels cannot filter out a confirmed addition or correction.
         const isAnnotatedAddition = !!model.piApi && !bundledModel;
+        const isContextProfileAddition =
+          sourceProviderId === 'openai' && wireId.endsWith('[1m]') && !bundledModel;
         const isProtocolCorrection =
           sourceProviderId !== 'openai' &&
           !!model.piApi &&
           !!bundledModel &&
           bundledModel.api !== model.piApi;
-        const preserved = isProtocolCorrection ? bundledModel : undefined;
+        const isRegistryBaselineOverlay = sourceProviderId === 'openai' && !!bundledModel;
         const catalogCost = catalogCostForPiNative(model.cost);
+        if (isRegistryBaselineOverlay) {
+          const input = model.supportsImageInput === undefined
+            ? [...bundledModel.input]
+            : model.supportsImageInput
+              ? ['text', 'image'] as Array<'text' | 'image'>
+              : ['text'] as Array<'text' | 'image'>;
+          const cost = catalogCost ?? bundledModel.cost;
+          return {
+            id: model.id,
+            wireId,
+            // Materialize Registry metadata for same-id OpenAI models. `api`
+            // makes inheritModels emit the overlay into models.json, while PI's
+            // bundled provider remains authoritative for native transport quirks.
+            api: bundledModel.api,
+            name: model.name,
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxOutput ?? bundledModel.maxTokens,
+            reasoning: model.efforts.length > 0,
+            input,
+            thinkingLevelMap: Object.fromEntries(
+              PI_REASONING_EFFORTS.map((effort) => [
+                effort,
+                model.efforts.includes(effort) ? effort : null,
+              ]),
+            ),
+            ...(cost ? { cost: { ...cost } } : {}),
+            ...(bundledModel.headers ? { headers: { ...bundledModel.headers } } : {}),
+            ...(bundledModel.compat ? { compat: structuredClone(bundledModel.compat) } : {}),
+            ...(bundledModel.samplingParams
+              ? { samplingParams: structuredClone(bundledModel.samplingParams) }
+              : {}),
+          };
+        }
+        const preserved = isProtocolCorrection ? bundledModel : contextProfileTemplate;
         return {
           id: model.id,
           wireId,
@@ -502,7 +579,7 @@ export function buildPiSubscriptionNativeProviders(
           // portable piApi marks a daily catalog addition here. Existing models
           // stay untouched so their full bundled compat/pricing metadata survives;
           // only IDs proven absent from this exact PI binary are added.
-          ...(sourceProviderId === 'openai' && isAnnotatedAddition
+          ...(sourceProviderId === 'openai' && (isAnnotatedAddition || isContextProfileAddition)
             ? { catalogAddition: true }
             : {}),
           // SuperGrok 没有官方列模型通道，Cindy 目录是成员唯一来源。
@@ -522,8 +599,10 @@ export function buildPiSubscriptionNativeProviders(
           (isAnnotatedAddition || isProtocolCorrection)
             ? { api: model.piApi }
             : {}),
-          name: preserved?.name ?? model.name,
-          contextWindow: preserved?.contextWindow ?? model.contextWindow,
+          name: isContextProfileAddition ? model.name : (preserved?.name ?? model.name),
+          contextWindow: isContextProfileAddition
+            ? model.contextWindow
+            : (preserved?.contextWindow ?? model.contextWindow),
           ...(preserved?.maxTokens
             ? { maxTokens: preserved.maxTokens }
             : model.maxOutput
@@ -1212,10 +1291,18 @@ export async function resolvePiNativeProviders(ctx: {
   const bundledModels = piBinaryPath ? await readPiBundledModels(piBinaryPath) : null;
   let subscriptions: PiNativeProvidersResult = { providers: [], env: {} };
   if (!ctx?.remoteHostId && isAnthropicCompatProxyHandleReady()) {
+    const retainedOpenAiModel =
+      ctx.resumeSessionId && ctx.providerId === 'openai'
+        ? resolvePiRuntimeModelDescriptor(getActiveCatalog(), 'openai', ctx.model, {
+            localOverrides: getLocalCatalogOverridesSnapshot(),
+          })
+        : null;
     subscriptions = buildPiSubscriptionNativeProviders(
       getActiveCatalog(),
       getClaudeEndpoint(),
       bundledModels ?? undefined,
+      undefined,
+      retainedOpenAiModel,
     );
   }
   let configs: CustomProviderConfig[] = [];

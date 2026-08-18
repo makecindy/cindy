@@ -888,6 +888,53 @@ export default function SessionScreen() {
   const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;
   const navigation = useNavigation<SessionRouteParamsNavigation & { isFocused(): boolean }>();
   const router = useRouter();
+  // 完整消息读取权限按「会话 + 单调代际」登记。focus 与 AppState 正交：后台时
+  // 导航仍可能保持 focused，必须立即撤权；重新聚焦/回前台会生成新代际，使旧
+  // listMessages 响应永久失效。
+  const messageAuthorityRef = useRef<ReturnType<
+    typeof remoteSessionStore.enterSessionMessageDetail
+  > | null>(null);
+  const messageScreenFocusedRef = useRef(false);
+  const messageAppActiveRef = useRef(AppState.currentState === 'active');
+  const handledMessageReloadRevisionRef = useRef(0);
+  const [messageReloadRevision, setMessageReloadRevision] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      messageScreenFocusedRef.current = true;
+      if (messageAppActiveRef.current) {
+        messageAuthorityRef.current = remoteSessionStore.enterSessionMessageDetail(sessionId);
+        // authority 是消息同步的前置条件。首次 focus 也必须在 enter 成功后触发 load；
+        // 否则导航 focus 晚于 mount effect 时，首轮 sync 会因无 authority 被丢弃且不再补发。
+        setMessageReloadRevision((value) => value + 1);
+      }
+      return () => {
+        messageScreenFocusedRef.current = false;
+        const authority = messageAuthorityRef.current;
+        messageAuthorityRef.current = null;
+        if (authority) {
+          remoteSessionStore.leaveSessionMessageDetail(sessionId, 'detail-blur', authority);
+        }
+      };
+    }, [deviceId, sessionId]),
+  );
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const active = nextState === 'active';
+      messageAppActiveRef.current = active;
+      if (!active) {
+        const authority = messageAuthorityRef.current;
+        messageAuthorityRef.current = null;
+        if (authority) {
+          remoteSessionStore.leaveSessionMessageDetail(sessionId, 'app-background', authority);
+        }
+        return;
+      }
+      if (!messageScreenFocusedRef.current || messageAuthorityRef.current) return;
+      messageAuthorityRef.current = remoteSessionStore.enterSessionMessageDetail(sessionId);
+      setMessageReloadRevision((value) => value + 1);
+    });
+    return () => subscription.remove();
+  }, [sessionId]);
   const auth = useAuth();
   const windowDimensions = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -907,6 +954,11 @@ export default function SessionScreen() {
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
+  const sessionRetention = useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.getSessionRetention(sessionId),
+  );
+  const isScheduleDetail = sessionRetention === 'schedule';
   const pending = useSessionPendingInteractions(sessionId);
   // pending 列表是否已被被控端的全量快照确认过(空列表能不能当「都处理完了」用)。
   const pendingInteractionsAuthoritative = useSessionPendingInteractionsAuthoritative(sessionId);
@@ -1443,6 +1495,29 @@ export default function SessionScreen() {
   // 同步真源(上传回调 / 派发循环 / send 同步段都要读最新值),state 只驱动渲染。
   const [outboxItems, setOutboxItems] = useState<readonly MobileOutboxItem[]>([]);
   const outboxRef = useRef<readonly MobileOutboxItem[]>([]);
+  const pageMessageWorkLeaseRef = useRef<ReturnType<
+    typeof remoteSessionStore.acquireSessionMessageWork
+  > | null>(null);
+  const pageHasMessageWork = outboxItems.length > 0
+    || pendingUploads.length > 0
+    || pastePlaceholderCount > 0
+    || getPendingUploadCount() > 0
+    || sendInFlightRef.current
+    || sending
+    || sendingQueueClientIds.size > 0
+    || settlingQueueItems.length > 0
+    || attachments.length > 0;
+  useLayoutEffect(() => {
+    const lease = remoteSessionStore.acquireSessionMessageWork(sessionId, pageHasMessageWork);
+    pageMessageWorkLeaseRef.current = lease;
+    return () => {
+      if (pageMessageWorkLeaseRef.current === lease) pageMessageWorkLeaseRef.current = null;
+      lease.release();
+    };
+  }, [sessionId]);
+  useLayoutEffect(() => {
+    pageMessageWorkLeaseRef.current?.update(pageHasMessageWork);
+  }, [pageHasMessageWork]);
   // 派发循环重入锁 + 路由函数的 ref 中转(onUploaded 闭包声明在组件前部,实际
   // 路由/派发逻辑声明在 send() 附近,经 ref 断开声明顺序依赖,同 composerAnnotationsRef)。
   const outboxPumpBusyRef = useRef(false);
@@ -3564,6 +3639,10 @@ export default function SessionScreen() {
   const syncSession = useCallback(async (syncRun: Pick<RemoteSyncRun, 'isStale' | 'replaceMessages'>) => {
     const options = { replaceMessages: syncRun.replaceMessages };
     if (!deviceId || !sessionId || syncRun.isStale()) return;
+    const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
+    const messageAuthorityCurrent = () =>
+      remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority);
+    if (!messageAuthorityCurrent()) return;
     // 新建会话乐观管线在途(running / create-failed):被控端可能还没有这个会话,
     // getSession 会 NOT_FOUND 报错横幅。统一在这里挡掉全部 load 触发点;管线完成
     // (task 移除)后由下方 effect 触发一轮真正的同步。
@@ -3622,7 +3701,7 @@ export default function SessionScreen() {
             fetchActiveSessionSnapshot(),
           ]);
         });
-        if (syncRun.isStale()) return;
+        if (syncRun.isStale() || !messageAuthorityCurrent()) return;
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setActiveSessionSnapshots(
           deviceId,
@@ -3637,9 +3716,12 @@ export default function SessionScreen() {
         // 「加载更早」入口同源,两者本就该一致。
         const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
         if (options.replaceMessages) {
-          remoteSessionStore.setMessages(sessionId, historyPage);
+          remoteSessionStore.setMessages(sessionId, historyPage, { authority: messageAuthority });
         } else {
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, { moreBeyondWindow });
+          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, {
+            authority: messageAuthority,
+            moreBeyondWindow,
+          });
         }
         remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
         setHasOlderMessages(moreBeyondWindow);
@@ -3670,7 +3752,7 @@ export default function SessionScreen() {
           messageWindowSynced: remoteSessionStore.isSessionMessageWindowSynced(sessionId, sessionMeta),
           storedSession: storedSessionAtStart,
         });
-        if (syncRun.isStale()) return;
+        if (syncRun.isStale() || !messageAuthorityCurrent()) return;
         remoteSessionStore.setActiveSessionSnapshots(
           deviceId,
           Array.isArray(activeSessionSnapshot.activeSessions)
@@ -3685,11 +3767,14 @@ export default function SessionScreen() {
               REOPEN_MESSAGE_WINDOW_LIMITS,
             ),
           );
-          if (syncRun.isStale()) return;
+          if (syncRun.isStale() || !messageAuthorityCurrent()) return;
           const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
           // 同首开路径:上沿之外还有历史时不保留更早的缓存段(#1222)。
           const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, { moreBeyondWindow });
+          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, {
+            authority: messageAuthority,
+            moreBeyondWindow,
+          });
           remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
           setHasOlderMessages(moreBeyondWindow);
         } else {
@@ -3709,7 +3794,7 @@ export default function SessionScreen() {
       // 不变量:上面 setHasOlderMessages 的校正(:806/:841/:846)与这里的 setLastSyncedAt 之间必须保持
       // 同步尾、无 await —— 否则乐观点亮 effect(依赖 lastSyncedAt===null)会在 await 间隙把刚校正成 false
       // 的「加载更早」入口重新点亮。将来切勿在两者之间插入 await。
-      if (syncRun.isStale()) return;
+      if (syncRun.isStale() || !messageAuthorityCurrent()) return;
       // 当前设备的权威 session + projection 同步已完整落定，才解除独立 transport hold。
       // 不在 connectionEpoch 刚推进时提前清，避免同一 commit 的 outbox effect 抢在 resync 前派发。
       setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);
@@ -3721,7 +3806,7 @@ export default function SessionScreen() {
         setReadAckSyncedKey(`${sessionId}:${readAckEpochAtStart}`);
       }
     } catch (err) {
-      if (!syncRun.isStale()) {
+      if (!syncRun.isStale() && messageAuthorityCurrent()) {
         const formatted = formatRemoteError(err);
         setError(formatted);
         // 两类失败都写入 hold 且不能清门：瞬态错误继续自动重试，确定性错误保留
@@ -3729,7 +3814,7 @@ export default function SessionScreen() {
         latchOutboxTransportHold(formatted);
       }
     } finally {
-      if (!syncRun.isStale()) setLoading(false);
+      if (!syncRun.isStale() && messageAuthorityCurrent()) setLoading(false);
     }
   }, [deviceId, deviceName, latchOutboxTransportHold, maker, openLink, sessionId, subscribe]);
   // 任一连接恢复身份变化都会让旧读取失去提交资格。否则断线前启动的同步可能在
@@ -3750,6 +3835,13 @@ export default function SessionScreen() {
     () => requestSync({ reason: 'passive-refresh' }),
     [requestSync],
   );
+  useEffect(() => {
+    if (messageReloadRevision === 0) return;
+    if (handledMessageReloadRevisionRef.current === messageReloadRevision) return;
+    if (!messageScreenFocusedRef.current || !messageAppActiveRef.current) return;
+    handledMessageReloadRevisionRef.current = messageReloadRevision;
+    void load();
+  }, [load, messageReloadRevision]);
 
   /** 恢复路径里装不下的附件:中转对象回收,不留无人认领的已上传对象。 */
   const discardRecoveredAttachments = (attachments: readonly RemoteSerializedAttachment[]) => {
@@ -4054,11 +4146,10 @@ export default function SessionScreen() {
   );
 
   useEffect(() => {
-    void load();
     return () => {
       void unsubscribe(`session:${sessionId}`, deviceId, ['sessions', `session:${sessionId}`]).catch(() => undefined);
     };
-  }, [deviceId, load, sessionId, unsubscribe]);
+  }, [deviceId, sessionId, unsubscribe]);
 
   // 乐观点亮「加载更早」入口:缓存消息 hydrate 后(messages 已有内容),不等首开那次慢 listMessages(A1,
   // device-link 往返可能数秒)回来,就用已存 session 的 _count.messages 与 in-store 已加载真实条数比较,
@@ -4066,11 +4157,12 @@ export default function SessionScreen() {
   // (lastSyncedAt 为空)、入口当前不可见、且 _count 已知且 > 已加载时乐观置 true;A1 / reopen 回来后仍按
   // shouldKeepOlderMessagesAffordance / hasOlderMessagesAfterReopen 校正(:806/:846)。_count 未知不凭空点亮。
   useEffect(() => {
+    if (isScheduleDetail) return;
     if (lastSyncedAt !== null || hasOlderMessages || messages.length === 0) return;
     if (hasOlderMessagesByServerCount(currentSession?._count?.messages, messages)) {
       setHasOlderMessages(true);
     }
-  }, [currentSession?._count?.messages, hasOlderMessages, lastSyncedAt, messages]);
+  }, [currentSession?._count?.messages, hasOlderMessages, isScheduleDetail, lastSyncedAt, messages]);
 
   // 在线时按 connectionEpoch 去重:每个连接 epoch 只 resync 一次。首开同步由上面的 mount effect 负责
   // (此处 epoch == 初值 → skip);仅在 epoch 变化(真正重连 / 回前台 connectNow→online)时再 resync,
@@ -4468,12 +4560,29 @@ export default function SessionScreen() {
     loadedRouteFocusKeyRef.current = routeFocusKey;
 
     let cancelled = false;
+    const releasePendingRouteFocusLookup = () => {
+      if (
+        loadedRouteFocusKeyRef.current === routeFocusKey
+        && appliedRouteFocusKeyRef.current !== routeFocusKey
+      ) loadedRouteFocusKeyRef.current = null;
+    };
+    const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
     void withTransientRemoteRetry(() =>
       maker.aroundMessagesByClientId(sessionId, routeFocusClientId, { radius: 60 }),
     )
       .then((list) => {
-        if (cancelled) return;
-        remoteSessionStore.mergeMessages(sessionId, Array.isArray(list) ? list : []);
+        if (
+          cancelled
+          || !remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)
+        ) {
+          releasePendingRouteFocusLookup();
+          return;
+        }
+        remoteSessionStore.mergeMessages(
+          sessionId,
+          Array.isArray(list) ? list : [],
+          { authority: messageAuthority },
+        );
         if (!Array.isArray(list) || list.length === 0) {
           setError(t('session.screen.locateMessageNotFound'));
           return;
@@ -4482,13 +4591,19 @@ export default function SessionScreen() {
         setRouteFocusedClientId(routeFocusClientId);
       })
       .catch((err) => {
-        if (!cancelled) setError(formatRemoteError(err));
+        if (cancelled) return;
+        if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) {
+          releasePendingRouteFocusLookup();
+          return;
+        }
+        setError(formatRemoteError(err));
       });
 
     return () => {
       cancelled = true;
+      releasePendingRouteFocusLookup();
     };
-  }, [deviceId, maker, renderItems, routeFocusClientId, routeFocusKey, sessionId]);
+  }, [deviceId, maker, messageReloadRevision, renderItems, routeFocusClientId, routeFocusKey, sessionId]);
 
   useEffect(() => {
     if (!routeFocusedItemKey || !routeFocusKey) return;
@@ -4633,7 +4748,10 @@ export default function SessionScreen() {
   }, [abandonInFlightBackfill, sessionId, connectionEpoch]);
 
   const loadEarlierMessages = useCallback(async () => {
+    if (isScheduleDetail) return;
     if (!deviceId || !sessionId || loadingEarlier || !hasOlderMessages) return;
+    const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
+    if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) return;
     const before = oldestMessageCursor(messages);
     if (!before) {
       setHasOlderMessages(false);
@@ -4649,18 +4767,21 @@ export default function SessionScreen() {
       const page = await withTransientRemoteRetry(() =>
         listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit, before })),
       );
+      if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) return;
       const pageList = Array.isArray(page.messages) ? page.messages : [];
       // 用 mergeEarlierMessages 而不是 mergeMessages:这一页是沿 before 从窗口最旧端**连续**取的,
       // 登记进「已验证连续」区间后,后续满页的最新窗口同步才不会把用户一路翻出来的历史当成来源
       // 不明的缓存丢掉(#1210 review)。
-      remoteSessionStore.mergeEarlierMessages(sessionId, pageList);
+      remoteSessionStore.mergeEarlierMessages(sessionId, pageList, { authority: messageAuthority });
       setHasOlderMessages(shouldKeepOlderMessagesAffordance(page));
     } catch (err) {
-      setError(formatRemoteError(err));
+      if (remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) {
+        setError(formatRemoteError(err));
+      }
     } finally {
       setLoadingEarlier(false);
     }
-  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, loadingEarlier, maker, messages, sessionId]);
+  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, isScheduleDetail, loadingEarlier, maker, messages, sessionId]);
 
   /**
    * 历史窗口空洞的自动补齐(见 `historyWindowGap.ts` 的文件头)。
@@ -4710,6 +4831,7 @@ export default function SessionScreen() {
    */
   const [backfillInFlightRun, setBackfillInFlightRun] = useState<{ sid: string; seq: number } | null>(null);
   useEffect(() => {
+    if (isScheduleDetail) return;
     if (!deviceId || !sessionId) return;
     // 同步门槛必须按 **session + 连接代** 判定,不能用 lastSyncedAt:屏实例复用、原地从会话 A
     // 切到有缓存消息的 B 时,lastSyncedAt 仍是 A 留下的非空值,补齐会在 B 的 listMessages 对账
@@ -4756,6 +4878,8 @@ export default function SessionScreen() {
     const gapKey = historyWindowGapKey(gap);
     const sessionIdAtStart = sessionId;
     const epochAtStart = connectionEpoch;
+    const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionIdAtStart);
+    if (!remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)) return;
     // 本轮的身份:单调序号。启动即成为"最新一轮",此前还在飞的那一轮由此自我作废。
     const runSeq = backfillRunSeqRef.current + 1;
     backfillRunSeqRef.current = runSeq;
@@ -4772,7 +4896,9 @@ export default function SessionScreen() {
         return Array.isArray(page.messages) ? page.messages : [];
       },
       merge: (rows) => {
-        if (rows.length > 0) remoteSessionStore.mergeMessages(sessionIdAtStart, rows);
+        if (rows.length > 0) {
+          remoteSessionStore.mergeMessages(sessionIdAtStart, rows, { authority: messageAuthority });
+        }
       },
       // 两个收手条件:
       //  - **我不再是最新那一轮** —— 屏幕已经为别的会话(或切回来后的同一会话)起了新的一轮。
@@ -4781,13 +4907,17 @@ export default function SessionScreen() {
       //  - 空洞较新一侧那行已不在窗口里 —— /clear、rewind 或整窗替换把它拿掉了,继续 merge 会
       //    把刚被移除的历史(甚至 clearedAt 之前的消息)塞回窗口。锚点没了就等于这处空洞不存在了。
       isCancelled: () => backfillLatestRunSeqRef.current !== runSeq
+        || !remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)
         || !remoteSessionStore.getMessages(sessionIdAtStart).some((row) => row.id === gap.newerId),
     }).then((outcome) => {
       // 按结局归类(容器的三类语义见 backfillGapStateRef 的注释)。归类发生在**收尾**而不是发起
       // 前:发起期间的重入由飞行标记挡住,不需要预先占位。切会话 / 换连接代之后落地的旧结局
       // 一律丢弃 —— 它属于上一个容器,写进新容器会污染当前会话的判断。
       // 已被新一轮取代的旧轮不写结论:它看到的窗口已经不是当前的了。
-      if (backfillLatestRunSeqRef.current !== runSeq) return;
+      if (
+        backfillLatestRunSeqRef.current !== runSeq
+        || !remoteSessionStore.isSessionMessageAuthorityCurrent(messageAuthority)
+      ) return;
       const state = backfillGapStateRef.current;
       if (!state || state.sid !== sessionIdAtStart || state.epoch !== epochAtStart) return;
       // cancelled 刻意**不记**:它的两个触发条件本身就不会招来立刻重试 —— 会话切走时当前会话
@@ -4805,6 +4935,7 @@ export default function SessionScreen() {
     backfillInFlightRun,
     connectionEpoch,
     deviceId,
+    isScheduleDetail,
     loading,
     loadingEarlier,
     maker,
@@ -5473,6 +5604,8 @@ export default function SessionScreen() {
    */
   const dispatchOutboxItem = async (item: MobileOutboxItem) => {
     if (outboxSessionAliveRef.current !== item.sessionId) return 'stopped' as const;
+    const messageWorkLease = remoteSessionStore.acquireSessionMessageWork(item.sessionId, true);
+    try {
     const failItem = (message: string) => {
       // 归属校验:条目所属会话已离场(切会话 cleanup 已跑 / 屏已卸载)时不回插
       // 共享 ref——那会把 A 会话的失败气泡画进 B,或写进没人消费的 ref 让文字
@@ -5653,6 +5786,9 @@ export default function SessionScreen() {
     // enqueue / 对账期间离场时，成功路径无需恢复草稿，但旧 pump 也绝不能接着
     // 消费新任务的 outbox；失败路径已由 failItem / waitForConnection 按 A 收口。
     if (outboxSessionAliveRef.current !== item.sessionId) return 'stopped' as const;
+    } finally {
+      messageWorkLease.release();
+    }
   };
 
   /** 会话行的同步真源(store);命令式路径不能读可能落后一帧的 render 快照。 */
@@ -6042,6 +6178,8 @@ export default function SessionScreen() {
     const connectionDispatchBlockedAtSend = outboxConnectionBlockedNow();
     sendInFlightRef.current = true;
     setSending(true);
+    const messageWorkLease = remoteSessionStore.acquireSessionMessageWork(sessionId, true);
+    try {
     // 自动恢复中的 error 也是 outbox 的派发门；先清掉会让刚入队的消息在下一帧
     // 立刻撞回断链。真正恢复后的 load / connection epoch 会负责清理并唤醒 pump。
     if (!connectionDispatchBlockedAtSend) setError(null);
@@ -6685,6 +6823,9 @@ export default function SessionScreen() {
     } finally {
       sendInFlightRef.current = false;
       setSending(false);
+    }
+    } finally {
+      messageWorkLease.release();
     }
   }
 
@@ -8514,7 +8655,6 @@ export default function SessionScreen() {
             target.messageClientId,
             { radius: 1 },
           );
-          remoteSessionStore.mergeMessages(target.sessionId, around);
           targetMessage = around.find((message) => (
             message.clientId === target.messageClientId || message.id === target.messageClientId
           ));
@@ -8607,21 +8747,9 @@ export default function SessionScreen() {
       // 也必须执行,否则该 session 的回撤结果丢失——不受下面 guard 影响。
       remoteSessionStore.applySessionPatch(deviceId, sessionId, updated);
       if (rewindRequestSeqRef.current !== seq) {
-        // 代际已变(切走 / 切走又切回 / 另发起新请求):不碰当前在屏 session 的 UI,但仍要把目标
-        // session 的消息 store 整窗刷新到 rewind 后。commit 已返回 = 服务端已截断历史,这里直接
-        // session-scoped 写 store(不经 syncSession,不写 loading/error 等当前 UI state),避免
-        // 「confirm 后立刻切走又切回」竞态下 reopen 抢在 commit 前用旧 meta 判定「已同步」而残留
-        // rewind 前的旧消息。失败不阻断:下次进入该会话的 reopen 会据过期的 sync 标记兜底重拉。
-        const refreshSeq = rewindRequestSeqRef.current;
-        const history = await listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit })).catch(() => null);
-        // fetch 往返期间代际又变(用户再次切换,或在该会话又完成了一次更新的 rewind)→ 这页已 stale。
-        // 丢弃:否则旧页会覆盖更新的消息 store,并用旧 meta 误标记已同步,导致已删消息重现,直到下次
-        // resync。交给下次进入该会话的 reopen 兜底重拉。
-        if (rewindRequestSeqRef.current !== refreshSeq) return;
-        if (history) {
-          remoteSessionStore.setMessages(sessionId, Array.isArray(history.messages) ? history.messages : []);
-          remoteSessionStore.markSessionMessagesSynced(sessionId, updated);
-        }
+        // 远端 rewind 已成功，但这个页面代际不再拥有目标会话的消息写权限。
+        // 失效内存/磁盘窗口并登记刷新；当前若已切回会自动 load，否则下次打开重拉。
+        remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
         return;
       }
       applyComposerDocument(state.draftDocument ?? migrateLegacyComposerDraft(
@@ -8780,7 +8908,7 @@ export default function SessionScreen() {
         <SessionSearchSheet
           activeHit={activeSearchHit}
           activeIndex={activeSearchIndex}
-          hasOlderMessages={hasOlderMessages}
+          hasOlderMessages={hasOlderMessages && !isScheduleDetail}
           hitCount={searchHits.length}
           loadingEarlier={loadingEarlier}
           onChangeQuery={setSearchQuery}
@@ -9047,7 +9175,7 @@ export default function SessionScreen() {
                     topOverlayHeight={topOverlayHeight}
                     busyAction={messageActionBusy?.kind ?? null}
                     busyClientId={messageActionBusy?.clientId ?? null}
-                    canLoadEarlier={hasOlderMessages && messages.length > 0}
+                    canLoadEarlier={hasOlderMessages && messages.length > 0 && !isScheduleDetail}
                     emptyTestID="session.messageList.empty"
                     focusedItemKey={focusedMessageItemKey ?? null}
                     focusedRequestKey={focusedMessageRequestKey}
