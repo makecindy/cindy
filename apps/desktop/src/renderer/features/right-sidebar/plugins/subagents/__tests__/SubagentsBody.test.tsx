@@ -396,6 +396,45 @@ describe('SubagentsBody', () => {
     expect(screen.queryByText('Runtime findings')).toBeNull();
   });
 
+  it('drops the waiting notice for a settled child while its siblings keep the run running', async () => {
+    // A parallel run stays `running` until the last child settles. Keying the
+    // waiting notice off the run status put a spinner under a child that had
+    // already finished, contradicting its own terminal label and its disabled
+    // composer on the same screen.
+    currentDetail = {
+      ...detail('parallel running'),
+      capabilities: { ...detail('unused').capabilities, viewFullTranscript: true, steer: true },
+      children: [
+        { id: 'child-1', role: 'scout', title: 'Scout', status: 'completed', output: 'scout done' },
+        { id: 'child-2', role: 'reviewer', title: 'Reviewer', status: 'failed', error: 'reviewer blew up' },
+        { id: 'child-3', role: 'worker', title: 'Worker', status: 'running' },
+      ],
+    };
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // Overview: the run really is still running, so the notice stays.
+    expect(await screen.findByText('rightSidebar.subagents.waitingForReply')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Scout' }));
+    expect(screen.queryByText('rightSidebar.subagents.waitingForReply')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewer' }));
+    expect(screen.queryByText('rightSidebar.subagents.waitingForReply')).toBeNull();
+
+    // The child that is genuinely still working keeps it.
+    fireEvent.click(screen.getByRole('button', { name: 'Worker' }));
+    expect(screen.getByText('rightSidebar.subagents.waitingForReply')).toBeTruthy();
+  });
+
   it('keeps child drafts separate and follows the standard composer send shortcut', async () => {
     currentDetail = {
       ...detail('parallel running'),

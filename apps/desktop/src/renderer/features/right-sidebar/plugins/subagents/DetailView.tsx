@@ -367,11 +367,17 @@ function PiDurableDetailView({
     && !conversation.items.some((item) => item.kind === 'parent');
   const hasAssistantReply = conversation.items.some((item) => item.kind === 'subagent')
     || Boolean(visibleResult);
+  // A parallel run stays `running` until its last child settles, so the run
+  // status alone would keep a waiting spinner under a child that already
+  // finished — contradicting that child's own terminal label and its disabled
+  // composer on the same screen. When a child is selected the wait belongs to
+  // that child; `selectedChildActive` is already true with no child selected,
+  // so the overview and single-child aggregate keep their existing behaviour.
   const activeNoticeKey = selectedChild?.awaitingApproval
     ? 'awaitingApprovalDetail'
     : selectedChild?.status === 'queued'
       ? 'queuedDetail'
-      : detail.status === 'running'
+      : detail.status === 'running' && selectedChildActive
         ? 'waitingForReply'
         : null;
   const actionBarItemId = detail.status === 'running'

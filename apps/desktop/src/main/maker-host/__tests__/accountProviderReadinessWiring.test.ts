@@ -249,6 +249,25 @@ describe('account provider readiness wiring', () => {
     expect(closeDb).toBeGreaterThan(sweep);
   });
 
+  it('refuses Subagent control for a run owned by another live instance', () => {
+    // stop / steer / follow_up all fall through to the same control write, so
+    // gating once between the resume early-return and that write covers all
+    // three. It must sit *before* the write: the point is not to touch another
+    // live instance's mailbox at all.
+    const handler = makerIpcSource.indexOf('MAKER_INVOKE.CONTROL_PI_SUBAGENT');
+    const resumeBranch = makerIpcSource.indexOf("body.action === 'resume'", handler);
+    const gate = makerIpcSource.indexOf('canHostControlPiSubagentRun(run, process.pid)', handler);
+    const controlWrite = makerIpcSource.indexOf('await controlPiSubagentRuns(', handler);
+
+    expect(handler).toBeGreaterThanOrEqual(0);
+    expect(gate).toBeGreaterThan(resumeBranch);
+    expect(controlWrite).toBeGreaterThan(gate);
+    // Refusal has to reach the user, not fail silently as "0 controlled".
+    expect(makerIpcSource).toContain(
+      'This Subagent run belongs to another running Cindy instance.',
+    );
+  });
+
   it('names the quit boundary so it is never mistaken for an ownership change', () => {
     expect(bootstrapSource).toContain("await m.shutdown({ reason: 'app-quit' })");
     expect(bootstrapSource).not.toContain('await m.shutdown();');

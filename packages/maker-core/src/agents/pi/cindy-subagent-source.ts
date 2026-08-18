@@ -165,6 +165,8 @@ const TASK_TIMEOUT_MS = 10 * 60 * 1000;
 // 配一个 deadline**:stopWritten 是单闩,谁先写谁就把它占住,没配 deadline 的那条
 // 会让后面的 deadline 分支永远进不去,runner 卡死时父 turn 就无限轮询下去。
 const STOP_GRACE_MS = 5000;
+// 放弃等待后,给 runner 处理 SIGTERM(杀 children + 写终态)的时间,之后 SIGKILL。
+const RUNNER_TERMINATE_GRACE_MS = 2000;
 
 // tools 同时是 --tools 白名单。只读角色永不拿写工具；worker/custom-write 的 Ask/Auto
 // 审批通过 child RPC → durable runner → Cindy 审批 UI 往返，未获明确 allow 就 fail-closed。
@@ -637,11 +639,16 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
       stopDeadline = Date.now() + STOP_GRACE_MS;
       writeControlRequest(launched.runDir, { action: 'stop' });
     } else if (stopDeadline > 0 && Date.now() >= stopDeadline) {
-      return launched.failureStatus(
-        signal && signal.aborted
-          ? 'Durable runner did not acknowledge the cancellation before its stop deadline.'
-          : 'Durable runner did not publish a terminal status before its deadline.',
-      );
+      const message = signal && signal.aborted
+        ? 'Durable runner did not acknowledge the cancellation before its stop deadline.'
+        : 'Durable runner did not publish a terminal status before its deadline.';
+      // Reporting "stopped" while the runner keeps working is the real damage:
+      // the caller tells the user the task is over and the durable record hides
+      // the stop control, but the detached children go on editing the workspace
+      // and spending tokens for up to the run's own 24h bound. Terminate for
+      // real first, then synthesise the terminal status.
+      await launched.terminate(message);
+      return launched.failureStatus(message);
     }
     await new Promise(function (resolve) { setTimeout(resolve, 100); });
   }
@@ -828,6 +835,47 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
     settleRunnerExit({ code: code, signal: signalName, error: null });
   });
   runner.unref();
+  // Give-up teardown for a runner that stopped answering its control mailbox.
+  //
+  // The runner handle belongs to a process this extension spawned itself, so
+  // signalling it does not violate the runner's "never signal a pid read from
+  // disk" rule. It is also the only reachable kill: the runner's children live
+  // in their own process groups, so signalling the runner's group cannot touch
+  // them, and their pids are deliberately not published to disk. The runner's
+  // own SIGTERM handler is what reaps them — installing that listener is also
+  // what stops Node from tearing the runner down without running any cleanup.
+  //
+  // Idempotent: repeat calls no-op once the runner has exited, and the durable
+  // status write is skipped when a terminal record already exists.
+  const terminateRunner = async function (message) {
+    if (!exitSettled) {
+      try {
+        if (process.platform === 'win32') {
+          if (typeof runner.pid === 'number') {
+            spawnSync('taskkill', ['/PID', String(runner.pid), '/T', '/F'], {
+              windowsHide: true,
+              stdio: 'ignore',
+            });
+          }
+        } else {
+          runner.kill('SIGTERM');
+        }
+      } catch (err) { /* already gone */ }
+      // Bounded escalation. A runner wedged past this cannot reap its children
+      // either, so the residue is the same class as an externally killed runner
+      // and is covered by the host-side agent-home sweeps.
+      const hardDeadline = Date.now() + RUNNER_TERMINATE_GRACE_MS;
+      while (!exitSettled && Date.now() < hardDeadline) {
+        await new Promise(function (resolve) { setTimeout(resolve, 50); });
+      }
+      if (!exitSettled) {
+        try { runner.kill('SIGKILL'); } catch (err) { /* already gone */ }
+      }
+    }
+    // Converge the durable record with reality: whatever the runner did or did
+    // not publish, the run must not be left reading as running.
+    persistFailureIfNeeded(message);
+  };
   return {
     runId: runId,
     taskId: taskId,
@@ -837,6 +885,7 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
       + Math.max(10000, Number.isFinite(timeoutMs) ? timeoutMs : TASK_TIMEOUT_MS)
       + 15000,
     failureStatus: failureStatus,
+    terminate: terminateRunner,
   };
 }
 

@@ -861,32 +861,12 @@ function main() {
     }
   }
 
-  // Last resort for an exit none of the terminal paths handled (fatal error in
-  // a timer callback, an external SIGTERM). Synchronous work only.
-  process.on('exit', function () {
-    for (const task of tasks) {
-      if (task.child) terminateOwnedTree(task.child, 'SIGKILL');
-    }
-  });
-
-  pruneControlReceipts(true);
-  flushStatusNow();
-  runAll().then(function () {
-    terminateOwnedChildren('Runner stopped this child before publishing its terminal status.');
-    clearRunnerTimers();
-    state.terminal = true;
-    state.state = state.stopRequested
-      ? 'stopped'
-      : tasks.some(function (task) { return task.status === 'failed'; })
-        ? 'failed'
-        : tasks.some(function (task) { return task.status === 'stopped'; })
-          ? 'stopped'
-          : 'completed';
-    const result = {
+  function terminalResultPayload(stateName, extra) {
+    const payload = {
       version: 1,
       runId: config.runId,
       taskId: config.taskId,
-      state: state.state,
+      state: stateName,
       completedAt: Date.now(),
       tasks: tasks.map(function (task) {
         return {
@@ -903,7 +883,60 @@ function main() {
         };
       }),
     };
-    atomicWriteJson(resultPath, result);
+    if (extra) for (const key of Object.keys(extra)) payload[key] = extra[key];
+    return payload;
+  }
+
+  // Last resort for an exit none of the terminal paths handled. Synchronous
+  // work only. Node does NOT run 'exit' handlers when a default-disposition
+  // signal kills the process, so this cannot be relied on for SIGTERM — the
+  // explicit signal handlers below are what make that path real.
+  process.on('exit', function () {
+    for (const task of tasks) {
+      if (task.child) terminateOwnedTree(task.child, 'SIGKILL');
+    }
+  });
+
+  // An external stop signal. This runner holds the only real handles to its
+  // children, and they were spawned into their own process groups, so nothing
+  // outside this process can reap them: signalling the runner's group does not
+  // reach them and a pid read from disk must never be signalled (see the file
+  // header). Installing these listeners also overrides Node's default
+  // disposition, which is what lets the kill + terminal publish run at all.
+  let signalShutdownStarted = false;
+  function shutdownFromSignal(signalName) {
+    if (signalShutdownStarted) return;
+    signalShutdownStarted = true;
+    state.stopRequested = true;
+    terminateOwnedChildren('Runner stopped by ' + signalName + ' before this child finished.');
+    clearRunnerTimers();
+    if (!state.terminal) {
+      state.terminal = true;
+      state.state = 'stopped';
+      atomicWriteJson(resultPath, terminalResultPayload('stopped', {
+        error: 'Runner stopped by ' + signalName + '.',
+      }));
+      flushStatusNow();
+    }
+    process.exit(0);
+  }
+  process.on('SIGTERM', function () { shutdownFromSignal('SIGTERM'); });
+  process.on('SIGINT', function () { shutdownFromSignal('SIGINT'); });
+
+  pruneControlReceipts(true);
+  flushStatusNow();
+  runAll().then(function () {
+    terminateOwnedChildren('Runner stopped this child before publishing its terminal status.');
+    clearRunnerTimers();
+    state.terminal = true;
+    state.state = state.stopRequested
+      ? 'stopped'
+      : tasks.some(function (task) { return task.status === 'failed'; })
+        ? 'failed'
+        : tasks.some(function (task) { return task.status === 'stopped'; })
+          ? 'stopped'
+          : 'completed';
+    atomicWriteJson(resultPath, terminalResultPayload(state.state));
     flushStatusNow();
   }).catch(function (error) {
     // A parallel lane can reject (session dir staging, spawn) after sibling
@@ -915,28 +948,7 @@ function main() {
     clearRunnerTimers();
     state.terminal = true;
     state.state = 'failed';
-    atomicWriteJson(resultPath, {
-      version: 1,
-      runId: config.runId,
-      taskId: config.taskId,
-      state: 'failed',
-      error: String(error),
-      completedAt: Date.now(),
-      tasks: tasks.map(function (task) {
-        return {
-          childId: task.childId,
-          stepId: task.stepId,
-          sessionId: task.sessionId,
-          agent: task.agent,
-          status: task.status,
-          output: task.output,
-          outputTruncated: task.outputTruncated || undefined,
-          error: task.error,
-          usage: task.usage,
-          toolUses: task.toolUses,
-        };
-      }),
-    });
+    atomicWriteJson(resultPath, terminalResultPayload('failed', { error: String(error) }));
     flushStatusNow();
     fail(String(error));
   });

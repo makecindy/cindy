@@ -213,6 +213,41 @@ export function piSubagentOwnerHostPid(runtimeOwnerId: string | undefined): numb
  * that is the shared-userData case where stopping would kill another running
  * instance's Subagent.
  */
+/**
+ * Who owns this run relative to `hostPid`, for *user-initiated control*
+ * (stop / steer / follow-up).
+ *
+ * Deliberately the mirror image of `isSweepableByHost`. A sweep is automatic
+ * and fails closed (stop anything it cannot attribute); a control is the user
+ * asking for something now, so an unattributable or orphaned run must stay
+ * controllable — otherwise a run left behind by a crashed instance could never
+ * be stopped from the UI. The one case that must be refused is a run owned by
+ * a *different, still-live* instance: writing into its mailbox would steer or
+ * stop work the other window is driving.
+ */
+export type PiSubagentControlOwnership = 'self' | 'orphaned' | 'unattributable' | 'foreign-live';
+
+export function piSubagentControlOwnership(
+  status: PiSubagentRunStatus,
+  hostPid: number,
+): PiSubagentControlOwnership {
+  const ownerPid = piSubagentOwnerHostPid(status.runtimeOwnerId);
+  // Missing or legacy prefix-less owner id: cannot attribute, stay controllable.
+  if (ownerPid === null) return 'unattributable';
+  if (ownerPid === hostPid) return 'self';
+  // Unknown liveness counts as live: refusing is recoverable (the user is told
+  // which window owns it), silently steering someone else's run is not.
+  return isProcessAlive(ownerPid) === false ? 'orphaned' : 'foreign-live';
+}
+
+/** True when this host may write control requests for the run. */
+export function canHostControlPiSubagentRun(
+  status: PiSubagentRunStatus,
+  hostPid: number,
+): boolean {
+  return piSubagentControlOwnership(status, hostPid) !== 'foreign-live';
+}
+
 function isSweepableByHost(status: PiSubagentRunStatus | undefined, hostPid: number): boolean {
   const ownerPid = piSubagentOwnerHostPid(status?.runtimeOwnerId);
   if (ownerPid === null) return true;

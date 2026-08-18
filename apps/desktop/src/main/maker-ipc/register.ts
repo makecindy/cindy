@@ -16,6 +16,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import {
+  canHostControlPiSubagentRun,
   controlPiSubagentRuns,
   isPiSubagentTerminal,
   listPiSubagentRuns,
@@ -5647,6 +5648,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     if (terminal) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'PI Subagent control requires an active run');
+    }
+    // `pi-agent-home` is shared with any concurrent dev / packaged / --passive
+    // instance, so this run may be driven by another live window. Stop, steer
+    // and follow-up all write into the runner's mailbox, so refuse before the
+    // write and tell the user where the run actually lives. Orphaned and
+    // unattributable runs stay controllable on purpose — that is the only way
+    // to stop work left behind by a crashed instance.
+    if (!canHostControlPiSubagentRun(run, process.pid)) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'This Subagent run belongs to another running Cindy instance. Control it from that window.',
+      );
     }
     const controlled = await controlPiSubagentRuns(
       runRoot,

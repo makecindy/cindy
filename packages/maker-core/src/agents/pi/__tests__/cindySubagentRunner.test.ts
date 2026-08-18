@@ -89,6 +89,12 @@ async function makeFixture(options: {
   runtimeOwnerId?: string;
   /** Point this task's sessionDir at an existing *file* so launchTask throws. */
   poisonSessionDirIndex?: number;
+  /**
+   * Keep the child alive after its stdin closes. Without this the fake pi exits
+   * as soon as the runner dies and its pipes close, which would silently stand
+   * in for the runner actually reaping it.
+   */
+  surviveStdinEnd?: boolean;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -195,7 +201,9 @@ process.stdin.on('end', () => {
   if (process.env.CINDY_TEST_PI_STDIN_ENDED) {
     fs.writeFileSync(process.env.CINDY_TEST_PI_STDIN_ENDED, '1');
   }
-  setTimeout(() => process.exit(0), ${Math.max(0, options.delayExitAfterInputEndMs ?? 0)});
+  ${options.surviveStdinEnd
+    ? 'setInterval(() => {}, 1000);'
+    : `setTimeout(() => process.exit(0), ${Math.max(0, options.delayExitAfterInputEndMs ?? 0)});`}
 });
 `, { mode: 0o700 });
   await chmod(fakePiFile, 0o700);
@@ -897,6 +905,55 @@ describe('Cindy durable PI Subagent runner', () => {
     );
     expect(fixture.child.exitCode).toBe(1);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'reaps its children and publishes a terminal status when SIGTERMed',
+    async () => {
+      // This is the link the extension's give-up teardown depends on. Children
+      // are spawned into their own process groups, so signalling the runner's
+      // group cannot reach them, and their pids are deliberately never written
+      // to disk for anyone else to signal. Node also does not run 'exit'
+      // handlers for a default-disposition signal — so without an explicit
+      // SIGTERM listener the runner dies and its children are orphaned.
+      const fixture = await makeFixture({ hang: true, surviveStdinEnd: true });
+      await waitFor(
+        async () => {
+          const [run] = await listPiSubagentRuns(fixture.root);
+          return run?.state === 'running' ? run : null;
+        },
+        15_000,
+        'the runner to launch its hanging child',
+      );
+      const childPid = Number((await readFile(fixture.pidsFile, 'utf8')).trim().split('\n')[0]);
+      expect(Number.isSafeInteger(childPid)).toBe(true);
+
+      process.kill(fixture.child.pid!, 'SIGTERM');
+
+      await waitFor(
+        async () => {
+          try {
+            process.kill(childPid, 0);
+            return null;
+          } catch (error) {
+            return (error as NodeJS.ErrnoException).code === 'ESRCH' ? true : null;
+          }
+        },
+        15_000,
+        'the SIGTERMed runner to reap its own child',
+      );
+
+      const stopped = await waitFor(
+        async () => {
+          const [run] = await listPiSubagentRuns(fixture.root);
+          return run?.state === 'stopped' ? run : null;
+        },
+        15_000,
+        'the SIGTERMed runner to publish a terminal status',
+      );
+      expect(stopped.tasks[0]?.error).toMatch(/stopped by SIGTERM/i);
+      await waitForClose(fixture.child, fixture.stderr);
+    },
+  );
 
   it('stops all owned children before removing durable files on parent deletion', async () => {
     const fixture = await makeFixture({ hang: true, tasks: 2 });

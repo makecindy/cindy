@@ -5,10 +5,12 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  canHostControlPiSubagentRun,
   controlPiSubagentRuns,
   hasActivePiSubagentRunsSync,
   listPiSubagentRunDiagnostics,
   listPiSubagentRuns,
+  piSubagentControlOwnership,
   piSubagentRunRoot,
   piSubagentRuntimeOwnerId,
   requestStopAllPiSubagentRunsSync,
@@ -160,6 +162,48 @@ describe('PI durable subagent run store', () => {
       action: string;
     };
     expect(control.action).toBe('stop');
+  });
+
+  /**
+   * Control is the mirror image of the sweep: a sweep is automatic and fails
+   * closed, a control is the user asking for something now. Only a run owned by
+   * a different *live* instance may be refused — everything else has to stay
+   * controllable or a run left behind by a crashed instance could never be
+   * stopped from the UI.
+   */
+  describe('control ownership', () => {
+    const foreignLivePid = process.ppid;
+    const deadPid = 4_194_303;
+    const run = (runtimeOwnerId?: string): PiSubagentRunStatus =>
+      status('123e4567-e89b-42d3-a456-426614174070', { runtimeOwnerId });
+
+    it('allows this process to control its own run', () => {
+      const owned = run(piSubagentRuntimeOwnerId(process.pid, 'scope-mine'));
+      expect(piSubagentControlOwnership(owned, process.pid)).toBe('self');
+      expect(canHostControlPiSubagentRun(owned, process.pid)).toBe(true);
+    });
+
+    it('allows recovering a run orphaned by a dead instance', () => {
+      const orphan = run(piSubagentRuntimeOwnerId(deadPid, 'scope-crashed'));
+      expect(piSubagentControlOwnership(orphan, process.pid)).toBe('orphaned');
+      expect(canHostControlPiSubagentRun(orphan, process.pid)).toBe(true);
+    });
+
+    it('allows a run whose owner cannot be attributed', () => {
+      for (const ownerId of ['owner-a', undefined]) {
+        const legacy = run(ownerId);
+        expect(piSubagentControlOwnership(legacy, process.pid)).toBe('unattributable');
+        expect(canHostControlPiSubagentRun(legacy, process.pid)).toBe(true);
+      }
+    });
+
+    it('refuses a run owned by another live instance, and stays stable on repeat', () => {
+      const foreign = run(piSubagentRuntimeOwnerId(foreignLivePid, 'scope-foreign'));
+      expect(piSubagentControlOwnership(foreign, process.pid)).toBe('foreign-live');
+      expect(canHostControlPiSubagentRun(foreign, process.pid)).toBe(false);
+      // Repeated triggers are pure: no state, same answer.
+      expect(canHostControlPiSubagentRun(foreign, process.pid)).toBe(false);
+    });
   });
 
   /**

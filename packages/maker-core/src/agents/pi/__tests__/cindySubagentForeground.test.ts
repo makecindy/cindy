@@ -245,6 +245,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const now = Date.now();
+// Recorded separately: the synthetic terminal status the extension writes on
+// give-up replaces status.json, so the pid has to survive that convergence.
+fs.writeFileSync(path.join(config.runDir, 'runner-pid'), String(process.pid));
 fs.writeFileSync(path.join(config.runDir, 'status.json'), JSON.stringify({
   version: 1, runId: config.runId, taskId: config.taskId,
   parentSessionId: config.parentSessionId, runnerInstanceId: 'wedged-fixture',
@@ -291,6 +294,30 @@ setTimeout(() => process.exit(0), 20000).unref();
             setTimeout(() => reject(new Error('parent turn polled past its stop deadline')), 20_000)),
         ])).rejects.toThrow(/did not acknowledge the cancellation/i);
         expect(Date.now() - startedAt).toBeLessThan(15_000);
+
+        // Giving up on the wait is not enough: the retained runner must really
+        // be gone, or it keeps editing the workspace for up to its own 24h
+        // bound while the caller reports the task as stopped.
+        const runId = (await readdir(f.runRoot))[0]!;
+        const runnerPid = Number(await readFile(path.join(f.runRoot, runId, 'runner-pid'), 'utf8'));
+        expect(Number.isSafeInteger(runnerPid)).toBe(true);
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          try {
+            process.kill(runnerPid, 0);
+          } catch (error) {
+            expect((error as NodeJS.ErrnoException).code).toBe('ESRCH');
+            break;
+          }
+          if (attempt === 99) throw new Error('retained runner process survived the stop deadline');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        // Durable state converges with the real processes: nothing may be left
+        // reading as running, or the panel hides the stop control forever.
+        const converged = JSON.parse(
+          await readFile(path.join(f.runRoot, runId, 'status.json'), 'utf8'),
+        ) as { state: string };
+        expect(['failed', 'stopped', 'completed']).toContain(converged.state);
       } finally {
         for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
         Object.assign(process.env, previous);
