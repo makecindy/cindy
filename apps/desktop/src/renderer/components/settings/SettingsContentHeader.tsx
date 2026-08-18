@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowLeft } from 'lucide-react';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Tip } from '@/components/ui/tooltip';
 import { useRegisterContentHeader } from '@/features/feature-context';
 
 export function SettingsContentHeaderRegistration() {
@@ -21,18 +22,21 @@ export function SettingsContentHeaderRegistration() {
 export function SettingsContentHeader() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const backLabel = t('settings.back');
 
   return (
     <div className="flex h-full min-w-0 items-center gap-2.5">
-      <button
-        type="button"
-        onClick={() => navigate('/')}
-        aria-label={t('settings.back')}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--settings-back-icon)] transition-colors hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)]"
-        style={WINDOW_NO_DRAG_STYLE}
-      >
-        <ArrowLeft size={15} />
-      </button>
+      <Tip text={backLabel} side="bottom">
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          aria-label={backLabel}
+          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-colors hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)]"
+          style={WINDOW_NO_DRAG_STYLE}
+        >
+          <ArrowLeft size={15} />
+        </button>
+      </Tip>
       <h1 className="truncate text-sm font-medium text-[var(--settings-back-text)]">
         {t('settings.title')}
       </h1>
