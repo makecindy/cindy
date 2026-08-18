@@ -54,8 +54,16 @@ import {
   parseBotOutputArtifacts,
 } from '../../shared/botOutputArtifact.js';
 import { parseBotDeliveryDiagnostic } from '../../shared/botDeliveryDiagnostic.js';
+import type {
+  BotCollaborationMeta,
+  BotCollaborationRole,
+  BotDelegationInterjectResult,
+} from '../../shared/botCollaboration.js';
+import { BOT_DELEGATION_CLIENT_ID } from '../../shared/botCollaboration.js';
 
 const ACTIVE_DELEGATION_STATUSES = ['queued', 'running', 'waiting'] as const;
+/** 一条插话的正文上限：够写清「先别做 X，改做 Y」，又不至于变成第二次委派。 */
+const MAX_INTERJECTION_CHARS = 4_000;
 const DEFAULT_MAX_DEPTH = 1;
 const HARD_MAX_DEPTH = 5;
 const DEFAULT_MAX_ACTIVE_CHILDREN = 10;
@@ -115,6 +123,8 @@ export interface BotDelegationServiceDeps {
       clientId: string;
       message: string;
       persistedContent: string;
+      /** 落库后要补的呈现标记（见 markTimelineMessage）。老 payload 缺省。 */
+      presentationAgentMeta?: Record<string, unknown>;
     };
   }) => Promise<{ id: string }>;
   abortSession: (sessionId: string) => Promise<void>;
@@ -127,6 +137,21 @@ export interface BotDelegationServiceDeps {
     role: 'user' | 'assistant';
     content: string;
     createdAt?: number;
+    /**
+     * 只增不改的呈现标记（写进 `messages.agent_meta`）。renderer 据此把镜像消息
+     * 升级成协作卡 / 客座气泡；不带标记的老行继续按普通文本渲染。
+     */
+    agentMeta?: Record<string, unknown>;
+  }) => Promise<void>;
+  /**
+   * 给一条**已落库**的消息补上呈现标记。结果回传走 dispatch / 投递外发队列，落库
+   * 时机不在本服务手里，所以只能事后按 (sessionId, clientId) 打补丁；失败仅降级
+   * 成普通文本气泡，不影响委派本身。
+   */
+  markTimelineMessage?: (params: {
+    sessionId: string;
+    clientId: string;
+    agentMeta: Record<string, unknown>;
   }) => Promise<void>;
   onChanged?: (payload: BotDelegationChangedPayload) => void;
   now?: () => number;
@@ -398,6 +423,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       content: params.content,
       agentKind: null,
       createdAt: params.createdAt,
+      ...(params.agentMeta
+        ? { agentMeta: params.agentMeta as Parameters<typeof createMessage>[1]['agentMeta'] }
+        : {}),
     });
   });
 
@@ -660,15 +688,83 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     return profile?.displayName || botId;
   };
 
+  /**
+   * 冻结这次协作双方的展示身份。名字后来改了不回填历史消息——消息流讲的是
+   * 「当时谁把活交给了谁」，不是「他们现在叫什么」。
+   */
+  const collaborationMeta = async (
+    row: Pick<DelegationRow,
+      'id' | 'requestingBotId' | 'targetBotId' | 'objective' | 'parentSessionId' | 'childSessionId'
+    >,
+    role: BotCollaborationRole,
+  ): Promise<BotCollaborationMeta> => {
+    const db = getDbClient().drizzle;
+    const profiles = await db
+      .select({ id: botProfiles.id, displayName: botProfiles.displayName })
+      .from(botProfiles)
+      .where(inArray(botProfiles.id, [...new Set([row.requestingBotId, row.targetBotId])]));
+    const nameOf = (botId: string): string =>
+      profiles.find((profile) => profile.id === botId)?.displayName || botId;
+    return {
+      v: 1,
+      role,
+      delegationId: row.id,
+      fromBotId: row.requestingBotId,
+      fromBotName: nameOf(row.requestingBotId),
+      toBotId: row.targetBotId,
+      toBotName: nameOf(row.targetBotId),
+      parentSessionId: row.parentSessionId,
+      childSessionId: row.childSessionId,
+      objective: row.objective.slice(0, 400),
+    };
+  };
+
+  /**
+   * 父任务里的协作卡锚点：空正文 + `botCollaboration` 标记，只为在发起方的消息流
+   * **原位**留下一个位置（「<目标> 加入了对话」）。卡片的实时状态、秒数与终态战报
+   * 都由 delegation 行推送驱动，锚点本身不需要更新。
+   *
+   * 刻意与 `projectTargetRequest` 分开：目标侧那条镜像是真实工作交接，写不进去就
+   * 必须让委派失败；这一条只是发起方视角的呈现，写不进去只降级成「没有卡」。
+   */
+  const projectParentRequest = async (row: Pick<DelegationRow,
+    | 'id'
+    | 'requestingBotId'
+    | 'targetBotId'
+    | 'objective'
+    | 'parentSessionId'
+    | 'childSessionId'
+    | 'createdAt'
+  >): Promise<void> => {
+    if (!row.parentSessionId) return;
+    await persistTimelineMessage({
+      sessionId: row.parentSessionId,
+      clientId: BOT_DELEGATION_CLIENT_ID.parentRequest(row.id),
+      role: 'assistant',
+      content: '',
+      createdAt: row.createdAt,
+      agentMeta: {
+        botCollaboration: await collaborationMeta(row, 'delegation-request'),
+      },
+    });
+  };
+
   const projectTargetRequest = async (row: Pick<DelegationRow,
-    'id' | 'requestingBotId' | 'objective' | 'permissionSnapshotJson' | 'createdAt'
+    | 'id'
+    | 'requestingBotId'
+    | 'targetBotId'
+    | 'objective'
+    | 'parentSessionId'
+    | 'childSessionId'
+    | 'permissionSnapshotJson'
+    | 'createdAt'
   >): Promise<void> => {
     const plan = parseBotDelegationPlanSnapshot(row.permissionSnapshotJson);
     if (!plan?.targetCanonicalSessionId) return;
     const requesterName = await requesterDisplayName(row.requestingBotId);
     await persistTimelineMessage({
       sessionId: plan.targetCanonicalSessionId,
-      clientId: `bot-delegation-target-request:${row.id}`,
+      clientId: BOT_DELEGATION_CLIENT_ID.targetRequest(row.id),
       role: 'user',
       content: [
         `[来自 ${requesterName} 的 Bot 委派]`,
@@ -676,13 +772,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         `委派记录：${row.id}`,
       ].join('\n\n'),
       createdAt: row.createdAt,
+      agentMeta: {
+        botCollaboration: await collaborationMeta(row, 'guest-request'),
+      },
     });
   };
 
   const projectTargetResult = async (row: Pick<DelegationRow,
     | 'id'
     | 'requestingBotId'
+    | 'targetBotId'
     | 'objective'
+    | 'parentSessionId'
     | 'childSessionId'
     | 'status'
     | 'resultSummary'
@@ -702,7 +803,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           : '失败';
     await persistTimelineMessage({
       sessionId: plan.targetCanonicalSessionId,
-      clientId: `bot-delegation-target-result:${row.id}`,
+      clientId: BOT_DELEGATION_CLIENT_ID.targetResult(row.id),
       role: 'assistant',
       content: [
         `[Bot 委派${statusLabel}]`,
@@ -713,6 +814,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         row.childSessionId ? `完整执行任务：${row.childSessionId}` : '',
       ].filter(Boolean).join('\n\n'),
       createdAt: row.completedAt ?? undefined,
+      agentMeta: {
+        botCollaboration: await collaborationMeta(row, 'result-mirror'),
+      },
     });
   };
 
@@ -769,7 +873,33 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     ]
       .filter(Boolean)
       .join('\n\n');
-    const completionClientId = `bot-delegation-completion:${params.id}`;
+    const completionClientId = BOT_DELEGATION_CLIENT_ID.completion(params.id);
+    // 结果回传落到父任务后补一个客座标记：这条正文是目标伙伴说的话，发起方的消息
+    // 流里应当以「<名>｜客座」的身份出现，而不是一段带方括号的机读文本。
+    const guestMeta = {
+      botCollaboration: await collaborationMeta(
+        {
+          id: params.id,
+          requestingBotId: params.requestingBotId,
+          targetBotId: params.targetBotId,
+          objective: params.objective,
+          parentSessionId: params.parentSessionId,
+          childSessionId: params.childSessionId,
+        },
+        'guest-result',
+      ),
+    };
+    const markGuestBubble = async (sessionId: string): Promise<void> => {
+      if (!deps.markTimelineMessage) return;
+      await deps
+        .markTimelineMessage({ sessionId, clientId: completionClientId, agentMeta: guestMeta })
+        .catch((error) => {
+          log.warn('failed to mark Bot delegation completion as a guest bubble', {
+            delegationId: params.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    };
     if (deps.enqueueDelivery) {
       await deps.enqueueDelivery({
         botId: params.requestingBotId,
@@ -786,15 +916,24 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           clientId: completionClientId,
           message: completionMessage,
           persistedContent: completionMessage,
+          // 外发队列可能跨重启才真正落库，也可能回退到 Bot 主任务，因此标记必须
+          // 随 payload 一起持久化，由投递方在落库后按实际会话补上。老 payload 没有
+          // 这个字段，投递方按缺省处理即可。
+          presentationAgentMeta: guestMeta,
         },
       });
       return;
     }
+    // 标记挂在 onAccepted 上：父任务正忙时这条先进输入队列，真正落库要等它排到，
+    // 那时才有行可打补丁。
     await deps.dispatch({
       targetSessionId: params.parentSessionId,
       message: completionMessage,
       persistedContent: completionMessage,
       clientId: completionClientId,
+      ...(deps.markTimelineMessage
+        ? { onAccepted: () => markGuestBubble(params.parentSessionId!) }
+        : {}),
     });
   };
 
@@ -906,6 +1045,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           eq(messages.sessionId, sessionId),
           eq(messages.role, 'assistant'),
           isNull(messages.rewindAt),
+          // 协作卡锚点(空正文)与插话留痕也是 assistant 行,但它们是这个任务**自己
+          // 派活**留下的注解,不是它交出的答复。嵌套委派下不排除会直接选错:上一层
+          // 拿到的"结果"会变成一句催促,或干脆是空的。
+          sql`(
+            ${messages.agentMeta} IS NULL
+            OR json_extract(${messages.agentMeta}, '$.botCollaboration.role') IS NULL
+            OR json_extract(${messages.agentMeta}, '$.botCollaboration.role')
+               NOT IN ('delegation-request', 'interjection')
+          )`,
         ),
       )
       .orderBy(desc(messages.createdAt), desc(messageRowid))
@@ -2166,14 +2314,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     }
 
     deps.broadcastSessionCreated?.(childSessionId);
+    const mirrorRow = {
+      id: delegationId,
+      requestingBotId: caller.botId,
+      targetBotId: target.id,
+      objective,
+      parentSessionId: input.callerSessionId,
+      childSessionId,
+      permissionSnapshotJson,
+      createdAt,
+    };
     try {
-      await projectTargetRequest({
-        id: delegationId,
-        requestingBotId: caller.botId,
-        objective,
-        permissionSnapshotJson,
-        createdAt,
-      });
+      await projectTargetRequest(mirrorRow);
     } catch (error) {
       const lastError = `TARGET_TIMELINE_PERSIST_FAILED: ${
         error instanceof Error ? error.message : String(error)
@@ -2203,6 +2355,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         message: '委派未启动：无法把请求记录到目标 Bot 的主任务',
       };
     }
+    await projectParentRequest(mirrorRow).catch((error) => {
+      log.warn('failed to anchor the Bot collaboration card in the requesting task', {
+        delegationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     scheduleTimeout(delegationId, deadlineAt);
     const dispatchResult = await attemptDispatch(delegationId);
     return {
@@ -2399,6 +2557,118 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: false, errorCode: 'ALREADY_TERMINAL', message: 'Bot delegation 已被另一操作收口' };
     }
     return { ok: true, delegationId, childSessionId: row.childSessionId };
+  };
+
+  /**
+   * 向一个**仍在进行**的委派补一句话：催促、补充条件、修正方向。
+   *
+   * 为什么需要单独的通道：子任务本身早就支持排队输入，缺的是「从发起方那一侧」
+   * 合法地投进去的入口——直接按 sessionId 发消息会绕开归属校验，把任意会话变成
+   * 任意 Bot 子任务的输入源。这里把三件事一次做完：
+   *  - **归属**：委派必须由调用会话发起（parentSessionId 命中），且属于调用者这个
+   *    Bot。两条都查，任一不符按 NOT_FOUND 处理，不泄露「有这么个委派」。
+   *  - **状态**：只接受 queued / running / waiting。终态明确报错，绝不复活已收口的
+   *    委派，也不会让插话变成「给已归档子任务发消息」。
+   *  - **幂等**：clientId 决定去重。同一 token 重发落到同一条消息上（dispatch 侧按
+   *    clientId 查已落库行），重试不会催两遍。
+   *
+   * 权限边界不放宽：投递复用发起委派时冻结的子任务，不新建会话、不改权限档、不碰
+   * 目标 Bot 的任何配置。子任务正忙时按会话既有语义入队，当前回合结束后被读到。
+   */
+  const interjectDelegation = async (
+    callerSessionId: string,
+    delegationId: string,
+    text: string,
+    idempotencyToken?: string,
+  ): Promise<BotDelegationInterjectResult> => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: '插话内容不能为空' };
+    }
+    if (trimmed.length > MAX_INTERJECTION_CHARS) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: `插话内容超过 ${MAX_INTERJECTION_CHARS} 字，请改用新的委派`,
+      };
+    }
+    const caller = await resolveCaller(callerSessionId);
+    if (!caller) {
+      return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于 Cindy Bot' };
+    }
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select()
+      .from(botDelegations)
+      .where(
+        and(
+          eq(botDelegations.id, delegationId),
+          eq(botDelegations.requestingBotId, caller.botId),
+          eq(botDelegations.parentSessionId, callerSessionId),
+        ),
+      )
+      .limit(1);
+    if (!row) return { ok: false, errorCode: 'NOT_FOUND', message: 'Bot delegation 不存在' };
+    if (!isActiveDelegation(row.status as DelegationStatus)) {
+      return {
+        ok: false,
+        errorCode: 'ALREADY_TERMINAL',
+        message: `Bot delegation 已是终态 ${row.status}，无法再插话`,
+      };
+    }
+    if (!row.childSessionId) {
+      return {
+        ok: false,
+        errorCode: 'CHILD_SESSION_MISSING',
+        message: 'Bot delegation 子任务尚未就绪',
+      };
+    }
+    // token 只做幂等键，不进正文；限死字符集免得脏值污染 clientId 空间。
+    const token = (idempotencyToken ?? createId()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)
+      || createId();
+    const requesterName = await requesterDisplayName(caller.botId);
+    const dispatched = await deps.dispatch({
+      targetSessionId: row.childSessionId,
+      message: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
+      persistedContent: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
+      clientId: BOT_DELEGATION_CLIENT_ID.interjection(delegationId, token),
+    });
+    if (!dispatched?.ok) {
+      return {
+        ok: false,
+        errorCode: dispatched?.errorCode ?? 'DISPATCH_FAILED',
+        message: dispatched?.message ?? '插话未能送达子任务',
+      };
+    }
+    // 发起方视角的留痕：催过什么、催过几次，重开会话仍在。写不进去不回滚投递
+    // ——话已经送到了，回滚只会让两边记账不一致。
+    await persistTimelineMessage({
+      sessionId: callerSessionId,
+      clientId: BOT_DELEGATION_CLIENT_ID.interjectionMirror(delegationId, token),
+      role: 'assistant',
+      content: trimmed,
+      createdAt: now(),
+      agentMeta: {
+        botCollaboration: await collaborationMeta(row, 'interjection'),
+      },
+    }).catch((error) => {
+      log.warn('failed to mirror a Bot delegation interjection into the requesting task', {
+        delegationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    emitChanged({
+      delegationId: row.id,
+      parentSessionId: row.parentSessionId,
+      childSessionId: row.childSessionId,
+      status: row.status as DelegationStatus,
+    });
+    return {
+      ok: true,
+      delegationId,
+      childSessionId: row.childSessionId,
+      queued: dispatched.wakeKind === 'queued',
+    };
   };
 
   const settleSession = async (params: {
@@ -2677,6 +2947,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     delegateToBot,
     listDelegations,
     cancelDelegation,
+    interjectDelegation,
     cancelDelegationsForParentSession,
     cancelDelegationsForBot,
     enforceBudgetForSession,

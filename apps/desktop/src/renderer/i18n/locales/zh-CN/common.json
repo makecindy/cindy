@@ -6600,6 +6600,32 @@
     },
     "advancedIdentity": {
       "title": "描述与背景"
+    },
+    "collab": {
+      "joined": "{{name}} 加入了对话",
+      "guestTag": "客座",
+      "nudge": "催一下",
+      "nudgeSend": "发送",
+      "nudgePlaceholder": "怎么样了？",
+      "nudgeAria": "给 {{name}} 补一句话",
+      "interjected": "你催了 {{name}} 一下",
+      "stop": "停止",
+      "openTask": "看 {{name}} 的对话",
+      "actionFailed": "没发出去，再试一次。",
+      "status": {
+        "queued": "正在开始",
+        "waiting": "等待开始",
+        "running": "正在做",
+        "completed": "已完成",
+        "failed": "失败了",
+        "cancelled": "已停止",
+        "timed-out": "已超时"
+      },
+      "report": {
+        "done": "{{name}} · 用时 {{duration}} · 完成",
+        "failed": "{{name}} · 用时 {{duration}} · 失败",
+        "stopped": "{{name}} · 用时 {{duration}} · 已停止"
+      }
     }
   },
   "commonUi": {

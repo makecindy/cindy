@@ -6600,6 +6600,32 @@
     },
     "advancedIdentity": {
       "title": "説明と背景情報"
+    },
+    "collab": {
+      "joined": "{{name}} が会話に加わりました",
+      "guestTag": "ゲスト",
+      "nudge": "催促する",
+      "nudgeSend": "送信",
+      "nudgePlaceholder": "進み具合はどう？",
+      "nudgeAria": "{{name}} に一言送る",
+      "interjected": "{{name}} に催促しました",
+      "stop": "停止",
+      "openTask": "{{name}} の会話を見る",
+      "actionFailed": "送信できませんでした。もう一度お試しください。",
+      "status": {
+        "queued": "開始しています",
+        "waiting": "開始待ち",
+        "running": "作業中",
+        "completed": "完了",
+        "failed": "失敗",
+        "cancelled": "停止済み",
+        "timed-out": "タイムアウト"
+      },
+      "report": {
+        "done": "{{name}} · {{duration}} · 完了",
+        "failed": "{{name}} · {{duration}} · 失敗",
+        "stopped": "{{name}} · {{duration}} · 停止"
+      }
     }
   },
   "commonUi": {

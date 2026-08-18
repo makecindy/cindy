@@ -33,6 +33,11 @@ export interface BotDelegationCallbacks {
     callerSessionId: string;
     delegationId: string;
   }): Promise<ControlResult<Record<string, unknown>, string>>;
+  interjectDelegation(params: {
+    callerSessionId: string;
+    delegationId: string;
+    text: string;
+  }): Promise<ControlResult<Record<string, unknown>, string>>;
 }
 
 export interface BotDelegationToolDeps {
@@ -131,6 +136,30 @@ export function registerBotDelegationTools(
       return result.ok
         ? okPayload({ delegations: result.delegations })
         : errorPayload(result.errorCode, result.message);
+    },
+  });
+
+  registry.register({
+    name: 'interject_bot_delegation',
+    category: 'bots',
+    description: [
+      '向一个仍在进行的委派补充一句话：催一下进度、追加条件、或者纠正方向。对方会在当前回合结束后读到，不会打断它正在做的事。',
+      '只对 queued/running/waiting 的委派有效；已完成、失败或已取消的委派会明确报错——那时候应该发起新的委派，而不是往旧的里塞话。',
+      '想让对方立刻停手用 cancel_bot_delegation；想知道现在做到哪了用 list_bot_delegations。',
+    ].join('\n'),
+    inputShape: {
+      delegation_id: z.string().min(1).max(128),
+      text: z.string().min(1).max(4_000),
+    },
+    handler: async ({ delegation_id, text }) => {
+      const sessionId = callerSessionId(deps);
+      if (!sessionId) return missingSession();
+      const result = await deps.callbacks.interjectDelegation({
+        callerSessionId: sessionId,
+        delegationId: delegation_id,
+        text,
+      });
+      return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
     },
   });
 

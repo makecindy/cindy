@@ -9361,12 +9361,38 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (value): value is string => typeof value === 'string' && value.length > 0,
       ))];
       let lastFailure: { errorCode: string; message: string } | null = null;
+      // 呈现标记随 payload 持久化，在消息**落库那一刻**按实际收下它的会话补上。
+      // 必须挂在 onAccepted 而不是 dispatch 返回后:目标忙时这条会先进输入队列,
+      // 真正落库要等它排到,那时才有行可打补丁。补不上只是少一层客座外观,不影响
+      // 投递本身,因此吞掉异常。
+      const presentationAgentMeta =
+        payload.presentationAgentMeta
+        && typeof payload.presentationAgentMeta === 'object'
+        && !Array.isArray(payload.presentationAgentMeta)
+          ? (payload.presentationAgentMeta as Record<string, unknown>)
+          : null;
+      const markPresentation = async (sessionId: string): Promise<void> => {
+        if (!presentationAgentMeta) return;
+        try {
+          if (await patchMessageAgentMeta(sessionId, clientId, presentationAgentMeta)) {
+            await broadcastMessageAgentMetaUpdate(sessionId, clientId);
+          }
+        } catch (err) {
+          log.warn('Bot delivery presentation meta patch failed (non-fatal)', {
+            deliveryId: row.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
       for (const candidate of candidates) {
         const result = await dispatchBotSessionMessage({
           targetSessionId: candidate,
           message,
           persistedContent,
           clientId,
+          ...(presentationAgentMeta
+            ? { onAccepted: () => markPresentation(candidate) }
+            : {}),
         });
         if (result.ok) {
           if (!row.routeId) return { ok: true as const };
@@ -9409,6 +9435,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     closeSession: (sessionId) => maker.closeSession(sessionId),
     broadcastSessionCreated,
+    markTimelineMessage: async ({ sessionId, clientId, agentMeta }) => {
+      if (await patchMessageAgentMeta(sessionId, clientId, agentMeta)) {
+        await broadcastMessageAgentMetaUpdate(sessionId, clientId);
+      }
+    },
     onChanged: (payload) => {
       broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload);
       void botSessionEventServiceHolder?.refreshGuardian();
@@ -9504,6 +9535,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
       }
       return delegationForRestore.cancelDelegation(parentSessionId, delegationId);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELEGATION_INTERJECT,
+    async (event, parentSessionId: unknown, delegationId: unknown, text: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof parentSessionId !== 'string'
+        || parentSessionId.length === 0
+        || typeof delegationId !== 'string'
+        || delegationId.length === 0
+      ) {
+        throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
+      }
+      if (typeof text !== 'string' || text.trim().length === 0) {
+        throwIpcError('INVALID_PARAMS', 'text required');
+      }
+      // 归属（委派必须由这个父任务发起）、状态（只接受进行中）与幂等都在服务里做，
+      // 这里只挡住形状不对的调用。
+      return delegationForRestore.interjectDelegation(parentSessionId, delegationId, text);
     },
   );
   ipcMain.handle(

@@ -117,6 +117,12 @@ describe("cindy_helper MCP server", () => {
       delegationId: "delegation-1",
       childSessionId: "bot-child-session",
     }));
+    const interjectDelegation = vi.fn(async () => ({
+      ok: true as const,
+      delegationId: "delegation-1",
+      childSessionId: "bot-child-session",
+      queued: true,
+    }));
     const server = createXdtHelperMcpServer(
       {
         botDelegation: {
@@ -124,6 +130,7 @@ describe("cindy_helper MCP server", () => {
           delegateToBot,
           listDelegations,
           cancelDelegation,
+          interjectDelegation,
         },
       },
       {
@@ -144,9 +151,24 @@ describe("cindy_helper MCP server", () => {
       expect((discovered.tools as Array<{ name: string }>).map((tool) => tool.name).sort()).toEqual([
         "cancel_bot_delegation",
         "delegate_to_bot",
+        "interject_bot_delegation",
         "list_bot_delegations",
         "list_bots",
       ]);
+
+      const interjected = await client.callTool({
+        name: "call_tool",
+        arguments: {
+          name: "interject_bot_delegation",
+          args: { delegation_id: "delegation-1", text: "先别写代码，等我确认口径" },
+        },
+      });
+      expect(parsePayload(interjected)).toMatchObject({ ok: true, queued: true });
+      expect(interjectDelegation).toHaveBeenCalledWith({
+        callerSessionId: "bot-parent-session",
+        delegationId: "delegation-1",
+        text: "先别写代码，等我确认口径",
+      });
 
       const listed = await client.callTool({
         name: "call_tool",

@@ -6602,6 +6602,32 @@
     },
     "advancedIdentity": {
       "title": "Description & background"
+    },
+    "collab": {
+      "joined": "{{name}} joined the conversation",
+      "guestTag": "Guest",
+      "nudge": "Nudge",
+      "nudgeSend": "Send",
+      "nudgePlaceholder": "How's it going?",
+      "nudgeAria": "Send {{name}} a note about this work",
+      "interjected": "You nudged {{name}}",
+      "stop": "Stop",
+      "openTask": "Open {{name}}'s conversation",
+      "actionFailed": "That didn't go through. Try again.",
+      "status": {
+        "queued": "Getting started",
+        "waiting": "Waiting to start",
+        "running": "Working on it",
+        "completed": "Done",
+        "failed": "Failed",
+        "cancelled": "Stopped",
+        "timed-out": "Timed out"
+      },
+      "report": {
+        "done": "{{name}} · {{duration}} · done",
+        "failed": "{{name}} · {{duration}} · failed",
+        "stopped": "{{name}} · {{duration}} · stopped"
+      }
     }
   },
   "commonUi": {

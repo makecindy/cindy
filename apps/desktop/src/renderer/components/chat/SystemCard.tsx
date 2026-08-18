@@ -29,6 +29,7 @@ import {
   reviewFailureCodeFromLegacyError,
   type ReviewFailureCode,
 } from '../../../shared/reviewRun';
+import { BotCollaborationCard } from '@/features/bots/BotCollaborationCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface SystemCardProps {
@@ -46,7 +47,8 @@ interface SystemCardProps {
     | 'review'
     | 'auto-resume'
     | 'auto-resume-pending'
-    | 'agent-switch';
+    | 'agent-switch'
+    | 'bot-collab';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -1242,6 +1244,8 @@ export function SystemCard({
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
+    case 'bot-collab':
+      return <BotCollaborationCard data={data} sessionId={sessionId} />;
     default:
       return null;
   }

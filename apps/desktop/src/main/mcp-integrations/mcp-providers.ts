@@ -479,6 +479,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
           return svc.cancelDelegation(callerSessionId, delegationId);
         },
+        interjectDelegation: async ({ callerSessionId, delegationId, text }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Bot delegation service not initialized',
+            };
+          }
+          return svc.interjectDelegation(callerSessionId, delegationId, text);
+        },
       },
       botDurableNotes: {
         list: listBotDurableNotes,

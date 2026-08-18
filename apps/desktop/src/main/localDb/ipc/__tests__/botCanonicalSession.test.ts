@@ -136,6 +136,10 @@ import { createBotDeliveryOutboxService } from '../../../maker-ipc/botDeliveryOu
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
 import { parseBotDelegationPlanSnapshot } from '../../../../shared/botDelegation';
+import {
+  readBotCollaborationMeta,
+  readBotDelegationCompletionBody,
+} from '../../../../shared/botCollaboration';
 
 function testSha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -4881,6 +4885,7 @@ describe('Bot avatar sentinel persistence', () => {
     });
   });
 
+
   it('still refuses an avatar long enough to smuggle a URL or a blob', async () => {
     await expect(
       invoke('local-db:bots:create', {
@@ -4889,5 +4894,331 @@ describe('Bot avatar sentinel persistence', () => {
         avatar: `https://example.com/${'a'.repeat(200)}.png`,
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe('Bot teammate collaboration', () => {
+  it('runs a two-stage teammate relay and lets the requester interject mid-flight', async () => {
+    // 连环编排的完整链路：Cindy 先叫策划，策划完再拿它的结论去叫设计；期间还能
+    // 对正在忙的伙伴补一句话。断言覆盖三件事：委派先后成立、消息流里的锚点顺序
+    // 正确、插话按归属 / 状态 / 幂等收口。
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    await invoke('local-db:bots:create', {
+      id: 'bot-planner',
+      name: 'Planner Bot',
+      capabilities: { harness: 'codex', model: 'gpt-5.5', permissions: 'trusted' },
+    });
+    await invoke('local-db:bots:create', {
+      id: 'bot-designer',
+      name: 'Designer Bot',
+      capabilities: { harness: 'codex', model: 'gpt-5.5', permissions: 'trusted' },
+    });
+
+    const dispatch = vi.fn(
+      async (params: { targetSessionId: string; onAccepted?: () => Promise<void> | void }) => {
+        await params.onAccepted?.();
+        return {
+          ok: true as const,
+          targetSessionId: params.targetSessionId,
+          wakeKind: 'already-active' as const,
+        };
+      },
+    );
+    const markTimelineMessage = vi.fn(async () => undefined);
+    let clock = 10_000;
+    let ids = 0;
+    const service = createBotDelegationService({
+      dispatch,
+      abortSession: vi.fn(async () => undefined),
+      archiveSession: vi.fn(async (sessionId: string) => {
+        h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(sessionId);
+      }),
+      closeSession: vi.fn(async () => undefined),
+      broadcastSessionCreated: vi.fn(),
+      markTimelineMessage,
+      now: () => clock,
+      createId: () => {
+        ids += 1;
+        return `gen-${ids}`;
+      },
+    });
+
+    try {
+      // ── 第一棒：策划 ───────────────────────────────────────────────────
+      const planning = await service.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-planner',
+        objective: '给「伙伴协作」做一版方案。',
+        timeoutMs: 600_000,
+      });
+      expect(planning).toMatchObject({ ok: true, targetBotId: 'bot-planner', depth: 1 });
+      const firstId = (planning as { delegationId: string }).delegationId;
+      const firstChild = (planning as { childSessionId: string }).childSessionId;
+
+      // 发起方消息流里出现协作卡锚点（空正文 + 结构化标记）。
+      const anchor = h.sqlite!
+        .prepare('SELECT role, content, agent_meta AS agentMeta FROM messages WHERE session_id = ? AND client_id = ?')
+        .get('session-1', `bot-delegation-request:${firstId}`) as
+        | { role: string; content: string; agentMeta: string }
+        | undefined;
+      expect(anchor).toMatchObject({ role: 'assistant', content: '' });
+      expect(readBotCollaborationMeta(JSON.parse(anchor!.agentMeta).botCollaboration)).toMatchObject(
+        {
+          role: 'delegation-request',
+          delegationId: firstId,
+          fromBotId: 'bot-1',
+          toBotId: 'bot-planner',
+          toBotName: 'Planner Bot',
+          parentSessionId: 'session-1',
+          childSessionId: firstChild,
+        },
+      );
+      // 目标伙伴主任务里的请求镜像同样带标记（客座来访 + 回跳发起方任务）。
+      const guestRequest = h.sqlite!
+        .prepare('SELECT agent_meta AS agentMeta FROM messages WHERE client_id = ?')
+        .get(`bot-delegation-target-request:${firstId}`) as { agentMeta: string } | undefined;
+      expect(
+        readBotCollaborationMeta(JSON.parse(guestRequest!.agentMeta).botCollaboration),
+      ).toMatchObject({ role: 'guest-request', parentSessionId: 'session-1' });
+
+      // ── 忙时插话 ──────────────────────────────────────────────────────
+      clock = 12_000;
+      const nudge = await service.interjectDelegation(
+        'session-1',
+        firstId,
+        '  先别铺开，我只要三条。  ',
+        'nudge-1',
+      );
+      expect(nudge).toEqual({
+        ok: true,
+        delegationId: firstId,
+        childSessionId: firstChild,
+        queued: false,
+      });
+      expect(dispatch).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          targetSessionId: firstChild,
+          clientId: `bot-delegation-interject:${firstId}:nudge-1`,
+          persistedContent: expect.stringContaining('先别铺开，我只要三条。'),
+        }),
+      );
+      const mirror = h.sqlite!
+        .prepare('SELECT role, content, agent_meta AS agentMeta FROM messages WHERE session_id = ? AND client_id = ?')
+        .get('session-1', `bot-delegation-interject-mirror:${firstId}:nudge-1`) as
+        | { role: string; content: string; agentMeta: string }
+        | undefined;
+      // 正文两端的空白被裁掉：留痕记的是那句话，不是输入框里的手抖。
+      expect(mirror).toMatchObject({ role: 'assistant', content: '先别铺开，我只要三条。' });
+      expect(readBotCollaborationMeta(JSON.parse(mirror!.agentMeta).botCollaboration)).toMatchObject(
+        { role: 'interjection', delegationId: firstId },
+      );
+
+      // 同一幂等 token 重发只留一条留痕。
+      await service.interjectDelegation('session-1', firstId, '重复的一句', 'nudge-1');
+      expect(
+        h.sqlite!
+          .prepare('SELECT count(*) FROM messages WHERE session_id = ? AND client_id = ?')
+          .pluck()
+          .get('session-1', `bot-delegation-interject-mirror:${firstId}:nudge-1`),
+      ).toBe(1);
+
+      // 归属：别的任务不能往这个委派里塞话，且不泄露「有这么个委派」。
+      await expect(
+        service.interjectDelegation('session-2', firstId, '我不是发起方'),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+      await expect(
+        service.interjectDelegation('session-1', firstId, '   '),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+
+      // ── 第一棒收口 ────────────────────────────────────────────────────
+      clock = 20_000;
+      await service.settleSession({
+        childSessionId: firstChild,
+        outcome: 'done',
+        resultText: '方案定三条：先对齐、再做卡、最后接插话。',
+      });
+      expect(
+        h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').pluck().get(firstId),
+      ).toBe('completed');
+      // 结果回传落到发起方任务后被标成客座气泡。
+      expect(markTimelineMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'session-1',
+          clientId: `bot-delegation-completion:${firstId}`,
+          agentMeta: expect.objectContaining({
+            botCollaboration: expect.objectContaining({
+              role: 'guest-result',
+              toBotId: 'bot-planner',
+              childSessionId: firstChild,
+            }),
+          }),
+        }),
+      );
+      // 回传正文的机读格式必须能被客座气泡的取文助手认出来，否则用户会在气泡里
+      // 看到一整段方括号协议文本。
+      const completion = dispatch.mock.calls
+        .map(([params]) => params as unknown as { message: string; clientId?: string })
+        .find((params) => params.clientId === `bot-delegation-completion:${firstId}`);
+      expect(readBotDelegationCompletionBody(completion!.message)).toEqual({
+        text: '方案定三条：先对齐、再做卡、最后接插话。',
+        error: null,
+      });
+
+      // 终态后不再接受插话。
+      await expect(
+        service.interjectDelegation('session-1', firstId, '再改一版'),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'ALREADY_TERMINAL' });
+
+      // ── 第二棒：拿第一棒的结论去叫设计 ───────────────────────────────
+      const firstResult = h.sqlite!
+        .prepare('SELECT result_summary AS resultSummary FROM bot_delegations WHERE id = ?')
+        .get(firstId) as { resultSummary: string };
+      clock = 30_000;
+      const design = await service.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-designer',
+        objective: `按这版方案出界面稿：${firstResult.resultSummary}`,
+        timeoutMs: 600_000,
+      });
+      expect(design).toMatchObject({ ok: true, targetBotId: 'bot-designer', depth: 1 });
+      const secondId = (design as { delegationId: string }).delegationId;
+      expect(secondId).not.toBe(firstId);
+
+      // 两张协作卡按发生顺序留在发起方的消息流里。
+      const anchors = h.sqlite!
+        .prepare(
+          `SELECT client_id AS clientId FROM messages
+             WHERE session_id = 'session-1' AND client_id LIKE 'bot-delegation-request:%'
+             ORDER BY created_at, rowid`,
+        )
+        .all() as Array<{ clientId: string }>;
+      expect(anchors.map((row) => row.clientId)).toEqual([
+        `bot-delegation-request:${firstId}`,
+        `bot-delegation-request:${secondId}`,
+      ]);
+      // 第二棒的目标读到的是第一棒的结论，不是原始需求。
+      const secondRequest = h.sqlite!
+        .prepare('SELECT content FROM messages WHERE client_id = ?')
+        .pluck()
+        .get(`bot-delegation-target-request:${secondId}`) as string;
+      expect(secondRequest).toContain('先对齐、再做卡、最后接插话');
+
+      const secondChild = (design as { childSessionId: string }).childSessionId;
+      clock = 40_000;
+      await service.settleSession({
+        childSessionId: secondChild,
+        outcome: 'done',
+        resultText: '界面稿两张：协作卡与客座气泡。',
+      });
+      expect(
+        h.sqlite!
+          .prepare('SELECT id, status FROM bot_delegations ORDER BY created_at, rowid')
+          .all(),
+      ).toEqual([
+        { id: firstId, status: 'completed' },
+        { id: secondId, status: 'completed' },
+      ]);
+    } finally {
+      service.dispose();
+    }
+  });
+
+
+  it('recovers the teammate answer, not the collaboration card it left behind', async () => {
+    // 嵌套委派下,子任务自己也会派活 —— 那会在它的时间线上留下协作卡锚点(空正文)
+    // 与插话留痕,两者都是 assistant 行。重启恢复若直接取"最后一条 assistant",
+    // 上一层拿到的"结果"就会变成一句催促,或者干脆是空的。
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    await invoke('local-db:bots:create', {
+      id: 'bot-2',
+      name: 'Research Bot',
+      capabilities: { harness: 'pi', model: 'grok-4.5', permissions: 'trusted' },
+    });
+    const first = createBotDelegationService({
+      dispatch: vi.fn(
+        async (params: { targetSessionId: string; onAccepted?: () => Promise<void> | void }) => {
+          await params.onAccepted?.();
+          return {
+            ok: true as const,
+            targetSessionId: params.targetSessionId,
+            wakeKind: 'already-active' as const,
+          };
+        },
+      ),
+      abortSession: vi.fn(async () => undefined),
+      createId: () => 'delegation-nested',
+      now: () => 50_000,
+    });
+    try {
+      await expect(
+        first.delegateToBot({
+          callerSessionId: 'session-1',
+          targetBotId: 'bot-2',
+          objective: '查一下兼容性矩阵。',
+        }),
+      ).resolves.toMatchObject({ ok: true, childSessionId: 'session-3' });
+    } finally {
+      first.dispose();
+    }
+
+    const insertMessage = h.sqlite!.prepare(
+      `INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+       VALUES (?, ?, 'session-3', 'assistant', ?, ?, ?)`,
+    );
+    insertMessage.run('m-answer', 'answer', '矩阵查完了：三个版本都兼容。', null, 51_000);
+    // 子任务转手派给了别人,时间线上落了一张协作卡锚点(空正文)。
+    insertMessage.run(
+      'm-card',
+      'bot-delegation-request:delegation-inner',
+      '',
+      JSON.stringify({ botCollaboration: { v: 1, role: 'delegation-request', delegationId: 'x' } }),
+      52_000,
+    );
+    insertMessage.run(
+      'm-nudge',
+      'bot-delegation-interject-mirror:delegation-inner:t1',
+      '快一点',
+      JSON.stringify({ botCollaboration: { v: 1, role: 'interjection', delegationId: 'x' } }),
+      53_000,
+    );
+    h.sqlite!
+      .prepare(
+        `UPDATE sessions SET active_turn_started_at = 51000, last_turn_ended_at = 54000
+           WHERE id = 'session-3'`,
+      )
+      .run();
+
+    const restored = createBotDelegationService({
+      dispatch: vi.fn(async (params: { targetSessionId: string }) => ({
+        ok: true as const,
+        targetSessionId: params.targetSessionId,
+        wakeKind: 'already-active' as const,
+      })),
+      abortSession: vi.fn(async () => undefined),
+      archiveSession: vi.fn(async (sessionId: string) => {
+        h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(sessionId);
+      }),
+      now: () => 55_000,
+    });
+    try {
+      await restored.restore();
+      expect(
+        h
+          .sqlite!.prepare(
+            'SELECT status, result_summary AS resultSummary FROM bot_delegations WHERE id = ?',
+          )
+          .get('delegation-nested'),
+      ).toEqual({ status: 'completed', resultSummary: '矩阵查完了：三个版本都兼容。' });
+    } finally {
+      restored.dispose();
+    }
   });
 });

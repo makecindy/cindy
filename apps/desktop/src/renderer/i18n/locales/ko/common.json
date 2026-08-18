@@ -6600,6 +6600,32 @@
     },
     "advancedIdentity": {
       "title": "설명과 배경 정보"
+    },
+    "collab": {
+      "joined": "{{name}}님이 대화에 참여했습니다",
+      "guestTag": "게스트",
+      "nudge": "재촉하기",
+      "nudgeSend": "보내기",
+      "nudgePlaceholder": "어떻게 되어 가나요?",
+      "nudgeAria": "{{name}}에게 한마디 보내기",
+      "interjected": "{{name}}을(를) 재촉했습니다",
+      "stop": "중지",
+      "openTask": "{{name}}의 대화 보기",
+      "actionFailed": "보내지 못했습니다. 다시 시도해 주세요.",
+      "status": {
+        "queued": "시작하는 중",
+        "waiting": "시작 대기 중",
+        "running": "작업 중",
+        "completed": "완료",
+        "failed": "실패",
+        "cancelled": "중지됨",
+        "timed-out": "시간 초과"
+      },
+      "report": {
+        "done": "{{name}} · {{duration}} · 완료",
+        "failed": "{{name}} · {{duration}} · 실패",
+        "stopped": "{{name}} · {{duration}} · 중지"
+      }
     }
   },
   "commonUi": {

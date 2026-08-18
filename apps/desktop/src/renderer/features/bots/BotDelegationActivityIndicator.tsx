@@ -108,7 +108,10 @@ export function BotDelegationActivityIndicator({ sessionId, maxWidth }: Props) {
             }).catch(() => undefined);
           }}
           aria-label={t('rightSidebar.botDelegations.activity.openAria')}
-          className="flex h-8 w-full items-center gap-2 rounded-xl border border-[var(--border-default)] bg-[hsl(var(--content-area))] px-3 text-12 leading-none text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          // 层级刻意低于消息流里的协作卡：那张卡是对话的一部分（有边框、有动作），
+          // 这条只是「滚出视口了也还在跑」的常驻提醒 —— 无边框、更小的字、次级色，
+          // 两者同屏时不会看起来像同一个东西出现了两次。
+          className="flex h-7 w-full items-center gap-2 rounded-full bg-[var(--surface-chip)] px-3 text-11 leading-none text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <span
             className="inline-flex shrink-0 animate-spin motion-reduce:animate-none"

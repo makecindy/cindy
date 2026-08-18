@@ -4716,6 +4716,12 @@ interface ElectronAPI {
       parentSessionId: string,
       delegationId: string,
     ) => Promise<import('../shared/botDelegation').BotDelegationCancelResult>;
+    /** 向仍在进行的委派补一句话（催促 / 补充 / 修正）；归属与状态校验在主进程。 */
+    interjectBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+      text: string,
+    ) => Promise<import('../shared/botCollaboration').BotDelegationInterjectResult>;
     onBotDelegationChanged: (
       cb: (
         payload: import('../shared/botDelegation').BotDelegationChangedPayload,

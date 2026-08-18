@@ -722,6 +722,11 @@ export const MAKER_INVOKE = {
   BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
   /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
+  /**
+   * Cindy Bot 父任务向仍在进行的委派补一句话（催促 / 补充 / 修正）。
+   * 入参 (parentSessionId, delegationId, text)；归属与状态校验都在主进程做。
+   */
+  BOT_DELEGATION_INTERJECT: 'maker:bot-delegation:interject',
   BOT_AUTOMATIONS_LIST: 'maker:bot-automations:list',
   BOT_AUTOMATION_CREATE: 'maker:bot-automation:create',
   BOT_AUTOMATION_UPDATE: 'maker:bot-automation:update',
