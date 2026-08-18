@@ -75,6 +75,19 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
     expect(catalog.lastSent.map((task) => task.id)).toEqual(['hidden-new', 'visible-old']);
   });
 
+  it('keeps a published empty sidebar empty instead of falling back to every task', () => {
+    const catalog = buildWorkLouderCodexTaskCatalog(
+      [
+        { id: 'hidden-a', title: 'Hidden A', pinnedAt: null, userSendAt: 2_000 },
+        { id: 'hidden-b', title: 'Hidden B', pinnedAt: null, userSendAt: 1_000 },
+      ],
+      { publishedVisibleOrder: true },
+    );
+
+    expect(catalog.sidebar).toEqual([]);
+    expect(catalog.lastSent.map((task) => task.id)).toEqual(['hidden-a', 'hidden-b']);
+  });
+
   it('keeps an untitled task addressable instead of dropping it', () => {
     const catalog = buildWorkLouderCodexTaskCatalog([
       { id: 'blank', title: null, pinnedAt: null, userSendAt: null },

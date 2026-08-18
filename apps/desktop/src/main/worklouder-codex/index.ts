@@ -123,7 +123,7 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
   (sessionId, focus = true) => openMainWindowSession(sessionId, { focus }),
   async () =>
     rendererTaskCatalog
-      ? buildWorkLouderCodexTaskCatalog(rendererTaskCatalog)
+      ? buildWorkLouderCodexTaskCatalog(rendererTaskCatalog, { publishedVisibleOrder: true })
       : listWorkLouderCodexTaskCatalog(),
   dispatchRendererAction,
   dispatchPreviewInput,

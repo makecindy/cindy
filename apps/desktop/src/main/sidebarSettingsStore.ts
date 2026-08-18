@@ -33,6 +33,7 @@ import {
   ownerScopedUserDataPath,
 } from './appSessionState.js';
 import { createLogger } from './logger.js';
+import { resumeInputDeviceTaskSlots } from './input-devices/registry.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
   hasExclusiveSharedLegacyUserDataAccess,
@@ -743,13 +744,11 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
 }
 
 function refreshInputDeviceTaskSlotsAfterPinnedOrderChange(): void {
-  void import('./input-devices/index.js')
-    .then(({ resumeInputDeviceTaskSlots }) => resumeInputDeviceTaskSlots())
-    .catch((error: unknown) => {
-      log.warn('Input device task slot refresh failed after pinned-order change', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+  void resumeInputDeviceTaskSlots().catch((error: unknown) => {
+    log.warn('Input device task slot refresh failed after pinned-order change', {
+      error: error instanceof Error ? error.message : String(error),
     });
+  });
 }
 
 export function registerSidebarSettingsIpc(): void {

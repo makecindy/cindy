@@ -124,7 +124,9 @@ import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
   consumeNewMakerDialogueTargetRequest,
+  consumeNewMakerFolderPickerRequest,
   readNewMakerDialogueTargetRequest,
+  readNewMakerFolderPickerRequest,
 } from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
@@ -582,8 +584,13 @@ export function NewMakerDraftRoute() {
     () => readNewMakerDialogueTargetRequest(location.state),
     [location.state],
   );
+  const folderPickerRequest = useMemo(
+    () => readNewMakerFolderPickerRequest(location.state),
+    [location.state],
+  );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
+  const handledFolderPickerRequestRef = useRef<string | null>(null);
   // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
   // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
   // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
@@ -2543,6 +2550,22 @@ export function NewMakerDraftRoute() {
     // 打开项目 picker 时收掉设备 picker(两个 popover 都是 absolute 浮层,会互相遮挡)。
     if (open) setDevicePickerOpen(false);
   }, []);
+
+  useLayoutEffect(() => {
+    if (
+      !folderPickerRequest ||
+      handledFolderPickerRequestRef.current === folderPickerRequest.requestId
+    ) {
+      return;
+    }
+    handledFolderPickerRequestRef.current = folderPickerRequest.requestId;
+    setFolderPickerOpen(true);
+    setDevicePickerOpen(false);
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: consumeNewMakerFolderPickerRequest(location.state),
+    });
+  }, [folderPickerRequest, location, navigate]);
   const handleDevicePickerOpenChange = useCallback((open: boolean) => {
     setDevicePickerOpen(open);
     if (open) setFolderPickerOpen(false);

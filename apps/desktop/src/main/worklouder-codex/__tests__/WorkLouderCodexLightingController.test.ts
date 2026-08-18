@@ -749,4 +749,41 @@ describe('WorkLouderCodexLightingController', () => {
 
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it('does not fire a held stick action after the account resumes', async () => {
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn(),
+      setJoystickInputHandler: vi.fn((handler: typeof joystickRef.current) => {
+        joystickRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    controller.start();
+    await controller.resumeTaskSlots();
+    joystickRef.current?.({ angle: 0.5, distance: 1 });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'command', commandId: 'toggleSidebar' }),
+    );
+
+    dispatch.mockClear();
+    controller.suspendTaskSlots();
+    await controller.resumeTaskSlots();
+    joystickRef.current?.({ angle: 0.5, distance: 1 });
+    expect(dispatch).not.toHaveBeenCalled();
+
+    joystickRef.current?.({ angle: 0.5, distance: 0 });
+    joystickRef.current?.({ angle: 0.5, distance: 1 });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'command', commandId: 'toggleSidebar' }),
+    );
+  });
 });

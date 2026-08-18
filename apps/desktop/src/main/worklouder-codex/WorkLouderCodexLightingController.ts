@@ -108,6 +108,7 @@ export class WorkLouderCodexLightingController {
   private started = false;
   private layoutPreviewActive = false;
   private inputActionsEnabled = true;
+  private joystickNeedsCenter = false;
 
   constructor(
     private readonly sink: WorkLouderCodexLightingSink,
@@ -271,6 +272,7 @@ export class WorkLouderCodexLightingController {
     this.slotSessionIds = [];
     this.pendingAgentKeyTap = null;
     this.joystickDirection = null;
+    this.joystickNeedsCenter = true;
     this.clearAutoDimTimer();
     this.clearWindowRevealTimer();
     this.lightingDimmed = false;
@@ -461,6 +463,10 @@ export class WorkLouderCodexLightingController {
     const direction = joystickDirection(event);
     this.emitStickPreview(event);
     if (this.layoutPreviewActive || !this.inputActionsEnabled) return;
+    if (this.joystickNeedsCenter) {
+      if (direction) return;
+      this.joystickNeedsCenter = false;
+    }
 
     // Scrolling follows the stick continuously — held means keep scrolling, and
     // pushing further means faster — so it cannot go through the one-shot path

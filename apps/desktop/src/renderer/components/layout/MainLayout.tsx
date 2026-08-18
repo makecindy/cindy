@@ -92,6 +92,7 @@ import {
   shouldAnimateSidebarVisibilityRequest,
 } from '@/features/right-sidebar/lib/sidebarCommands';
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
+import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -1185,7 +1186,7 @@ export function MainLayout() {
           navigate('/issues');
           return true;
         case 'openFolder':
-          navigate('/cc-agent/new');
+          navigate('/cc-agent/new', { state: makeFolderPickerNewMakerRouteState() });
           return true;
         case 'navigateBack':
           navigate(-1);

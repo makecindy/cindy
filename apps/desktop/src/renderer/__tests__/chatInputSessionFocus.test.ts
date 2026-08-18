@@ -88,6 +88,11 @@ describe('ChatInput session switch focus contract', () => {
     expect(mainLayoutSource).toContain("const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');");
     expect(mainLayoutSource).toContain('if (reviewIsActive && reviewTab) {');
     expect(mainLayoutSource).toContain('await closeTab(sessionId, reviewTab.id);');
+    expect(mainLayoutSource).toContain(
+      "navigate('/cc-agent/new', { state: makeFolderPickerNewMakerRouteState() })",
+    );
+    expect(newMakerDraftRouteSource).toContain('readNewMakerFolderPickerRequest(location.state)');
+    expect(newMakerDraftRouteSource).toContain('setFolderPickerOpen(true)');
     expect(newMakerDraftRouteSource).toContain('focusOnStorageKeyChange');
   });
 

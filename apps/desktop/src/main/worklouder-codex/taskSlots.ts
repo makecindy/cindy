@@ -84,6 +84,7 @@ export interface WorkLouderCodexTaskCatalogInput {
  */
 export function buildWorkLouderCodexTaskCatalog(
   rows: readonly WorkLouderCodexTaskCatalogInput[],
+  options: { publishedVisibleOrder?: boolean } = {},
 ): WorkLouderCodexTaskCatalog {
   const catalogRows: WorkLouderCodexTaskCatalogRow[] = rows
     .slice(0, TASK_OPTION_LIMIT)
@@ -99,13 +100,15 @@ export function buildWorkLouderCodexTaskCatalog(
   const visibleOrder = rows
     .filter((row) => row.sidebarOrder !== undefined)
     .toSorted((left, right) => (left.sidebarOrder ?? 0) - (right.sidebarOrder ?? 0));
+  // Local database rows have no sidebarOrder. A renderer publication does:
+  // even an empty visible list must stay empty, otherwise a machine filter
+  // or sidebar search would light keys for tasks the user cannot see.
+  const publishedVisibleRows = visibleOrder.flatMap((item) => {
+    const row = byId.get(item.id);
+    return row ? [row] : [];
+  });
   const sidebarSource =
-    visibleOrder.length > 0
-      ? visibleOrder.flatMap((item) => {
-          const row = byId.get(item.id);
-          return row ? [row] : [];
-        })
-      : catalogRows;
+    options.publishedVisibleOrder || visibleOrder.length > 0 ? publishedVisibleRows : catalogRows;
   const sidebar = sidebarSource.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(toTaskOption);
   const lastSent = sortLastSentRows(catalogRows)
     .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
