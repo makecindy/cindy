@@ -150,7 +150,7 @@ describe('scanPiCustomizations', () => {
     expect(stat.mock.calls.some(([candidate]) => String(candidate).includes('entry-'))).toBe(false);
   });
 
-  it('fails closed at the shared byte budget before opening the next SKILL.md', async () => {
+  it('charges streamed bytes when SKILL.md exceeds its reported size', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');
     mkdirSync(path.join(repo, '.git'), { recursive: true });
@@ -161,9 +161,10 @@ describe('scanPiCustomizations', () => {
     const actualStat = await fs.promises.stat([...mdPaths][0]);
     const reservedStat = {
       ...actualStat,
-      size: 16 * 1024 * 1024,
+      size: 1,
       isFile: () => true,
     } as fs.Stats;
+    const streamedChunk = Buffer.alloc(16 * 1024 * 1024);
     const originalStat = fs.promises.stat;
     const stat = vi.fn((candidate: string) => {
       if (candidate === piUserSkillRoot()) {
@@ -178,7 +179,7 @@ describe('scanPiCustomizations', () => {
       return {
         stat: vi.fn(async () => reservedStat),
         createReadStream: vi.fn(() => ({
-          [Symbol.asyncIterator]: () => [][Symbol.iterator](),
+          [Symbol.asyncIterator]: () => [streamedChunk][Symbol.iterator](),
         })),
         close,
       } as unknown as FileHandle;

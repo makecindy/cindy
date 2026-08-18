@@ -188,6 +188,7 @@ async function readBoundedSkillFile(
 
     const chunks: Buffer[] = [];
     let byteLength = 0;
+    let chargedByteLength = pathBefore.size;
     stream = handle.createReadStream({
       start: 0,
       autoClose: false,
@@ -205,6 +206,10 @@ async function readBoundedSkillFile(
       byteLength += chunk.byteLength;
       if (byteLength > MAX_PI_CUSTOMIZATION_SKILL_MD_BYTES) {
         throw unsafeSkillFileError('Pi Skill entrypoint exceeded the byte budget');
+      }
+      if (byteLength > chargedByteLength) {
+        reserveScanBytes(budget, byteLength - chargedByteLength);
+        chargedByteLength = byteLength;
       }
       chunks.push(chunk);
     }
