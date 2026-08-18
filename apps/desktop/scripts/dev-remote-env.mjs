@@ -32,14 +32,24 @@ const env = {
   VITE_CINDY_AUTH_REGION: startupConfig.region,
 };
 
+// XDT_RESTART_MANAGED 是 restart 链路的一跳（one-hop）启动标记：只在判定「本进程
+// 是不是 restart 拉起的」时有意义，进入 Electron 后会被 agent 进程继承，导致 agent
+// 在 worktree 里跑裸 dev:remote 时误判「受 restart 管理」而禁用自动隔离（review-pr
+// P1, PR #2640）。从传给 Electron 的环境里删除，只保留给启动判定用。
+const restartManagedEnv = { ...process.env };
+delete restartManagedEnv.XDT_RESTART_MANAGED;
+
 // 内置 worktree 会话里的裸 dev 启动默认按隔离沙箱处理（issue #2635）：worktree 内
 // 不带 --isolated 裸启动会沿用区域默认 profile + 物理机 deviceId，dev 登录会把同机
 // release 的服务端 refresh token 顶掉、把 release 挤下线。显式传了 --isolated /
-// --passive / --preserve-running（或已设 XDT_ISOLATED=1 / XDT_USER_DATA_DIR）时不干预；
-// baseRepo 直跑保持既有共库语义。
+// --passive（或已设 XDT_ISOLATED=1 / XDT_USER_DATA_DIR）时不干预；baseRepo 直跑保持
+// 既有共库语义。restart 链路经 XDT_RESTART_MANAGED / XDT_SCHEDULER_PASSIVE 识别。
+// 注意 --preserve-running 不在豁免清单：裸路径上 Electron 侧不认这个参数（只有
+// restart 会翻译成 XDT_SCHEDULER_PASSIVE=1），豁免它会共享 userData 却正常调度 +
+// 正常单实例锁（review-pr P1, PR #2640）。
 const worktreeIsolation = resolveWorktreeIsolationFromCwd({
   argv: rawArgs,
-  env: process.env,
+  env: restartManagedEnv,
 });
 if (worktreeIsolation) {
   env.XDT_ISOLATED = '1';

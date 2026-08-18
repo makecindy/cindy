@@ -90,7 +90,12 @@ dev 会沿用区域默认 profile + 物理机 deviceId，登录后把同机正�
 **restart 链路（`restart-desktop-remote.mjs`）不受此自动隔离影响**：restart 会置
 `XDT_RESTART_MANAGED=1` 显式表态（其参数契约即语义：无参=共库+正常调度、
 `--isolated`=隔离、`--passive` / `--preserve-running`=共享），自动隔离判定识别后一律
-不干预——避免 worktree 内无参 restart 被静默改造成隔离沙箱。
+不干预——避免 worktree 内无参 restart 被静默改造成隔离沙箱。该标记是**一跳（one-hop）
+启动标记**：`dev-remote-env.mjs` 判定完成后即从传给 Electron 的环境删除，避免被
+agent 子进程继承后禁用自动隔离（agent 在 worktree 跑裸 `dev:remote` 时防护必须恢复）。
+裸 dev 路径上的 `--preserve-running` **不豁免**自动隔离：Electron 侧不认该参数
+（只有 restart 会翻译成 `XDT_SCHEDULER_PASSIVE=1`），豁免会导致共享 userData 却
+正常调度 + 正常单实例锁（定时任务重复 / 无法再开预览）。
 
 配套护栏与工具：
 

@@ -246,7 +246,6 @@ test("worktree dev launch honors explicit isolation/sharing intent and never ove
     ["--isolated"],
     ["--isolated=feature-a"],
     ["--passive"],
-    ["--preserve-running"],
     ["start", "--", "--isolated=feature-a"],
   ]) {
     assert.equal(
@@ -259,6 +258,17 @@ test("worktree dev launch honors explicit isolation/sharing intent and never ove
       `argv ${JSON.stringify(argv)} must suppress auto-isolation`,
     );
   }
+  // 裸 dev 路径上的 --preserve-running 不豁免自动隔离：Electron 侧不认这个参数
+  // （只有 restart 会翻译成 XDT_SCHEDULER_PASSIVE=1），豁免它会共享 userData 却
+  // 正常调度 + 正常单实例锁，造成定时任务重复 / 无法再开预览（review-pr P1）。
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: ["--preserve-running"],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
   assert.equal(
     resolveWorktreeIsolationFromCwd({
       cwd: worktreeCwd("epic-thompson"),
@@ -324,5 +334,61 @@ test("worktree dev launch falls back to the default sandbox for invalid names", 
       env: {},
     }),
     { worktreeName: null },
+  );
+});
+
+// ── restart 一跳标记 / 裸 preserve-running（review-pr P1，PR #2640）─────────────
+
+test("restart marker is one-hop: stripped from the Electron env but honored during launch decision", () => {
+  // 判定在 dev-remote-env 剥离 XDT_RESTART_MANAGED 后用剥离后的 env 调用：
+  // - 剥离后无标记 → worktree 裸启动命中自动隔离（#2635 防护恢复）
+  // - restart --passive 仍透传 XDT_SCHEDULER_PASSIVE=1 → 共享意图被识别不干预
+  const stripped = {};
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: stripped,
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { ...stripped, XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
+  );
+  // XDT_RESTART_MANAGED 存在时（透传进 Electron 前）判定仍识别 restart 链路
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1" },
+    }),
+    null,
+  );
+});
+
+test("bare dev:remote with --preserve-running in a worktree is isolated (no silent shared userData)", () => {
+  // 裸路径（不经 restart）--preserve-running 不被豁免：Electron 侧不认该参数，
+  // 豁免会导致共享 userData 却正常调度 + 正常单实例锁（定时任务重复 / 预览失败）。
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: ["--preserve-running"],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  // 但 restart 链路的 --preserve-running 经 XDT_SCHEDULER_PASSIVE=1 表达共享意图
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
   );
 });

@@ -178,11 +178,15 @@ export function worktreeNameFromPath(cwd) {
  * - cwd 命中托管 worktree 且调用方未声明任何显式模式时返回 `{ worktreeName }`；
  *   worktree 名不合法时返回 `{ worktreeName: null }`（仍隔离，回退默认沙箱，与
  *   devCliFlags 的 invalidIsolationName 语义一致——回落到不隔离会混进正式版数据）；
- * - 显式 `--isolated[=<名>]` / `--passive` / `--preserve-running`、`XDT_ISOLATED=1`、
- *   `XDT_USER_DATA_DIR`、`XDT_SCHEDULER_PASSIVE=1`（restart --passive /
- *   --preserve-running 透传的共享意图）或 `XDT_RESTART_MANAGED=1`（restart 链路：
- *   参数契约显式，默认=共库+正常调度，由 restart 自己负责，不套自动隔离）已设置时
- *   返回 null（显式意图优先，不覆盖用户选择）；
+ * - 显式 `--isolated[=<名>]` / `--passive`、`XDT_ISOLATED=1`、`XDT_USER_DATA_DIR`、
+ *   `XDT_SCHEDULER_PASSIVE=1`（restart --passive / --preserve-running 透传的共享
+ *   意图）或 `XDT_RESTART_MANAGED=1`（restart 链路：参数契约显式，默认=共库+正常
+ *   调度，由 restart 自己负责，不套自动隔离）已设置时返回 null（显式意图优先，
+ *   不覆盖用户选择）；
+ * - `--preserve-running` **不在**豁免清单：裸 dev 路径上 Electron 侧不认这个参数
+ *   （只有 restart 会翻译成 XDT_SCHEDULER_PASSIVE=1），豁免它会共享 userData 却
+ *   正常调度 + 正常单实例锁，造成定时任务重复 / 无法再开预览（review-pr P1，
+ *   PR #2640）；restart 链路经 env 标记识别，不受影响；
  * - baseRepo 直跑（cwd 不在 worktree 下）返回 null，保持既有共库语义不变。
  */
 export function resolveWorktreeIsolationFromCwd({
@@ -195,8 +199,7 @@ export function resolveWorktreeIsolationFromCwd({
       (arg) =>
         arg === "--isolated" ||
         arg.startsWith("--isolated=") ||
-        arg === "--passive" ||
-        arg === "--preserve-running",
+        arg === "--passive",
     )
   ) {
     return null;
