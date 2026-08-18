@@ -144,7 +144,7 @@ describe("ConversationShareSvg", () => {
       colors,
       messages: [
         {
-          body: "- [x] shipped\n- [ ] pending\n1. first\n* bullet",
+          body: "- [x] shipped\n- [ ] pending\n1. first\n* bullet\n2. [x] ordered done\n3. [ ] ordered pending",
           clientId: "list",
           kind: "assistant",
         },
@@ -157,6 +157,8 @@ describe("ConversationShareSvg", () => {
       "[ ] pending",
       "1. first",
       "* bullet",
+      "2. [x] ordered done",
+      "3. [ ] ordered pending",
     ]);
   });
 

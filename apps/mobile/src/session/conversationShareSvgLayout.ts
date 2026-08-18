@@ -199,12 +199,17 @@ function plainMarkdownBlockText(block: MobileMarkdownBlock): string {
     case "blockquote":
       return plainMarkdownInlineText(block.inlines);
     case "list_item": {
-      const marker =
+      const taskMarker =
         typeof block.checked === "boolean"
           ? block.checked
             ? "[x]"
             : "[ ]"
-          : block.marker;
+          : null;
+      const marker = taskMarker
+        ? block.ordered
+          ? `${block.marker} ${taskMarker}`
+          : taskMarker
+        : block.marker;
       return `${marker} ${plainMarkdownInlineText(block.inlines)}`;
     }
     case "table": {
