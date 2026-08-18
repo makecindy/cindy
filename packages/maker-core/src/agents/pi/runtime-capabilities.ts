@@ -1,3 +1,6 @@
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+
 import type { PiRpcResponse } from './rpc-client.js';
 import type {
   PiRuntimeCapabilityError,
@@ -16,6 +19,14 @@ const MAX_SOURCE_INFO_VALUE_LENGTH = 4_096;
 const MAX_ERROR_MESSAGE_LENGTH = 160;
 export const PI_RUNTIME_CAPABILITY_TIMEOUT_MS = 5_000;
 const PI_RPC_RESPONSE_KEYS = new Set(['type', 'id', 'command', 'success', 'data', 'error']);
+const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
+  'cindy.pi.runtime-user-skill-canonical-source',
+);
+
+interface PiRuntimeCapabilityCaptureOptions {
+  /** Local roots Cindy permits Pi to report as auto-loaded user Skill homes. */
+  readonly userSkillBaseDirs?: readonly string[];
+}
 
 type RuntimeCommandParseResult =
   | { ok: true; commands: PiRuntimeCommand[] }
@@ -24,6 +35,124 @@ type RuntimeCommandParseResult =
 function boundedString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== 'string' || value.trim().length === 0 || value.length > maxLength) return undefined;
   return value;
+}
+
+async function awaitRuntimeCapabilityStep<T>(
+  operation: () => Promise<T>,
+  deadlineAtMs: number,
+): Promise<T> {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) throw new Error('Pi runtime capability provenance capture timed out');
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Pi runtime capability provenance capture timed out')),
+          remainingMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function stableCanonicalUserSkillSource(
+  baseDir: string,
+  entryName: string,
+  deadlineAtMs: number,
+): Promise<string | null> {
+  const entryPath = path.join(baseDir, 'skills', entryName);
+  try {
+    const [entryBefore, canonicalBefore] = await Promise.all([
+      awaitRuntimeCapabilityStep(() => fsp.lstat(entryPath, { bigint: true }), deadlineAtMs),
+      awaitRuntimeCapabilityStep(() => fsp.realpath(entryPath), deadlineAtMs),
+    ]);
+    const [entryAfter, canonicalAfter, targetAfter] = await Promise.all([
+      awaitRuntimeCapabilityStep(() => fsp.lstat(entryPath, { bigint: true }), deadlineAtMs),
+      awaitRuntimeCapabilityStep(() => fsp.realpath(entryPath), deadlineAtMs),
+      awaitRuntimeCapabilityStep(() => fsp.stat(entryPath, { bigint: true }), deadlineAtMs),
+    ]);
+    if (
+      (!entryBefore.isDirectory() && !entryBefore.isSymbolicLink())
+      || !targetAfter.isDirectory()
+      || entryBefore.dev === 0n
+      || entryBefore.ino === 0n
+      || entryBefore.dev !== entryAfter.dev
+      || entryBefore.ino !== entryAfter.ino
+      || entryBefore.mode !== entryAfter.mode
+      || canonicalBefore !== canonicalAfter
+      || !path.isAbsolute(canonicalBefore)
+      || canonicalBefore.includes('\0')
+    ) return null;
+    return canonicalBefore;
+  } catch {
+    return null;
+  }
+}
+
+async function capturePathlessUserSkillSources(
+  commands: readonly PiRuntimeCommand[],
+  options: PiRuntimeCapabilityCaptureOptions,
+  deadlineAtMs: number,
+): Promise<void> {
+  if (!options.userSkillBaseDirs?.length) return;
+  const allowedBaseDirs = new Set<string>();
+  for (const rawBaseDir of options.userSkillBaseDirs) {
+    if (!path.isAbsolute(rawBaseDir) || rawBaseDir.includes('\0')) continue;
+    try {
+      allowedBaseDirs.add(await awaitRuntimeCapabilityStep(
+        () => fsp.realpath(path.resolve(rawBaseDir)),
+        deadlineAtMs,
+      ));
+    } catch {
+      // A missing or blocked host-owned root cannot prove runtime provenance.
+    }
+  }
+
+  for (const command of commands) {
+    if (
+      command.source !== 'skill'
+      || command.sourceInfo.scope !== 'user'
+      || command.sourceInfo.source !== 'auto'
+      || command.sourceInfo.path !== undefined
+    ) continue;
+    const match = /^skill:([^\s/\\\0]+)$/.exec(command.name);
+    const entryName = match?.[1];
+    const rawBaseDir = command.sourceInfo.baseDir;
+    if (
+      !entryName
+      || entryName === '.'
+      || entryName === '..'
+      || path.basename(entryName) !== entryName
+      || typeof rawBaseDir !== 'string'
+      || !path.isAbsolute(rawBaseDir)
+      || rawBaseDir.includes('\0')
+    ) continue;
+    try {
+      const canonicalBaseDir = await awaitRuntimeCapabilityStep(
+        () => fsp.realpath(path.resolve(rawBaseDir)),
+        deadlineAtMs,
+      );
+      if (!allowedBaseDirs.has(canonicalBaseDir)) continue;
+      const canonicalSource = await stableCanonicalUserSkillSource(
+        canonicalBaseDir,
+        entryName,
+        deadlineAtMs,
+      );
+      if (!canonicalSource) continue;
+      Object.defineProperty(command, PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE, {
+        value: canonicalSource,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+    } catch {
+      // Keep the command visible for diagnostics; final invocation fails closed.
+    }
+  }
 }
 
 function parseSourceInfo(value: unknown): PiRuntimeCommandSourceInfo | undefined {
@@ -156,7 +285,9 @@ export async function capturePiRuntimeCapabilityManifest(
   identity: { sessionId?: string; sdkSessionId?: string },
   generation: number,
   stage: PiRuntimeCapabilityErrorStage,
+  options: PiRuntimeCapabilityCaptureOptions = {},
 ): Promise<PiRuntimeCapabilityManifest> {
+  const deadlineAtMs = Date.now() + PI_RUNTIME_CAPABILITY_TIMEOUT_MS;
   try {
     const response = await requester.request(
       { type: 'get_commands' },
@@ -199,6 +330,7 @@ export async function capturePiRuntimeCapabilityManifest(
         message: 'Pi returned an invalid runtime command catalog',
       }, 'failed');
     }
+    await capturePathlessUserSkillSources(parsed.commands, options, deadlineAtMs);
     return {
       ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
       ...(identity.sdkSessionId ? { sdkSessionId: identity.sdkSessionId } : {}),

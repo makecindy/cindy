@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -27,6 +31,64 @@ describe('Pi runtime capability parsing', () => {
 
   it('accepts an authoritative empty catalog without treating it as scanner discovery', () => {
     expect(parsePiRuntimeCommands({ commands: [] })).toEqual({ ok: true, commands: [] });
+  });
+
+  it('freezes pathless user Skill provenance at catalog capture without serializing it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-runtime-user-skill-'));
+    const baseDir = path.join(root, 'pi-home');
+    const firstTarget = path.join(root, 'target-a');
+    const secondTarget = path.join(root, 'target-b');
+    const linkedSource = path.join(baseDir, 'skills', 'demo');
+    try {
+      fs.mkdirSync(firstTarget, { recursive: true });
+      fs.mkdirSync(secondTarget, { recursive: true });
+      fs.mkdirSync(path.dirname(linkedSource), { recursive: true });
+      fs.symlinkSync(
+        firstTarget,
+        linkedSource,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      const manifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: { source: 'auto', scope: 'user', baseDir },
+              }],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [baseDir] },
+      );
+      const runtimeCommand = manifest.commands[0]!;
+      const provenance = Reflect.get(
+        runtimeCommand,
+        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
+      );
+      expect(provenance).toBe(fs.realpathSync(firstTarget));
+      expect(JSON.stringify(manifest)).not.toContain(String(provenance));
+
+      fs.unlinkSync(linkedSource);
+      fs.symlinkSync(
+        secondTarget,
+        linkedSource,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      expect(Reflect.get(
+        runtimeCommand,
+        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
+      )).toBe(fs.realpathSync(firstTarget));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it.each([

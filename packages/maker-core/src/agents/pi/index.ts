@@ -110,7 +110,7 @@ import type { MemoryResetResult, MemorySetResult, MemoryStatus } from '../../typ
 import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../types/common.js';
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
-import { scanPiCustomizations } from './customization-scanner.js';
+import { piUserSkillRoot, scanPiCustomizations } from './customization-scanner.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
@@ -2320,6 +2320,11 @@ export class PiAgent extends BaseAgent {
         },
         generation,
         stage,
+        {
+          userSkillBaseDirs: remote
+            ? []
+            : [path.dirname(piUserSkillRoot()), configHome],
+        },
       );
       const manifest = {
         ...capturedManifest,

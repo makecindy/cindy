@@ -24,6 +24,9 @@ const defaultValidationDeps: PiSkillInvocationValidationDeps = {
 };
 
 const PI_SKILL_INVOCATION_VALIDATION_TIMEOUT = 'PI_SKILL_INVOCATION_VALIDATION_TIMEOUT';
+const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
+  'cindy.pi.runtime-user-skill-canonical-source',
+);
 
 async function awaitValidationStep<T>(
   operation: () => Promise<T>,
@@ -137,11 +140,12 @@ async function runtimeUserSkillMatchesSource(
   );
   if (derivedFromBase !== selected) return false;
 
-  // baseDir only identifies the user Skill's lexical entry. Re-resolving that
-  // entry at dispatch time cannot prove which target Pi loaded if the entry is
-  // a symlink that was retargeted after get_commands. Without Pi's loaded path,
-  // there is no immutable runtime target to compare, so fail closed.
-  if (command.sourceInfo.path === undefined) return false;
+  if (command.sourceInfo.path === undefined) {
+    // Pinned Pi v0.83 normally omits path for auto-loaded user Skills. Catalog
+    // capture freezes the canonical target in a non-enumerable Symbol; using
+    // only the re-resolved baseDir here would accept a post-catalog retarget.
+    return Reflect.get(command, PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE) === selected;
+  }
   const runtimePath = await canonicalLocalPath(
     command.sourceInfo.path,
     dependencies,

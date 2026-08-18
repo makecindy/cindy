@@ -339,6 +339,17 @@ describe('Pi Skill invocation validation', () => {
           },
         }],
       });
+      Object.defineProperty(
+        pathlessRuntimeManifest.commands[0]!,
+        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
+        { value: fs.realpathSync(linkedSource), enumerable: false },
+      );
+
+      expect(await isCurrentPiSkillInvocation(
+        item({ scope: 'user', sourcePath: linkedSource }),
+        pathlessRuntimeManifest,
+        skills({ scope: 'user', path: linkedSource, runtimeStatus: undefined }),
+      )).toBe(true);
 
       fs.unlinkSync(linkedSource);
       fs.symlinkSync(
