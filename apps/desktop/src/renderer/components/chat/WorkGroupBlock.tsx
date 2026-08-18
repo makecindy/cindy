@@ -80,7 +80,7 @@ function thinkingActivityForMessage(
   message: ChatMessage,
 ): ProjectedThinkingActivity | null {
   if (message.thinkingRedacted) return null;
-  const rawContent = message.content.trim();
+  const rawContent = typeof message.content === 'string' ? message.content.trim() : '';
   const content = rawContent.replace(/\s+/g, ' ');
   return content
     ? { kind: 'thinking', key: message.clientId, rawContent, content }
@@ -203,7 +203,7 @@ function ThinkingActivityRow({
  *  允许再点该行查看完整原文。live preview 继续复用上面的固定单行版本。 */
 function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
   const activity = thinkingActivityForMessage(message);
-  const rawContent = message.content.trim();
+  const rawContent = activity?.rawContent ?? '';
   const hasExplicitLineBreak = /[\r\n]/.test(rawContent);
   const textRef = useRef<HTMLSpanElement>(null);
   const [canExpand, setCanExpand] = useState(hasExplicitLineBreak);

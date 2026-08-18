@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { projectWorkActivities } from '@/lib/agent-actions/workActivityProjection';
+import {
+  projectRecentWorkActivities,
+  projectWorkActivities,
+} from '@/lib/agent-actions/workActivityProjection';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 function tool(id: string, toolName: string, toolInput: Record<string, unknown>): ChatMessage {
@@ -166,5 +169,20 @@ describe('projectWorkActivities', () => {
 
     expect(projection.explorationCounts.read).toBe(1);
     expect(projection.isPureExploration).toBe(false);
+  });
+
+  it('ignores malformed thinking content in recent and expanded projections', () => {
+    const child = {
+      kind: 'thinking' as const,
+      key: 'thinking-malformed',
+      message: {
+        clientId: 'thinking-malformed',
+        role: 'thinking',
+        content: undefined,
+      } as unknown as ChatMessage,
+    };
+
+    expect(projectRecentWorkActivities([child], true, 5)).toEqual([]);
+    expect(projectWorkActivities([child], true).activities).toEqual([]);
   });
 });

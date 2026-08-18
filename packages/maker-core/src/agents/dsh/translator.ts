@@ -3,7 +3,13 @@ import type { AgentEvent, UsageSnapshot } from '../../types/events.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import type { DshSessionEvent, DshTokenUsage } from './protocol.js';
 
-export interface DshTranslateContext { logger: Logger; isStreaming: boolean; thinkingSeq: number; thinkingBlocks: Map<number, string>; toolCalls: Map<number, { id?: string; name?: string; arguments: string }>; finalText: string; pendingTurnEndReason: string | null; usage: UsageSnapshot; }
+interface DshThinkingBlock {
+  blockId: string;
+  startedAt: number;
+  textParts: string[];
+}
+
+export interface DshTranslateContext { logger: Logger; isStreaming: boolean; thinkingSeq: number; thinkingBlocks: Map<number, DshThinkingBlock>; toolCalls: Map<number, { id?: string; name?: string; arguments: string }>; finalText: string; pendingTurnEndReason: string | null; usage: UsageSnapshot; }
 export function createDshTranslateContext(logger: Logger): DshTranslateContext { return { logger, isStreaming: false, thinkingSeq: 0, thinkingBlocks: new Map(), toolCalls: new Map(), finalText: '', pendingTurnEndReason: null, usage: { tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 } }; }
 export function createDshEventQueue(): AsyncQueue<AgentEvent> { return createAsyncQueue<AgentEvent>(); }
 function status(queue: AsyncQueue<AgentEvent>, ctx: DshTranslateContext, text: string, isRunning: boolean): void { queue.push({ type: 'status', data: { status: text, ...ctx.usage, isRunning }, source: 'dsh' }); }
@@ -20,9 +26,9 @@ export function translateDshEvent(event: DshSessionEvent, queue: AsyncQueue<Agen
   const index = typeof chunk.index === 'number' ? chunk.index : 0;
   switch (chunk.type) {
     case 'text-delta': if (typeof chunk.text === 'string') { ctx.finalText += chunk.text; queue.push({ type: 'text', data: { text: chunk.text }, source: 'dsh' }); } break;
-    case 'reasoning-delta': if (typeof chunk.text === 'string') { let blockId = ctx.thinkingBlocks.get(index); if (!blockId) { blockId = `dsh-think-${++ctx.thinkingSeq}`; ctx.thinkingBlocks.set(index, blockId); queue.push({ type: 'thinking', data: { stage: 'start', blockId, startedAt: Date.now() }, source: 'dsh' }); } queue.push({ type: 'thinking', data: { stage: 'delta', blockId, text: chunk.text }, source: 'dsh' }); } break;
+    case 'reasoning-delta': if (typeof chunk.text === 'string') { let thinkingBlock = ctx.thinkingBlocks.get(index); if (!thinkingBlock) { const startedAt = Date.now(); thinkingBlock = { blockId: `dsh-think-${++ctx.thinkingSeq}`, startedAt, textParts: [] }; ctx.thinkingBlocks.set(index, thinkingBlock); queue.push({ type: 'thinking', data: { stage: 'start', blockId: thinkingBlock.blockId, startedAt }, source: 'dsh' }); } thinkingBlock.textParts.push(chunk.text); queue.push({ type: 'thinking', data: { stage: 'delta', blockId: thinkingBlock.blockId, text: chunk.text }, source: 'dsh' }); } break;
     case 'tool-call-delta': { const existing = ctx.toolCalls.get(index) ?? { arguments: '' }; if (typeof chunk.id === 'string') existing.id = chunk.id; if (typeof chunk.name === 'string') existing.name = chunk.name; if (typeof chunk.argumentsDelta === 'string') existing.arguments += chunk.argumentsDelta; ctx.toolCalls.set(index, existing); break; }
-    case 'block-end': { const block = record(chunk.block); if (block?.type === 'reasoning') { const blockId = ctx.thinkingBlocks.get(index); if (blockId) { queue.push({ type: 'thinking', data: { stage: 'final', blockId }, source: 'dsh' }); ctx.thinkingBlocks.delete(index); } } else if (block?.type === 'tool-call') { const cached = ctx.toolCalls.get(index); const id = typeof block.id === 'string' ? block.id : cached?.id ?? `dsh-tool-${index}`; const name = typeof block.name === 'string' ? block.name : cached?.name ?? 'tool'; const args = typeof block.arguments === 'string' ? block.arguments : cached?.arguments; queue.push({ type: 'tool_use', data: { toolUseId: id, name, input: parseArguments(args) }, source: 'dsh' }); } break; }
+    case 'block-end': { const block = record(chunk.block); if (block?.type === 'reasoning') { const thinkingBlock = ctx.thinkingBlocks.get(index); if (thinkingBlock) { const text = typeof block.text === 'string' ? block.text : thinkingBlock.textParts.join(''); queue.push({ type: 'thinking', data: { stage: 'final', blockId: thinkingBlock.blockId, text, durationMs: Math.max(0, Date.now() - thinkingBlock.startedAt) }, source: 'dsh' }); ctx.thinkingBlocks.delete(index); } } else if (block?.type === 'tool-call') { const cached = ctx.toolCalls.get(index); const id = typeof block.id === 'string' ? block.id : cached?.id ?? `dsh-tool-${index}`; const name = typeof block.name === 'string' ? block.name : cached?.name ?? 'tool'; const args = typeof block.arguments === 'string' ? block.arguments : cached?.arguments; queue.push({ type: 'tool_use', data: { toolUseId: id, name, input: parseArguments(args) }, source: 'dsh' }); } break; }
     case 'usage': applyUsage(ctx, chunk.usage as DshTokenUsage | undefined); break;
   }
 }

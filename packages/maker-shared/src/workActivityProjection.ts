@@ -209,7 +209,9 @@ function projectThinkingMessage<TMessage extends WorkActivityMessageLike>(
   message: TMessage,
 ): ProjectedThinkingActivity | null {
   if (message.thinkingRedacted) return null;
-  const rawContent = message.content.trim();
+  // Agent events cross runtime/IPC boundaries. A malformed final event must not
+  // take down the whole message stream while the producer is being recovered.
+  const rawContent = typeof message.content === 'string' ? message.content.trim() : '';
   const content = rawContent.replace(/\s+/g, ' ');
   return content
     ? { kind: 'thinking', key: message.clientId, rawContent, content }

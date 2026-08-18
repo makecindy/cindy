@@ -525,6 +525,24 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(screen.getByTestId('redacted-thinking').getAttribute('data-redacted')).toBe('true');
   });
 
+  it('ignores malformed thinking content in collapsed and expanded views', () => {
+    const malformed = {
+      ...mkThinking('malformed', ''),
+      content: undefined as unknown as string,
+    };
+
+    render(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        childItems: [thinking(malformed)],
+      }),
+    );
+
+    expect(document.querySelector('[data-message-client-id="malformed"]')).toBeNull();
+    expect(() => clickGroup('chat.workGroup.workDetails')).not.toThrow();
+    expect(document.querySelector('[data-message-client-id="malformed"]')).toBeNull();
+  });
+
   it('marks result/settled tools done and only unresolved tools running', () => {
     render(
       createElement(WorkGroupBlock, {

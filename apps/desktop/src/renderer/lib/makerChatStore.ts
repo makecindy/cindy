@@ -4744,7 +4744,7 @@ export function handleStreamEvent(
       const data = event.data as
         | { stage: 'start'; blockId: string; startedAt: number }
         | { stage: 'delta'; blockId: string; text: string }
-        | { stage: 'final'; blockId: string; text: string; durationMs: number }
+        | { stage: 'final'; blockId: string; text?: unknown; durationMs?: unknown }
         | { stage: 'redacted'; blockId: string };
 
       if (data.stage === 'start') {
@@ -4781,6 +4781,13 @@ export function handleStreamEvent(
       }
 
       if (data.stage === 'final') {
+        const authoritativeText = typeof data.text === 'string' ? data.text : undefined;
+        const authoritativeDurationMs =
+          typeof data.durationMs === 'number'
+          && Number.isFinite(data.durationMs)
+          && data.durationMs >= 0
+            ? data.durationMs
+            : undefined;
         // Known limitation: if `start` was somehow lost in flight (IPC order
         // is guaranteed by Electron, so this should never happen in practice),
         // the fallback below pushes the message at the END of the array — it
@@ -4797,9 +4804,11 @@ export function handleStreamEvent(
         // rather than dropping the content.
         const exists = state.messages.some((m) => m.clientId === data.blockId);
         if (!exists) {
+          const text = authoritativeText ?? '';
+          const durationMs = authoritativeDurationMs ?? 0;
           // omitted-display 占位块(空文本 + 0 时长,无 start/delta 先行)不建卡,
           // 见 isOmittedThinkingPlaceholder 注释。落库仍由 main 照常进行,只是不渲染。
-          if (isOmittedThinkingPlaceholder(data.text, data.durationMs)) {
+          if (isOmittedThinkingPlaceholder(text, durationMs)) {
             return state;
           }
           return {
@@ -4809,10 +4818,10 @@ export function handleStreamEvent(
               {
                 clientId: data.blockId,
                 role: 'thinking',
-                content: data.text,
+                content: text,
                 isStreaming: false,
-                thinkingDurationMs: data.durationMs,
-                thinkingStartedAt: Date.now() - data.durationMs,
+                thinkingDurationMs: durationMs,
+                thinkingStartedAt: Date.now() - durationMs,
                 createdAt: new Date().toISOString(),
                 ...assistantMetaFields,
               },
@@ -4825,9 +4834,13 @@ export function handleStreamEvent(
             m.clientId === data.blockId && m.role === 'thinking'
               ? {
                   ...m,
-                  content: data.text, // overwrite with authoritative full text
+                  // Preserve streamed text if a malformed producer omits the
+                  // authoritative final payload instead of poisoning the row.
+                  content: authoritativeText ?? (typeof m.content === 'string' ? m.content : ''),
                   isStreaming: false,
-                  thinkingDurationMs: data.durationMs,
+                  ...(authoritativeDurationMs !== undefined
+                    ? { thinkingDurationMs: authoritativeDurationMs }
+                    : {}),
                   // subagent-model-chip: thinking 'start' 的 delta 常不带 agentMeta,
                   // 真正的 model/parentUuid 在这条 final(来自 SDK message)才到 —— 补写,
                   // 覆盖纯 thinking(无 text/tool)子代理被 stop/fail 的运行时场景。

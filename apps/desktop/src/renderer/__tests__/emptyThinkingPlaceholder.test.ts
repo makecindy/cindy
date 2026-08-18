@@ -181,6 +181,28 @@ describe('handleStreamEvent — omitted thinking placeholder (live)', () => {
     expect(msg?.isStreaming).toBe(false);
   });
 
+  it('preserves streamed text when a malformed final event omits its payload', () => {
+    let s = handleStreamEvent(EMPTY_SESSION_STATE, {
+      sessionId: SESSION_ID,
+      type: 'thinking',
+      data: { stage: 'start', blockId: 'tb-malformed-final', startedAt: 1000 },
+    });
+    s = handleStreamEvent(s, {
+      sessionId: SESSION_ID,
+      type: 'thinking',
+      data: { stage: 'delta', blockId: 'tb-malformed-final', text: 'streamed reasoning' },
+    });
+    s = handleStreamEvent(s, {
+      sessionId: SESSION_ID,
+      type: 'thinking',
+      data: { stage: 'final', blockId: 'tb-malformed-final' },
+    });
+
+    const msg = s.messages.find((m) => m.clientId === 'tb-malformed-final');
+    expect(msg?.content).toBe('streamed reasoning');
+    expect(msg?.isStreaming).toBe(false);
+  });
+
   it('drops redacted thinking (加密推理无明文可读,不进渲染列表)', () => {
     const next = handleStreamEvent(EMPTY_SESSION_STATE, {
       sessionId: SESSION_ID,

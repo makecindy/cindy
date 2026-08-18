@@ -103,6 +103,34 @@ DSH 专用密钥优先。为兼容 DSH runtime 出现前已经保存的原 DeepS
 - `packages/model-providers/src/user-provider.ts`：把用户配置投影为 DSH catalog 来源；
 - `packages/maker-core/src/agents/dsh/`：Harness 配置、JSON-RPC 桥接与事件翻译。
 
+### 思考事件翻译契约
+
+DSH SDK 的 reasoning block 必须按固定顺序投影为 Cindy thinking 事件：首个 `reasoning-delta` 先产生一次
+`start`，紧接着为首个文本分片产生同 `blockId` 的 `delta`；之后每个文本分片继续产生 `delta`，对应
+`block-end` 最后产生一次 `final`。翻译层不得重排或合并事件；同一个 SDK block index 在结束前必须一直映射
+到同一个 `blockId`。
+
+`final` 是完整载荷，不是只有阶段名称的结束标记。其 `data` 必须同时包含：
+
+- `text: string`：优先使用 SDK `block-end` 给出的完整 reasoning 文本；终块未携带文本时，回退为此前所有
+  delta 文本按到达顺序拼接。热路径应累计分片后一次拼接，避免随流长度产生平方级复制；
+- `durationMs: number`：从首个 delta 的 `startedAt` 计算，必须是有限且非负的毫秒数。
+
+跨版本运行时、IPC 和历史持久数据仍可能带来畸形载荷，因此消费侧同时保持以下防线：
+
+- Renderer 收到缺少 `final.text` 的事件时，保留已经流式累积的 thinking 内容，不得用 `undefined` 覆盖；
+- 没有任何 `start` / `delta` 的空 final 退化为空占位，不生成 thinking 卡片；
+- 最近工作活动投影和完整展开视图遇到非字符串 `content` 时跳过该行，不得让单条坏数据中断整条消息流。
+
+消费侧容错不放宽生产侧契约：新版本 DSH translator 仍必须发出完整的 `text` 与 `durationMs`，使 Main 的持久化
+与 Renderer 的最终状态一致。若再次出现 `projectThinkingMessage` 读取 `.trim()` 的异常，应先检查 translator
+发出的 `final` 载荷，再检查 Renderer 是否错误覆盖了已收到的 delta；不要通过隐藏整个工作过程来规避。
+
+回归覆盖分别位于 `packages/maker-core/src/agents/dsh/translator.test.ts`、
+`apps/desktop/src/renderer/__tests__/emptyThinkingPlaceholder.test.ts`、
+`workActivityProjection.test.ts` 与 `workGroupBlockLivePreview.test.tsx`，需要同时覆盖正常完整终块、终块缺文本、
+Renderer 保留流式文本以及折叠/展开两条畸形历史数据路径。
+
 ### 持久状态与跨端投影
 
 `dsh` 必须作为正式 `agentKind` 贯穿任务记录、输入队列快照、Agent 切换意图、新任务草稿、来源和模型选择；
