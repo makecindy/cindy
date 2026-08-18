@@ -30,6 +30,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import {
+  findSlashCommandToken,
+  leadingSlashCommandRange,
+  restoreSlashCommandRuntimeAlias,
+  slashCommandRangeCoversToken,
+} from '@cindy/maker-shared/composer-palette';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { ListComposerTextarea } from '@/components/new-chat/ListComposerTextarea';
@@ -172,7 +178,14 @@ export function UserMessageEditBox({
   const doCommit = useCallback(async () => {
     try {
       const visibleTextUnchanged = text === initialText;
-      const submitText = visibleTextUnchanged ? (initialSubmitText ?? text) : text;
+      const originalWireText = initialSubmitText ?? initialText;
+      const originalHadConfirmedRange = slashCommandRangeCoversToken(
+        slashCommandRanges,
+        findSlashCommandToken(originalWireText),
+      );
+      const submitText = visibleTextUnchanged
+        ? originalWireText
+        : restoreSlashCommandRuntimeAlias(originalWireText, text, slashCommandRanges);
       const preserveQuoteMetadata = quotesEncoded && visibleTextUnchanged;
       const preservedAgentReferences =
         visibleTextUnchanged && agentReferences && agentReferences.length > 0
@@ -182,9 +195,14 @@ export function UserMessageEditBox({
         visibleTextUnchanged && pastedTextRanges && pastedTextRanges.length > 0
           ? [...pastedTextRanges]
           : undefined;
-      const preservedSlashCommandRanges =
-        visibleTextUnchanged && slashCommandRanges !== undefined
-          ? [...slashCommandRanges]
+      const rebuiltSlashRange = leadingSlashCommandRange(submitText);
+      const submitTokenIsRuntimeAlias = rebuiltSlashRange
+        ? submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end).toLowerCase().startsWith('/skill:')
+        : false;
+      const preservedSlashCommandRanges = visibleTextUnchanged && slashCommandRanges !== undefined
+        ? [...slashCommandRanges]
+        : submitTokenIsRuntimeAlias && originalHadConfirmedRange && rebuiltSlashRange
+          ? [rebuiltSlashRange]
           : undefined;
       if (onCommitOverride) {
         // 被拦消息:普通重发(不 rewind)。失败抛错落入下方 catch 保留编辑态。

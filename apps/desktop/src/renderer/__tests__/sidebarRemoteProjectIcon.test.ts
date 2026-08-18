@@ -35,8 +35,8 @@ describe('sidebar remote project icon', () => {
     expect(sessionCardSource).toMatch(
       /const remoteIconKind = session\.deviceLinkDeviceId\s+\?\s+'device-link'\s+:\s+session\.remoteHostId\s+\?\s+'ssh'\s+:\s+null/,
     );
-    expect(sessionHeaderSource).toContain(
-      "const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null",
+    expect(sessionHeaderSource).toMatch(
+      /const remoteIconKind = session\.deviceLinkDeviceId\s+\?\s+'device-link'\s+:\s+session\.remoteHostId\s+\?\s+'ssh'\s+:\s+null/,
     );
   });
 

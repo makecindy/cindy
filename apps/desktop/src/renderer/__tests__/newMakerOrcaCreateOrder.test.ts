@@ -245,7 +245,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(worktreeBranch).toContain('agentSkillInvocation = resolvedInvocation;');
   });
 
-  it('reconciles Pi skill aliases after the user selects a working directory', () => {
+  it('reconciles Pi Skill receipts after the user selects a working directory', () => {
     const workingDirHandler = sessionViewSource
       .slice(
         sessionViewSource.indexOf('const handleWorkingDirChange = useCallback('),

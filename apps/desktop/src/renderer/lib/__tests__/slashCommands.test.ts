@@ -146,6 +146,7 @@ describe('Pi project skill availability', () => {
     expect(hasAvailableSlashCommand(merged, true)).toBe(false);
     expect(hasUnavailableProjectSkillPreview(merged)).toBe(true);
     expect(ambiguousPendingProjectSkillName('/DEMO run', merged, true)).toBe('demo');
+    expect(ambiguousPendingProjectSkillName('  \n/DEMO run', merged, true)).toBe('demo');
     expect(ambiguousPendingProjectSkillName('/demo run', merged, false)).toBeUndefined();
   });
 
@@ -174,6 +175,7 @@ describe('Pi project skill availability', () => {
     const merged = mergeCommands([], [], [discovered]);
 
     expect(pendingProjectSkillForMessage('/DEMO run this', merged, true)).toEqual(discovered);
+    expect(pendingProjectSkillForMessage('  \n/DEMO run this', merged, true)).toEqual(discovered);
     expect(pendingProjectSkillForMessage('/demo', merged, false)).toBeUndefined();
   });
 
@@ -242,6 +244,12 @@ describe('Pi project skill availability', () => {
 
     expect(loaded.name).toBe('demo');
     expect(agentSkillInvocationForDispatch('/demo arg', loaded)).toEqual({
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+      scope: 'repo',
+      sourcePath: '/repo/.pi/skills/demo',
+    });
+    expect(agentSkillInvocationForDispatch('  \n/demo arg', loaded)).toEqual({
       name: 'demo',
       runtimeCommandName: 'skill:demo',
       scope: 'repo',

@@ -78,7 +78,13 @@ import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import { createOneShotTicketStore } from './oneShotTickets.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
-import { GhostPackagePermissionReviewRequiredError } from './packagePermissionReview.js';
+import {
+  GhostPackagePermissionReviewRequiredError,
+  marketPackageHostReviewDiff,
+  marketPackageManualSummaryChanged,
+  marketPackageNeedsHostReview,
+  marketPackageOauthIdentityChanged,
+} from './packagePermissionReview.js';
 import {
   clearBuiltinTombstone,
   listEligibleBuiltinCommands,
@@ -4569,14 +4575,17 @@ export async function installOrUpdateMarketGhostPackage(
     /** receipt 模型并发护栏:更新分支比对 receipt 派生 token(与 main 硬化叠加,决策 A)。 */
     expectedInstalledApproval?: string;
     /**
-     * 手动首装确认真实包、同来源更新仅在真实包扩权时确认；默认安装只把
-     * 市场目录 manifest 当作 fail-closed 权限上限。目录 manifest 不记作批准。
+     * 用户已确认的 reviewedManifest 是权限上限:真实包没有超出则不再弹 Host。
+     * 没有这份上限时,手动首装仍确认真实包,同来源更新仅在相对已装基线扩权时确认。
+     * 默认安装(cap)只把目录 manifest 当作 fail-closed 上限,目录本身不记作批准。
      */
     permissionPolicy?:
       | { mode: 'manual'; sourceType: PluginMarketItemSource }
       | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
     /** 安装锁内从当前已落位包读取的 canonical 权限基线。 */
     permissionBaselineManifest?: GhostManifest;
+    /** 用户已在页面确认过的权限清单;真实包未超出则跳过 Host。 */
+    reviewedManifest?: GhostManifest;
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
@@ -4605,6 +4614,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       | { mode: 'manual'; sourceType: PluginMarketItemSource }
       | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
     permissionBaselineManifest?: GhostManifest;
+    reviewedManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
     beforeCommitInLock?: () => void;
@@ -4675,29 +4685,59 @@ async function installOrUpdateMarketGhostPackageLocked(
               inspected.canonicalManifest,
             )
           : [];
-      const needsReview =
-        permissionDiff?.builtinOauthClientChanged === true ||
-        (expected.permissionPolicy.mode === 'manual'
-          ? permissionDiff === null || permissionDiff.added.length > 0
-          : unreviewed.length > 0);
+      const extrasVersusReviewed = expected.reviewedManifest
+        ? unreviewedGhostPermissionItems(
+            expected.reviewedManifest,
+            baselineManifest ?? undefined,
+            inspected.canonicalManifest,
+          )
+        : null;
+      const builtinOauthClientChanged = marketPackageOauthIdentityChanged(
+        expected.reviewedManifest,
+        baselineManifest,
+        inspected.canonicalManifest,
+      );
+      const manualSummaryChanged = marketPackageManualSummaryChanged(
+        expected.reviewedManifest,
+        inspected.canonicalManifest,
+      );
+      const needsReview = marketPackageNeedsHostReview({
+        mode: expected.permissionPolicy.mode,
+        builtinOauthClientChanged,
+        manualSummaryChanged,
+        addedCount: permissionDiff === null ? null : permissionDiff.added.length,
+        unreviewedCount: unreviewed.length,
+        extrasVersusReviewedCount:
+          extrasVersusReviewed === null ? null : extrasVersusReviewed.length,
+      });
       if (needsReview && expected.approvedPackageSha256 === undefined) {
         const reviewKeys =
-          expected.permissionPolicy.mode === 'manual'
-            ? (permissionDiff?.added.map((item) => item.key) ?? [])
-            : unreviewed.map((item) => item.key);
+          extrasVersusReviewed !== null
+            ? extrasVersusReviewed.map((item) => item.key)
+            : expected.permissionPolicy.mode === 'manual'
+              ? (permissionDiff?.added.map((item) => item.key) ?? [])
+              : unreviewed.map((item) => item.key);
+        const reviewDiff = marketPackageHostReviewDiff({
+          permissionDiff,
+          extrasVersusReviewedCount:
+            extrasVersusReviewed === null ? null : extrasVersusReviewed.length,
+          builtinOauthClientChanged,
+          manualSummaryChanged,
+        });
         const review: PluginMarketPackageReviewFacts = {
           manifest: inspected.manifest,
-          permissionDiff,
+          permissionDiff: reviewDiff,
           isUpdate: installed !== undefined,
           packageSha256: inspected.packageSha256,
           installedBaseline,
           sourceType: expected.permissionPolicy.sourceType,
+          builtinOauthClientChanged,
         };
         log.info('market package requires permission review', {
           ghostId: expected.ghostId,
           mode: expected.permissionPolicy.mode,
           keys: reviewKeys,
-          builtinOauthClientChanged: permissionDiff?.builtinOauthClientChanged === true,
+          builtinOauthClientChanged,
         });
         throw new GhostPackagePermissionReviewRequiredError(review);
       }

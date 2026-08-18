@@ -1015,6 +1015,7 @@ export class PluginMarketService {
       // 用户从没见过，不能当作"已审阅"递进安装。与自定义来源路径
       // install.ts:184-191 的打包前比对同向（但此处比对的是预览清单而非
       // 实际打包字节，名字/版本/作者差异不在此处检测）。
+      let reviewedManifest: GhostManifest | undefined;
       if (options.expectedManifest !== undefined) {
         const reviewed = validateNormalizedGhostManifest(options.expectedManifest);
         // 畸形 payload 会造成 ghostPermissionBaselineKey crash（slots.includes
@@ -1029,6 +1030,9 @@ export class PluginMarketService {
         ) {
           throwIpcError('PRECONDITION_FAILED', 'Plugin manifest changed after permission review');
         }
+        // 用户实际点过确认的那份清单才是已审上限。同 release 下服务端把
+        // OAuth clientId 换掉时,权限投影不变,不能把重新拉取的清单当成已审。
+        reviewedManifest = reviewed.manifest;
       }
       const existing = getGhostManager()
         .list()
@@ -1037,7 +1041,7 @@ export class PluginMarketService {
         plugin,
         {
           expectedInstalled: Boolean(existing),
-          reviewedManifest: compatible.manifest,
+          ...(reviewedManifest ? { reviewedManifest } : {}),
           ...(options.expectedInstalledApproval !== undefined
             ? { expectedInstalledApproval: options.expectedInstalledApproval }
             : {}),
@@ -1958,6 +1962,7 @@ export class PluginMarketService {
           ? {
               permissionPolicy: options.permissionPolicy,
               ...(permissionBaselineManifest ? { permissionBaselineManifest } : {}),
+              ...(options.reviewedManifest ? { reviewedManifest: options.reviewedManifest } : {}),
             }
           : {}),
         ...(options.approvedPackageSha256 !== undefined

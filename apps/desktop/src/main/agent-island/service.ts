@@ -165,6 +165,8 @@ export interface AgentIslandServiceDeps {
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
+  /** Optional process-local consumer for task activity, such as hardware status lighting. */
+  onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
 }
 
 interface AgentIslandNativeRenderer {
@@ -596,6 +598,7 @@ export class AgentIslandService {
     } else {
       this.publishHidden(Date.now());
     }
+    this.notifySessionActivityConsumer([]);
   }
 
   setAppFocused(focused: boolean): void {
@@ -1407,6 +1410,7 @@ export class AgentIslandService {
   private emitSessionActivityToRenderer(): void {
     const payload = this.buildSessionActivityPayload();
     this.sessionActivityRelay.publish(payload);
+    this.notifySessionActivityConsumer(payload);
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
     // 也订阅同一频道,只发主窗会让副窗卡片预览停在陈旧 summary(PR #246 review)。
     const windows = BrowserWindow.getAllWindows().filter(isAppContentWindow);
@@ -1414,6 +1418,16 @@ export class AgentIslandService {
     for (const win of windows) {
       const wc = win.webContents;
       if (wc && !wc.isDestroyed()) wc.send(AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL, payload);
+    }
+  }
+
+  private notifySessionActivityConsumer(activity: readonly AgentIslandSessionActivity[]): void {
+    try {
+      this.deps.onSessionActivityChange?.(activity);
+    } catch (error) {
+      log.warn('process-local session activity consumer failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

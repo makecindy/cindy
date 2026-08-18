@@ -17,6 +17,9 @@
  */
 
 import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
+import { leadingSlashInvocation } from '@cindy/maker-shared';
+
+export { leadingSlashInvocation };
 
 import { createLogger } from '@/lib/logger';
 
@@ -78,8 +81,8 @@ export function agentSkillInvocationForDispatch(
   ) {
     return undefined;
   }
-  const match = message.match(/^\/(\S+)([\s\S]*)$/);
-  if (!match || match[1].toLowerCase() !== command.name.toLowerCase()) return undefined;
+  const leading = leadingSlashInvocation(message);
+  if (!leading || leading.name.toLowerCase() !== command.name.toLowerCase()) return undefined;
   return {
     name: command.name,
     runtimeCommandName: command.runtimeCommandName,
@@ -247,7 +250,7 @@ export function ambiguousPendingProjectSkillName(
   allowPendingProjectSkillSelection = false,
 ): string | undefined {
   if (!allowPendingProjectSkillSelection) return undefined;
-  const name = message.match(/^\/(\S+)/)?.[1]?.toLowerCase();
+  const name = leadingSlashInvocation(message)?.name.toLowerCase();
   return name && ambiguousUnavailableSkillsByCommands.get(commands)?.has(name)
     ? name
     : undefined;
@@ -264,7 +267,7 @@ export function pendingProjectSkillForMessage(
   allowPendingProjectSkillSelection = false,
 ): PendingProjectSkillCommand | undefined {
   if (!allowPendingProjectSkillSelection) return undefined;
-  const name = message.match(/^\/(\S+)/)?.[1]?.toLowerCase();
+  const name = leadingSlashInvocation(message)?.name.toLowerCase();
   if (!name || ambiguousPendingProjectSkillName(message, commands, true)) return undefined;
   const matches = commands.filter((command): command is PendingProjectSkillCommand => (
     command.kind === 'agent-skill'

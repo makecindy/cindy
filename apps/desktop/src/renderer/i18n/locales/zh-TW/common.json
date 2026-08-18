@@ -1414,6 +1414,16 @@
           "piChatHelp": "Pi 直接連線供應商的 OpenAI 相容 Chat Completions API。",
           "piAnthropicHelp": "Pi 直接連線供應商的 Anthropic Messages API。"
         },
+        "modelProtocol": {
+          "label": "模型協定",
+          "inherit": "繼承預設",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "繼承預設會使用上方供應商協定；僅在該模型需要不同協定時覆寫。",
+          "ariaLabel": "{{model}} 的模型協定"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 協議(用 x-api-key 鑑權)。填該來源用於 Claude Code 的 baseURL、金鑰與模型，留空則此來源不提供 Claude Code。",
@@ -1452,7 +1462,8 @@
           "button": "測試連線",
           "testing": "測試中…",
           "ok": "連線成功（{{ms}}ms）",
-          "needFields": "請先填寫基礎 URL 和至少一個模型 ID"
+          "needFields": "請先填寫基礎 URL 和至少一個模型 ID",
+          "unsupportedProtocol": "測試連線暫不支援此模型協定"
         },
         "fetch": {
           "button": "獲取模型列表",
@@ -2350,10 +2361,10 @@
     },
     "subagentModels": {
       "title": "Subagent",
-      "description": "分別設定 Claude Code 和 Codex 執行子任務時使用的預設模型，併為 Codex Subagent 配置執行護欄。設定按入口生效，不會為每個模型單獨儲存。",
-      "unspecified": "不指定（跟隨原邏輯）",
-      "hint": "Claude Code Subagent 僅支援指定模型，推理強度沿用 Claude Code 原生邏輯。可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
-      "codexV2ModelHint": "Subagent 預設模型必須是 Codex 自身模型目錄內的模型，目錄外的模型（如經相容橋接入的第三方模型）會被 Codex 拒絕；Sol / Terra（Multi-Agent V2）進一步只接受 V2 目錄模型（當前為 gpt-5.6-sol 與 gpt-5.6-terra），舊版（V1）無 V2 限制。",
+      "description": "選擇 Claude Code 和 Codex 的 Subagent 模型。",
+      "unspecified": "跟隨預設設定",
+      "hint": "Claude Code 的設定從新任務開始生效；Codex 的設定會在閒置後自動套用。",
+      "codexV2ModelHint": "Claude Code 使用所選模型作為預設值。Codex 的所有本機 Subagent 都固定使用所選模型和推理強度。",
       "saveFailed": "儲存 Subagent 設定失敗",
       "guardrails": {
         "title": "Codex Subagent 護欄",
@@ -3235,6 +3246,311 @@
       "reset": "恢復預設",
       "recording": "按下新快捷鍵…",
       "editAria": "修改 {{name}} 的快捷鍵",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "上一個任務",
+            "description": "開啟側邊欄中目前任務上面的那個"
+          },
+          "session.selectNext": {
+            "name": "下一個任務",
+            "description": "開啟側邊欄中目前任務下面的那個"
+          },
+          "toggleRightSidebar": {
+            "name": "切換右側欄",
+            "description": "顯示或隱藏右側欄"
+          },
+          "composer.toggleFastMode": {
+            "name": "切換快速模式",
+            "description": "在目前輸入框中開啟或關閉快速模式"
+          },
+          "approval.approve": {
+            "name": "核准請求",
+            "description": "核准目前等待確認的請求"
+          },
+          "approval.decline": {
+            "name": "拒絕請求",
+            "description": "拒絕目前等待確認的請求"
+          },
+          "forkTask": {
+            "name": "在新任務中繼續",
+            "description": "以目前任務為基礎建立新任務"
+          },
+          "composer.submit": {
+            "name": "傳送訊息",
+            "description": "傳送輸入框中的訊息"
+          },
+          "feedback": {
+            "name": "傳送意見回饋",
+            "description": "將產品意見回饋傳送給 Cindy 團隊"
+          },
+          "toggleTerminal": {
+            "name": "開啟終端機",
+            "description": "開啟終端機面板"
+          },
+          "copyConversationMarkdown": {
+            "name": "複製為 Markdown",
+            "description": "將目前任務的對話複製為 Markdown",
+            "copied": "已複製為 Markdown",
+            "empty": "這個任務還沒有可複製的內容",
+            "failed": "複製失敗"
+          },
+          "archiveTask": {
+            "name": "封存任務",
+            "description": "封存目前任務"
+          },
+          "newTask": {
+            "name": "新增任務",
+            "description": "開始一個新任務"
+          },
+          "openBrowserTab": {
+            "name": "開啟瀏覽器分頁",
+            "description": "開啟一個新的瀏覽器分頁"
+          },
+          "toggleTaskPin": {
+            "name": "切換釘選",
+            "description": "釘選或取消釘選目前任務"
+          },
+          "toggleReviewTab": {
+            "name": "切換複核",
+            "description": "顯示或隱藏目前任務的複核"
+          },
+          "composer.addPhotos": {
+            "name": "新增圖片",
+            "description": "將圖片新增至輸入框"
+          },
+          "settings": {
+            "name": "設定",
+            "description": "開啟 Cindy 設定"
+          },
+          "manageTasks": {
+            "name": "管理排程任務",
+            "description": "建立或管理排程任務"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "提高推理強度",
+            "description": "提高目前輸入框的推理強度"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "降低推理強度",
+            "description": "降低目前輸入框的推理強度"
+          },
+          "openFolder": {
+            "name": "開啟資料夾",
+            "description": "將本機專案新增至 Cindy"
+          },
+          "composer.addFiles": {
+            "name": "附加檔案和資料夾",
+            "description": "將檔案和資料夾附加到輸入框"
+          },
+          "openSkills": {
+            "name": "前往技能",
+            "description": "瀏覽已安裝和推薦的技能"
+          },
+          "composer.togglePlanMode": {
+            "name": "切換計畫模式",
+            "description": "在目前輸入框中開啟或關閉計畫模式"
+          },
+          "navigateForward": {
+            "name": "前進",
+            "description": "在瀏覽記錄中前進"
+          },
+          "toggleSidebar": {
+            "name": "切換側邊欄",
+            "description": "顯示或隱藏側邊欄"
+          },
+          "navigateBack": {
+            "name": "返回",
+            "description": "在瀏覽記錄中返回"
+          },
+          "composer.focus": {
+            "name": "聚焦輸入框",
+            "description": "將游標移至輸入框"
+          },
+          "conversation.scrollUp": {
+            "name": "向上捲動",
+            "description": "向上捲動對話"
+          },
+          "conversation.scrollDown": {
+            "name": "向下捲動",
+            "description": "向下捲動對話"
+          },
+          "conversation.scrollBottom": {
+            "name": "跳到最新",
+            "description": "捲動到最新一則訊息"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "用 Agent 鍵開啟任務，並用燈光顯示任務狀態。",
+        "openAria": "開啟 Work Louder Codex Micro 設定",
+        "back": "返回鍵盤快捷鍵",
+        "retry": "重試",
+        "device": {
+          "title": "裝置",
+          "firmware": "韌體 {{version}}",
+          "inputMonitoring": {
+            "label": "輸入監控權限",
+            "granted": "macOS 允許 Cindy 接收鍵盤輸入。",
+            "denied": "macOS 正在阻擋鍵盤輸入，請在系統設定中允許 Cindy。",
+            "unknown": "Cindy 尚未檢查 macOS 的輸入監控權限。",
+            "not-required": "此平台不需要輸入監控權限。",
+            "open": "開啟系統設定"
+          }
+        },
+        "errors": {
+          "load": "讀取 Codex Micro 設定失敗",
+          "save": "儲存 Codex Micro 設定失敗"
+        },
+        "connection": {
+          "label": "連線",
+          "status": {
+            "connecting": "正在連線",
+            "connected": "已連線",
+            "not-detected": "未偵測到",
+            "error": "連線異常",
+            "unavailable": "SDK 無法使用"
+          },
+          "descriptions": {
+            "connecting": "Cindy 正在啟動 Work Louder 裝置服務。",
+            "connected": "USB 已連線，Cindy 正在監聽按鍵並同步任務燈效。",
+            "not-detected": "請用支援資料傳輸的 USB 線連接鍵盤；如果 ChatGPT 正在占用裝置，請先關閉。",
+            "error": "Cindy 暫時無法與鍵盤通訊，正在自動重試。",
+            "unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。",
+            "connection-timeout": "Work Louder 服務未在期限內回應，Cindy 會自動重試。",
+            "connection-failed": "Work Louder 服務啟動失敗，Cindy 會自動重試。",
+            "permission-required": "macOS 拒絕鍵盤存取，請在輸入監控中允許 Cindy 後重試。",
+            "sdk-unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。"
+          }
+        },
+        "lighting": {
+          "title": "燈光",
+          "brightness": {
+            "label": "亮度",
+            "description": "調整鍵帽燈、任務燈和環形燈的整體亮度。",
+            "aria": "調整 Codex Micro 燈光亮度"
+          },
+          "autoDim": {
+            "label": "自動熄燈",
+            "description": "閒置後關閉燈光；使用鍵盤或任務狀態變更時自動恢復。",
+            "aria": "選擇 Codex Micro 自動熄燈時間",
+            "options": {
+              "off": "關閉",
+              "30-seconds": "30 秒",
+              "1-minute": "1 分鐘",
+              "3-minutes": "3 分鐘",
+              "10-minutes": "10 分鐘",
+              "30-minutes": "30 分鐘",
+              "1-hour": "1 小時"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "來源設為自訂時，這個任務鍵開啟什麼。",
+          "title": "Agent 鍵",
+          "source": {
+            "label": "任務順序",
+            "description": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
+            "descriptions": {
+              "sidebar": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
+              "last-sent": "AG00～AG05 依你最後一次傳送訊息的時間，最近的排在前面。",
+              "priority": "AG00～AG05 對應前 6 個優先任務。",
+              "custom": "AG00～AG05 各自開啟你指定的任務。"
+            },
+            "value": "側邊欄順序",
+            "options": {
+              "sidebar": "側邊欄順序",
+              "last-sent": "最近任務",
+              "priority": "優先任務",
+              "custom": "自訂"
+            }
+          },
+          "singleTap": {
+            "label": "按一下啟用 Cindy",
+            "description": "開啟後按一下就開啟任務並啟用 Cindy。關閉後按一下仍會在背景切換任務；350 毫秒內再按同一個鍵才會啟用 Cindy。",
+            "aria": "按一下 Agent 鍵啟用 Cindy"
+          },
+          "newTask": "新任務",
+          "slot": "最近第 {{position}} 個",
+          "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務"
+        },
+        "commandKeys": {
+          "builtInDescription": "保持鍵帽內建的動作，或將這個鍵改綁到其他動作。",
+          "builtIn": "使用鍵帽預設動作",
+          "unmapped": "這個鍵帽沒有對應動作"
+        },
+        "microphone": {
+          "title": "麥克風",
+          "separate": {
+            "label": "拆分麥克風鍵",
+            "description": "保持 ACT10 和 ACT11 分開，不合併為一個 MIC 鍵。"
+          }
+        },
+        "analog": {
+          "title": "搖桿",
+          "description": "分別設定搖桿四個方向的動作。",
+          "directions": {
+            "up": "上",
+            "right": "右",
+            "down": "下",
+            "left": "左"
+          }
+        },
+        "encoder": {
+          "title": "旋鈕",
+          "mode": {
+            "label": "旋鈕模式",
+            "description": "選擇旋轉和按下旋鈕時控制的功能。",
+            "options": {
+              "session-switch": "切換任務",
+              "composer-navigation": "導覽輸入框",
+              "reasoning": "推理強度",
+              "conversation-scroll": "捲動對話",
+              "custom": "自訂"
+            }
+          },
+          "gestures": {
+            "left": "向左旋轉",
+            "right": "向右旋轉",
+            "click": "按下",
+            "longPress": "長按"
+          },
+          "customDescription": "設定這個旋鈕手勢要執行的動作。"
+        },
+        "actions": {
+          "choose": "選擇動作",
+          "none": "無動作",
+          "tasks": "任務",
+          "commands": "命令",
+          "keycaps": "鍵帽",
+          "skills": "技能"
+        },
+        "layout": {
+          "editor": {
+            "done": "完成",
+            "title": "編輯鍵帽",
+            "description": "選擇這個實體按鍵上顯示的鍵帽。",
+            "searchPlaceholder": "搜尋鍵帽",
+            "close": "關閉鍵帽編輯器",
+            "cancel": "取消",
+            "save": "儲存",
+            "assignedShortcut": "已分配動作",
+            "selectKeycap": "選擇鍵帽 {{keycap}}"
+          },
+          "keyboard": {
+            "indicator": "狀態指示燈",
+            "title": "配置",
+            "description": "點選鍵帽，選擇它的標籤和預設動作。",
+            "analogStick": "搖桿",
+            "encoder": "旋鈕"
+          },
+          "reset": {
+            "title": "恢復鍵位配置",
+            "description": "恢復鍵帽、搖桿、旋鈕和麥克風分配，不變更任務順序或燈光設定。",
+            "button": "恢復配置"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "儲存快捷鍵設定失敗",
         "notBindable": "該組合鍵不可用",
@@ -5642,7 +5958,8 @@
         "discount": "立省 {{percent}}%",
         "perMillion": "模型標準價格",
         "fixedFx": "按固定匯率 1 USD = 6.7 CNY 約算",
-        "subscriptionEstimate": "價值估算，不代表實際帳單"
+        "subscriptionEstimate": "價值估算，不代表實際帳單",
+        "discountedVsStandard": "折扣中，較標準價省 {{percent}}%"
       },
       "trigger": {
         "placeholder": "選擇模型",
@@ -5697,6 +6014,28 @@
       },
       "agentSwitch": {
         "hint": "選擇切換到 {{agent}} 後使用的模型"
+      },
+      "unified": {
+        "railFavorites": "收藏",
+        "railAll": "全部",
+        "favoritesGroup": "收藏",
+        "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
+        "layoutBadge": "試用樣式B",
+        "layoutClassic": "切回樣式A",
+        "layoutTryUnified": "試用新選擇器",
+        "layoutOriginal": "切回舊版",
+        "addFavorite": "存為收藏",
+        "removeFavorite": "取消收藏",
+        "favoriteConfig": "收藏設定",
+        "recommended": "推薦",
+        "recommendedConfig": "推薦設定",
+        "customized": "已自訂",
+        "reset": "恢復推薦",
+        "fastTip": "Fast · 插隊加速 · 用量更多",
+        "effortEndFast": "更高效",
+        "effortEndSmart": "更聰明",
+        "railSameEngine": "僅 {{agent}}",
+        "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容"
       },
       "modelListAria": "模型清單"
     },
@@ -8105,6 +8444,12 @@
       }
     },
     "builtinTemplates": {
+      "schedule": {
+        "daily": "每天 {{time}}",
+        "weekdays": "工作日 {{time}}",
+        "weekly": "{{weekday}} {{time}}",
+        "monthly": "每月 {{day}} 日 {{time}}"
+      },
       "categories": {
         "dev-automation": "開發自動化",
         "info-radar": "資訊雷達",

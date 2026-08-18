@@ -4,7 +4,6 @@ import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
 
 import {
   appendDiscoveredCustomProviderModels,
-  clearCustomProviderModelPiApiOverrides,
   createCustomProvider,
   customProviderModelConfigFromCatalogModel,
   customProviderWireProtocolForSave,
@@ -13,6 +12,7 @@ import {
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
   replaceCustomProviderModelId,
+  setCustomProviderModelPiApi,
   setCustomProviderModelReasoning,
   setCustomProviderModelReasoningEffort,
   setCustomProviderModelSupportsImageInput,
@@ -86,7 +86,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     ).toBeUndefined();
   });
 
-  it('treats an omitted Pi protocol as the effective openai-chat default', () => {
+  it('treats an omitted Pi protocol as a configuration change, not Chat', () => {
     const openAiChat = {
       ...official,
       wireProtocol: 'openai-chat' as const,
@@ -96,7 +96,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
         ...openAiChat,
         wireProtocol: undefined,
       }),
-    ).toBe('example');
+    ).toBeUndefined();
     expect(
       piCatalogProviderIdAfterRouteEdit(
         'pi',
@@ -106,7 +106,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
         },
         openAiChat,
       ),
-    ).toBe('example');
+    ).toBeUndefined();
     expect(
       piCatalogProviderIdAfterRouteEdit('pi', openAiChat, {
         ...openAiChat,
@@ -244,8 +244,14 @@ describe('replaceCustomProviderModelId', () => {
 });
 
 describe('PI custom-provider protocol overrides', () => {
-  it('drops preset piApi metadata and persists an explicit Chat selection', () => {
+  it.each([
+    [undefined, undefined],
+    ['anthropic-messages', 'anthropic-messages'],
+    ['openai-completions', 'openai-completions'],
+    ['openai-responses', 'openai-responses'],
+  ] as const)('sets the selected model override to %s', (piApi, expected) => {
     const models: ProviderRuntimeModelConfig[] = [
+      { id: 'unchanged', name: 'Unchanged', piApi: 'anthropic-messages' },
       {
         id: 'deepseek-v4-pro',
         name: 'DeepSeek V4 Pro',
@@ -254,13 +260,57 @@ describe('PI custom-provider protocol overrides', () => {
       },
     ];
 
-    expect(clearCustomProviderModelPiApiOverrides(models)).toEqual([
-      {
-        id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
-        contextWindow: 1_000_000,
+    const updated = setCustomProviderModelPiApi(models, 1, piApi);
+    expect(updated[0]).toBe(models[0]);
+    expect(updated[1]).toEqual({
+      id: 'deepseek-v4-pro',
+      name: 'DeepSeek V4 Pro',
+      contextWindow: 1_000_000,
+      ...(expected ? { piApi: expected } : {}),
+    });
+  });
+
+  it.each([
+    [undefined, undefined],
+    ['openai-completions', 'openai-completions'],
+    ['openai-responses', 'openai-responses'],
+    ['google-generative-ai', 'google-generative-ai'],
+  ] as const)(
+    'drops a stale Messages route when switching the model override to %s',
+    (piApi, expected) => {
+      const models: ProviderRuntimeModelConfig[] = [{
+        id: 'routed-model',
+        name: 'Routed model',
+        piApi: 'anthropic-messages',
+        route: {
+          baseUrl: 'https://provider.example/anthropic',
+          wireProtocol: 'anthropic-messages',
+        },
+      }];
+
+      expect(setCustomProviderModelPiApi(models, 0, piApi)[0]).toEqual({
+        id: 'routed-model',
+        name: 'Routed model',
+        ...(expected ? { piApi: expected } : {}),
+      });
+    },
+  );
+
+  it('retains a model route when the selected override still uses its protocol', () => {
+    const model: ProviderRuntimeModelConfig = {
+      id: 'routed-model',
+      name: 'Routed model',
+      piApi: 'anthropic-messages',
+      route: {
+        baseUrl: 'https://provider.example/anthropic',
+        wireProtocol: 'anthropic-messages',
       },
-    ]);
+    };
+
+    expect(setCustomProviderModelPiApi([model], 0, 'anthropic-messages')[0]).toEqual(model);
+  });
+
+  it('persists the Pi provider default without rewriting model overrides', () => {
     expect(customProviderWireProtocolForSave('pi', 'openai-chat', 'openai-chat')).toBe(
       'openai-chat',
     );
