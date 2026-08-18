@@ -188,6 +188,27 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
+  it('does not union the official Grok 4.6 ladder onto other SuperGrok models', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([
+      { id: 'xai/grok-4.5', efforts: ['low'], defaultEffort: 'low' },
+      { id: 'xai/grok-4.6', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+    ]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.5')).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+  });
+
   it('xAI successful empty snapshot stays empty and does not leak static membership', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([]);

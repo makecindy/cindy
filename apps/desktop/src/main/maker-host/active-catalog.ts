@@ -228,6 +228,30 @@ function mergeKnownXaiEfforts(
   return EFFORT_RANK.filter((effort) => seen.has(effort));
 }
 
+function isOfficialGrok46Id(modelId: string): boolean {
+  return modelId === 'grok-4.6' || modelId.endsWith('/grok-4.6');
+}
+
+/** Registry overlay 会写回静态档位;非 4.6 的 discovery 显式值必须压过它。 */
+function preserveNonGrok46DiscoveryEfforts(
+  models: readonly CatalogModel[],
+  discovered: readonly XaiDiscoveredModel[],
+): CatalogModel[] {
+  const byId = new Map(discovered.map((entry) => [entry.id, entry]));
+  return models.map((model) => {
+    const entry = byId.get(model.id) ?? byId.get(`xai/${model.id}`);
+    if (!entry || entry.efforts === undefined || isOfficialGrok46Id(entry.id)) return model;
+    const efforts = [...entry.efforts];
+    const defaultEffort =
+      entry.defaultEffort != null && efforts.includes(entry.defaultEffort)
+        ? entry.defaultEffort
+        : efforts.length === 0
+          ? null
+          : efforts[0]!;
+    return { ...model, efforts, defaultEffort };
+  });
+}
+
 function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return (model.agents ?? []).filter((agent) => {
     if (agent !== 'pi') return true;
@@ -626,10 +650,15 @@ function materializeXaiAccountModels(
       xaiCatalogModelById(provider, entry.id, agent) ??
       xaiCatalogModelById(provider, entry.id, 'pi');
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
-    const efforts = mergeKnownXaiEfforts(
-      entry.efforts,
-      registry?.efforts ?? catalogModel?.efforts,
-    );
+    const baseline = registry?.efforts ?? catalogModel?.efforts;
+    const isGrok46 = isOfficialGrok46Id(entry.id);
+    // 官方梯子只对 Grok 4.6 补 xhigh。其它 SuperGrok 模型保留 discovery 原值
+    // (含空数组),避免给 4.5 等模型宣传账号并未报告的档位。
+    const efforts = isGrok46
+      ? mergeKnownXaiEfforts(entry.efforts, baseline)
+      : entry.efforts !== undefined
+        ? [...entry.efforts]
+        : [...(baseline ?? [])];
     const requestedDefault =
       registry?.defaultEffort != null && efforts.includes(registry.defaultEffort)
         ? registry.defaultEffort
@@ -976,6 +1005,12 @@ function computeMerged(): Catalog {
       const codexRoot = authoritativeMembers
         ? assembleAuthoritativeRoot('xai', 'codex', codexSeed, plan)
         : assembleRoot('xai', 'codex', codexSeed, plan, true);
+      const claudeAccountRoot = useAccountMembership
+        ? preserveNonGrok46DiscoveryEfforts(claudeRoot, accountModels)
+        : claudeRoot;
+      const codexAccountRoot = useAccountMembership
+        ? preserveNonGrok46DiscoveryEfforts(codexRoot, accountModels)
+        : codexRoot;
       const stripPiApi = (model: CatalogModel): CatalogModel => {
         if (model.piApi === undefined) return model;
         const rest = { ...model };
@@ -984,7 +1019,7 @@ function computeMerged(): Catalog {
       };
       const piModels = applyPiApiAnnotations(
         'xai',
-        claudeRoot.map((model) => projectXaiPiModel(p, model)),
+        claudeAccountRoot.map((model) => projectXaiPiModel(p, model)),
       );
       return {
         ...p,
@@ -1001,8 +1036,8 @@ function computeMerged(): Catalog {
         },
         models: {
           ...p.models,
-          'claude-code': claudeRoot.map(stripPiApi),
-          codex: codexRoot.map(stripPiApi),
+          'claude-code': claudeAccountRoot.map(stripPiApi),
+          codex: codexAccountRoot.map(stripPiApi),
           pi: piModels,
         },
       };
