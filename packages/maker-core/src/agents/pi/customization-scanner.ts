@@ -45,7 +45,10 @@ const defaultScanDeps: PiCustomizationScanDeps = {
   stat: (candidate) => fsp.stat(candidate),
   realpath: (candidate) => fsp.realpath(candidate),
   openDirectory: (candidate) => fsp.opendir(candidate),
-  openFile: (candidate) => fsp.open(candidate, 'r'),
+  openFile: (candidate) => fsp.open(
+    candidate,
+    fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0),
+  ),
   deadlineMs: PI_CUSTOMIZATION_SCAN_DEADLINE_MS,
 };
 

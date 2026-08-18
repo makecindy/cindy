@@ -189,6 +189,29 @@ describe('scanPiCustomizations', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it('opens SKILL.md non-blocking before validating its file identity', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    const skillDir = writeSkill(repo, path.join('.pi', 'skills'), 'non-blocking');
+    const mdPath = path.join(canonical(skillDir), 'SKILL.md');
+    const openSpy = vi.spyOn(fs.promises, 'open');
+
+    try {
+      const result = await scanPiCustomizations({ workingDirs: [repo] });
+
+      expect(projectItems(result).map((item) => item.name)).toContain('non-blocking');
+      const entrypointOpen = openSpy.mock.calls.find(
+        ([candidate]) => String(candidate) === mdPath,
+      );
+      expect(entrypointOpen?.[1]).toBe(
+        fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0),
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it('aborts a hanging project SKILL.md stream at the shared deadline', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');
