@@ -906,6 +906,99 @@ async function serializePiSubagentResume<T>(root: string, operation: () => Promi
   }
 }
 
+/**
+ * Cross-process resume claim.
+ *
+ * The in-process promise map only serialises resumes inside one Cindy. Two
+ * instances sharing `pi-agent-home` can read the same terminal generation, both
+ * pass the "no active run" check, and each launch a runner over the *same* Pi
+ * session dir and session id — concurrent writes into one session file and the
+ * follow-up executed twice.
+ *
+ * The claim is an `O_EXCL` create, which is the one filesystem primitive that
+ * is atomic across processes on both POSIX and Windows. It lives in the source
+ * run directory, so it is scoped to exactly the generation being resumed.
+ */
+const RESUME_CLAIM_FILENAME = 'resume.claim';
+
+interface PiSubagentResumeClaim {
+  version: 1;
+  runtimeOwnerId?: string;
+  hostPid: number;
+  claimedAt: number;
+}
+
+function parseResumeClaim(value: unknown): PiSubagentResumeClaim | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1 || !Number.isSafeInteger(raw.hostPid) || (raw.hostPid as number) <= 0) return null;
+  return {
+    version: 1,
+    ...(typeof raw.runtimeOwnerId === 'string' ? { runtimeOwnerId: raw.runtimeOwnerId } : {}),
+    hostPid: raw.hostPid as number,
+    claimedAt: finiteNonNegative(raw.claimedAt) ? raw.claimedAt : 0,
+  };
+}
+
+/** Raised when another *live* instance already holds the resume claim. */
+export class PiSubagentResumeClaimedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PiSubagentResumeClaimedError';
+  }
+}
+
+/**
+ * Take the claim for `sourceDir`, or explain why not.
+ *
+ * Returns a release function on success. A claim left behind by a dead process
+ * is taken over by renaming it aside first: `rename` is atomic, so exactly one
+ * racer can move a given path and the losers fall through to the `wx` retry.
+ * No TTL — a slow but live resume must never have its claim stolen.
+ */
+async function acquirePiSubagentResumeClaim(
+  sourceDir: string,
+  runtimeOwnerId: string | undefined,
+  hostPid: number,
+): Promise<(() => Promise<void>) | null> {
+  const claimPath = path.join(sourceDir, RESUME_CLAIM_FILENAME);
+  const payload = `${JSON.stringify({
+    version: 1,
+    ...(runtimeOwnerId ? { runtimeOwnerId } : {}),
+    hostPid,
+    claimedAt: Date.now(),
+  })}\n`;
+  const release = async (): Promise<void> => {
+    await fs.rm(claimPath, { force: true }).catch(() => undefined);
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await fs.writeFile(claimPath, payload, { mode: 0o600, flag: 'wx' });
+      return release;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // The generation was deleted underneath us (task removal): nothing to resume.
+      if (code === 'ENOENT') return null;
+      if (code !== 'EEXIST') throw error;
+    }
+    const holder = parseResumeClaim(await readSmallJson(claimPath).catch(() => null));
+    // An unreadable or malformed claim cannot prove a live owner, but it also
+    // must not wedge resume forever; treat it like a dead holder and take over.
+    if (holder && isProcessAlive(holder.hostPid) !== false) {
+      throw new PiSubagentResumeClaimedError(
+        'Another running Cindy instance is already resuming this Subagent generation.',
+      );
+    }
+    if (attempt === 0) {
+      await fs.rename(claimPath, `${claimPath}.stale-${process.pid}-${randomUUID()}`)
+        .catch(() => undefined);
+    }
+  }
+  throw new PiSubagentResumeClaimedError(
+    'This Subagent generation is already being resumed.',
+  );
+}
+
 function isResumeConfig(value: unknown, runId: string): value is ResumeRunnerConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const raw = value as Record<string, unknown>;
@@ -941,6 +1034,41 @@ async function resumePiSubagentRunUnlocked(
   if (!source || !isPiSubagentTerminal(source.state)) return null;
   if (runs.some((run) => run.taskId === source.taskId && !isPiSubagentTerminal(run.state))) return null;
   const sourceDir = path.join(root, source.runId);
+  // Everything from here to the new run's status.json is the critical section:
+  // that file is what makes the "already has an active run" check above true
+  // for anyone else. Hold the cross-process claim across it.
+  const releaseClaim = await acquirePiSubagentResumeClaim(
+    sourceDir,
+    launch.runtimeOwnerId,
+    process.pid,
+  );
+  if (!releaseClaim) return null;
+  try {
+    return await resumeClaimedPiSubagentRun(
+      root, source, sourceDir, followUp, launch, childId,
+    );
+  } finally {
+    // Released as soon as the new generation exists on disk: from then on the
+    // ordinary active-run check is the guard, so keeping the claim would only
+    // leak a file that blocks the next legitimate resume.
+    await releaseClaim();
+  }
+}
+
+async function resumeClaimedPiSubagentRun(
+  root: string,
+  source: PiSubagentRunStatus,
+  sourceDir: string,
+  followUp: string,
+  launch: PiSubagentResumeLaunch,
+  childId?: string,
+): Promise<string | null> {
+  // Re-check under the claim: a racer may have won and already published a new
+  // active generation between our listing and taking the claim.
+  const claimedRuns = await listPiSubagentRuns(root);
+  if (claimedRuns.some((run) => run.taskId === source.taskId && !isPiSubagentTerminal(run.state))) {
+    return null;
+  }
   const sourceConfigValue = await readSmallJson(path.join(sourceDir, 'config.json'));
   if (!isResumeConfig(sourceConfigValue, source.runId)) {
     throw new Error('PI Subagent resume config is unavailable');
@@ -1278,6 +1406,15 @@ async function stopPiSubagentRunsUnderRoots(
       );
       for (const runId of runIds) {
         const status = statuses.get(runId);
+        // Skipping a stale run is not "assumed handled" — it is that there is
+        // nothing left to handle *and* nothing to signal. Stale means the
+        // runner process is provably gone (dead pid or expired heartbeat), so
+        // no one will consume a stop control written here; the run is also
+        // already hidden from `listPiSubagentRuns`. Its Pi children are reaped
+        // by the runner's death closing their stdin (see the stdin-EOF
+        // regression in `cindySubagentParentWatchdog.test.ts`). The only other
+        // option would be signalling child pids read off disk, which the runner
+        // header forbids because of pid reuse.
         if ((status && isPiSubagentTerminal(status.state)) || staleRunIds.has(runId)) continue;
         if (
           scope.runtimeOwnerId !== undefined

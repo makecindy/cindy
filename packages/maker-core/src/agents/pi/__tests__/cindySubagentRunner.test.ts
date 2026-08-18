@@ -19,6 +19,7 @@ import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 import {
   controlPiSubagentRuns,
+  isPiSubagentTerminal,
   listPiSubagentRuns,
   resumePiSubagentRun,
   stopAndRemovePiSubagentRuns,
@@ -50,16 +51,48 @@ async function waitFor<T>(
   read: () => Promise<T | null>,
   timeoutMs = 30_000,
   what = 'runner state',
+  diagnose?: () => Promise<string> | string,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await read();
     if (value !== null) return value;
     if (Date.now() >= deadline) {
-      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+      let detail = '';
+      if (diagnose) {
+        try {
+          detail = `\n${await diagnose()}`;
+        } catch (error) {
+          detail = `\n(diagnostics unavailable: ${String(error)})`;
+        }
+      }
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}${detail}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+/**
+ * Why a durable-state wait timed out, for a platform we cannot reproduce on.
+ *
+ * `listPiSubagentRuns` hides corrupt *and* stale records, so "the run never
+ * reached this state" is indistinguishable from "it published the state but the
+ * record was rejected" or "the runner died and the record went stale". Reading
+ * status.json raw, next to the runner's own stderr, separates those three on the
+ * first CI run instead of costing another round trip.
+ */
+function runnerDiagnostics(fixture: { runDir: string; stderr: () => string }) {
+  return async (): Promise<string> => {
+    const parts: string[] = [];
+    try {
+      parts.push(`status.json: ${await readFile(path.join(fixture.runDir, 'status.json'), 'utf8')}`);
+    } catch (error) {
+      parts.push(`status.json unreadable: ${String(error)}`);
+    }
+    const stderr = fixture.stderr().trim();
+    parts.push(stderr ? `runner stderr: ${stderr.slice(-4000)}` : 'runner stderr: (empty)');
+    return parts.join('\n');
+  };
 }
 
 async function waitForClose(child: ReturnType<typeof spawn>, stderr: () => string): Promise<void> {
@@ -317,10 +350,15 @@ describe('Cindy durable PI Subagent runner', () => {
 
   it('records a zero-exit model failure as failed instead of completed with empty usage', async () => {
     const fixture = await makeFixture({ modelError: true });
-    const failed = await waitFor(async () => {
-      const [run] = await listPiSubagentRuns(fixture.root);
-      return run?.state === 'failed' ? run : null;
-    });
+    const failed = await waitFor(
+      async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      },
+      undefined,
+      'the zero-exit model failure to be recorded as failed',
+      runnerDiagnostics(fixture),
+    );
     expect(failed.tasks[0]).toMatchObject({
       status: 'failed',
       error: 'socket closed before response',
@@ -381,12 +419,137 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitForClose(fixture.child, fixture.stderr);
   });
 
+  /**
+   * The in-process promise map only serialises resumes inside one Cindy. Two
+   * instances sharing `pi-agent-home` could read the same terminal generation,
+   * both pass the "no active run" check, and each launch a runner over the same
+   * Pi session dir and session id.
+   */
+  describe('cross-process resume claim', () => {
+    /** A completed run whose config is valid to resume. */
+    async function resumableFixture(options: Parameters<typeof makeFixture>[0] = {}) {
+      const fixture = await makeFixture(options);
+      const first = await waitFor(async () => {
+        const runs = await listPiSubagentRuns(fixture.root);
+        return runs.find((run) => run.runId === fixture.runId && run.state === 'completed') ?? null;
+      });
+      await waitForClose(fixture.child, fixture.stderr);
+      return { fixture, first };
+    }
+
+    function resumeLaunch(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+      return {
+        nodeExecutable: process.execPath,
+        runtimeOwnerId: 'resume-owner',
+        runnerFallbackFile: path.join(fixture.root, 'runner.cjs'),
+        env: {
+          ...process.env,
+          CINDY_TEST_PI_ARGS: fixture.argsFile,
+          CINDY_TEST_PI_PROMPTS: fixture.promptsFile,
+          CINDY_TEST_PI_COMMANDS: fixture.commandsFile,
+        },
+        permissionSnapshot: { mode: 'ask' as const, readOnlyRoots: [] as string[] },
+        runtimeSnapshot: {
+          modelsJson: Buffer.from('{"providers":{}}\n'),
+          bridgeSource: Buffer.from('export default function bridge() {}\n'),
+          runnerSource: Buffer.from(CINDY_SUBAGENT_RUNNER_SOURCE),
+        },
+      };
+    }
+
+    it('refuses when a live instance already holds the claim', async () => {
+      const { fixture, first } = await resumableFixture();
+      // process.ppid is certainly alive and is not us.
+      await writeFile(
+        path.join(fixture.root, first.runId, 'resume.claim'),
+        `${JSON.stringify({ version: 1, hostPid: process.ppid, claimedAt: Date.now() })}\n`,
+        { mode: 0o600 },
+      );
+
+      await expect(resumePiSubagentRun(
+        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
+      )).rejects.toThrow(/already resuming this Subagent generation/i);
+    });
+
+    it('takes over a claim left behind by a dead instance', async () => {
+      const { fixture, first } = await resumableFixture();
+      const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
+      // 2^22 is above every OS pid_max, so this owner is provably gone.
+      await writeFile(
+        claimPath,
+        `${JSON.stringify({ version: 1, hostPid: 4_194_303, claimedAt: 1 })}\n`,
+        { mode: 0o600 },
+      );
+
+      const resumedRunId = await resumePiSubagentRun(
+        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
+      );
+      expect(typeof resumedRunId).toBe('string');
+      await waitFor(
+        async () => {
+          const runs = await listPiSubagentRuns(fixture.root);
+          return runs.find((run) => run.runId === resumedRunId && isPiSubagentTerminal(run.state)) ?? null;
+        },
+        15_000,
+        'the resumed generation to settle',
+      );
+      // The claim is released once the new generation exists on disk.
+      await expect(readFile(claimPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('lets exactly one of two concurrent instances resume a generation', async () => {
+      // The resumed child hangs on the follow-up, so the winner's generation is
+      // still non-terminal when the loser re-checks under the claim. Without
+      // that the fake pi can finish first and the second resume becomes a
+      // legitimate *sequential* resume — which is allowed, and would make this
+      // assertion flaky rather than wrong.
+      const { fixture, first } = await resumableFixture({ hangOnMessage: 'continue' });
+      // A symlinked root keeps `path.resolve` distinct, so the two calls land in
+      // different in-process serialisation buckets and race on disk exactly the
+      // way two Cindy processes would.
+      const aliasRoot = path.join(path.dirname(fixture.root), `alias-${randomUUID()}`);
+      await symlink(fixture.root, aliasRoot, 'dir');
+      roots.push(aliasRoot);
+
+      const settled = await Promise.allSettled([
+        resumePiSubagentRun(fixture.root, first.runId, 'continue', resumeLaunch(fixture)),
+        resumePiSubagentRun(aliasRoot, first.runId, 'continue', resumeLaunch(fixture)),
+      ]);
+      const started = settled.filter(
+        (outcome) => outcome.status === 'fulfilled' && typeof outcome.value === 'string',
+      );
+      expect(started).toHaveLength(1);
+      // The loser either lost the claim or lost the re-check under it; either
+      // way it must not have launched a second runner over the same session.
+      const resumedRunId = (started[0] as PromiseFulfilledResult<string>).value;
+      const runs = await listPiSubagentRuns(fixture.root);
+      expect(runs.filter((run) => run.taskId === first.taskId && run.runId !== first.runId))
+        .toHaveLength(1);
+
+      await controlPiSubagentRuns(fixture.root, resumedRunId, 'stop');
+      await waitFor(
+        async () => {
+          const settledRuns = await listPiSubagentRuns(fixture.root);
+          const resumed = settledRuns.find((run) => run.runId === resumedRunId);
+          return resumed && isPiSubagentTerminal(resumed.state) ? resumed : null;
+        },
+        15_000,
+        'the hung resumed generation to stop',
+      );
+    });
+  });
+
   it('resumes a terminal generation with the same PI child session id', async () => {
     const fixture = await makeFixture();
-    const first = await waitFor(async () => {
-      const runs = await listPiSubagentRuns(fixture.root);
-      return runs.find((run) => run.runId === fixture.runId && run.state === 'completed') ?? null;
-    });
+    const first = await waitFor(
+      async () => {
+        const runs = await listPiSubagentRuns(fixture.root);
+        return runs.find((run) => run.runId === fixture.runId && run.state === 'completed') ?? null;
+      },
+      undefined,
+      'the first generation to complete',
+      runnerDiagnostics(fixture),
+    );
     await waitForClose(fixture.child, fixture.stderr);
     const resumeTokenCanary = 'resume-parent-token-canary-1234567890';
     const priorConfigPath = path.join(fixture.runDir, 'config.json');
