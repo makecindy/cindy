@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,10 +59,68 @@ import {
   getIOSSimulatorPluginStatus,
   getIOSSimulatorMcpDeps,
   reconcilePersistedIOSSimulatorOwnership,
+  pruneStaleIOSSimulatorBuildCaches,
   type IOSSimulatorAppLifecycleAdapter,
   type IOSSimulatorMediaCaptureAdapter,
   type IOSSimulatorProjectBuilderAdapter,
 } from '../ios-simulator';
+
+describe('pruneStaleIOSSimulatorBuildCaches', () => {
+  it('removes directories older than the max age and keeps fresh ones', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
+    try {
+      const stale = path.join(root, 'stale');
+      const fresh = path.join(root, 'fresh');
+      await mkdir(stale);
+      await mkdir(fresh);
+      const now = Date.now();
+      const staleTime = new Date(now - 8 * 24 * 60 * 60 * 1000);
+      await utimes(stale, staleTime, staleTime);
+      await pruneStaleIOSSimulatorBuildCaches(
+        [root],
+        7 * 24 * 60 * 60 * 1000,
+        () => now,
+      );
+      await expect(stat(stale)).rejects.toThrow();
+      await expect(stat(fresh)).resolves.toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a missing root', async () => {
+    await expect(
+      pruneStaleIOSSimulatorBuildCaches(
+        [path.join(os.tmpdir(), 'cindy-does-not-exist-xyz')],
+        1_000,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps active (skipped) caches even when their mtime is stale', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
+    try {
+      const active = path.join(root, 'active-key');
+      const idle = path.join(root, 'idle-key');
+      await mkdir(active);
+      await mkdir(idle);
+      const now = Date.now();
+      const staleTime = new Date(now - 8 * 24 * 60 * 60 * 1000);
+      await utimes(active, staleTime, staleTime);
+      await utimes(idle, staleTime, staleTime);
+      await pruneStaleIOSSimulatorBuildCaches(
+        [root],
+        7 * 24 * 60 * 60 * 1000,
+        () => now,
+        (name) => name === 'active-key',
+      );
+      await expect(stat(active)).resolves.toBeTruthy();
+      await expect(stat(idle)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 const READY_REPORT: IOSSimulatorEnvironmentReport = {
   platform: 'darwin',
@@ -2994,6 +3062,9 @@ describe('iOS Simulator host', () => {
       resultBundlePath,
       buildLogTail: 'build succeeded',
     }));
+    // build_app copies the product into an immutable location; `cp` requires
+    // the source tree to actually exist.
+    await mkdir('/tmp/force-quit-xcresult-session/Demo.app', { recursive: true });
     let readSignal: AbortSignal | undefined;
     let releaseRead!: () => void;
     let projectBuilder!: IOSSimulatorProjectBuilderAdapter;
@@ -3074,6 +3145,9 @@ describe('iOS Simulator host', () => {
       errorCode: 'MUTATION_CANCELLED',
     });
     expect(readXcresult).toHaveBeenCalledWith(resultBundlePath, undefined, readSignal);
+    await rm('/tmp/force-quit-xcresult-session', { recursive: true, force: true }).catch(
+      () => undefined,
+    );
   });
 
   it('synchronously aborts active builds before updater force-quit', async () => {
@@ -7868,6 +7942,9 @@ describe('iOS Simulator host', () => {
           'compile /tmp/session-a/secret.swift\\nGH_TOKEN=ghp_1234567890abcdefghijkl\\nwarning: keep this warning',
       }),
     );
+    // build_app now copies the product into an immutable location; `cp`
+    // requires the source tree to actually exist.
+    await mkdir('/tmp/session-a/build/Demo.app', { recursive: true });
     const validateLaunch = vi.fn(async () => ({
       healthy: true,
       expectedPort: 8081,
@@ -8013,6 +8090,7 @@ describe('iOS Simulator host', () => {
     ).resolves.toMatchObject({ ok: true });
 
     const mobileArtifact = { ...artifact, artifactId: 'mobile-artifact' };
+    await mkdir('/tmp/session-a/apps/mobile/ios/build/Cindy.app', { recursive: true });
     buildProject.mockResolvedValueOnce({
       kind: 'cindy-mobile',
       worktreeRoot: '/tmp/session-a',
@@ -8109,6 +8187,875 @@ describe('iOS Simulator host', () => {
       errorCode: 'MUTATION_CANCELLED',
     });
     await expect(stopping).resolves.toMatchObject({ ok: true });
+    await rm('/tmp/session-a', { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+  });
+
+  it('does not evict an artifact while install_app is reading it', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-pin-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-pin-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation((name) => {
+      if (name === 'userData') return userData;
+      return userData;
+    });
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(async () => ({ ...READY_REPORT.devices[0]!, state: 'Booted' })),
+        shutdownExact: vi.fn(async () => undefined),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const sourceApp = path.join(worktree, 'Demo.app');
+    await mkdir(sourceApp, { recursive: true });
+    let createdSeq = 0;
+    const inspectedPaths: string[] = [];
+    const inspectArtifact = vi.fn<IOSSimulatorAppLifecycleAdapter['inspectArtifact']>(
+      async (_worktreeRoot, appPath) => {
+        createdSeq += 1;
+        inspectedPaths.push(appPath);
+        return {
+          artifactId: `artifact-${createdSeq}`,
+          worktreeRoot: worktree,
+          authorizedRoot: path.dirname(appPath),
+          appPath,
+          bundleId: 'com.example.demo',
+          createdAt: new Date(Date.UTC(2026, 7, 18, 0, 0, createdSeq)).toISOString(),
+        };
+      },
+    );
+    let releaseInstall: () => void = () => undefined;
+    const installGate = new Promise<void>((resolve) => {
+      releaseInstall = resolve;
+    });
+    const installExact = vi.fn<IOSSimulatorAppLifecycleAdapter['installExact']>(
+      async () => {
+        if (installExact.mock.calls.length === 1) await installGate;
+      },
+    );
+    const host = createIOSSimulatorHost({
+      actor,
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      },
+      projectBuilder: {
+        build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => ({
+          kind: 'xcode-project' as const,
+          worktreeRoot,
+          projectRoot: worktreeRoot,
+          containerPath: `${worktreeRoot}/Demo.xcodeproj`,
+          scheme: 'Demo',
+          appPath: sourceApp,
+          resultBundlePath: `${derivedDataPath}/CindyBuild.xcresult`,
+          buildLogTail: '',
+        })),
+      },
+      appLifecycle: {
+        inspectArtifact,
+        installExact,
+        launchExact: vi.fn(async () => undefined),
+        terminateExact: vi.fn(async () => undefined),
+        openUrlExact: vi.fn(async () => undefined),
+      },
+      resourceScheduler: testResourceScheduler(),
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-pin', origin: 'user' },
+      );
+      const instance = actor.list('session-pin')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      const artifactIds: string[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        const built = await host.callTool('build_app', route, {
+          sessionId: 'session-pin',
+          origin: 'user',
+        });
+        expect(built).toMatchObject({ ok: true });
+        artifactIds.push(
+          (built as { ok: true; data: { artifact: { artifactId: string } } }).data.artifact
+            .artifactId,
+        );
+      }
+      const oldestPath = inspectedPaths[0]!;
+      await expect(stat(oldestPath)).resolves.toBeDefined();
+
+      const installing = host.callTool(
+        'install_app',
+        { ...route, artifactId: artifactIds[0] },
+        { sessionId: 'session-pin', origin: 'user' },
+      );
+      await vi.waitFor(() => expect(installExact).toHaveBeenCalledOnce());
+
+      const fifth = await host.callTool('build_app', route, {
+        sessionId: 'session-pin',
+        origin: 'user',
+      });
+      expect(fifth).toMatchObject({ ok: true });
+      await expect(stat(oldestPath)).resolves.toBeDefined();
+
+      releaseInstall();
+      await expect(installing).resolves.toMatchObject({ ok: true });
+
+      const sixth = await host.callTool('build_app', route, {
+        sessionId: 'session-pin',
+        origin: 'user',
+      });
+      expect(sixth).toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(stat(oldestPath)).rejects.toMatchObject({ code: 'ENOENT' }));
+      await expect(
+        host.callTool(
+          'install_app',
+          { ...route, artifactId: artifactIds[0] },
+          { sessionId: 'session-pin', origin: 'user' },
+        ),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'APP_ARTIFACT_INVALID' });
+    } finally {
+      releaseInstall();
+      getPath.mockRestore();
+      await host.dispose();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('evicts excess artifacts when the last install pin is released', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-unpin-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-unpin-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation((name) => {
+      if (name === 'userData') return userData;
+      return userData;
+    });
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(async () => ({ ...READY_REPORT.devices[0]!, state: 'Booted' })),
+        shutdownExact: vi.fn(async () => undefined),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const sourceApp = path.join(worktree, 'Demo.app');
+    await mkdir(sourceApp, { recursive: true });
+    let createdSeq = 0;
+    const inspectedPaths: string[] = [];
+    const inspectArtifact = vi.fn<IOSSimulatorAppLifecycleAdapter['inspectArtifact']>(
+      async (_worktreeRoot, appPath) => {
+        createdSeq += 1;
+        inspectedPaths.push(appPath);
+        return {
+          artifactId: `artifact-${createdSeq}`,
+          worktreeRoot: worktree,
+          authorizedRoot: path.dirname(appPath),
+          appPath,
+          bundleId: 'com.example.demo',
+          createdAt: new Date(Date.UTC(2026, 7, 18, 0, 0, createdSeq)).toISOString(),
+        };
+      },
+    );
+    let releaseOldestInstall: () => void = () => undefined;
+    const oldestInstallGate = new Promise<void>((resolve) => {
+      releaseOldestInstall = resolve;
+    });
+    const installExact = vi.fn<IOSSimulatorAppLifecycleAdapter['installExact']>(
+      async (_udid, artifact) => {
+        if (artifact.artifactId === 'artifact-1') await oldestInstallGate;
+      },
+    );
+    const host = createIOSSimulatorHost({
+      actor,
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      },
+      projectBuilder: {
+        build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => ({
+          kind: 'xcode-project' as const,
+          worktreeRoot,
+          projectRoot: worktreeRoot,
+          containerPath: `${worktreeRoot}/Demo.xcodeproj`,
+          scheme: 'Demo',
+          appPath: sourceApp,
+          resultBundlePath: `${derivedDataPath}/CindyBuild.xcresult`,
+          buildLogTail: '',
+        })),
+      },
+      appLifecycle: {
+        inspectArtifact,
+        installExact,
+        launchExact: vi.fn(async () => undefined),
+        terminateExact: vi.fn(async () => undefined),
+        openUrlExact: vi.fn(async () => undefined),
+      },
+      resourceScheduler: testResourceScheduler(),
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-unpin', origin: 'user' },
+      );
+      const instance = actor.list('session-unpin')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      const artifactIds: string[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        const built = await host.callTool('build_app', route, {
+          sessionId: 'session-unpin',
+          origin: 'user',
+        });
+        expect(built).toMatchObject({ ok: true });
+        artifactIds.push(
+          (built as { ok: true; data: { artifact: { artifactId: string } } }).data.artifact
+            .artifactId,
+        );
+      }
+      const oldestPath = inspectedPaths[0]!;
+      const installs = artifactIds.map((artifactId) =>
+        host.callTool(
+          'install_app',
+          { ...route, artifactId },
+          { sessionId: 'session-unpin', origin: 'user' },
+        ),
+      );
+      await vi.waitFor(() => expect(installExact).toHaveBeenCalledTimes(1));
+
+      const fifth = await host.callTool('build_app', route, {
+        sessionId: 'session-unpin',
+        origin: 'user',
+      });
+      expect(fifth).toMatchObject({ ok: true });
+      await expect(stat(oldestPath)).resolves.toBeDefined();
+
+      releaseOldestInstall();
+      await expect(Promise.all(installs)).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ ok: true })]),
+      );
+      await vi.waitFor(() => expect(stat(oldestPath)).rejects.toMatchObject({ code: 'ENOENT' }));
+      await expect(
+        host.callTool(
+          'install_app',
+          { ...route, artifactId: artifactIds[0] },
+          { sessionId: 'session-unpin', origin: 'user' },
+        ),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'APP_ARTIFACT_INVALID' });
+    } finally {
+      releaseOldestInstall();
+      getPath.mockRestore();
+      await host.dispose();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('evicts installed artifacts before uninstalled ones', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-inst-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-inst-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation(() => userData);
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(async () => ({ ...READY_REPORT.devices[0]!, state: 'Booted' })),
+        shutdownExact: vi.fn(async () => undefined),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const sourceApp = path.join(worktree, 'Demo.app');
+    await mkdir(sourceApp, { recursive: true });
+    let createdSeq = 0;
+    const inspectedPaths: string[] = [];
+    const inspectArtifact = vi.fn<IOSSimulatorAppLifecycleAdapter['inspectArtifact']>(
+      async (_worktreeRoot, appPath) => {
+        createdSeq += 1;
+        inspectedPaths.push(appPath);
+        return {
+          artifactId: `artifact-${createdSeq}`,
+          worktreeRoot: worktree,
+          authorizedRoot: path.dirname(appPath),
+          appPath,
+          bundleId: 'com.example.demo',
+          createdAt: new Date(Date.UTC(2026, 7, 18, 0, 0, createdSeq)).toISOString(),
+        };
+      },
+    );
+    const host = createIOSSimulatorHost({
+      actor,
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      },
+      projectBuilder: {
+        build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => ({
+          kind: 'xcode-project' as const,
+          worktreeRoot,
+          projectRoot: worktreeRoot,
+          containerPath: `${worktreeRoot}/Demo.xcodeproj`,
+          scheme: 'Demo',
+          appPath: sourceApp,
+          resultBundlePath: `${derivedDataPath}/CindyBuild.xcresult`,
+          buildLogTail: '',
+        })),
+      },
+      appLifecycle: {
+        inspectArtifact,
+        installExact: vi.fn(async () => undefined),
+        launchExact: vi.fn(async () => undefined),
+        terminateExact: vi.fn(async () => undefined),
+        openUrlExact: vi.fn(async () => undefined),
+      },
+      resourceScheduler: testResourceScheduler(),
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-inst', origin: 'user' },
+      );
+      const instance = actor.list('session-inst')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      const artifactIds: string[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        const built = await host.callTool('build_app', route, {
+          sessionId: 'session-inst',
+          origin: 'user',
+        });
+        expect(built).toMatchObject({ ok: true });
+        artifactIds.push(
+          (built as { ok: true; data: { artifact: { artifactId: string } } }).data.artifact
+            .artifactId,
+        );
+      }
+      // Install the oldest artifact: it becomes "consumed" and should be the
+      // one evicted on the fifth build, not the still-pending second artifact.
+      await expect(
+        host.callTool(
+          'install_app',
+          { ...route, artifactId: artifactIds[0] },
+          { sessionId: 'session-inst', origin: 'user' },
+        ),
+      ).resolves.toMatchObject({ ok: true });
+
+      const fifth = await host.callTool('build_app', route, {
+        sessionId: 'session-inst',
+        origin: 'user',
+      });
+      expect(fifth).toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(stat(inspectedPaths[0])).rejects.toMatchObject({ code: 'ENOENT' }));
+      await expect(stat(inspectedPaths[1])).resolves.toBeDefined();
+    } finally {
+      getPath.mockRestore();
+      await host.dispose();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('does not leave a stuck build when containerPath is invalid', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-arg-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-arg-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation(() => userData);
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(async () => ({ ...READY_REPORT.devices[0]!, state: 'Booted' })),
+        shutdownExact: vi.fn(async () => undefined),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const sourceApp = path.join(worktree, 'Demo.app');
+    await mkdir(sourceApp, { recursive: true });
+    const host = createIOSSimulatorHost({
+      actor,
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      },
+      projectBuilder: {
+        build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => ({
+          kind: 'xcode-project' as const,
+          worktreeRoot,
+          projectRoot: worktreeRoot,
+          containerPath: `${worktreeRoot}/Demo.xcodeproj`,
+          scheme: 'Demo',
+          appPath: sourceApp,
+          resultBundlePath: `${derivedDataPath}/CindyBuild.xcresult`,
+          buildLogTail: '',
+        })),
+      },
+      appLifecycle: {
+        inspectArtifact: vi.fn(async (_worktreeRoot, appPath) => ({
+          artifactId: 'artifact-arg',
+          worktreeRoot: worktree,
+          authorizedRoot: path.dirname(appPath),
+          appPath,
+          bundleId: 'com.example.demo',
+          createdAt: new Date(Date.UTC(2026, 7, 18)).toISOString(),
+        })),
+        installExact: vi.fn(async () => undefined),
+        launchExact: vi.fn(async () => undefined),
+        terminateExact: vi.fn(async () => undefined),
+        openUrlExact: vi.fn(async () => undefined),
+      },
+      resourceScheduler: testResourceScheduler(),
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-arg', origin: 'user' },
+      );
+      const instance = actor.list('session-arg')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      // Invalid containerPath must reject without registering a stuck build.
+      await expect(
+        host.callTool(
+          'build_app',
+          { ...route, containerPath: '' },
+          { sessionId: 'session-arg', origin: 'user' },
+        ),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGUMENT' });
+      // A subsequent valid build must still be admitted (not DEVICE_BUSY).
+      await expect(
+        host.callTool('build_app', route, { sessionId: 'session-arg', origin: 'user' }),
+      ).resolves.toMatchObject({ ok: true });
+    } finally {
+      getPath.mockRestore();
+      await host.dispose();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('does not evict an artifact while launch_app is waiting', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-launch-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-launch-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation(() => userData);
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(async () => ({ ...READY_REPORT.devices[0]!, state: 'Booted' })),
+        shutdownExact: vi.fn(async () => undefined),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const sourceApp = path.join(worktree, 'Demo.app');
+    await mkdir(sourceApp, { recursive: true });
+    let createdSeq = 0;
+    const inspectedPaths: string[] = [];
+    const inspectArtifact = vi.fn<IOSSimulatorAppLifecycleAdapter['inspectArtifact']>(
+      async (_worktreeRoot, appPath) => {
+        createdSeq += 1;
+        inspectedPaths.push(appPath);
+        return {
+          artifactId: `artifact-${createdSeq}`,
+          worktreeRoot: worktree,
+          authorizedRoot: path.dirname(appPath),
+          appPath,
+          bundleId: 'com.example.demo',
+          createdAt: new Date(Date.UTC(2026, 7, 18, 0, 0, createdSeq)).toISOString(),
+        };
+      },
+    );
+    let releaseLaunch: () => void = () => undefined;
+    const launchGate = new Promise<void>((resolve) => {
+      releaseLaunch = resolve;
+    });
+    const launchExact = vi.fn<IOSSimulatorAppLifecycleAdapter['launchExact']>(async () => {
+      if (launchExact.mock.calls.length === 1) await launchGate;
+    });
+    const host = createIOSSimulatorHost({
+      actor,
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      },
+      projectBuilder: {
+        build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => ({
+          kind: 'xcode-project' as const,
+          worktreeRoot,
+          projectRoot: worktreeRoot,
+          containerPath: `${worktreeRoot}/Demo.xcodeproj`,
+          scheme: 'Demo',
+          appPath: sourceApp,
+          resultBundlePath: `${derivedDataPath}/CindyBuild.xcresult`,
+          buildLogTail: '',
+        })),
+      },
+      appLifecycle: {
+        inspectArtifact,
+        installExact: vi.fn(async () => undefined),
+        launchExact,
+        terminateExact: vi.fn(async () => undefined),
+        openUrlExact: vi.fn(async () => undefined),
+      },
+      resourceScheduler: testResourceScheduler(),
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-launch', origin: 'user' },
+      );
+      const instance = actor.list('session-launch')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      const artifactIds: string[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        const built = await host.callTool('build_app', route, {
+          sessionId: 'session-launch',
+          origin: 'user',
+        });
+        expect(built).toMatchObject({ ok: true });
+        artifactIds.push(
+          (built as { ok: true; data: { artifact: { artifactId: string } } }).data.artifact
+            .artifactId,
+        );
+      }
+      const launching = host.callTool(
+        'launch_app',
+        { ...route, artifactId: artifactIds[0], args: [] },
+        { sessionId: 'session-launch', origin: 'user' },
+      );
+      await vi.waitFor(() => expect(launchExact).toHaveBeenCalledOnce());
+
+      // A fifth build evicts the oldest unpinned artifact; the launched (pinned)
+      // artifact must survive, so the oldest *unpinned* one goes instead.
+      const fifth = await host.callTool('build_app', route, {
+        sessionId: 'session-launch',
+        origin: 'user',
+      });
+      expect(fifth).toMatchObject({ ok: true });
+      await expect(stat(inspectedPaths[0])).resolves.toBeDefined();
+      await vi.waitFor(() =>
+        expect(stat(inspectedPaths[1])).rejects.toMatchObject({ code: 'ENOENT' }),
+      );
+
+      releaseLaunch();
+      await expect(launching).resolves.toMatchObject({ ok: true });
+    } finally {
+      releaseLaunch();
+      getPath.mockRestore();
+      await host.dispose();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  itMac('reclaims artifact copies when userData is behind a symlink', async () => {
+    const realUserData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-link-real-'));
+    const linkUserData = path.join(os.tmpdir(), `cindy-ios-link-${crypto.randomUUID()}`);
+    await symlink(realUserData, linkUserData, 'dir');
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-link-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation((name) => {
+      if (name === 'userData') return linkUserData;
+      return linkUserData;
+    });
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(async () => ({ ...READY_REPORT.devices[0]!, state: 'Booted' })),
+        shutdownExact: vi.fn(async () => undefined),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const sourceApp = path.join(worktree, 'Demo.app');
+    await mkdir(sourceApp, { recursive: true });
+    const resolvedAppPaths: string[] = [];
+    const inspectArtifact = vi.fn<IOSSimulatorAppLifecycleAdapter['inspectArtifact']>(
+      async (_worktreeRoot, appPath) => {
+        // Mirror the runtime adapter: it realpaths the copy, so the stored
+        // appPath no longer shares the (symlinked) managed root's prefix.
+        const resolved = await realpath(appPath);
+        resolvedAppPaths.push(resolved);
+        return {
+          artifactId: 'artifact-link',
+          worktreeRoot: worktree,
+          authorizedRoot: path.dirname(resolved),
+          appPath: resolved,
+          bundleId: 'com.example.demo',
+          createdAt: new Date(Date.UTC(2026, 7, 18)).toISOString(),
+        };
+      },
+    );
+    const host = createIOSSimulatorHost({
+      actor,
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      },
+      projectBuilder: {
+        build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => ({
+          kind: 'xcode-project' as const,
+          worktreeRoot,
+          projectRoot: worktreeRoot,
+          containerPath: `${worktreeRoot}/Demo.xcodeproj`,
+          scheme: 'Demo',
+          appPath: sourceApp,
+          resultBundlePath: `${derivedDataPath}/CindyBuild.xcresult`,
+          buildLogTail: '',
+        })),
+      },
+      appLifecycle: {
+        inspectArtifact,
+        installExact: vi.fn(async () => undefined),
+        launchExact: vi.fn(async () => undefined),
+        terminateExact: vi.fn(async () => undefined),
+        openUrlExact: vi.fn(async () => undefined),
+      },
+      resourceScheduler: testResourceScheduler(),
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-link', origin: 'user' },
+      );
+      const instance = actor.list('session-link')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      const built = await host.callTool('build_app', route, {
+        sessionId: 'session-link',
+        origin: 'user',
+      });
+      expect(built).toMatchObject({ ok: true });
+      const resolvedAppPath = resolvedAppPaths[0]!;
+      await expect(stat(resolvedAppPath)).resolves.toBeDefined();
+
+      await host.dispose();
+      // Cleanup must reclaim the copy via its unresolved path; otherwise the
+      // realpathed appPath fails the managed-root comparison and the copy leaks.
+      await expect(stat(resolvedAppPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      getPath.mockRestore();
+      await host.dispose();
+      await rm(linkUserData, { recursive: true, force: true });
+      await rm(realUserData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  itMac('isolates the build cache by container within a worktree', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-cont-ud-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-cont-wt-'));
+    const getPath = vi.spyOn(app, 'getPath').mockImplementation(() => userData);
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle: {
+        findExact: vi.fn(),
+        bootExact: vi.fn(async () => ({ ...READY_REPORT.devices[0]!, state: 'Booted' })),
+        shutdownExact: vi.fn(async () => undefined),
+        createExact: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+    });
+    const sourceApp = path.join(worktree, 'Demo.app');
+    await mkdir(sourceApp, { recursive: true });
+    const derivedDataPaths: string[] = [];
+    let artifactSeq = 0;
+    const host = createIOSSimulatorHost({
+      actor,
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(
+          async (options) =>
+            ({
+              instanceId: options.instanceId,
+              simulatorUdid: options.simulatorUdid,
+              pid: 42,
+              driver: {},
+              driverSessionId: 'wda-session',
+            }) as unknown as Promise<WdaRunningInstance>,
+        ),
+        stop: vi.fn(async () => undefined),
+      },
+      projectBuilder: {
+        build: vi.fn(async ({ worktreeRoot, derivedDataPath }) => {
+          derivedDataPaths.push(derivedDataPath);
+          return {
+            kind: 'xcode-project' as const,
+            worktreeRoot,
+            projectRoot: worktreeRoot,
+            containerPath: `${worktreeRoot}/Demo.xcodeproj`,
+            scheme: 'Demo',
+            appPath: sourceApp,
+            resultBundlePath: `${derivedDataPath}/CindyBuild.xcresult`,
+            buildLogTail: '',
+          };
+        }),
+      },
+      appLifecycle: {
+        inspectArtifact: vi.fn(async (_worktreeRoot, appPath) => {
+          artifactSeq += 1;
+          return {
+            artifactId: `artifact-${artifactSeq}`,
+            worktreeRoot: worktree,
+            authorizedRoot: path.dirname(appPath),
+            appPath,
+            bundleId: 'com.example.demo',
+            createdAt: new Date(Date.UTC(2026, 7, 18, 0, 0, artifactSeq)).toISOString(),
+          };
+        }),
+        installExact: vi.fn(async () => undefined),
+        launchExact: vi.fn(async () => undefined),
+        terminateExact: vi.fn(async () => undefined),
+        openUrlExact: vi.fn(async () => undefined),
+      },
+      resourceScheduler: testResourceScheduler(),
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ id, workDir: worktree, remoteHostId: null })),
+      resolveWorktreeRoot: vi.fn(async () => worktree),
+    });
+
+    try {
+      await host.callTool(
+        'attach_device',
+        { udid: READY_REPORT.devices[0]!.udid },
+        { sessionId: 'session-cont', origin: 'user' },
+      );
+      const instance = actor.list('session-cont')[0]!;
+      const route = {
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+      };
+      await host.callTool(
+        'build_app',
+        { ...route, containerPath: 'Alpha.xcodeproj' },
+        { sessionId: 'session-cont', origin: 'user' },
+      );
+      await host.callTool(
+        'build_app',
+        { ...route, containerPath: 'Beta.xcodeproj' },
+        { sessionId: 'session-cont', origin: 'user' },
+      );
+      expect(derivedDataPaths).toHaveLength(2);
+      expect(derivedDataPaths[0]).not.toBe(derivedDataPaths[1]);
+    } finally {
+      getPath.mockRestore();
+      await host.dispose();
+      await rm(userData, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
+    }
   });
 
   it('returns readable diagnostics when build_app fails', async () => {
