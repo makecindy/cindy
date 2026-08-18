@@ -32,6 +32,7 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { UserMessage } from '@/components/chat/UserMessage';
 import { Spinner } from '@/components/ui/spinner';
 import {
+  getComposerModifierShortcutLabel,
   getComposerSendShortcutLabel,
   resolveComposerEnterIntent,
   useComposerSendShortcutPreference,
@@ -311,18 +312,23 @@ function PiDurableDetailView({
     || selectedChild.status === 'running'
     || selectedChild.status === 'queued';
   const selectedChildHasCompletedOutput = Boolean(selectedChild?.output?.trim());
-  // The composer works like the session's: one box, one send. The delivery
-  // semantics are decided by the run's state, never picked by the user —
-  // running reads as an interjection, a settled reply reads as a follow-up
-  // that must not overwrite it, and a finished run reads as continuing it.
-  const activeControlAction: SubagentControlIntent | undefined =
-    detail.status === 'running' && detail.capabilities.steer && selectedChildActive
-      ? selectedChildHasCompletedOutput
-        ? 'follow_up'
-        : 'steer'
-      : detail.status !== 'running' && detail.capabilities.resume
-        ? 'resume'
-        : undefined;
+  // The composer works like the session's: one box, one send, and the same
+  // keystrokes. While running, plain send queues a follow-up and the modifier
+  // send interjects (steer) — exactly the main composer's Enter / ⌘+Enter
+  // split. A settled reply may not be steered over, and a finished run reads
+  // any send as continuing it.
+  const composerActionForIntent = (
+    intent: 'queue' | 'steer',
+  ): SubagentControlIntent | undefined => {
+    if (detail.status !== 'running') {
+      return detail.capabilities.resume ? 'resume' : undefined;
+    }
+    if (!detail.capabilities.steer || !selectedChildActive) return undefined;
+    if (intent === 'steer' && !selectedChildHasCompletedOutput) return 'steer';
+    return 'follow_up';
+  };
+  const defaultComposerAction = composerActionForIntent('queue');
+  const steerAvailable = composerActionForIntent('steer') === 'steer';
   const controlDraftKey = selectedChild?.id ?? 'all';
   const controlMessage = controlDrafts[controlDraftKey] ?? '';
   const setControlMessage = (message: string): void => {
@@ -332,9 +338,8 @@ function PiDurableDetailView({
     sendShortcutPreference,
     window.electronAPI?.platform,
   );
-  const submitControl = (): void => {
+  const submitControl = (action: SubagentControlIntent | undefined): void => {
     const message = controlMessage.trim();
-    const action = activeControlAction;
     if (!message || !action || controlBusy) return;
     setControlBusy(true);
     setControlError(false);
@@ -549,7 +554,7 @@ function PiDurableDetailView({
         </div>
       </div>
 
-      {activeControlAction ? (
+      {defaultComposerAction ? (
         <div className="shrink-0 border-t border-[var(--border-default)] p-3">
           <div className="mx-auto flex max-w-[720px] flex-col gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2">
             <div className="flex items-end gap-2">
@@ -567,12 +572,17 @@ function PiDurableDetailView({
                   );
                   if (intent === 'native' || intent === null) return;
                   event.preventDefault();
-                  if (intent !== 'ignore') submitControl();
+                  if (intent === 'ignore') return;
+                  submitControl(composerActionForIntent(intent));
                 }}
                 disabled={controlBusy}
                 maxLength={32_000}
                 rows={2}
-                placeholder={t(`rightSidebar.subagents.composerPlaceholders.${activeControlAction}`)}
+                placeholder={steerAvailable && sendShortcutPreference === 'enter'
+                  ? t('rightSidebar.subagents.composerPlaceholders.runningWithSteer', {
+                      steerShortcut: getComposerModifierShortcutLabel(window.electronAPI?.platform),
+                    })
+                  : t(`rightSidebar.subagents.composerPlaceholders.${defaultComposerAction}`)}
                 aria-label={t('rightSidebar.subagents.sendDirection')}
                 title={t('rightSidebar.subagents.sendShortcutHint', { shortcut: sendShortcutLabel })}
                 className="min-h-10 min-w-0 flex-1 resize-none rounded-lg bg-transparent px-2 py-1.5 text-13 leading-5 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
@@ -580,9 +590,9 @@ function PiDurableDetailView({
               <button
                 type="button"
                 disabled={controlBusy || !controlMessage.trim()}
-                onClick={submitControl}
-                title={t(`rightSidebar.subagents.controlActions.${activeControlAction}`)}
-                aria-label={t(`rightSidebar.subagents.controlActions.${activeControlAction}`)}
+                onClick={() => submitControl(defaultComposerAction)}
+                title={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)}
+                aria-label={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)}
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {controlBusy ? (

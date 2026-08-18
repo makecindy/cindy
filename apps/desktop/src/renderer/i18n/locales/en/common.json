@@ -5217,7 +5217,7 @@
       "childError": "Error: {{error}}",
       "sendDirection": "Send direction",
       "composerPlaceholders": {
-        "steer": "Add direction — applies after the current action finishes…",
+        "runningWithSteer": "Queue a follow-up · {{steerShortcut}} to steer…",
         "follow_up": "Queue a follow-up — the returned result stays intact…",
         "resume": "Continue this Subagent…"
       },

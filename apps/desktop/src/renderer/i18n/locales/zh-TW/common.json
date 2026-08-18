@@ -5215,7 +5215,7 @@
       "childError": "錯誤：{{error}}",
       "sendDirection": "傳送指令",
       "composerPlaceholders": {
-        "steer": "補充糾正方向，當前動作結束後生效…",
+        "runningWithSteer": "排隊跟進；{{steerShortcut}} 插話糾正…",
         "follow_up": "排隊跟進，已完成的結果不會被覆蓋…",
         "resume": "繼續這個 Subagent…"
       },

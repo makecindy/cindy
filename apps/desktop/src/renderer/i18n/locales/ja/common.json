@@ -5215,7 +5215,7 @@
       "childError": "エラー：{{error}}",
       "sendDirection": "指示を送る",
       "composerPlaceholders": {
-        "steer": "軌道修正を伝える — 現在の操作が終わり次第反映されます…",
+        "runningWithSteer": "フォローアップを送る · {{steerShortcut}} で軌道修正…",
         "follow_up": "フォローアップを送る — 完了した結果は上書きされません…",
         "resume": "この Subagent を続行…"
       },

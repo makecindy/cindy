@@ -417,21 +417,22 @@ describe('SubagentsBody', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Scout' }));
-    const scoutInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
+    const scoutInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.runningWithSteer');
     fireEvent.change(scoutInput, { target: { value: 'scout draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Reviewer' }));
-    const reviewerInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
+    const reviewerInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.runningWithSteer');
     expect((reviewerInput as HTMLTextAreaElement).value).toBe('');
     fireEvent.change(reviewerInput, { target: { value: 'reviewer draft' } });
     fireEvent.keyDown(reviewerInput, { key: 'Enter', shiftKey: true });
     expect(controlPiSubagent).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Scout' }));
-    const restoredScoutInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
+    const restoredScoutInput = screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.runningWithSteer');
     expect((restoredScoutInput as HTMLTextAreaElement).value).toBe('scout draft');
+    // Plain Enter is the session's queue keystroke — it must follow up, not steer.
     fireEvent.keyDown(restoredScoutInput, { key: 'Enter' });
     await waitFor(() => {
       expect(controlPiSubagent).toHaveBeenCalledWith({
-        sessionId: 'session-1', taskId: 'task-1', action: 'steer',
+        sessionId: 'session-1', taskId: 'task-1', action: 'follow_up',
         message: 'scout draft', childId: 'child-1',
       });
     });
@@ -463,12 +464,12 @@ describe('SubagentsBody', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Finished Scout' }));
-    expect(screen.queryByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer')).toBeNull();
+    expect(screen.queryByPlaceholderText('rightSidebar.subagents.composerPlaceholders.runningWithSteer')).toBeNull();
     expect(screen.getByText('rightSidebar.subagents.childEndedControlHint')).toBeTruthy();
     expect(screen.queryByLabelText('chat.agentTask.stop')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Running Reviewer' }));
-    expect(screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer')).toBeTruthy();
+    expect(screen.getByPlaceholderText('rightSidebar.subagents.composerPlaceholders.runningWithSteer')).toBeTruthy();
     expect(screen.getByLabelText('chat.agentTask.stop')).toBeTruthy();
   });
 
@@ -914,15 +915,18 @@ describe('SubagentsBody', () => {
         }}
       />,
     );
-    const input = await screen.findByPlaceholderText('rightSidebar.subagents.composerPlaceholders.steer');
+    const input = await screen.findByPlaceholderText('rightSidebar.subagents.composerPlaceholders.runningWithSteer');
     fireEvent.change(input, { target: { value: 'check the fallback too' } });
-    fireEvent.click(screen.getByLabelText('rightSidebar.subagents.controlActions.steer'));
+    // The modifier send is the session's interjection keystroke while running.
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     await waitFor(() => {
       expect(controlPiSubagent).toHaveBeenCalledWith({
         sessionId: 'session-1', taskId: 'task-1', action: 'steer',
         message: 'check the fallback too',
       });
     });
+    // The visible send button is the plain queue path.
+    expect(screen.getByLabelText('rightSidebar.subagents.controlActions.follow_up')).toBeTruthy();
   });
 
   it('dispatches a follow-up automatically once the child has settled output', async () => {

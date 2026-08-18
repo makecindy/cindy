@@ -5215,7 +5215,7 @@
       "childError": "오류: {{error}}",
       "sendDirection": "지시 보내기",
       "composerPlaceholders": {
-        "steer": "방향을 보완하세요 — 현재 작업이 끝나면 반영됩니다…",
+        "runningWithSteer": "후속 지시를 보내기 · {{steerShortcut}} 방향 보완…",
         "follow_up": "후속 지시를 보내세요 — 완료된 결과는 덮어쓰지 않습니다…",
         "resume": "이 Subagent 계속하기…"
       },
