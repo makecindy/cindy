@@ -4,6 +4,7 @@ import {
   activePiHistoryFromTree,
   normalizePiSessionTree,
   piContextTokensFromTree,
+  piSessionLeafMatchesReloadDefault,
   userDraftTextFromPiEntry,
 } from '../session-tree.js';
 
@@ -91,6 +92,12 @@ describe('pi session tree adapter', () => {
 
   it('restores context usage from the last active assistant call', () => {
     expect(piContextTokensFromTree(treeData)).toBe(69);
+  });
+
+  it('treats the newest timestamped entry as the switch_session reload default', () => {
+    expect(piSessionLeafMatchesReloadDefault(treeData)).toBe(false);
+    expect(piSessionLeafMatchesReloadDefault({ ...treeData, leafId: 'abandoned-user' })).toBe(true);
+    expect(piSessionLeafMatchesReloadDefault({})).toBe(true);
   });
 
   it('drops malformed nodes rather than exposing arbitrary raw entry data', () => {

@@ -287,6 +287,24 @@ export function findPiTreeEntry(data: unknown, entryId: string): UnknownRecord |
   return rawNodeMap(data).get(entryId) ?? null;
 }
 
+/** switch_session 只按 JSONL 重载，默认落在时间上最新的条目。当前叶不是该默认叶时不能热切。 */
+export function piSessionLeafMatchesReloadDefault(data: unknown): boolean {
+  const snapshot = normalizePiSessionTree(data);
+  if (!snapshot.leafId) return true;
+  const entries = rawNodeMap(data);
+  if (entries.size === 0) return true;
+  let newestId: string | null = null;
+  let newestTs = Number.NEGATIVE_INFINITY;
+  for (const [id, entry] of entries) {
+    const ts = timestampOf(entry);
+    if (ts >= newestTs) {
+      newestTs = ts;
+      newestId = id;
+    }
+  }
+  return newestId == null || newestId === snapshot.leafId;
+}
+
 export function userDraftTextFromPiEntry(entry: UnknownRecord | null): string | undefined {
   if (entry?.type !== 'message') return undefined;
   const message = recordOf(entry.message);

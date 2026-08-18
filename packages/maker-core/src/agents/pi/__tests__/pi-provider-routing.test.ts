@@ -936,6 +936,96 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('refuses a live catalog reload when the session is parked on a historic branch', async () => {
+    const xaiProvider = {
+      id: 'xai',
+      sourceProviderId: 'xai' as const,
+      name: 'xAI',
+      baseUrl: 'http://127.0.0.1:9/v1',
+      inheritModels: true,
+      apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+      modelIdAliases: { 'xai/grok-4.6': 'grok-4.6', 'grok-4.6': 'grok-4.6' },
+      models: [{
+        id: 'grok-4.6',
+        wireId: 'grok-4.6',
+        api: 'openai-responses' as const,
+        catalogAddition: true,
+      }],
+    };
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'get_tree') {
+        return {
+          success: true,
+          data: {
+            leafId: 'old',
+            tree: [{
+              entry: {
+                type: 'message', id: 'old', parentId: null, timestamp: '2026-08-18T00:00:00.000Z',
+                message: { role: 'user', content: 'old' },
+              },
+              children: [{
+                entry: {
+                  type: 'message', id: 'tip', parentId: 'old', timestamp: '2026-08-18T00:00:01.000Z',
+                  message: { role: 'assistant', content: 'tip' },
+                },
+                children: [],
+              }],
+            }],
+          },
+        };
+      }
+      return { success: true, data: {} };
+    };
+    let includeXai = false;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          { id: 'local-model', displayName: 'Local', contextWindow: 128_000, efforts: [], defaultEffort: null },
+          { id: 'xai/grok-4.6', displayName: 'Grok 4.6', contextWindow: 500_000, efforts: [], defaultEffort: null },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => (includeXai
+        ? { providers: [xaiProvider], env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' } }
+        : {
+            providers: [{
+              id: 'native-a',
+              name: 'Native A',
+              baseUrl: 'http://a.test',
+              api: 'openai-completions',
+              models: [{ id: 'local-model' }],
+            }],
+            env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+          }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'xai-reload-historic',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+    });
+    includeXai = true;
+    await expect(handle.setModel!('xai/grok-4.6', { providerId: 'xai' })).rejects.toThrow(/PI_CATALOG_RELOAD_ON_HISTORIC_BRANCH/);
+    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, unknown> };
+    expect(models.providers.xai).toBeUndefined();
+    await handle.close();
+  });
+
   it('rolls models.json back when switch_session fails after an xAI catalog refresh', async () => {
     const xaiProvider = {
       id: 'xai',

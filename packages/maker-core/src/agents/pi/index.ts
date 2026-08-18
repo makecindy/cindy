@@ -141,6 +141,7 @@ import {
   findPiTreeEntry,
   normalizePiSessionTree,
   piContextTokensFromTree,
+  piSessionLeafMatchesReloadDefault,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
 import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
@@ -2773,6 +2774,15 @@ export class PiAgent extends BaseAgent {
           // 但 switch_session 会 createRuntime → ModelConfig.load,等于无重启扩名单。
           // success:false = 确定没重载,回滚安全。reject/超时 = 不知道 Pi 侧有没有吃到新
           // models.json,回滚和放行都可能分叉,按未确认 set_model 一样终止会话。
+          // switch_session 只带 sessionPath,会丢 in-memory 的非最新叶(navigateTree)。
+          // 不在这里复水分支/plan mode;历史叶上直接拒绝热切,要求重开任务。
+          const tree = await proc.request({ type: 'get_tree' });
+          if (!tree.success || !piSessionLeafMatchesReloadDefault(tree.data)) {
+            await restoreNativeCatalogOrTerminate(previousProviders);
+            throw new Error(
+              '[PI_CATALOG_RELOAD_ON_HISTORIC_BRANCH] 当前任务不在会话最新分支上，无法热切换模型目录。请重新打开任务后再切换模型。',
+            );
+          }
           let reloaded;
           try {
             reloaded = await proc.request({
