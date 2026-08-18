@@ -34,8 +34,6 @@ import {
 } from 'expo-audio';
 import {
   addScreenshotListener,
-  conversationShareNativeRendererAvailable,
-  renderConversationShareHtmlToPng,
 } from 'xdt-screenshot-monitor';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
@@ -102,15 +100,16 @@ import {
   type ShareableMessageViewport,
 } from '@/session/MessageRenderer';
 import {
-  ConversationShareWebView,
-  bundledAssetToDataUri,
   deleteConversationSharePngTemp,
   writeConversationSharePngTemp,
-  type ConversationShareWebViewHandle,
 } from '@/session/ConversationShareWebView';
 import {
-  buildConversationShareHtml,
+  ConversationShareSvg,
+  type ConversationShareSvgHandle,
+} from '@/session/ConversationShareSvg';
+import {
   type ConversationShareMessage,
+  type ConversationShareWebViewColors,
 } from '@/session/conversationShareWebViewHtml';
 import {
   collectConversationShareBlockIds,
@@ -609,14 +608,6 @@ const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 const TAIL_RETRY_HIDE_TIMEOUT_MS = 15_000;
 const SCREENSHOT_SHARE_ACTIVATION_DEBOUNCE_MS = 1_200;
 
-// 分享图页脚资源转成 data URI 后再交给 WebView，避免 foreignObject 导出空白。
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const shareCharacterAsset = require('../../assets/share/cindy-share-character.jpg');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const shareLogoLightAsset = require('../../assets/login/login-wordmark.png');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const shareLogoDarkAsset = require('../../assets/login/login-wordmark-dark.png');
-
 /**
  * 排队消息「复用 composer 编辑」的会话内状态:clientId 定位队列条目,
  * stashed* 暂存进入编辑前用户的草稿与附件托盘(保存/放弃/条目消失时恢复)。
@@ -994,7 +985,7 @@ export default function SessionScreen() {
     composerDocumentRef.current = nextScope.document;
     draftRef.current = nextDraft;
   }
-  const conversationShareWebViewRef = useRef<ConversationShareWebViewHandle | null>(null);
+  const conversationShareSvgRef = useRef<ConversationShareSvgHandle | null>(null);
   const topOverlayRef = useRef<View>(null);
   const bottomOverlayRef = useRef<View>(null);
   const visibleShareableMessageIdsReaderRef = useRef<(
@@ -1010,9 +1001,6 @@ export default function SessionScreen() {
   const shareOperationSeqRef = useRef(0);
   const [conversationShareBusy, setConversationShareBusy] = useState(false);
   const [shareSelectionTriggeredByScreenshot, setShareSelectionTriggeredByScreenshot] = useState(false);
-  const [shareCharacterSrc, setShareCharacterSrc] = useState<string | null>(null);
-  const [shareLogoSrc, setShareLogoSrc] = useState<string | null>(null);
-  const shareLogoModeRef = useRef<string | null>(null);
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
@@ -1092,28 +1080,6 @@ export default function SessionScreen() {
       };
     }, [sessionId]),
   );
-  useEffect(() => {
-    if (!shareSelectionActive) return undefined;
-    let cancelled = false;
-    const logoNeedsLoad = shareLogoModeRef.current !== mode || !shareLogoSrc;
-    void Promise.all([
-      shareCharacterSrc
-        ? Promise.resolve(shareCharacterSrc)
-        : bundledAssetToDataUri(shareCharacterAsset, 'image/jpeg'),
-      logoNeedsLoad
-        ? bundledAssetToDataUri(
-            mode === 'dark' ? shareLogoDarkAsset : shareLogoLightAsset,
-            'image/png',
-          )
-        : Promise.resolve(shareLogoSrc),
-    ]).then(([character, logo]) => {
-      if (cancelled) return;
-      shareLogoModeRef.current = mode;
-      setShareCharacterSrc(character);
-      setShareLogoSrc(logo);
-    });
-    return () => { cancelled = true; };
-  }, [mode, shareCharacterSrc, shareLogoSrc, shareSelectionActive]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
@@ -6008,45 +5974,26 @@ export default function SessionScreen() {
       .map((clientId) => shareMessageById.get(clientId))
       .filter((message): message is ConversationShareMessage => message !== undefined);
   }, [allShareableIds, shareMessageById, shareSelectionActive, shareSelectionRevision]);
-  const conversationShareHtml = useMemo(() => {
-    if (!shareSelectionActive || selectedShareMessages.length === 0) return '';
-    return buildConversationShareHtml({
-      allShareableIds,
-      characterSrc: shareCharacterSrc ?? undefined,
-      colors: {
-        background: colors.surface,
-        border: colors.border,
-        codeSurface: colors.chatCodeSurface,
-        inlineCode: colors.chatInlineCodeText,
-        surfaceChip: colors.surfaceChip,
-        surfaceElevated: colors.surfaceElevated,
-        syntax: {
-          comment: colors.syntaxComment,
-          function: colors.syntaxFunction,
-          keyword: colors.syntaxKeyword,
-          number: colors.syntaxNumber,
-          property: colors.syntaxProperty,
-          string: colors.syntaxString,
-        },
-        textPrimary: colors.textPrimary,
-        textSecondary: colors.textSecondary,
-        textTertiary: colors.textTertiary,
-        dark: mode === 'dark',
-      },
-      contentWidth: windowDimensions.width,
-      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
-      selectedMessages: selectedShareMessages,
-    });
-  }, [
-    allShareableIds,
-    colors,
-    mode,
-    selectedShareMessages,
-    shareCharacterSrc,
-    shareLogoSrc,
-    shareSelectionActive,
-    windowDimensions.width,
-  ]);
+  const conversationShareColors = useMemo<ConversationShareWebViewColors>(() => ({
+    background: colors.surface,
+    border: colors.border,
+    codeSurface: colors.chatCodeSurface,
+    inlineCode: colors.chatInlineCodeText,
+    surfaceChip: colors.surfaceChip,
+    surfaceElevated: colors.surfaceElevated,
+    syntax: {
+      comment: colors.syntaxComment,
+      function: colors.syntaxFunction,
+      keyword: colors.syntaxKeyword,
+      number: colors.syntaxNumber,
+      property: colors.syntaxProperty,
+      string: colors.syntaxString,
+    },
+    textPrimary: colors.textPrimary,
+    textSecondary: colors.textSecondary,
+    textTertiary: colors.textTertiary,
+    dark: mode === 'dark',
+  }), [colors, mode]);
   const enterShareSelection = useCallback((clientId: string) => {
     Keyboard.dismiss();
     setShareSelectionTriggeredByScreenshot(false);
@@ -6058,18 +6005,11 @@ export default function SessionScreen() {
     setShareSelectionTriggeredByScreenshot(false);
     shareSelectionStore.exit();
   }, []);
-  const exportConversationSharePng = useCallback(async (scale = 2) => {
-    if (!conversationShareHtml) throw new Error('conversation share html is empty');
-    const nativeBase64 = await renderConversationShareHtmlToPng({
-      html: conversationShareHtml,
-      scale,
-      width: windowDimensions.width,
-    });
-    if (nativeBase64) return nativeBase64;
-    const webView = conversationShareWebViewRef.current;
-    if (!webView) throw new Error('conversation share renderer is unavailable');
-    return webView.exportPng({ scale });
-  }, [conversationShareHtml, windowDimensions.width]);
+  const exportConversationSharePng = useCallback(async () => {
+    const svg = conversationShareSvgRef.current;
+    if (!svg) throw new Error('conversation share svg renderer is unavailable');
+    return svg.exportPng();
+  }, []);
   const shareSelectedConversation = useCallback(async () => {
     if (
       conversationShareBusy
@@ -6108,7 +6048,7 @@ export default function SessionScreen() {
       }
       if (shareOperationSeqRef.current === operationSeq) setConversationShareBusy(false);
     }
-  }, [conversationShareBusy, conversationShareHtml, exportConversationSharePng, selectedShareMessages.length, shareSelectionActive, shareSelectionRevision, t]);
+  }, [conversationShareBusy, exportConversationSharePng, selectedShareMessages.length, shareSelectionActive, shareSelectionRevision, t]);
   // 解禁唤醒:会话参数就绪(fresh 元数据到达 / 新建管线收口)的那一帧重新 pump,把
   // 未就绪期间攒下的待发消息按 FIFO 发出去。渲染态判据与 outboxDispatchBlockedNow
   // 同构(那个读 store,供异步循环用;这个供 effect 依赖比较用)。
@@ -9643,11 +9583,13 @@ export default function SessionScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
-      {shareSelectionActive && conversationShareHtml && !conversationShareNativeRendererAvailable ? (
-        <ConversationShareWebView
-          html={conversationShareHtml}
-          key={conversationShareHtml}
-          ref={conversationShareWebViewRef}
+      {shareSelectionActive && selectedShareMessages.length > 0 ? (
+        <ConversationShareSvg
+          allShareableIds={allShareableIds}
+          colors={conversationShareColors}
+          messages={selectedShareMessages}
+          ref={conversationShareSvgRef}
+          width={windowDimensions.width}
         />
       ) : null}
       {wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AgentIslandSessionActivity } from '../../../shared/agentIsland.js';
 import {
   applyWorkLouderCodexLightingBrightness,
   createWorkLouderCodexOffFrame,
@@ -10,14 +9,15 @@ import {
   isWorkLouderCodexLightingFrameOff,
   parseWorkLouderCodexAgentKeyPress,
   projectWorkLouderCodexSlotActivity,
+  type WorkLouderCodexSessionActivity,
   WorkLouderLightingEffect,
 } from '../protocol.js';
 
 function activity(
   sessionId: string,
-  phase: AgentIslandSessionActivity['phase'],
+  phase: WorkLouderCodexSessionActivity['phase'],
   attention = false,
-): AgentIslandSessionActivity {
+): WorkLouderCodexSessionActivity {
   return { sessionId, phase, compactDetail: '', attention };
 }
 

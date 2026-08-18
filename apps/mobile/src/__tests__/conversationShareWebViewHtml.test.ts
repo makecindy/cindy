@@ -175,7 +175,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
       'await deleteConversationSharePngTemp(file.uri);',
     );
     expect(sessionSource).toContain("localUri && Platform.OS !== 'android'");
-    expect(sessionSource).toContain('key={conversationShareHtml}');
+    expect(sessionSource).toContain('<ConversationShareSvg');
   });
 
   it('使用 Mobile 获批的克制页脚尺寸', () => {
@@ -183,11 +183,23 @@ describe('buildConversationShareHtml 富内容导出', () => {
       resolve(process.cwd(), '../../docs/design-rules/DESIGN.md'),
       'utf8',
     );
+    const svgSource = readFileSync(
+      resolve(process.cwd(), 'src/session/ConversationShareSvg.tsx'),
+      'utf8',
+    );
     const html = buildRichConversationHtml();
 
     expect(designSource).toContain('Mobile approved 2026-08-08');
+    expect(designSource).toContain('src/session/ConversationShareSvg.tsx');
     expect(designSource).toContain('22×22px (6px radius)');
     expect(designSource).toContain('18px-high wordmark with a 6px gap');
+    expect(svgSource).toContain('const SHARE_CHARACTER_SIZE = 22;');
+    expect(svgSource).toContain('const SHARE_LOGO_HEIGHT = 18;');
+    expect(svgSource).toContain('const SHARE_LOCKUP_GAP = 6;');
+    expect(svgSource).toContain('rx={6}');
+    expect(svgSource).toContain('footerAssetGate.waitUntilReady()');
+    expect(svgSource).toContain('footerAssetGate.markReady("character")');
+    expect(svgSource).toContain('footerAssetGate.markReady("logo")');
     expect(html).toContain('width: 22px;');
     expect(html).toContain('height: 18px;');
     expect(html).toContain('gap: 6px;');

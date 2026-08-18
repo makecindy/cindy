@@ -18,6 +18,25 @@ export function getDbClient(): DbClient {
   return current.client;
 }
 
+/**
+ * Database ownership can be temporarily absent during startup, logout, and
+ * account switches. Keep every public boundary on one retryable classification
+ * while accepting the legacy localDb wording used by older call sites.
+ */
+export function isDbClientNotReadyError(error: unknown): boolean {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'HOST_NOT_READY'
+  ) {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:localDb|DbClient) not ready/i.test(message);
+}
+
 export function tryGetDbClient(): DbClient | null {
   return current?.client ?? null;
 }

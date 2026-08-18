@@ -1,4 +1,3 @@
-import type { AgentIslandSessionActivity } from '../../shared/agentIsland.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
@@ -30,6 +29,7 @@ import {
   type WorkLouderCodexHidEvent,
   type WorkLouderCodexJoystickEvent,
   type WorkLouderCodexLightingFrame,
+  type WorkLouderCodexSessionActivity,
 } from './protocol.js';
 import type { WorkLouderCodexTaskCatalog } from './taskSlots.js';
 import {
@@ -77,7 +77,7 @@ type TaskCatalogLoader = () => Promise<WorkLouderCodexTaskCatalog | readonly str
 export class WorkLouderCodexLightingController {
   private lastFrameKey = '';
   private slotSessionIds: string[] = [];
-  private latestActivity: readonly AgentIslandSessionActivity[] = [];
+  private latestActivity: readonly WorkLouderCodexSessionActivity[] = [];
   private taskCatalog: WorkLouderCodexTaskCatalog = { sidebar: [], lastSent: [], options: [] };
   private agentSlots: WorkLouderCodexAgentSlotState[] = emptyAgentSlots();
   private slotRefreshVersion = 0;
@@ -137,7 +137,7 @@ export class WorkLouderCodexLightingController {
     }
   }
 
-  updateSessionActivity(activity: readonly AgentIslandSessionActivity[]): void {
+  updateSessionActivity(activity: readonly WorkLouderCodexSessionActivity[]): void {
     this.latestActivity = activity;
     if (this.settings.agentSource === 'priority') this.publishAgentSlots();
     this.updateLightingFrame(true);
@@ -842,7 +842,7 @@ function actionTitle(action: WorkLouderCodexAction | null): string | null {
   }
 }
 
-function activityPriority(activity: AgentIslandSessionActivity): number {
+function activityPriority(activity: WorkLouderCodexSessionActivity): number {
   if (activity.phase === 'needs-interaction') return 5;
   if (activity.attention) return 4;
   if (activity.phase === 'error') return 3;
