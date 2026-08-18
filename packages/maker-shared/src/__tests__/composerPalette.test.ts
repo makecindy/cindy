@@ -114,12 +114,36 @@ describe('shared composer palette model', () => {
       '/git follow-up',
     );
     expect(
-      restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/git please review'),
+      restoreSlashCommandRuntimeAlias(
+        '/skill:git follow-up',
+        '/git please review',
+        [{ start: 0, end: 10 }],
+      ),
     ).toBe('/skill:git please review');
-    expect(restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/help')).toBe('/help');
+    expect(restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/git please review')).toBe(
+      '/git please review',
+    );
     expect(
-      restoreSlashCommandRuntimeAlias('> quoted\n\n/skill:git follow-up', '> quoted\n\n/git please'),
+      restoreSlashCommandRuntimeAlias('/skill:git follow-up', '/help', [{ start: 0, end: 10 }]),
+    ).toBe('/help');
+    const quotedOriginal = '> quoted\n\n/skill:git follow-up';
+    const quotedSkillStart = quotedOriginal.indexOf('/skill:git');
+    expect(
+      restoreSlashCommandRuntimeAlias(
+        quotedOriginal,
+        '> quoted\n\n/git please',
+        [{ start: quotedSkillStart, end: quotedSkillStart + 10 }],
+      ),
     ).toBe('> quoted\n\n/skill:git please');
+    const mixed = '/skill:unknown\n/help later';
+    const helpStart = mixed.indexOf('/help');
+    expect(
+      restoreSlashCommandRuntimeAlias(
+        mixed,
+        '/unknown\n/help later',
+        [{ start: helpStart, end: helpStart + 5 }],
+      ),
+    ).toBe('/unknown\n/help later');
     expect(leadingSlashCommandRange('/skill:git please review')).toEqual({ start: 0, end: 10 });
     const quotedRuntime = '> quoted\n\n/skill:git please';
     const quotedRuntimeStart = quotedRuntime.indexOf('/skill:git');

@@ -142,13 +142,24 @@ export function findSlashCommandToken(
   return { start, end: start + match[1].length, name: match[1].slice(1) };
 }
 
+/** True when a confirmed slash range covers this token. */
+export function slashCommandRangeCoversToken(
+  ranges: readonly { start: number; end: number }[] | undefined,
+  token: { start: number; end: number } | undefined,
+): boolean {
+  if (!ranges || !token) return false;
+  return ranges.some((range) => range.start <= token.start && range.end >= token.end);
+}
+
 export function restoreSlashCommandRuntimeAlias(
   originalText: string,
   editedText: string,
+  confirmedRanges?: readonly { start: number; end: number }[],
 ): string {
   const original = findSlashCommandToken(originalText);
   const edited = findSlashCommandToken(editedText);
   if (!original || !edited) return editedText;
+  if (!slashCommandRangeCoversToken(confirmedRanges, original)) return editedText;
   if (!original.name.toLowerCase().startsWith(PI_SKILL_RUNTIME_PREFIX)) return editedText;
   const humanName = original.name.slice(PI_SKILL_RUNTIME_PREFIX.length);
   if (!humanName || edited.name.toLowerCase() !== humanName.toLowerCase()) return editedText;

@@ -193,6 +193,34 @@ describe('UserMessageEditBox — idle 发送', () => {
     expect(commitMock.mock.calls[0][0].slashCommandRanges).toBeUndefined();
   });
 
+  it('后文已确认的命令 range 不会让首行未确认的 /skill: 散文被改回', async () => {
+    const original = '/skill:unknown\n/help later';
+    const helpStart = original.indexOf('/help');
+    const box = renderBox({
+      initialText: original,
+      initialSubmitText: original,
+      slashCommandRanges: [{ start: helpStart, end: helpStart + 5 }],
+    });
+    fireEvent.change(box.textarea, { target: { value: '/unknown\n/help later' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('/unknown\n/help later');
+    expect(commitMock.mock.calls[0][0].slashCommandRanges).toBeUndefined();
+  });
+
+  it('已确认 range 覆盖的 Pi skill 编辑后仍恢复 runtime 名', async () => {
+    const box = renderBox({
+      initialText: '/git please',
+      initialSubmitText: '/skill:git please',
+      slashCommandRanges: [{ start: 0, end: 10 }],
+    });
+    fireEvent.change(box.textarea, { target: { value: '/git review' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('/skill:git review');
+    expect(commitMock.mock.calls[0][0].slashCommandRanges).toEqual([{ start: 0, end: 10 }]);
+  });
+
   it('被拦消息覆盖重发在文本未修改时透传语义引用与 chip ranges', async () => {
     const override = vi.fn(async () => {});
     const agentReferences = [{

@@ -31,8 +31,10 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next';
 
 import {
+  findSlashCommandToken,
   leadingSlashCommandRange,
   restoreSlashCommandRuntimeAlias,
+  slashCommandRangeCoversToken,
 } from '@cindy/maker-shared/composer-palette';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
 import { cn } from '@/lib/utils';
@@ -180,12 +182,13 @@ export function UserMessageEditBox({
       const originalVisibleText = quotesEncoded
         ? stripChatQuoteMarkerLines(initialSubmitText ?? initialText)
         : (initialSubmitText ?? initialText);
-      const originalHadConfirmedRange = Boolean(slashCommandRanges && slashCommandRanges.length > 0);
+      const originalHadConfirmedRange = slashCommandRangeCoversToken(
+        slashCommandRanges,
+        findSlashCommandToken(originalVisibleText),
+      );
       const submitText = visibleTextUnchanged
         ? (initialSubmitText ?? text)
-        : originalHadConfirmedRange
-          ? restoreSlashCommandRuntimeAlias(originalVisibleText, text)
-          : text;
+        : restoreSlashCommandRuntimeAlias(originalVisibleText, text, slashCommandRanges);
       const preserveQuoteMetadata = quotesEncoded && visibleTextUnchanged;
       const preservedAgentReferences =
         visibleTextUnchanged && agentReferences && agentReferences.length > 0
