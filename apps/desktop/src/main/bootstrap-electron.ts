@@ -1402,6 +1402,8 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       try {
         const stopped = await stopAllPiSubagentRunsForExit(
           path.join(app.getPath('userData'), 'pi-agent-home'),
+          undefined,
+          { hostPid: process.pid },
         );
         if (!stopped) {
           authBoundaryLog.warn(
@@ -4751,8 +4753,12 @@ const registerIpcHandlers = () => {
         // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
         // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
         anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
+        // Scope to this process: `pi-agent-home` is shared with a concurrent
+        // dev/packaged/`--passive` instance, and its running Subagents are not
+        // a reason to hold up *our* quit.
         anyPiSubagentRunning: () => hasActivePiSubagentRunsSync(
           path.join(app.getPath('userData'), 'pi-agent-home'),
+          { hostPid: process.pid },
         ),
         // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
         anySchedulerRunRunning: () =>
@@ -7642,7 +7648,11 @@ onQuit(
   'pi-subagent-runners',
   async () => {
     const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
-    const stopped = await stopAllPiSubagentRunsForExit(agentHome);
+    // Only our own children (plus unattributable / dead-owner orphans). A
+    // concurrent instance sharing this agent home keeps running.
+    const stopped = await stopAllPiSubagentRunsForExit(agentHome, undefined, {
+      hostPid: process.pid,
+    });
     if (!stopped) {
       piSubagentLog.warn('PI Subagent runners did not all acknowledge stop before exit timeout');
     }

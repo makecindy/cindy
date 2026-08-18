@@ -1337,7 +1337,11 @@ function forceQuit(): void {
   // build_app uses detached process groups, so parent exit does not reliably
   // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
   abortIOSSimulatorOperationsForExit();
-  requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'));
+  // Scoped to this process so an update relaunch never kills a concurrent
+  // instance's Subagents out of the shared agent home.
+  requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
+    hostPid: process.pid,
+  });
   // Node 子进程同理——before-quit 的 destroyAll 不会触发,这里同步 kill。
   try { getGhostNodeRuntimeBroker().destroyAll(); } catch { /* best-effort */ }
   for (const win of BrowserWindow.getAllWindows()) {

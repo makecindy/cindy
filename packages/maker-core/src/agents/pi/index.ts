@@ -92,6 +92,7 @@ import {
   isPiSubagentTerminal,
   listPiSubagentRuns,
   piSubagentRunRoot,
+  piSubagentRuntimeOwnerId,
   resumePiSubagentRun,
   stopPiSubagentRunsForAccountBoundary,
   syncPiSubagentPermissions,
@@ -165,6 +166,36 @@ import {
   userDraftTextFromPiEntry,
 } from './session-tree.js';
 import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
+
+/**
+ * Denial reasons that mean *nobody was on the other end*, as opposed to an
+ * approval surface that existed and said no.
+ *
+ * Only this set makes a durable Subagent approval stay pending. Everything else
+ * a resolver can answer — a user denial, an Auto-review block, a timeout, a
+ * resolver that threw — keeps its existing fail-closed deny, so the "surface
+ * exists but explicitly refused" boundary is unchanged.
+ */
+const PI_APPROVAL_SURFACE_ABSENT_REASONS: ReadonlySet<string> = new Set([
+  'no_interaction_resolver',
+  'no_resolver_attached',
+  'no_listener_attached',
+  'no_interaction_route',
+  'interaction_route_released',
+]);
+
+function isPiApprovalSurfaceAbsentReason(reason: unknown): boolean {
+  return typeof reason === 'string' && PI_APPROVAL_SURFACE_ABSENT_REASONS.has(reason);
+}
+
+/**
+ * How a pending permission card is force-settled when the host takes it away.
+ *
+ * `unanswered` is only ever delivered to entries that opted in with
+ * `deferWhenSurfaceLost` (durable Subagent approvals). Root-turn cards have no
+ * durable mailbox to fall back to, so they map it to a system denial.
+ */
+type PiPendingPromptSettle = (resolveAs: 'allow' | 'deny' | 'unanswered') => void;
 
 const PI_PROVIDER_ID = 'cindy';
 // 既非 Cindy 网关(cindy/xd)也非经 compat proxy 的订阅直连(openai/anthropic)的 providerId = 显式 BYOM
@@ -1648,7 +1679,18 @@ export class PiAgent extends BaseAgent {
     const runtimeInstanceId = remote
       ? stableSessionPathSegment(sid)
       : randomBytes(8).toString('hex');
-    const subagentRuntimeOwnerId = opts.sessionInstanceId?.trim() || runtimeInstanceId;
+    // Owner id = <host pid>:<session-instance scope>. The scope half is what
+    // decides who may answer approvals and rewrite permissions (it is minted
+    // per `Maker.createSession`, so it identifies this handle). The pid half
+    // lets agent-home-wide sweeps ask "did this Cindy process start the run?"
+    // without a durable schema change — `pi-agent-home` is shared by dev,
+    // packaged and every `--passive` instance. Local-only: the owner id never
+    // reaches a remote spawn env (`subagentRoutingEnabled = localSubagentSupported`),
+    // so this cannot destabilise the remote envHash reattach identity.
+    const subagentRuntimeOwnerId = piSubagentRuntimeOwnerId(
+      process.pid,
+      opts.sessionInstanceId?.trim() || runtimeInstanceId,
+    );
     // 轮 20-V1 HIGH:远端路径必须 POSIX join —— path.join 在 Windows 本地会把
     // runtimeDir 与文件名拼成反斜杠(远端 shell 不认, 权限文件/子代理 runtime
     // 写不进删不掉, 破坏权限门与子代理路由)。runtimeDir 已是 posix(956 行)。
@@ -2062,6 +2104,12 @@ export class PiAgent extends BaseAgent {
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     let interactionResolver: InteractionResolver | null = null;
+    /**
+     * Bumped whenever the approval surface is (re)wired. Deferred Subagent
+     * approvals are re-offered on a change, so a re-attached host gets the card
+     * immediately instead of waiting for the next durable poll to guess.
+     */
+    let interactionResolverGeneration = 0;
     // Host 每轮权限策略(个人微信 / Telegram 群)。刻意保留在 send 之外的闭包里:
     // pi 的内部续跑(plan 审批后的实施轮、自动继续)不再经 handle.send,却必须继续
     // 强制确认策略命中的工具 —— 与 Claude(task_notification 续跑)/ Codex(plan
@@ -2095,20 +2143,49 @@ export class PiAgent extends BaseAgent {
      * 已经失效的卡(codex review P1)。
      */
     type PendingPrompt = {
-      settle: (resolveAs: 'allow' | 'deny') => void;
+      /**
+       * `unanswered` = the surface went away without the user deciding. Only
+       * durable Subagent prompts opt into it (`deferWhenSurfaceLost`); a root
+       * turn's prompt still fails closed to deny.
+       */
+      settle: PiPendingPromptSettle;
       /** 高风险审批(MCP prompt-each-time、灰区 ask、审查中收紧):放宽档位不得批量放行。 */
       forcePrompt: boolean;
       /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
       unavailableHandoff?: boolean;
+      /**
+       * The request survives this handle in a durable mailbox, so losing the
+       * approval surface must park it rather than answer it. Set only by the
+       * PI Subagent path — the child keeps running and can be asked again.
+       */
+      deferWhenSurfaceLost?: boolean;
     };
     const pendingPrompts = new Map<string, PendingPrompt>();
     const registerPendingPrompt = (requestId: string, entry: PendingPrompt): (() => void) => {
       pendingPrompts.set(requestId, entry);
       return () => pendingPrompts.delete(requestId);
     };
-    const dismissAllPendingPrompts = (reason: string, resolveAs: 'allow' | 'deny'): void => {
+    const dismissAllPendingPrompts = (
+      reason: string,
+      resolveAs: 'allow' | 'deny',
+      dismissOpts?: { surfaceLost?: boolean },
+    ): void => {
       if (pendingPrompts.size === 0) return;
       for (const [requestId, entry] of Array.from(pendingPrompts.entries())) {
+        // The approval surface itself is going away (session teardown / process
+        // exit). A durable Subagent question the user never answered must be
+        // parked, not denied — its child keeps running and the durable mailbox
+        // can re-offer it. The card is still dismissed so no stale UI remains.
+        if (dismissOpts?.surfaceLost && entry.deferWhenSurfaceLost) {
+          pendingPrompts.delete(requestId);
+          entry.settle('unanswered');
+          queue.push({
+            type: 'interaction_dismissed',
+            data: { requestId, reason, resolvedAs: 'deny', deferred: true },
+            source: 'pi',
+          });
+          continue;
+        }
         // 放宽档位不能替用户批准他还没表态的高风险调用:没拿到这一次的明确确认就 fail-closed
         // (与 CC / Codex 的同名逻辑一致 —— 否则 pending 期间切档能让破坏性调用自动过)。
         const effectiveResolveAs: 'allow' | 'deny' =
@@ -2127,10 +2204,12 @@ export class PiAgent extends BaseAgent {
     };
     const clearActiveTurnPermissionPolicy = (
       reason: string,
-      opts?: { dismissPending?: boolean },
+      opts?: { dismissPending?: boolean; surfaceLost?: boolean },
     ): void => {
       activeTurnPermissionPolicy = null;
-      if (opts?.dismissPending) dismissAllPendingPrompts(reason, 'deny');
+      if (opts?.dismissPending) {
+        dismissAllPendingPrompts(reason, 'deny', { surfaceLost: opts.surfaceLost === true });
+      }
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
@@ -2178,6 +2257,21 @@ export class PiAgent extends BaseAgent {
     // the parent view unmounted still gets a real Cindy prompt instead of
     // waiting out its own run timeout.
     let detachedApprovalSupervisorActive = false;
+    /**
+     * Approvals we offered while no approval surface was listening.
+     *
+     * A durable child's question must not be *consumed* as a denial just
+     * because the parent view went away: `Session.performClose` clears its
+     * interaction listener, so the resolver that survives on the handle answers
+     * `no_listener_attached` — a system deny that would fail the child's tool
+     * for a question the user never saw. Those requests stay in the durable
+     * mailbox instead, and the sidebar keeps showing `awaitingApproval`.
+     *
+     * The value is the resolver generation the offer was made under, so the
+     * 250ms supervisor poll re-offers exactly once per surface change rather
+     * than hammering a resolver that has nobody behind it.
+     */
+    const piSubagentApprovalDeferred = new Map<string, number>();
     let piSubagentResumeTail: Promise<void> = Promise.resolve();
     const clearPiSubagentApprovalState = (runId: string): void => {
       const prefix = `${runId}:`;
@@ -2186,6 +2280,9 @@ export class PiAgent extends BaseAgent {
       }
       for (const key of piSubagentApprovalDeliveries) {
         if (key.startsWith(prefix)) piSubagentApprovalDeliveries.delete(key);
+      }
+      for (const key of piSubagentApprovalDeferred.keys()) {
+        if (key.startsWith(prefix)) piSubagentApprovalDeferred.delete(key);
       }
       for (const key of piSubagentApprovalDecisions.keys()) {
         if (key.startsWith(prefix)) piSubagentApprovalDecisions.delete(key);
@@ -2286,6 +2383,13 @@ export class PiAgent extends BaseAgent {
         && approval.title === 'cindy:turn-change-capture';
       const key = `${status.runId}:${task.childId}:${approval.id}`;
       if (piSubagentApprovalDeliveries.has(key) || piSubagentApprovalRequests.has(key)) return;
+      // Parked for want of an approval surface: hold until one is (re)wired.
+      if (piSubagentApprovalDeferred.get(key) === interactionResolverGeneration) return;
+      // Snapshot the surface generation *before* the offer's awaits. A resolver
+      // attached while auto-review is still running must invalidate the park,
+      // otherwise the entry is filed under the new generation and the retry gate
+      // below never opens again.
+      const offeredUnderGeneration = interactionResolverGeneration;
       piSubagentApprovalRequests.add(key);
       if (turnChangeCapture) {
         let toolName = '';
@@ -2380,10 +2484,10 @@ export class PiAgent extends BaseAgent {
         // of turning startup ordering into a denial. The runner timeout remains
         // the final fail-closed bound if a resolver never arrives.
         if (!interactionResolver) return null;
-        return new Promise<PiPermissionResolution>((resolve) => {
+        return new Promise<PiPermissionResolution | null>((resolve) => {
           let settled = false;
           let unregister: (() => void) | null = null;
-          const finalize = (resolution: PiPermissionResolution): void => {
+          const finalize = (resolution: PiPermissionResolution | null): void => {
             if (settled) return;
             settled = true;
             unregister?.();
@@ -2392,7 +2496,11 @@ export class PiAgent extends BaseAgent {
           unregister = registerPendingPrompt(requestId, {
             forcePrompt: options.forcePrompt,
             ...(options.unavailableHandoff ? { unavailableHandoff: true } : {}),
-            settle: (resolveAs) => finalize(resolveAs === 'allow' ? 'allow' : 'system-deny'),
+            // Durable child: losing the surface parks the question.
+            deferWhenSurfaceLost: true,
+            settle: (resolveAs) => finalize(
+              resolveAs === 'allow' ? 'allow' : resolveAs === 'unanswered' ? null : 'system-deny',
+            ),
           });
           const permissionRequest = {
             kind: 'permission' as const,
@@ -2416,6 +2524,17 @@ export class PiAgent extends BaseAgent {
             if (decision.kind !== 'permission') {
               if (options.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
               finalize('system-deny');
+              return;
+            }
+            // "Nobody was listening" is not an answer. The parent view can be
+            // gone (Session.performClose clears its interaction listener) while
+            // the detached child runs on; consuming that as a denial fails a
+            // tool call for a question the user never saw. Park it instead.
+            if (
+              decision.behavior === 'deny'
+              && isPiApprovalSurfaceAbsentReason(decision.reason)
+            ) {
+              finalize(null);
               return;
             }
             if (
@@ -2512,6 +2631,12 @@ export class PiAgent extends BaseAgent {
         ) {
           const resolved = await resolveConfirmation();
           if (resolved === null) {
+            // Parked, not answered: no decision cached, no delivery recorded,
+            // so the request stays in the durable mailbox for a later surface.
+            // Remember the generation we offered under so the 250ms supervisor
+            // poll does not re-ask a resolver with nobody behind it; a new
+            // `setInteractionResolver` clears this and re-offers immediately.
+            piSubagentApprovalDeferred.set(key, offeredUnderGeneration);
             piSubagentApprovalRequests.delete(key);
             return;
           }
@@ -3059,7 +3184,10 @@ export class PiAgent extends BaseAgent {
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
           disposePiTranslateContext(ctx);
-          clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true });
+          // The root pi process is gone, but detached children are not. Their
+          // unanswered cards are parked in the durable mailbox rather than
+          // denied; a root-turn card still fails closed to deny.
+          clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true, surfaceLost: true });
           runtimeCapabilityGeneration++;
           publishRuntimeCapabilities(undefined);
           runtimeCapabilityListeners.clear();
@@ -4080,8 +4208,9 @@ export class PiAgent extends BaseAgent {
         publishRuntimeCapabilities(undefined);
         runtimeCapabilityListeners.clear();
         // 会话结束时挂起的卡已经不可能有人回答:清 policy 并强制 deny,别让等它的调用
-        // 悬着(同 CC / Codex)。
-        clearActiveTurnPermissionPolicy('session_closed', { dismissPending: true });
+        // 悬着(同 CC / Codex)。例外是仍在跑的 detached Subagent —— 它的卡回到
+        // durable mailbox 待决(surfaceLost),不能被当成用户拒绝。
+        clearActiveTurnPermissionPolicy('session_closed', { dismissPending: true, surfaceLost: true });
         // MCP route belongs to the root and closes immediately. Transfer the
         // proxy-token disposer first so detached children keep their gateway
         // lease until their durable statuses settle.
@@ -4126,6 +4255,10 @@ export class PiAgent extends BaseAgent {
 
       setInteractionResolver(resolver: InteractionResolver): void {
         interactionResolver = resolver;
+        // A new surface is listening: every approval we parked because nobody
+        // was there becomes offerable again on the next durable poll.
+        interactionResolverGeneration++;
+        piSubagentApprovalDeferred.clear();
       },
 
       async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
@@ -4700,7 +4833,7 @@ export class PiAgent extends BaseAgent {
       registerPendingPrompt: (
         requestId: string,
         entry: {
-          settle: (resolveAs: 'allow' | 'deny') => void;
+          settle: PiPendingPromptSettle;
           forcePrompt: boolean;
           unavailableHandoff?: boolean;
         },

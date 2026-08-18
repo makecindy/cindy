@@ -177,6 +177,50 @@ export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
   return state === 'completed' || state === 'failed' || state === 'stopped';
 }
 
+/**
+ * Runtime owner identity for a durable run.
+ *
+ * `scopeId` is the per-session-instance id that decides who may answer
+ * approvals and rewrite permissions — it is freshly minted for every
+ * `Maker.createSession`, so it identifies a *handle*, not an app instance.
+ *
+ * Agent-home-wide sweeps (quit, account boundary) need the coarser question
+ * "did *this* Cindy process start the run?", because `pi-agent-home` is shared
+ * by dev + packaged + every `--passive` instance. Prefixing the owner id with
+ * the host pid answers that without a durable schema change: the id stays an
+ * opaque, equality-compared string for the runner and the in-Pi extension, and
+ * only the Host ever parses it back.
+ */
+export function piSubagentRuntimeOwnerId(hostPid: number, scopeId: string): string {
+  return `${hostPid}:${scopeId}`;
+}
+
+/** Host pid encoded by `piSubagentRuntimeOwnerId`, or null for a legacy/absent id. */
+export function piSubagentOwnerHostPid(runtimeOwnerId: string | undefined): number | null {
+  if (typeof runtimeOwnerId !== 'string' || runtimeOwnerId.length === 0) return null;
+  const separator = runtimeOwnerId.indexOf(':');
+  if (separator <= 0) return null;
+  const pid = Number(runtimeOwnerId.slice(0, separator));
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+/**
+ * Does an agent-home-wide sweep in `hostPid` own this run?
+ *
+ * Fail closed on anything we cannot attribute (missing status, legacy id
+ * without a host prefix): an unattributable run is treated as ours and stopped.
+ * Only a run whose owning process is a *different, still-live* one is skipped —
+ * that is the shared-userData case where stopping would kill another running
+ * instance's Subagent.
+ */
+function isSweepableByHost(status: PiSubagentRunStatus | undefined, hostPid: number): boolean {
+  const ownerPid = piSubagentOwnerHostPid(status?.runtimeOwnerId);
+  if (ownerPid === null) return true;
+  if (ownerPid === hostPid) return true;
+  // A dead owner process leaves an orphan runner that nobody will ever stop.
+  return isProcessAlive(ownerPid) === false;
+}
+
 function isProcessAlive(pid: number | undefined): boolean | null {
   if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return null;
   try {
@@ -1069,7 +1113,17 @@ export async function resumePiSubagentRun(
   ));
 }
 
-export function hasActivePiSubagentRunsSync(agentHome: string): boolean {
+/**
+ * Is anything still running that *this* host would have to stop on exit?
+ *
+ * `hostPid` scopes the answer to this process (plus unattributable and orphaned
+ * runs). Without it a concurrent instance sharing `pi-agent-home` would make
+ * this host warn about, and later stop, work it does not own.
+ */
+export function hasActivePiSubagentRunsSync(
+  agentHome: string,
+  scope: PiSubagentSweepScope = {},
+): boolean {
   const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
   let sessionEntries: import('node:fs').Dirent[];
   try { sessionEntries = readdirSync(parentRoot, { withFileTypes: true }); } catch { return false; }
@@ -1085,6 +1139,9 @@ export function hasActivePiSubagentRunsSync(agentHome: string): boolean {
           JSON.parse(readFileSync(path.join(root, runEntry.name, 'status.json'), 'utf8')),
           runEntry.name,
         );
+        if (status && scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) {
+          continue;
+        }
         if (!status || (!isPiSubagentTerminal(status.state) && !isPiSubagentRunStale(status))) return true;
       } catch {
         return true;
@@ -1094,7 +1151,11 @@ export function hasActivePiSubagentRunsSync(agentHome: string): boolean {
   return false;
 }
 
-export function requestStopAllPiSubagentRunsSync(agentHome: string): number {
+/** Force-quit variant of the exit sweep; same ownership scoping. */
+export function requestStopAllPiSubagentRunsSync(
+  agentHome: string,
+  scope: PiSubagentSweepScope = {},
+): number {
   const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
   let requested = 0;
   let sessionEntries: import('node:fs').Dirent[];
@@ -1116,6 +1177,7 @@ export function requestStopAllPiSubagentRunsSync(agentHome: string): number {
           );
         } catch { /* unreadable status is treated as potentially active */ }
         if (status && (isPiSubagentTerminal(status.state) || isPiSubagentRunStale(status))) continue;
+        if (status && scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
         const controlPath = path.join(runDir, 'control.json');
         let seq = 0;
         try {
@@ -1141,15 +1203,29 @@ export function requestStopAllPiSubagentRunsSync(agentHome: string): number {
 }
 
 /**
+ * Ownership scope for a stop sweep.
+ *
+ * - `runtimeOwnerId` — exact handle scope (one parent task's own children).
+ * - `hostPid` — agent-home-wide scope: everything this Cindy process started,
+ *   plus anything unattributable or orphaned by a dead process. A run owned by
+ *   a different, still-live instance is left alone.
+ *
+ * Both are optional; omitting them sweeps everything (legacy behaviour).
+ */
+export interface PiSubagentSweepScope {
+  runtimeOwnerId?: string;
+  hostPid?: number;
+}
+
+/**
  * Request stop for every non-terminal run under `roots` and wait until they are
- * all terminal (or the deadline passes). `runtimeOwnerId`, when given, skips
- * runs whose status names a *different* owner — an unreadable status stays in
- * scope so a corrupt record can never keep a child alive past its boundary.
+ * all terminal (or the deadline passes). An unreadable status stays in scope so
+ * a corrupt record can never keep a child alive past its boundary.
  */
 async function stopPiSubagentRunsUnderRoots(
   roots: readonly string[],
   timeoutMs: number,
-  runtimeOwnerId?: string,
+  scope: PiSubagentSweepScope = {},
 ): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
   const requested = new Set<string>();
@@ -1169,12 +1245,13 @@ async function stopPiSubagentRunsUnderRoots(
         const status = statuses.get(runId);
         if ((status && isPiSubagentTerminal(status.state)) || staleRunIds.has(runId)) continue;
         if (
-          runtimeOwnerId !== undefined
+          scope.runtimeOwnerId !== undefined
           && status?.runtimeOwnerId !== undefined
-          && status.runtimeOwnerId !== runtimeOwnerId
+          && status.runtimeOwnerId !== scope.runtimeOwnerId
         ) {
           continue;
         }
+        if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
         activeCount += 1;
         const key = `${root}:${runId}`;
         if (requested.has(key)) continue;
@@ -1190,9 +1267,17 @@ async function stopPiSubagentRunsUnderRoots(
   }
 }
 
+/**
+ * Quit / account-boundary sweep across the whole agent home.
+ *
+ * `scope.hostPid` keeps a concurrent instance's Subagents alive: dev +
+ * packaged + every `--passive` launch share one `pi-agent-home`, so an
+ * unscoped sweep would stop another live instance's children.
+ */
 export async function stopAllPiSubagentRunsForExit(
   agentHome: string,
   timeoutMs = 4_000,
+  scope: PiSubagentSweepScope = {},
 ): Promise<boolean> {
   const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
   let sessionEntries: import('node:fs').Dirent[];
@@ -1205,7 +1290,7 @@ export async function stopAllPiSubagentRunsForExit(
   const roots = sessionEntries
     .filter((entry) => entry.isDirectory() && entry.name !== '.' && entry.name !== '..')
     .map((entry) => path.join(parentRoot, entry.name));
-  return stopPiSubagentRunsUnderRoots(roots, timeoutMs);
+  return stopPiSubagentRunsUnderRoots(roots, timeoutMs, scope);
 }
 
 /**
@@ -1220,7 +1305,9 @@ export async function stopPiSubagentRunsForAccountBoundary(
   root: string,
   options: { runtimeOwnerId?: string; timeoutMs?: number } = {},
 ): Promise<boolean> {
-  return stopPiSubagentRunsUnderRoots([root], options.timeoutMs ?? 4_000, options.runtimeOwnerId);
+  return stopPiSubagentRunsUnderRoots([root], options.timeoutMs ?? 4_000, {
+    ...(options.runtimeOwnerId !== undefined ? { runtimeOwnerId: options.runtimeOwnerId } : {}),
+  });
 }
 
 /**

@@ -97,6 +97,7 @@ vi.mock('../rpc-client.js', () => ({
 }));
 
 import { PiAgent } from '../index.js';
+import { Session } from '../../../session.js';
 import * as piSubagentRuns from '../pi-subagent-runs.js';
 import type { PiSubagentRunStatus } from '../pi-subagent-runs.js';
 import { piProjectKey } from '../project-trust.js';
@@ -254,6 +255,14 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     model: 'm',
   });
 
+  /**
+   * Owner ids are `<host pid>:<session-instance scope>`; the pid half is what
+   * lets an agent-home-wide sweep tell this process's runs from a concurrent
+   * instance's. Fixtures owned by "this handle" must use the same shape.
+   */
+  const ownerId = (scope = 'pi-instance-1') =>
+    piSubagentRuns.piSubagentRuntimeOwnerId(process.pid, scope);
+
   function pendingSubagentRun(
     input: Record<string, unknown>,
     overrides: Partial<PiSubagentRunStatus> = {},
@@ -265,7 +274,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       runId,
       taskId: 'tool-subagent-approval',
       parentSessionId: 's1',
-      runtimeOwnerId: 'pi-instance-1',
+      runtimeOwnerId: ownerId(),
       interactiveOwner: 'host',
       runnerInstanceId: 'runner-subagent-approval',
       state: 'running',
@@ -431,7 +440,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         runId,
         taskId: 'tool-durable',
         parentSessionId: 's1',
-        runtimeOwnerId: 'pi-instance-1',
+        runtimeOwnerId: ownerId(),
         runnerInstanceId: 'runner-durable',
         state,
         startedAt: 1,
@@ -497,6 +506,118 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(proxyDisposed).toBe(0);
   });
 
+  /**
+   * Production teardown: a real `Session` owns the handle, so closing it runs
+   * `performClose`, which clears `interactionListener` in its `finally`. The
+   * resolver the handle keeps then answers `no_listener_attached` — the exact
+   * path that used to turn "nobody was listening" into a system denial.
+   */
+  function wrapInSession(handle: Awaited<ReturnType<PiAgent['startSession']>>): Session {
+    return new Session({
+      id: 's1',
+      agentKind: 'pi',
+      workDir: cwd,
+      handle,
+      capabilities: { permissionModes: ['ask', 'auto', 'bypassPermissions'] } as never,
+      logger: noopLogger,
+    });
+  }
+
+  it('parks a detached Subagent approval instead of denying it when the listener is torn down', async () => {
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const session = wrapInSession(handle);
+    // No listener is ever attached: this is the torn-down surface, reached
+    // through the real Session resolver rather than by poking the handle.
+    await session.close();
+
+    // Give the detached supervisor several poll cycles.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    // Nothing was delivered — in particular no `confirmed: false`.
+    expect(control).not.toHaveBeenCalled();
+    // Still leased: the run is live and its question is still open.
+    expect(proxyDisposed).toBe(0);
+  });
+
+  it('delivers a parked Subagent approval once an approval surface is attached again', async () => {
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const session = wrapInSession(handle);
+    await session.close();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(control).not.toHaveBeenCalled();
+
+    // Re-attaching a Session re-wires the handle resolver (the same call the
+    // production rebuild path makes) and the parked question is offered again.
+    const reattached = wrapInSession(handle);
+    reattached.setInteractionListener(async () => ({
+      kind: 'permission',
+      behavior: 'allow',
+    }) as never);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: true }),
+    ), { timeout: 3_000 });
+  });
+
+  it('still denies a detached Subagent approval when a real surface refuses it', async () => {
+    // fail-closed boundary is unchanged: "surface exists and said no" is a deny,
+    // only "nobody was listening" parks.
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const session = wrapInSession(handle);
+    session.setInteractionListener(async () => ({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'user_rejected',
+    }) as never);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: false }),
+    ), { timeout: 3_000 });
+    await session.close();
+  });
+
+  it('parks an in-flight Subagent card when the session tears the surface down under it', async () => {
+    // The user had the card on screen and never answered; closing the session
+    // must not convert that into a denial for a child that is still running.
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const session = wrapInSession(handle);
+    let sawRequest!: () => void;
+    const requestShown = new Promise<void>((resolve) => { sawRequest = resolve; });
+    // Never resolves: the card is up and the user is thinking.
+    session.setInteractionListener((() => {
+      sawRequest();
+      return new Promise(() => {});
+    }) as never);
+
+    await requestShown;
+    await session.close();
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    expect(control).not.toHaveBeenCalled();
+  });
+
   it('stops detached Subagent runners and revokes the proxy token at an account boundary', async () => {
     const agent = new PiAgent(buildDeps());
     const handle = await agent.startSession(opts());
@@ -510,7 +631,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
     expect(stop).toHaveBeenCalledWith(
       path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1'),
-      { runtimeOwnerId: 'pi-instance-1' },
+      { runtimeOwnerId: ownerId() },
     );
     // No lease transfer: the old owner's gateway route is revoked immediately.
     expect(proxyDisposed).toBe(2);
@@ -566,7 +687,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       runId,
       taskId: 'tool-turn-change',
       parentSessionId: 's1',
-      runtimeOwnerId: 'pi-instance-1',
+      runtimeOwnerId: ownerId(),
       runnerInstanceId: 'runner-turn-change',
       state: 'running',
       startedAt: 1,
@@ -603,7 +724,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         childId: `${runId}-1`,
         approvalId: 'capture-1',
         confirmed: true,
-        runtimeOwnerId: 'pi-instance-1',
+        runtimeOwnerId: ownerId(),
       },
     ));
     expect(noteOpaqueWrite).toHaveBeenCalledWith({
@@ -637,7 +758,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         childId: run.tasks[0]!.childId,
         approvalId: 'approval-1',
         confirmed,
-        runtimeOwnerId: 'pi-instance-1',
+        runtimeOwnerId: ownerId(),
       },
     ));
     expect(resolver).toHaveBeenCalledOnce();
@@ -725,7 +846,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   it('never answers durable Subagent approvals owned by another runtime', async () => {
     const run = pendingSubagentRun(
       { toolName: 'write', input: { path: 'a.txt' } },
-      { runtimeOwnerId: 'another-runtime' },
+      { runtimeOwnerId: piSubagentRuns.piSubagentRuntimeOwnerId(process.pid, 'another-runtime') },
     );
     vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);

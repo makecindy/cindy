@@ -4,9 +4,19 @@ import { chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
+
+/**
+ * Every case here spawns a real runner process (and that runner spawns a fake
+ * pi per child). Vitest's 5s default is a Linux-shaped budget: on the Windows
+ * CI runner process creation alone eats most of it, which is why this whole
+ * file went red there while staying green on Linux. The waits inside the tests
+ * are the real bound — they poll durable state and fail with a readable
+ * message — so this only has to be comfortably above them.
+ */
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 import {
   controlPiSubagentRuns,
   listPiSubagentRuns,
@@ -699,9 +709,7 @@ describe('Cindy durable PI Subagent runner', () => {
     );
     expect(stopped.tasks[0]?.output).toBe('fixture result');
     await waitForClose(fixture.child, fixture.stderr);
-    // Budget sits above both waits so a slow CI run reports the readable
-    // "timed out waiting for ..." message instead of a bare vitest timeout.
-  }, 40_000);
+  });
 
   it('bounds control dedupe and abandoned receipts without replaying the legacy mailbox', async () => {
     const fixture = await makeFixture({ hang: true });
@@ -738,15 +746,29 @@ describe('Cindy durable PI Subagent runner', () => {
         requestedAt: Date.now(),
       })}\n`, { mode: 0o600 });
     }));
-    await waitFor(async () => (await readdir(controlsDir)).length === 0 ? true : null);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitFor(
+      async () => (await readdir(controlsDir)).length === 0 ? true : null,
+      15_000,
+      'the runner to drain every queued control request',
+    );
+    // Draining the mailbox is not the same event as publishing the receipts:
+    // the runner writes each receipt after consuming its request, so a fixed
+    // sleep raced the tail of that work on a loaded runner (CI saw 441/512).
+    // 512 is the retained-receipt bound, so waiting for it is deterministic —
+    // the cap is what stops the count from ever going past it.
+    const receiptsDir = path.join(fixture.runDir, 'control-receipts');
+    await waitFor(
+      async () => (await readdir(receiptsDir)).length === 512 ? true : null,
+      15_000,
+      'the retained control receipts to settle at the 512 bound',
+    );
 
     const commands = (await readFile(fixture.commandsFile, 'utf8'))
       .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
     expect(commands.filter((command) => (
       command.type === 'steer' && command.message === 'legacy direction once'
     ))).toHaveLength(1);
-    expect(await readdir(path.join(fixture.runDir, 'control-receipts'))).toHaveLength(512);
+    expect(await readdir(receiptsDir)).toHaveLength(512);
 
     await expect(controlPiSubagentRuns(fixture.root, running.runId, 'stop')).resolves.toBe(1);
     await waitFor(async () => {
@@ -853,9 +875,20 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);
       return run?.tasks[1]?.status === 'running' ? run : null;
-    });
-    const commands = (await readFile(fixture.commandsFile, 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+    }, 15_000, 'the queued child to launch');
+    // "child is running" and "its queued direction has been written" are two
+    // different events; wait for the one the assertions below actually read.
+    const commands = await waitFor(
+      async () => {
+        const parsed = (await readFile(fixture.commandsFile, 'utf8'))
+          .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+        return parsed.some((command) => command.type === 'steer' && command.message === 'queued direction')
+          ? parsed
+          : null;
+      },
+      15_000,
+      'the queued direction to reach the child after its prompt',
+    );
     const secondPrompt = commands.findIndex((command) => command.type === 'prompt' && command.message === 'task 2');
     const queuedSteer = commands.findIndex((command) => command.type === 'steer' && command.message === 'queued direction');
     expect(secondPrompt).toBeGreaterThan(-1);

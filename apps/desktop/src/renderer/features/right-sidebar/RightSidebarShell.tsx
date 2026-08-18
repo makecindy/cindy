@@ -239,9 +239,19 @@ export function RightSidebarShell({
     });
   }, [sessionId, shellVisible]);
 
+  // Subagents eligibility is tri-state: `undefined` while the session row is
+  // still loading, then true/false once the harness is known. Folding unknown
+  // into "unavailable" would filter a *persisted* active Subagents tab out of
+  // the projection, and the active-tab reconciliation below would immediately
+  // persist a different tab (or null) as active — the user's selection is gone
+  // by the time eligibility resolves to true. Keep the tab projected while
+  // unknown and only converge once we actually know.
   const tabAvailability = useMemo(
-    () => ({ iosSimulatorAvailable: iosSimulatorPluginAvailable, subagentsAvailable: subagentsEnabled }),
-    [iosSimulatorPluginAvailable, subagentsEnabled],
+    () => ({
+      iosSimulatorAvailable: iosSimulatorPluginAvailable,
+      subagentsAvailable: subagentsEnabled || !subagentsEligibilityKnown,
+    }),
+    [iosSimulatorPluginAvailable, subagentsEligibilityKnown, subagentsEnabled],
   );
   const projectedTabs = useMemo(
     () => projectAvailableTabs(bucket.tabs, bucket.activeTabId, tabAvailability),
@@ -316,7 +326,12 @@ export function RightSidebarShell({
   // If a now-hidden simulator tab owned the active marker, move the persisted
   // marker to a visible tab (or null). The simulator tab itself remains stored
   // and returns when the plugin is enabled again.
+  //
+  // Never write while Subagents eligibility is still unknown: the projection is
+  // provisional during that window, so converging it would persist a decision
+  // taken from incomplete information and destroy the restored selection.
   useEffect(() => {
+    if (!subagentsEligibilityKnown) return;
     if (!bucket.hydrated || !sessionId || bucket.activeTabId === activeTabId) return;
     void setActiveTab(sessionId, activeTabId).catch((err) => {
       log.error('hidden simulator active-tab reconciliation failed', {
@@ -325,7 +340,7 @@ export function RightSidebarShell({
         err,
       });
     });
-  }, [activeTabId, bucket.activeTabId, bucket.hydrated, sessionId]);
+  }, [activeTabId, bucket.activeTabId, bucket.hydrated, sessionId, subagentsEligibilityKnown]);
 
   const prevTabCountRef = useRef<number | null>(null);
   useEffect(() => {
