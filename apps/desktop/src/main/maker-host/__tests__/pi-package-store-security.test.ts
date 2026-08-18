@@ -736,6 +736,102 @@ describe('Pi package executable-code boundary', () => {
     expect(leftovers).toEqual([]);
   });
 
+  it.each([
+    { kind: 'Skill', phase: 'before read', mismatchCall: 1, relativePath: path.join('skills', 'sample', 'SKILL.md') },
+    { kind: 'Skill', phase: 'after read', mismatchCall: 2, relativePath: path.join('skills', 'sample', 'SKILL.md') },
+    { kind: 'Prompt', phase: 'before read', mismatchCall: 1, relativePath: path.join('prompts', 'hello.md') },
+    { kind: 'Prompt', phase: 'after read', mismatchCall: 2, relativePath: path.join('prompts', 'hello.md') },
+  ])('rejects a $kind source whose opened handle changes $phase', async ({
+    mismatchCall,
+    relativePath,
+  }) => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-snapshot-race-'));
+    roots.push(packageRoot);
+    const sourceFile = path.join(packageRoot, relativePath);
+    const outsideFile = path.join(runtime.userData, `outside-${path.basename(sourceFile)}`);
+    await fs.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fs.writeFile(sourceFile, 'approved package content\n');
+    await fs.writeFile(outsideFile, 'host-private-content\n');
+
+    const snapshotRoot = path.join(runtime.userData, `raced-${path.basename(sourceFile)}-snapshot`);
+    const outsideStat = await fs.stat(outsideFile);
+    const probeHandle = await fs.open(sourceFile, 'r');
+    const fileHandlePrototype = Object.getPrototypeOf(probeHandle) as {
+      stat: typeof probeHandle.stat;
+    };
+    await probeHandle.close();
+    const originalHandleStat = fileHandlePrototype.stat;
+    let sourceStatCalls = 0;
+    Object.defineProperty(fileHandlePrototype, 'stat', {
+      configurable: true,
+      value: async function (...args: Parameters<typeof probeHandle.stat>) {
+        sourceStatCalls += 1;
+        if (sourceStatCalls === mismatchCall) {
+          return outsideStat;
+        }
+        return originalHandleStat.apply(this, args);
+      },
+      writable: true,
+    });
+    try {
+      const store = await import('../pi-package-store.js');
+      await expect(store.stageManagedPackageSnapshot({
+        extensions: [],
+        skills: relativePath.endsWith('SKILL.md') ? [{ path: sourceFile, name: 'sample' }] : [],
+        promptTemplates: relativePath.endsWith('SKILL.md') ? [] : [sourceFile],
+        packageRoots: [packageRoot],
+      }, snapshotRoot)).rejects.toThrow(/changed (?:before|while) copying snapshot/);
+    } finally {
+      Object.defineProperty(fileHandlePrototype, 'stat', {
+        configurable: true,
+        value: originalHandleStat,
+        writable: true,
+      });
+    }
+
+    expect(sourceStatCalls).toBe(mismatchCall);
+    await expect(fs.stat(snapshotRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    const leftovers = (await fs.readdir(runtime.userData)).filter((entry) => (
+      entry.startsWith(`${path.basename(snapshotRoot)}.tmp-`)
+    ));
+    expect(leftovers).toEqual([]);
+  });
+
+  it('applies snapshot budgets independently to each package root', async () => {
+    const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-budget-first-'));
+    const secondRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-budget-second-'));
+    roots.push(firstRoot, secondRoot);
+    const firstSkill = path.join(firstRoot, 'SKILL.md');
+    const secondSkill = path.join(secondRoot, 'SKILL.md');
+    await Promise.all([
+      fs.writeFile(firstSkill, '# First\n'),
+      fs.writeFile(secondSkill, '# Second\n'),
+    ]);
+
+    const store = await import('../pi-package-store.js');
+    const snapshotRoot = path.join(runtime.userData, 'independent-package-budgets');
+    const snapshot = await store.stageManagedPackageSnapshot({
+      extensions: [],
+      skills: [
+        { path: firstSkill, name: 'first' },
+        { path: secondSkill, name: 'second' },
+      ],
+      promptTemplates: [],
+      packageRoots: [firstRoot, secondRoot],
+    }, snapshotRoot, {
+      maxEntries: 2,
+      maxBytes: 1024,
+      maxDurationMs: 10_000,
+    });
+
+    expect(snapshot.skills).toEqual([
+      { path: path.join(snapshotRoot, '0', 'SKILL.md'), name: 'first' },
+      { path: path.join(snapshotRoot, '1', 'SKILL.md'), name: 'second' },
+    ]);
+    await expect(Promise.all(snapshot.skills.map((skill) => fs.readFile(skill.path, 'utf8'))))
+      .resolves.toEqual(['# First\n', '# Second\n']);
+  });
+
   it.runIf(process.platform !== 'win32').each([
     { layout: 'local' as const, source: 'local' },
     { layout: 'npm' as const, source: 'npm:mode-preserving-extension' },

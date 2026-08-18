@@ -1764,15 +1764,27 @@ async function copySnapshotEntryBounded(
     }
     budget.activeDirectories.add(canonicalSource);
     const directory = await fs.opendir(canonicalSource);
+    const copiedEntries: string[] = [];
     try {
       await fs.mkdir(targetPath, { mode: sourceMode });
       for await (const entry of directory) {
+        copiedEntries.push(entry.name);
         await copySnapshotEntryBounded(
           confinementRoot,
           path.join(canonicalSource, entry.name),
           path.join(targetPath, entry.name),
           budget,
         );
+      }
+      const [after, finalEntries] = await Promise.all([
+        fs.stat(canonicalSource),
+        fs.readdir(canonicalSource).then((entries) => entries.sort()),
+      ]);
+      if (
+        !sameStableStat(sourceStat, after)
+        || copiedEntries.sort().join('\0') !== finalEntries.join('\0')
+      ) {
+        throw new Error('Pi extension package changed while copying snapshot');
       }
       // mkdir applies the process umask. Restore the source mode only after
       // children are materialized so a read-only source directory cannot make
@@ -1789,6 +1801,10 @@ async function copySnapshotEntryBounded(
   const sourceHandle = await fs.open(canonicalSource, 'r');
   let targetHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
+    const opened = await sourceHandle.stat();
+    if (!opened.isFile() || !sameStableStat(sourceStat, opened)) {
+      throw new Error('Pi extension package changed before copying snapshot');
+    }
     targetHandle = await fs.open(targetPath, 'wx', sourceMode);
     const chunk = Buffer.allocUnsafe(SNAPSHOT_COPY_CHUNK_BYTES);
     let position = 0;
@@ -1800,6 +1816,10 @@ async function copySnapshotEntryBounded(
       await targetHandle.write(chunk, 0, bytesRead, position);
       budget.bytes += bytesRead;
       position += bytesRead;
+    }
+    const after = await sourceHandle.stat();
+    if (!sameStableStat(opened, after) || position !== after.size) {
+      throw new Error('Pi extension package changed while copying snapshot');
     }
     // open(mode) is also masked by umask; the already-open handle can restore
     // the exact approved mode without a path replacement race.
@@ -1843,16 +1863,20 @@ export async function stageManagedPackageSnapshot(
   if (!path.isAbsolute(snapshotRoot)) throw new Error('Pi extension snapshot root must be absolute');
   const temporaryRoot = `${snapshotRoot}.tmp-${process.pid}-${Date.now()}`;
   const mappings: Array<{ source: string; target: string; directory: boolean }> = [];
-  const budget: SnapshotCopyBudget = {
-    startedAt: Date.now(),
-    entries: 0,
-    bytes: 0,
-    activeDirectories: new Set(),
-    limits,
-  };
   try {
     await fs.mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
     for (const [index, rawRoot] of resources.packageRoots.entries()) {
+      // Inspection applies these limits independently to each package launch
+      // root. Keep staging aligned with that contract: several individually
+      // valid packages must not exhaust one shared cross-package budget and
+      // make the entire task start without resources.
+      const budget: SnapshotCopyBudget = {
+        startedAt: Date.now(),
+        entries: 0,
+        bytes: 0,
+        activeDirectories: new Set(),
+        limits,
+      };
       const source = await fs.realpath(rawRoot);
       const sourceStat = await fs.stat(source);
       const directory = sourceStat.isDirectory();
