@@ -31,7 +31,7 @@ export function SettingsContentHeader() {
           type="button"
           onClick={() => navigate('/')}
           aria-label={backLabel}
-          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-colors hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)]"
+          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-[color,background-color,transform] duration-150 hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)] active:scale-[0.98]"
           style={WINDOW_NO_DRAG_STYLE}
         >
           <ArrowLeft size={15} />

@@ -49,6 +49,7 @@ describe('SettingsContentHeader', () => {
 
     const back = screen.getByRole('button', { name: 'Back' });
     expect(back.className).toContain('rounded-full');
+    expect(back.className).toContain('active:scale-[0.98]');
     expect(back.getAttribute('data-state')).toBe('closed');
     expect(
       (back.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
