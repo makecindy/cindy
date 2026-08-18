@@ -30,6 +30,7 @@ vi.mock('../../mcp-integrations/piEnvironment.js', () => ({
 }));
 
 vi.mock('../auth-adapters.js', () => ({
+  desktopClaudeAuthAdapter: { ensureSharedGlobalSkills: async () => undefined },
   desktopCodexAuthAdapter: {},
   readClaudeApiKey: () => 'test-key',
 }));

@@ -6044,7 +6044,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         if (kind === 'codex') {
           await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
-        } else if (kind === 'claude-code') {
+        } else {
+          // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
+          // Codex-only skill added after Cindy startup is visible without using another agent
+          // or restarting the app first. Claude keeps the same shared-root refresh semantics.
           await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
         }
         const result = await maker.listAgentSkills(kind, skillParams);
@@ -6169,6 +6172,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const agentKind = p.agentKind !== undefined ? requireAgentKind(p.agentKind) : undefined;
       if (agentKind === undefined || agentKind === 'codex') {
         await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
+      } else if (agentKind === 'pi') {
+        await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
       }
       const opts = {
         ...(agentKind !== undefined ? { agentKind } : {}),

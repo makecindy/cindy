@@ -49,7 +49,11 @@ import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
-import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
+import {
+  desktopClaudeAuthAdapter,
+  desktopCodexAuthAdapter,
+  readClaudeApiKey,
+} from './auth-adapters.js';
 import {
   getClaudeEndpoint,
   isAnthropicCompatProxyHandleReady,
@@ -1208,6 +1212,12 @@ export async function resolvePiNativeProviders(ctx: {
   model: string;
   resumeSessionId?: string;
 }): Promise<PiNativeProvidersResult> {
+  if (!ctx.remoteHostId) {
+    // Pi scans the local ~/.agents/skills root when it starts. This hook is awaited by every
+    // Desktop Pi startSession caller, so refresh Codex-only projections added after app startup
+    // before the process snapshots its global skills. Remote Pi has a different HOME/root.
+    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+  }
   const piBinaryPath = resolvePiBinaryPath();
   const bundledModels = piBinaryPath ? await readPiBundledModels(piBinaryPath) : null;
   let subscriptions: PiNativeProvidersResult = { providers: [], env: {} };
