@@ -22,6 +22,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 const BUILTIN_API_KEY_PROVIDER_IDS: ReadonlySet<ProviderSecretId> = new Set<ProviderSecretId>([
   'gemini',
   'openai-images',
+  'deepseek',
 ]);
 
 /** 白名单查询(只读语义,供测试与未来调用方使用,不暴露集合本体)。 */

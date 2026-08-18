@@ -1627,11 +1627,14 @@ export function ChatInput({
   const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId ?? undefined);
   const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId ?? undefined);
   const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId ?? undefined);
+  const dshCaps = useAgentCapabilities('dsh', deviceLinkDeviceId ?? undefined);
   const activeAgentCapabilities =
     agentKind === 'codex'
       ? codexCaps.capabilities
       : agentKind === 'pi'
         ? piCaps.capabilities
+        : agentKind === 'dsh'
+          ? dshCaps.capabilities
         : ccCaps.capabilities;
 
   // session-agent-switch 入口门控。device-link 远程会话读**被控端**的值；除了基础
@@ -1746,8 +1749,11 @@ export function ChatInput({
     if ((piCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
       return 'pi';
     }
+    if ((dshCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
+      return 'dsh';
+    }
     return null;
-  }, [activeModel, agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
+  }, [activeModel, agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities, dshCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   const localProviders = useProviders();
@@ -1772,6 +1778,7 @@ export function ChatInput({
     cc: ccCaps,
     codex: codexCaps,
     pi: piCaps,
+    dsh: dshCaps,
     providers: remoteProviders,
   });
   const providersLoading = deviceLinkDeviceId
@@ -1789,7 +1796,9 @@ export function ChatInput({
   // (sessionId 在)按实际路由口径判(includeDisabled):运行中的会话不因停用打断,
   // 请求仍走原路由,把停用当「无来源」会误禁 Send(PR #744 review 第十轮)。草稿是
   // 新路由选择,保持准入口径(停用拷贝不算可发送来源)。
-  const hasConnectedSendSource = currentModelAgentKind
+  const hasConnectedSendSource = currentModelAgentKind === 'dsh'
+    ? true
+    : currentModelAgentKind
     ? chatEligibleSourcesForModel(sendProviders, activeModel, currentModelAgentKind, {
         onlyConnected: true,
         includeDisabled: !!sessionId,
@@ -1802,6 +1811,7 @@ export function ChatInput({
     !remoteModelListBlocked &&
     // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
     // provider 镜像误判成权威的「没有已连接来源」。
+    currentModelAgentKind !== 'dsh' &&
     (!deviceLinkDeviceId || !remoteProviders.unsupported) &&
     !hasConnectedSendSource;
 
@@ -4812,6 +4822,7 @@ export function ChatInput({
         if (
           enforceConnectedSourceGate &&
           currentModelAgentKind &&
+          currentModelAgentKind !== 'dsh' &&
           // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
           // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
           !(deviceLinkDeviceId && remoteProviders.unsupported)

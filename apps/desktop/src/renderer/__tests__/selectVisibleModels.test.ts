@@ -128,6 +128,20 @@ describe('selectVisibleModels — device-link「以被控端为准」', () => {
     expect(ids(out)).toEqual(['pi-model']);
   });
 
+  it('agentKind 锁定 dsh:使用固定 DeepSeek 路由的能力模型，而非通用供应商配置', () => {
+    const out = selectVisibleModels({
+      agentKind: 'dsh',
+      deviceId: undefined,
+      // DSH 不应要求用户额外创建一个 generic DeepSeek provider。
+      providers: [],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      deviceDshModels: [devModel('deepseek-v4-flash'), devModel('deepseek-v4-pro')],
+    });
+
+    expect(ids(out)).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
+  });
+
   it('device-link Pi picker 不给 BYOM 显式 effort 子集补档', () => {
     const explicit = {
       ...devModel('reasoner'),

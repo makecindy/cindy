@@ -17,7 +17,7 @@
  * 不再经 OSS 下发。OSS `cfg/providers.json`(v2)只承载 xai 清单 + presets 模板,
  * 模型元数据与参考价只走同目录下严格版本化的 `model-registry.json`。
  *
- * ⚠️ 顺序契约:BUILTIN_PROVIDERS 的数组序(anthropic → openai → xai → xd)决定
+ * ⚠️ 顺序契约:BUILTIN_PROVIDERS 的数组序(anthropic → openai → xai → xd,gemini / deepseek 仅可追加在尾部)决定
  * 选择器分段顺序与 deriveAvailableModels 的 first-wins 去重优先级,不要改动。
  */
 
@@ -261,13 +261,56 @@ const GEMINI_PROVIDER: Provider = {
   models: {},
 };
 
-/** 内置供应商(顺序契约见文件头;gemini 追加在 xd 之后,聊天分段与 first-wins 契约零影响)。 */
+/**
+ * DeepSeek(API key,DSH 对话来源)。DSH 是内置 agent,固定直连 DeepSeek 官方
+ * runtime(openai-chat 协议),模型清单随代码走:deepseek-v4-flash(DSH 新对话
+ * 默认)与 deepseek-v4-pro。efforts 恒空 —— DSH 不支持档位切换(DshAgent
+ * baseCapabilities 口径),defaultEffort 为 null。连接凭证存 provider_key_deepseek
+ * (providerSecretStore),经内置 apiKey 桥写入。
+ */
+const DEEPSEEK_PROVIDER: Provider = {
+  id: 'deepseek',
+  name: 'DeepSeek',
+  source: 'builtin',
+  agents: ['dsh'],
+  auth: { method: 'apiKey' },
+  access: { kind: 'api' },
+  routing: {
+    dsh: {
+      upstream: 'https://api.deepseek.com',
+      wireProtocol: 'openai-chat',
+      authStrategy: 'api-key-header',
+    },
+  },
+  models: {
+    dsh: [
+      {
+        id: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        contextWindow: 1000000,
+        newSessionDefault: ['dsh'],
+        efforts: [],
+        defaultEffort: null,
+      },
+      {
+        id: 'deepseek-v4-pro',
+        name: 'DeepSeek V4 Pro',
+        contextWindow: 1000000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ],
+  },
+};
+
+/** 内置供应商(顺序契约见文件头;gemini / deepseek 追加在 xd 之后,聊天分段与 first-wins 契约零影响)。 */
 export const BUILTIN_PROVIDERS: Provider[] = [
   ANTHROPIC_PROVIDER,
   OPENAI_PROVIDER,
   XAI_PROVIDER,
   XD_PROVIDER,
   GEMINI_PROVIDER,
+  DEEPSEEK_PROVIDER,
 ];
 
 /** 打包进 App 的内置目录(离线兜底 / 远端拉取失败时使用)。 */

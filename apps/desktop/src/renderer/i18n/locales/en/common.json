@@ -5669,6 +5669,8 @@
         "viaSource": "Source: {{source}}",
         "emptyTitle": "No available source",
         "emptyDesc": "Connect a source that supports the current model to select it",
+        "dshEmptyTitle": "DeepSeek API Key required",
+        "dshEmptyDesc": "Configure your DeepSeek API Key in Settings to use DSH as a source and select a model",
         "disconnected": "Disconnected"
       },
       "agentSwitch": {

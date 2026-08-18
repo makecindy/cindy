@@ -791,6 +791,7 @@ export function resolveRemoteModelListStatus({
   cc,
   codex,
   pi,
+  dsh: dshState,
   providers,
 }: {
   deviceId?: string;
@@ -798,12 +799,21 @@ export function resolveRemoteModelListStatus({
   cc: RemoteCapabilityLoadState;
   codex: RemoteCapabilityLoadState;
   pi: RemoteCapabilityLoadState;
+  dsh?: RemoteCapabilityLoadState;
   providers: RemoteProviderLoadState;
 }): RemoteModelListStatus {
   if (!deviceId) return 'idle';
+  // Optional keeps direct consumers from older tests/hosts source-compatible.
+  // A DSH-specific request with no DSH state remains unavailable rather than
+  // borrowing another agent's catalogue.
+  const dsh: RemoteCapabilityLoadState = dshState ?? {
+    capabilities: null,
+    loading: false,
+    error: agentKind === 'dsh' ? 'dsh capabilities unavailable' : null,
+  };
   const required = agentKind
-    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi]
-    : [cc, codex, pi];
+    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : agentKind === 'pi' ? pi : dsh]
+    : [cc, codex, pi, dsh];
   if (required.some((state) => !!state.error)) return 'error';
   if (providers.error && !providers.unsupported) return 'error';
   if (providers.loading || required.some((state) => state.loading || state.capabilities == null)) {
@@ -930,6 +940,7 @@ function ModelSelectorContentView({
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
+  const dsh = useAgentCapabilities('dsh', deviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
   const { hasSavedKey } = useApiKey();
@@ -945,6 +956,7 @@ function ModelSelectorContentView({
     cc,
     codex,
     pi,
+    dsh,
     providers: remoteProviders,
   });
   const retryRemoteModels = useCallback(() => {
@@ -1075,6 +1087,7 @@ function ModelSelectorContentView({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceDshModels: dsh.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -1085,6 +1098,7 @@ function ModelSelectorContentView({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      dsh.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],
@@ -2118,10 +2132,18 @@ function ModelSelectorContentView({
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
             <span className="truncate text-sm font-medium text-[var(--model-item-text)]">
-              {t('newChat.modelSelector.source.emptyTitle')}
+              {t(
+                currentAgentKind === 'dsh'
+                  ? 'newChat.modelSelector.source.dshEmptyTitle'
+                  : 'newChat.modelSelector.source.emptyTitle',
+              )}
             </span>
             <span className="text-12 font-normal text-[var(--text-secondary)]">
-              {t('newChat.modelSelector.source.emptyDesc')}
+              {t(
+                currentAgentKind === 'dsh'
+                  ? 'newChat.modelSelector.source.dshEmptyDesc'
+                  : 'newChat.modelSelector.source.emptyDesc',
+              )}
             </span>
           </div>
         </div>
@@ -2489,6 +2511,7 @@ export function ModelSelector({
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
+  const dsh = useAgentCapabilities('dsh', deviceId);
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
   // trigger 的来源 icon / 当前模型也按来源取:device-link 用被控端供应商目录(否则控制端本地
@@ -2502,6 +2525,7 @@ export function ModelSelector({
     cc,
     codex,
     pi,
+    dsh,
     providers: remoteProviders,
   });
   const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
@@ -2515,6 +2539,7 @@ export function ModelSelector({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceDshModels: dsh.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -2525,6 +2550,7 @@ export function ModelSelector({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      dsh.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],
@@ -2621,6 +2647,7 @@ export function ModelSelector({
     !!onNavigateToProviders &&
     !deviceId &&
     !!currentAgentKind &&
+    currentAgentKind !== 'dsh' &&
     !providersLoading &&
     !hasConnectedSource;
   // trigger 上仍展示当前模型的 effort(模型支持时)。

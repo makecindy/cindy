@@ -5666,6 +5666,8 @@
         "viaSource": "來源：{{source}}",
         "emptyTitle": "暫無可用來源",
         "emptyDesc": "連線一個支援當前模型的來源後即可選擇",
+        "dshEmptyTitle": "需要設定 DeepSeek API Key",
+        "dshEmptyDesc": "在設定中設定 DeepSeek API Key 後，DSH 即可作為來源選擇模型",
         "disconnected": "已斷開"
       },
       "agentSwitch": {

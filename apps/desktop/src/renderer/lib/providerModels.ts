@@ -212,6 +212,8 @@ export function selectVisibleModels(params: {
   deviceCcModels: ModelDescriptor[];
   deviceCodexModels: ModelDescriptor[];
   devicePiModels?: ModelDescriptor[];
+  /** DSH owns a fixed DeepSeek route, so this is always capability-backed. */
+  deviceDshModels?: ModelDescriptor[];
   /**
    * SSH 远程会话(remoteHostId)传 true:订阅直连模型(chatgpt/ / xai/)不再被过滤,
    * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
@@ -235,6 +237,7 @@ export function selectVisibleModels(params: {
     deviceCcModels,
     deviceCodexModels,
     devicePiModels = [],
+    deviceDshModels = [],
     excludeSubscriptionDirect,
     excludeChatBridgedCodex,
   } = params;
@@ -247,12 +250,17 @@ export function selectVisibleModels(params: {
   const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
   const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
   const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'));
+  // DSH does not use the generic provider catalogue at send time. Reading its
+  // models from capabilities keeps the selector usable before/without a
+  // generic DeepSeek provider has been configured.
+  const dsh = pass(deviceDshModels);
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   if (agentKind === 'pi') return pi;
+  if (agentKind === 'dsh') return dsh;
   const merged = [...cc];
   const seen = new Set(merged.map((m) => m.id));
-  for (const list of [codex, pi]) {
+  for (const list of [codex, pi, dsh]) {
     for (const m of list) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);

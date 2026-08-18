@@ -168,7 +168,7 @@ describe('mergeWithBundled', () => {
       providers: [JSON.parse(JSON.stringify(BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')))],
     };
     const merged = mergeWithBundled(v2Remote);
-    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
+    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini', 'deepseek']);
     // 远端独有的新供应商追加在 bundled 之后。
     const withExtra: Catalog = {
       version: '2',
@@ -178,7 +178,7 @@ describe('mergeWithBundled', () => {
       ],
     };
     expect(mergeWithBundled(withExtra).providers.map((p) => p.id)).toEqual([
-      'anthropic', 'openai', 'xai', 'xd', 'gemini', 'newvendor',
+      'anthropic', 'openai', 'xai', 'xd', 'gemini', 'deepseek', 'newvendor',
     ]);
   });
 
@@ -936,7 +936,7 @@ describe('loadCatalog', () => {
     };
     const cat = await loadCatalog({ url: 'https://x/y.json' }, io);
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
-    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'gemini', 'openai', 'xai', 'xd']);
+    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'deepseek', 'gemini', 'openai', 'xai', 'xd']);
   });
 
   it('disableFetch → bundled (no network)', async () => {

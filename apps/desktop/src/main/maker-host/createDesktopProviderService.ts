@@ -950,7 +950,11 @@ export function getDesktopProviderService(): ProviderService {
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
-      providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
+      providerId === 'gemini'
+        ? Boolean(getProviderSecretStore().get('gemini')?.trim())
+        : providerId === 'deepseek'
+          ? Boolean(getProviderSecretStore().get('deepseek')?.trim())
+          : false,
     // 动态发现失败归因：目前只有 anthropic 的 live entitlement 证据依赖这条通道。
     // 即使 Registry presence 仍能展示目录，UI 也要说明当前账号验证失败，而不是一直
     // 说「正在发现」。

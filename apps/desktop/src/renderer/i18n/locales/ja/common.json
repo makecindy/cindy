@@ -5667,6 +5667,8 @@
         "viaSource": "ソース：{{source}}",
         "emptyTitle": "利用可能なソースがありません",
         "emptyDesc": "現在のモデルに対応するソースを接続すると選択できます",
+        "dshEmptyTitle": "DeepSeek API キーが必要です",
+        "dshEmptyDesc": "設定で DeepSeek API キーを設定すると、DSH をソースとしてモデルを選択できます",
         "disconnected": "切断済み"
       },
       "agentSwitch": {
