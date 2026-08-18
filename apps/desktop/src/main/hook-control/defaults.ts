@@ -66,7 +66,12 @@ export interface ResolvedHookSessionConfig {
   providerId: string | null;
 }
 
-const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi', 'kimi-code']);
+// Hook 派发的 agent 准入白名单:不含 kimi-code——其 runtime 尚未注册(Phase 2),
+// 接受会撞 requireAgent 抛错,中断无人值守任务;UI 入口已隐藏,存量 / 外部下发的
+// kimi-code override 在此静默回退全局默认(安全降级)。Phase 2 注册后恢复并同步
+// renderer 侧 hookWorkspacePrefsLogic 的 KnownAgent(该处保留 kimi-code 仅用于
+// 渲染存量配置,不开放新选)。
+const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
 
 /**
  * 合成新 hook 会话的 agent/model/effort。

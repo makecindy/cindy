@@ -621,7 +621,9 @@ export function pickMostRecentSessionRuntime(
     if (options.deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== options.deviceId) continue;
     const agentKind: NewSessionAgentKind = session.agentKind === 'codex' || session.agentKind === 'pi'
       ? session.agentKind
-      : 'claude-code';
+      : session.agentKind === 'kimi'
+        ? 'kimi-code'
+        : 'claude-code';
     if (options.agentKind && agentKind !== options.agentKind) continue;
     const activityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
     if (!best || activityAt.localeCompare(best.activityAt) > 0) {

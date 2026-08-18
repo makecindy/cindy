@@ -790,6 +790,7 @@ export function resolveRemoteModelListStatus({
   cc,
   codex,
   pi,
+  kimi,
   providers,
 }: {
   deviceId?: string;
@@ -797,11 +798,14 @@ export function resolveRemoteModelListStatus({
   cc: RemoteCapabilityLoadState;
   codex: RemoteCapabilityLoadState;
   pi: RemoteCapabilityLoadState;
+  kimi: RemoteCapabilityLoadState;
   providers: RemoteProviderLoadState;
 }): RemoteModelListStatus {
   if (!deviceId) return 'idle';
+  // 未指定 agentKind(各边合并展示)时不计入 kimi:其 runtime 未注册前 error 恒在,
+  // 计入会把三边展示拖成 error;仅显式打开 Kimi 会话(agentKind='kimi-code')才纳入。
   const required = agentKind
-    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi]
+    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : agentKind === 'kimi-code' ? kimi : pi]
     : [cc, codex, pi];
   if (required.some((state) => !!state.error)) return 'error';
   if (providers.error && !providers.unsupported) return 'error';
@@ -925,10 +929,11 @@ function ModelSelectorContentView({
     // 错误地串在一起，并在回调尚未启动时留下可发送窗口。
     void agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);
   };
-  // 同时拉三个 agent —— vendorKey 不传时把三边模型一起展示。hooks 必须按固定顺序调用。
+  // 同时拉四个 agent —— vendorKey 不传时把各边模型一起展示。hooks 必须按固定顺序调用。
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
+  const kimi = useAgentCapabilities('kimi-code', deviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
   const { hasSavedKey } = useApiKey();
@@ -944,6 +949,7 @@ function ModelSelectorContentView({
     cc,
     codex,
     pi,
+    kimi,
     providers: remoteProviders,
   });
   const retryRemoteModels = useCallback(() => {
@@ -1074,6 +1080,7 @@ function ModelSelectorContentView({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceKimiModels: kimi.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -1084,6 +1091,7 @@ function ModelSelectorContentView({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      kimi.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],
@@ -2490,6 +2498,7 @@ export function ModelSelector({
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
+  const kimi = useAgentCapabilities('kimi-code', deviceId);
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
   // trigger 的来源 icon / 当前模型也按来源取:device-link 用被控端供应商目录(否则控制端本地
@@ -2503,6 +2512,7 @@ export function ModelSelector({
     cc,
     codex,
     pi,
+    kimi,
     providers: remoteProviders,
   });
   const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
@@ -2516,6 +2526,7 @@ export function ModelSelector({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceKimiModels: kimi.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -2526,6 +2537,7 @@ export function ModelSelector({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      kimi.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],

@@ -237,6 +237,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const cc = useVendorReadiness('cc');
   const codex = useVendorReadiness('codex');
   const pi = useVendorReadiness('pi');
+  const kimi = useVendorReadiness('kimi');
 
   const checkAndConfirm = useCallback(
     async (
@@ -339,7 +340,9 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
 
       // 触发一次最新检查——避免 stale state 误放行。
-      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : cc;
+      // kimi 走独立 readiness:未接入供应商时按 Kimi 自身状态引导,
+      // 不再错用 Claude 的二进制 / provider 判定(review 六轮 P1)。
+      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : vendor === 'kimi' ? kimi : cc;
       // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
       const readiness = await target.revalidate({
         includeSuspended: options?.existingSessionRoute === true,

@@ -1625,6 +1625,7 @@ export function ChatInput({
   const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId ?? undefined);
   const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId ?? undefined);
   const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId ?? undefined);
+  const kimiCaps = useAgentCapabilities('kimi-code', deviceLinkDeviceId ?? undefined);
   const activeAgentCapabilities =
     agentKind === 'codex'
       ? codexCaps.capabilities
@@ -1770,6 +1771,7 @@ export function ChatInput({
     cc: ccCaps,
     codex: codexCaps,
     pi: piCaps,
+    kimi: kimiCaps,
     providers: remoteProviders,
   });
   const providersLoading = deviceLinkDeviceId
