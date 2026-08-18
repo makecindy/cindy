@@ -271,7 +271,7 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
     firstMessageClientId,
     { attachments: [...params.attachments] },
   ), firstMessageSessionRefs);
-  remoteSessionStore.setInputProjection(params.sessionId, buildOptimisticProjection(params.sessionId, queued));
+  remoteSessionStore.setInputProjectionOptimistically(params.sessionId, buildOptimisticProjection(params.sessionId, queued));
   const task: InternalTask = {
     sessionId: params.sessionId,
     deviceId: params.deviceId,
@@ -315,7 +315,7 @@ export function retryNewSessionCreation(sessionId: string): void {
     task.firstMessageClientId,
     { attachments: [...task.attachments] },
   ), task.firstMessageSessionRefs);
-  remoteSessionStore.setInputProjection(sessionId, buildOptimisticProjection(sessionId, queued));
+  remoteSessionStore.setInputProjectionOptimistically(sessionId, buildOptimisticProjection(sessionId, queued));
   emit();
   void runPipeline(task);
 }
@@ -331,7 +331,7 @@ export function dismissNewSessionCreation(sessionId: string, opts: { removeSynth
   tasks.delete(sessionId);
   if (opts.removeSyntheticRow) {
     remoteSessionStore.applySessionPatch(task.deviceId, sessionId, { status: 'deleted' });
-    remoteSessionStore.setInputProjection(sessionId, null);
+    remoteSessionStore.setInputProjectionOptimistically(sessionId, null);
   }
   emit();
 }
@@ -556,7 +556,7 @@ function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed'
     // 回填 composer,用户走正常发送);同时清掉合成行的 pendingLocalCreation
     // 禁发标——弱网下 fresh getSession / 会话页 load 可能都还没成功,不清的话
     // 用户拿着回填草稿仍被禁发,只能干等 load(codex review P2)。
-    remoteSessionStore.setInputProjection(task.sessionId, null);
+    remoteSessionStore.setInputProjectionOptimistically(task.sessionId, null);
     remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, { pendingLocalCreation: false });
   }
   emit();
@@ -851,7 +851,7 @@ function cancelStaleOwnerTask(task: InternalTask): void {
   );
   if (session && remoteSessionStore.getSessionDeviceId(task.sessionId) === task.deviceId) {
     remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, { status: 'deleted' });
-    remoteSessionStore.setInputProjection(task.sessionId, null);
+    remoteSessionStore.setInputProjectionOptimistically(task.sessionId, null);
   }
   emit();
 }

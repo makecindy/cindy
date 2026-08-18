@@ -62,6 +62,7 @@ function build(overrides: Partial<Parameters<typeof buildPendingSendItems>[0]> =
     outbox: [],
     hiddenClientIds: NO_IDS,
     sendingClientIds: NO_IDS,
+    unconfirmedClientIds: NO_IDS,
     editingClientId: null,
     steeringClientIds: NO_IDS,
     presentationByClientId: NO_PRESENTATION,
@@ -123,6 +124,16 @@ describe('buildPendingSendItems', () => {
       editingClientId: 'c',
     });
     expect(items.map((entry) => entry.phase)).toEqual(['sending', 'sending', 'editing']);
+  });
+
+  it('keeps an unconfirmed enqueue spinning without queue actions', () => {
+    const [item] = build({
+      queue: [queued('unknown')],
+      unconfirmedClientIds: new Set(['unknown']),
+      presentationByClientId: new Map([['unknown', { actions: {} as MobilePendingSendActions, hint: null }]]),
+    });
+    expect(item.phase).toBe('sending');
+    expect(item.actions).toBeNull();
   });
 
   it('derives outbox phases from upload progress and failure', () => {

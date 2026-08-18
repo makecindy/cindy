@@ -30,7 +30,7 @@ import {
 import { cacheSessionMessages, getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
-import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import type { InputProjection, PendingInteraction, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 import { compareMessageOrder } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
@@ -266,6 +266,12 @@ const inputProjections = new Map<string, InputProjection>();
 const inputProjectionAuthorityEpochs = new Map<string, number>();
 let nextInputProjectionAuthorityEpoch = 0;
 let inputProjectionAuthorityEpochFloor = 0;
+const inputProjectionRemoteEpochs = new Map<string, number>();
+let nextInputProjectionRemoteEpoch = 0;
+let inputProjectionRemoteEpochFloor = 0;
+const inputProjectionRemoteQueuedEvidence = new Map<string, Map<string, number>>();
+const inputProjectionUnconfirmedQueuedClientIds = new Map<string, ReadonlySet<string>>();
+const INPUT_PROJECTION_REMOTE_EVIDENCE_LIMIT = 256;
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
 const sessionRunning = new Map<string, boolean>();
 const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
@@ -509,6 +515,7 @@ const subs = new Set<() => void>();
 const emptyMessages: RemoteMessage[] = [];
 const emptyPendingInteractions: PendingInteraction[] = [];
 const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
+const EMPTY_CLIENT_IDS: ReadonlySet<string> = new Set();
 
 let mergedSessions: RemoteSession[] = [];
 let messageVersion = 0;
@@ -527,6 +534,102 @@ function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
   const epoch = ++nextInputProjectionAuthorityEpoch;
   inputProjectionAuthorityEpochs.set(sessionId, epoch);
   return epoch;
+}
+
+function recordInputProjectionRemoteEvidence(sessionId: string, clientIds: Iterable<string>, settled = false): void {
+  const epoch = ++nextInputProjectionRemoteEpoch;
+  inputProjectionRemoteEpochs.set(sessionId, epoch);
+  let evidence = inputProjectionRemoteQueuedEvidence.get(sessionId);
+  for (const clientId of clientIds) {
+    inputProjectionRemoteQueuedEvidence.set(sessionId, evidence ??= new Map<string, number>());
+    evidence.delete(clientId);
+    evidence.set(clientId, settled ? -epoch : epoch);
+  }
+  while (evidence && evidence.size > INPUT_PROJECTION_REMOTE_EVIDENCE_LIMIT) evidence.delete(evidence.keys().next().value!);
+}
+
+function clearInputProjectionUnconfirmed(sessionId: string, confirmedClientIds: ReadonlySet<string>): boolean {
+  const current = inputProjectionUnconfirmedQueuedClientIds.get(sessionId);
+  if (!current) return false;
+  const next = new Set([...current].filter((clientId) => !confirmedClientIds.has(clientId)));
+  if (next.size === current.size) return false;
+  if (next.size === 0) inputProjectionUnconfirmedQueuedClientIds.delete(sessionId);
+  else inputProjectionUnconfirmedQueuedClientIds.set(sessionId, next);
+  return true;
+}
+
+function retainUnconfirmedQueuedItems(sessionId: string, next: InputProjection): InputProjection {
+  const unconfirmed = inputProjectionUnconfirmedQueuedClientIds.get(sessionId);
+  const current = inputProjections.get(sessionId);
+  if (!unconfirmed?.size || !current) return next;
+  const remoteClientIds = new Set(next.pendingQueue.map((item) => item.clientId));
+  const merged = [...next.pendingQueue];
+  let insertionIndex = 0;
+  for (const [index, item] of current.pendingQueue.entries()) {
+    if (!unconfirmed.has(item.clientId) || remoteClientIds.has(item.clientId)) continue;
+    const anchor = current.pendingQueue.slice(index + 1).find((entry) => remoteClientIds.has(entry.clientId));
+    insertionIndex = Math.max(insertionIndex, anchor ? merged.findIndex((entry) => entry.clientId === anchor.clientId) : merged.length);
+    merged.splice(insertionIndex++, 0, item);
+  }
+  return merged.length > next.pendingQueue.length ? { ...next, pendingQueue: merged } : next;
+}
+
+function resolveInputProjectionUnconfirmed(sessionId: string, confirmedClientIds: ReadonlySet<string>, includeConfirmed = false): boolean {
+  const unconfirmed = inputProjectionUnconfirmedQueuedClientIds.get(sessionId) ?? EMPTY_CLIENT_IDS;
+  const resolved = new Set([...confirmedClientIds].filter((clientId) => includeConfirmed || unconfirmed.has(clientId)));
+  if (resolved.size === 0) return false;
+  const markerChanged = clearInputProjectionUnconfirmed(sessionId, resolved);
+  const current = inputProjections.get(sessionId);
+  const pendingQueue = current?.pendingQueue.filter((item) => !resolved.has(item.clientId));
+  const projectionChanged = Boolean(current && pendingQueue?.length !== current.pendingQueue.length);
+  if (!markerChanged && !projectionChanged) return false;
+  if (current && pendingQueue && projectionChanged) inputProjections.set(sessionId, { ...current, pendingQueue });
+  bumpInputProjectionAuthorityEpoch(sessionId);
+  return true;
+}
+
+function confirmInputProjectionUnconfirmedFromMessages(
+  sessionId: string, list: readonly RemoteMessage[],
+): boolean {
+  const unconfirmed = inputProjectionUnconfirmedQueuedClientIds.get(sessionId) ?? EMPTY_CLIENT_IDS;
+  const tracked = new Set(inputProjections.get(sessionId)?.pendingQueue.map((item) => item.clientId) ?? []);
+  for (const clientId of unconfirmed) tracked.add(clientId);
+  for (const [clientId, epoch] of inputProjectionRemoteQueuedEvidence.get(sessionId) ?? []) if (epoch > 0) tracked.add(clientId);
+  if (tracked.size === 0) return false;
+  const confirmed = new Set(list
+    .filter((message) => message.role === 'user' && tracked.has(message.clientId))
+    .map((message) => message.clientId));
+  if (confirmed.size === 0) return false;
+  recordInputProjectionRemoteEvidence(sessionId, confirmed, true);
+  const changed = resolveInputProjectionUnconfirmed(sessionId, confirmed, true);
+  if (!changed) bumpInputProjectionAuthorityEpoch(sessionId);
+  return changed;
+}
+
+function retainInputProjectionUnconfirmed(sessionId: string, next: InputProjection): boolean {
+  const queuedClientIds = new Set(next.pendingQueue.map((item) => item.clientId));
+  const current = inputProjectionUnconfirmedQueuedClientIds.get(sessionId);
+  if (!current) return false;
+  const retained = new Set([...current].filter((clientId) => queuedClientIds.has(clientId)));
+  if (retained.size === current.size) return false;
+  if (retained.size === 0) inputProjectionUnconfirmedQueuedClientIds.delete(sessionId);
+  else inputProjectionUnconfirmedQueuedClientIds.set(sessionId, retained);
+  return true;
+}
+
+function invalidateInputProjectionForOffline(sessionId: string): boolean {
+  recordInputProjectionRemoteEvidence(sessionId, EMPTY_CLIENT_IDS);
+  const current = inputProjections.get(sessionId);
+  const unconfirmed = inputProjectionUnconfirmedQueuedClientIds.get(sessionId);
+  if (!current || !unconfirmed?.size) return inputProjections.delete(sessionId);
+  const next: InputProjection = {
+    ...EMPTY_INPUT_PROJECTION,
+    sessionId,
+    pendingQueue: current.pendingQueue.filter((item) => unconfirmed.has(item.clientId)),
+  };
+  if (deepValueEqual(current, next)) return false;
+  inputProjections.set(sessionId, next);
+  return true;
 }
 
 function commitInputProjection(sessionId: string, next: InputProjection): boolean {
@@ -1428,12 +1531,13 @@ export const remoteSessionStore = {
   setMessages(sessionId: string, list: readonly RemoteMessage[]): void {
     const textFlushed = flushPendingTextDelta(sessionId);
     const next = normalizeMessages(list);
+    const unconfirmedChanged = confirmInputProjectionUnconfirmedFromMessages(sessionId, next);
     // 记账在相等早退**之前**:这一页是服务端一次给出的连续段,它带来的连续性结论与"窗口内容有没有
     // 变"无关。冷开缓存恰好与服务端最新页逐行相同时(常态)若被早退跳过,这次权威响应就白来了 ——
     // 之后会话涨过一页、再遇一次满页重连刷新,本可保留的历史会被当成来源不明全丢(#1210 review)。
     coverReplacedWindow(sessionId, next);
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
-      if (textFlushed) emit();
+      if (textFlushed || unconfirmedChanged) emit();
       return;
     }
     messages.set(sessionId, next);
@@ -1466,6 +1570,7 @@ export const remoteSessionStore = {
   ): void {
     const textFlushed = flushPendingTextDelta(sessionId);
     const latestWindow = normalizeMessages(list);
+    const unconfirmedChanged = confirmInputProjectionUnconfirmedFromMessages(sessionId, latestWindow);
     if (latestWindow.length === 0) {
       // 空窗口仍需保留本地系统卡(mobile-system-*):新会话首条消息发出后服务端
       // 消息列表可能仍为空,下一次 setLatestMessageWindow 传空数组不能把刚追加的
@@ -1474,7 +1579,7 @@ export const remoteSessionStore = {
       // A live assistant row is not yet represented in the DB window. Do not erase it
       // while the persistence push is still in flight.
       if (hasLiveAssistantMessage(sessionId)) {
-        if (textFlushed) emit();
+        if (textFlushed || unconfirmedChanged) emit();
         return;
       }
       const preserved = existing.filter((item) => messageKey(item).startsWith('mobile-system-'));
@@ -1485,7 +1590,7 @@ export const remoteSessionStore = {
         messages.set(sessionId, next);
         bumpMessageVersion();
         emit();
-      } else if (textFlushed) {
+      } else if (textFlushed || unconfirmedChanged) {
         emit();
       }
       return;
@@ -1603,7 +1708,7 @@ export const remoteSessionStore = {
     // "窗口内容有没有变"无关。被早退跳过时这次权威响应就白来了(#1210 review)。
     coverLatestPage(sessionId, latestOldestCreatedAt, latestNewestCreatedAt, joinedCoverage);
     if (remoteMessageListsEqual(existing, next)) {
-      if (textFlushed) emit();
+      if (textFlushed || unconfirmedChanged) emit();
       return;
     }
     messages.set(sessionId, next);
@@ -1636,6 +1741,7 @@ export const remoteSessionStore = {
 
   mergeMessages(sessionId: string, list: readonly RemoteMessage[]): void {
     const textFlushed = flushPendingTextDelta(sessionId);
+    const unconfirmedChanged = confirmInputProjectionUnconfirmedFromMessages(sessionId, list);
     const byKey = new Map<string, RemoteMessage>();
     for (const item of messages.get(sessionId) ?? []) {
       byKey.set(messageKey(item), item);
@@ -1659,7 +1765,7 @@ export const remoteSessionStore = {
     }
     const next = normalizeMessages([...byKey.values()]);
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
-      if (textFlushed) emit();
+      if (textFlushed || unconfirmedChanged) emit();
       return;
     }
     messages.set(sessionId, next);
@@ -1686,6 +1792,7 @@ export const remoteSessionStore = {
 
   appendMessage(sessionId: string, message: RemoteMessage): void {
     let changed = flushPendingTextDelta(sessionId);
+    changed = confirmInputProjectionUnconfirmedFromMessages(sessionId, [message]) || changed;
     changed = upsertMessage(sessionId, overlayLivePlanSnapshot(sessionId, message)) || changed;
     // 订阅内到达的实时行可以把覆盖区间的上界往后推;断流后收到的不行(见 liveTailTrusted)。
     coverLiveRow(sessionId, message);
@@ -1717,6 +1824,13 @@ export const remoteSessionStore = {
   removeMessages(sessionId: string, clientIds: readonly string[], deviceId?: string): void {
     const deletedClientIds = new Set(clientIds.filter(Boolean));
     if (!sessionId || deletedClientIds.size === 0) return;
+    const tracked = new Set(inputProjections.get(sessionId)?.pendingQueue.map((item) => item.clientId) ?? []);
+    for (const clientId of inputProjectionUnconfirmedQueuedClientIds.get(sessionId) ?? []) tracked.add(clientId);
+    for (const [clientId, epoch] of inputProjectionRemoteQueuedEvidence.get(sessionId) ?? []) if (epoch > 0) tracked.add(clientId);
+    const settled = new Set([...deletedClientIds].filter((clientId) => tracked.has(clientId)));
+    if (settled.size) recordInputProjectionRemoteEvidence(sessionId, settled, true);
+    const unconfirmedChanged = resolveInputProjectionUnconfirmed(sessionId, settled, true);
+    if (!unconfirmedChanged && settled.size) bumpInputProjectionAuthorityEpoch(sessionId);
     const existing = messages.get(sessionId) ?? emptyMessages;
     const removed = existing.filter((message) => (
       deletedClientIds.has(message.clientId) || deletedClientIds.has(message.id)
@@ -1761,7 +1875,7 @@ export const remoteSessionStore = {
     for (const deletedClientId of deletedClientIds) {
       forgetPendingLiveAssistantMessageIdentity(sessionId, deletedClientId);
     }
-    if (!messagesChanged && !tasksChanged) return;
+    if (!messagesChanged && !tasksChanged && !unconfirmedChanged) return;
     bumpMessageVersion();
     emit();
     // useSessionMessageCacheSync 对空数组会跳过持久化；删除最后一条消息时在这里
@@ -1864,25 +1978,93 @@ export const remoteSessionStore = {
   setInputProjection(sessionId: string, projection: unknown): void {
     const next = normalizeInputProjection(projection, sessionId);
     bumpInputProjectionAuthorityEpoch(sessionId);
-    commitInputProjection(sessionId, next);
+    recordInputProjectionRemoteEvidence(sessionId, next.pendingQueue.map((item) => item.clientId));
+    const confirmedClientIds = new Set(next.pendingQueue.map((item) => item.clientId));
+    const unconfirmedChanged = clearInputProjectionUnconfirmed(sessionId, confirmedClientIds);
+    const projectionChanged = commitInputProjection(sessionId, retainUnconfirmedQueuedItems(sessionId, next));
+    if (unconfirmedChanged && !projectionChanged) emit();
+  },
+
+  setInputProjectionOptimistically(sessionId: string, projection: unknown): void {
+    const next = normalizeInputProjection(projection, sessionId);
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    const unconfirmedChanged = retainInputProjectionUnconfirmed(sessionId, next);
+    const projectionChanged = commitInputProjection(sessionId, next);
+    if (unconfirmedChanged && !projectionChanged) emit();
+  },
+
+  markInputProjectionQueuedItemUnconfirmed(sessionId: string, clientId: string, fallback?: QueuedRemoteMessage): void {
+    if ((messages.get(sessionId) ?? emptyMessages).some((message) => message.role === 'user' && message.clientId === clientId)) return;
+    const projection = inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION;
+    const needsFallback = !projection.pendingQueue.some((item) => item.clientId === clientId);
+    if (needsFallback && !fallback) return;
+    const current = inputProjectionUnconfirmedQueuedClientIds.get(sessionId) ?? EMPTY_CLIENT_IDS;
+    if (current.has(clientId)) return;
+    inputProjectionUnconfirmedQueuedClientIds.set(sessionId, new Set([...current, clientId]));
+    if (needsFallback) {
+      this.setInputProjectionOptimistically(sessionId, {
+        ...projection,
+        sessionId: projection.sessionId || sessionId,
+        pendingQueue: [...projection.pendingQueue, fallback!],
+      });
+      return;
+    }
+    emit();
+  },
+
+  getInputProjectionUnconfirmedQueuedClientIds(sessionId: string): ReadonlySet<string> {
+    return inputProjectionUnconfirmedQueuedClientIds.get(sessionId) ?? EMPTY_CLIENT_IDS;
   },
 
   captureInputProjectionAuthorityEpoch(sessionId: string): number {
     return inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
   },
 
+  captureInputProjectionRemoteEpoch(sessionId: string): number {
+    return inputProjectionRemoteEpochs.get(sessionId) ?? inputProjectionRemoteEpochFloor;
+  },
+
+  hasAuthoritativeQueuedItemSince(sessionId: string, clientId: string, expectedRemoteEpoch: number): boolean {
+    return Math.abs(inputProjectionRemoteQueuedEvidence.get(sessionId)?.get(clientId) ?? 0)
+      > expectedRemoteEpoch;
+  },
+
   setInputProjectionIfCurrent(
     sessionId: string,
     projection: unknown,
     expectedEpoch: number,
+    expectedRemoteEpoch?: number,
+    acceptedClientId?: string,
   ): boolean {
+    const remoteEpoch = inputProjectionRemoteEpochs.get(sessionId) ?? inputProjectionRemoteEpochFloor;
     const currentEpoch = inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
-    if (currentEpoch !== expectedEpoch) {
-      return false;
+    const authorityStale = currentEpoch !== expectedEpoch;
+    const remoteStale = expectedRemoteEpoch !== undefined && remoteEpoch !== expectedRemoteEpoch;
+    if ((authorityStale && expectedRemoteEpoch === undefined) || remoteStale) {
+      const evidence = acceptedClientId ? inputProjectionRemoteQueuedEvidence.get(sessionId)?.get(acceptedClientId) : 0;
+      const acceptedLive = Boolean(acceptedClientId && ((inputProjectionUnconfirmedQueuedClientIds.get(sessionId)?.has(acceptedClientId)) || inputProjections.get(sessionId)?.pendingQueue.some((item) => item.clientId === acceptedClientId) || (evidence ?? 0) > 0));
+      if (!remoteStale || !acceptedLive) return false;
     }
     const next = normalizeInputProjection(projection, sessionId);
+    const queuedClientIds = new Set(next.pendingQueue.map((item) => item.clientId));
+    const confirmedClientIds = new Set(queuedClientIds);
+    if (acceptedClientId) confirmedClientIds.add(acceptedClientId);
+    const preserveSettled = Boolean(acceptedClientId && !queuedClientIds.has(acceptedClientId) && (inputProjectionRemoteQueuedEvidence.get(sessionId)?.get(acceptedClientId) ?? 0) < 0);
+    const evidenceClientIds = preserveSettled ? queuedClientIds : remoteStale ? new Set([acceptedClientId!]) : confirmedClientIds;
+    recordInputProjectionRemoteEvidence(sessionId, evidenceClientIds);
+    if (authorityStale || remoteStale) {
+      const remove = new Set<string>();
+      if (acceptedClientId && !queuedClientIds.has(acceptedClientId)) remove.add(acceptedClientId);
+      const removed = resolveInputProjectionUnconfirmed(sessionId, remove);
+      const retained = clearInputProjectionUnconfirmed(sessionId, remoteStale ? new Set(queuedClientIds.has(acceptedClientId!) ? [acceptedClientId!] : []) : queuedClientIds);
+      if (retained && !removed) bumpInputProjectionAuthorityEpoch(sessionId);
+      if (removed || retained) emit();
+      return false;
+    }
     bumpInputProjectionAuthorityEpoch(sessionId);
-    commitInputProjection(sessionId, next);
+    const unconfirmedChanged = clearInputProjectionUnconfirmed(sessionId, confirmedClientIds);
+    const projectionChanged = commitInputProjection(sessionId, retainUnconfirmedQueuedItems(sessionId, next));
+    if (unconfirmedChanged && !projectionChanged) emit();
     return true;
   },
 
@@ -1896,6 +2078,7 @@ export const remoteSessionStore = {
     boundaryAgentMeta?: Record<string, unknown> | null,
   ): void {
     if (!sessionId) return;
+    recordInputProjectionRemoteEvidence(sessionId, EMPTY_CLIENT_IDS);
     // A maker turn boundary supersedes any projection query that started
     // before it. This is the terminal fence for late owner snapshots.
     bumpInputProjectionAuthorityEpoch(sessionId);
@@ -2663,7 +2846,7 @@ export const remoteSessionStore = {
       changed = pendingInteractions.delete(sessionId) || changed;
       // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
       changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
-      changed = inputProjections.delete(sessionId) || changed;
+      changed = invalidateInputProjectionForOffline(sessionId) || changed;
       bumpInputProjectionAuthorityEpoch(sessionId);
       changed = sessionLiveActivity.delete(sessionId) || changed;
       changed = sessionGoalStatus.delete(sessionId) || changed;
@@ -2694,6 +2877,9 @@ export const remoteSessionStore = {
         pendingInteractions.delete(sessionId);
         pendingInteractionsAuthoritative.delete(sessionId);
         inputProjections.delete(sessionId);
+        recordInputProjectionRemoteEvidence(sessionId, EMPTY_CLIENT_IDS);
+        inputProjectionRemoteQueuedEvidence.delete(sessionId);
+        inputProjectionUnconfirmedQueuedClientIds.delete(sessionId);
         bumpInputProjectionAuthorityEpoch(sessionId);
         sessionLiveActivity.delete(sessionId);
         sessionRunning.delete(sessionId);
@@ -2745,6 +2931,10 @@ export const remoteSessionStore = {
     inputProjections.clear();
     inputProjectionAuthorityEpochFloor = ++nextInputProjectionAuthorityEpoch;
     inputProjectionAuthorityEpochs.clear();
+    inputProjectionRemoteEpochFloor = ++nextInputProjectionRemoteEpoch;
+    inputProjectionRemoteEpochs.clear();
+    inputProjectionRemoteQueuedEvidence.clear();
+    inputProjectionUnconfirmedQueuedClientIds.clear();
     // Keep authority tombstones monotonic across a global store reset so an
     // old in-flight query cannot be accepted after the session is recreated.
     sessionLiveActivity.clear();
@@ -3372,6 +3562,10 @@ export function useSessionInputProjection(sessionId: string): InputProjection {
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getInputProjection(sessionId),
   );
+}
+
+export function useSessionInputProjectionUnconfirmedQueuedClientIds(sessionId: string): ReadonlySet<string> {
+  return useSyncExternalStore(remoteSessionStore.subscribe, () => remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds(sessionId));
 }
 
 export function useSessionRunning(sessionId: string): boolean {

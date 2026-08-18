@@ -161,6 +161,7 @@ export interface BuildPendingSendItemsInput {
   hiddenClientIds: ReadonlySet<string>;
   /** enqueue RPC 在途的 clientId(徽标转圈,不谎报「已入队」)。 */
   sendingClientIds: ReadonlySet<string>;
+  unconfirmedClientIds: ReadonlySet<string>;
   /** 正在 composer 里编辑的条目。 */
   editingClientId: string | null;
   /** 插队发送中的 clientId(projection.steeringQueueClientIds)。 */
@@ -188,7 +189,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
     if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
     const attachments = queuedAttachmentThumbs(item, input.previewByOssRef);
-    const presentation = queueIndex === null
+    const presentation = queueIndex === null || input.unconfirmedClientIds.has(item.clientId)
       ? null
       : input.presentationByClientId.get(item.clientId) ?? null;
     items.push({
@@ -222,7 +223,9 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   input.queue.forEach((item, index) => {
     const phase: MobilePendingSendPhase = input.editingClientId === item.clientId
       ? 'editing'
-      : input.steeringClientIds.has(item.clientId) || input.sendingClientIds.has(item.clientId)
+      : input.unconfirmedClientIds.has(item.clientId)
+        || input.steeringClientIds.has(item.clientId)
+        || input.sendingClientIds.has(item.clientId)
         ? 'sending'
         : 'queued';
     pushQueued(item, phase, index + 1);
