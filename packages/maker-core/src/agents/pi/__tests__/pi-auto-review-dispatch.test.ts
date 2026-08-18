@@ -129,6 +129,7 @@ import {
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
 import { PiAgent } from '../index.js';
+import { Session } from '../../../session.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import {
@@ -1333,7 +1334,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('publishes a localized deterministic mutation receipt even when the following model prompt fails', async () => {
+  it('keeps a completed mutation accepted when the following model receipt prompt fails', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
       affectedPackage: {
@@ -1356,48 +1357,65 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         remove: 'Pi 扩展已卸载。',
       },
     });
-    const handle = await new PiAgent(deps).startSession({
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
       sessionId: 'managed-package-durable-receipt-session',
       workingDir: cwd,
       model: 'm',
     });
+    const session = new Session({
+      id: 'managed-package-durable-receipt-session',
+      agentKind: 'pi',
+      workDir: cwd,
+      handle,
+      capabilities: agent.capabilities,
+      logger: noopLogger,
+    });
+    const sessionEvents: unknown[] = [];
+    let resolveTerminal!: () => void;
+    const terminal = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
+    const unsubscribe = session.onEvent((event) => {
+      sessionEvents.push(event);
+      if (event.type === 'done') resolveTerminal();
+    });
     try {
       captured.failPrompt = true;
-      await expect(handle.send({
+      await expect(session.send({
         type: 'user',
         content: 'pi install npm:context-mode',
-      })).rejects.toThrow('pi prompt rejected');
+      })).resolves.toEqual({ accepted: true });
+      await terminal;
 
-      const events = handle.events()[Symbol.asyncIterator]();
-      let receiptEvent: Awaited<ReturnType<typeof events.next>>['value'];
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        const event = await events.next();
-        if (event.done) break;
-        if (
-          event.value.type === 'text'
-          && JSON.stringify(event.value).includes('Pi 扩展已安装；重启任务后生效。')
-        ) {
-          receiptEvent = event.value;
-          break;
-        }
-      }
-
-      expect(receiptEvent).toMatchObject({
+      expect(sessionEvents).toContainEqual(expect.objectContaining({
         type: 'text',
         data: {
+          text: expect.stringContaining('Pi 扩展已安装；重启任务后生效。'),
           isFinal: false,
         },
         source: 'pi',
-      });
-      if (!receiptEvent || receiptEvent.type !== 'text') {
-        throw new Error('missing deterministic Pi extension mutation receipt');
-      }
-      expect(receiptEvent.data.text).toContain('Pi 扩展已安装；重启任务后生效。');
-      expect(receiptEvent.data.text).toContain('"requiresExtensionApproval":true');
+      }));
+      expect(sessionEvents).toContainEqual(expect.objectContaining({
+        type: 'text',
+        data: expect.objectContaining({
+          text: expect.stringContaining('"requiresExtensionApproval":true'),
+        }),
+      }));
+      expect(sessionEvents).toContainEqual(expect.objectContaining({
+        type: 'done',
+        data: expect.objectContaining({
+          type: 'pi/managed_package_receipt',
+          result: '',
+        }),
+        source: 'pi',
+      }));
+      expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
       expect(mutatePiManagedPackage).toHaveBeenCalledTimes(1);
     } finally {
       captured.failPrompt = false;
-      await handle.close();
+      unsubscribe();
+      await session.close();
     }
   });
 

@@ -3607,6 +3607,56 @@ export class PiAgent extends BaseAgent {
                 PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
             }));
             if (!resp.success) {
+              if (managedPackageRoute.accepted) {
+                // The host-owned package mutation and its deterministic visible
+                // receipt already crossed the dispatch boundary. The follow-up
+                // prompt only lets Pi/model restate that receipt; rejecting it
+                // must not advertise the completed mutation as safe to retry.
+                providerAccepted = true;
+                deps.logger.warn('pi managed package receipt prompt rejected after mutation', {
+                  message: resp.error ?? 'unknown',
+                });
+                // No Pi turn exists to publish a terminal event. Resolve send()
+                // first, then close the accepted host-owned turn explicitly so
+                // Session cannot remain running or retry the package mutation.
+                setImmediate(() => {
+                  if (closed) return;
+                  clearActiveTurnPermissionPolicy('managed_package_receipt_terminal', {
+                    dismissPending: true,
+                  });
+                  ctx.turnTokens = 0;
+                  ctx.turnInput = 0;
+                  ctx.turnOutput = 0;
+                  ctx.turnCacheRead = 0;
+                  ctx.turnCacheWrite = 0;
+                  ctx.finalAssistantText = '';
+                  ctx.pendingAssistantError = null;
+                  queue.push({
+                    type: 'done',
+                    data: {
+                      type: 'pi/managed_package_receipt',
+                      result: '',
+                      usage: {
+                        inputTokens: 0,
+                        outputTokens: 0,
+                        cacheReadTokens: 0,
+                        cacheCreationTokens: 0,
+                      },
+                    },
+                    source: 'pi',
+                  });
+                  queue.push({
+                    type: 'status',
+                    data: {
+                      status: 'Done',
+                      ...usageSnapshotOf(ctx),
+                      isRunning: false,
+                    },
+                    source: 'pi',
+                  });
+                });
+                return;
+              }
               if (resp.command !== command.type) {
                 throw new Error('pi prompt rejection response missing matching command');
               }
