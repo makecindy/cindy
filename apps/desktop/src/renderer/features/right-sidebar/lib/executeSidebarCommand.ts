@@ -76,7 +76,8 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     await ensureHydrated(command.sessionId);
     const bucket = getBucket(command.sessionId);
     const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');
-    if (reviewTab && bucket.activeTabId === reviewTab.id) {
+    const hostAlreadyVisible = typeof document === 'undefined' || document.visibilityState === 'visible';
+    if (reviewTab && bucket.activeTabId === reviewTab.id && hostAlreadyVisible) {
       await closeTab(command.sessionId, reviewTab.id);
       return;
     }

@@ -60,6 +60,7 @@ import {
   matchesKeyboardEvent,
   SWITCH_SESSION_SHORTCUT_IDS,
 } from '../../../shared/appShortcuts';
+import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../../shared/workLouderCodex';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
@@ -634,11 +635,11 @@ export function CCAgentSidebarUpper() {
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
     const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
-    const visibleOnly = visibleSessionsWithRemote.filter(
-      (session) => !catalogSessions.some((active) => active.id === session.id),
-    );
-    const remainingCatalogSlots = Math.max(0, 100 - visibleOnly.length);
-    const tasks = [...visibleOnly, ...catalogSessions.slice(0, remainingCatalogSlots)].map((session) => {
+    const visibleProjection = visibleSessionsWithRemote
+      .filter((session) => !catalogSessions.some((active) => active.id === session.id))
+      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+    const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
+    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map((session) => {
       const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
       const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
       const order = sidebarOrder.get(session.id);

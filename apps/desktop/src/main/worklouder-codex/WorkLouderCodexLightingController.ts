@@ -272,8 +272,8 @@ export class WorkLouderCodexLightingController {
     this.agentSlots = emptyAgentSlots();
     this.slotSessionIds = [];
     this.pendingAgentKeyTap = null;
+    this.joystickNeedsCenter = this.joystickDirection !== null;
     this.joystickDirection = null;
-    this.joystickNeedsCenter = true;
     this.releaseHeldVoice();
     this.clearAutoDimTimer();
     this.clearWindowRevealTimer();

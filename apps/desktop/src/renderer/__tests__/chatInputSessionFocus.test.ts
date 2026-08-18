@@ -109,7 +109,11 @@ describe('ChatInput session switch focus contract', () => {
       "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
     );
     expect(sidebarUpperSource).toContain('catalogEligible: false');
-    expect(sidebarUpperSource).toContain('const remainingCatalogSlots = Math.max(0, 100 - visibleOnly.length);');
+    expect(sidebarUpperSource).toContain(
+      'const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);',
+    );
+    expect(sidebarUpperSource).toContain('WORKLOUDER_CODEX_AGENT_SLOT_COUNT');
+    expect(sidebarUpperSource).toContain('.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)');
     expect(sidebarUpperSource).not.toContain(
       '[...visibleSessionsWithRemote, ...remoteProjectSessions]',
     );

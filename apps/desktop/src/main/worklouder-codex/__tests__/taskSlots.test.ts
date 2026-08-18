@@ -109,6 +109,30 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
     expect(catalog.options.map((task) => task.id)).toEqual(['active-hidden']);
   });
 
+  it('still fills last-sent from active rows when only six archived keys are reserved', () => {
+    const archived = Array.from({ length: 6 }, (_, index) => ({
+      id: `archived-${index}`,
+      title: `Archived ${index}`,
+      pinnedAt: null,
+      userSendAt: 9_000 + index,
+      sidebarOrder: index,
+      catalogEligible: false as const,
+    }));
+    const active = Array.from({ length: 4 }, (_, index) => ({
+      id: `active-${index}`,
+      title: `Active ${index}`,
+      pinnedAt: null,
+      userSendAt: index,
+    }));
+    const catalog = buildWorkLouderCodexTaskCatalog([...archived, ...active], {
+      publishedVisibleOrder: true,
+    });
+
+    expect(catalog.sidebar.map((task) => task.id)).toEqual(archived.map((row) => row.id));
+    expect(catalog.lastSent.map((task) => task.id)).toEqual([...active].reverse().map((row) => row.id));
+    expect(catalog.options.map((task) => task.id)).toEqual(active.map((row) => row.id));
+  });
+
   it('keeps an untitled task addressable instead of dropping it', () => {
     const catalog = buildWorkLouderCodexTaskCatalog([
       { id: 'blank', title: null, pinnedAt: null, userSendAt: null },
