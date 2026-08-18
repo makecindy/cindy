@@ -63,6 +63,11 @@ const modelMemoryMock = vi.hoisted(() => {
     }),
     getFast: vi.fn(),
     setFast: vi.fn(),
+    // 「恢复推荐 / 回落默认」= 删记忆键(2026-08-17 review H3),不是写一份默认快照。
+    clearEffort: vi.fn((_agent: string, _providerId: string, modelId: string) => {
+      effortByModel.delete(modelId);
+    }),
+    clearFast: vi.fn(),
   };
 });
 vi.mock('@/state/providerModelMemory', () => ({
@@ -70,6 +75,8 @@ vi.mock('@/state/providerModelMemory', () => ({
   setProviderModelEffort: modelMemoryMock.setEffort,
   getProviderModelFast: modelMemoryMock.getFast,
   setProviderModelFast: modelMemoryMock.setFast,
+  clearProviderModelEffort: modelMemoryMock.clearEffort,
+  clearProviderModelFast: modelMemoryMock.clearFast,
 }));
 
 // 已连接 anthropic(claude)与 openai(codex);ghost-provider 不存在。

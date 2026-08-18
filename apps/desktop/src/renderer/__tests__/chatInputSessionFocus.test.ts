@@ -203,6 +203,9 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(chatInputSource).toContain("editor.commands.focus('end');");
     expect(chatInputSource).toContain('restoreFiles(restored.attachments);');
     expect(chatInputSource).toContain(
+      'latestStorageKeyRef.current === sourceStorageKey && editorOwnsSource',
+    );
+    expect(chatInputSource).toContain(
       'latestStorageKeyRef.current === sourceStorageKey &&\n            storageKeyForDraftRef.current === sourceStorageKey',
     );
     expect(chatInputSource).toContain(
@@ -232,7 +235,9 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(chatInputSource).toContain('getOrCreateRemoteOptimisticTransitionCheckpoint(');
     expect(chatInputSource).toContain('saveComposerTextAfterAsyncTransition(');
     expect(chatInputSource).toContain('recoveryCheckpoint!');
-    expect(chatInputSource).toContain('if (pendingStopAndSend || voiceInputBusyRef.current)');
+    expect(chatInputSource).toContain(
+      'if ((pendingStopAndSend || voiceInputBusyRef.current) && prevEditorKey && voiceOwnerKey)',
+    );
     expect(chatInputSource).toContain('}, [editor, storageKey]);');
     expect(chatInputSource).not.toContain('}, [editor, storageKey, voiceInput.isBusy]);');
     expect(chatInputSource.match(/storageKeyTransitionRecoveryRef\.current = null;/g)).toHaveLength(

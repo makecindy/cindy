@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RemoteMessage } from '@/session/types';
+import type { RemoteMessage, RemoteSession } from '@/session/types';
 
 // 内存版 AsyncStorage:覆盖 getItem/setItem/removeItem/getAllKeys/multiRemove,贴近真实 RN API。
 const store = vi.hoisted(() => new Map<string, string>());
@@ -39,6 +39,26 @@ function makeMessage(overrides: Partial<RemoteMessage> & { createdAt: string }):
 
 function isoAt(index: number): string {
   return new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+}
+
+function makeSession(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
+  return {
+    id,
+    userId: 'user-1',
+    title: id,
+    workingDir: '/repo',
+    workspaceKind: 'project',
+    model: 'claude',
+    effort: 'medium',
+    permissionMode: 'default',
+    fastMode: false,
+    status: 'active',
+    agentKind: 'cc',
+    userSendAt: null,
+    createdAt: isoAt(0),
+    updatedAt: isoAt(0),
+    ...patch,
+  };
 }
 
 describe('mobileSessionMessageCache', () => {
@@ -248,11 +268,11 @@ describe('mobileSessionMessageCache', () => {
     await expect(getCachedSessionMessages('host-a', 'session-1')).resolves.toEqual([]);
   });
 
-  it('does not persist an empty render snapshot before cache hydration finishes', () => {
+  it('does not treat an empty in-memory render snapshot as a cache deletion', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/remoteSessionStore.ts'), 'utf8');
-    expect(source).toContain('const hydrationReadyKeyRef = useRef<string | null>(null);');
-    expect(source).toContain('if (hydrationReadyKeyRef.current !== key) return;');
-    expect(source).toContain('if (deviceId) void cacheSessionMessages(deviceId, sessionId, next).catch(() => undefined);');
+    expect(source).toContain('空内存可能只是 regular LRU 淘汰');
+    expect(source).toContain('if (messages.length === 0) return;');
+    expect(source).toContain("if (retentionForSession(sessionId) === 'schedule')");
   });
 
   it('clears every cached session on logout but leaves unrelated keys', async () => {
@@ -269,5 +289,259 @@ describe('mobileSessionMessageCache', () => {
     await expect(getCachedSessionMessages('host-b', 'session-2')).resolves.toEqual([]);
     expect([...store.keys()].some((key) => key.startsWith(`${__testing.storageKeyPrefix}.`))).toBe(false);
     expect(store.get('xdt.unrelated.key')).toBe('keep-me');
+  });
+
+  it('keeps local system cards outside the latest cache window', async () => {
+    const { MAX_CACHED_SESSION_MESSAGES, cacheSessionMessages, getCachedSessionMessages } =
+      await import('@/session/mobileSessionMessageCache');
+    const localCard = makeMessage({
+      id: 'mobile-system-pwd-old',
+      clientId: 'mobile-system-pwd-old',
+      createdAt: isoAt(0),
+    });
+    const rows = Array.from({ length: MAX_CACHED_SESSION_MESSAGES + 5 }, (_, index) =>
+      makeMessage({ id: `m-${index}`, createdAt: isoAt(index + 1) }),
+    );
+
+    await cacheSessionMessages('host-a', 'session-1', [localCard, ...rows]);
+    const restored = await getCachedSessionMessages('host-a', 'session-1');
+
+    expect(restored.some((row) => row.id === localCard.id)).toBe(true);
+    expect(restored.at(-1)?.id).toBe(`m-${rows.length - 1}`);
+  });
+
+  it('serializes a schedule cache clear after an already-started regular write', async () => {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const { cacheSessionMessages, getCachedSessionMessages } =
+      await import('@/session/mobileSessionMessageCache');
+    let finishSetItem!: () => void;
+    vi.mocked(AsyncStorage.setItem).mockImplementationOnce((key: string, value: string) =>
+      new Promise<void>((resolve) => {
+        finishSetItem = () => {
+          store.set(key, value);
+          resolve();
+        };
+      }));
+
+    const oldWrite = cacheSessionMessages('host-a', 'session-1', [
+      makeMessage({ id: 'body', createdAt: isoAt(1) }),
+    ]);
+    for (let index = 0; index < 5 && !finishSetItem; index += 1) await Promise.resolve();
+    const scheduleClear = cacheSessionMessages('host-a', 'session-1', []);
+    expect(finishSetItem).toBeTypeOf('function');
+    finishSetItem();
+    await Promise.all([oldWrite, scheduleClear]);
+
+    await expect(getCachedSessionMessages('host-a', 'session-1')).resolves.toEqual([]);
+  });
+
+  it('removeMessages on a schedule task clears cache instead of persisting the remaining body', async () => {
+    const { cacheSessionMessages, getCachedSessionMessages } =
+      await import('@/session/mobileSessionMessageCache');
+    const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+    remoteSessionStore.clear();
+    remoteSessionStore.setDeviceSessions('host-a', 'Mac', [
+      makeSession('session-1', { source: 'scheduler' }),
+    ]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('session-1');
+    const rows = [
+      makeMessage({ id: 'a', clientId: 'a', createdAt: isoAt(1) }),
+      makeMessage({ id: 'b', clientId: 'b', createdAt: isoAt(2) }),
+    ];
+    await cacheSessionMessages('host-a', 'session-1', rows);
+    remoteSessionStore.setMessages('session-1', rows, { authority });
+
+    remoteSessionStore.removeMessages('session-1', ['a'], 'host-a');
+
+    await expect(getCachedSessionMessages('host-a', 'session-1')).resolves.toEqual([]);
+    expect(remoteSessionStore.getMessages('session-1').map((row) => row.id)).toEqual(['b']);
+  });
+
+  it('regular LRU eviction removes only memory and preserves the disk window', async () => {
+    const { cacheSessionMessages, getCachedSessionMessages } =
+      await import('@/session/mobileSessionMessageCache');
+    const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+    remoteSessionStore.clear();
+    const sessions = Array.from({ length: 9 }, (_, index) => makeSession(`s${index}`));
+    remoteSessionStore.setDeviceSessions('host-a', 'Mac', sessions);
+    const cached = makeMessage({ id: 'cached-s0', sessionId: 's0', createdAt: isoAt(1) });
+    await cacheSessionMessages('host-a', 's0', [cached]);
+
+    for (const item of sessions) {
+      remoteSessionStore.setMessages(
+        item.id,
+        Array.from({ length: 100 }, (_, index) => makeMessage({
+          id: `${item.id}-${index}`,
+          sessionId: item.id,
+          createdAt: isoAt(index),
+        })),
+      );
+    }
+
+    expect(remoteSessionStore.getMessages('s0')).toEqual([]);
+    await expect(getCachedSessionMessages('host-a', 's0')).resolves.toEqual([cached]);
+  });
+
+  it('an explicit cache replacement rejects a later stale debounce snapshot', async () => {
+    const {
+      cacheSessionMessagesIfCurrent,
+      captureSessionMessageCacheWriteAuthority,
+      getCachedSessionMessages,
+      replaceCachedSessionMessages,
+    } = await import('@/session/mobileSessionMessageCache');
+    const stale = makeMessage({ id: 'stale', createdAt: isoAt(1) });
+    const authority = captureSessionMessageCacheWriteAuthority('host-a', 'session-1');
+
+    await replaceCachedSessionMessages('host-a', 'session-1', []);
+    await cacheSessionMessagesIfCurrent(authority, [stale]);
+
+    await expect(getCachedSessionMessages('host-a', 'session-1')).resolves.toEqual([]);
+  });
+
+  it('an authoritative clear rejects a cache read that started before the clear', async () => {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const {
+      cacheSessionMessages,
+      captureSessionMessageCacheWriteAuthority,
+      getCachedSessionMessages,
+      isSessionMessageCacheWriteAuthorityCurrent,
+    } = await import('@/session/mobileSessionMessageCache');
+    const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+    remoteSessionStore.clear();
+    remoteSessionStore.setDeviceSessions('host-a', 'Mac', [makeSession('session-1')]);
+    const stale = makeMessage({ id: 'stale', createdAt: isoAt(1) });
+    await cacheSessionMessages('host-a', 'session-1', [stale]);
+
+    let finishGetItem!: () => void;
+    vi.mocked(AsyncStorage.getItem).mockImplementationOnce((key: string) => {
+      const snapshot = store.get(key) ?? null;
+      return new Promise<string | null>((resolve) => {
+        finishGetItem = () => resolve(snapshot);
+      });
+    });
+    const pageAuthority = remoteSessionStore.enterSessionMessageDetail('session-1');
+    const cacheAuthority = captureSessionMessageCacheWriteAuthority('host-a', 'session-1');
+    const read = getCachedSessionMessages('host-a', 'session-1');
+    for (let index = 0; index < 5 && !finishGetItem; index += 1) await Promise.resolve();
+    expect(finishGetItem).toBeTypeOf('function');
+
+    remoteSessionStore.setMessages('session-1', [], { authority: pageAuthority });
+    finishGetItem();
+    const cached = await read;
+    if (isSessionMessageCacheWriteAuthorityCurrent(cacheAuthority)) {
+      remoteSessionStore.hydrateMessagesIfEmpty('session-1', cached, { authority: pageAuthority });
+    }
+
+    expect(cached.map((row) => row.id)).toEqual(['stale']);
+    expect(isSessionMessageCacheWriteAuthorityCurrent(cacheAuthority)).toBe(false);
+    expect(remoteSessionStore.getMessages('session-1')).toEqual([]);
+  });
+
+  it('logout waits for an in-flight cache write before deleting owned keys', async () => {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const {
+      cacheSessionMessages,
+      clearCachedSessionMessages,
+      getCachedSessionMessages,
+    } = await import('@/session/mobileSessionMessageCache');
+    let finishSetItem!: () => void;
+    vi.mocked(AsyncStorage.setItem).mockImplementationOnce((key: string, value: string) =>
+      new Promise<void>((resolve) => {
+        finishSetItem = () => {
+          store.set(key, value);
+          resolve();
+        };
+      }));
+
+    const write = cacheSessionMessages('host-a', 'session-1', [
+      makeMessage({ id: 'body', createdAt: isoAt(1) }),
+    ]);
+    for (let index = 0; index < 5 && !finishSetItem; index += 1) await Promise.resolve();
+    const clear = clearCachedSessionMessages();
+    expect(finishSetItem).toBeTypeOf('function');
+    finishSetItem();
+    await Promise.all([write, clear]);
+
+    await expect(getCachedSessionMessages('host-a', 'session-1')).resolves.toEqual([]);
+  });
+
+  it('logout rejects a cache write authority captured after global clear starts', async () => {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const {
+      cacheSessionMessagesIfCurrent,
+      captureSessionMessageCacheWriteAuthority,
+      clearCachedSessionMessages,
+      getCachedSessionMessages,
+    } = await import('@/session/mobileSessionMessageCache');
+    let finishGetAllKeys!: () => void;
+    vi.mocked(AsyncStorage.getAllKeys).mockImplementationOnce(() => {
+      const snapshot = [...store.keys()];
+      return new Promise<string[]>((resolve) => {
+        finishGetAllKeys = () => resolve(snapshot);
+      });
+    });
+
+    const clear = clearCachedSessionMessages();
+    for (let index = 0; index < 5 && !finishGetAllKeys; index += 1) await Promise.resolve();
+    expect(finishGetAllKeys).toBeTypeOf('function');
+
+    // 模拟页面在登出 clear 已开始后才执行卸载 flush。旧实现会在 getAllKeys 的
+    // 快照之外创建新 key，导致 multiRemove 完成后正文仍残留。
+    const lateAuthority = captureSessionMessageCacheWriteAuthority('host-a', 'session-late');
+    const lateWrite = cacheSessionMessagesIfCurrent(lateAuthority, [
+      makeMessage({ id: 'stale-after-logout', createdAt: isoAt(1) }),
+    ]);
+    finishGetAllKeys();
+    await Promise.all([clear, lateWrite]);
+
+    expect(lateAuthority).toBeNull();
+    await expect(getCachedSessionMessages('host-a', 'session-late')).resolves.toEqual([]);
+  });
+
+  it('an authoritative empty window clears disk even when memory is already empty', async () => {
+    const { cacheSessionMessages, getCachedSessionMessages } =
+      await import('@/session/mobileSessionMessageCache');
+    const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+    remoteSessionStore.clear();
+    remoteSessionStore.setDeviceSessions('host-a', 'Mac', [makeSession('session-1')]);
+    await cacheSessionMessages('host-a', 'session-1', [
+      makeMessage({ id: 'stale', createdAt: isoAt(1) }),
+    ]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('session-1');
+
+    remoteSessionStore.setMessages('session-1', [], { authority });
+
+    await expect(getCachedSessionMessages('host-a', 'session-1')).resolves.toEqual([]);
+  });
+
+  it('a delete push clears disk after the regular in-memory window was LRU-evicted', async () => {
+    const { cacheSessionMessages, getCachedSessionMessages } =
+      await import('@/session/mobileSessionMessageCache');
+    const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+    remoteSessionStore.clear();
+    const sessions = Array.from({ length: 9 }, (_, index) => makeSession(`s${index}`));
+    remoteSessionStore.setDeviceSessions('host-a', 'Mac', sessions);
+    const cached = makeMessage({
+      id: 'deleted-row',
+      clientId: 'deleted-row',
+      sessionId: 's0',
+      createdAt: isoAt(1),
+    });
+    await cacheSessionMessages('host-a', 's0', [cached]);
+    for (const item of sessions) {
+      remoteSessionStore.setMessages(
+        item.id,
+        Array.from({ length: 100 }, (_, index) => makeMessage({
+          id: `${item.id}-${index}`,
+          sessionId: item.id,
+          createdAt: isoAt(index),
+        })),
+      );
+    }
+    expect(remoteSessionStore.getMessages('s0')).toEqual([]);
+
+    remoteSessionStore.removeMessages('s0', ['deleted-row'], 'host-a');
+
+    await expect(getCachedSessionMessages('host-a', 's0')).resolves.toEqual([]);
   });
 });

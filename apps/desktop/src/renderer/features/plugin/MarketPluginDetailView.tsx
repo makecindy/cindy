@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
@@ -89,7 +90,11 @@ export function MarketPluginDetailView({
                 type="button"
                 onClick={onInstall}
                 disabled={actionDisabled}
-                aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
+                aria-label={t(actionKey)}
+                aria-busy={busy || undefined}
+                aria-describedby={
+                  replacementDescription ? replacementDescriptionId : undefined
+                }
                 className={cn(
                   'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
                   'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -98,8 +103,14 @@ export function MarketPluginDetailView({
                   'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
                 )}
               >
-                <Download size={15} aria-hidden="true" />
-                {t(actionKey)}
+                {busy ? (
+                  <Spinner size={14} />
+                ) : (
+                  <>
+                    <Download size={15} aria-hidden="true" />
+                    {t(actionKey)}
+                  </>
+                )}
               </button>
             ) : null}
           </div>

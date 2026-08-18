@@ -285,6 +285,7 @@ async function fetchAnthropicTitle(
   signal: AbortSignal,
   maxTokens: number = TITLE_MAX_TOKENS,
   systemPrompt?: string,
+  thinking?: typeof TITLE_GATEWAY_THINKING | null,
 ): Promise<string> {
   // Anthropic Messages API 不支持 role: 'system' 消息 —— 系统指令必须写入
   // 顶层 `system` 字段，否则请求会被 API 拒绝。
@@ -295,6 +296,10 @@ async function fetchAnthropicTitle(
   };
   if (systemPrompt) {
     body.system = systemPrompt;
+  }
+  // 标题 / 预测只要短正文；有 thinking 的 Claude 档不关会先烧 token。
+  if (thinking) {
+    body.thinking = thinking;
   }
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/v1/messages`, {
     method: 'POST',
@@ -374,11 +379,14 @@ async function fetchGatewayTitle(
   signal: AbortSignal,
   maxTokens: number = TITLE_MAX_TOKENS,
   systemPrompt?: string,
+  thinking?: typeof TITLE_GATEWAY_THINKING | null,
+  effort?: Effort | null,
 ): Promise<string> {
   const messages: Array<{ role: string; content: string }> = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
   messages.push({ role: 'user', content: prompt });
 
+  // thinking / reasoning_effort 都由调用方按 TitleTarget 传入，函数内不写死。
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/chat/completions`, {
     method: 'POST',
     signal,
@@ -389,7 +397,8 @@ async function fetchGatewayTitle(
     body: JSON.stringify({
       model: modelId,
       max_tokens: maxTokens,
-      thinking: TITLE_GATEWAY_THINKING,
+      ...(thinking ? { thinking } : {}),
+      ...(effort ? { reasoning_effort: effort } : {}),
       messages,
     }),
   });
@@ -677,6 +686,7 @@ log.debug('title oneShot skipped: no title target', {
           controller.signal,
           maxTokens,
           opts?.systemPrompt,
+          TITLE_GATEWAY_THINKING,
         );
         break;
       }
@@ -800,6 +810,8 @@ log.debug('title oneShot skipped: no title target', {
           controller.signal,
           maxTokens,
           opts?.systemPrompt,
+          TITLE_GATEWAY_THINKING,
+          target.effort,
         );
         break;
       }

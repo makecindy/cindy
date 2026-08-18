@@ -3153,3 +3153,287 @@ describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)',
     }
   });
 });
+
+describe('任务消息内存治理', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  const manyMessages = (sessionId: string, count: number): RemoteMessage[] =>
+    Array.from({ length: count }, (_, index) => messageAt(
+      `${sessionId}-m-${index}`,
+      sessionId,
+      new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    ));
+
+  const flushReclaim = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('只按 source=scheduler 分类，标题与 source 缺失均保守按 regular', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('schedule', { source: 'scheduler', title: '普通标题' }),
+      session('legacy-title', { title: '[Schedule] 旧标题' }),
+      session('bound', { source: 'user', title: '被定时器绑定' }),
+    ]);
+
+    expect(remoteSessionStore.getSessionRetention('schedule')).toBe('schedule');
+    expect(remoteSessionStore.getSessionRetention('legacy-title')).toBe('regular');
+    expect(remoteSessionStore.getSessionRetention('bound')).toBe('regular');
+  });
+
+  it('旧详情代际的读取在 blur→refocus 后不能覆盖新窗口', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const first = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('first', 's1')], { authority: first });
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', first);
+    const second = remoteSessionStore.enterSessionMessageDetail('s1');
+
+    remoteSessionStore.setMessages('s1', [message('stale', 's1')], { authority: first });
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['first']);
+
+    remoteSessionStore.setMessages('s1', [message('fresh', 's1')], { authority: second });
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['fresh']);
+  });
+
+  it('从未打开的 regular 可更新全局镜像，首次进入或离场后不再接受无 authority 补读', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const unenteredAuthority = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+    expect(remoteSessionStore.hasSessionMessageDetailEntered('s1')).toBe(false);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-1')).toBe(true);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-2')).toBe(false);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [message('global-mirror', 's1')]);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['global-mirror']);
+
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.hasSessionMessageDetailEntered('s1')).toBe(true);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-1')).toBe(false);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    remoteSessionStore.setLatestMessageWindow('s1', [message('stale-reconnect', 's1')]);
+
+    expect(remoteSessionStore.getMessages('s1').some((row) => row.id === 'stale-reconnect')).toBe(false);
+  });
+
+  it('从未打开的 schedule 不接受无 authority 的重连补读', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { source: 'scheduler' }),
+    ]);
+
+    const unenteredAuthority = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+    expect(remoteSessionStore.hasSessionMessageDetailEntered('s1')).toBe(false);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-1')).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', [message('schedule-reconnect', 's1')]);
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('clear 后同设备同任务重建也拒绝 reset 前的未进入详情读取', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const beforeReset = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+
+    remoteSessionStore.clear();
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(beforeReset, 'dev-1')).toBe(false);
+    const afterReset = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(afterReset, 'dev-1')).toBe(true);
+  });
+
+  it('schedule 失焦后回收到 0，后续 push 不会复活完整正文', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1',
+      message: message('late-push', 's1'),
+    });
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('regular 离场后旧订阅 push 与尚未 flush 的流式批次都不能复活窗口', async () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+      const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+      remoteSessionStore.setMessages('s1', manyMessages('s1', 2), { authority });
+      pushMakerText('s1', 'stream-1', 'queued delta', false);
+
+      remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+      const nextAuthority = remoteSessionStore.enterSessionMessageDetail('s1');
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1',
+        message: message('late-subscription-push', 's1'),
+      });
+
+      expect(remoteSessionStore.isSessionMessageAuthorityCurrent(nextAuthority)).toBe(true);
+      expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual([
+        's1-m-0',
+        'late-subscription-push',
+        's1-m-1',
+      ]);
+      // 上面的 push 是在新代际可见期间到达，应该保留；旧代际排队的 delta 不得出现。
+      expect(remoteSessionStore.getMessages('s1').some((row) => row.id === 'stream-1')).toBe(false);
+
+      remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', nextAuthority);
+      await flushReclaim();
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1',
+        message: message('push-after-leave', 's1'),
+      });
+      expect(remoteSessionStore.getMessages('s1').some((row) => row.id === 'push-after-leave')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('页面卸载后本地工作排空仍会完成 deferred reclaim', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const work = remoteSessionStore.acquireSessionMessageWork('s1', true);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'session-switch', authority);
+
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    work.release();
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('pending queue 暂缓 schedule 回收，queue 排空后由 store 主动补回收', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+    remoteSessionStore.setInputProjection('s1', projection('s1'));
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'app-background', authority);
+
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    remoteSessionStore.setInputProjection('s1', {
+      ...projection('s1'),
+      pendingQueue: [],
+    });
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('regular 失焦压回单窗，同时保留窗口外的本地系统卡', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    const localCard = {
+      ...messageAt('mobile-system-pwd-old', 's1', '2025-12-31T23:59:59.000Z'),
+      role: 'system' as const,
+    };
+    remoteSessionStore.setMessages('s1', [localCard, ...manyMessages('s1', 100)], { authority });
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    await flushReclaim();
+
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.some((row) => row.id === localCard.id)).toBe(true);
+    expect(rows.at(-1)?.id).toBe('s1-m-99');
+  });
+
+  it('regular 全局 LRU 不淘汰当前详情，且总量压回约 800 条', () => {
+    const sessions = Array.from({ length: 9 }, (_, index) => session(`s${index}`));
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
+    remoteSessionStore.enterSessionMessageDetail('s0');
+    for (const item of sessions) {
+      remoteSessionStore.setMessages(item.id, manyMessages(item.id, 100));
+    }
+
+    const total = sessions.reduce(
+      (sum, item) => sum + remoteSessionStore.getMessages(item.id).length,
+      0,
+    );
+    expect(total).toBeLessThanOrEqual(800);
+    expect(remoteSessionStore.getMessages('s0')).toHaveLength(100);
+    expect(sessions.slice(1).some((item) => remoteSessionStore.getMessages(item.id).length === 0)).toBe(true);
+  });
+
+  it('regular LRU 只淘汰可重取正文，不丢尚未落盘的本地系统卡', () => {
+    const sessions = Array.from({ length: 9 }, (_, index) => session(`s${index}`));
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
+    const localCard = {
+      ...messageAt('mobile-system-local-only', 's0', '2025-12-31T23:59:59.000Z'),
+      role: 'system' as const,
+    };
+    remoteSessionStore.setMessages('s0', [localCard, ...manyMessages('s0', 99)]);
+    for (const item of sessions.slice(1)) {
+      remoteSessionStore.setMessages(item.id, manyMessages(item.id, 100));
+    }
+
+    expect(remoteSessionStore.getMessages('s0')).toHaveLength(100);
+    expect(remoteSessionStore.getMessages('s0').some((row) => row.id === localCard.id)).toBe(true);
+  });
+
+  it('regular 离场释放详情投影并拒绝离场前启动的旧投影查询', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+    remoteSessionStore.setInputProjection('s1', {
+      ...projection('s1'),
+      pendingQueue: [],
+    });
+    const queryEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    await flushReclaim();
+
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toEqual([]);
+    expect(remoteSessionStore.setInputProjectionIfCurrent(
+      's1',
+      projection('s1'),
+      queryEpoch,
+    )).toBe(false);
+  });
+
+  it('source 晚到改判 schedule：当前详情立即压窗，失焦后归零', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
+
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', { source: 'scheduler' }));
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
+
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur');
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('归档会话会撤销旧 authority，并拒绝迟到 push 复活正文', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('before-archive', 's1')], { authority });
+
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1',
+      message: message('late-after-archive', 's1'),
+    });
+
+    expect(remoteSessionStore.isSessionMessageAuthorityCurrent(authority)).toBe(false);
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('显式失效 rewind 窗口会清正文、sync marker 并登记刷新', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('before-rewind', 's1')], { authority });
+    const row = remoteSessionStore.getSessions().find((item) => item.id === 's1')!;
+    remoteSessionStore.markSessionMessagesSynced('s1', row);
+
+    remoteSessionStore.invalidateSessionMessageWindow('s1', 'dev-1');
+
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', row)).toBe(false);
+    expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
+    expect(remoteSessionStore.isSessionMessageAuthorityCurrent(authority)).toBe(true);
+  });
+});

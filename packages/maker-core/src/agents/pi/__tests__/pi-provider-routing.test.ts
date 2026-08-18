@@ -289,13 +289,22 @@ describe('Pi provider-aware model routing', () => {
             id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
             baseUrl: 'http://127.0.0.1:9988', inheritModels: true,
             apiKeyEnvVar: 'CINDY_PI_OPENAI_PROXY_KEY',
-            models: [{
-              id: 'chatgpt/gpt-cindy-daily-test',
-              wireId: 'gpt-cindy-daily-test',
-              catalogAddition: true,
-              contextWindow: 272_000,
-              maxTokens: 32_000,
-            }],
+            models: [
+              {
+                id: 'chatgpt/gpt-5.6-sol',
+                wireId: 'gpt-5.6-sol',
+                api: 'openai-codex-responses',
+                contextWindow: 1_000_000,
+                maxTokens: 128_000,
+              },
+              {
+                id: 'chatgpt/gpt-cindy-daily-test',
+                wireId: 'gpt-cindy-daily-test',
+                catalogAddition: true,
+                contextWindow: 272_000,
+                maxTokens: 32_000,
+              },
+            ],
           },
           {
             id: 'xai', sourceProviderId: 'xai', name: 'xAI',
@@ -338,9 +347,15 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers.anthropic?.models).toBeUndefined();
     expect(models.providers['openai-codex']).not.toHaveProperty('api');
     expect(models.providers['openai-codex']?.models).toEqual([
+      expect.objectContaining({
+        id: 'gpt-5.6-sol',
+        api: 'openai-codex-responses',
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      }),
       expect.objectContaining({ id: 'gpt-cindy-daily-test' }),
     ]);
-    expect(models.providers['openai-codex']?.models?.[0]).not.toHaveProperty('api');
+    expect(models.providers['openai-codex']?.models?.[1]).not.toHaveProperty('api');
     expect(models.providers.xai).not.toHaveProperty('api');
     expect(models.providers.xai?.models).toEqual([
       expect.objectContaining({
@@ -934,6 +949,64 @@ describe('Pi provider-aware model routing', () => {
     }));
     expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
       .toEqual(['--model', 'xai/grok-retired']);
+    await handle.close();
+  });
+
+  it('restores a retired OpenAI context profile through its native subscription provider', async () => {
+    const resolver = vi.fn(async () => ({
+      providers: [{
+        id: 'openai-codex',
+        sourceProviderId: 'openai',
+        name: 'OpenAI (ChatGPT)',
+        baseUrl: 'http://127.0.0.1:9',
+        inheritModels: true,
+        models: [{
+          id: 'chatgpt/gpt-5.6-sol[1m]',
+          wireId: 'gpt-5.6-sol[1m]',
+          catalogAddition: true,
+        }],
+      }],
+      env: {},
+    }));
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'ChatGPT', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: { availableModels: [] },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: resolver,
+      resolvePiRuntimeModelDescriptor: () => ({
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        displayName: 'GPT-5.6-Sol (1M · Higher usage)',
+        contextWindow: 1_000_000,
+        efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+        defaultEffort: 'medium',
+      }),
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'historical-openai-profile-resume',
+      resumeSessionId: 'pi-sdk-session-openai-profile',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      providerId: 'openai',
+    });
+
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'openai',
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      resumeSessionId: 'pi-sdk-session-openai-profile',
+    }));
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'openai-codex']);
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'gpt-5.6-sol[1m]']);
     await handle.close();
   });
 
@@ -2155,6 +2228,93 @@ describe('Pi provider-aware model routing', () => {
     })).rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
     // 未走到 spawn(transport 从未创建)。
     expect(captured.args).toEqual([]);
+  });
+
+  it('rejects a local-only OpenAI context profile before resolving or spawning remote Pi', async () => {
+    const resolver = vi.fn(async () => ({ providers: [], env: {} }));
+    const transport = vi.fn(async () => {
+      throw new Error('remote transport must not be created');
+    });
+    const agent = new PiAgent({
+      ...byomDeps(resolver, [
+        {
+          id: 'chatgpt/gpt-5.6-sol[1m]',
+          displayName: 'GPT-5.6-Sol 1M',
+          contextWindow: 1_000_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ]),
+      getRemotePiTransport: transport,
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'remote-openai-context-profile',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      providerId: 'openai',
+      remoteHostId: 'remote-host',
+    })).rejects.toThrow(/\[REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE\]/);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(captured.args).toEqual([]);
+  });
+
+  it('rejects switching a running remote Pi session to a local-only OpenAI context profile', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const base = byomDeps(async () => ({ providers: [], env: {} }), [
+      {
+        id: 'gateway-model',
+        displayName: 'Gateway model',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+      {
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        displayName: 'GPT-5.6-Sol 1M',
+        contextWindow: 1_000_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ]);
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => remoteStub,
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-gateway-context-profile-switch',
+      workingDir: cwd,
+      model: 'gateway-model',
+      providerId: 'xd',
+      remoteHostId: 'remote-host',
+    });
+
+    captured.requests.length = 0;
+    await expect(handle.setModel!('chatgpt/gpt-5.6-sol[1m]', { providerId: 'openai' }))
+      .rejects.toThrow(/\[REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE\]/);
+    expect(handle.model).toBe('gateway-model');
+    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'set_model' }));
+    await handle.close();
   });
 
   it('allows an explicitly forwarded remote xAI provider and keeps proxy auth in the remote env', async () => {

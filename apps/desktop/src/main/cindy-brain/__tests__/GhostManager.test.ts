@@ -271,6 +271,11 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
       approval: { state: 'approved' },
     });
     expect(fs.existsSync(migrationLedgerPath())).toBe(true);
+    expect(manager.approvedInstallEvidence('hello')).toMatchObject({
+      packageSha256: null,
+      approvedManifest: { id: 'hello', version: '1.0.0' },
+      legacyMigrated: true,
+    });
   });
 
   it('带 setup.kv 的旧安装无感迁移并保留标准化就绪声明', async () => {

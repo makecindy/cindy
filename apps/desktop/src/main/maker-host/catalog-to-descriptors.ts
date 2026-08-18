@@ -29,6 +29,11 @@ import {
 } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 import { resolveRetiredRegistryModelForPi } from './model-plane/modelPlanePolicy.js';
+import {
+  applyLocalOverridesToRetiredRootModel,
+  EMPTY_MODEL_CATALOG_OVERRIDES,
+  type ModelCatalogOverrides,
+} from './model-plane/localCatalogOverrides.js';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
 interface ModelCapabilitiesTarget {
@@ -181,6 +186,7 @@ export function resolvePiRuntimeModelDescriptor(
   catalog: Catalog,
   providerId: string | null | undefined,
   modelId: string,
+  options: { localOverrides?: ModelCatalogOverrides } = {},
 ): ModelDescriptor | null {
   const providers =
     providerId === 'cindy'
@@ -198,7 +204,15 @@ export function resolvePiRuntimeModelDescriptor(
   }
 
   for (const provider of providers) {
-    const retired = resolveRetiredRegistryModelForPi(catalog.modelRegistry, provider.id, modelId);
+    const retired = resolveRetiredRegistryModelForPi(catalog.modelRegistry, provider.id, modelId, {
+      prepareRootModel: ({ providerId: matchedProviderId, rootAgent, model }) =>
+        applyLocalOverridesToRetiredRootModel(
+          matchedProviderId,
+          rootAgent,
+          model,
+          options.localOverrides ?? EMPTY_MODEL_CATALOG_OVERRIDES,
+        ),
+    });
     if (retired) return toDescriptor(retired, 'pi');
   }
   return null;
@@ -206,9 +220,10 @@ export function resolvePiRuntimeModelDescriptor(
 
 /** Pi 默认 gateway 的 v3 transport 来自 XD；描述符必须使用同一来源。 */
 export function resolvePiGatewayDescriptorProviderId(
-  _providerId: string | null | undefined,
+  providerId: string | null | undefined,
 ): string {
-  return 'xd';
+  const source = providerId?.trim();
+  return !source || source === 'cindy' ? 'xd' : source;
 }
 
 /**
