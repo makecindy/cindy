@@ -7316,10 +7316,10 @@
       },
       "contextRebuild": {
         "labelOverflow": "已整理上下文並繼續",
-        "labelTimeout": "原生會話無回應，已換窗繼續",
+        "labelTimeout": "上一輪沒有回應，已整理後繼續",
         "toggleHint": "檢視交接內容",
-        "handoffTitle": "交接內容——換窗時傳送給新原生會話的上下文摘要(不計入對話記錄，僅在此展示)",
-        "handoffTitleEnglishSource": "交接內容——換窗時傳送給新原生會話的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)"
+        "handoffTitle": "交接內容——整理後傳送給後續對話的上下文摘要(不計入對話記錄，僅在此展示)",
+        "handoffTitleEnglishSource": "交接內容——整理後傳送給後續對話的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)"
       },
       "review": {
         "running": "正在審查當前成果",
