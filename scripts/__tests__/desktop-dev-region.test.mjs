@@ -443,3 +443,25 @@ test("clearInheritedIsolationOverrides drops host-inherited launch overrides", (
   // 无覆写时原样返回
   assert.deepEqual(clearInheritedIsolationOverrides({ A: "1" }), { A: "1" });
 });
+
+test("isolation injection must truly delete inherited keys (Object.assign would keep them)", () => {
+  // 回归钉住（review-pr P1, PR #2640）：Object.assign(env, cleared) 只复制存在的属性、
+  // 不删除目标上的旧键——继承的宿主覆写会残留并覆盖沙箱语义。注入块必须直接 delete。
+  const env = {
+    XDT_USER_DATA_DIR: "C:\\host\\sandbox",
+    XDT_USER_DATA_DIR_EPOCH: "1",
+    XDT_DEVICE_ID_OVERRIDE: "dev-host-abc",
+    XDT_ISOLATED_NAME: "old",
+  };
+  // 模拟 dev-remote-env 命中自动隔离的注入块
+  delete env.XDT_USER_DATA_DIR;
+  delete env.XDT_USER_DATA_DIR_EPOCH;
+  delete env.XDT_DEVICE_ID_OVERRIDE;
+  env.XDT_ISOLATED = "1";
+  env.XDT_ISOLATED_NAME = "epic-thompson";
+  assert.equal(env.XDT_USER_DATA_DIR, undefined);
+  assert.equal(env.XDT_USER_DATA_DIR_EPOCH, undefined);
+  assert.equal(env.XDT_DEVICE_ID_OVERRIDE, undefined);
+  assert.equal(env.XDT_ISOLATED, "1");
+  assert.equal(env.XDT_ISOLATED_NAME, "epic-thompson");
+});

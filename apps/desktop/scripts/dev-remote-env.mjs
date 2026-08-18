@@ -14,7 +14,6 @@ import { spawn } from 'node:child_process';
 
 import {
   applyDesktopDevStartupConfig,
-  clearInheritedIsolationOverrides,
   resolveWorktreeIsolationFromCwd,
   stripDesktopDevRegionArgs,
 } from '../../../scripts/shared/desktop-dev-region.mjs';
@@ -59,7 +58,11 @@ if (worktreeIsolation) {
   // 优先采用宿主 userData、且因已有 device override 不派生新身份，覆盖掉这里注入的
   // worktree 沙箱语义（review-pr P1, PR #2640）。清除后沙箱目录与独立 deviceId 由
   // 注入的 XDT_ISOLATED / XDT_ISOLATED_NAME 正常派生。
-  Object.assign(env, clearInheritedIsolationOverrides(env));
+  // 注意：必须真正 delete 这些键——Object.assign 只复制存在的属性，不会删除目标
+  // 上已存在的旧键（review-pr P1, PR #2640）。
+  delete env.XDT_USER_DATA_DIR;
+  delete env.XDT_USER_DATA_DIR_EPOCH;
+  delete env.XDT_DEVICE_ID_OVERRIDE;
   env.XDT_ISOLATED = '1';
   if (worktreeIsolation.worktreeName) {
     env.XDT_ISOLATED_NAME = worktreeIsolation.worktreeName;
