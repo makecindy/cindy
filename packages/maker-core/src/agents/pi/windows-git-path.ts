@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { statSync } from 'node:fs';
 import path from 'node:path';
+
+export type WindowsPathKind = 'file' | 'directory';
 
 /**
  * Windows Git/PATH helpers for the future Pi shell integration.
@@ -16,6 +17,7 @@ export interface WindowsGitPathProbes {
   readRegistryInstallPaths: () => readonly string[];
   findGitExecutablesOnPath: (pathValue: string | undefined) => readonly string[];
   readGitExecPath: (gitPath: string) => string | undefined;
+  probePathKinds: (candidates: readonly string[]) => ReadonlyMap<string, WindowsPathKind>;
   isDirectory: (candidate: string) => boolean;
   isFile: (candidate: string) => boolean;
 }
@@ -33,6 +35,7 @@ export const WINDOWS_GIT_REGISTRY_KEYS = [
 ] as const;
 
 const WINDOWS_GIT_EXECUTABLE = 'git.exe';
+const WINDOWS_PATH_PROBE_TIMEOUT_MS = 3_000;
 
 /**
  * PowerShell emits each registry value as UTF-16LE Base64. The transport is
@@ -103,41 +106,113 @@ function defaultReadRegistryInstallPaths(): readonly string[] {
   }
 }
 
+/** Decode the ASCII-only records emitted by the bounded PowerShell path probe. */
+export function decodeWindowsPathKindLines(output: string): Map<string, WindowsPathKind> {
+  const kinds = new Map<string, WindowsPathKind>();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const match = rawLine.trim().match(/^([FD])\t(.+)$/);
+    if (!match) continue;
+    const encoded = match[2];
+    if (
+      encoded.length % 4 !== 0
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)
+    ) {
+      continue;
+    }
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.length === 0 || bytes.length % 2 !== 0) continue;
+    const candidate = bytes.toString('utf16le');
+    const normalized = normalizedWindowsPath(candidate);
+    if (!normalized) continue;
+    kinds.set(normalized, match[1] === 'D' ? 'directory' : 'file');
+  }
+  return kinds;
+}
+
+/**
+ * Resolve a batch of filesystem metadata in one native subprocess with one
+ * total timeout. A disconnected UNC share or mapped drive can therefore delay
+ * each best-effort batch only up to the bounded probe, never an unbounded
+ * `statSync` call in Cindy's process.
+ */
+function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMap<string, WindowsPathKind> {
+  if (process.platform !== 'win32') return new Map();
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return new Map();
+  const absoluteCandidates = uniqueWindowsPaths(candidates)
+    .filter(isFullyQualifiedWindowsPath);
+  if (absoluteCandidates.length === 0) return new Map();
+  const script = [
+    '$stdin = [Console]::OpenStandardInput()',
+    '$memory = New-Object System.IO.MemoryStream',
+    '$stdin.CopyTo($memory)',
+    '$json = [Text.Encoding]::UTF8.GetString($memory.ToArray())',
+    '$paths = @($json | ConvertFrom-Json)',
+    'foreach ($candidate in $paths) {',
+    '  try {',
+    '    $item = Get-Item -LiteralPath ([string]$candidate) -Force -ErrorAction Stop',
+    "    $kind = if ($item.PSIsContainer) { 'D' } else { 'F' }",
+    '    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$candidate))',
+    '    [Console]::Out.WriteLine($kind + "`t" + $encoded)',
+    '  } catch {}',
+    '}',
+  ].join('\n');
+  try {
+    const output = execFileSync(
+      powershell,
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        encoding: 'utf8',
+        input: Buffer.from(JSON.stringify(absoluteCandidates), 'utf8'),
+        stdio: ['pipe', 'pipe', 'ignore'],
+        timeout: WINDOWS_PATH_PROBE_TIMEOUT_MS,
+        windowsHide: true,
+      },
+    );
+    return decodeWindowsPathKindLines(output);
+  } catch {
+    // Filesystem discovery is best-effort. PATH resolution must remain fail-open.
+    return new Map();
+  }
+}
+
+function isFullyQualifiedWindowsPath(candidate: string): boolean {
+  if (!path.win32.isAbsolute(candidate)) return false;
+  const root = path.win32.parse(candidate).root;
+  // `\foo` and `/foo` resolve against the process's current drive on Windows.
+  // Only drive-rooted, UNC and device paths are stable discovery inputs.
+  return root !== '\\' && root !== '/';
+}
+
+function windowsExecutableCandidatesOnPath(
+  pathValue: string | undefined,
+  executableName: string,
+): string[] {
+  if (!pathValue) return [];
+  const candidates: string[] = [];
+  for (const rawDirectory of pathValue.split(';')) {
+    const directory = rawDirectory.trim().replace(/^"|"$/g, '');
+    // Blank and relative PATH entries both mean the current directory on
+    // Windows. Discovery must never inspect or execute workspace files.
+    if (!directory || !isFullyQualifiedWindowsPath(directory)) continue;
+    candidates.push(path.win32.join(directory, executableName));
+  }
+  return uniqueWindowsPaths(candidates);
+}
+
 export function findWindowsExecutablesOnPath(
   pathValue: string | undefined,
   executableName: string,
   isFile: (candidate: string) => boolean,
 ): string[] {
-  if (!pathValue) return [];
-  const matches: string[] = [];
-  for (const rawDirectory of pathValue.split(';')) {
-    const directory = rawDirectory.trim().replace(/^"|"$/g, '');
-    if (!directory) continue;
-    const candidate = path.win32.join(directory, executableName);
-    if (isFile(candidate)) matches.push(candidate);
-  }
-  return uniqueWindowsPaths(matches);
-}
-
-function safeIsDirectory(candidate: string): boolean {
-  try {
-    return statSync(candidate).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function safeIsFile(candidate: string): boolean {
-  try {
-    return statSync(candidate).isFile();
-  } catch {
-    return false;
-  }
+  return windowsExecutableCandidatesOnPath(pathValue, executableName).filter(isFile);
 }
 
 function defaultFindGitExecutablesOnPath(pathValue: string | undefined): readonly string[] {
   if (process.platform !== 'win32') return [];
-  return findWindowsExecutablesOnPath(pathValue, WINDOWS_GIT_EXECUTABLE, safeIsFile);
+  const candidates = windowsExecutableCandidatesOnPath(pathValue, WINDOWS_GIT_EXECUTABLE);
+  const kinds = defaultProbeWindowsPathKinds(candidates);
+  return candidates.filter((candidate) => kinds.get(normalizedWindowsPath(candidate)) === 'file');
 }
 
 function defaultReadGitExecPath(gitPath: string): string | undefined {
@@ -161,8 +236,11 @@ const defaultProbes: WindowsGitPathProbes = {
   readRegistryInstallPaths: defaultReadRegistryInstallPaths,
   findGitExecutablesOnPath: defaultFindGitExecutablesOnPath,
   readGitExecPath: defaultReadGitExecPath,
-  isDirectory: safeIsDirectory,
-  isFile: safeIsFile,
+  probePathKinds: defaultProbeWindowsPathKinds,
+  // The production resolver replaces these placeholders with one batched
+  // snapshot. They remain injectable for cross-platform pure-function tests.
+  isDirectory: () => false,
+  isFile: () => false,
 };
 
 function normalizedWindowsPath(value: string): string {
@@ -228,25 +306,71 @@ export function gitPathsForInstallRoot(
   return uniqueWindowsPaths(candidates);
 }
 
-function gitInstallRootFromExecPath(
-  execPath: string | undefined,
-  probes: WindowsGitFileProbes,
-): string | undefined {
-  if (!execPath) return undefined;
+function gitInstallRootCandidatesFromExecPath(execPath: string | undefined): string[] {
+  if (!execPath) return [];
+  const candidates: string[] = [];
   let candidate = path.win32.normalize(execPath.replaceAll('/', '\\'));
   for (let depth = 0; depth < 6; depth += 1) {
-    if (gitPathsForInstallRoot(candidate, probes).length > 0) return candidate;
+    candidates.push(candidate);
     const parent = path.win32.dirname(candidate);
     if (parent === candidate) break;
     candidate = parent;
   }
-  return undefined;
+  return uniqueWindowsPaths(candidates);
 }
 
-function gitInstallRootForPath(gitPath: string, probes: WindowsGitPathProbes): string | undefined {
+function gitInstallRootCandidatesForPath(gitPath: string, probes: WindowsGitPathProbes): string[] {
+  const candidates: string[] = [];
   const inferred = gitInstallRootFromPath(gitPath);
-  if (inferred && gitPathsForInstallRoot(inferred, probes).length > 0) return inferred;
-  return gitInstallRootFromExecPath(probes.readGitExecPath(gitPath), probes);
+  if (inferred) candidates.push(inferred);
+  candidates.push(...gitInstallRootCandidatesFromExecPath(probes.readGitExecPath(gitPath)));
+  return uniqueWindowsPaths(candidates);
+}
+
+function installRootProbeCandidates(installRoot: string): string[] {
+  const root = path.win32.normalize(installRoot);
+  const candidates: string[] = [];
+  for (const directory of [
+    path.win32.join(root, 'cmd'),
+    path.win32.join(root, 'bin'),
+    path.win32.join(root, 'usr', 'bin'),
+  ]) {
+    candidates.push(directory);
+    for (const executable of ['git.exe', 'git.cmd', 'git.bat']) {
+      candidates.push(path.win32.join(directory, executable));
+    }
+  }
+  candidates.push(path.win32.join(root, 'usr', 'bin', 'ls.exe'));
+  return candidates;
+}
+
+function msysRootProbeCandidates(segments: readonly string[], installRoots: readonly string[]): string[] {
+  const candidates: string[] = [];
+  for (const segment of segments) {
+    const trimmed = segment.trim().replace(/^"|"$/g, '');
+    if (!trimmed || /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\\\')) continue;
+    const forward = trimmed.replaceAll('\\', '/');
+    if (!forward.startsWith('/')) continue;
+    const rest = forward.slice(1);
+    const slash = rest.indexOf('/');
+    const head = slash >= 0 ? rest.slice(0, slash) : rest;
+    if (/^[A-Za-z]$/.test(head)) continue;
+    const relative = rest.replaceAll('/', '\\');
+    for (const root of installRoots) candidates.push(path.win32.join(root, relative));
+  }
+  return candidates;
+}
+
+function fileProbesFromPathKinds(kinds: ReadonlyMap<string, WindowsPathKind>): WindowsGitFileProbes {
+  const normalizedKinds = new Map<string, WindowsPathKind>();
+  for (const [candidate, kind] of kinds) {
+    const normalized = normalizedWindowsPath(candidate);
+    if (normalized) normalizedKinds.set(normalized, kind);
+  }
+  return {
+    isDirectory: (candidate) => normalizedKinds.get(normalizedWindowsPath(candidate)) === 'directory',
+    isFile: (candidate) => normalizedKinds.get(normalizedWindowsPath(candidate)) === 'file',
+  };
 }
 
 export function translateMsysPathSegment(segment: string, installRoots: readonly string[], isDirectory: (candidate: string) => boolean): string | undefined {
@@ -271,20 +395,27 @@ export function resolveWindowsGitPath({ platform = process.platform, existingPat
   if (platform !== 'win32') return existingPath ?? '';
   const probes: WindowsGitPathProbes = { ...defaultProbes, ...overrides };
   const original = existingPath ?? '';
-  const roots = uniqueWindowsPaths([
+  const segments = original.split(';').filter((segment) => segment.trim() !== '');
+  const rootCandidates = uniqueWindowsPaths([
     ...probes.readRegistryInstallPaths(),
     ...probes.findGitExecutablesOnPath(existingPath)
-      .map((gitPath) => gitInstallRootForPath(gitPath, probes))
-      .filter((value): value is string => Boolean(value)),
+      .flatMap((gitPath) => gitInstallRootCandidatesForPath(gitPath, probes)),
   ]);
-  const added = roots.flatMap((root) => gitPathsForInstallRoot(root, probes));
+  const injectedFileProbes = overrides?.isDirectory !== undefined || overrides?.isFile !== undefined;
+  const fileProbes: WindowsGitFileProbes = injectedFileProbes
+    ? { isDirectory: probes.isDirectory, isFile: probes.isFile }
+    : fileProbesFromPathKinds(probes.probePathKinds([
+      ...rootCandidates.flatMap(installRootProbeCandidates),
+      ...msysRootProbeCandidates(segments, rootCandidates),
+    ]));
+  const roots = rootCandidates.filter((root) => gitPathsForInstallRoot(root, fileProbes).length > 0);
+  const added = roots.flatMap((root) => gitPathsForInstallRoot(root, fileProbes));
   if (added.length === 0) return original;
 
-  const segments = original.split(';').filter((segment) => segment.trim() !== '');
   const seen = new Set<string>();
   const result: string[] = [];
   for (const segment of segments) {
-    const translated = translateMsysPathSegment(segment, roots, probes.isDirectory) ?? segment;
+    const translated = translateMsysPathSegment(segment, roots, fileProbes.isDirectory) ?? segment;
     const normalized = normalizedWindowsPath(translated);
     if (!normalized || seen.has(normalized)) continue;
     seen.add(normalized);
@@ -292,7 +423,7 @@ export function resolveWindowsGitPath({ platform = process.platform, existingPat
   }
   for (const candidate of added) {
     const normalized = normalizedWindowsPath(candidate);
-    if (!normalized || seen.has(normalized) || !probes.isDirectory(candidate)) continue;
+    if (!normalized || seen.has(normalized) || !fileProbes.isDirectory(candidate)) continue;
     seen.add(normalized);
     result.push(candidate);
   }

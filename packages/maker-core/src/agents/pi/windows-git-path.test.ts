@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   decodeWindowsRegistryBase64Lines,
+  decodeWindowsPathKindLines,
   findWindowsExecutablesOnPath,
   gitInstallRootFromPath,
   gitPathsForInstallRoot,
@@ -48,10 +49,42 @@ describe('Windows Git/PATH helpers', () => {
     const gitPath = 'C:\\Users\\测试用户\\Git\\cmd\\git.exe';
     const isFile = (candidate: string) => candidate === gitPath;
     expect(findWindowsExecutablesOnPath(
-      ';;"C:\\Users\\测试用户\\Git\\cmd";C:\\Windows',
+      ';;tools;\\root-relative;"C:\\Users\\测试用户\\Git\\cmd";C:\\Windows',
       'git.exe',
       isFile,
     )).toEqual([gitPath]);
+  });
+
+  it('round-trips Unicode file kinds from the bounded native path probe', () => {
+    const directory = 'C:\\Users\\测试用户\\Git\\cmd';
+    const file = `${directory}\\git.exe`;
+    const output = [
+      `D\t${Buffer.from(directory, 'utf16le').toString('base64')}`,
+      `F\t${Buffer.from(file, 'utf16le').toString('base64')}`,
+      'invalid',
+    ].join('\r\n');
+    expect([...decodeWindowsPathKindLines(output).values()]).toEqual(['directory', 'file']);
+  });
+
+  it('uses one injected path-kind snapshot instead of direct filesystem probes', () => {
+    const root = '\\\\offline-server\\Git';
+    const cmd = `${root}\\cmd`;
+    const git = `${cmd}\\git.exe`;
+    let captured: readonly string[] = [];
+    const result = resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: 'C:\\Windows',
+      probes: {
+        readRegistryInstallPaths: () => [root],
+        findGitExecutablesOnPath: () => [],
+        probePathKinds: (candidates) => {
+          captured = candidates;
+          return new Map([[cmd, 'directory'], [git, 'file']]);
+        },
+      },
+    });
+    expect(captured).toContain(git);
+    expect(result).toBe(`C:\\Windows;${cmd}`);
   });
 
   it('discovers Git install paths from registry probes', () => {
