@@ -1338,7 +1338,9 @@ describe('Pi approved project resource assembly', () => {
 
       await expect(fingerprintPiProjectSkillEntrypoint(skillPath, workingDir, {
         pathComparisonIdentity: nativePathComparisonIdentity,
-        budget: { remainingEntries: 10, deadlineAtMs: Date.now() + 10 },
+        // Leave enough time for Windows canonical-path probes to reach the
+        // metadata call that this test deliberately leaves pending.
+        budget: { remainingEntries: 10, deadlineAtMs: Date.now() + 1_000 },
       })).resolves.toBeNull();
       expect(blockedProbe).toHaveBeenCalledOnce();
     } finally {
