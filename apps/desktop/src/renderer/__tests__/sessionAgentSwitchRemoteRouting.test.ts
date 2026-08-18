@@ -118,6 +118,30 @@ describe('makerChatStore.mirrorAgentSwitchIntent', () => {
     expect(makerChatStore.getSnapshot(s)).toBe(snap); // 引用不变 = 未触发更新
   });
 
+  it('DSH 意图回流保留 model/provider/effort，不把本地乐观选择清成 null', async () => {
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    const s = sid();
+    makerChatStore.noteAgentSwitchIntent(s, 'dsh', {
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek-2',
+      effort: 'high',
+    });
+    makerChatStore.mirrorAgentSwitchIntent(s, {
+      targetAgentKind: 'dsh',
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek-2',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toEqual({
+      target: 'dsh',
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek-2',
+      effort: 'high',
+      fastMode: false,
+    });
+  });
+
   it('null / 非法值 = 无意图 → 清除', async () => {
     const { makerChatStore } = await import('@/lib/makerChatStore');
     const s = sid();

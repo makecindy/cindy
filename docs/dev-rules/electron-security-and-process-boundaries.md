@@ -180,6 +180,10 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
   仍使用 `file://` 是存量架构，迁移需要单独设计和验证，不能在普通功能 PR 中顺带改动。
 - 打包必须保留现有 Fuses：关闭 RunAsNode、Node options 和 CLI inspect，开启 cookie 加密、
   ASAR 完整性校验并只从 ASAR 加载应用。
+- 正式包关闭 RunAsNode 后，`process.execPath` 是 Electron 应用入口，不是 Node CLI。任何 JS/ESM
+  子运行时不得通过 `spawn(process.execPath, ...)` 启动；必须由 Main 显式选择受控的
+  `utilityProcess` 或随包 Node，并用测试锁住入口打包、stdin/协议通道、环境变量白名单、退出清理
+  与无孤儿进程。不得通过重新启用 `ELECTRON_RUN_AS_NODE` 绕过这条边界。
 - 使用当前受支持的 Electron 版本；升级时重新核对官方安全清单、默认值变化和 breaking
   changes，不因“默认已经安全”删除显式配置。
 

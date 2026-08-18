@@ -1906,17 +1906,21 @@ export function getMaker(): Maker {
         return getRemoteAgentProxyEnv(remoteHost);
       },
     });
-    const dshAgent = buildDshAgent(desktopMakerLogger, async (input) => {
-      const remoteHost = getRemoteSshPool().get(input.remoteHostId);
-      if (!remoteHost) {
-        throw new Error(`remote SSH host "${input.remoteHostId}" not found in pool — connect it first under Settings → Remote`);
-      }
-      if (remoteHost.getStatus() !== 'ready') {
-        throw new Error(`remote SSH host "${input.remoteHostId}" is not connected (status=${remoteHost.getStatus()}) — connect it under Settings → Remote first`);
-      }
-      await ensureDshRuntime(remoteHost);
-      return createDesktopRemoteDshTransport(remoteHost, input, desktopMakerLogger);
-    });
+    const dshAgent = buildDshAgent(
+      desktopMakerLogger,
+      async (input) => {
+        const remoteHost = getRemoteSshPool().get(input.remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${input.remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        if (remoteHost.getStatus() !== 'ready') {
+          throw new Error(`remote SSH host "${input.remoteHostId}" is not connected (status=${remoteHost.getStatus()}) — connect it under Settings → Remote first`);
+        }
+        await ensureDshRuntime(remoteHost);
+        return createDesktopRemoteDshTransport(remoteHost, input, desktopMakerLogger);
+      },
+      { availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'dsh') },
+    );
 
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
@@ -1967,7 +1971,14 @@ export function getMaker(): Maker {
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           if (opts.agentKind === 'dsh') {
-            opts.vendorOptions = { ...(opts.vendorOptions ?? {}), ...prepareDshVendorOptions(opts.remoteHostId) };
+            opts.vendorOptions = {
+              ...(opts.vendorOptions ?? {}),
+              ...prepareDshVendorOptions({
+                providerId: opts.providerId,
+                modelId: opts.model,
+                remoteHostId: opts.remoteHostId,
+              }),
+            };
           }
           if (opts.agentKind === 'codex') {
             const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(

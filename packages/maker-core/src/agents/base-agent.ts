@@ -432,6 +432,17 @@ export interface AgentDeps {
   logger: Logger;
 
   /**
+   * Host-owned local process boundary for DSH. Electron hosts use utilityProcess because their
+   * executable is not a Node CLI; non-Electron hosts may omit this and use core's Node fallback.
+   */
+  createLocalDshTransport?: (input: {
+    binPath: string;
+    configPath: string;
+    workingDir: string;
+    env: Record<string, string | undefined>;
+  }) => DshTransport | Promise<DshTransport>;
+
+  /**
    * Host-owned SSH bridge for DSH. Core supplies only ephemeral configuration
    * and a secret in memory; the host owns every remote filesystem/process action.
    */

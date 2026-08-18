@@ -184,13 +184,15 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(providers[0].routing).toBeUndefined();
   });
 
-  it('保留 provider 的其它显示字段（id / name / connected / agents 原样透传）', () => {
-    const { providers } = project({ providers: [xdProviderWithFullRouting()] });
+  it('保留 provider 的其它显示字段（id / name / connected / agents / runtimeConnected 原样透传）', () => {
+    const provider = { ...xdProviderWithFullRouting(), runtimeConnected: { dsh: false } };
+    const { providers } = project({ providers: [provider] });
     expect(providers[0]).toMatchObject({
       id: 'xd',
       name: 'XD Gateway',
       connected: true,
       agents: ['claude-code', 'codex'],
+      runtimeConnected: { dsh: false },
     });
   });
 

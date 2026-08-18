@@ -156,6 +156,36 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(connectedProvidersForAgent(cached?.providers ?? [], 'codex')).toEqual([]);
   });
 
+  it('保留逐 runtime 的连接态，让远程 DSH 未配置密钥时不进入发送来源', async () => {
+    const projected = {
+      ...providerWithModel('hybrid-dsh'),
+      agents: ['claude-code', 'dsh'],
+      models: {
+        'claude-code': providerWithModel('hybrid-dsh').models['claude-code'],
+        dsh: [
+          {
+            id: 'hybrid-dsh-model',
+            name: 'Hybrid DSH Model',
+            contextWindow: 640_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      runtimeConnected: { dsh: false },
+    };
+    const invoke = vi.fn(async () => ({ providers: [projected] }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+
+    await mod.prefetchDeviceProviders('dev-hybrid-dsh');
+
+    const cached = mod.getCachedDeviceProviders('dev-hybrid-dsh');
+    expect(cached?.providers[0]?.runtimeConnected).toEqual({ dsh: false });
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'claude-code')).toHaveLength(1);
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'dsh')).toEqual([]);
+  });
+
   it('嵌套模型损坏时丢掉坏模型，保留供应商', async () => {
     const malformed = {
       ...provider('malformed-model'),
@@ -222,6 +252,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it.each([
     ['provider.suspended', { ...provider('bad-suspended'), suspended: 'true' }],
+    ['runtimeConnected.dsh', { ...provider('bad-dsh-connection'), runtimeConnected: { dsh: 'false' } }],
     [
       'routing.disabled',
       {

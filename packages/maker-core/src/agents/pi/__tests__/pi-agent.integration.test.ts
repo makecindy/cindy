@@ -1264,7 +1264,12 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       const nativeAddr = nativeServer.address();
       const nativeUrl = typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
 
+      // The suite's shared agentHome is cleaned asynchronously on each close.
+      // Give this test a private home so inspecting its generated models.json
+      // cannot select a stale config directory while another cleanup runs.
+      const byomAgentHome = mkdtempSync(path.join(tmpdir(), 'pi-byom-agent-'));
       const deps = buildDeps();
+      deps.resolvePiAgentHome = () => byomAgentHome;
       const authProviderIds: Array<string | null | undefined> = [];
       deps.auth.getState = async (options) => {
         authProviderIds.push(options?.providerId);
@@ -1297,11 +1302,14 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           model: 'byom-model', // 属于原生 provider,不是网关模型
         });
         // models.json 里有独立的 localbyom provider 块,baseUrl 直连原生端点。
-        // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根;
-        // 本 test 只起一个会话,run-tmp 下恰有一个子目录。
+        // 本用例的 agentHome 是私有的，因此 run-tmp 只能包含本会话的 configHome。
         const { readFileSync, readdirSync } = await import('node:fs');
-        const runTmp = path.join(agentHome, 'run-tmp');
-        const configHome = path.join(runTmp, readdirSync(runTmp)[0]);
+        const runTmp = path.join(byomAgentHome, 'run-tmp');
+        const configHomes = readdirSync(runTmp, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name);
+        expect(configHomes).toHaveLength(1);
+        const configHome = path.join(runTmp, configHomes[0]!);
         const config = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8')) as {
           providers: Record<string, { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> }>;
         };
@@ -1330,6 +1338,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         await handle?.close();
         await new Promise<void>((r) => nativeServer.close(() => r()));
         rmSync(workingDir, { recursive: true, force: true });
+        rmSync(byomAgentHome, { recursive: true, force: true });
       }
     },
   );

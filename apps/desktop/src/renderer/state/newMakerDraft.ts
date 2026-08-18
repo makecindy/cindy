@@ -21,7 +21,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { isSelectableVendor } from '@/lib/agentVendors';
+import { isSelectableVendor, SELECTABLE_VENDORS } from '@/lib/agentVendors';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import type { OrcaWorkerPermissionMode } from '../../shared/orca-worker-permission-mode';
@@ -177,6 +177,17 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
   if (vendor === 'codex') {
     return {
       model: getDefaultModelForVendor('codex').id,
+      effort: 'high',
+      permissionMode: 'auto',
+      planMode: false,
+      providerId: null,
+    };
+  }
+  if (vendor === 'dsh') {
+    return {
+      // DSH has its own provider/model catalog; do not inherit Claude Code's
+      // seed or a fresh DeepSeek configuration would create an invalid task.
+      model: getDefaultModelForVendor('dsh').id,
       effort: 'high',
       permissionMode: 'auto',
       planMode: false,
@@ -348,7 +359,10 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
-  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
+  // Keep the durable "explicitly selected" marker in lockstep with the
+  // user-selectable vendor catalog.  A hand-maintained list here previously
+  // omitted DSH, so its selected model was reset after an app restart.
+  for (const v of SELECTABLE_VENDORS) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
   // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，

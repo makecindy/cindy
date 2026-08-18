@@ -27,6 +27,7 @@ export type {
   ProviderModelRouteConfig,
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
+  DshReasoningEffort,
   PiModelApi,
   ProviderPreset,
   ProviderPresetRuntime,
@@ -36,7 +37,7 @@ export type {
   OAuthProviderDescriptor,
 } from './types.js';
 
-export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+export { DSH_REASONING_EFFORTS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
 
 export { effectivePiWireProtocol, preservesPiCatalogModels } from './pi-catalog-marker.js';
 
@@ -100,6 +101,7 @@ export type {
 export {
   buildRegistry,
   providersForAgent,
+  isProviderConnectedForAgent,
   connectedProvidersForAgent,
   nativeDefaultSourceId,
   effectiveSourceIdForModel,

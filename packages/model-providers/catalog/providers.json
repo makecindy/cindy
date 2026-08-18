@@ -58,24 +58,6 @@
             "originator",
             "session_id"
           ]
-        },
-        "dsh": {
-          "baseUrl": "https://api.deepseek.com",
-          "wireProtocol": "openai-chat",
-          "modelsUrl": "https://api.deepseek.com/models",
-          "models": [
-            {
-              "id": "deepseek-v4-flash",
-              "name": "DeepSeek V4 Flash",
-              "contextWindow": 1000000,
-              "newSessionDefault": ["dsh"]
-            },
-            {
-              "id": "deepseek-v4-pro",
-              "name": "DeepSeek V4 Pro",
-              "contextWindow": 1000000
-            }
-          ]
         }
       },
       "models": {
@@ -447,6 +429,23 @@
               "reasoning": true,
               "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
+            }
+          ]
+        },
+        "dsh": {
+          "baseUrl": "https://api.deepseek.com",
+          "models": [
+            {
+              "id": "deepseek-v4-flash",
+              "name": "DeepSeek V4 Flash",
+              "contextWindow": 1000000,
+              "dshReasoningEffort": "high"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1000000,
+              "dshReasoningEffort": "high"
             }
           ]
         }

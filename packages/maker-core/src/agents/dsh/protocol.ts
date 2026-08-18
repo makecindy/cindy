@@ -241,6 +241,22 @@ export interface DshCompositionOptions {
   sessionRoot: string;
   /** 是否裁剪 bash-local 插件(纯只读 / 无子进程场景)。 */
   bashLocal?: boolean;
+  /** DSH DeepSeek adapter 的 base URL；省略时使用 adapter 默认值。 */
+  baseUrl?: string;
+  /** 每个模型的 DSH 目录元数据；上下文窗口直接影响 DSH 的会话管理。 */
+  models?: readonly DshVendorModel[];
+  /** DSH 的会话级默认推理强度；`off` 同时关闭思考过程。 */
+  reasoningEffort?: DshReasoningEffort;
+}
+
+export type DshReasoningEffort = 'off' | 'low' | 'high' | 'max';
+
+/** DSH adapter consumes a deliberately small, text-only model descriptor. */
+export interface DshVendorModel {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxTokens?: number;
 }
 
 /** cordis.yml 的 AST 形态 —— 生成器内部使用,避免拼 YAML 字符串。 */

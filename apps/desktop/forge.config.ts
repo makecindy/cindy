@@ -1548,6 +1548,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/maker-host/dshRuntimeWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // DSH packaged-bin 是 ESM；独立 utilityProcess 入口提供虚拟 stdin，
+          // 不把 Electron 可执行文件误当成 Node CLI。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts',
           config: 'vite.preload.config.ts',
           // Stable-parent scaffold publish/cleanup runs in a utility process;

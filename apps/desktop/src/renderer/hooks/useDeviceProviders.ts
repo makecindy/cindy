@@ -115,6 +115,14 @@ function isProviderView(value: unknown): value is ProviderView {
   const models = sanitizeProviderModels(value.models);
   if (!models) return false;
   value.models = models;
+  const runtimeConnected = value.runtimeConnected;
+  if (
+    runtimeConnected !== undefined &&
+    (!isRecord(runtimeConnected) ||
+      Object.values(runtimeConnected).some((connected) => typeof connected !== 'boolean'))
+  ) {
+    return false;
+  }
   return (
     typeof value.id === 'string' &&
     value.id.length > 0 &&

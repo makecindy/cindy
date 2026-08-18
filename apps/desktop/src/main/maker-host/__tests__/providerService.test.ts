@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, connectedProvidersForAgent } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  buildUserProvider,
+  connectedProvidersForAgent,
+} from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService } from '../provider-service.js';
@@ -17,7 +21,7 @@ describe('createProviderService', () => {
     const providers = await svc.listProviders();
     const byId = Object.fromEntries(providers.map((p) => [p.id, p.connected]));
     // gemini(内置 API-key 供应商)未注入 builtinApiKeyConnected ⇒ 缺省未连接。
-    expect(byId).toEqual({ anthropic: false, openai: false, xai: false, xd: true, gemini: false, deepseek: false });
+    expect(byId).toEqual({ anthropic: false, openai: false, xai: false, xd: true, gemini: false });
   });
 
   it('builtin API-key provider connection follows builtinApiKeyConnected (2026-07 图像多来源)', async () => {
@@ -274,5 +278,36 @@ describe('createProviderService', () => {
     expect(providers[0]?.connected).toBe(true);
     expect(connectedProvidersForAgent(providers, 'claude-code')).toHaveLength(1);
     expect(connectedProvidersForAgent(providers, 'codex')).toHaveLength(0);
+  });
+
+  it('marks a user provider DSH runtime unavailable until its dedicated key exists', async () => {
+    let hasDshKey = false;
+    const hybrid = buildUserProvider({
+      id: 'hybrid-dsh',
+      name: 'Hybrid DSH',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://gateway.example.test/anthropic',
+          models: [{ id: 'hybrid-claude', name: 'Hybrid Claude' }],
+        },
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [{ id: 'hybrid-dsh', name: 'Hybrid DSH', dshReasoningEffort: 'low' }],
+        },
+      },
+    });
+    const svc = createProviderService({
+      getCatalog: () => ({ version: 'hybrid-dsh-test', providers: [hybrid] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      customDshApiKeyConnected: () => hasDshKey,
+    });
+
+    const withoutDshKey = await svc.listProviders();
+    expect(withoutDshKey[0]).toMatchObject({ connected: true, runtimeConnected: { dsh: false } });
+    expect(connectedProvidersForAgent(withoutDshKey, 'claude-code')).toHaveLength(1);
+    expect(connectedProvidersForAgent(withoutDshKey, 'dsh')).toEqual([]);
+
+    hasDshKey = true;
+    expect(connectedProvidersForAgent(await svc.listProviders(), 'dsh')).toHaveLength(1);
   });
 });

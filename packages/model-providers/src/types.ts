@@ -30,6 +30,10 @@ export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | '
 export const PI_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
 
+/** DeepSeek Harness accepts these exact per-session thinking defaults. */
+export const DSH_REASONING_EFFORTS = ['off', 'low', 'high', 'max'] as const;
+export type DshReasoningEffort = (typeof DSH_REASONING_EFFORTS)[number];
+
 /**
  * PI models.json understands these four portable inference protocols. The
  * provider-level wireProtocol remains the default for an endpoint; piApi is a
@@ -319,6 +323,15 @@ export interface CatalogModel {
    * 这个字段专供 desktop 自定义 Provider 编辑表单的回转判定用。
    */
   contextWindowExplicit?: boolean;
+  /**
+   * 用户为 DeepSeek Harness 这一来源设置的默认推理强度。它不是 Cindy 的通用
+   * `Effort`（DSH 还支持 `off`），也不进入扁平 `ModelDescriptor`；host 在启动
+   * 该 provider + model 的 DSH 会话时读取它并生成 DSH adapter 配置。
+   *
+   * 这是 per-provider 运行参数，同一模型由另一来源提供时可不同，故不参与
+   * catalog.ts 的跨来源 modelSignature 一致性校验。
+   */
+  dshReasoningEffort?: DshReasoningEffort;
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];
@@ -534,6 +547,8 @@ export interface ProviderRuntimeModelConfig {
   reasoningEfforts?: PiReasoningEffort[];
   /** Pi 自定义模型的厂商推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
   reasoningDefaultEffort?: PiReasoningEffort;
+  /** DSH 选中该模型时使用的默认推理强度（含 `off`）。 */
+  dshReasoningEffort?: DshReasoningEffort;
 }
 
 /**

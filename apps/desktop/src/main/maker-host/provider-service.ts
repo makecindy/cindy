@@ -82,6 +82,12 @@ export interface ProviderServiceDeps {
    */
   builtinApiKeyConnected?: (providerId: string) => boolean;
   /**
+   * DSH is a dedicated Harness: a user provider can be configured for another
+   * runtime while its DSH API key is absent. Keep that readiness fact per
+   * runtime so selector/send gates fail before lazy session creation.
+   */
+  customDshApiKeyConnected?: (providerId: string) => boolean;
+  /**
    * 动态清单发现的最近一次失败（生产 = anthropic 的 getAnthropicModelDiscoveryFailure）。
    * 只有「清单唯一来源是动态发现」的供应商需要，缺席 = 该供应商没有这种失败态。
    *
@@ -167,7 +173,23 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         if (failure) discoveryFailures[p.id] = failure;
       }
     }
-    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.());
+    const views = buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.());
+    return views.map((provider) => {
+      if (
+        provider.source !== 'user' ||
+        provider.auth.method !== 'apiKey' ||
+        !provider.agents.includes('dsh')
+      ) {
+        return provider;
+      }
+      return {
+        ...provider,
+        runtimeConnected: {
+          ...(provider.runtimeConnected ?? {}),
+          dsh: deps.customDshApiKeyConnected?.(provider.id) ?? false,
+        },
+      };
+    });
   }
 
   return { listProviders };

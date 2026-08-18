@@ -13,6 +13,16 @@ export type DbAgentKind = 'cc' | 'codex' | 'pi' | 'dsh';
 /** maker-core / IPC 契约侧的 agent 形态。 */
 export type MakerAgentKindWire = 'claude-code' | 'codex' | 'pi' | 'dsh';
 
+/** Runtime guard for the persisted sessions.agent_kind vocabulary. */
+export function isDbAgentKind(value: unknown): value is DbAgentKind {
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'dsh';
+}
+
+/** Runtime guard for the Maker IPC agent-kind vocabulary. */
+export function isMakerAgentKindWire(value: unknown): value is MakerAgentKindWire {
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'dsh';
+}
+
 export function dbToMakerAgentKind(db: string | null | undefined): MakerAgentKindWire {
   if (db === 'codex') return 'codex';
   if (db === 'pi') return 'pi';

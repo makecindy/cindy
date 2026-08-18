@@ -14049,13 +14049,13 @@ function getAgentSwitchIntentRev(sessionId: string): number {
 function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
-  // 轮 42 P1(codex-connector):pi 遗漏 —— main 的 performSessionAgentSwitch 与
-  // AgentSwitchIntentRecord.target 都支持 'pi', 这里收窄成 cc/codex 会把
-  // 等待下轮的 Pi switch 意图归一化成 null, pending 状态在 renderer 丢失。
+  // main 的 performSessionAgentSwitch 与 AgentSwitchIntentRecord.target 共用这四种
+  // runtime；漏掉任意一种都会把合法回流归一化成 null，清掉等待下轮的切换意图。
   if (
     item.targetAgentKind !== 'claude-code'
     && item.targetAgentKind !== 'codex'
     && item.targetAgentKind !== 'pi'
+    && item.targetAgentKind !== 'dsh'
   ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);

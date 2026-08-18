@@ -1359,7 +1359,7 @@
         "dialog": {
           "createTitle": "Add a custom provider",
           "editTitle": "Edit custom provider",
-          "desc": "Configure an OpenAI / Anthropic-compatible provider."
+          "desc": "Configure an OpenAI / Anthropic-compatible provider and the DeepSeek Harness runtime."
         },
         "fields": {
           "name": "Display name",
@@ -1368,6 +1368,7 @@
           "wireProtocol": "Upstream protocol",
           "baseUrl": "Base URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "dshBaseUrlPlaceholder": "https://api.deepseek.com",
           "requestPath": "Exact request path (optional)",
           "requestPathHelp": "Leave empty to use the standard path for the selected protocol. Enter a path beginning with / only when the provider uses a non-standard inference endpoint.",
           "apiKey": "API key",
@@ -1385,6 +1386,8 @@
           "modelSupportsReasoning": "Supports reasoning",
           "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
           "modelReasoningEfforts": "Supported reasoning effort levels",
+          "dshReasoningEffort": "Default reasoning effort",
+          "dshReasoningEffortHelp": "Applied whenever DSH starts with this model. Off disables DeepSeek thinking.",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -1412,7 +1415,15 @@
           "codex": "Codex",
           "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose native Responses, or let Cindy bridge Chat Completions or Anthropic Messages. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source.",
           "pi": "Pi",
-          "piDesc": "Pi is a multi-protocol harness: your custom or local models connect natively (Ollama, vLLM, self-hosted endpoints), without going through Cindy's compatibility proxy. Pick the API type below, then enter this source's base URL, key, and models for Pi; leave blank to skip Pi for this source."
+          "piDesc": "Pi is a multi-protocol harness: your custom or local models connect natively (Ollama, vLLM, self-hosted endpoints), without going through Cindy's compatibility proxy. Pick the API type below, then enter this source's base URL, key, and models for Pi; leave blank to skip Pi for this source.",
+          "dsh": "DSH",
+          "dshDesc": "DSH uses the fixed DeepSeek Harness contract. Enter the base URL, API key, models, context windows, and default reasoning effort for this source. DSH sends text only and does not accept images or custom request headers."
+        },
+        "dshReasoningEffort": {
+          "off": "Off",
+          "low": "Low",
+          "high": "High",
+          "max": "Max"
         },
         "errors": {
           "nameRequired": "Display name is required",
@@ -1421,7 +1432,8 @@
           "contextWindowInvalid": "Context window must be a valid positive integer (separators allowed between digit groups)",
           "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
-          "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs"
+          "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs",
+          "dshApiKeyRequired": "DSH requires API key authentication. Select API key and enter a DSH API key."
         },
         "toast": {
           "created": "Provider added",
@@ -5450,6 +5462,7 @@
       "description": "The current model has no connected source. Connect one in Settings to start sending.",
       "connect": "Connect"
     },
+    "dshTextOnly": "DSH only supports text messages. Remove attachments and images before sending.",
     "sourceDisconnected": {
       "title": "Model source disconnected",
       "description": "The source selected for this session is disconnected, so messages can't be sent. Pick a connected source in the model selector, or reconnect it in Settings.",
@@ -5630,6 +5643,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "dsh": "DSH",
           "pending": "Next: {{agent}}"
         }
       },
@@ -5669,8 +5683,6 @@
         "viaSource": "Source: {{source}}",
         "emptyTitle": "No available source",
         "emptyDesc": "Connect a source that supports the current model to select it",
-        "dshEmptyTitle": "DeepSeek API Key required",
-        "dshEmptyDesc": "Configure your DeepSeek API Key in Settings to use DSH as a source and select a model",
         "disconnected": "Disconnected"
       },
       "agentSwitch": {

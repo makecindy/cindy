@@ -66,6 +66,47 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.routing.codex?.headerOverride).toBeUndefined();
   });
 
+  it('projects DSH context and thinking metadata without generic transport overrides', () => {
+    const provider = buildUserProvider({
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          requestPath: '/ignored-by-dsh',
+          wireProtocol: 'openai-responses',
+          modelsUrl: 'https://gateway.example.test/models',
+          headers: { 'X-Should-Not-Forward': 'value' },
+          models: [
+            {
+              id: 'gateway-pro',
+              name: 'Gateway Pro',
+              contextWindow: 640_000,
+              dshReasoningEffort: 'low',
+              route: {
+                baseUrl: 'https://gateway.example.test/should-not-route',
+                wireProtocol: 'openai-chat',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(provider.routing.dsh).toEqual({
+      upstream: 'https://gateway.example.test/deepseek',
+      authStrategy: 'api-key-header',
+    });
+    expect(provider.models.dsh).toEqual([
+      expect.objectContaining({
+        id: 'gateway-pro',
+        contextWindow: 640_000,
+        dshReasoningEffort: 'low',
+      }),
+    ]);
+    expect(provider.models.dsh?.[0]?.route).toBeUndefined();
+  });
+
   it('preserves an explicit Chat Completions protocol for Codex routing', () => {
     const p = buildUserProvider({
       ...codexOnly,

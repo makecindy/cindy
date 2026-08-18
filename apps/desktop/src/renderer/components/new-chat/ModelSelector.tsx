@@ -1119,9 +1119,10 @@ function ModelSelectorContentView({
       ccModels: cc.capabilities?.availableModels ?? [],
       codexModels: codex.capabilities?.availableModels ?? [],
       piModels: pi.capabilities?.availableModels ?? [],
+      dshModels: dsh.capabilities?.availableModels ?? [],
       providers,
     });
-  }, [agentKind, cc.capabilities, codex.capabilities, pi.capabilities, currentModel, providers]);
+  }, [agentKind, cc.capabilities, codex.capabilities, pi.capabilities, dsh.capabilities, currentModel, providers]);
 
   const effortMeta = useMemo(() => {
     const levels =
@@ -1275,6 +1276,7 @@ function ModelSelectorContentView({
       ccModels: cc.capabilities?.availableModels ?? [],
       codexModels: codex.capabilities?.availableModels ?? [],
       piModels: pi.capabilities?.availableModels ?? [],
+      dshModels: dsh.capabilities?.availableModels ?? [],
       providers,
     });
     if (!rowAgentKind) return true;
@@ -1283,14 +1285,7 @@ function ModelSelectorContentView({
     // 该拷贝不算可路由 —— 只数「来源连接且启用 + 模型条目未停用」的拷贝,否则远程
     // flat picker(如 CreateWorkerPopover)选中后到 Main 准入才失败
     // (PR #744 review 第二十二轮)。
-    return !providers.some(
-      (provider) =>
-        provider.connected &&
-        !provider.suspended &&
-        provider.agents.includes(rowAgentKind) &&
-        providerOffersModel(provider, id, rowAgentKind) &&
-        getModel(provider, id, rowAgentKind)?.disabled !== true,
-    );
+    return sourcesForModel(providers, id, rowAgentKind).length === 0;
   };
 
   // ── 供应商分段 / flat 列表 ────────────────────────────────────────────────
@@ -1391,7 +1386,7 @@ function ModelSelectorContentView({
       ? remoteProviders.modelVisibilityOverrides === undefined
         ? null
         : new Set(
-            (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi'] as const)).flatMap((agent) =>
+            (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi', 'dsh'] as const)).flatMap((agent) =>
               visibleModelUnion(providers, agent, (providerId, model) =>
                 isDeviceModelVisible(
                   remoteProviders.modelVisibilityOverrides,
@@ -1403,7 +1398,7 @@ function ModelSelectorContentView({
             ),
           )
       : new Set(
-          (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi'] as const)).flatMap((agent) =>
+          (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi', 'dsh'] as const)).flatMap((agent) =>
             visibleModelUnion(providers, agent, (providerId, model) =>
               isModelEnabled(agent, providerId, model),
             ).map((model) => model.id),
@@ -2132,18 +2127,10 @@ function ModelSelectorContentView({
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
             <span className="truncate text-sm font-medium text-[var(--model-item-text)]">
-              {t(
-                currentAgentKind === 'dsh'
-                  ? 'newChat.modelSelector.source.dshEmptyTitle'
-                  : 'newChat.modelSelector.source.emptyTitle',
-              )}
+              {t('newChat.modelSelector.source.emptyTitle')}
             </span>
             <span className="text-12 font-normal text-[var(--text-secondary)]">
-              {t(
-                currentAgentKind === 'dsh'
-                  ? 'newChat.modelSelector.source.dshEmptyDesc'
-                  : 'newChat.modelSelector.source.emptyDesc',
-              )}
+              {t('newChat.modelSelector.source.emptyDesc')}
             </span>
           </div>
         </div>
@@ -2576,7 +2563,9 @@ export function ModelSelector({
         ? t('newChat.modelSelector.trigger.agent.claudeCode')
         : agentIdentity.vendorKey === 'pi'
           ? t('newChat.modelSelector.trigger.agent.pi')
-          : t('newChat.modelSelector.trigger.agent.codex')
+          : agentIdentity.vendorKey === 'dsh'
+            ? t('newChat.modelSelector.trigger.agent.dsh')
+            : t('newChat.modelSelector.trigger.agent.codex')
       : null;
   const agentIdentityLabel =
     agentName && agentIdentity?.state === 'pending'
@@ -2606,6 +2595,12 @@ export function ModelSelector({
     if (providers.some((p) => providerOffersModel(p, currentModel.id, 'codex'))) {
       return 'codex';
     }
+    if (providers.some((p) => providerOffersModel(p, currentModel.id, 'pi'))) {
+      return 'pi';
+    }
+    if (providers.some((p) => providerOffersModel(p, currentModel.id, 'dsh'))) {
+      return 'dsh';
+    }
     return null;
   }, [currentModel, providers, agentKind]);
 
@@ -2615,9 +2610,11 @@ export function ModelSelector({
         ? (cc.capabilities?.effortLevels ?? [])
         : currentAgentKind === 'codex'
           ? (codex.capabilities?.effortLevels ?? [])
-          : [];
+          : currentAgentKind === 'pi'
+            ? (pi.capabilities?.effortLevels ?? [])
+            : [];
     return new Map(levels.map((e) => [e.id, e.displayName]));
-  }, [currentAgentKind, cc.capabilities, codex.capabilities]);
+  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities]);
   // 档名多语言(与列表侧 effortLabelFor 同序):i18n 词表 → 模型级覆盖 → capabilities 英文名 → id。
   const labelOf = (e: Effort) => modelEffortLabel(t, currentModel, e, effortMeta.get(e));
 
@@ -2647,7 +2644,6 @@ export function ModelSelector({
     !!onNavigateToProviders &&
     !deviceId &&
     !!currentAgentKind &&
-    currentAgentKind !== 'dsh' &&
     !providersLoading &&
     !hasConnectedSource;
   // trigger 上仍展示当前模型的 effort(模型支持时)。

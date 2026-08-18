@@ -4622,11 +4622,11 @@ interface ElectronAPI {
     // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi' | 'dsh', string>>,
     ) => Promise<{ ok: true }>;
     updateCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi' | 'dsh', string>>,
     ) => Promise<{ ok: true }>;
     deleteCustomProvider: (providerId: string) => Promise<{ ok: true }>;
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */

@@ -267,6 +267,10 @@ export function resolveDraftSessionProviderId({
     return explicitProviderId;
   }
   if (!effectiveProviderId) return null;
+  // DSH 会在 lazy create 时直接按 sessions.provider_id 解析 API key 与 endpoint。它没有
+  // 其它 harness 的原生认证 fallback，因此即使是当前唯一/默认的原 DeepSeek 来源，也要把
+  // renderer 已确认的精确来源固化到会话，避免 null 在启动边界重新变成隐式来源。
+  if (agent === 'dsh') return effectiveProviderId;
   // 预设通过「添加供应商」落地后同样属于 user provider。即使它是当前模型唯一的
   // 已连接来源，也不能省略 providerId：main / maker-core 的 null 语义是沿用各 harness
   // 的原生认证 fallback（Claude → Cindy gateway / Claude OAuth），不会反查目录里唯一的

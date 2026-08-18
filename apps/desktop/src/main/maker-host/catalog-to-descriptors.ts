@@ -246,19 +246,19 @@ export function resolveVerifiedContextWindow(
 }
 
 /**
- * 目录运行时刷新后原地替换两个 agent 的模型能力。不能直接赋新数组：本地 Session 持有 agent
+ * 目录运行时刷新后原地替换各 agent 的模型能力。不能直接赋新数组：本地 Session 持有 agent
  * capabilities 引用，原地 splice 才能让 provider:list 与实际可发送模型在同一次广播前对齐。
  */
 export function refreshCatalogDerivedModels(
   target: ModelCapabilitiesTarget,
   catalog: Catalog,
 ): void {
-  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+  for (const agent of ['claude-code', 'codex', 'pi', 'dsh'] as const) {
     let availableModels: ModelDescriptor[];
     try {
       availableModels = target.getCapabilities(agent).availableModels;
     } catch {
-      // pi 是可选 agent(二进制缺失时不注册),getCapabilities 抛错则跳过。
+      // Pi / DSH 都是可选 agent（二进制缺失时不注册），getCapabilities 抛错则跳过。
       continue;
     }
     availableModels.splice(0, availableModels.length, ...deriveAvailableModels(catalog, agent));

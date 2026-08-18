@@ -1359,7 +1359,7 @@
         "dialog": {
           "createTitle": "添加自定义供应商",
           "editTitle": "编辑自定义供应商",
-          "desc": "配置与 OpenAI / Anthropic 兼容的供应商。"
+          "desc": "配置与 OpenAI / Anthropic 兼容的供应商，以及 DeepSeek Harness 运行时。"
         },
         "fields": {
           "name": "显示名称",
@@ -1368,6 +1368,7 @@
           "wireProtocol": "上游协议",
           "baseUrl": "基础 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "dshBaseUrlPlaceholder": "https://api.deepseek.com",
           "requestPath": "精确请求路径（可选）",
           "requestPathHelp": "留空会使用所选协议的标准路径。只有供应商使用非标准推理接口时，才填写以 / 开头的路径。",
           "apiKey": "API 密钥",
@@ -1385,6 +1386,8 @@
           "modelSupportsReasoning": "支持推理",
           "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后，下一个 Pi Agent 会话生效。",
           "modelReasoningEfforts": "支持的推理强度",
+          "dshReasoningEffort": "默认推理强度",
+          "dshReasoningEffortHelp": "使用此模型启动 DSH 时应用。关闭会禁用 DeepSeek 的思考过程。",
           "addModel": "添加模型",
           "headers": "请求头(可选)",
           "headerNamePlaceholder": "Header-Name",
@@ -1412,7 +1415,15 @@
           "codex": "Codex",
           "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。",
           "pi": "Pi",
-          "piDesc": "Pi 是多协议 harness：你的自定义或本地模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。"
+          "piDesc": "Pi 是多协议 harness：你的自定义或本地模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。",
+          "dsh": "DSH",
+          "dshDesc": "DSH 使用 DeepSeek Harness 的固定协议。填写此来源用于 DSH 的基础 URL、API 密钥、模型、上下文窗口与默认推理强度；只发送纯文本，不支持图片或自定义请求头。"
+        },
+        "dshReasoningEffort": {
+          "off": "关闭思考",
+          "low": "低",
+          "high": "高",
+          "max": "最高"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -1421,7 +1432,8 @@
           "contextWindowInvalid": "上下文窗口必须是合法的正整数（数字组之间可用分隔符）",
           "requestPathInvalid": "精确请求路径需以单个 / 开头，不含片段标识或 .、.. 路径段；空格和不安全字符请使用百分号编码",
           "modelRequired": "请至少添加一个模型",
-          "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址"
+          "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址",
+          "dshApiKeyRequired": "DSH 只能使用 API 密钥鉴权。请切换到 API 密钥并填写 DSH 密钥。"
         },
         "toast": {
           "created": "已添加供应商",
@@ -5448,6 +5460,7 @@
       "description": "当前模型还没有已连接的来源，请先在设置里连接一个再发送。",
       "connect": "去连接"
     },
+    "dshTextOnly": "DSH 仅支持纯文本消息。请移除附件和图片后再发送。",
     "sourceDisconnected": {
       "title": "模型来源已断开",
       "description": "此任务选择的来源已断开连接，暂时无法发送消息。请在模型选择器里换一个已连接的来源，或去设置重新连接。",
@@ -5628,6 +5641,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "dsh": "DSH",
           "pending": "下条：{{agent}}"
         }
       },
@@ -5667,8 +5681,6 @@
         "viaSource": "来源：{{source}}",
         "emptyTitle": "暂无可用来源",
         "emptyDesc": "连接一个支持当前模型的来源后即可选择",
-        "dshEmptyTitle": "需要配置 DeepSeek API Key",
-        "dshEmptyDesc": "在设置中配置 DeepSeek API Key 后，DSH 即可作为来源选择模型",
         "disconnected": "已断开"
       },
       "agentSwitch": {

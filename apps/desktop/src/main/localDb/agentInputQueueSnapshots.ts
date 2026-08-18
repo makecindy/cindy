@@ -20,6 +20,7 @@ import {
   sanitizeQueuedMessageForPersistence,
   type AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
+import { isMakerAgentKindWire } from '../../shared/agentKindConversion.js';
 
 const log = createLogger('agent-input-queue-snapshots');
 
@@ -60,9 +61,11 @@ function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
   // no-op rejection observer now so a fire-and-forget caller cannot create an
   // unhandled-rejection warning while the durable waiter still sees the error.
   void opResult.catch(() => undefined);
-  const chainNext = opResult.catch(() => undefined).finally(() => {
-    if (_writeChains.get(sessionId) === chainNext) _writeChains.delete(sessionId);
-  });
+  const chainNext = opResult
+    .catch(() => undefined)
+    .finally(() => {
+      if (_writeChains.get(sessionId) === chainNext) _writeChains.delete(sessionId);
+    });
   // Keep a settled failure visible to the next durable-boundary waiter until
   // a later successful write replaces it.  Treating a rejected write as
   // "nothing pending" would let attachment ownership advance past a snapshot
@@ -104,7 +107,8 @@ function stripInlineBase64(items: AgentInputQueuedMessage[]): AgentInputQueuedMe
       return rest;
     });
     const images = item.chatMessage.images?.filter((img) => !('base64' in img));
-    const imagesChanged = images !== undefined && images.length !== (item.chatMessage.images?.length ?? 0);
+    const imagesChanged =
+      images !== undefined && images.length !== (item.chatMessage.images?.length ?? 0);
     if (!changed && !imagesChanged) return item;
     return {
       ...item,
@@ -136,11 +140,14 @@ export function saveAgentInputQueueSnapshot(
       if (payload.length > MAX_PAYLOAD_BYTES) {
         payload = JSON.stringify(stripInlineBase64(persistableItems));
         if (payload.length > MAX_PAYLOAD_BYTES) {
-          log.warn('queue snapshot too large even after stripping inline base64; keeping previous snapshot', {
-            sessionId,
-            items: items.length,
-            bytes: payload.length,
-          });
+          log.warn(
+            'queue snapshot too large even after stripping inline base64; keeping previous snapshot',
+            {
+              sessionId,
+              items: items.length,
+              bytes: payload.length,
+            },
+          );
           throw new AgentInputQueueSnapshotTooLargeError(sessionId, items.length, payload.length);
         }
         log.warn('queue snapshot stripped inline base64 attachments to fit size cap', {
@@ -183,14 +190,15 @@ export function isRestorableQueuedMessage(value: unknown): value is AgentInputQu
   if (!value || typeof value !== 'object') return false;
   const msg = value as AgentInputQueuedMessage;
   return (
-    typeof msg.clientId === 'string' && msg.clientId.length > 0 &&
+    typeof msg.clientId === 'string' &&
+    msg.clientId.length > 0 &&
     typeof msg.text === 'string' &&
     typeof msg.persistedContent === 'string' &&
-    !!msg.chatMessage && typeof msg.chatMessage === 'object' &&
-    !!msg.createOpts && typeof msg.createOpts === 'object' &&
-    (msg.createOpts.agentKind === 'claude-code' ||
-      msg.createOpts.agentKind === 'codex' ||
-      msg.createOpts.agentKind === 'pi')
+    !!msg.chatMessage &&
+    typeof msg.chatMessage === 'object' &&
+    !!msg.createOpts &&
+    typeof msg.createOpts === 'object' &&
+    isMakerAgentKindWire(msg.createOpts.agentKind)
   );
 }
 

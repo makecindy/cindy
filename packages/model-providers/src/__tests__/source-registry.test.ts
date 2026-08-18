@@ -168,7 +168,7 @@ describe('mergeWithBundled', () => {
       providers: [JSON.parse(JSON.stringify(BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')))],
     };
     const merged = mergeWithBundled(v2Remote);
-    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini', 'deepseek']);
+    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
     // 远端独有的新供应商追加在 bundled 之后。
     const withExtra: Catalog = {
       version: '2',
@@ -178,7 +178,7 @@ describe('mergeWithBundled', () => {
       ],
     };
     expect(mergeWithBundled(withExtra).providers.map((p) => p.id)).toEqual([
-      'anthropic', 'openai', 'xai', 'xd', 'gemini', 'deepseek', 'newvendor',
+      'anthropic', 'openai', 'xai', 'xd', 'gemini', 'newvendor',
     ]);
   });
 
@@ -473,10 +473,10 @@ describe('loadCatalog', () => {
     ).toEqual([]);
   });
 
-  it('only backfills Pi metadata for proven legacy snapshots across local, remote, and cache', async () => {
+  it('backfills legacy Pi and missing DeepSeek DSH metadata across catalog sources', async () => {
     const bundledPreset = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
     if (!bundledPreset) throw new Error('missing bundled DeepSeek preset');
-    const { pi: _missing, ...legacyRuntimes } = bundledPreset.runtimes;
+    const { pi: _missingPi, dsh: _missingDsh, ...legacyRuntimes } = bundledPreset.runtimes;
     const legacy = JSON.stringify({
       version: '2',
       providers: MINIMAL.providers,
@@ -502,6 +502,8 @@ describe('loadCatalog', () => {
     for (const loaded of [local, remote, cache]) {
       expect(loaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
         .toEqual(bundledPreset.runtimes.pi);
+      expect(loaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.dsh)
+        .toEqual(bundledPreset.runtimes.dsh);
     }
 
     const currentLoaded = await loadCatalogWithSource(
@@ -510,6 +512,8 @@ describe('loadCatalog', () => {
     );
     expect(currentLoaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
       .toBeUndefined();
+    expect(currentLoaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.dsh)
+      .toEqual(bundledPreset.runtimes.dsh);
   });
 
   it('persists a valid remote snapshot and uses its source-scoped LKG after failure', async () => {
@@ -936,7 +940,7 @@ describe('loadCatalog', () => {
     };
     const cat = await loadCatalog({ url: 'https://x/y.json' }, io);
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
-    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'deepseek', 'gemini', 'openai', 'xai', 'xd']);
+    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'gemini', 'openai', 'xai', 'xd']);
   });
 
   it('disableFetch → bundled (no network)', async () => {
@@ -958,6 +962,62 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
   it('connectedProvidersForAgent honors connection', () => {
     expect(connectedProvidersForAgent(views, 'claude-code').map((p) => p.id)).toEqual(['xd']);
     expect(connectedProvidersForAgent(views, 'codex').map((p) => p.id)).toEqual(['xd']);
+  });
+
+  it('per-runtime connection state blocks only the unavailable DSH route', () => {
+    const hybrid = {
+      id: 'hybrid-dsh',
+      name: 'Hybrid DSH',
+      source: 'user' as const,
+      agents: ['claude-code', 'dsh'] as const,
+      auth: { method: 'apiKey' as const },
+      routing: {
+        'claude-code': { upstream: 'https://gateway.example.test/anthropic' },
+        dsh: { upstream: 'https://gateway.example.test/deepseek' },
+      },
+      models: {
+        'claude-code': [model('hybrid-claude')],
+        dsh: [model('hybrid-dsh')],
+      },
+      connected: true,
+      runtimeConnected: { dsh: false },
+    };
+
+    expect(connectedProvidersForAgent([hybrid], 'claude-code').map((provider) => provider.id)).toEqual([
+      'hybrid-dsh',
+    ]);
+    expect(connectedProvidersForAgent([hybrid], 'dsh')).toEqual([]);
+    expect(sourcesForModel([hybrid], 'hybrid-dsh', 'dsh')).toEqual([]);
+    expect(chatEligibleSourcesForModel([hybrid], 'hybrid-dsh', 'dsh')).toEqual([]);
+    expect(
+      sourcesForModel([hybrid], 'hybrid-dsh', 'dsh', { onlyConnected: false }).map(
+        (provider) => provider.id,
+      ),
+    ).toEqual(['hybrid-dsh']);
+
+    expect(
+      connectedProvidersForAgent([{ ...hybrid, connected: false, runtimeConnected: { dsh: true } }], 'dsh'),
+    ).toEqual([]);
+  });
+
+  it('routes a DSH model through the original configured provider', () => {
+    const customWithDshKey = {
+      id: 'user-deepseek',
+      name: 'My DeepSeek',
+      source: 'user' as const,
+      agents: ['dsh'] as const,
+      auth: { method: 'apiKey' as const },
+      routing: { dsh: { upstream: 'https://api.deepseek.com' } },
+      models: { dsh: [model('deepseek-v4-flash')] },
+      connected: true,
+      runtimeConnected: { dsh: true },
+    };
+
+    const views = [customWithDshKey];
+    expect(
+      chatEligibleSourcesForModel(views, 'deepseek-v4-flash', 'dsh').map((provider) => provider.id),
+    ).toEqual(['user-deepseek']);
+    expect(effectiveSourceIdForModel(views, null, 'deepseek-v4-flash', 'dsh')).toBe('user-deepseek');
   });
 
   it('agent selectors and model sources exclude disabled runtimes', () => {

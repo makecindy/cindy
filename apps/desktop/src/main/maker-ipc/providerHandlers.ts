@@ -73,7 +73,10 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 const log = createLogger('maker-ipc:provider');
 
-const VALID_AGENTS: readonly string[] = ['claude-code', 'codex', 'pi'];
+/** Runtimes whose configuration and API-key lifecycle are supported by custom providers. */
+const CUSTOM_PROVIDER_CONFIG_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'dsh'];
+/** Generic HTTP probes are not a DSH transport contract; DSH is tested by its Harness. */
+const PROBEABLE_CUSTOM_PROVIDER_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -142,7 +145,10 @@ function parseRuntimeKeys(input: unknown): RuntimeKeys | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const entries = Object.entries(input as Record<string, unknown>);
   if (
-    entries.some(([agent, value]) => !VALID_AGENTS.includes(agent) || typeof value !== 'string')
+    entries.some(
+      ([agent, value]) =>
+        !CUSTOM_PROVIDER_CONFIG_AGENTS.includes(agent as AgentKind) || typeof value !== 'string',
+    )
   ) return null;
   return Object.fromEntries(entries) as RuntimeKeys;
 }
@@ -358,14 +364,20 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
   const i = input as Record<string, unknown>;
   if (i.kind === 'saved') {
     if (typeof i.providerId !== 'string' || i.providerId.length === 0) return null;
-    if (typeof i.agent !== 'string' || !VALID_AGENTS.includes(i.agent)) return null;
+    if (
+      typeof i.agent !== 'string' ||
+      !PROBEABLE_CUSTOM_PROVIDER_AGENTS.includes(i.agent as AgentKind)
+    ) return null;
     return { kind: 'saved', providerId: i.providerId, agent: i.agent as AgentKind };
   }
   if (i.kind === 'adhoc') {
     const s = i.spec;
     if (!s || typeof s !== 'object') return null;
     const spec = s as Record<string, unknown>;
-    if (typeof spec.agent !== 'string' || !VALID_AGENTS.includes(spec.agent)) return null;
+    if (
+      typeof spec.agent !== 'string' ||
+      !PROBEABLE_CUSTOM_PROVIDER_AGENTS.includes(spec.agent as AgentKind)
+    ) return null;
     if (
       typeof spec.authMethod !== 'string'
       || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod)
@@ -413,7 +425,10 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
 function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   if (!input || typeof input !== 'object') return null;
   const spec = input as Record<string, unknown>;
-  if (typeof spec.agent !== 'string' || !VALID_AGENTS.includes(spec.agent)) return null;
+  if (
+    typeof spec.agent !== 'string' ||
+    !PROBEABLE_CUSTOM_PROVIDER_AGENTS.includes(spec.agent as AgentKind)
+  ) return null;
   if (
     typeof spec.authMethod !== 'string'
     || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod)
@@ -649,7 +664,7 @@ export function registerProviderHandlers(
   ): KeyMutation[] => {
     const mutations: KeyMutation[] = [];
     const usesApiKey = !config.auth || config.auth.method === 'apiKey';
-    for (const agent of VALID_AGENTS as readonly AgentKind[]) {
+    for (const agent of CUSTOM_PROVIDER_CONFIG_AGENTS) {
       const replacement = keys[agent]?.trim();
       if (mode === 'create') {
         if (usesApiKey && config.runtimes[agent] && replacement) {
@@ -1138,7 +1153,7 @@ export function registerProviderHandlers(
       typeof target.providerId !== 'string' ||
       target.providerId.length === 0 ||
       target.providerId.length > MAX_DISABLE_ID_LENGTH ||
-      !VALID_AGENTS.includes(String(target.agent)) ||
+      !CUSTOM_PROVIDER_CONFIG_AGENTS.includes(String(target.agent) as AgentKind) ||
       typeof target.modelId !== 'string' ||
       target.modelId.length === 0 ||
       target.modelId.length > MAX_DISABLE_ID_LENGTH
@@ -1412,7 +1427,7 @@ export function registerProviderHandlers(
         deps.oauthCancel(providerId);
         const credentialSnapshots = stageProviderCredentials(
           providerId,
-          (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({
+          CUSTOM_PROVIDER_CONFIG_AGENTS.map((agent) => ({
             agent,
             replacement: null,
           })),

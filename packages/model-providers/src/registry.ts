@@ -95,6 +95,13 @@ export type ModelDiscoveryFailureState = Partial<
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
   connected: boolean;
+  /**
+   * Optional per-runtime connection facts. This is append-only display state:
+   * older peers fall back to `connected`, while a newer host can keep a
+   * provider's Claude/Codex route usable without falsely treating its DSH key
+   * as configured.
+   */
+  runtimeConnected?: Partial<Record<AgentKind, boolean>>;
   /** Non-secret presentation metadata resolved before routing details cross device-link. */
   logoKind?: ProviderLogoKind;
   /** 动态清单发现的最近一次失败（已剥掉 detail）；成功或从未失败时缺席。 */
@@ -199,6 +206,14 @@ export function providersForAgent(views: ProviderView[], agent: AgentKind): Prov
   return views.filter((p) => hasEnabledAgentRuntime(p, agent));
 }
 
+/** Whether this provider is connected for one specific runtime. */
+export function isProviderConnectedForAgent(provider: ProviderView, agent: AgentKind): boolean {
+  // `connected` is the coarse provider-level fact. A runtime-level true must
+  // never resurrect a globally disconnected provider received from an older or
+  // malformed peer; the optional map can only make a runtime more restrictive.
+  return provider.connected && (provider.runtimeConnected?.[agent] ?? true);
+}
+
 /**
  * 该 agent 已连接的供应商 —— 模型选择器「来源栏」用。停用(suspended)的供应商不可
  * 作为新路由,默认一并剔除。`includeSuspended` 保留 suspended 来源 —— 给**已建会话**
@@ -214,7 +229,7 @@ export function connectedProvidersForAgent(
   // 供应商级停用(suspended,model-disable-store)—— 任一命中都不可路由。
   return views.filter(
     (p) =>
-      p.connected &&
+      isProviderConnectedForAgent(p, agent) &&
       (opts.includeSuspended === true || !p.suspended) &&
       hasEnabledAgentRuntime(p, agent),
   );
@@ -256,7 +271,7 @@ export function sourcesForModel(
   return views.filter(
     (p) =>
       (includeDisabled || !p.suspended) &&
-      (!onlyConnected || p.connected) &&
+      (!onlyConnected || isProviderConnectedForAgent(p, agent)) &&
       hasEnabledAgentRuntime(p, agent) &&
       providerOffersModel(p, modelId, agent) &&
       (includeDisabled || getModel(p, modelId, agent)?.disabled !== true),

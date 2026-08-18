@@ -417,16 +417,19 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(resolvePiRuntimeModelDescriptor(catalog, 'anthropic', 'chatgpt/gpt-retired')).toBeNull();
   });
 
-  it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
+  it('runtime refresh replaces every agent model list in place so existing sessions keep the live reference', () => {
     const claudeModels: ModelDescriptor[] = [{ id: 'stale-claude', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const codexModels: ModelDescriptor[] = [{ id: 'stale-codex', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const piModels: ModelDescriptor[] = [{ id: 'stale-pi', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
+    const dshModels: ModelDescriptor[] = [{ id: 'stale-dsh', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const claudeRef = claudeModels;
     const codexRef = codexModels;
     const piRef = piModels;
+    const dshRef = dshModels;
     const target = {
-      getCapabilities(agent: 'claude-code' | 'codex' | 'pi') {
+      getCapabilities(agent: 'claude-code' | 'codex' | 'pi' | 'dsh') {
         if (agent === 'pi') return { availableModels: piModels };
+        if (agent === 'dsh') return { availableModels: dshModels };
         return { availableModels: agent === 'claude-code' ? claudeModels : codexModels };
       },
     };
@@ -436,9 +439,11 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(claudeModels).toBe(claudeRef);
     expect(codexModels).toBe(codexRef);
     expect(piModels).toBe(piRef);
+    expect(dshModels).toBe(dshRef);
     expect(claudeModels).toEqual(deriveAvailableModels(injectedCatalog(), 'claude-code'));
     expect(codexModels).toEqual(deriveAvailableModels(injectedCatalog(), 'codex'));
     expect(piModels).toEqual(deriveAvailableModels(injectedCatalog(), 'pi'));
+    expect(dshModels).toEqual(deriveAvailableModels(injectedCatalog(), 'dsh'));
   });
 });
 

@@ -1359,7 +1359,7 @@
         "dialog": {
           "createTitle": "カスタムプロバイダーを追加",
           "editTitle": "カスタムプロバイダーを編集",
-          "desc": "OpenAI / Anthropic 互換のプロバイダーを設定します。"
+          "desc": "OpenAI / Anthropic 互換のプロバイダーと DeepSeek Harness ランタイムを設定します。"
         },
         "fields": {
           "name": "表示名",
@@ -1368,6 +1368,7 @@
           "wireProtocol": "上流プロトコル",
           "baseUrl": "ベース URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
+          "dshBaseUrlPlaceholder": "https://api.deepseek.com",
           "requestPath": "正確なリクエストパス（任意）",
           "requestPathHelp": "空欄の場合は選択したプロトコルの標準パスを使用します。プロバイダーが標準外の推論エンドポイントを使う場合のみ、/ で始まるパスを入力してください。",
           "apiKey": "API キー",
@@ -1385,6 +1386,8 @@
           "modelSupportsReasoning": "推論に対応",
           "modelSupportsReasoningHelp": "モデルが推論強度を受け付ける場合のみ有効にし、実際に対応するすべてのレベルを選択してください。保存後、次の Pi Agent セッションから反映されます。",
           "modelReasoningEfforts": "対応する推論強度",
+          "dshReasoningEffort": "デフォルトの推論強度",
+          "dshReasoningEffortHelp": "このモデルで DSH を開始するときに適用します。オフにすると DeepSeek の思考を無効にします。",
           "addModel": "モデルを追加",
           "headers": "リクエストヘッダー(任意)",
           "headerNamePlaceholder": "Header-Name",
@@ -1412,7 +1415,15 @@
           "codex": "Codex",
           "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブ、または Chat Completions / Anthropic Messages を Cindy でブリッジする方式を選べます。このプロバイダーの Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。",
           "pi": "Pi",
-          "piDesc": "Pi はマルチプロトコルのハーネスです:カスタム/ローカルモデル(Ollama、vLLM、自ホストのエンドポイント)は Cindy の互換プロキシを経由せず、そのまま接続します。下で API タイプを選び、この提供元の Pi 用 base URL・キー・モデルを入力してください。空欄なら Pi は設定しません。"
+          "piDesc": "Pi はマルチプロトコルのハーネスです:カスタム/ローカルモデル(Ollama、vLLM、自ホストのエンドポイント)は Cindy の互換プロキシを経由せず、そのまま接続します。下で API タイプを選び、この提供元の Pi 用 base URL・キー・モデルを入力してください。空欄なら Pi は設定しません。",
+          "dsh": "DSH",
+          "dshDesc": "DSH は固定の DeepSeek Harness 契約を使用します。この提供元のベース URL、API キー、モデル、コンテキストウィンドウ、デフォルトの推論強度を入力してください。DSH はテキストのみを送信し、画像とカスタムリクエストヘッダーは使用できません。"
+        },
+        "dshReasoningEffort": {
+          "off": "オフ",
+          "low": "低",
+          "high": "高",
+          "max": "最大"
         },
         "errors": {
           "nameRequired": "表示名を入力してください",
@@ -1421,7 +1432,8 @@
           "contextWindowInvalid": "コンテキストウィンドウは有効な正の整数である必要があります（数字グループの間に区切り記号を使用できます）",
           "requestPathInvalid": "正確なリクエストパスは 1 つの / で始め、フラグメントや .、.. のパスセグメントを含めないでください。空白や安全でない文字はパーセントエンコードしてください。",
           "modelRequired": "モデルを 1 つ以上追加してください",
-          "oauthInvalid": "OAuth 設定が不完全です。すべての項目が必須で、両方のエンドポイントは安全な https URL である必要があります"
+          "oauthInvalid": "OAuth 設定が不完全です。すべての項目が必須で、両方のエンドポイントは安全な https URL である必要があります",
+          "dshApiKeyRequired": "DSH には API キー認証が必要です。API キーを選択して DSH API キーを入力してください。"
         },
         "toast": {
           "created": "プロバイダーを追加しました",
@@ -5448,6 +5460,7 @@
       "description": "現在のモデルには接続済みのソースがありません。設定でソースを接続してから送信してください。",
       "connect": "接続する"
     },
+    "dshTextOnly": "DSH はテキスト メッセージのみ対応しています。添付ファイルと画像を削除してから送信してください。",
     "sourceDisconnected": {
       "title": "モデルのソースが切断されました",
       "description": "このセッションで選択したソースは切断されているため、メッセージを送信できません。モデルセレクターで接続済みのソースを選ぶか、設定で再接続してください。",
@@ -5628,6 +5641,7 @@
           "claudeCode": "Claude Code",
           "codex": "Codex",
           "pi": "Pi",
+          "dsh": "DSH",
           "pending": "次回：{{agent}}"
         }
       },
@@ -5667,8 +5681,6 @@
         "viaSource": "ソース：{{source}}",
         "emptyTitle": "利用可能なソースがありません",
         "emptyDesc": "現在のモデルに対応するソースを接続すると選択できます",
-        "dshEmptyTitle": "DeepSeek API キーが必要です",
-        "dshEmptyDesc": "設定で DeepSeek API キーを設定すると、DSH をソースとしてモデルを選択できます",
         "disconnected": "切断済み"
       },
       "agentSwitch": {

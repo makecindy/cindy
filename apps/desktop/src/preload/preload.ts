@@ -4983,11 +4983,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi' | 'dsh', string>>,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:provider:custom:create', config, keys),
     updateCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi' | 'dsh', string>>,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:provider:custom:update', config, keys),
     deleteCustomProvider: (providerId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:custom:delete', providerId),

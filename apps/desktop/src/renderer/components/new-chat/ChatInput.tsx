@@ -278,6 +278,7 @@ import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabiliti
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { selectableVendorForAgentKind } from '@/lib/agentVendors';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
 import {
   deriveModelsFromProviders,
@@ -1564,8 +1565,7 @@ export function ChatInput({
   // initialModel/initialEffort 缺失的瞬态(会话快照未加载)兜底:读本地草稿 lastByVendor
   // (localStorage,按 agent 分槽、sanitize 恒有种子值)。默认模型/档位偏好已全量本地化,
   // 不再依赖服务端 UserPreferences(登录态失效/离线时模型与档位选择必须照常工作)。
-  const localVendorDefaults =
-    getDraft().lastByVendor[vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : 'cc'];
+  const localVendorDefaults = getDraft().lastByVendor[vendorKey ?? 'cc'];
   // session-agent-switch 意图制:意图期内 chip / 选择器显示用户选择的目标
   // (model/effort/provider/fast),props(镜像 DB)仍是旧引擎值——真切换在下一条
   // 消息发送时刻 apply,patched 回流后意图清除、显示交回 props。意图存放在
@@ -1796,9 +1796,7 @@ export function ChatInput({
   // (sessionId 在)按实际路由口径判(includeDisabled):运行中的会话不因停用打断,
   // 请求仍走原路由,把停用当「无来源」会误禁 Send(PR #744 review 第十轮)。草稿是
   // 新路由选择,保持准入口径(停用拷贝不算可发送来源)。
-  const hasConnectedSendSource = currentModelAgentKind === 'dsh'
-    ? true
-    : currentModelAgentKind
+  const hasConnectedSendSource = currentModelAgentKind
     ? chatEligibleSourcesForModel(sendProviders, activeModel, currentModelAgentKind, {
         onlyConnected: true,
         includeDisabled: !!sessionId,
@@ -1811,7 +1809,6 @@ export function ChatInput({
     !remoteModelListBlocked &&
     // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
     // provider 镜像误判成权威的「没有已连接来源」。
-    currentModelAgentKind !== 'dsh' &&
     (!deviceLinkDeviceId || !remoteProviders.unsupported) &&
     !hasConnectedSendSource;
 
@@ -4794,6 +4791,16 @@ export function ChatInput({
           return;
         }
 
+        // DSH 的 DeepSeek 运行时只接受文本块。附件和浏览器评论截图都会最终变成文件/图片
+        // payload，必须在 Renderer 发送边界拦住，绝不能把图片交给 DeepSeek。
+        if (
+          currentModelAgentKind === 'dsh' &&
+          (attachmentsForSend.length > 0 || commentsForSend.length > 0)
+        ) {
+          toast.warning(t('newChat.dshTextOnly'));
+          return;
+        }
+
         // 预检:会话显式选中的来源已断开 → 发送前拦截。main 侧懒创建会从 DB 水合 providerId
         // 直接 LAZY_CREATE_FAILED(renderer 的 sendProviderId=null 救不了已建会话),所以这里
         // 弹窗给出明确原因 + 去设置入口,而不是让请求出去撞一个原始错误码。
@@ -4822,7 +4829,6 @@ export function ChatInput({
         if (
           enforceConnectedSourceGate &&
           currentModelAgentKind &&
-          currentModelAgentKind !== 'dsh' &&
           // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
           // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
           !(deviceLinkDeviceId && remoteProviders.unsupported)
@@ -5429,10 +5435,10 @@ export function ChatInput({
         return { efforts: m?.efforts ?? [], defaultEffort: m?.defaultEffort ?? null };
       }
       const kinds: readonly AgentKind[] = targetAgentKind
-        ? [targetAgentKind]
+          ? [targetAgentKind]
         : currentModelAgentKind
           ? [currentModelAgentKind]
-          : ['claude-code', 'codex', 'pi'];
+          : ['claude-code', 'codex', 'pi', 'dsh'];
       if (providerId) {
         for (const kind of kinds) {
           const scoped = resolveProviderModelEfforts({
@@ -5474,7 +5480,9 @@ export function ChatInput({
             ? codexCaps.capabilities
             : currentModelAgentKind === 'pi'
               ? piCaps.capabilities
-              : ccCaps.capabilities,
+              : currentModelAgentKind === 'dsh'
+                ? dshCaps.capabilities
+                : ccCaps.capabilities,
         providerId,
         modelId: targetModelId,
         agentKind: currentModelAgentKind,
@@ -5487,6 +5495,7 @@ export function ChatInput({
       ccCaps.capabilities,
       codexCaps.capabilities,
       piCaps.capabilities,
+      dshCaps.capabilities,
     ],
   );
 
@@ -5517,9 +5526,6 @@ export function ChatInput({
     ) => {
       const agentKind = opts.agentKind ?? currentModelAgentKind;
       if (!sessionId || !agentKind || !modelId) return;
-      // DSH's fixed provider route has no shared draft/provider-memory slot.
-      // Its model choice is persisted with the session-switch intent instead.
-      if (agentKind === 'dsh') return;
       const activeProviderId =
         opts.activeProviderId !== undefined ? opts.activeProviderId : selectedProviderId;
       const memoryProviderId =
@@ -5528,12 +5534,7 @@ export function ChatInput({
         opts.remoteDeviceId ?? getSessionDeviceId(sessionId) ?? deviceLinkDeviceId;
       const markModelChoice = opts.markModelChoice === true;
       if (!remoteDeviceId) {
-        const vendor =
-          agentKind === 'codex'
-            ? 'codex'
-            : agentKind === 'pi'
-              ? 'pi'
-              : 'cc';
+        const vendor = selectableVendorForAgentKind(agentKind);
         const persistPrefs = markModelChoice ? patchVendorPrefs : patchVendorPrefsPreservingModelChoice;
         persistPrefs(vendor, {
           // 换模才带配对并打标记。本机只改思考档 / Fast 不写回活动模型,

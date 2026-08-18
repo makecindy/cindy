@@ -18,7 +18,7 @@ import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { resolveBusinessSessionId } from '../../sessionIds';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { isDbAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
   sessionToCamel,
   sessionCreateToRow,
@@ -268,7 +268,8 @@ export async function recycleSessionWorktreeForStatusChange(
         // quiescence and ref/worktree deletion.
         await removeDeletedSessionMediaRefs(targetSessionId, mediaDb)
           .then((count) => {
-            if (count > 0) log.info('session media refs removed', { sessionId: targetSessionId, count });
+            if (count > 0)
+              log.info('session media refs removed', { sessionId: targetSessionId, count });
           })
           .catch((err) => {
             log.warn('session media ref cleanup failed', {
@@ -1046,8 +1047,7 @@ export function registerSessionIpc(
     const id = resolveBusinessSessionId(bodyObj.id);
     const createBody = bodyObj as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
-    if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
+    if (bodyObj.agentKind !== undefined && !isDbAgentKind(bodyObj.agentKind)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
     }
     const ALLOWED_WORKSPACE_KINDS = new Set<string>(['project', 'dialogue']);

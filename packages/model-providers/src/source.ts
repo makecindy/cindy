@@ -198,8 +198,10 @@ function allowsBundledImageInheritance(
 
 /**
  * 同 id preset 仍以远端为主；bundled 给远端仍保留的同 runtime / 同 model 回填缺失的
- * contextWindow，并为旧 schema 中完全缺席的 Pi runtime 回填已核实能力。这样旧远端不会
- * 把长上下文或 Pi 能力降级；已有 Pi runtime 与显式窗口仍完整由远端优先。
+ * contextWindow，并为旧 schema 中完全缺席的 Pi runtime 回填已核实能力。DeepSeek 的
+ * DSH runtime 是客户端 Harness 能力，不由远端目录单独开关；同 id 预设缺席时也从 bundled
+ * 回填。这样旧快照和尚未发布该字段的当前快照都不会遮掉 DSH；已有 runtime 与显式窗口
+ * 仍完整由远端优先。
  */
 function backfillPresetMetadata(
   primary: ProviderPreset,
@@ -237,6 +239,17 @@ function backfillPresetMetadata(
     && bundled.runtimes.pi !== undefined
   ) {
     runtimes.pi = bundled.runtimes.pi;
+    changed = true;
+  }
+  // DSH 是客户端随包 Harness，而非远端目录可独立停用的供应商能力。远端当前没有
+  // “显式禁用 DSH”的字段，因此 DeepSeek 同名预设里 runtime 缺席只能表示快照尚未携带
+  // 这段客户端元数据；窄范围回填，避免旧/当前远端把原有 DeepSeek 的 DSH 页签再次遮掉。
+  if (
+    bundled.id === 'deepseek'
+    && primary.runtimes.dsh === undefined
+    && bundled.runtimes.dsh !== undefined
+  ) {
+    runtimes.dsh = bundled.runtimes.dsh;
     changed = true;
   }
   return changed

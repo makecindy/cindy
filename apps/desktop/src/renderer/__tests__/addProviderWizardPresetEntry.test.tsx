@@ -53,6 +53,8 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
 import { createCustomProvider } from '@/lib/customProviders';
 
+const builtinApiKeyStoreSpy = vi.hoisted(() => vi.fn(async () => undefined));
+
 const anthropicProvider = {
   id: 'anthropic',
   name: 'Anthropic',
@@ -247,6 +249,7 @@ beforeEach(() => {
       // 列模型失败场景兜底(Greptile P1 回归):官方 API 预设必须靠推荐模型仍可完成。
       fetchProviderModels: vi.fn(async () => ({ ok: false, code: 'NETWORK' })),
     },
+    builtinApiKeyStore: builtinApiKeyStoreSpy,
   };
 });
 

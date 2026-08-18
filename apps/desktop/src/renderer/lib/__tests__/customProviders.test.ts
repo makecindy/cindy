@@ -635,6 +635,56 @@ describe('providerViewToCustomProviderConfig', () => {
     ]);
   });
 
+  it('round-trips DSH context and thinking default from a provider view', () => {
+    const provider = {
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      source: 'user',
+      agents: ['dsh'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        dsh: {
+          upstream: 'https://gateway.example.test/deepseek',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: {
+        dsh: [
+          {
+            id: 'gateway-pro',
+            name: 'Gateway Pro',
+            contextWindow: 640_000,
+            contextWindowExplicit: true,
+            efforts: [],
+            defaultEffort: null,
+            dshReasoningEffort: 'max',
+          },
+        ],
+      },
+      connected: false,
+      runtimeConnected: { dsh: false },
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider)).toEqual({
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [
+            {
+              id: 'gateway-pro',
+              name: 'Gateway Pro',
+              contextWindow: 640_000,
+              dshReasoningEffort: 'max',
+            },
+          ],
+        },
+      },
+    });
+  });
+
   it('preserves non-secret presence metadata for main-only runtime headers', () => {
     const provider = {
       id: 'headered-provider',
@@ -820,6 +870,30 @@ describe('custom provider credential lifecycle', () => {
     await updateCustomProvider(config, { codex: 'replacement-key' });
 
     expect(update).toHaveBeenCalledWith(config, { codex: 'replacement-key' });
+  });
+
+  it('submits a DSH-specific replacement key through the main-process mutation', async () => {
+    const update = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: { updateCustomProvider: update },
+      },
+    });
+
+    const config = {
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      auth: { method: 'apiKey' as const },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [{ id: 'gateway-pro', name: 'Gateway Pro' }],
+        },
+      },
+    };
+    await updateCustomProvider(config, { dsh: 'dsh-test-key' });
+
+    expect(update).toHaveBeenCalledWith(config, { dsh: 'dsh-test-key' });
   });
 
   it('surfaces an atomic main-process update failure', async () => {

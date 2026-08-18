@@ -12,7 +12,7 @@
 
 import { parseModelRegistry } from './modelAccessValidator.js';
 
-import { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+import { DSH_REASONING_EFFORTS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
 import type {
   Catalog,
   Provider,
@@ -86,6 +86,10 @@ function isPiModelApi(v: unknown): boolean {
   return typeof v === 'string' && (PI_MODEL_APIS as readonly string[]).includes(v);
 }
 
+function isDshReasoningEffort(v: unknown): boolean {
+  return typeof v === 'string' && (DSH_REASONING_EFFORTS as readonly string[]).includes(v);
+}
+
 function hasValidPresetReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
@@ -148,7 +152,13 @@ function validateModel(
   assert(typeof m.id === 'string' && m.id.length > 0, `model.id missing in provider '${providerId}'`);
   assert(typeof m.name === 'string' && m.name.length > 0, `model.name missing for '${m.id}'`);
   if (m.piApi !== undefined) {
-    assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
+    assert(agent === 'pi' && isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
+  }
+  if (m.dshReasoningEffort !== undefined) {
+    assert(
+      agent === 'dsh' && isDshReasoningEffort(m.dshReasoningEffort),
+      `model.dshReasoningEffort invalid for '${m.id}'`,
+    );
   }
   if (m.route !== undefined) {
     assert(
@@ -486,12 +496,17 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (typeof mm.name !== 'string' || mm.name.length === 0) return false;
       if (mm.piApi !== undefined && !isPiModelApi(mm.piApi)) return false;
       if (
+        mm.dshReasoningEffort !== undefined &&
+        (agent !== 'dsh' || !isDshReasoningEffort(mm.dshReasoningEffort))
+      ) return false;
+      if (
         mm.contextWindow !== undefined
         && (typeof mm.contextWindow !== 'number' || !Number.isFinite(mm.contextWindow) || mm.contextWindow <= 0)
       ) return false;
       if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
         return false;
       }
+      if (agent === 'dsh' && mm.supportsImageInput === true) return false;
       if (!hasValidPresetReasoningCapability(agent, mm)) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;

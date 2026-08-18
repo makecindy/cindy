@@ -15,6 +15,7 @@ import {
   getModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
+  isProviderConnectedForAgent,
   isModelSelectableForNewRoute,
   isModelDisabled,
   isProviderDisabled,
@@ -317,7 +318,10 @@ export async function isAgentOneShotRouteDisabled(
       return false;
     }
   }
-  const rail = views.filter((p) => p.connected && p.agents.includes(agent));
+  const rail = views.filter(
+    (provider) =>
+      isProviderConnectedForAgent(provider, agent) && provider.agents.includes(agent),
+  );
   const defaultId = nativeDefaultSourceId(rail, agent);
   if (!defaultId) return false;
   return rail.find((p) => p.id === defaultId)?.suspended === true;

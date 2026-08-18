@@ -19,6 +19,7 @@ import type {
   AgentKind,
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
+  DshReasoningEffort,
   OAuthProviderDescriptor,
   PiReasoningEffort,
   PiModelApi,
@@ -26,7 +27,9 @@ import type {
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
+  BUNDLED_CATALOG,
   effectivePiWireProtocol,
+  DSH_REASONING_EFFORTS,
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
@@ -44,7 +47,7 @@ export const CUSTOM_PROVIDER_ID_RE = /^[a-z0-9_-]+$/;
 // 'cindy' 是 pi models.json 里网关 provider 的保留 id;自定义 provider 撞名会让其模型
 // 既被排除出网关块又不写入原生块 → --model 校验失败,故一并保留。
 const RESERVED_IDS = new Set(['anthropic', 'openai', 'xai', 'xd', 'cindy']);
-const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'dsh'];
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
 
@@ -62,6 +65,10 @@ function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
 
 function isPiModelApi(value: unknown): value is PiModelApi {
   return typeof value === 'string' && (PI_MODEL_APIS as readonly string[]).includes(value);
+}
+
+function isDshReasoningEffort(value: unknown): value is DshReasoningEffort {
+  return typeof value === 'string' && (DSH_REASONING_EFFORTS as readonly string[]).includes(value);
 }
 
 function parseStoredPiReasoningCapability(
@@ -89,6 +96,14 @@ function parseStoredPiReasoningCapability(
     reasoningEfforts: efforts,
     ...(defaultEffort ? { reasoningDefaultEffort: defaultEffort } : {}),
   };
+}
+
+function parseStoredDshReasoningEffort(
+  agent: AgentKind,
+  model: Record<string, unknown>,
+): Partial<ProviderRuntimeModelConfig> {
+  if (agent !== 'dsh' || !isDshReasoningEffort(model.dshReasoningEffort)) return {};
+  return { dshReasoningEffort: model.dshReasoningEffort };
 }
 
 function parseStoredModelRoute(
@@ -189,7 +204,13 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.requestPath !== undefined && !isProviderRequestPath(r.requestPath)) {
     return invalid(`runtime '${agent}' requestPath invalid`);
   }
+  if (agent === 'dsh' && r.requestPath !== undefined) {
+    return invalid("runtime 'dsh' does not support requestPath");
+  }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
+  if (agent === 'dsh' && r.models.length === 0) {
+    return invalid("runtime 'dsh' requires at least one model");
+  }
   for (const m of r.models) {
     if (!m || typeof m !== 'object') return invalid(`runtime '${agent}' model must be an object`);
     const mm = m as Record<string, unknown>;
@@ -213,10 +234,16 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
+    if (agent === 'dsh' && mm.supportsImageInput !== undefined) {
+      return invalid("runtime 'dsh' does not support image input");
+    }
     if (mm.piApi !== undefined && (agent !== 'pi' || !isPiModelApi(mm.piApi))) {
       return invalid(`runtime '${agent}' model.piApi invalid`);
     }
     if (mm.route !== undefined) {
+      if (agent === 'dsh') {
+        return invalid("runtime 'dsh' does not support per-model routes");
+      }
       if (!mm.route || typeof mm.route !== 'object' || Array.isArray(mm.route)) {
         return invalid(`runtime '${agent}' model.route must be an object`);
       }
@@ -280,8 +307,14 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     } else if (mm.reasoningEfforts !== undefined || mm.reasoningDefaultEffort !== undefined) {
       return invalid(`runtime '${agent}' reasoning metadata requires reasoning=true`);
     }
+    if (mm.dshReasoningEffort !== undefined) {
+      if (agent !== 'dsh' || !isDshReasoningEffort(mm.dshReasoningEffort)) {
+        return invalid(`runtime '${agent}' model.dshReasoningEffort invalid`);
+      }
+    }
   }
   if (r.wireProtocol !== undefined) {
+    if (agent === 'dsh') return invalid("runtime 'dsh' does not support wireProtocol");
     // Pi 是多协议 harness；Codex 也具备 Responses / Chat / Anthropic bridge。
     // Claude Code 只接受原生 Anthropic Messages。
     if (!isAllowedWireProtocol(agent, r.wireProtocol)) {
@@ -289,6 +322,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
   }
   if (r.headers !== undefined) {
+    if (agent === 'dsh') return invalid("runtime 'dsh' does not support custom headers");
     if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) {
       return invalid(`runtime '${agent}' headers must be an object`);
     }
@@ -299,6 +333,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
   }
   if (r.modelsUrl !== undefined) {
+    if (agent === 'dsh') return invalid("runtime 'dsh' does not support modelsUrl");
     if (typeof r.modelsUrl !== 'string' || r.modelsUrl.trim().length === 0) {
       return invalid(`runtime '${agent}' modelsUrl must be a non-empty string`);
     }
@@ -456,7 +491,8 @@ export function validateCustomProviderConfig(
   if (typeof c.id !== 'string' || c.id.length === 0) return invalid('id required');
   if (c.id.length > MAX_ID_LEN) return invalid(`id too long (max ${MAX_ID_LEN})`);
   if (!CUSTOM_PROVIDER_ID_RE.test(c.id)) return invalid('id must match /^[a-z0-9_-]+$/');
-  if (RESERVED_IDS.has(c.id) && !(c.id === 'xai' && options.allowLegacyXai === true)) {
+  const allowedLegacyCollision = c.id === 'xai' && options.allowLegacyXai === true;
+  if (RESERVED_IDS.has(c.id) && !allowedLegacyCollision) {
     return invalid(`id '${c.id}' is reserved`);
   }
 
@@ -479,6 +515,13 @@ export function validateCustomProviderConfig(
     const r = validateRuntime(k, rts[k]);
     if (!r.ok) return r;
   }
+  if (
+    rts.dsh !== undefined &&
+    c.auth !== undefined &&
+    (!c.auth || typeof c.auth !== 'object' || (c.auth as { method?: unknown }).method !== 'apiKey')
+  ) {
+    return invalid("runtime 'dsh' requires API key authentication");
+  }
   return validateNoAuthLoopbackBoundary(
     c.auth as CustomProviderConfig['auth'],
     rts as Partial<Record<AgentKind, CustomProviderRuntimeConfig>>,
@@ -496,7 +539,7 @@ function normalizeRuntime(
       id: m.id.trim(),
       name: m.name.trim(),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
-      ...(m.route
+      ...(agent !== 'dsh' && m.route
         ? {
             route: {
               baseUrl: m.route.baseUrl.trim(),
@@ -509,7 +552,7 @@ function normalizeRuntime(
         : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-      ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+      ...(agent !== 'dsh' && m.supportsImageInput === true ? { supportsImageInput: true } : {}),
       ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
         ? {
             reasoning: true,
@@ -519,6 +562,9 @@ function normalizeRuntime(
               : {}),
           }
         : {}),
+      ...(agent === 'dsh' && m.dshReasoningEffort
+        ? { dshReasoningEffort: m.dshReasoningEffort }
+        : {}),
     }))
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
@@ -526,11 +572,11 @@ function normalizeRuntime(
       return true;
     });
   const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
-  if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
-  if (agent !== 'pi' && rt.requestPath && rt.requestPath.trim()) {
+  if (agent !== 'dsh' && rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
+  if ((agent === 'claude-code' || agent === 'codex') && rt.requestPath && rt.requestPath.trim()) {
     out.requestPath = rt.requestPath.trim();
   }
-  if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
+  if (agent !== 'dsh' && rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
   if (agent === 'pi' && rt.piCatalogProviderId) out.piCatalogProviderId = rt.piCatalogProviderId;
   return out;
 }
@@ -686,7 +732,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
           )
           .map((m) => {
-            const route = parseStoredModelRoute(agent, baseUrl, m.route);
+            const route = agent === 'dsh' ? undefined : parseStoredModelRoute(agent, baseUrl, m.route);
             return {
               id: String(m.id),
               name: String(m.name ?? ''),
@@ -698,8 +744,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                 ? { contextWindow: m.contextWindow }
                 : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...(agent !== 'dsh' && m.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...parseStoredPiReasoningCapability(agent, m),
+              ...parseStoredDshReasoningEffort(agent, m),
             };
           })
       : [];
@@ -708,6 +755,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       models,
     };
     if (
+      agent !== 'dsh' &&
       typeof r.wireProtocol === 'string' &&
       (r.wireProtocol === 'anthropic-messages' ||
         r.wireProtocol === 'openai-responses' ||
@@ -715,13 +763,15 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     ) {
       entry.wireProtocol = r.wireProtocol;
     }
-    if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
+    if ((agent === 'claude-code' || agent === 'codex') && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;
     }
-    if (r.headers && typeof r.headers === 'object' && !Array.isArray(r.headers)) {
+    if (agent !== 'dsh' && r.headers && typeof r.headers === 'object' && !Array.isArray(r.headers)) {
       entry.headers = r.headers as Record<string, string>;
     }
-    if (typeof r.modelsUrl === 'string' && r.modelsUrl.length > 0) entry.modelsUrl = r.modelsUrl;
+    if (agent !== 'dsh' && typeof r.modelsUrl === 'string' && r.modelsUrl.length > 0) {
+      entry.modelsUrl = r.modelsUrl;
+    }
     if (
       agent === 'pi' &&
       typeof r.piCatalogProviderId === 'string' &&
@@ -737,6 +787,28 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
 function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderConfig {
   const auth = parseAuth(row.auth);
   const runtimes = parseRuntimes(row.runtimes);
+  // DSH was added to the existing DeepSeek preset after some users had already saved it.
+  // The stable Pi catalog marker identifies that preset without guessing from its display name.
+  // Project the bundled DSH runtime on read; the next ordinary edit persists it with the row.
+  if (!runtimes.dsh && runtimes.pi?.piCatalogProviderId === 'deepseek') {
+    const presetDsh = BUNDLED_CATALOG.presets
+      ?.find((preset) => preset.id === 'deepseek')
+      ?.runtimes.dsh;
+    if (presetDsh) {
+      runtimes.dsh = {
+        baseUrl: presetDsh.baseUrl,
+        models: presetDsh.models.map((model) => ({
+          id: model.id,
+          name: model.name,
+          ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+          ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
+          ...(model.dshReasoningEffort
+            ? { dshReasoningEffort: model.dshReasoningEffort }
+            : {}),
+        })),
+      };
+    }
+  }
   // #527 之前保存的远程 auth:none 记录保留原始表单数据，供设置页展示和修复。
   // buildUserProvider 会把不满足当前 loopback 边界的 runtime 标成 disabled；路由解析
   // 一律拒绝 disabled 描述符，因此不会把历史远程 endpoint 重新解释成 API-key 路由。

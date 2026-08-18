@@ -516,7 +516,11 @@ import {
   recordTurnSpend,
 } from '../usageBroadcaster.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import {
+  dbToMakerAgentKind,
+  isMakerAgentKindWire,
+  makerToDbAgentKind,
+} from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import {
@@ -11596,11 +11600,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!msg.createOpts || typeof msg.createOpts !== 'object') {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts required');
     }
-    if (
-      msg.createOpts.agentKind !== 'claude-code' &&
-      msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
-    ) {
+    if (!isMakerAgentKindWire(msg.createOpts.agentKind)) {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };

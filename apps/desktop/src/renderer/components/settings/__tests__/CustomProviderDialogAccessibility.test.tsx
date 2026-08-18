@@ -355,6 +355,116 @@ describe('CustomProviderDialog accessibility', () => {
     ).toBeUndefined();
   });
 
+  it('shows a dedicated DSH page with model context and reasoning strength, then saves them', async () => {
+    const initial: CustomProviderConfig = {
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [
+            {
+              id: 'gateway-pro',
+              name: 'Gateway Pro',
+              contextWindow: 640_000,
+              dshReasoningEffort: 'low',
+            },
+          ],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('stored-dsh-key');
+
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+
+    expect(
+      screen
+        .getByRole('tab', { name: 'settings.providers.custom.protocol.dsh' })
+        .getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(
+      screen.getByText('settings.providers.custom.fields.dshReasoningEffort'),
+    ).not.toBeNull();
+    expect(screen.getByDisplayValue('640000')).not.toBeNull();
+    expect(screen.queryByText('settings.providers.custom.fields.requestPath')).toBeNull();
+    expect(screen.queryByText('settings.providers.custom.fields.headers')).toBeNull();
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'settings.providers.custom.dshReasoningEffort.max',
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[0].runtimes.dsh).toEqual({
+      baseUrl: 'https://gateway.example.test/deepseek',
+      models: [
+        {
+          id: 'gateway-pro',
+          name: 'Gateway Pro',
+          contextWindow: 640_000,
+          dshReasoningEffort: 'max',
+        },
+      ],
+    });
+  });
+
+  it('saves DSH non-secret settings before its dedicated key is configured', async () => {
+    const initial: CustomProviderConfig = {
+      id: 'dsh-without-key',
+      name: 'DSH without key',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [
+            {
+              id: 'gateway-pro',
+              name: 'Gateway Pro',
+              contextWindow: 640_000,
+              dshReasoningEffort: 'max',
+            },
+          ],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitFor(() =>
+      expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalledWith('dsh-without-key', 'dsh'),
+    );
+    expect(screen.getByText('settings.providers.custom.errors.dshApiKeyRequired')).not.toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledWith(
+      {
+        id: 'dsh-without-key',
+        name: 'DSH without key',
+        runtimes: {
+          dsh: {
+            baseUrl: 'https://gateway.example.test/deepseek',
+            models: [
+              {
+                id: 'gateway-pro',
+                name: 'Gateway Pro',
+                contextWindow: 640_000,
+                dshReasoningEffort: 'max',
+              },
+            ],
+          },
+        },
+      },
+      {},
+    );
+  });
+
   it('submits an explicitly edited key as the endpoint replacement', async () => {
     const initial: CustomProviderConfig = {
       id: 'existing-provider',

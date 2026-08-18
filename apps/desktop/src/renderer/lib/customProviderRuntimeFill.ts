@@ -6,6 +6,7 @@ import type {
 import { savedCustomProviderModelShape } from '@/../shared/piRuntimeInitialization';
 
 export type RuntimeFillAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
+type RuntimeKeyAgent = RuntimeFillAgent | Extract<AgentKind, 'dsh'>;
 export interface RuntimeFillHeaderRow {
   name: string;
   value: string;
@@ -275,17 +276,20 @@ export function cloneRuntimeFillDraft(draft: RuntimeFillDraft): RuntimeFillDraft
   };
 }
 
-export function mergeHydratedRuntimeKeys<T extends RuntimeFillDraft>(
-  drafts: Record<RuntimeFillAgent, T>,
-  fetched: Partial<Record<RuntimeFillAgent, string>>,
+export function mergeHydratedRuntimeKeys<
+  T extends RuntimeFillDraft,
+  Agent extends RuntimeKeyAgent,
+>(
+  drafts: Record<Agent, T>,
+  fetched: Partial<Record<Agent, string>>,
   savedTargets: Partial<
-    Record<RuntimeFillAgent, Pick<RuntimeFillDraft, 'baseUrl' | 'modelsUrl'>>
+    Record<Agent, Pick<RuntimeFillDraft, 'baseUrl' | 'modelsUrl'>>
   >,
-  revisionAtStart: Record<RuntimeFillAgent, number>,
-  currentRevision: Record<RuntimeFillAgent, number>,
-): Record<RuntimeFillAgent, T> {
+  revisionAtStart: Record<Agent, number>,
+  currentRevision: Record<Agent, number>,
+): Record<Agent, T> {
   const next = { ...drafts };
-  for (const agent of RUNTIME_FILL_AGENTS) {
+  for (const agent of Object.keys(drafts) as Agent[]) {
     const apiKey = fetched[agent];
     const savedTarget = savedTargets[agent];
     if (

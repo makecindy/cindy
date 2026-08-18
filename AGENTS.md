@@ -29,6 +29,9 @@
 - 启动、调试或验证 Desktop 时，必须先读 `docs/dev-rules/desktop-development.md`。
 - 修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、导航或 Electron
   特权能力前，必须先读 `docs/dev-rules/electron-security-and-process-boundaries.md`。
+- 修改 DSH 的供应商/runtime 配置、凭证解析、模型/任务持久化、transport、进程启动或 Agent
+  composition 前，必须先读 `docs/dsh-integration.md`；保持“沿用原 DeepSeek 供应商、Cindy 只做
+  呈现与双向传输入口、DSH 拥有内部执行与插件配置、text-only”的边界。
 - 新增或修改 Desktop 独立窗口、辅助窗口或弹出型 `BrowserWindow` 前，必须遵守
   `docs/dev-rules/electron-security-and-process-boundaries.md` 的「独立辅助窗口统一生命周期
   基线」：复用既有控制器／基础设施，不得另造平行的预热、就绪握手、隐藏复用与崩溃恢复

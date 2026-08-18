@@ -202,6 +202,9 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
     );
     return;
   }
+  if (fileName === '0091_amazing_blur.sql') {
+    ensureColumnSync(db, 'sessions', 'codex_plan_json', 'text');
+  }
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
@@ -281,6 +284,9 @@ async function applyMigrationScript(target: DbClient, fileName: string): Promise
       'integer DEFAULT 0 NOT NULL',
     );
     return;
+  }
+  if (fileName === '0091_amazing_blur.sql') {
+    await ensureColumn(target, 'sessions', 'codex_plan_json', 'text');
   }
 }
 

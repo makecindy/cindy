@@ -25,6 +25,9 @@ const h = vi.hoisted(() => ({
   relocate: vi.fn(async (): Promise<{ persistedSdkSessionId: string | null }> => ({
     persistedSdkSessionId: null,
   })),
+  ensureDialogueWorkspaceDir: vi.fn(() => '/app-data/dialogues/dsh-created'),
+  ensureProjectGitInitialized: vi.fn(async () => undefined),
+  readGitSafetySettings: vi.fn(() => ({ autoSnapshotEnabled: false })),
   tapWindowBroadcast: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
@@ -46,7 +49,15 @@ vi.mock('../../../logger', () => ({
 vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
-vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
+vi.mock('../../dialogueWorkspace', () => ({
+  ensureDialogueWorkspaceDir: h.ensureDialogueWorkspaceDir,
+}));
+vi.mock('../../../git-snapshot/projectGitBootstrap', () => ({
+  ensureProjectGitInitialized: h.ensureProjectGitInitialized,
+}));
+vi.mock('../../../maker-host/git-safety-settings-store', () => ({
+  readGitSafetySettings: h.readGitSafetySettings,
+}));
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
@@ -65,6 +76,7 @@ vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) =
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
+vi.mock('../../../cindy-brain/index.js', () => ({ notifyGhostSessionEvent: vi.fn() }));
 
 import { registerSessionIpc } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
@@ -109,6 +121,7 @@ function createDb(): void {
       orca_role TEXT,
       remote_host_id TEXT,
       codex_history_has_product_prompt INTEGER,
+      codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
       summary TEXT,
@@ -137,11 +150,15 @@ function createDb(): void {
   insert.run('cc-local', '/old/dir', 'cc', null, 'dialogue');
   insert.run('codex-local', '/old/dir', 'codex', null, 'dialogue');
   insert.run('cc-remote', '/remote/dir', 'cc', 'host-1', 'project');
-  sqlite.prepare(`
+  sqlite
+    .prepare(
+      `
     INSERT INTO sessions (
       id, working_dir, agent_kind, remote_host_id, workspace_kind, source, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, 'review', 1, 1)
-  `).run('review-local', '/review/dir', 'codex', null, 'dialogue');
+  `,
+    )
+    .run('review-local', '/review/dir', 'codex', null, 'dialogue');
   h.sqlite = sqlite;
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
 }
@@ -150,6 +167,12 @@ async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise
   const handler = h.handlers.get('local-db:sessions:update');
   if (!handler) throw new Error('update handler not registered');
   return handler({}, id, patch);
+}
+
+async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
+  const handler = h.handlers.get('local-db:sessions:create');
+  if (!handler) throw new Error('create handler not registered');
+  return handler({}, body);
 }
 
 beforeEach(() => {
@@ -167,6 +190,36 @@ afterEach(() => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('accepts DSH task creation and persists the DSH agent kind', async () => {
+    const created = await invokeCreate({
+      id: 'dsh-created',
+      agentKind: 'dsh',
+      workspaceKind: 'dialogue',
+      model: 'deepseek-v4-pro',
+    });
+
+    expect(created).toMatchObject({
+      id: 'dsh-created',
+      agentKind: 'dsh',
+      model: 'deepseek-v4-pro',
+      workspaceKind: 'dialogue',
+    });
+    expect(
+      h
+        .sqlite!.prepare(
+          'SELECT agent_kind AS agentKind, workspace_kind AS workspaceKind FROM sessions WHERE id = ?',
+        )
+        .get('dsh-created'),
+    ).toEqual({ agentKind: 'dsh', workspaceKind: 'dialogue' });
+    expect(h.ensureProjectGitInitialized).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'dsh-created',
+        workspaceKind: 'dialogue',
+        source: 'local-db:sessions:create',
+      }),
+    );
+  });
+
   it('does not resurrect a deleted task through the generic status writer', async () => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
 

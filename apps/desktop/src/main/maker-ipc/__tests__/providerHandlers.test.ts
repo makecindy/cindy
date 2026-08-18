@@ -948,6 +948,43 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(storeCustomProviderKey).toHaveBeenCalledWith('pi-native', 'pi', 'pi-secret');
   });
 
+  it('persists DSH settings without a key and stages its dedicated key when supplied', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const storeCustomProviderKey = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({ storeCustomProviderKey }));
+    const config: CustomProviderConfig = {
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [
+            {
+              id: 'gateway-pro',
+              name: 'Gateway Pro',
+              contextWindow: 640_000,
+              dshReasoningEffort: 'max',
+            },
+          ],
+        },
+      },
+    };
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config),
+    ).resolves.toEqual({ ok: true });
+    expect(storeCustomProviderKey).not.toHaveBeenCalled();
+    expect((await listCustomProviders())[0]?.runtimes.dsh).toEqual(config.runtimes.dsh);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, { dsh: 'dsh-test-key' }),
+    ).resolves.toEqual({ ok: true });
+    expect(storeCustomProviderKey).toHaveBeenCalledWith('dsh-gateway', 'dsh', 'dsh-test-key');
+    expect((await listCustomProviders())[0]?.runtimes.dsh).toEqual(config.runtimes.dsh);
+  });
+
   it('encrypts runtime headers and never persists their values in SQLite', async () => {
     mountDb();
     const harness = new IpcHarness();

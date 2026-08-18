@@ -96,6 +96,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     expect(validateCustomProviderConfig({ ...valid, id: 'xai' }, { allowLegacyXai: true }).ok).toBe(
       true,
     );
+    expect(validateCustomProviderConfig({ ...valid, id: 'deepseek' }).ok).toBe(true);
     // 'cindy' 撞 pi 网关 provider id,必须保留
     expect(validateCustomProviderConfig({ ...valid, id: 'cindy' }).ok).toBe(false);
   });
@@ -180,6 +181,64 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         }).ok,
       ).toBe(true);
     }
+  });
+
+  it('accepts a DSH runtime with model context and a dedicated reasoning default', () => {
+    const config: CustomProviderConfig = {
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [
+            {
+              id: 'gateway-pro',
+              name: 'Gateway Pro',
+              contextWindow: 640_000,
+              dshReasoningEffort: 'low',
+            },
+          ],
+        },
+      },
+    };
+
+    expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+    for (const runtime of [
+      { ...config.runtimes.dsh!, requestPath: '/chat/completions' },
+      { ...config.runtimes.dsh!, wireProtocol: 'openai-chat' },
+      { ...config.runtimes.dsh!, headers: { 'X-Unsupported': 'value' } },
+      { ...config.runtimes.dsh!, modelsUrl: 'https://gateway.example.test/models' },
+      {
+        ...config.runtimes.dsh!,
+        models: [{ id: 'image', name: 'Image', supportsImageInput: true }],
+      },
+      {
+        ...config.runtimes.dsh!,
+        models: [
+          {
+            id: 'bad-effort',
+            name: 'Bad effort',
+            dshReasoningEffort: 'medium' as never,
+          },
+        ],
+      },
+      {
+        ...config.runtimes.dsh!,
+        models: [
+          {
+            id: 'route',
+            name: 'Route',
+            route: { baseUrl: 'https://gateway.example.test/deepseek', wireProtocol: 'openai-chat' },
+          },
+        ],
+      },
+    ]) {
+      expect(validateCustomProviderConfig({ ...config, runtimes: { dsh: runtime } }).ok).toBe(false);
+    }
+    expect(
+      validateCustomProviderConfig({ ...config, auth: { method: 'none' } }).ok,
+    ).toBe(false);
   });
 
   it('accepts a same-origin model route and rejects unsafe route variants', () => {
@@ -365,6 +424,40 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     await deleteCustomProvider('openrouter');
     expect(await listCustomProviders()).toEqual([]);
     expect(await getCustomProvider('openrouter')).toBeNull();
+  });
+
+  it('round-trips DSH model context and reasoning default', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'dsh-gateway',
+      name: 'DSH Gateway',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [
+            {
+              id: 'gateway-pro',
+              name: 'Gateway Pro',
+              contextWindow: 640_000,
+              dshReasoningEffort: 'low',
+            },
+          ],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('dsh-gateway'))?.runtimes.dsh).toEqual({
+      baseUrl: 'https://gateway.example.test/deepseek',
+      models: [
+        {
+          id: 'gateway-pro',
+          name: 'Gateway Pro',
+          contextWindow: 640_000,
+          dshReasoningEffort: 'low',
+        },
+      ],
+    });
   });
 
   it('applies discovered models only while the saved provider still matches its snapshot', async () => {

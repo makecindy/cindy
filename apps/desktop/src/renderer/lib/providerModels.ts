@@ -212,7 +212,7 @@ export function selectVisibleModels(params: {
   deviceCcModels: ModelDescriptor[];
   deviceCodexModels: ModelDescriptor[];
   devicePiModels?: ModelDescriptor[];
-  /** DSH owns a fixed DeepSeek route, so this is always capability-backed. */
+  /** DSH models from the controlled device; local models come from the live provider catalog. */
   deviceDshModels?: ModelDescriptor[];
   /**
    * SSH 远程会话(remoteHostId)传 true:订阅直连模型(chatgpt/ / xai/)不再被过滤,
@@ -250,10 +250,10 @@ export function selectVisibleModels(params: {
   const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
   const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
   const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'));
-  // DSH does not use the generic provider catalogue at send time. Reading its
-  // models from capabilities keeps the selector usable before/without a
-  // generic DeepSeek provider has been configured.
-  const dsh = pass(deviceDshModels);
+  // DSH has a dedicated Harness transport, but its configured model list is
+  // still provider-owned. Read local custom DSH models live so saving the DSH
+  // tab immediately makes the configured context window/model selectable.
+  const dsh = pass(deviceId ? deviceDshModels : deriveModelsFromProviders(providers, 'dsh'));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   if (agentKind === 'pi') return pi;
@@ -281,13 +281,15 @@ export function resolveVisibleModelAgentKind(params: {
   ccModels: ModelDescriptor[];
   codexModels: ModelDescriptor[];
   piModels?: ModelDescriptor[];
+  dshModels?: ModelDescriptor[];
   providers: ProviderView[];
 }): AgentKind | null {
-  const { modelId, agentKind, ccModels, codexModels, piModels = [], providers } = params;
+  const { modelId, agentKind, ccModels, codexModels, piModels = [], dshModels = [], providers } = params;
   if (agentKind) return agentKind;
   if (ccModels.some((model) => model.id === modelId)) return 'claude-code';
   if (codexModels.some((model) => model.id === modelId)) return 'codex';
   if (piModels.some((model) => model.id === modelId)) return 'pi';
+  if (dshModels.some((model) => model.id === modelId)) return 'dsh';
   if (providers.some((provider) => providerOffersModel(provider, modelId, 'claude-code'))) {
     return 'claude-code';
   }
@@ -296,6 +298,9 @@ export function resolveVisibleModelAgentKind(params: {
   }
   if (providers.some((provider) => providerOffersModel(provider, modelId, 'pi'))) {
     return 'pi';
+  }
+  if (providers.some((provider) => providerOffersModel(provider, modelId, 'dsh'))) {
+    return 'dsh';
   }
   return null;
 }

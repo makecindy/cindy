@@ -1,7 +1,7 @@
 /**
  * CustomProviderDialog —— 自定义供应商「新建 / 编辑」表单弹窗（按 .pen pQrpu/Fxstc 还原）。
  *
- * 结构：顶部「显示名称」(供应商身份,跨 runtime 共享) + Runtime 分段 Tab(Claude Code / Codex)。
+ * 结构：顶部「显示名称」(供应商身份,跨 runtime 共享) + Runtime 分段 Tab(Claude Code / Codex / Pi / DSH)。
  * **每个 Tab 是独立配置**：基础 URL / API 密钥 / 模型 / 请求头 都属于当前 Tab 的那个 runtime。
  * 只配需要的那个,也可两个都配(该来源同时供两端)。至少配一个 Tab。
  *
@@ -25,6 +25,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { DshMark } from '@/components/icons/DshMark';
 import { PiMark } from '@/components/icons/PiMark';
 import {
   CustomProviderRuntimeFillOverlay,
@@ -40,6 +41,7 @@ import {
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
   setCustomProviderModelReasoningEffort,
+  setCustomProviderModelDshReasoningEffort,
   setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
   type RuntimeKeys,
@@ -72,12 +74,14 @@ import {
   runtimeFillHasUnreviewedConflict,
   runtimeFillSelectedTargetChanged,
   runtimeFillTargetAgents,
+  type RuntimeFillAgent,
   type RuntimeFillDraft,
   type RuntimeFillField,
 } from '@/lib/customProviderRuntimeFill';
 
 import {
   isProviderRequestPath,
+  DSH_REASONING_EFFORTS,
   PI_REASONING_EFFORTS,
   presetDisplayName,
   sortPresetsForRegion,
@@ -85,20 +89,23 @@ import {
 import type {
   AgentKind,
   CustomProviderConfig,
+  DshReasoningEffort,
   ProviderPreset,
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { SettingsTextInput } from './SettingsTextInput';
 import { CURRENT_CINDY_REGION } from '@/../shared/brandRegion';
+import { providerCredentialTargetsMatch } from '@/../shared/providerCredentialTarget';
 
 /**
- * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
- * 走 pi 原生 provider 直连(不过 anthropic-compat 代理),故 pi tab 额外提供显式 api 选择器。
+ * 本面板配置 claude / codex / pi / dsh 四个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
+ * 走 pi 原生 provider 直连(不过 anthropic-compat 代理),故 pi tab 额外提供显式 api 选择器；
+ * DSH 则固定 DeepSeek Harness 契约，不显示通用 wire、请求路径或请求头字段。
  */
-type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
+type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi' | 'dsh'>;
 
-const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
+const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi', 'dsh'];
 
 const VISIBLE_AGENTS: DialogAgentKind[] = AGENTS;
 
@@ -130,6 +137,11 @@ const TAB_META: Record<
     labelKey: 'settings.providers.custom.protocol.pi',
     helpKey: 'settings.providers.custom.protocol.piDesc',
   },
+  dsh: {
+    Mark: DshMark,
+    labelKey: 'settings.providers.custom.protocol.dsh',
+    helpKey: 'settings.providers.custom.protocol.dshDesc',
+  },
 };
 
 /** pi 默认 wire protocol:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。 */
@@ -138,7 +150,7 @@ const PI_DEFAULT_WIRE: ProviderWireProtocol = 'openai-chat';
 /** 某 agent runtime 的默认 wire protocol。 */
 function defaultWireFor(agent: DialogAgentKind): ProviderWireProtocol {
   if (agent === 'claude-code') return 'anthropic-messages';
-  if (agent === 'pi') return PI_DEFAULT_WIRE;
+  if (agent === 'pi' || agent === 'dsh') return PI_DEFAULT_WIRE;
   return 'openai-responses';
 }
 
@@ -184,12 +196,26 @@ interface TestState {
 const IDLE_TEST: TestState = { status: 'idle' };
 
 function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
+  const dshModels: ModelRow[] = [
+    {
+      id: 'deepseek-v4-flash',
+      name: 'DeepSeek V4 Flash',
+      contextWindow: 1_000_000,
+      dshReasoningEffort: 'high',
+    },
+    {
+      id: 'deepseek-v4-pro',
+      name: 'DeepSeek V4 Pro',
+      contextWindow: 1_000_000,
+      dshReasoningEffort: 'high',
+    },
+  ];
   return {
     baseUrl: '',
     requestPath: '',
     apiKey: '',
     wireProtocol: defaultWireFor(agent),
-    models: [{ id: '', name: '' }],
+    models: agent === 'dsh' ? dshModels : [{ id: '', name: '' }],
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
     piCatalogProviderId: undefined,
@@ -201,6 +227,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
     'claude-code': emptyRuntime('claude-code'),
     codex: emptyRuntime('codex'),
     pi: emptyRuntime('pi'),
+    dsh: emptyRuntime('dsh'),
   };
   if (initial) {
     for (const a of AGENTS) {
@@ -208,15 +235,16 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
       if (!rc) continue;
       out[a] = {
         baseUrl: rc.baseUrl,
-        requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
+        requestPath: a === 'claude-code' || a === 'codex' ? (rc.requestPath ?? '') : '',
         apiKey: '',
         wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
-        models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
+        models: rc.models.length ? rc.models.map((m) => ({ ...m })) : emptyRuntime(a).models,
         headers:
+          a !== 'dsh' &&
           rc.headers && Object.keys(rc.headers).length > 0
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
             : [{ name: '', value: '' }],
-        modelsUrl: rc.modelsUrl ?? '',
+        modelsUrl: a === 'dsh' ? '' : (rc.modelsUrl ?? ''),
         piCatalogProviderId: rc.piCatalogProviderId,
         headersState: rc.headersState,
       };
@@ -366,6 +394,7 @@ export function CustomProviderDialog({
     'claude-code': false,
     codex: false,
     pi: false,
+    dsh: false,
   });
   const [saving, setSaving] = useState(false);
   // 鉴权形态：API key（默认）/ OAuth / 无鉴权（本机或受信自托管代理）。
@@ -411,12 +440,14 @@ export function CustomProviderDialog({
     'claude-code': IDLE_TEST,
     codex: IDLE_TEST,
     pi: IDLE_TEST,
+    dsh: IDLE_TEST,
   });
   // per-runtime「获取模型列表」进行中标记（按钮瞬态 spinner）。
   const [fetchingModels, setFetchingModels] = useState<Record<DialogAgentKind, boolean>>({
     'claude-code': false,
     codex: false,
     pi: false,
+    dsh: false,
   });
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [runtimeFill, setRuntimeFill] = useState<RuntimeFillDialogState | null>(null);
@@ -427,6 +458,7 @@ export function CustomProviderDialog({
     'claude-code': false,
     codex: false,
     pi: false,
+    dsh: false,
   });
   const runtimeFillTriggerRef = useRef<HTMLButtonElement>(null);
   const modelPickerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -542,6 +574,7 @@ export function CustomProviderDialog({
     'claude-code': '',
     codex: '',
     pi: '',
+    dsh: '',
   });
   // A late safeStorage response must not overwrite a key edited or copied while
   // hydration was in flight. Revisions only change for explicit key mutations.
@@ -549,6 +582,7 @@ export function CustomProviderDialog({
     'claude-code': 0,
     codex: 0,
     pi: 0,
+    dsh: 0,
   });
 
   // 已存供应商在编辑态的基线快照:端点/协议/鉴权模式取自已存配置,apiKey 取回填值,
@@ -568,8 +602,8 @@ export function CustomProviderDialog({
             : 'apiKey';
       return {
         baseUrl: rc.baseUrl,
-        requestPath: agent === 'pi' ? '' : (rc.requestPath ?? ''),
-        modelsUrl: rc.modelsUrl ?? '',
+        requestPath: agent === 'claude-code' || agent === 'codex' ? (rc.requestPath ?? '') : '',
+        modelsUrl: agent === 'dsh' ? '' : (rc.modelsUrl ?? ''),
         wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
@@ -648,21 +682,21 @@ export function CustomProviderDialog({
           }
           next[a] = {
             baseUrl: rc.baseUrl,
-            requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
+            requestPath: a === 'claude-code' || a === 'codex' ? (rc.requestPath ?? '') : '',
             apiKey: prev[a].apiKey, // 已填的 key 保留
             wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
             models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
             headers:
-              rc.headers && Object.keys(rc.headers).length > 0
+              a !== 'dsh' && rc.headers && Object.keys(rc.headers).length > 0
                 ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
                 : [{ name: '', value: '' }],
-            modelsUrl: rc.modelsUrl ?? '',
+            modelsUrl: a === 'dsh' ? '' : (rc.modelsUrl ?? ''),
             piCatalogProviderId: rc.piCatalogProviderId,
           };
         }
         return next;
       });
-      setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
+      setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST, dsh: IDLE_TEST });
       // 预设整体替换所有 runtime 的 models 数组(含清空未声明的 runtime),旧行号
       // 全部失效——不清空的话陈旧草稿(如 -5)会挂在无关的新行、或挂在被预设清空
       // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
@@ -684,19 +718,21 @@ export function CustomProviderDialog({
     }
     let cancelled = false;
     setKeyHydrationReady(false);
-    setKeyHydrationFailed({ 'claude-code': false, codex: false, pi: false });
+    setKeyHydrationFailed({ 'claude-code': false, codex: false, pi: false, dsh: false });
     const revisionAtStart = { ...keyEditRevisionRef.current };
     void (async () => {
       const nextHas: Record<DialogAgentKind, boolean> = {
         'claude-code': false,
         codex: false,
         pi: false,
+        dsh: false,
       };
       const fetched: Partial<Record<DialogAgentKind, string>> = {};
       const failed: Record<DialogAgentKind, boolean> = {
         'claude-code': false,
         codex: false,
         pi: false,
+        dsh: false,
       };
       for (const a of AGENTS) {
         if (!initial.runtimes[a]) continue;
@@ -709,6 +745,28 @@ export function CustomProviderDialog({
         if (k) {
           nextHas[a] = true;
           fetched[a] = k;
+        }
+      }
+      // Existing DeepSeek preset rows predate the DSH key slot. Mirror a key in the form only
+      // when it belongs to this same provider and authenticates to the exact same endpoint.
+      // A later explicit edit still writes a dedicated DSH key; untouched inherited keys do not.
+      if (!fetched.dsh && initial.runtimes.dsh) {
+        for (const candidate of ['codex', 'pi', 'claude-code'] as const) {
+          const candidateRuntime = initial.runtimes[candidate];
+          const candidateKey = fetched[candidate];
+          if (
+            candidateRuntime &&
+            candidateKey &&
+            providerCredentialTargetsMatch(
+              initial.runtimes.dsh.baseUrl,
+              candidateRuntime.baseUrl,
+            )
+          ) {
+            fetched.dsh = candidateKey;
+            nextHas.dsh = true;
+            failed.dsh = false;
+            break;
+          }
         }
       }
       if (cancelled) return;
@@ -768,13 +826,17 @@ export function CustomProviderDialog({
       toast.info(t('settings.providers.custom.runtimeFill.modelsBusy'));
       return;
     }
+    if (activeTab === 'dsh') return;
     const source = activeTab;
     const usesApiKey = authModeRef.current === 'apiKey';
     if (usesApiKey && !keyHydrationReady) {
       toast.info(t('settings.providers.custom.runtimeFill.loadingKeys'));
       return;
     }
-    if (usesApiKey && AGENTS.some((agent) => keyHydrationFailed[agent])) {
+    if (
+      usesApiKey &&
+      (['claude-code', 'codex', 'pi'] as const).some((agent) => keyHydrationFailed[agent])
+    ) {
       toast.info(t('settings.providers.custom.runtimeFill.keysUnavailable'));
       return;
     }
@@ -913,7 +975,7 @@ export function CustomProviderDialog({
       setWindowDrafts((drafts) =>
         Object.fromEntries(
           Object.entries(drafts).filter(
-            ([key]) => !modelFilled.has(key.split(':')[0] as DialogAgentKind),
+            ([key]) => !modelFilled.has(key.split(':')[0] as RuntimeFillAgent),
           ),
         ),
       );
@@ -947,7 +1009,7 @@ export function CustomProviderDialog({
     else applyRuntimeFill();
   }, [applyRuntimeFill, runtimeFill]);
 
-  const toggleRuntimeFillField = useCallback((agent: DialogAgentKind, field: RuntimeFillField) => {
+  const toggleRuntimeFillField = useCallback((agent: RuntimeFillAgent, field: RuntimeFillField) => {
     setRuntimeFill((prev) => {
       if (!prev) return prev;
       const target = prev.targets.find((candidate) => candidate.agent === agent);
@@ -985,6 +1047,7 @@ export function CustomProviderDialog({
   /** 测试当前 Tab 的表单值（未保存也能测；key 仅内存透传给 main，不落盘）。 */
   const handleTest = useCallback(async () => {
     const agent = activeTab;
+    if (agent === 'dsh') return;
     const rf = rt[agent];
     const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
     const baseUrl = rf.baseUrl.trim();
@@ -1077,6 +1140,7 @@ export function CustomProviderDialog({
   /** 获取模型列表：用当前 Tab 表单值 GET 列模型端点（key 仅内存透传），成功后开勾选弹层。 */
   const handleFetchModels = useCallback(async () => {
     const agent = activeTab;
+    if (agent === 'dsh') return;
     const rf = rt[agent];
     if (
       modelFetchInFlightRef.current ||
@@ -1369,8 +1433,7 @@ export function CustomProviderDialog({
       if (isCommittableWindowText(draftText)) continue;
       const sep = draftKey.lastIndexOf(':');
       const draftAgent = draftKey.slice(0, sep) as AgentKind;
-      // Custom-provider runtime editing has no DSH route contract yet.
-      if (draftAgent === 'dsh' || !VISIBLE_AGENTS.includes(draftAgent)) continue;
+      if (!VISIBLE_AGENTS.includes(draftAgent)) continue;
       // 该 runtime 未配置 baseUrl、或该行 id/name 为空:两者都会在下面序列化时
       // 被丢弃,不会写进最终配置,草稿再非法也不该挡住一个原本有效的保存
       // (review P1)。
@@ -1390,6 +1453,11 @@ export function CustomProviderDialog({
     for (const a of VISIBLE_AGENTS) {
       const rf = rt[a];
       if (!rf.baseUrl.trim()) continue; // 该 runtime 未配置
+      if (a === 'dsh' && authMode !== 'apiKey') {
+        setActiveTab(a);
+        toast.error(t('settings.providers.custom.errors.dshApiKeyRequired'));
+        return;
+      }
       try {
         const u = new URL(rf.baseUrl.trim());
         if (u.protocol !== 'http:' && u.protocol !== 'https:') {
@@ -1412,11 +1480,11 @@ export function CustomProviderDialog({
           id: m.id.trim(),
           name: m.name.trim(),
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
-          ...(m.route ? { route: { ...m.route } } : {}),
+          ...(a !== 'dsh' && m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-          ...(m.reasoning === true && m.reasoningEfforts?.length
+          ...(a !== 'dsh' && m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+          ...(a === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
             ? {
                 reasoning: true,
                 reasoningEfforts: [...m.reasoningEfforts],
@@ -1425,9 +1493,10 @@ export function CustomProviderDialog({
                   : {}),
               }
             : {}),
+          ...(a === 'dsh' ? { dshReasoningEffort: m.dshReasoningEffort ?? 'high' } : {}),
         }))
         .filter((m) => m.id && m.name);
-      const requestPath = a === 'pi' ? '' : rf.requestPath.trim();
+      const requestPath = a === 'claude-code' || a === 'codex' ? rf.requestPath.trim() : '';
       if (requestPath && !isProviderRequestPath(requestPath)) {
         setActiveTab(a);
         toast.error(t('settings.providers.custom.errors.requestPathInvalid'));
@@ -1439,25 +1508,28 @@ export function CustomProviderDialog({
         toast.error(t('settings.providers.custom.errors.modelRequired'));
         return;
       }
+      // DSH 的端点、模型和会话默认值均是非敏感 override，应允许先保存。旧版 DeepSeek
+      // 预设的同端点 key 由 main 在严格同供应商、同 credential target 的边界内兼容读取。
       const headers: Record<string, string> = {};
-      for (const h of rf.headers) {
-        const n = h.name.trim();
-        if (n) headers[n] = h.value.trim();
+      if (a !== 'dsh') {
+        for (const h of rf.headers) {
+          const n = h.name.trim();
+          if (n) headers[n] = h.value.trim();
+        }
       }
       const savedHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
       const defaultProtocol = defaultWireFor(a);
-      const savedWireProtocol = customProviderWireProtocolForSave(
-        a,
-        rf.wireProtocol,
-        defaultProtocol,
-      );
+      const savedWireProtocol =
+        a === 'dsh'
+          ? undefined
+          : customProviderWireProtocolForSave(a, rf.wireProtocol, defaultProtocol);
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
         ...(requestPath ? { requestPath } : {}),
         ...(savedWireProtocol ? { wireProtocol: savedWireProtocol } : {}),
         models,
         ...(Object.keys(savedHeaders).length > 0 ? { headers: savedHeaders } : {}),
-        ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
+        ...(a !== 'dsh' && rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
         ...(a === 'pi' && rf.piCatalogProviderId
           ? { piCatalogProviderId: rf.piCatalogProviderId }
           : {}),
@@ -1728,13 +1800,20 @@ export function CustomProviderDialog({
                   type="button"
                   onClick={() => {
                     changeAuthMode(m);
-                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
+                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST, dsh: IDLE_TEST });
                   }}
+                  disabled={m !== 'apiKey' && rt.dsh.baseUrl.trim().length > 0}
+                  title={
+                    m !== 'apiKey' && rt.dsh.baseUrl.trim().length > 0
+                      ? t('settings.providers.custom.errors.dshApiKeyRequired')
+                      : undefined
+                  }
                   className={cn(
                     'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
                     authMode === m
                       ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
                       : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
+                    m !== 'apiKey' && rt.dsh.baseUrl.trim().length > 0 && 'cursor-not-allowed opacity-50',
                   )}
                   style={
                     authMode === m ? { backgroundColor: 'var(--surface-elevated)' } : undefined
@@ -1808,7 +1887,7 @@ export function CustomProviderDialog({
             )}
           </div>
 
-          {/* Runtime 分段 Tab：Claude Code 与 Codex 各自维护端点、协议、模型与凭证。 */}
+          {/* Runtime 分段 Tab：每个 runtime 各自维护端点、模型与凭证；DSH 固定其 Harness 协议。 */}
           <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.fields.protocols')}</FieldLabel>
             <div
@@ -1857,6 +1936,11 @@ export function CustomProviderDialog({
             <span className="text-12 leading-snug text-[var(--text-tertiary)]">
               {t(TAB_META[activeTab].helpKey)}
             </span>
+            {activeTab === 'dsh' && authMode !== 'apiKey' && (
+              <span className="text-12 leading-snug text-[var(--error-fg)]">
+                {t('settings.providers.custom.errors.dshApiKeyRequired')}
+              </span>
+            )}
           </div>
 
           {/* 当前 Tab 的独立配置面板 */}
@@ -1922,25 +2006,31 @@ export function CustomProviderDialog({
             <div className="flex flex-col gap-[7px]">
               <div className="flex items-center justify-between gap-3">
                 <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>
-                <button
-                  ref={runtimeFillTriggerRef}
-                  type="button"
-                  onClick={openRuntimeFill}
-                  className="shrink-0 rounded-full px-1 py-0.5 text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  {t('settings.providers.custom.runtimeFill.action')}
-                </button>
+                {activeTab !== 'dsh' && (
+                  <button
+                    ref={runtimeFillTriggerRef}
+                    type="button"
+                    onClick={openRuntimeFill}
+                    className="shrink-0 rounded-full px-1 py-0.5 text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  >
+                    {t('settings.providers.custom.runtimeFill.action')}
+                  </button>
+                )}
               </div>
               <SettingsTextInput
                 surface="ivory"
                 value={f.baseUrl}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
-                placeholder={t('settings.providers.custom.fields.baseUrlPlaceholder')}
+                placeholder={
+                  activeTab === 'dsh'
+                    ? t('settings.providers.custom.fields.dshBaseUrlPlaceholder')
+                    : t('settings.providers.custom.fields.baseUrlPlaceholder')
+                }
               />
             </div>
 
             {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
-            {activeTab !== 'pi' && (
+            {(activeTab === 'claude-code' || activeTab === 'codex') && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
                 <SettingsTextInput
@@ -1990,7 +2080,11 @@ export function CustomProviderDialog({
                   secret
                 />
                 <span className="text-12 text-[var(--text-tertiary)]">
-                  {t('settings.providers.custom.fields.apiKeyHelp')}
+                  {t(
+                    activeTab === 'dsh'
+                      ? 'settings.providers.custom.errors.dshApiKeyRequired'
+                      : 'settings.providers.custom.fields.apiKeyHelp',
+                  )}
                 </span>
               </div>
             )}
@@ -2016,7 +2110,7 @@ export function CustomProviderDialog({
               </div>
             )}
 
-            {(authMode !== 'oauth' || showAdvanced) && (
+            {(activeTab === 'dsh' || authMode !== 'oauth' || showAdvanced) && (
               <>
                 {/* 模型 */}
                 <div className="flex flex-col gap-2">
@@ -2102,9 +2196,11 @@ export function CustomProviderDialog({
                               }),
                             }));
                           }}
-                          placeholder={t(
-                            'settings.providers.custom.fields.modelContextWindowPlaceholder',
-                          )}
+                          placeholder={
+                            activeTab === 'dsh'
+                              ? '1,000,000'
+                              : t('settings.providers.custom.fields.modelContextWindowPlaceholder')
+                          }
                         />
                       </div>
                       <button
@@ -2140,6 +2236,52 @@ export function CustomProviderDialog({
                       >
                         <Trash2 size={16} />
                       </button>
+                      {activeTab === 'dsh' && (
+                        <div className="flex basis-full flex-col gap-1.5 pr-12 text-[var(--settings-section-desc)]">
+                          <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
+                            {t('settings.providers.custom.fields.dshReasoningEffort')}
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {DSH_REASONING_EFFORTS.map((effort) => {
+                              const selectedDshEffort: DshReasoningEffort =
+                                m.dshReasoningEffort ?? 'high';
+                              const selected = selectedDshEffort === effort;
+                              return (
+                                <button
+                                  key={effort}
+                                  type="button"
+                                  onClick={() =>
+                                    patch(activeTab, (x) => ({
+                                      ...x,
+                                      models: setCustomProviderModelDshReasoningEffort(
+                                        x.models,
+                                        i,
+                                        effort,
+                                      ),
+                                    }))
+                                  }
+                                  className={cn(
+                                    'rounded-full border px-2.5 py-1 text-11 font-medium transition-colors',
+                                    selected
+                                      ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
+                                      : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
+                                  )}
+                                  style={
+                                    selected
+                                      ? { backgroundColor: 'var(--surface-elevated)' }
+                                      : undefined
+                                  }
+                                >
+                                  {t(`settings.providers.custom.dshReasoningEffort.${effort}`)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <span className="text-11 leading-snug">
+                            {t('settings.providers.custom.fields.dshReasoningEffortHelp')}
+                          </span>
+                        </div>
+                      )}
                       {activeTab === 'pi' && (
                         <div className="flex basis-full flex-col gap-2 pr-12 text-[var(--settings-section-desc)]">
                           <label className="flex cursor-pointer items-start gap-2">
@@ -2244,7 +2386,19 @@ export function CustomProviderDialog({
                       // 追加在末尾不移动既有行号,别行草稿无需动(review P1)。
                       patch(activeTab, (x) => ({
                         ...x,
-                        models: [...x.models, { id: '', name: '' }],
+                        models: [
+                          ...x.models,
+                          ...(activeTab === 'dsh'
+                            ? [
+                                {
+                                  id: '',
+                                  name: '',
+                                  contextWindow: 1_000_000,
+                                  dshReasoningEffort: 'high' as const,
+                                },
+                              ]
+                            : [{ id: '', name: '' }]),
+                        ],
                       }))
                     }
                     className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
@@ -2254,8 +2408,8 @@ export function CustomProviderDialog({
                   </button>
                 </div>
 
-                {/* 请求头（可选） */}
-                <div className="flex flex-col gap-2">
+                {/* 请求头（可选）；DSH 固定由 Harness 处理鉴权，不允许任意转发头。 */}
+                {activeTab !== 'dsh' && <div className="flex flex-col gap-2">
                   <FieldLabel>{t('settings.providers.custom.fields.headers')}</FieldLabel>
                   {f.headers.map((h, i) => (
                     <div key={i} className="flex items-center gap-2">
@@ -2313,13 +2467,13 @@ export function CustomProviderDialog({
                     <Plus size={14} className="text-[var(--settings-section-desc)]" />
                     {t('settings.providers.custom.fields.addHeader')}
                   </button>
-                </div>
+                </div>}
               </>
             )}
 
             {/* 测试连接：用当前 Tab 表单值发最小探测请求（与真实会话同路由口径，未保存也能测）。
                 OAuth 形态隐藏——登录前无凭证可测，保存并授权后可在供应商行验证。 */}
-            {authMode !== 'oauth' && (
+            {authMode !== 'oauth' && activeTab !== 'dsh' && (
               <div className="flex min-h-[32px] flex-wrap items-center gap-2.5">
                 <button
                   type="button"

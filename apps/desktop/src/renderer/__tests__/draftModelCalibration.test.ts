@@ -761,4 +761,20 @@ describe('resolveDraftSessionProviderId', () => {
       }),
     ).toBe('xd');
   });
+
+  it('DSH 即使只有默认内置来源也显式固化 providerId，供 lazy create 精确取 key', () => {
+    const deepseek = provider('deepseek', true, {
+      dsh: [model('deepseek-v4-flash')],
+    });
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [deepseek],
+        agent: 'dsh',
+        model: 'deepseek-v4-flash',
+        explicitProviderId: null,
+        effectiveProviderId: 'deepseek',
+      }),
+    ).toBe('deepseek');
+  });
 });

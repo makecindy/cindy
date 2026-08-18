@@ -22,6 +22,7 @@ import type {
   AgentKind,
   CatalogModel,
   CustomProviderConfig,
+  DshReasoningEffort,
   PiReasoningEffort,
   ProviderView,
   ProviderRuntimeModelConfig,
@@ -161,6 +162,17 @@ export function setCustomProviderModelReasoningEffort(
   });
 }
 
+/** DSH owns a per-model session default; `off` explicitly disables thinking. */
+export function setCustomProviderModelDshReasoningEffort(
+  models: readonly ProviderRuntimeModelConfig[],
+  targetIndex: number,
+  effort: DshReasoningEffort,
+): ProviderRuntimeModelConfig[] {
+  return models.map((model, index) =>
+    index === targetIndex ? { ...model, dshReasoningEffort: effort } : model,
+  );
+}
+
 /**
  * 运行期 CatalogModel 已把缺省 contextWindow 物化为通用默认值；转回用户配置时不能把该
  * 默认快照写成 override，否则未来默认升级后老配置无法跟随。判据以 contextWindowExplicit
@@ -178,6 +190,7 @@ export function customProviderModelConfigFromCatalogModel(
     | 'supportsImageInput'
     | 'piApi'
     | 'route'
+    | 'dshReasoningEffort'
   > &
     Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
@@ -192,6 +205,9 @@ export function customProviderModelConfigFromCatalogModel(
     id: model.id,
     name: model.name,
     ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
+    ...(agent === 'dsh' && model.dshReasoningEffort
+      ? { dshReasoningEffort: model.dshReasoningEffort }
+      : {}),
     ...(model.route ? { route: { ...model.route } } : {}),
     ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }

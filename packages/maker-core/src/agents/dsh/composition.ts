@@ -7,9 +7,29 @@ const js = (expression: string): JsExpression => ({ expression });
 export function buildDshCordisConfig(options: DshCompositionOptions): DshCordisConfig {
   if (options.provider !== 'deepseek-official') throw new Error(`dsh only supports provider deepseek-official (got ${options.provider})`);
   if (options.apiKeyEnv !== 'DEEPSEEK_API_KEY') throw new Error('dsh deepseek adapter requires DEEPSEEK_API_KEY');
+  const reasoningEffort = options.reasoningEffort ?? 'max';
+  const deepseekConfig = {
+    ...(options.baseUrl?.trim() ? { baseURL: options.baseUrl.trim() } : {}),
+    thinking: reasoningEffort === 'off' ? 'disabled' : 'enabled',
+    reasoningEffort,
+    ...(options.models?.length
+      ? {
+          models: options.models.map((model) => ({
+            id: model.id,
+            ...(model.name?.trim() ? { name: model.name.trim() } : {}),
+            ...(typeof model.contextWindow === 'number' && model.contextWindow > 0
+              ? { contextWindow: model.contextWindow }
+              : {}),
+            ...(typeof model.maxTokens === 'number' && model.maxTokens > 0
+              ? { maxTokens: model.maxTokens }
+              : {}),
+          })),
+        }
+      : {}),
+  };
   const config: unknown[] = [
     { id: 'cindy-dsh-bridge', name: './cindy-dsh-bridge.mjs' },
-    { id: 'llm-deepseek', name: '@deepseek-ai/dsh-llm-deepseek', config: { thinking: 'enabled', reasoningEffort: 'max' } },
+    { id: 'llm-deepseek', name: '@deepseek-ai/dsh-llm-deepseek', config: deepseekConfig },
     { id: 'subprocess', name: '@deepseek-ai/dsh-subprocess-local' },
     ...(options.bashLocal !== false ? [{ id: 'bash', name: '@deepseek-ai/dsh-bash-local', config: { cwd: js('process.env.DSH_CWD ?? process.cwd()'), timeoutMs: 60000 } }] : []),
     { id: 'agent-spine', name: '@deepseek-ai/dsh-agent-spine-demo', config: { persona: js("process.env.DSH_SYSTEM_PROMPT ?? 'You are a coding agent.'"), workspaceContext: false, skills: { enabled: false }, toolBash: { enableRunInBackground: false }, toolJobs: false } },
@@ -51,5 +71,9 @@ function scalar(value: unknown): string {
   // YAML parses `:` and `?` in an unquoted expression as structure, not code.
   if (isJs(value)) return `!!js ${JSON.stringify(value.expression)}`;
   if (value === null) return 'null'; if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  const text = String(value); return /^[A-Za-z0-9_./@-]+$/.test(text) ? text : JSON.stringify(text);
+  // Package names beginning with `@` are YAML reserved indicators, so the
+  // renderer must not emit any string as a plain scalar. JSON string syntax is
+  // valid YAML and also protects future plugin ids from YAML's other implicit
+  // scalar conversions.
+  return JSON.stringify(String(value));
 }

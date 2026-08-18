@@ -21,4 +21,31 @@ describe('ChatInput model source switching wiring', () => {
     expect(selectorBlock).toContain('sourceDisconnected={selectedSourceDisconnected}');
     expect(selectorBlock).toContain('reselectEmitsChange={selectedSourceDisconnected}');
   });
+
+  it('blocks DSH attachments and browser screenshots before building a send payload', () => {
+    const dshGuard = chatInputSource.indexOf("currentModelAgentKind === 'dsh'");
+    const filesToSend = chatInputSource.indexOf('const filesToSend =', dshGuard);
+
+    expect(dshGuard).toBeGreaterThanOrEqual(0);
+    expect(filesToSend).toBeGreaterThan(dshGuard);
+    expect(chatInputSource.slice(dshGuard, filesToSend)).toContain(
+      'attachmentsForSend.length > 0 || commentsForSend.length > 0',
+    );
+    expect(chatInputSource.slice(dshGuard, filesToSend)).toContain(
+      "toast.warning(t('newChat.dshTextOnly'))",
+    );
+  });
+
+  it('reads and writes DSH model/source preferences through the DSH draft slot', () => {
+    expect(chatInputSource).toContain("getDraft().lastByVendor[vendorKey ?? 'cc']");
+
+    const syncStart = chatInputSource.indexOf('const syncSessionDraftModelPrefs');
+    const syncEnd = chatInputSource.indexOf('const persistFastModeChange', syncStart);
+    expect(syncStart).toBeGreaterThanOrEqual(0);
+    expect(syncEnd).toBeGreaterThan(syncStart);
+    const syncBlock = chatInputSource.slice(syncStart, syncEnd);
+    expect(syncBlock).not.toContain("if (agentKind === 'dsh') return");
+    expect(syncBlock).toContain('selectableVendorForAgentKind(agentKind)');
+    expect(syncBlock).toContain('{ model: modelId, providerId: activeProviderId ?? null }');
+  });
 });

@@ -70,8 +70,8 @@ function registryEffortMetadata(
   modelId: string,
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  // DSH owns its small fixed DeepSeek model contract and does not consume the
-  // cross-provider Model Access registry.
+  // Pi and DSH do not consume the cross-provider Model Access registry. DSH
+  // keeps its per-provider thinking default in the runtime model config.
   if (agent === 'pi' || agent === 'dsh' || !registry) return undefined;
 
   const candidates = new Set([modelId]);
@@ -133,7 +133,10 @@ function toCatalogModel(
     id: m.id,
     name: m.name,
     ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
-    ...(m.route ? { route: { ...m.route } } : {}),
+    ...(agent === 'dsh' && m.dshReasoningEffort
+      ? { dshReasoningEffort: m.dshReasoningEffort }
+      : {}),
+    ...(agent !== 'dsh' && m.route ? { route: { ...m.route } } : {}),
     contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
     // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
     // 那是「仅用于展示」的保守默认,不能拿去收敛运行期上报的窗口。
@@ -225,13 +228,13 @@ export function buildUserProvider(
     routing[agent] = toRouting(
       agent,
       rt.baseUrl,
-      rt.requestPath,
-      rt.headers,
-      rt.headersState,
+      agent === 'dsh' ? undefined : rt.requestPath,
+      agent === 'dsh' ? undefined : rt.headers,
+      agent === 'dsh' ? undefined : rt.headersState,
       strategy,
-      rt.modelsUrl,
-      rt.wireProtocol,
-      rt.piCatalogProviderId,
+      agent === 'dsh' ? undefined : rt.modelsUrl,
+      agent === 'dsh' ? undefined : rt.wireProtocol,
+      agent === 'dsh' ? undefined : rt.piCatalogProviderId,
     );
     models[agent] = rt.models.map((m) =>
       toCatalogModel(m, config.id, agent, options.modelRegistry),

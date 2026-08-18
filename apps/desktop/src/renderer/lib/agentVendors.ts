@@ -13,6 +13,7 @@
  */
 
 import type { MakerVendor } from './ccAgent.types';
+import type { AgentKind } from '@cindy/model-providers';
 
 export const SELECTABLE_VENDORS = ['cc', 'codex', 'pi', 'dsh'] as const satisfies readonly MakerVendor[];
 
@@ -21,4 +22,9 @@ export type SelectableVendor = (typeof SELECTABLE_VENDORS)[number];
 /** localStorage / IPC 等外部输入的引擎值校验(不认识的一律交给调用方回退默认)。 */
 export function isSelectableVendor(value: unknown): value is SelectableVendor {
   return typeof value === 'string' && (SELECTABLE_VENDORS as readonly string[]).includes(value);
+}
+
+/** AgentKind uses the runtime id `claude-code`; draft preferences use the UI vendor id `cc`. */
+export function selectableVendorForAgentKind(agentKind: AgentKind): SelectableVendor {
+  return agentKind === 'claude-code' ? 'cc' : agentKind;
 }

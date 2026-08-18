@@ -29,6 +29,9 @@ vi.mock('../logger.js', () => ({
   }),
 }));
 
+// This fixture exercises the CN-only xdt-maker user-data migration path.
+vi.mock('../../shared/brandRegion.js', () => ({ CURRENT_CINDY_REGION: 'cn' }));
+
 import {
   importExternalCodexSessions,
   importExternalCodexMessagesForSession,

@@ -125,7 +125,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
 
   it('has exactly the built-in providers in stable order', () => {
     // 顺序契约:决定选择器分段顺序与 deriveAvailableModels first-wins 优先级。
-    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini', 'deepseek']);
+    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
     expect(BUNDLED_CATALOG.providers.every((p) => p.source === 'builtin')).toBe(true);
   });
 
@@ -208,7 +208,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(() => parseCatalog(bad)).toThrow(/icon/);
   });
 
-  it('accepts the four portable piApi values and rejects unknown PI protocols', () => {
+  it('accepts the four portable piApi values only on Pi models and rejects unknown protocols', () => {
     for (const piApi of [
       'anthropic-messages',
       'openai-responses',
@@ -217,14 +217,19 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     ] as const) {
       const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
       catalog.providers.find((provider) => provider.id === 'xai')!
-        .models['claude-code']![0]!.piApi = piApi;
+        .models.pi![0]!.piApi = piApi;
       expect(() => parseCatalog(catalog)).not.toThrow();
     }
 
     const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     (bad.providers.find((provider) => provider.id === 'xai')!
-      .models['claude-code']![0] as unknown as Record<string, unknown>).piApi = 'claude-v1';
+      .models.pi![0] as unknown as Record<string, unknown>).piApi = 'claude-v1';
     expect(() => parseCatalog(bad)).toThrow(/piApi/);
+
+    const wrongAgent = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    (wrongAgent.providers.find((provider) => provider.id === 'xai')!
+      .models['claude-code']![0] as unknown as Record<string, unknown>).piApi = 'anthropic-messages';
+    expect(() => parseCatalog(wrongAgent)).toThrow(/piApi/);
   });
 
   it('ships custom-provider presets (OSS 热更的第三方模板)', () => {

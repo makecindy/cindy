@@ -385,8 +385,8 @@ export function AddProviderWizard({
       ),
     [providers],
   );
-  // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目,今天只有 gemini 图像来源):
-  // 已连接的不再进向导;声明了媒体清单才展示(纯占位条目没有可配置的能力面)。
+  // 内置 API-key 渠道目前只承载媒体来源（例如 Gemini 图像来源）。对话 runtime
+  // 仍由下面的供应商预设创建，不能在这里投影成第二个平行供应商。
   const builtinApiKeyChoices = useMemo(
     () =>
       providers.filter(
@@ -827,7 +827,7 @@ export function AddProviderWizard({
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
   /**
-   * 内置 API-key 供应商(如 Gemini):保存 = 把 key 写进该供应商在册的 safeStorage 键
+   * 内置媒体 API-key 供应商(如 Gemini):保存 = 把 key 写进该供应商在册的 safeStorage 键
    * (providerSecrets SSoT),连接态(provider-service 的 builtinApiKeyConnected)与
    * 图像通道 ready 都以「key 已存」为准 —— 无自定义供应商落库、无模型拉取步。
    */
@@ -909,6 +909,9 @@ export function AddProviderWizard({
                       ? { reasoningDefaultEffort: presetModel.reasoningDefaultEffort }
                       : {}),
                   }
+                : {}),
+              ...(agent === 'dsh' && presetModel?.dshReasoningEffort
+                ? { dshReasoningEffort: presetModel.dshReasoningEffort }
                 : {}),
             };
           });

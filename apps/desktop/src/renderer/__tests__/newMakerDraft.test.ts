@@ -77,6 +77,19 @@ describe('newMakerDraft store', () => {
     expect(m2.getPersistedVendorModel('pi')).toBe('chatgpt/gpt-5.6');
   });
 
+  it('persists an explicit DSH model choice across reload', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('dsh', {
+      model: 'deepseek-chat',
+      providerId: 'deepseek-2',
+    });
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(m2.getDraft().modelChosenByVendor.dsh).toBe(true);
+    expect(m2.getPersistedVendorModel('dsh')).toBe('deepseek-chat');
+    expect(m2.getDraft().lastByVendor.dsh.providerId).toBe('deepseek-2');
+  });
+
   it('Effort 按模型记忆:get/set + 同值短路 + 持久化', async () => {
     const m1 = await loadModule();
     expect(m1.getEffortForModel('claude-opus-4-7')).toBeUndefined();
