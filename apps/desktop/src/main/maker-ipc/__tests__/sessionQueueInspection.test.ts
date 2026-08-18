@@ -180,6 +180,38 @@ describe('projectSessionQueueForInspection', () => {
     expect(loadPersistedCounts).toHaveBeenCalledWith(['cold']);
   });
 
+  it('isolates one live queue inspection failure without dropping healthy sessions', async () => {
+    const loadPersistedCounts = vi.fn<SessionQueueCountDeps['loadPersistedCounts']>(
+      async () => ({ cold: 3 }),
+    );
+
+    await expect(
+      resolveSessionQueueCounts(['broken-live', 'cold', 'healthy-live'], {
+        getLiveQueue: (sessionId) => {
+          if (sessionId === 'broken-live') throw new Error('coordinator unavailable');
+          if (sessionId === 'healthy-live') return [inspectionEntry('healthy-live-1')];
+          return null;
+        },
+        loadPersistedCounts,
+      }),
+    ).resolves.toEqual({ 'broken-live': 0, cold: 3, 'healthy-live': 1 });
+    expect(loadPersistedCounts).toHaveBeenCalledWith(['cold']);
+  });
+
+  it('does not reuse a persisted count when the live recheck fails after the DB read', async () => {
+    let reads = 0;
+    await expect(
+      resolveSessionQueueCounts(['raced-broken'], {
+        getLiveQueue: () => {
+          reads += 1;
+          if (reads === 1) return null;
+          throw new Error('live restore failed');
+        },
+        loadPersistedCounts: async () => ({ 'raced-broken': 4 }),
+      }),
+    ).resolves.toEqual({ 'raced-broken': 0 });
+  });
+
   it('propagates persisted count failures instead of reporting zero', async () => {
     await expect(
       resolveSessionQueueCounts(['cold'], {

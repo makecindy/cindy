@@ -71,6 +71,11 @@ type PendingRemotePrecreatedWorktreeTarget =
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
 type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawReleaseNotes;
+type WorkLouderCodexSettingsPatch =
+  import('../shared/workLouderCodex').WorkLouderCodexSettingsPatch;
+type WorkLouderCodexState = import('../shared/workLouderCodex').WorkLouderCodexState;
+type WorkLouderCodexRendererAction =
+  import('../shared/workLouderCodex').WorkLouderCodexRendererAction;
 
 interface NewMakerWorktreeBranchPreferenceSnapshot {
   baseRepo: string;
@@ -1807,6 +1812,28 @@ interface ElectronAPI {
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
     onWindowsCloseBehaviorRequested: (callback: () => void) => () => void;
     notifyWindowsCloseBehaviorPromptShown: () => void;
+  };
+
+  workLouderCodex: {
+    getState: () => Promise<WorkLouderCodexState>;
+    setSettings: (patch: WorkLouderCodexSettingsPatch) => Promise<WorkLouderCodexState>;
+    resetSettings: () => Promise<WorkLouderCodexState>;
+    openInputMonitoringSettings: () => Promise<void>;
+    /** Re-check whether the device is still attached; the SDK never says so itself. */
+    probe: () => Promise<WorkLouderCodexState>;
+    /**
+     * Hand the sidebar's task list to the agent keys. Main cannot see tasks on
+     * linked machines, nor which machine filter is applied.
+     */
+    publishTasks: (
+      tasks: import('../shared/workLouderCodex').WorkLouderCodexPublishedTask[],
+    ) => Promise<void>;
+    setLayoutPreviewActive: (active: boolean) => Promise<void>;
+    onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
+    onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
+    onPreviewInput: (
+      callback: (input: import('../shared/workLouderCodex').WorkLouderCodexPreviewInput) => void,
+    ) => () => void;
   };
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────

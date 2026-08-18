@@ -12,7 +12,7 @@
  *   4. 「不指定」同时清除该行全部键(Codex 含 effort,不留孤儿);
  *   5. 护栏三行写对 patch key;总开关关闭时其余护栏行禁用(值保留);
  *   6. codexRestartDeferred=true 时提示延迟生效;
- *   7. 两张卡的 DefaultOverrideControls 按各自键组判 isCustomized、恢复只写本卡键。
+ *   7. 两个模型行各自常驻还原入口，护栏卡独立还原；每个入口只写自己的键。
  *   8. Codex 未选中模型行复用全局模型预设适配器,可直接修改 effort 并原子选中。
  */
 
@@ -138,13 +138,20 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
   }),
 }));
 
-// 两卡各一个恢复入口:按卡片键组判 isCustomized,恢复只写本卡键。
+// 两个模型行 + 护栏卡各一个恢复入口；模型行即使未自定义也常驻禁用。
 vi.mock('../DefaultOverrideControls', () => ({
-  DefaultOverrideControls: (props: { isCustomized: boolean; onReset: () => void }) => (
+  DefaultOverrideControls: (props: {
+    isCustomized: boolean;
+    disabled?: boolean;
+    alwaysVisible?: boolean;
+    onReset: () => void;
+  }) => (
     <button
       type="button"
       data-testid="override-reset"
       data-customized={String(props.isCustomized)}
+      data-always-visible={String(props.alwaysVisible === true)}
+      disabled={props.disabled || !props.isCustomized}
       onClick={props.onReset}
     />
   ),
@@ -500,23 +507,22 @@ describe('SubagentModelSection Codex row', () => {
     render(<SubagentModelSection />);
     const selector = await screen.findByTestId('model-selector-codex');
     expect(selector.dataset.sourcesEnabled).toBe('true');
-    // Codex 派发通道有 effort 维度(agents.default_subagent_reasoning_effort):
-    // 配置列必须开启,effort 回显已存档位。
+    // Codex 锁定路由有 effort 维度：配置列必须开启，effort 回显已存档位。
     expect(selector.dataset.configurationEnabled).toBe('true');
     expect(selector.dataset.modelMemory).toBe('true');
     expect(selector.dataset.effort).toBe('high');
     expect(selector.dataset.currentProvider).toBe('openai');
     expect(selector.dataset.model).toBe('gpt-5.6-terra');
-    // Chat 桥接的 Codex 供应商模型必须隐藏:原生 spawn 按 Codex 自身目录解析,
-    // 桥接模型必被拒(greptile review P1)。Claude 行不受此约束。
-    expect(selector.dataset.excludeBridged).toBe('true');
+    // 锁定路由由 Proxy 在子线程请求上应用实际 Provider / wire 协议，因此不得隐藏
+    // DeepSeek、Kimi、GLM 等 Chat 兼容桥模型。
+    expect(selector.dataset.excludeBridged).toBe('false');
     const claudeSelector = screen.getByTestId('model-selector-cc');
     expect(claudeSelector.dataset.excludeBridged).toBe('false');
   });
 
   it('persists the (model, providerId, effort) triple atomically in one patch', async () => {
-    // 上游只设 default_subagent_model 时子代理 effort 会被重置为目标模型目录默认档,
-    // 所以选模型必须成对写 effort:未存档位时解析为目录 defaultEffort。
+    // Proxy 会成对应用锁定模型与 effort，所以选模型时必须一并保存 effort；未存档位时
+    // 解析为目录 defaultEffort。
     render(<SubagentModelSection />);
     fireEvent.click(await screen.findByTestId('codex:pick-provider-row'));
     await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
@@ -834,8 +840,8 @@ describe('SubagentModelSection guardrails card', () => {
   });
 });
 
-describe('SubagentModelSection per-card override controls', () => {
-  it('scopes isCustomized per card key group', async () => {
+describe('SubagentModelSection per-row override controls', () => {
+  it('keeps both model reset controls visible and scopes isCustomized per row', async () => {
     settingsGet.mockResolvedValue(
       makeState({
         codexSubagentsEnabled: false,
@@ -845,18 +851,23 @@ describe('SubagentModelSection per-card override controls', () => {
     );
     render(<SubagentModelSection />);
     const controls = await screen.findAllByTestId('override-reset');
-    expect(controls).toHaveLength(2);
-    // 第一个在模型卡(Claude 行),第二个在护栏卡头部。
+    expect(controls).toHaveLength(3);
     expect(controls[0]?.dataset.customized).toBe('false');
-    expect(controls[1]?.dataset.customized).toBe('true');
+    expect((controls[0] as HTMLButtonElement).disabled).toBe(true);
+    expect(controls[0]?.dataset.alwaysVisible).toBe('true');
+    expect(controls[1]?.dataset.customized).toBe('false');
+    expect((controls[1] as HTMLButtonElement).disabled).toBe(true);
+    expect(controls[1]?.dataset.alwaysVisible).toBe('true');
+    expect(controls[2]?.dataset.customized).toBe('true');
   });
 
-  it('restores only the model-card keys from its own reset control', async () => {
+  it('restores only the Claude model-row keys', async () => {
     settingsGet.mockResolvedValue(
       makeState({
+        claudeCode: 'claude-opus-4-6',
+        claudeCodeProviderId: 'anthropic',
         codex: 'gpt-5.6-terra',
-        codexEffort: 'high',
-        customizedKeys: ['codex', 'codexEffort'],
+        customizedKeys: ['claudeCode', 'claudeCodeProviderId', 'codex'],
         isCustomized: true,
       }),
     );
@@ -867,6 +878,25 @@ describe('SubagentModelSection per-card override controls', () => {
     expect(settingsSet).toHaveBeenCalledWith({
       claudeCode: null,
       claudeCodeProviderId: null,
+    });
+  });
+
+  it('restores only the Codex model-row keys', async () => {
+    settingsGet.mockResolvedValue(
+      makeState({
+        claudeCode: 'claude-opus-4-6',
+        codex: 'gpt-5.6-terra',
+        codexProviderId: 'openai',
+        codexEffort: 'high',
+        customizedKeys: ['claudeCode', 'codex', 'codexProviderId', 'codexEffort'],
+        isCustomized: true,
+      }),
+    );
+    render(<SubagentModelSection />);
+    const controls = await screen.findAllByTestId('override-reset');
+    fireEvent.click(controls[1] as HTMLElement);
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({
       codex: null,
       codexProviderId: null,
       codexEffort: null,
@@ -889,7 +919,7 @@ describe('SubagentModelSection per-card override controls', () => {
     );
     render(<SubagentModelSection />);
     const controls = await screen.findAllByTestId('override-reset');
-    fireEvent.click(controls[1] as HTMLElement);
+    fireEvent.click(controls[2] as HTMLElement);
     await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
     expect(settingsSet).toHaveBeenCalledWith({
       codexSubagentsEnabled: true,

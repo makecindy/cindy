@@ -140,15 +140,24 @@ describe('account provider readiness wiring', () => {
       bootstrapSource.indexOf('ensureCurrentAccountProviderReadiness()', waitFn),
     ).toBeGreaterThan(waitFn);
 
+    const failed = bootstrapSource.indexOf("dbClientTakeover.mode === 'failed'");
+    const failedResume = bootstrapSource.indexOf('await resumeInputDeviceTaskSlots();', failed);
+    const failedReturn = bootstrapSource.indexOf('return;', failedResume);
+    expect(failed).toBeGreaterThanOrEqual(0);
+    expect(failedResume).toBeGreaterThan(failed);
+    expect(failedReturn).toBeGreaterThan(failedResume);
+
     const unchanged = bootstrapSource.indexOf("dbClientTakeover.mode === 'unchanged'");
     const unchangedEnsure = bootstrapSource.indexOf(
       'ensureCurrentAccountProviderReadiness()',
       unchanged,
     );
-    const unchangedReturn = bootstrapSource.indexOf('return;', unchangedEnsure);
+    const unchangedResume = bootstrapSource.indexOf('await resumeInputDeviceTaskSlots();', unchanged);
+    const unchangedReturn = bootstrapSource.indexOf('return;', unchangedResume);
     expect(unchanged).toBeGreaterThanOrEqual(0);
     expect(unchangedEnsure).toBeGreaterThan(unchanged);
-    expect(unchangedReturn).toBeGreaterThan(unchangedEnsure);
+    expect(unchangedResume).toBeGreaterThan(unchangedEnsure);
+    expect(unchangedReturn).toBeGreaterThan(unchangedResume);
     expect(bootstrapSource).toContain('shouldKeepPendingReadinessStart');
     expect(bootstrapSource).toContain('shouldClearCatalogAfterJoiningPreviousScope');
     expect(bootstrapSource).toMatch(
@@ -194,6 +203,7 @@ describe('account provider readiness wiring', () => {
 
   it('clears owner-scoped custom routes before replacing account runtimes', () => {
     const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
+    const suspendHardware = bootstrapSource.indexOf('suspendInputDeviceTaskSlots();', teardown);
     const clearCustomProviders = bootstrapSource.indexOf('setCustomProviders([])', teardown);
     const makerShutdown = bootstrapSource.indexOf('await maker.shutdown()', teardown);
     const joinPrevious = bootstrapSource.indexOf(
@@ -206,6 +216,8 @@ describe('account provider readiness wiring', () => {
     );
 
     expect(teardown).toBeGreaterThanOrEqual(0);
+    expect(suspendHardware).toBeGreaterThan(teardown);
+    expect(suspendHardware).toBeLessThan(clearCustomProviders);
     expect(clearCustomProviders).toBeGreaterThan(teardown);
     expect(makerShutdown).toBeGreaterThan(clearCustomProviders);
     expect(joinPrevious).toBeGreaterThan(makerShutdown);

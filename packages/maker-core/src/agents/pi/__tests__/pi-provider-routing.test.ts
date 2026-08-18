@@ -1188,7 +1188,7 @@ describe('Pi provider-aware model routing', () => {
       }>;
     };
     expect(models.providers.cindy?.models.find((model) => model.id === 'byom-only-model'))
-      .toMatchObject({ api: 'anthropic-messages' });
+      .toBeUndefined();
     expect(models.providers['my-local']?.models.find((model) => model.id === 'byom-only-model'))
       .toMatchObject({ id: 'byom-only-model' });
     await handle.close();

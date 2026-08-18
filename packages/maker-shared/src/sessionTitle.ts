@@ -61,3 +61,33 @@ export function projectDraftSessionTitle(
   if (isDefaultDraftSessionTitle(title) && unnamedLabel) return unnamedLabel;
   return title ?? '';
 }
+
+/**
+ * 新建任务第一帧该显示的标题。有用户文字就用原文截断;没有文字时才用附件名 /
+ * 类别词。算不出任何东西时返回空串,调用方再落到哨兵的显示层兜底。
+ *
+ * 桌面乐观预览、手机合成行、远程临时行共用这一份,避免「先亮未命名任务、再跳成
+ * 用户那句话」。mention / 引用的权威剔除仍在 desktop `deriveAutoTitleSeed`;
+ * 这里只处理调用方已经确认可当标题的素材。
+ */
+function optimisticFileBaseName(name: string): string {
+  return name.split(/[\\/]/).pop() ?? '';
+}
+
+export function deriveOptimisticSessionTitle(input: {
+  text?: string | null;
+  fileNames?: readonly string[] | null;
+  imageLabel?: string | null;
+  fileLabel?: string | null;
+  firstFileIsImage?: boolean;
+}): string {
+  const fromText = normalizeAutoTitle(input.text ?? '');
+  if (fromText) return fromText;
+  for (const name of input.fileNames ?? []) {
+    const fromFile = normalizeAutoTitle(optimisticFileBaseName(name));
+    if (fromFile) return fromFile;
+  }
+  if (input.firstFileIsImage) return normalizeAutoTitle(input.imageLabel ?? '');
+  if ((input.fileNames?.length ?? 0) > 0) return normalizeAutoTitle(input.fileLabel ?? '');
+  return '';
+}

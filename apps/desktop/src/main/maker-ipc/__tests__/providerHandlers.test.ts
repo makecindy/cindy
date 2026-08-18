@@ -8,7 +8,7 @@ import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelR
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
-import { listCustomProviders } from '../../maker-host/custom-provider-store.js';
+import { getCustomProvider, listCustomProviders } from '../../maker-host/custom-provider-store.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
@@ -960,6 +960,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://header-auth.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M' }],
           headers: {
             Authorization: 'Bearer top-secret',
@@ -1008,6 +1009,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://header-rollback.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M' }],
           headers: { Authorization: 'Bearer old' },
         },
@@ -1029,6 +1031,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://different-endpoint.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M' }],
         },
       },
@@ -1062,6 +1065,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://keep.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M' }],
           headers: { Authorization: 'Bearer keepme' },
         },
@@ -1078,6 +1082,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://keep.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M renamed' }],
         },
       },
@@ -1097,6 +1102,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'http://127.0.0.1:8080/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M' }],
         },
       },
@@ -1128,6 +1134,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://old-endpoint.example/v1',
+          wireProtocol: 'openai-chat',
           modelsUrl: 'https://old-endpoint.example/models',
           models: [{ id: 'm', name: 'M' }],
           headers: { Authorization: 'Bearer endpoint-bound' },
@@ -1142,6 +1149,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://new-endpoint.example/v1',
+          wireProtocol: 'openai-chat',
           modelsUrl: 'https://new-endpoint.example/models',
           models: [{ id: 'm', name: 'M' }],
         },
@@ -1177,6 +1185,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://old-endpoint.example/v1',
+          wireProtocol: 'openai-chat',
           modelsUrl: 'https://old-endpoint.example/models',
           models: [{ id: 'm', name: 'M' }],
         },
@@ -1206,6 +1215,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://new-endpoint.example/v1',
+          wireProtocol: 'openai-chat',
           modelsUrl: 'https://new-endpoint.example/models',
           models: [{ id: 'm', name: 'M' }],
         },
@@ -1428,9 +1438,11 @@ describe('provider:custom:* CRUD handlers', () => {
         JSON.stringify(legacyXai.auth),
       );
 
+    const migratedLegacyXai = await getCustomProvider('xai');
+    expect(migratedLegacyXai?.runtimes.pi?.wireProtocol).toBe('openai-chat');
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
-        ...legacyXai,
+        ...migratedLegacyXai!,
         name: 'Legacy custom xAI edited',
       }),
     ).resolves.toEqual({ ok: true });
@@ -1494,6 +1506,7 @@ describe('provider:custom:* CRUD handlers', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://owner-a.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M' }],
           headers: { Authorization: 'Bearer owner-a' },
         },

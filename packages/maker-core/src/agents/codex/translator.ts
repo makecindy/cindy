@@ -1800,6 +1800,8 @@ function handleCollabAgentToolCall(
   ctx: CodexTranslateContext,
 ): void {
   const toolName = `collab:${item.tool}`;
+  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const hasSpawnReceiver = !isSpawn || item.receiverThreadIds.length > 0;
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,
@@ -1809,6 +1811,13 @@ function handleCollabAgentToolCall(
   if (item.reasoningEffort) input.reasoningEffort = item.reasoningEffort;
 
   if (phase === 'started') {
+    // Codex can emit a provisional spawn item before validation has created a
+    // child thread. If validation then fails (for example an unknown model),
+    // 0.145 emits no matching terminal collab item. Publishing this empty-
+    // receiver placeholder would therefore leave an inline card and durable
+    // Subagent run stuck on running forever. Wait for a receiver-bearing
+    // updated/completed snapshot, which is the first proof that a child exists.
+    if (!hasSpawnReceiver) return;
     if (ctx.rt.emittedToolUse.has(item.id)) return;
     ctx.rt.emittedToolUse.add(item.id);
     queue.push({
@@ -1825,6 +1834,7 @@ function handleCollabAgentToolCall(
   }
 
   if (phase === 'updated') {
+    if (!hasSpawnReceiver) return;
     if (!ctx.rt.emittedToolUse.has(item.id)) {
       ctx.rt.emittedToolUse.add(item.id);
       queue.push({
@@ -1901,6 +1911,7 @@ interface SubAgentActivityItem {
   agentPath?: string;
   /** Newer Codex builds may include the selected child model on the activity. */
   model?: string;
+  reasoningEffort?: string | null;
 }
 
 /**
@@ -1976,10 +1987,14 @@ function handleSubAgentActivity(
   if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
   const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
   const model = typeof item.model === 'string' && item.model ? item.model : undefined;
+  const reasoningEffort = typeof item.reasoningEffort === 'string' && item.reasoningEffort
+    ? item.reasoningEffort
+    : undefined;
   const input: Record<string, unknown> = {};
   if (agentPath) input.name = agentPath;
   if (item.agentThreadId) input.agentThreadId = item.agentThreadId;
   if (model) input.model = model;
+  if (reasoningEffort) input.reasoningEffort = reasoningEffort;
   queue.push({
     type: 'tool_use',
     data: { toolUseId: item.id, toolName: 'collab:spawn', input },
@@ -2016,6 +2031,7 @@ function handleSubAgentActivity(
       ...(item.agentThreadId ? { receiverThreadIds: [item.agentThreadId] } : {}),
       ...(agentPath ? { title: agentPath } : {}),
       ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     },
     source: 'codex',
   });
@@ -2028,7 +2044,9 @@ function toCodexTaskUpdate(
   completedOnly = false,
 ): AgentTaskUpdateEventData {
   const isSpawn = item.tool.toLowerCase().startsWith('spawn');
-  const subagentObservation = isSpawn && (status !== 'completed' || completedOnly)
+  const subagentObservation = isSpawn
+    && item.receiverThreadIds.length > 0
+    && (status !== 'completed' || completedOnly)
     ? {
         kind: status === 'running' || completedOnly ? 'spawn' as const : 'terminal' as const,
         logicalSubagentId: item.id,

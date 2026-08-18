@@ -1,5 +1,9 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import {
+  DEFAULT_DRAFT_SESSION_TITLE,
+  deriveOptimisticSessionTitle,
+} from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
@@ -858,14 +862,28 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
 
 export function sessionFromCreateResult(
   result: CreateSessionResult,
-  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'>,
+  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'> & {
+    firstMessage?: string;
+    attachments?: readonly { name?: string; originalName?: string; path?: string; category?: string }[];
+  },
   now = new Date(),
 ): RemoteSession {
   const iso = now.toISOString();
+  const first = fallback.attachments?.[0];
+  const optimisticTitle = deriveOptimisticSessionTitle({
+    text: fallback.firstMessage,
+    fileNames: (fallback.attachments ?? [])
+      .filter((file) => !file.path?.startsWith('clipboard://'))
+      .map((file) => file.originalName || file.name || '')
+      .filter(Boolean),
+    imageLabel: i18n.t('session.common.photo'),
+    fileLabel: i18n.t('session.common.file'),
+    firstFileIsImage: first?.category === 'image',
+  });
   return {
     id: result.sessionId,
     userId: '',
-    title: 'New remote session',
+    title: optimisticTitle || DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: result.workDir ?? fallback.workingDir,
     workspaceKind: fallback.workspaceKind,
     model: fallback.model,

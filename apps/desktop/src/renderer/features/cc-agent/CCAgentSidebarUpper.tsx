@@ -60,6 +60,7 @@ import {
   matchesKeyboardEvent,
   SWITCH_SESSION_SHORTCUT_IDS,
 } from '../../../shared/appShortcuts';
+import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../../shared/workLouderCodex';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
@@ -164,6 +165,7 @@ import {
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
+import { onRequestSessionSwitch, pickAdjacentSessionId } from './lib/sessionSwitchCommands';
 import type {
   AutomationScheduleAction,
   AutomationScheduleSessionInfo,
@@ -614,6 +616,78 @@ export function CCAgentSidebarUpper() {
       ),
     [statusFilteredSessionsWithRemote, hiddenProjectKeys, localPlatform],
   );
+
+  /* Codex Micro 的 6 个任务键跟侧栏走。主进程只能查本地 sessions 表,看不见被控
+   * 机器上的任务(它们只活在渲染端的 remote store 里),也不知道用户当前选了哪台
+   * 机器 —— 光靠主进程投影,连着远程用时 6 个键会全是空的。所以由这里上报。
+   *
+   * 顺序取真实渲染顺序(与 mod+1..9、旋钮切任务同一个口径),不是
+   * visibleSessionsWithRemote 那份扁平的「按最近更新排序」列表 —— 后者不含置顶区
+   * 与项目分组,和用户眼里看到的顺序对不上,AG00 会指向列表里根本不在第一行的任务。
+   * 不限定容器:展开态与 rail 折叠态是两个不同组件,扫整个 document 才能两种形态
+   * 都覆盖。只送键盘需要的三个字段,不整份 session 过 IPC。 */
+  const publishedTaskKeyRef = useRef<string>('');
+  const publishSidebarTasks = useCallback(() => {
+    if (isSecondaryWindow()) return;
+    const renderedIds = getVisibleSidebarSessionIds();
+    const sidebarOrder = new Map(renderedIds.map((id, index) => [id, index] as const));
+    // 空可见列表也要上报:换机器、折叠或搜索把可见行清掉时,侧栏映射必须让位,
+    // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
+    // / 优先 / 自定义不能被折叠裁掉。
+    const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
+    const visibleProjection = visibleSessionsWithRemote
+      .filter((session) => !catalogSessions.some((active) => active.id === session.id))
+      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+    const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
+    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map((session) => {
+      const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
+      const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
+      const order = sidebarOrder.get(session.id);
+      const isActiveCatalog = session.status === 'active';
+      return {
+        id: session.id,
+        title: session.title ?? null,
+        pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
+        userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
+        ...(order === undefined ? {} : { sidebarOrder: order }),
+        ...(isActiveCatalog ? {} : { catalogEligible: false }),
+      };
+    });
+    // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
+    const key = JSON.stringify(tasks);
+    if (key === publishedTaskKeyRef.current) return;
+    publishedTaskKeyRef.current = key;
+    void window.electronAPI?.workLouderCodex?.publishTasks?.(tasks)?.catch(() => {
+      // 键盘没接或 IPC 不可用都不影响侧栏本身。
+      publishedTaskKeyRef.current = '';
+    });
+  }, [sessionsWithRemote, visibleSessionsWithRemote]);
+  useEffect(() => {
+    publishSidebarTasks();
+    // 展开/折叠项目、分组重排这类纯 UI 变化不会动 visibleSessionsWithRemote,
+    // 但会改渲染顺序 —— 跟序号徽标同样的做法,靠 DOM 变化跟住。
+    if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
+    // 观察面是整个 document(展开态与 rail 是两个组件),流式输出时 mutation 会非常
+    // 密集 —— 每帧最多重算一次,别让它变成热路径。
+    let frame: number | null = null;
+    const observer = new MutationObserver(() => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        publishSidebarTasks();
+      });
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'hidden', 'aria-hidden'],
+    });
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [publishSidebarTasks]);
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
   // 会话并入 attention 未读集。否则 rail 模式下,靠 scheduleSessionIndex 恢复的定时任务
@@ -2108,6 +2182,32 @@ function ExpandedView({
     },
     [handleSessionClick],
   );
+  /* Codex Micro 旋钮:左转沿侧栏列表往上,右转往下 —— 跟着屏幕上的列表走,
+   * 不是抽象的"上一个/下一个"。序号口径与 mod+1..9 完全相同:都取
+   * getVisibleSidebarSessionIds 的真实渲染顺序,所以分组、置顶区、折叠与搜索
+   * 过滤天然一致,所见即所得。「新建」是列表最上面那一站(它在 SidebarTopNav
+   * 里、不是会话行,所以由 pickAdjacentSessionId 单独补进序列)。到头停住不
+   * 回绕:旋钮是连续控件,从末尾绕回开头会把用户甩到看不见的地方,还感觉不到
+   * 列表已经到边。 */
+  const onNewMakerMatchRef = useRef(onNewMakerMatch);
+  onNewMakerMatchRef.current = onNewMakerMatch;
+  useEffect(() => {
+    if (!sessionSwitchEnabled) return;
+    return onRequestSessionSwitch((direction) => {
+      const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
+      // 已经停在新建页时按"第 0 站"计,这样右转能进入列表第一条。
+      const activeId = onNewMakerMatchRef.current ? null : (activeSessionIdRef.current ?? null);
+      const target = pickAdjacentSessionId(visibleIds, activeId, direction);
+      if (!target) return;
+      if (target.kind === 'new-task') {
+        navigate('/cc-agent/new');
+        return;
+      }
+      // 同样复用行点击唯一入口,继承清通知 / 同对话去重 / Orca 角色路由。
+      void handleSessionClick(target.sessionId);
+    });
+  }, [handleSessionClick, navigate, sessionSwitchEnabled]);
+
   useAppShortcut('switch-session-1', () => handleSwitchSessionSlot(0), {
     enabled: sessionSwitchEnabled,
   });
@@ -3276,6 +3376,7 @@ function ExpandedView({
           {searchActive ? (
             <div
               data-conversation-search-surface
+              data-conversation-search-overlay
               onContextMenu={(event) => event.stopPropagation()}
             >
               <SearchResultsBody

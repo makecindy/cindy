@@ -217,7 +217,11 @@ let lastPlanWarnings: ModelPlaneWarning[] = [];
 type Effort = CatalogModel['efforts'][number];
 
 function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
-  return model.agents ? [...model.agents] : [];
+  return (model.agents ?? []).filter((agent) => {
+    if (agent !== 'pi') return true;
+    const wireProtocol = model.perAgent?.pi?.wireProtocol;
+    return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses';
+  });
 }
 
 /**
@@ -225,16 +229,18 @@ function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
  *
  * Pi provider 始终叫 `cindy`；这里只读取 v3 服务端给该模型的 transport，供
  * models.json 写入模型级 `api`。三态语义：非 XD Pi 模型返回 undefined；XD Pi 模型
- * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回 Responses。
+ * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回服务端声明值。
  */
 export function resolveXdPiGatewayWireProtocol(
   modelId: string,
-): Extract<ProviderWireProtocol, 'openai-responses'> | null | undefined {
+): Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'> | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
   if (!gatewayModel?.agents?.includes('pi')) return undefined;
   const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
-  return wireProtocol === 'openai-responses' ? wireProtocol : null;
+  return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses'
+    ? wireProtocol
+    : null;
 }
 
 /** 派生 XD 中「仅 claude-code 面（投影给 Claude）、无 codex 原生」的模型 id 集合。 */
@@ -1040,6 +1046,9 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
+          // Pi 的协议是 Model Access 按模型下发的权威路由元数据。重建 CatalogModel 时
+          // 必须一并投影，否则模型虽然保留在 Pi tab，统一路由器却会因协议缺失而 fail closed。
+          ...(agent === 'pi' && ov.wireProtocol ? { piApi: ov.wireProtocol } : {}),
         };
         models[agent]!.push(merged);
       }

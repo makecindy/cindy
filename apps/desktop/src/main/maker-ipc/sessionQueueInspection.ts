@@ -26,13 +26,26 @@ export async function resolveSessionQueueCounts(
   deps: SessionQueueCountDeps,
 ): Promise<Record<string, number>> {
   const uniqueIds = [...new Set(sessionIds)];
-  const unrestoredIds = uniqueIds.filter((sessionId) => deps.getLiveQueue(sessionId) === null);
+  const readLiveQueue = (
+    sessionId: string,
+  ): SessionQueueInspectionEntry[] | null | undefined => {
+    try {
+      return deps.getLiveQueue(sessionId);
+    } catch {
+      // A single live coordinator can be between construction and queue restore,
+      // or otherwise fail its process-local projection. Keep list_sessions useful
+      // for every other session while reporting this one conservatively as zero.
+      return undefined;
+    }
+  };
+  const unrestoredIds = uniqueIds.filter((sessionId) => readLiveQueue(sessionId) === null);
   const persistedCounts = await deps.loadPersistedCounts(unrestoredIds);
   return Object.fromEntries(
     uniqueIds.map((sessionId) => {
       // Recheck after the async DB read: a live restore/enqueue that won the race is newer.
-      const live = deps.getLiveQueue(sessionId);
-      return [sessionId, live?.length ?? persistedCounts[sessionId] ?? 0];
+      const live = readLiveQueue(sessionId);
+      if (live !== null) return [sessionId, live?.length ?? 0];
+      return [sessionId, persistedCounts[sessionId] ?? 0];
     }),
   );
 }

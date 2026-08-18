@@ -12,8 +12,23 @@ const sessionViewSource = readFileSync(
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
+const messageStreamSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'chat', 'MessageStream.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
+const mainLayoutSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'layout', 'MainLayout.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 const newMakerDraftRouteSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
+const sidebarUpperSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
@@ -67,6 +82,41 @@ describe('ChatInput session switch focus contract', () => {
       'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
+    expect(sessionViewSource).toContain(
+      'ownsHardwareComposerActions={ownsHardwareTaskActions}',
+    );
+    expect(chatInputSource).toContain('workLouderVoiceGestureRef.current?.cancelHeldPress();');
+    expect(sessionViewSource).toContain(
+      'ownsHardwareScrollActions={ownsHardwareTaskActions}',
+    );
+    expect(sessionViewSource).toContain("navigationMode !== 'split-pane'");
+    expect(sessionViewSource).toContain("action.commandId === 'toggleTaskPin'");
+    expect(sessionViewSource).toContain("action.commandId === 'archiveTask'");
+    expect(sessionViewSource).toContain('void togglePin();');
+    expect(sessionViewSource).toContain('void archive();');
+    expect(messageStreamSource).toContain('ownsHardwareScrollActions?: boolean;');
+    expect(messageStreamSource).toContain('if (!ownsHardwareScrollActions) return false;');
+    expect(mainLayoutSource).toContain("const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');");
+    expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'toggle-review-tab', sessionId })");
+    expect(mainLayoutSource).toContain('if (reviewIsActive && reviewTab) {');
+    expect(mainLayoutSource).toContain('await closeTab(sessionId, reviewTab.id);');
+    expect(mainLayoutSource).toContain(
+      "navigate('/cc-agent/new', { state: makeFolderPickerNewMakerRouteState() })",
+    );
+    expect(newMakerDraftRouteSource).toContain('readNewMakerFolderPickerRequest(location.state)');
+    expect(newMakerDraftRouteSource).toContain('setFolderPickerOpen(true)');
+    expect(sidebarUpperSource).toContain(
+      "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
+    );
+    expect(sidebarUpperSource).toContain('catalogEligible: false');
+    expect(sidebarUpperSource).toContain(
+      'const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);',
+    );
+    expect(sidebarUpperSource).toContain('WORKLOUDER_CODEX_AGENT_SLOT_COUNT');
+    expect(sidebarUpperSource).toContain('.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)');
+    expect(sidebarUpperSource).not.toContain(
+      '[...visibleSessionsWithRemote, ...remoteProjectSessions]',
+    );
     expect(newMakerDraftRouteSource).toContain('focusOnStorageKeyChange');
   });
 

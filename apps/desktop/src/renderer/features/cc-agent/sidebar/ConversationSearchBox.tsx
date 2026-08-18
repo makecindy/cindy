@@ -1043,6 +1043,8 @@ function SearchResultRow({
 
   return (
     <div
+      data-sidebar-session-row="true"
+      data-session-id={item.session.id}
       className={cn(
         'rounded-lg transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
       )}

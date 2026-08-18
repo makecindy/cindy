@@ -19,6 +19,7 @@ import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
@@ -283,6 +284,12 @@ function interactionsByRequestId(list: readonly PendingInteraction[]): Map<strin
   return byId;
 }
 const inputProjections = new Map<string, InputProjection>();
+/**
+ * 新建任务第一帧标题预览。权威行在自动起名写库前仍是 New Maker；入队成功后
+ * pendingLocalCreation 必须清掉才能解禁，所以预览不能绑在那根标上。权威标题
+ * 一旦离开哨兵（智能标题或用户改名）就让位。
+ */
+const pendingTitlePreview = new Map<string, string>();
 // Projection queries can resolve after a newer push or terminal boundary. Keep
 // a monotonic per-session authority epoch so late snapshots cannot overwrite
 // current queue / continuation state (mirrors Desktop makerChatStore).
@@ -823,12 +830,15 @@ function recomputeSessions(): void {
   const next: RemoteSession[] = [];
   for (const { session, physicalDeviceId } of byId.values()) {
     const prev = prevById.get(session.id);
-    next.push(prev && remoteSessionEqual(prev, session) ? prev : session);
+    const projected = applyPendingTitlePreview(session);
+    next.push(prev && remoteSessionEqual(prev, projected) ? prev : projected);
     sessionDeviceIndex.set(session.id, physicalDeviceId);
   }
   for (const sessionId of [...sessionLiveActivity.keys()]) {
     if (!sessionDeviceIndex.has(sessionId)) sessionLiveActivity.delete(sessionId);
   }
+  // 预览不因列表短暂缺席回收:旧 sessions:list 可能在远端建会话前发出、入队成功后才回来。
+  // 权威标题落地、明确失败撤回、归档/删除、设备移除、clear() 才会丢掉。
   // 数组级同样调和:全部元素引用与序都未变时保留旧数组引用——useRemoteSessions 的
   // useSyncExternalStore 快照经 Object.is 即可短路,消费屏对无关 emit 零重渲染。
   mergedSessions = sameElementRefs(mergedSessions, next) ? mergedSessions : next;
@@ -867,18 +877,43 @@ function stamp(session: RemoteSession, deviceId: string, deviceName: string): Re
   return { ...session, deviceLinkDeviceId: deviceId, deviceLinkDeviceName: deviceName };
 }
 
+function dropPendingTitlePreview(sessionId: string): void {
+  pendingTitlePreview.delete(sessionId);
+}
+
+function isDraftSentinelTitle(title: string | undefined): boolean {
+  return !title
+    || isDefaultDraftSessionTitle(title)
+    || title === 'New remote session';
+}
+
+function applyPendingTitlePreview(session: RemoteSession): RemoteSession {
+  const preview = pendingTitlePreview.get(session.id);
+  if (!preview) return session;
+  // 分片里可能已经是乐观原文(合成行),也可能仍是哨兵。只有权威标题变成
+  // 另一串(智能标题 / 用户改名)才让位;不能把「分片 == 预览」当成终态丢掉。
+  if (isDraftSentinelTitle(session.title) || session.title === preview) {
+    return session.title === preview ? session : { ...session, title: preview };
+  }
+  dropPendingTitlePreview(session.id);
+  return session;
+}
+
 /**
  * SQLite session 快照不包含 desktop main 内存里的 pending Agent intent。全量列表 / getSession
  * 对账只能刷新持久化字段，不能顺手抹掉已由 push / 权威查询写入的运行时镜像；显式携带该字段
  * 的新快照仍优先（包括 null）。
  */
 function preserveSessionRuntimeFields(fresh: RemoteSession, local: RemoteSession | undefined): RemoteSession {
+  if (!local) return fresh;
+  let next = fresh;
   if (
-    !local
-    || Object.prototype.hasOwnProperty.call(fresh, 'agentSwitchIntent')
-    || local.agentSwitchIntent === undefined
-  ) return fresh;
-  return { ...fresh, agentSwitchIntent: local.agentSwitchIntent };
+    !Object.prototype.hasOwnProperty.call(fresh, 'agentSwitchIntent')
+    && local.agentSwitchIntent !== undefined
+  ) {
+    next = { ...next, agentSwitchIntent: local.agentSwitchIntent };
+  }
+  return next;
 }
 
 function normalizeMessages(list: readonly RemoteMessage[]): RemoteMessage[] {
@@ -1534,6 +1569,24 @@ function recallParkedTaskUpdates(
 
 export const remoteSessionStore = {
   /**
+   * 新建任务第一帧标题预览。只盖哨兵,权威标题一旦离开哨兵就让位。
+   * 失败撤回走 {@link clearPendingTitlePreview}。
+   */
+  setPendingTitlePreview(sessionId: string, title: string): void {
+    const next = title.trim();
+    if (!sessionId || !next) return;
+    if (pendingTitlePreview.get(sessionId) === next) return;
+    pendingTitlePreview.set(sessionId, next);
+    recomputeSessions();
+  },
+
+  clearPendingTitlePreview(sessionId: string): void {
+    if (!sessionId || !pendingTitlePreview.has(sessionId)) return;
+    dropPendingTitlePreview(sessionId);
+    recomputeSessions();
+  },
+
+  /**
    * 读当前权威设备身份列表(setDeviceIdentity 注入的那份;未注入过为空)。
    * 会话页抽屉等在首页之外调 buildMobileHomePresentation 时传入,保证展示归一化
    * (canonicalDeviceId 认领)与首页/本 store 同一口径——不传 devices 的空列表会把
@@ -1792,6 +1845,7 @@ export const remoteSessionStore = {
     if (patch.status === 'deleted' || patch.status === 'archived') {
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       sessionLiveActivity.delete(sessionId);
+      dropPendingTitlePreview(sessionId);
       let messageStateChanged = invalidateSessionMessageWindowState(sessionId, false);
       messageStateChanged = releaseSessionDetailProjections(sessionId) || messageStateChanged;
       sessionMessageLifecycle.forget(sessionId);
@@ -1800,7 +1854,10 @@ export const remoteSessionStore = {
     } else {
       const wasPinned = shard.sessions[idx].pinnedAt != null;
       const unpinned = Object.prototype.hasOwnProperty.call(patch, 'pinnedAt') && patch.pinnedAt == null;
-      const patched = { ...shard.sessions[idx], ...patch } as RemoteSession;
+      const patched = preserveSessionRuntimeFields(
+        { ...shard.sessions[idx], ...patch } as RemoteSession,
+        shard.sessions[idx],
+      );
       if (remoteSessionEqual(shard.sessions[idx], patched)) return;
       shard.sessions = shard.sessions.map((s) => (s.id === sessionId ? patched : s));
       shouldReseedAfterPatch = wasPinned && unpinned;
@@ -3166,6 +3223,7 @@ export const remoteSessionStore = {
         sessionMessageLifecycle.forget(sessionId);
         sessionLastAccessOrder.delete(sessionId);
         sessionDeviceIndex.delete(sessionId);
+        dropPendingTitlePreview(sessionId);
         // revision 下限按会话回收:它不参与单轮快照回收(那会把覆盖权还给晚到的
         // 旧快照),所以只能在会话本身消失时清,保持有界。
         const sessionPrefix = interactionResolveKey(sessionId, '');
@@ -3221,6 +3279,7 @@ export const remoteSessionStore = {
     nextSessionAccessOrder = 0;
     sessionDeviceIndex.clear();
     reseedHandlers.clear();
+    pendingTitlePreview.clear();
     mergedSessions = [];
     deviceList = null;
     bumpMessageVersion();

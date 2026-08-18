@@ -20,7 +20,7 @@
  * 输入的控件挖 no-drag 洞，避免标题和 git 信息整块变成不可拖区域。
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Ellipsis, Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -147,8 +147,7 @@ export function SessionContentHeader({
   const isArchived = session.status === 'archived';
   // Draft 判定与 SessionItem 同口径:标题仍是默认哨兵且无消息。
   const isEmpty = isEmptyDraftSession(session);
-  const remoteWritesBlocked =
-    remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
+  const remoteWritesBlocked = remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   // 「移动到项目」/「导出会话…」可见性与 SessionItem 同条件。
   const canMoveToProject =
     !isEmpty && !session.remoteHostId && !session.deviceLinkDeviceId && !isArchived;
@@ -177,9 +176,13 @@ export function SessionContentHeader({
   const displayTitle =
     getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'))?.trim() ||
     t('ccAgent.sessionHeader.untitled');
-  const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
+  const remoteIconKind = session.deviceLinkDeviceId
+    ? 'device-link'
+    : session.remoteHostId
+      ? 'ssh'
+      : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
-    ? session.deviceLinkConnectionStatus ?? 'connected'
+    ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
 
   /* ---- 行内重命名（与 SessionItem 同交互：双击进入，Enter 提交 / Esc 取消 / Blur 提交，
@@ -388,12 +391,7 @@ export function SessionContentHeader({
         );
       }
     },
-    [
-      patchLocal,
-      runningSessionIds,
-      session,
-      t,
-    ],
+    [patchLocal, runningSessionIds, session, t],
   );
 
   /* ---- 导出会话(.cshare)---- 弹窗仅打开时挂载,与 SessionItem 同款。 */
@@ -404,8 +402,10 @@ export function SessionContentHeader({
     [remoteProjectSessions, sessions],
   );
   const hasSessionFamily = useMemo(
-    () => allKnownSessions.some((item) =>
-      item.parentSessionId === session.id || item.id === session.parentSessionId),
+    () =>
+      allKnownSessions.some(
+        (item) => item.parentSessionId === session.id || item.id === session.parentSessionId,
+      ),
     [allKnownSessions, session.id, session.parentSessionId],
   );
   const canShowBranchTree = !isEmpty && (session.agentKind === 'pi' || hasSessionFamily);
@@ -422,7 +422,8 @@ export function SessionContentHeader({
         toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
       } else if (result) {
         const hasNumbers =
-          typeof result.tokensBefore === 'number' && typeof result.estimatedTokensAfter === 'number';
+          typeof result.tokensBefore === 'number' &&
+          typeof result.estimatedTokensAfter === 'number';
         toast.success(
           hasNumbers
             ? t('ccAgent.sidebar.sessionMenu.compactSuccessWithTokens', {
@@ -490,10 +491,7 @@ export function SessionContentHeader({
     // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
     // 改成接管结算之后再 resolve —— clean 一律重查(见 worktreeRemovalWarning),
     // 拿到的是此刻的结论;菜单打开时的 prefetch 仍然热了 git cache。
-    const preflight = await resolveWorktreeRemovalPreflight(
-      session.id,
-      session.deviceLinkDeviceId,
-    );
+    const preflight = await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId);
     // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
     // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
     // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
@@ -586,15 +584,15 @@ export function SessionContentHeader({
       )}
       {boundSchedules.length > 0 && (
         <span style={WINDOW_NO_DRAG_STYLE}>
-          <ScheduleBindingBadge
-            schedules={boundSchedules}
-            size={13}
-            className="mr-1 size-4"
-          />
+          <ScheduleBindingBadge schedules={boundSchedules} size={13} className="mr-1 size-4" />
         </span>
       )}
       {!isEditing && remoteIconKind && (
-        <Tip text={session.deviceLinkDeviceName ?? session.deviceLinkDeviceId ?? session.remoteHostId ?? ''}>
+        <Tip
+          text={
+            session.deviceLinkDeviceName ?? session.deviceLinkDeviceId ?? session.remoteHostId ?? ''
+          }
+        >
           <RemoteProjectIcon
             kind={remoteIconKind}
             connectionStatus={remoteIconConnectionStatus}
@@ -781,12 +779,8 @@ export function SessionContentHeader({
                         onSelectProject={(workingDir) =>
                           void handleMoveSession({ kind: 'project', workingDir })
                         }
-                        onBrowseProject={() =>
-                          void handleMoveSession({ kind: 'browseProject' })
-                        }
-                        onMoveToDialogue={() =>
-                          void handleMoveSession({ kind: 'dialogue' })
-                        }
+                        onBrowseProject={() => void handleMoveSession({ kind: 'browseProject' })}
+                        onMoveToDialogue={() => void handleMoveSession({ kind: 'dialogue' })}
                       />
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>

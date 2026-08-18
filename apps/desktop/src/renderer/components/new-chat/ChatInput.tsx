@@ -231,7 +231,6 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-  slashCommandInvocationName,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -267,6 +266,7 @@ import {
 } from '@/hooks/useComposerSendShortcutPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
 import {
   composerRenderSnapshot,
@@ -343,6 +343,7 @@ import {
 import { VoiceInputPointerHintLayer } from '@/voice-input/VoiceInputPointerHintLayer';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
+import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
@@ -655,6 +656,11 @@ interface ChatInputProps {
    * 嵌入式 rail / split pane 保持 false,避免抢走当前页面快捷键或其它 pane 的焦点。
    */
   focusOnStorageKeyChange?: boolean;
+  /**
+   * Whether this composer should consume hardware send / voice / text commands.
+   * Split panes keep every ChatInput mounted; only the focused owner may act.
+   */
+  ownsHardwareComposerActions?: boolean;
   /**
    * 附加只读引用目录列表(绝对路径)。
    * 与 onExtraDirsChange 成对出现:
@@ -1052,6 +1058,7 @@ export function ChatInput({
   draftKey,
   disableAutofocus = false,
   focusOnStorageKeyChange = false,
+  ownsHardwareComposerActions = true,
   extraDirs,
   onExtraDirsChange,
   onNewGoal,
@@ -2885,7 +2892,8 @@ export function ChatInput({
     [installedGhosts, workingDir],
   );
   const pluginAvailableIds = useMemo(
-    () => new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
+    () =>
+      new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
     [ghostsForCommand],
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
@@ -3160,6 +3168,9 @@ export function ChatInput({
   const localVoiceShortcutHandledAtRef = useRef(0);
   const globalVoiceShortcutStartHandledAtRef = useRef(0);
   const globalVoiceShortcutSuppressReleaseFromLocalRef = useRef(false);
+  const workLouderVoiceGestureRef = useRef<ReturnType<
+    typeof createWorkLouderCodexVoiceGesture
+  > | null>(null);
 
   useEffect(() => {
     voiceShortcutRef.current = voiceInputSettings.shortcut;
@@ -4011,9 +4022,7 @@ export function ChatInput({
   );
 
   // ── Slash / At panel state ─────────────────────────────────────────
-  const trigger: TriggerState = editor
-    ? detectTrigger(editor)
-    : { kind: 'none' };
+  const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
@@ -4195,9 +4204,10 @@ export function ChatInput({
             if (atScanSeqRef.current !== seq || !partial.success) return;
             setAtState((prev) => ({
               kind: 'ready',
-              items: preservePreviousItems && prev.kind === 'ready'
-                ? mergeAtResourceItems(prev.items, partial.items)
-                : partial.items,
+              items:
+                preservePreviousItems && prev.kind === 'ready'
+                  ? mergeAtResourceItems(prev.items, partial.items)
+                  : partial.items,
               truncated: partial.truncated || (prev.kind === 'ready' && prev.truncated),
               searching: true,
             }));
@@ -4361,10 +4371,7 @@ export function ChatInput({
     workingDir,
   ]);
 
-  const atResources = useMemo(
-    () => (atState.kind === 'ready' ? atState.items : []),
-    [atState],
-  );
+  const atResources = useMemo(() => (atState.kind === 'ready' ? atState.items : []), [atState]);
 
   const filteredAt = useMemo(
     () =>
@@ -4392,12 +4399,12 @@ export function ChatInput({
 
   // Keep keyboard focus on an executable row when filtering or runtime status changes.
   useEffect(() => {
-    setSlashFocus((current) => (
-      current >= filteredCommands.length
-      || (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
+    setSlashFocus((current) =>
+      current >= filteredCommands.length ||
+      (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
         ? firstAvailableSlashCommandIndex(filteredCommands)
-        : current
-    ));
+        : current,
+    );
   }, [filteredCommands]);
   useEffect(() => {
     if (
@@ -4417,13 +4424,14 @@ export function ChatInput({
     if (normalizedQuery === atLastScanQueryRef.current) return;
     atLastScanQueryRef.current = normalizedQuery;
     const seq = ++atScanSeqRef.current;
-    setAtState((prev) => prev.kind === 'ready'
-      ? { ...prev, searching: true }
-      : prev);
-    atQueryScanTimerRef.current = window.setTimeout(() => {
-      atQueryScanTimerRef.current = null;
-      runAtScan(normalizedQuery, seq);
-    }, normalizedQuery ? 200 : 0);
+    setAtState((prev) => (prev.kind === 'ready' ? { ...prev, searching: true } : prev));
+    atQueryScanTimerRef.current = window.setTimeout(
+      () => {
+        atQueryScanTimerRef.current = null;
+        runAtScan(normalizedQuery, seq);
+      },
+      normalizedQuery ? 200 : 0,
+    );
     return () => {
       if (atQueryScanTimerRef.current !== null) {
         window.clearTimeout(atQueryScanTimerRef.current);
@@ -4457,9 +4465,7 @@ export function ChatInput({
 
   const slashOpen = trigger.kind === 'slash' && suppressedSlashAt !== trigger.from;
   const typedAtOpen =
-    effectiveAt?.activation === 'typed' &&
-    !isRemoteSession &&
-    suppressedAtAt !== effectiveAt.from;
+    effectiveAt?.activation === 'typed' && !isRemoteSession && suppressedAtAt !== effectiveAt.from;
   const syntheticAtOpen = effectiveAt?.activation === 'synthetic';
   const atOpen = typedAtOpen || syntheticAtOpen;
 
@@ -4582,7 +4588,8 @@ export function ChatInput({
       if (
         !editor ||
         editor.isDestroyed ||
-        trigger.kind !== 'slash' || composerMutationLockedRef.current ||
+        trigger.kind !== 'slash' ||
+        composerMutationLockedRef.current ||
         editor.view.composing ||
         isSlashCommandUnavailable(cmd)
       ) {
@@ -4632,14 +4639,13 @@ export function ChatInput({
             // 识别并追加机器指令,序列化零特判。
             tr.replaceWith(from, runEnd, editor.schema.text(`$${cmd.name} `));
           } else {
-            // Slash 也保持纯文本;SlashCommandDecoration 只负责视觉确认,
-            // Backspace / 光标移动因此与普通文字完全一致。
+            // 展示层写入人类名(`/git`);Pi 线路名(`/skill:git`)只在发送期改写。
             replaceSlashCommandRunWithText(
               tr,
               editor.schema,
               from,
               runEnd,
-              slashCommandInvocationName(cmd),
+              cmd.name,
             );
           }
           return true;
@@ -4826,30 +4832,25 @@ export function ChatInput({
     [closeAtPanel, editor, insertAtResource, resolveEffectiveAtRange],
   );
 
-  const handleComposerSuggestionOpenChange = useCallback((nextOpen: boolean) => {
-    if (!nextOpen) {
-      setSyntheticAtAnchor(null);
-      return;
-    }
-    if (!editor || editor.isDestroyed || composerMutationLocked) return;
-    if (trigger.kind === 'slash') {
-      setSuppressedSlashAt(trigger.from);
-    } else if (trigger.kind === 'at') {
-      setSuppressedAtAt(trigger.from);
-    }
-    setSyntheticAtAnchor(editor.state.selection.from);
-    setAtFocus(0);
-    editor.commands.focus();
-  }, [
-    composerMutationLocked,
-    editor,
-    setSyntheticAtAnchor,
-    trigger,
-  ]);
-  const composerSuggestionFocusTarget = useCallback(
-    () => editor?.view.dom ?? null,
-    [editor],
+  const handleComposerSuggestionOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        setSyntheticAtAnchor(null);
+        return;
+      }
+      if (!editor || editor.isDestroyed || composerMutationLocked) return;
+      if (trigger.kind === 'slash') {
+        setSuppressedSlashAt(trigger.from);
+      } else if (trigger.kind === 'at') {
+        setSuppressedAtAt(trigger.from);
+      }
+      setSyntheticAtAnchor(editor.state.selection.from);
+      setAtFocus(0);
+      editor.commands.focus();
+    },
+    [composerMutationLocked, editor, setSyntheticAtAnchor, trigger],
   );
+  const composerSuggestionFocusTarget = useCallback(() => editor?.view.dom ?? null, [editor]);
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightKeysRef = useRef(new Set<string>());
@@ -5015,10 +5016,7 @@ export function ChatInput({
           }
           if (sourceStorageKey) {
             if (
-              shouldPreservePlanModeComposerDraft(
-                attachmentsForSend.length,
-                commentsForSend.length,
-              )
+              shouldPreservePlanModeComposerDraft(attachmentsForSend.length, commentsForSend.length)
             ) {
               const existingDraft = getComposerDraft(sourceStorageKey);
               saveComposerDraft(
@@ -6855,6 +6853,101 @@ export function ChatInput({
       settingsLocked,
     ],
   );
+
+  useEffect(() => {
+    const gesture = createWorkLouderCodexVoiceGesture({
+      longPressMs: VOICE_INPUT_LONG_PRESS_MS,
+      getState: () => voiceInputStateRef.current,
+      start: () => handleVoiceInputStartRef.current(),
+      stop: () => voiceInputStopRef.current(),
+    });
+    workLouderVoiceGestureRef.current = gesture;
+    return () => {
+      gesture.dispose();
+      if (workLouderVoiceGestureRef.current === gesture) {
+        workLouderVoiceGestureRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ownsHardwareComposerActions) {
+      workLouderVoiceGestureRef.current?.cancelHeldPress();
+    }
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'voice' && !ownsHardwareComposerActions) {
+        workLouderVoiceGestureRef.current?.cancelHeldPress();
+        return false;
+      }
+      if (!ownsHardwareComposerActions) return false;
+      if (action.type === 'skill') {
+        if (!editor || editor.isDestroyed || composerMutationLocked) return false;
+        editor.chain().focus().insertContent(`$${action.name} `).run();
+        return true;
+      }
+      if (action.type === 'composer-text') {
+        if (!editor || editor.isDestroyed || composerMutationLocked) return false;
+        editor.chain().focus().insertContent(action.text).run();
+        return true;
+      }
+      if (action.type === 'voice') {
+        // One path for the key: the gesture already covers tap-to-start,
+        // tap-again-to-stop, and hold-to-talk, matching Cindy's microphone.
+        workLouderVoiceGestureRef.current?.handle({ phase: action.phase });
+        return true;
+      }
+      if (action.type !== 'command') return false;
+      switch (action.commandId) {
+        case 'composer.submit':
+          void handleClickSend();
+          return true;
+        case 'composer.toggleFastMode':
+          void handleFastModeChange(!fastMode);
+          return true;
+        case 'composer.togglePlanMode':
+          if (!planModeEntry) return false;
+          planModeEntry.onToggle(!planModeEntry.enabled);
+          return true;
+        case 'composer.focus':
+          editor?.commands.focus('end');
+          return true;
+        case 'composer.addFiles':
+        case 'composer.addPhotos':
+          suggestionFileInputRef.current?.click();
+          return true;
+        case 'composer.increaseReasoningEffort':
+        case 'composer.decreaseReasoningEffort': {
+          const { efforts } = resolveModelEfforts(activeModel, effectiveSourceId);
+          if (efforts.length === 0) return false;
+          const currentIndex = Math.max(0, efforts.indexOf(activeEffort));
+          const delta = action.commandId === 'composer.increaseReasoningEffort' ? 1 : -1;
+          const next = efforts[Math.max(0, Math.min(efforts.length - 1, currentIndex + delta))];
+          if (!next || next === activeEffort) return true;
+          void handleEffortChange(next);
+          return true;
+        }
+        default:
+          return false;
+      }
+    });
+  }, [
+    activeEffort,
+    activeModel,
+    composerMutationLocked,
+    editor,
+    ownsHardwareComposerActions,
+    effectiveSourceId,
+    fastMode,
+    handleClickSend,
+    handleEffortChange,
+    handleFastModeChange,
+    handleVoiceInputPlainStop,
+    handleVoiceInputStart,
+    planModeEntry,
+    resolveModelEfforts,
+    voiceInput.isBusy,
+    voiceInput.isListening,
+  ]);
 
   // per-session 来源切换。镜像 model 持久化路径(handleModelChange 里的
   // `sessionService.update({ model }) + maker.setModel`):
