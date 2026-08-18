@@ -383,6 +383,7 @@ export async function applyAgentSwitchToSessionRow(
     /** 目标引擎下的 effort / fastMode(意图登记时 renderer 按目标目录解析,apply 一并落库)。 */
     effort?: string;
     fastMode?: boolean;
+    contextWindow?: number | null;
   },
 ): Promise<void> {
   const ownerScope = captureOwnerScope();
@@ -401,6 +402,9 @@ export async function applyAgentSwitchToSessionRow(
     setObj.effort = patch.effort as (typeof sessions.$inferInsert)['effort'];
   }
   if (patch.fastMode !== undefined) setObj.fastMode = patch.fastMode;
+  if (typeof patch.contextWindow === 'number' && patch.contextWindow > 0) {
+    setObj.contextWindow = Math.floor(patch.contextWindow);
+  }
   await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
   if (!isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
@@ -412,6 +416,9 @@ export async function applyAgentSwitchToSessionRow(
       ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
       ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
       ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
+      ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
+        ? { contextWindow: Math.floor(patch.contextWindow) }
+        : {}),
     },
     ownerScope,
   );

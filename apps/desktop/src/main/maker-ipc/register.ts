@@ -4511,7 +4511,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             resolveVerifiedContextWindow(getActiveCatalog(), 'pi', 'xai', modelId) ??
             resolveVerifiedContextWindow(getActiveCatalog(), 'claude-code', 'xai', modelId),
           session.model,
-          typeof session.providerId === 'string' ? session.providerId : null,
+          getSessionProvider(session.id),
         );
         recordSessionContextSnapshot(
           session.id,
@@ -8142,7 +8142,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       listMessagesForAgentHandoff(sessionId, 400, after),
     findParkedEngineSession: (sessionId, targetDbKind) =>
       findParkedEngineSession(sessionId, targetDbKind),
-    applyAgentSwitchToDb: applyAgentSwitchToSessionRow,
+    applyAgentSwitchToDb: async (sessionId, patch) => {
+      const verifiedWindow = lookupVerifiedContextWindow(
+        (modelId, pid) =>
+          resolveVerifiedContextWindow(getActiveCatalog(), dbToMakerAgentKind(patch.agentKind), pid, modelId) ??
+          resolveVerifiedContextWindow(getActiveCatalog(), dbToMakerAgentKind(patch.agentKind), 'xai', modelId) ??
+          resolveVerifiedContextWindow(getActiveCatalog(), 'claude-code', 'xai', modelId),
+        patch.model,
+        patch.providerId ?? null,
+      );
+      await applyAgentSwitchToSessionRow(sessionId, {
+        ...patch,
+        ...(verifiedWindow ? { contextWindow: verifiedWindow } : {}),
+      });
+    },
     setSessionProvider,
     supersedePendingCredentialSwitch: clearPendingCredentialSwitchForSession,
     insertBoundaryMessage: async (sessionId, content) => {
@@ -12138,6 +12151,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (route.model) patch.model = route.model;
       if (route.effort) patch.effort = route.effort;
       if (route.fastMode !== undefined) patch.fastMode = route.fastMode;
+      const agentKind = getSessionDbAgentKind(sessionId);
+      if (route.model && agentKind) {
+        const verifiedWindow = lookupVerifiedContextWindow(
+          (modelId, pid) =>
+            resolveVerifiedContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), pid, modelId) ??
+            resolveVerifiedContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), 'xai', modelId) ??
+            resolveVerifiedContextWindow(getActiveCatalog(), 'claude-code', 'xai', modelId),
+          route.model,
+          route.providerId ?? null,
+        );
+        if (verifiedWindow) patch.contextWindow = verifiedWindow;
+      }
       await getDbClient().drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId));
       broadcastSessionPatched(sessionId, patch);
     },

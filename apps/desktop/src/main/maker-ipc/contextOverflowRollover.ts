@@ -387,7 +387,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const rebuildReason = isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
-    const handoffMessages = source.filter((message) => message.role !== 'error');
+    const handoffMessages = source.filter((message) => {
+      if (message.role === 'error') return false;
+      // timeout 的失败 user 会由 Retry 再 wire 一次，交接里不能再带一遍。
+      if (rebuildReason === 'pi-prompt-timeout' && message.clientId === lastUser.clientId) {
+        return false;
+      }
+      return true;
+    });
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     if (live) await deps.closeSession(sessionId);
     const label = engineLabelForOverflow(sessionRow.agentKind);

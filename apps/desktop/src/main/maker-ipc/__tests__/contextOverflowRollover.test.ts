@@ -157,6 +157,7 @@ describe('createContextOverflowRollover', () => {
         contextTokens: 0,
         contextWindow: 200_000,
         model: 'x-ai/grok-4.6',
+        providerId: 'xai',
       })),
       listMessages: vi.fn(async () => source),
       findLatestRebuildMeta: vi.fn(async () => null),
@@ -227,6 +228,7 @@ describe('createContextOverflowRollover', () => {
       contextTokens: 553_582,
       contextWindow: 1_050_000,
       model: 'x-ai/grok-4.6',
+      providerId: 'xai',
     });
     const rollover = createContextOverflowRollover(deps);
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
@@ -248,6 +250,7 @@ describe('createContextOverflowRollover', () => {
       contextTokens: 400_000,
       contextWindow: 500_000,
       model: 'x-ai/grok-4.6',
+      providerId: 'xai',
     });
     deps.getAutoCompactThresholdPct = vi.fn(() => 75);
     const rollover = createContextOverflowRollover(deps);
@@ -289,9 +292,13 @@ describe('createContextOverflowRollover', () => {
     expect(deps.commitRebuild).toHaveBeenCalled();
     expect(deps.setPendingHandoff).toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
-    expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('还有建议吗');
+    expect(deps.setPendingHandoff.mock.calls[0]?.[1]).not.toContain('还有建议吗');
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('stopped responding to prompts');
-    expect(deps.commitRebuild.mock.calls[0]?.[2]).toMatchObject({ reason: 'pi-prompt-timeout' });
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({ reason: 'pi-prompt-timeout' }),
+    );
   });
 
   it('does not auto-replay a prompt RPC timeout as context-overflow', async () => {
@@ -324,6 +331,11 @@ describe('createContextOverflowRollover', () => {
       agentKind: 'cc',
       remoteHostId: null,
       clearedAt: null,
+      sdkSessionId: '',
+      contextTokens: 0,
+      contextWindow: 0,
+      model: '',
+      providerId: '',
     });
     const rollover = createContextOverflowRollover(deps);
     rollover.claim('s1');

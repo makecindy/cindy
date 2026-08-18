@@ -68,8 +68,8 @@ const queryMock = vi.fn(async () => [] as Array<{ role: string; content: string 
 const commitContextRebuildMock = vi.fn(async () => ({ updatedAt: Date.now() }));
 const createMessageMock = vi.fn(async () => ({}));
 vi.mock('../localDb/ipc/messages.js', () => ({
-  commitContextRebuild: (...args: unknown[]) => commitContextRebuildMock(...args),
-  createMessage: (...args: unknown[]) => createMessageMock(...args),
+  commitContextRebuild: commitContextRebuildMock as never,
+  createMessage: createMessageMock as never,
 }));
 
 vi.mock('../localDb/client/current', () => ({

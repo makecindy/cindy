@@ -217,8 +217,8 @@ async function resolveForkNativeSource(
   }
   const client = getDbClient();
   const positionParams = [sourceSessionId, target.createdAt, target.createdAt, target.rowid];
-  const invalidated = await client.queryOne<{ id: string; content: string }>(
-    `SELECT id, content FROM messages
+  const invalidated = await client.queryOne<{ id: string; content: string; created_at: number; rowid: number }>(
+    `SELECT id, content, created_at, rowid FROM messages
       WHERE session_id = ?
         AND role = 'context_rebuild'
         AND (created_at > ? OR (created_at = ? AND rowid > ?))
@@ -226,21 +226,9 @@ async function resolveForkNativeSource(
       LIMIT 1`,
     positionParams,
   );
-  if (invalidated) {
-    const rebuildReason = parseContextRebuildReason(invalidated.content);
-    // 消息删除重建会让旧历史失效；超限/超时换窗只换原生会话，可见历史仍可 fork。
-    if (!rebuildReason) {
-      throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话已因上下文重建失效');
-    }
-    return {
-      agentKind: normalizeDbAgentKind(source.agentKind),
-      sdkSessionId: null,
-      model: source.model,
-      providerId: source.providerId,
-      nextSwitch: null,
-      reuseVendorSession: false,
-      rebuildReason,
-    };
+  const rebuildReason = invalidated ? parseContextRebuildReason(invalidated.content) : null;
+  if (invalidated && !rebuildReason) {
+    throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话已因上下文重建失效');
   }
   const nextSwitch = await client.queryOne<{
     content: string;
@@ -256,32 +244,43 @@ async function resolveForkNativeSource(
       LIMIT 1`,
     positionParams,
   );
-  if (!nextSwitch) {
-    if (!source.sdkSessionId) {
-      throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
+  if (nextSwitch && (!invalidated || isBefore(
+    { createdAt: nextSwitch.created_at, rowid: nextSwitch.rowid },
+    { createdAt: invalidated.created_at, rowid: invalidated.rowid },
+  ))) {
+    const parsed = parseAgentSwitchBoundary(nextSwitch.content);
+    if (!parsed?.fromSdkSessionId) {
+      throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
     }
-    const agentKind: DbAgentKind = normalizeDbAgentKind(source.agentKind);
     return {
-      agentKind,
-      sdkSessionId: source.sdkSessionId,
-      model: source.model,
-      providerId: source.providerId,
-      nextSwitch: null,
+      agentKind: parsed.fromAgentKind,
+      sdkSessionId: parsed.fromSdkSessionId,
+      model: parsed.fromModel ?? source.model,
+      providerId: parsed.fromAgentKind === source.agentKind ? source.providerId : null,
+      nextSwitch: { createdAt: nextSwitch.created_at, rowid: nextSwitch.rowid },
       reuseVendorSession: true,
     };
   }
-  const parsed = parseAgentSwitchBoundary(nextSwitch.content);
-  if (!parsed?.fromSdkSessionId) {
-    throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
+  if (rebuildReason) {
+    return {
+      agentKind: normalizeDbAgentKind(source.agentKind),
+      sdkSessionId: null,
+      model: source.model,
+      providerId: source.providerId,
+      nextSwitch: null,
+      reuseVendorSession: false,
+      rebuildReason,
+    };
+  }
+  if (!source.sdkSessionId) {
+    throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
   }
   return {
-    agentKind: parsed.fromAgentKind,
-    sdkSessionId: parsed.fromSdkSessionId,
-    model: parsed.fromModel ?? source.model,
-    // 边界没有保存历史 provider；只有仍处于同一 agent 时才继承当前凭证形态，
-    // 否则跟随目标 agent 默认 provider，不能把另一家引擎的 providerId 带过去。
-    providerId: parsed.fromAgentKind === source.agentKind ? source.providerId : null,
-    nextSwitch: { createdAt: nextSwitch.created_at, rowid: nextSwitch.rowid },
+    agentKind: normalizeDbAgentKind(source.agentKind),
+    sdkSessionId: source.sdkSessionId,
+    model: source.model,
+    providerId: source.providerId,
+    nextSwitch: null,
     reuseVendorSession: true,
   };
 }
@@ -622,7 +621,7 @@ export async function forkSessionAtMessage(
     target.role,
     forkSource.agentKind,
   );
-  if (!usesTailTurnFork) {
+  if (!usesTailTurnFork && forkSource.sdkSessionId) {
     claudeAnchorIndex = await loadClaudeTranscriptAnchorIndex({
       sdkSessionId: forkSource.sdkSessionId,
       workingDir: source.workingDir,
