@@ -669,6 +669,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
     expect(body.model).toBe('claude-haiku-4-5-20251001'); // 经 toSdkModelString 还原
     expect(body.messages).toEqual([{ role: 'user', content: '为这条消息起标题：编译报错' }]);
     expect(body.system).toBeUndefined(); // 不注入身份段
+    expect(body.thinking).toEqual({ type: 'disabled' });
   });
   it('先验证完整响应再按旧契约截到 40 个 Unicode 字符', async () => {
     const longTitle = '标题'.repeat(30);
@@ -843,7 +844,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       setXdGatewayModels([]);
     }
   });
-  it('网关模型未下发 efforts 时仍写死 reasoning_effort=low', async () => {
+  it('网关模型未下发 efforts 时不传 reasoning_effort', async () => {
     setXdGatewayModels([
       xdGatewayModel('codex/gpt-5.6-luna', 'chat', { efforts: [], defaultEffort: null }),
     ]);
@@ -864,11 +865,12 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
         string,
         { body: string },
       ];
-      expect(JSON.parse(init.body)).toMatchObject({
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      expect(body).toMatchObject({
         model: 'codex/gpt-5.6-luna',
         thinking: { type: 'disabled' },
-        reasoning_effort: 'low',
       });
+      expect(body).not.toHaveProperty('reasoning_effort');
     } finally {
       setXdGatewayModels([]);
     }

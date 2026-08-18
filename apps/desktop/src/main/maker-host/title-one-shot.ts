@@ -68,8 +68,6 @@ const TITLE_MAX_TOKENS = 32;
  * 网关认 OpenAI 兼容的 thinking.type=disabled;官方 no_think / enable_thinking=false 无效。
  */
 const TITLE_GATEWAY_THINKING = { type: 'disabled' } as const;
-/** GPT / Codex 推理档 one-shot 固定用最低档，避免回落到模型默认 high。 */
-const TITLE_GATEWAY_REASONING_EFFORT = 'low' as const;
 /** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
 const TITLE_OUTPUT_MAX_CHARS = 256;
 /**
@@ -287,6 +285,7 @@ async function fetchAnthropicTitle(
   signal: AbortSignal,
   maxTokens: number = TITLE_MAX_TOKENS,
   systemPrompt?: string,
+  thinking?: typeof TITLE_GATEWAY_THINKING | null,
 ): Promise<string> {
   // Anthropic Messages API 不支持 role: 'system' 消息 —— 系统指令必须写入
   // 顶层 `system` 字段，否则请求会被 API 拒绝。
@@ -297,6 +296,10 @@ async function fetchAnthropicTitle(
   };
   if (systemPrompt) {
     body.system = systemPrompt;
+  }
+  // 标题 / 预测只要短正文；有 thinking 的 Claude 档不关会先烧 token。
+  if (thinking) {
+    body.thinking = thinking;
   }
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/v1/messages`, {
     method: 'POST',
@@ -376,14 +379,14 @@ async function fetchGatewayTitle(
   signal: AbortSignal,
   maxTokens: number = TITLE_MAX_TOKENS,
   systemPrompt?: string,
+  thinking?: typeof TITLE_GATEWAY_THINKING | null,
+  effort?: Effort | null,
 ): Promise<string> {
   const messages: Array<{ role: string; content: string }> = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
   messages.push({ role: 'user', content: prompt });
 
-  // thinking.type=disabled：Hy3 / DeepSeek 等网关思考模型。
-  // reasoning_effort 写死 low：GPT / Codex 推理档（如 gpt-5.6-luna）不认 thinking 字段，
-  // 且 XD /models 常不下发 efforts，依赖清单最低档会整段漏传、回落到默认 high。
+  // thinking / reasoning_effort 都由调用方按 TitleTarget 传入，函数内不写死。
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/chat/completions`, {
     method: 'POST',
     signal,
@@ -394,8 +397,8 @@ async function fetchGatewayTitle(
     body: JSON.stringify({
       model: modelId,
       max_tokens: maxTokens,
-      thinking: TITLE_GATEWAY_THINKING,
-      reasoning_effort: TITLE_GATEWAY_REASONING_EFFORT,
+      ...(thinking ? { thinking } : {}),
+      ...(effort ? { reasoning_effort: effort } : {}),
       messages,
     }),
   });
@@ -683,6 +686,7 @@ log.debug('title oneShot skipped: no title target', {
           controller.signal,
           maxTokens,
           opts?.systemPrompt,
+          TITLE_GATEWAY_THINKING,
         );
         break;
       }
@@ -806,6 +810,8 @@ log.debug('title oneShot skipped: no title target', {
           controller.signal,
           maxTokens,
           opts?.systemPrompt,
+          TITLE_GATEWAY_THINKING,
+          target.effort,
         );
         break;
       }
