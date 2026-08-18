@@ -205,7 +205,12 @@ describe('account provider readiness wiring', () => {
     const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
     const suspendHardware = bootstrapSource.indexOf('suspendInputDeviceTaskSlots();', teardown);
     const clearCustomProviders = bootstrapSource.indexOf('setCustomProviders([])', teardown);
-    const makerShutdown = bootstrapSource.indexOf('await maker.shutdown()', teardown);
+    // The boundary must name itself: an unlabelled shutdown fails closed to
+    // 'account-boundary' in Maker, but the real logout path states it.
+    const makerShutdown = bootstrapSource.indexOf(
+      "await maker.shutdown({ reason: 'account-boundary' })",
+      teardown,
+    );
     const joinPrevious = bootstrapSource.indexOf(
       'waitForPreviousScope(',
       makerShutdown,
@@ -222,5 +227,30 @@ describe('account provider readiness wiring', () => {
     expect(makerShutdown).toBeGreaterThan(clearCustomProviders);
     expect(joinPrevious).toBeGreaterThan(makerShutdown);
     expect(clearAfterJoin).toBeGreaterThan(joinPrevious);
+  });
+
+  it('stops every PI Subagent runner of the outgoing owner at the account boundary', () => {
+    const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
+    const makerShutdown = bootstrapSource.indexOf(
+      "await maker.shutdown({ reason: 'account-boundary' })",
+      teardown,
+    );
+    // maker.shutdown only reaches tasks that still hold a live handle. A
+    // detached runner whose parent task was closed earlier has none, so the
+    // boundary must also sweep the agent home before the owner DB goes away.
+    const sweep = bootstrapSource.indexOf('stopAllPiSubagentRunsForExit(', makerShutdown);
+    const resetMakerCall = bootstrapSource.indexOf('resetMaker();', sweep);
+    const closeDb = bootstrapSource.indexOf('close local DB on', sweep);
+
+    expect(teardown).toBeGreaterThanOrEqual(0);
+    expect(makerShutdown).toBeGreaterThan(teardown);
+    expect(sweep).toBeGreaterThan(makerShutdown);
+    expect(resetMakerCall).toBeGreaterThan(sweep);
+    expect(closeDb).toBeGreaterThan(sweep);
+  });
+
+  it('names the quit boundary so it is never mistaken for an ownership change', () => {
+    expect(bootstrapSource).toContain("await m.shutdown({ reason: 'app-quit' })");
+    expect(bootstrapSource).not.toContain('await m.shutdown();');
   });
 });

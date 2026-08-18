@@ -1470,6 +1470,31 @@ export interface BackgroundTaskSnapshot {
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
 
 /**
+ * Why a session handle is being torn down.
+ *
+ * This is a *lifecycle identity*, not a hint: adapters that own detached,
+ * parent-independent resources (currently the Pi durable Subagent runners)
+ * branch on it.
+ *
+ * - `navigation` — ordinary session close / agent switch. The account and its
+ *   database stay the same, so detached work keeps running.
+ * - `account-boundary` — logout or account switch. The owner database and
+ *   gateway credentials are being replaced, so every detached child of the old
+ *   owner must be stopped and its credential leases revoked immediately.
+ * - `app-quit` — process shutdown. Detached children are stopped by the
+ *   dedicated quit step; this reason exists so quit is never mistaken for an
+ *   ownership change.
+ *
+ * Callers that cannot identify their boundary must omit the reason: teardown
+ * then fails closed to `account-boundary`.
+ */
+export type AgentSessionTeardownReason = 'navigation' | 'account-boundary' | 'app-quit';
+
+export interface AgentSessionTeardownOptions {
+  readonly reason: AgentSessionTeardownReason;
+}
+
+/**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
@@ -1559,13 +1584,13 @@ export interface AgentSessionHandle {
   ): () => void;
 
   /** 关闭会话，清理子进程 */
-  close(): Promise<void>;
+  close(opts?: AgentSessionTeardownOptions): Promise<void>;
 
   /**
    * Detach from a long-lived remote session without terminating the upstream
    * process. Agents without detach semantics leave this undefined.
    */
-  detach?(): Promise<void>;
+  detach?(opts?: AgentSessionTeardownOptions): Promise<void>;
 
   /** 事件流（streaming + 翻译后的统一事件） */
   events(): AsyncIterable<AgentEvent>;

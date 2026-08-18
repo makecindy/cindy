@@ -413,19 +413,25 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(proxyDisposed).toBe(2);
   });
 
-  it('keeps the proxy token leased until detached Subagents settle', async () => {
-    const agent = new PiAgent(buildDeps());
-    const handle = await agent.startSession(opts());
-    const runId = '123e4567-e89b-42d3-a456-426614174099';
+  /**
+   * Durable run fixture on disk, owned by this test's runtime instance so the
+   * host-side approval/ownership fences accept it.
+   */
+  function writeDurableRunStatus(
+    runId: string,
+    state: 'running' | 'completed',
+    extra: Record<string, unknown> = {},
+  ): string {
     const runDir = path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1', runId);
     mkdirSync(runDir, { recursive: true });
-    const writeStatus = (state: 'running' | 'completed') => writeFileSync(
+    writeFileSync(
       path.join(runDir, 'status.json'),
       JSON.stringify({
         version: 1,
         runId,
         taskId: 'tool-durable',
         parentSessionId: 's1',
+        runtimeOwnerId: 'pi-instance-1',
         runnerInstanceId: 'runner-durable',
         state,
         startedAt: 1,
@@ -437,17 +443,118 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
           agent: 'scout',
           status: state,
         }],
+        ...extra,
       }) + '\n',
     );
-    writeStatus('running');
+    return runDir;
+  }
 
-    await handle.close();
+  it('keeps the proxy token leased until detached Subagents settle', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    const runId = '123e4567-e89b-42d3-a456-426614174099';
+    writeDurableRunStatus(runId, 'running');
+
+    await handle.close({ reason: 'navigation' });
     await new Promise((resolve) => setTimeout(resolve, 350));
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(0);
 
-    writeStatus('completed');
+    writeDurableRunStatus(runId, 'completed');
     await vi.waitFor(() => expect(proxyDisposed).toBe(2), { timeout: 2_000 });
+  });
+
+  it('keeps answering detached Subagent approvals after the parent handle closes', async () => {
+    // Regression: close() used to clear the only timer that refreshed
+    // pendingApproval *and* short-circuit the approval handler on `closed`,
+    // while the detached child and its proxy token survived to the durable run's
+    // own terminal state. The child then waited out its run timeout on a card
+    // nobody was consuming.
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    // A resolver stays wired to the handle; only the parent handle is closing.
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+
+    await handle.close({ reason: 'navigation' });
+    // The approval only appears after close, so nothing could have been
+    // consumed by the foreground refresh timer.
+    handle.setInteractionResolver(resolver);
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      run.taskId,
+      'approval',
+      expect.objectContaining({ confirmed: true }),
+    ), { timeout: 3_000 });
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'write',
+      metadata: expect.objectContaining({ subagent: true }),
+    }));
+    // The lease is still held: the detached run has not settled.
+    expect(proxyDisposed).toBe(0);
+  });
+
+  it('stops detached Subagent runners and revokes the proxy token at an account boundary', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    const runId = '123e4567-e89b-42d3-a456-426614174095';
+    const runDir = writeDurableRunStatus(runId, 'running');
+    const stop = vi
+      .spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary')
+      .mockResolvedValue(true);
+
+    await handle.close({ reason: 'account-boundary' });
+
+    expect(stop).toHaveBeenCalledWith(
+      path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1'),
+      { runtimeOwnerId: 'pi-instance-1' },
+    );
+    // No lease transfer: the old owner's gateway route is revoked immediately.
+    expect(proxyDisposed).toBe(2);
+    expect(disposed).toBe(1);
+    // Ownership boundary, not data removal.
+    expect(existsSync(runDir)).toBe(true);
+    // The run stays live long enough to prove nothing re-leased the token.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(proxyDisposed).toBe(2);
+  });
+
+  it('does not resurrect a detached supervisor when the process exits after an account boundary', async () => {
+    // proc.close() fires onExit after close() already stopped the runners; that
+    // exit must not start a supervisor that answers the outgoing owner's cards.
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    // A runner that misses its stop deadline is exactly the risky case.
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(false);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    await handle.close({ reason: 'account-boundary' });
+    knobs.onExit?.({ code: 0, signal: null });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    expect(control).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('fails closed to the account boundary when a teardown caller names no reason', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    writeDurableRunStatus('123e4567-e89b-42d3-a456-426614174094', 'running');
+    const stop = vi
+      .spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary')
+      .mockResolvedValue(true);
+
+    await handle.close();
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(proxyDisposed).toBe(2);
   });
 
   it('acknowledges durable Subagent turn-change capture without creating a user permission prompt', async () => {

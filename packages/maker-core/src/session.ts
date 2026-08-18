@@ -46,6 +46,7 @@ import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
   AgentSessionHandle,
+  AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
   SendOptions,
   TurnContinuationState,
@@ -823,12 +824,17 @@ export class Session {
     return this.handle.onTurnContinuationChange?.(listener) ?? (() => undefined);
   }
 
-  close(): Promise<void> {
+  /**
+   * Ordinary close. Without an explicit reason this is navigation: the account
+   * and its database are unchanged, so an adapter's detached work survives.
+   * Account boundaries go through `detach({ reason: 'account-boundary' })`.
+   */
+  close(opts?: AgentSessionTeardownOptions): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
     this.terminationStarted = true;
-    this.closePromise = this.performClose();
+    this.closePromise = this.performClose(opts ?? { reason: 'navigation' });
     return this.closePromise;
   }
 
@@ -842,17 +848,17 @@ export class Session {
       return Promise.resolve(false);
     }
     this.terminationStarted = true;
-    this.closePromise = this.performClose();
+    this.closePromise = this.performClose({ reason: 'navigation' });
     return this.closePromise.then(() => true);
   }
 
-  private async performClose(): Promise<void> {
+  private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
     let closeSucceeded = false;
     try {
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
-      await this.handle.close();
+      await this.handle.close(teardown);
       closeSucceeded = true;
     } finally {
       this.sendReservation = null;
@@ -872,7 +878,14 @@ export class Session {
     }
   }
 
-  async detach(): Promise<void> {
+  /**
+   * Shutdown-path teardown. The reason is *not* optional in practice: Maker
+   * fails closed to `account-boundary` when its caller did not identify the
+   * boundary, so an unlabelled logout can never leave detached work running
+   * against the next owner's credentials.
+   */
+  async detach(opts?: AgentSessionTeardownOptions): Promise<void> {
+    const teardown: AgentSessionTeardownOptions = opts ?? { reason: 'account-boundary' };
     if (this.status === 'closed') return;
     this.terminationStarted = true;
     // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
@@ -882,9 +895,9 @@ export class Session {
     let detachSucceeded = false;
     try {
       if (this.handle.detach) {
-        await this.handle.detach();
+        await this.handle.detach(teardown);
       } else {
-        await this.handle.close();
+        await this.handle.close(teardown);
       }
       detachSucceeded = true;
     } finally {
@@ -1774,7 +1787,7 @@ export class Session {
       this.logger.error('event loop crashed', { error: String(e) });
       if (this.closePromise || this.status === 'closed') return;
       // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
-      this.closePromise = this.performClose();
+      this.closePromise = this.performClose({ reason: 'navigation' });
       if (this.terminalEventObservedGeneration !== this.turnGeneration) {
         this.fanOutEvent({
           type: 'error',

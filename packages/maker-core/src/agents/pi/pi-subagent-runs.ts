@@ -1140,21 +1140,17 @@ export function requestStopAllPiSubagentRunsSync(agentHome: string): number {
   return requested;
 }
 
-export async function stopAllPiSubagentRunsForExit(
-  agentHome: string,
-  timeoutMs = 4_000,
+/**
+ * Request stop for every non-terminal run under `roots` and wait until they are
+ * all terminal (or the deadline passes). `runtimeOwnerId`, when given, skips
+ * runs whose status names a *different* owner — an unreadable status stays in
+ * scope so a corrupt record can never keep a child alive past its boundary.
+ */
+async function stopPiSubagentRunsUnderRoots(
+  roots: readonly string[],
+  timeoutMs: number,
+  runtimeOwnerId?: string,
 ): Promise<boolean> {
-  const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
-  let sessionEntries: import('node:fs').Dirent[];
-  try {
-    sessionEntries = await fs.readdir(parentRoot, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-    throw error;
-  }
-  const roots = sessionEntries
-    .filter((entry) => entry.isDirectory() && entry.name !== '.' && entry.name !== '..')
-    .map((entry) => path.join(parentRoot, entry.name));
   const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
   const requested = new Set<string>();
   for (;;) {
@@ -1172,6 +1168,13 @@ export async function stopAllPiSubagentRunsForExit(
       for (const runId of runIds) {
         const status = statuses.get(runId);
         if ((status && isPiSubagentTerminal(status.state)) || staleRunIds.has(runId)) continue;
+        if (
+          runtimeOwnerId !== undefined
+          && status?.runtimeOwnerId !== undefined
+          && status.runtimeOwnerId !== runtimeOwnerId
+        ) {
+          continue;
+        }
         activeCount += 1;
         const key = `${root}:${runId}`;
         if (requested.has(key)) continue;
@@ -1185,6 +1188,39 @@ export async function stopAllPiSubagentRunsForExit(
     if (Date.now() >= deadline) return false;
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
+}
+
+export async function stopAllPiSubagentRunsForExit(
+  agentHome: string,
+  timeoutMs = 4_000,
+): Promise<boolean> {
+  const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
+  let sessionEntries: import('node:fs').Dirent[];
+  try {
+    sessionEntries = await fs.readdir(parentRoot, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  const roots = sessionEntries
+    .filter((entry) => entry.isDirectory() && entry.name !== '.' && entry.name !== '..')
+    .map((entry) => path.join(parentRoot, entry.name));
+  return stopPiSubagentRunsUnderRoots(roots, timeoutMs);
+}
+
+/**
+ * Account boundary (logout / account switch) teardown for one parent task.
+ *
+ * Unlike ordinary navigation close, the owning account's database and gateway
+ * credentials are being replaced, so its detached children must not keep
+ * running against the next owner's routing. Durable files are deliberately left
+ * on disk — this is an ownership boundary, not a data-removal boundary.
+ */
+export async function stopPiSubagentRunsForAccountBoundary(
+  root: string,
+  options: { runtimeOwnerId?: string; timeoutMs?: number } = {},
+): Promise<boolean> {
+  return stopPiSubagentRunsUnderRoots([root], options.timeoutMs ?? 4_000, options.runtimeOwnerId);
 }
 
 /**

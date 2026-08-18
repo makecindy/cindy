@@ -12,6 +12,7 @@ import {
   listPiSubagentRuns,
   resumePiSubagentRun,
   stopAndRemovePiSubagentRuns,
+  stopPiSubagentRunsForAccountBoundary,
 } from '../pi-subagent-runs.js';
 
 const roots: string[] = [];
@@ -22,12 +23,25 @@ async function tempRoot(): Promise<string> {
   return root;
 }
 
-async function waitFor<T>(read: () => Promise<T | null>, timeoutMs = 10_000): Promise<T> {
+/**
+ * Poll a real runner's durable state until `read` returns a value.
+ *
+ * `what` is only used to make a CI timeout readable: without it the failure
+ * surfaces later as a confusing assertion on a half-written record instead of
+ * "the child never reached this state".
+ */
+async function waitFor<T>(
+  read: () => Promise<T | null>,
+  timeoutMs = 10_000,
+  what = 'runner state',
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await read();
     if (value !== null) return value;
-    if (Date.now() >= deadline) throw new Error('timed out waiting for runner state');
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
@@ -56,6 +70,7 @@ async function makeFixture(options: {
   outputThenHang?: boolean;
   hangOnMessage?: string;
   delayExitAfterInputEndMs?: number;
+  runtimeOwnerId?: string;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -167,6 +182,7 @@ process.stdin.on('end', () => {
     runId,
     taskId: 'tool-fixture',
     parentSessionId: 'parent-fixture',
+    ...(options.runtimeOwnerId ? { runtimeOwnerId: options.runtimeOwnerId } : {}),
     runDir,
     cwd: root,
     binary: process.execPath,
@@ -642,16 +658,21 @@ describe('Cindy durable PI Subagent runner', () => {
 
   it('keeps completed output immutable and requires follow-up instead of late steer', async () => {
     const fixture = await makeFixture({ outputThenHang: true });
-    const running = await waitFor(async () => {
-      const [run] = await listPiSubagentRuns(fixture.root);
-      if (run?.state !== 'running') return null;
-      try {
-        const transcript = await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8');
-        return transcript.includes('fixture result') ? run : null;
-      } catch {
-        return null;
-      }
-    });
+    // The precondition under test is the *durable status* carrying the child's
+    // finished output while the run is still live. Waiting on transcript.jsonl
+    // instead raced that write: under CI load the transcript line landed first
+    // and the very next assertion read an output that was still undefined.
+    // Poll the same record the assertion reads, and let the explicit timeout
+    // say what never happened.
+    const running = await waitFor(
+      async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        if (run?.state !== 'running') return null;
+        return run.tasks[0]?.output === 'fixture result' ? run : null;
+      },
+      15_000,
+      'the child result to land in durable status while the run is still live',
+    );
     expect(running.tasks[0]?.output).toBe('fixture result');
     await expect(controlPiSubagentRuns(fixture.root, running.runId, 'steer', {
       childId: running.tasks[0]?.childId,
@@ -668,13 +689,19 @@ describe('Cindy durable PI Subagent runner', () => {
       type: 'follow_up', message: 'continue from the completed result',
     }));
     await expect(controlPiSubagentRuns(fixture.root, running.runId, 'stop')).resolves.toBe(1);
-    const stopped = await waitFor(async () => {
-      const [run] = await listPiSubagentRuns(fixture.root);
-      return run?.state === 'stopped' ? run : null;
-    });
+    const stopped = await waitFor(
+      async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'stopped' ? run : null;
+      },
+      15_000,
+      'the stop request to land the run in a stopped state',
+    );
     expect(stopped.tasks[0]?.output).toBe('fixture result');
     await waitForClose(fixture.child, fixture.stderr);
-  }, 10_000);
+    // Budget sits above both waits so a slow CI run reports the readable
+    // "timed out waiting for ..." message instead of a bare vitest timeout.
+  }, 40_000);
 
   it('bounds control dedupe and abandoned receipts without replaying the legacy mailbox', async () => {
     const fixture = await makeFixture({ hang: true });
@@ -722,6 +749,46 @@ describe('Cindy durable PI Subagent runner', () => {
     expect(await readdir(path.join(fixture.runDir, 'control-receipts'))).toHaveLength(512);
 
     await expect(controlPiSubagentRuns(fixture.root, running.runId, 'stop')).resolves.toBe(1);
+    await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'stopped' ? run : null;
+    });
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('stops this owner\'s detached runner at an account boundary and keeps its durable files', async () => {
+    const fixture = await makeFixture({ hang: true, runtimeOwnerId: 'owner-a' });
+    await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'running' ? run : null;
+    });
+
+    await expect(stopPiSubagentRunsForAccountBoundary(fixture.root, {
+      runtimeOwnerId: 'owner-a',
+    })).resolves.toBe(true);
+
+    const [stopped] = await listPiSubagentRuns(fixture.root);
+    expect(stopped?.state).toBe('stopped');
+    // Logout is an ownership boundary, not a data-removal boundary.
+    expect(await readFile(path.join(fixture.runDir, 'status.json'), 'utf8')).toContain('"stopped"');
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('leaves a run owned by another runtime alone at an account boundary', async () => {
+    const fixture = await makeFixture({ hang: true, runtimeOwnerId: 'owner-a' });
+    await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'running' ? run : null;
+    });
+
+    await expect(stopPiSubagentRunsForAccountBoundary(fixture.root, {
+      runtimeOwnerId: 'owner-b',
+      timeoutMs: 300,
+    })).resolves.toBe(true);
+    const [untouched] = await listPiSubagentRuns(fixture.root);
+    expect(untouched?.state).toBe('running');
+
+    await expect(controlPiSubagentRuns(fixture.root, untouched!.runId, 'stop')).resolves.toBe(1);
     await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);
       return run?.state === 'stopped' ? run : null;

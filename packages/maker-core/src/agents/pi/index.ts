@@ -61,6 +61,7 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentDeps,
   type AgentSessionHandle,
+  type AgentSessionTeardownOptions,
   type PiExtraSpawnConfig,
   type PiNativeModelSpec,
   type PiNativeProviderSpec,
@@ -92,6 +93,7 @@ import {
   listPiSubagentRuns,
   piSubagentRunRoot,
   resumePiSubagentRun,
+  stopPiSubagentRunsForAccountBoundary,
   syncPiSubagentPermissions,
   type PiSubagentRunStatus,
 } from './pi-subagent-runs.js';
@@ -2168,6 +2170,14 @@ export class PiAgent extends BaseAgent {
     const piSubagentApprovalDeliveries = new Set<string>();
     const piSubagentApprovalDecisions = new Map<string, PiPermissionResolution>();
     let piSubagentRefreshInFlight = false;
+    // Approval delivery belongs to the *detached run* lifecycle, not to the
+    // parent handle. After a navigation close the foreground refresh timer is
+    // gone, but `deferProxyDisposalForDetachedRuns` keeps polling durable status
+    // until the last detached run settles; while that supervisor runs it owns
+    // approval consumption, so a child that reaches an approval-gated tool after
+    // the parent view unmounted still gets a real Cindy prompt instead of
+    // waiting out its own run timeout.
+    let detachedApprovalSupervisorActive = false;
     let piSubagentResumeTail: Promise<void> = Promise.resolve();
     const clearPiSubagentApprovalState = (runId: string): void => {
       const prefix = `${runId}:`;
@@ -2266,7 +2276,7 @@ export class PiAgent extends BaseAgent {
       status: PiSubagentRunStatus,
       task: PiSubagentRunStatus['tasks'][number],
     ): Promise<void> => {
-      if (closed) return;
+      if (closed && !detachedApprovalSupervisorActive) return;
       // Shared userData can contain active runs from another Desktop instance.
       // Missing ownership is legacy metadata and must fail closed here.
       if (status.runtimeOwnerId !== subagentRuntimeOwnerId) return;
@@ -2724,18 +2734,56 @@ export class PiAgent extends BaseAgent {
       }
       if (firstError) throw firstError;
     };
+    /**
+     * Account boundary teardown for this task's detached runners.
+     *
+     * Bounded on purpose: a runner that does not acknowledge in time still
+     * loses its proxy token when `disposeSessionRegistrations()` runs right
+     * after, and the parent watchdog in the runner itself is the backstop.
+     * Never deletes durable files — logout is an ownership boundary.
+     */
+    let accountBoundaryTeardown = false;
+    const stopDetachedSubagentRunsForAccountBoundary = async (): Promise<void> => {
+      accountBoundaryTeardown = true;
+      if (!localSubagentSupported) return;
+      try {
+        const stopped = await stopPiSubagentRunsForAccountBoundary(subagentRunRoot, {
+          runtimeOwnerId: subagentRuntimeOwnerId,
+        });
+        if (!stopped) {
+          this.deps.logger.warn('pi detached Subagent runners did not stop before the account boundary deadline', {
+            sessionId: opts.sessionId,
+          });
+        }
+      } catch (error) {
+        this.deps.logger.warn('pi detached Subagent account boundary stop failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
     let proxyLeaseInitialInspection: Promise<void> | null = null;
     const deferProxyDisposalForDetachedRuns = (): Promise<void> => {
       if (proxyLeaseInitialInspection) return proxyLeaseInitialInspection;
-      if (!proxyRegistrationOwned || !disposeProxySession) return Promise.resolve();
-      const dispose = disposeProxySession;
-      disposeProxySession = undefined;
-      proxyRegistrationOwned = false;
+      // `proc.close()` fires onExit *after* an account-boundary close already
+      // stopped the runners and revoked the registrations. Without this fence
+      // that exit would start a supervisor for the outgoing owner and let a
+      // runner that missed its stop deadline reach the old approval surface.
+      if (accountBoundaryTeardown) return Promise.resolve();
+      const dispose = proxyRegistrationOwned ? disposeProxySession : undefined;
+      if (dispose) {
+        disposeProxySession = undefined;
+        proxyRegistrationOwned = false;
+      } else if (!localSubagentSupported) {
+        // Nothing to lease and no durable children to supervise.
+        return Promise.resolve();
+      }
       let leaseDisposed = false;
+      detachedApprovalSupervisorActive = localSubagentSupported;
       const settleLease = (): void => {
         if (leaseDisposed) return;
         leaseDisposed = true;
-        dispose();
+        detachedApprovalSupervisorActive = false;
+        dispose?.();
       };
       const startedAt = Date.now();
       const unreadableDirectoryDeadline = startedAt + 2_000;
@@ -2759,6 +2807,15 @@ export class PiAgent extends BaseAgent {
           const active = statuses.some((status) => !isPiSubagentTerminal(status.state));
           const allDirectoriesReadable = statuses.length === directoryCount;
           settleInitialInspection();
+          // Approval delivery keeps running while any detached run is live. The
+          // decision/delivery dedupe sets are the same ones the foreground timer
+          // used, so a request already answered before close is never re-asked.
+          if (localSubagentSupported && !leaseDisposed) {
+            for (const status of statuses) {
+              if (isPiSubagentTerminal(status.state)) continue;
+              for (const task of status.tasks) void resolvePiSubagentApproval(status, task);
+            }
+          }
           if (
             !active
             && (
@@ -2779,6 +2836,7 @@ export class PiAgent extends BaseAgent {
       })().catch((error) => {
         settleInitialInspection();
         // Inspection failure revokes rather than leaking a credential lease.
+        detachedApprovalSupervisorActive = false;
         try {
           settleLease();
         } catch {
@@ -4010,8 +4068,12 @@ export class PiAgent extends BaseAgent {
         }
       },
 
-      async close(): Promise<void> {
+      async close(closeOpts?: AgentSessionTeardownOptions): Promise<void> {
         closed = true;
+        // No reason means the caller could not identify its boundary; fail
+        // closed to the account boundary rather than leaving a detached child
+        // running against credentials that may already belong to someone else.
+        const accountBoundary = (closeOpts?.reason ?? 'account-boundary') === 'account-boundary';
         clearPiSubagentRefreshTimer();
         disposePiTranslateContext(ctx);
         runtimeCapabilityGeneration++;
@@ -4024,7 +4086,18 @@ export class PiAgent extends BaseAgent {
         // proxy-token disposer first so detached children keep their gateway
         // lease until their durable statuses settle.
         await piSubagentResumeTail;
-        await deferProxyDisposalForDetachedRuns();
+        if (accountBoundary) {
+          // The owner database is being removed and the gateway/BYOM credentials
+          // behind this proxy token are being replaced. A detached child of the
+          // old owner must not keep writing the workspace or resolving its proxy
+          // route into the next owner's credentials, so stop it here and let the
+          // registration teardown below revoke the token immediately instead of
+          // leasing it out. Durable files stay on disk (ownership boundary, not
+          // a data-removal boundary).
+          await stopDetachedSubagentRunsForAccountBoundary();
+        } else {
+          await deferProxyDisposalForDetachedRuns();
+        }
         try {
           disposeSessionRegistrations();
         } catch (err) {

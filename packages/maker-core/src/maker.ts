@@ -40,6 +40,8 @@ import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resourc
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
+  AgentSessionTeardownOptions,
+  AgentSessionTeardownReason,
   BaseAgent,
   StartSessionOptions,
   OneShotOptions,
@@ -434,7 +436,8 @@ export class Maker {
   ): Promise<void> {
     const entry = this.failedHandleCleanups.get(sessionId);
     if (!entry || (expectedEntry && entry !== expectedEntry)) return;
-    const cleanup = entry.promise ?? entry.handle.close();
+    // Startup-failure rollback, not an ownership change.
+    const cleanup = entry.promise ?? entry.handle.close({ reason: 'navigation' });
     entry.promise = cleanup;
     try {
       await cleanup;
@@ -616,7 +619,7 @@ export class Maker {
         }
       } catch (error) {
         try {
-          await handle.close();
+          await handle.close({ reason: 'navigation' });
         } catch (closeError) {
           this.logger.warn('failed to close Codex handle after thread claim conflict', {
             sessionId: id,
@@ -667,7 +670,7 @@ export class Maker {
       // MCP bridge 残留成「用户看不到、Maker 管不到」的半创建状态。
       let cleanupFailed = false;
       try {
-        await handle.close();
+        await handle.close({ reason: 'navigation' });
       } catch (closeError) {
         cleanupFailed = true;
         this.failedHandleCleanups.set(id, {
@@ -941,8 +944,14 @@ export class Maker {
    * 调用方:**只调一次**这个方法就够了。不需要再单独遍历 sessions。
    * 失败一律 swallow + 聚合日志, 不抛 (before-quit 阶段不能阻断退出流程)。
    */
-  async shutdown(): Promise<void> {
+  async shutdown(opts?: { reason?: AgentSessionTeardownReason }): Promise<void> {
     this.shutdownStarted = true;
+    // Fail closed: a caller that cannot name its boundary is treated as an
+    // account boundary, so adapters with detached, credential-holding children
+    // (Pi durable Subagents) always stop them rather than letting them run on
+    // into the next owner. The two real callers name themselves explicitly
+    // (`app-quit` from before-quit, `account-boundary` from logout/switch).
+    const teardown: AgentSessionTeardownOptions = { reason: opts?.reason ?? 'account-boundary' };
     const agentEntries = Object.entries(this.agents);
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
 
@@ -960,7 +969,7 @@ export class Maker {
       }
       return sessions.map((session) =>
         Promise.resolve()
-          .then(() => session.detach())
+          .then(() => session.detach(teardown))
           .catch((e) => {
             errors.push({ kind: `session-${phase}`, name: session.id, error: e });
           }),

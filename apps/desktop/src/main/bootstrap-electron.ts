@@ -99,7 +99,10 @@ async function shutdownMaker(): Promise<void> {
   try {
     // splash 失败时 maker 未 init / getMakerCore() 抛错 —— 静默兜底, 没东西要清。
     const m = getMakerCore();
-    await m.shutdown();
+    // Process exit, not an ownership change: detached PI Subagent runners are
+    // stopped by the dedicated `pi-subagent-runners` quit step above, and the
+    // account's DB/credentials are not being handed to anyone else.
+    await m.shutdown({ reason: 'app-quit' });
   } catch (err) {
     // maker 未就绪 (getMakerCore 抛) 或 shutdown 自身抛 —— 都不能阻断退出。
     // 注意: getMakerCore 未就绪时抛的是 sync error, await m.shutdown() 也走这里。
@@ -1385,7 +1388,29 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   try {
     try {
       const maker = getMakerIfReady();
-      if (maker) await maker.shutdown();
+      // Logout / account switch: the owner DbClient is disposed a few lines
+      // below and the gateway credentials behind every proxy token are being
+      // replaced. Adapters that keep parent-independent children alive across an
+      // ordinary close (PI durable Subagents) must stop them here instead.
+      if (maker) await maker.shutdown({ reason: 'account-boundary' });
+      // maker.shutdown only reaches tasks that still have a live handle. A
+      // detached PI Subagent whose parent task was closed earlier has no handle
+      // left, but it is still holding a transferred proxy lease and still
+      // writing the workspace — sweep the whole agent home so no child of the
+      // outgoing owner survives into the next one. Same call the quit path uses;
+      // idempotent with the per-handle stop above.
+      try {
+        const stopped = await stopAllPiSubagentRunsForExit(
+          path.join(app.getPath('userData'), 'pi-agent-home'),
+        );
+        if (!stopped) {
+          authBoundaryLog.warn(
+            `PI Subagent runners did not all acknowledge stop on ${reason} before timeout`,
+          );
+        }
+      } catch (err) {
+        authBoundaryLog.error(`stop PI Subagent runners on ${reason} failed (non-fatal):`, err);
+      }
       resetMaker();
     } catch (err) {
       authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
