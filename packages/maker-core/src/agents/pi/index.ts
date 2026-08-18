@@ -2996,7 +2996,7 @@ export class PiAgent extends BaseAgent {
         const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
         const command: Record<string, unknown> = { type: 'steer', message: escapeLeadingSlashCommand(promptText) };
         if (images.length > 0) command.images = images;
-        const resp = await proc.request(command);
+        const resp = await runExclusivePiRpc(() => proc.request(command));
         if (!resp.success) {
           throw new Error(`pi steer rejected: ${resp.error ?? 'unknown'}`);
         }

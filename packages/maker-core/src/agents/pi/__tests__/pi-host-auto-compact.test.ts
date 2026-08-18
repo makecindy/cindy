@@ -276,4 +276,27 @@ describe('PiAgent host auto-compact', () => {
     expect(promptAt).toBeGreaterThan(compactAt);
     await handle.close();
   });
+
+  it('holds steer until the in-flight compact RPC finishes', async () => {
+    let release!: () => void;
+    knobs.compactHold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const handle = await start(75);
+    settleWithUsage(160_000);
+    await vi.waitFor(() => expect(knobs.compactCalls).toHaveLength(1));
+    const steerDone = handle.steer!({
+      role: 'user',
+      content: [{ type: 'text', text: 'steer now' }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(knobs.rpcTypes.includes('steer')).toBe(false);
+    release();
+    await steerDone;
+    const compactAt = knobs.rpcTypes.lastIndexOf('compact');
+    const steerAt = knobs.rpcTypes.lastIndexOf('steer');
+    expect(steerAt).toBeGreaterThan(compactAt);
+    await handle.close();
+  });
 });
