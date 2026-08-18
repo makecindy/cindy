@@ -14,7 +14,7 @@ import path from 'node:path';
 
 export interface WindowsGitPathProbes {
   readRegistryInstallPaths: () => readonly string[];
-  whereGit: () => readonly string[];
+  findGitExecutablesOnPath: (pathValue: string | undefined) => readonly string[];
   readGitExecPath: (gitPath: string) => string | undefined;
   isDirectory: (candidate: string) => boolean;
   isFile: (candidate: string) => boolean;
@@ -32,40 +32,112 @@ export const WINDOWS_GIT_REGISTRY_KEYS = [
   'HKLM\\SOFTWARE\\WOW6432Node\\GitForWindows',
 ] as const;
 
-export const WINDOWS_GIT_WHERE_PATTERN = '$PATH:git.exe';
+const WINDOWS_GIT_EXECUTABLE = 'git.exe';
+
+/**
+ * PowerShell emits each registry value as UTF-16LE Base64. The transport is
+ * therefore ASCII-only and cannot be corrupted by the active Windows console
+ * code page before Node receives it.
+ */
+export function decodeWindowsRegistryBase64Lines(output: string): string[] {
+  const values: string[] = [];
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (
+      line.length === 0
+      || line.length % 4 !== 0
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(line)
+    ) {
+      continue;
+    }
+    const bytes = Buffer.from(line, 'base64');
+    if (bytes.length === 0 || bytes.length % 2 !== 0) continue;
+    const value = bytes.toString('utf16le').trim();
+    if (value) values.push(value);
+  }
+  return values;
+}
+
+function windowsPowerShellPath(): string | undefined {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot) return undefined;
+  return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+function windowsRegistryProviderPath(key: typeof WINDOWS_GIT_REGISTRY_KEYS[number]): string {
+  if (key.startsWith('HKCU\\')) {
+    return `Registry::HKEY_CURRENT_USER\\${key.slice('HKCU\\'.length)}`;
+  }
+  return `Registry::HKEY_LOCAL_MACHINE\\${key.slice('HKLM\\'.length)}`;
+}
 
 function defaultReadRegistryInstallPaths(): readonly string[] {
   if (process.platform !== 'win32') return [];
-  const paths: string[] = [];
-  for (const key of WINDOWS_GIT_REGISTRY_KEYS) {
-    try {
-      const output = execFileSync('reg', ['query', key, '/v', 'InstallPath'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        windowsHide: true,
-      });
-      const match = output.match(/InstallPath\s+REG_SZ\s+(.+)/i);
-      const value = match?.[1]?.trim();
-      if (value) paths.push(value);
-    } catch {
-      // Registry access is best-effort. PATH resolution must remain fail-open.
-    }
-  }
-  return paths;
-}
-
-function defaultWhereGit(): readonly string[] {
-  if (process.platform !== 'win32') return [];
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return [];
+  const registryPaths = WINDOWS_GIT_REGISTRY_KEYS
+    .map((key) => `'${windowsRegistryProviderPath(key)}'`)
+    .join(', ');
+  const script = [
+    `$keys = @(${registryPaths})`,
+    'foreach ($key in $keys) {',
+    '  try {',
+    "    $value = Get-ItemPropertyValue -LiteralPath $key -Name 'InstallPath' -ErrorAction Stop",
+    '    if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {',
+    '      [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$value))',
+    '    }',
+    '  } catch {}',
+    '}',
+  ].join('\n');
   try {
-    const output = execFileSync('where', [WINDOWS_GIT_WHERE_PATTERN], {
+    const output = execFileSync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 3_000,
       windowsHide: true,
     });
-    return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    return decodeWindowsRegistryBase64Lines(output);
   } catch {
+    // Registry access is best-effort. PATH resolution must remain fail-open.
     return [];
   }
+}
+
+export function findWindowsExecutablesOnPath(
+  pathValue: string | undefined,
+  executableName: string,
+  isFile: (candidate: string) => boolean,
+): string[] {
+  if (!pathValue) return [];
+  const matches: string[] = [];
+  for (const rawDirectory of pathValue.split(';')) {
+    const directory = rawDirectory.trim().replace(/^"|"$/g, '');
+    if (!directory) continue;
+    const candidate = path.win32.join(directory, executableName);
+    if (isFile(candidate)) matches.push(candidate);
+  }
+  return uniqueWindowsPaths(matches);
+}
+
+function safeIsDirectory(candidate: string): boolean {
+  try {
+    return statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function safeIsFile(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function defaultFindGitExecutablesOnPath(pathValue: string | undefined): readonly string[] {
+  if (process.platform !== 'win32') return [];
+  return findWindowsExecutablesOnPath(pathValue, WINDOWS_GIT_EXECUTABLE, safeIsFile);
 }
 
 function defaultReadGitExecPath(gitPath: string): string | undefined {
@@ -87,22 +159,10 @@ function defaultReadGitExecPath(gitPath: string): string | undefined {
 
 const defaultProbes: WindowsGitPathProbes = {
   readRegistryInstallPaths: defaultReadRegistryInstallPaths,
-  whereGit: defaultWhereGit,
+  findGitExecutablesOnPath: defaultFindGitExecutablesOnPath,
   readGitExecPath: defaultReadGitExecPath,
-  isDirectory: (candidate) => {
-    try {
-      return statSync(candidate).isDirectory();
-    } catch {
-      return false;
-    }
-  },
-  isFile: (candidate) => {
-    try {
-      return statSync(candidate).isFile();
-    } catch {
-      return false;
-    }
-  },
+  isDirectory: safeIsDirectory,
+  isFile: safeIsFile,
 };
 
 function normalizedWindowsPath(value: string): string {
@@ -213,7 +273,7 @@ export function resolveWindowsGitPath({ platform = process.platform, existingPat
   const original = existingPath ?? '';
   const roots = uniqueWindowsPaths([
     ...probes.readRegistryInstallPaths(),
-    ...probes.whereGit()
+    ...probes.findGitExecutablesOnPath(existingPath)
       .map((gitPath) => gitInstallRootForPath(gitPath, probes))
       .filter((value): value is string => Boolean(value)),
   ]);

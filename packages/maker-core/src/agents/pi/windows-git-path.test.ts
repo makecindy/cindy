@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  decodeWindowsRegistryBase64Lines,
+  findWindowsExecutablesOnPath,
   gitInstallRootFromPath,
   gitPathsForInstallRoot,
   resolveWindowsGitPath,
   translateMsysPathSegment,
   WINDOWS_GIT_REGISTRY_KEYS,
-  WINDOWS_GIT_WHERE_PATTERN,
   type WindowsGitPathProbes,
 } from './windows-git-path.js';
 
@@ -37,8 +38,20 @@ describe('Windows Git/PATH helpers', () => {
     ]);
   });
 
-  it('limits where.exe discovery to PATH instead of the current working directory', () => {
-    expect(WINDOWS_GIT_WHERE_PATTERN).toBe('$PATH:git.exe');
+  it('round-trips non-ASCII registry paths through the PowerShell Base64 transport', () => {
+    const installPath = 'C:\\Users\\测试用户\\Git';
+    const encoded = Buffer.from(installPath, 'utf16le').toString('base64');
+    expect(decodeWindowsRegistryBase64Lines(`${encoded}\r\nnot-base64\r\n`)).toEqual([installPath]);
+  });
+
+  it('finds git.exe in Unicode PATH segments without searching the current directory', () => {
+    const gitPath = 'C:\\Users\\测试用户\\Git\\cmd\\git.exe';
+    const isFile = (candidate: string) => candidate === gitPath;
+    expect(findWindowsExecutablesOnPath(
+      ';;"C:\\Users\\测试用户\\Git\\cmd";C:\\Windows',
+      'git.exe',
+      isFile,
+    )).toEqual([gitPath]);
   });
 
   it('discovers Git install paths from registry probes', () => {
@@ -50,7 +63,11 @@ describe('Windows Git/PATH helpers', () => {
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: 'C:\\Windows\\System32',
-      probes: { readRegistryInstallPaths: () => ['C:\\Program Files\\Git'], whereGit: () => [], ...fs },
+      probes: {
+        readRegistryInstallPaths: () => ['C:\\Program Files\\Git'],
+        findGitExecutablesOnPath: () => [],
+        ...fs,
+      },
     });
     expect(result.split(';')).toEqual([
       'C:\\Windows\\System32',
@@ -60,12 +77,16 @@ describe('Windows Git/PATH helpers', () => {
     ]);
   });
 
-  it('discovers a Git install root from a where git result', () => {
+  it('discovers a Git install root from a PATH executable', () => {
     const fs = fakeFs(['C:\\Tools\\Git\\bin\\git.exe']);
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: '',
-      probes: { readRegistryInstallPaths: () => [], whereGit: () => ['C:\\Tools\\Git\\bin\\git.exe'], ...fs },
+      probes: {
+        readRegistryInstallPaths: () => [],
+        findGitExecutablesOnPath: () => ['C:\\Tools\\Git\\bin\\git.exe'],
+        ...fs,
+      },
     });
     expect(result).toBe('C:\\Tools\\Git\\bin');
   });
@@ -76,7 +97,7 @@ describe('Windows Git/PATH helpers', () => {
     ['C:\\Git\\usr\\bin\\git.exe', 'C:\\Git'],
     ['C:\\Git\\mingw64\\bin\\git.exe', 'C:\\Git'],
     ['C:\\Git\\mingw32\\bin\\git.exe', 'C:\\Git'],
-  ])('infers install root from where git path %s', (gitPath, expected) => {
+  ])('infers install root from PATH executable %s', (gitPath, expected) => {
     expect(gitInstallRootFromPath(gitPath)).toBe(expected);
   });
 
@@ -89,12 +110,12 @@ describe('Windows Git/PATH helpers', () => {
     'C:\\Git\\bin\\git.exe',
     'C:\\Git\\usr\\bin\\git.exe',
     'C:\\Git\\mingw64\\bin\\git.exe',
-  ])('uses a where git probe at %s to add the inferred root paths', (gitPath) => {
+  ])('uses a PATH executable at %s to add the inferred root paths', (gitPath) => {
     const fs = fakeFs([gitPath, 'C:\\Git\\cmd\\git.exe']);
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: '',
-      probes: { readRegistryInstallPaths: () => [], whereGit: () => [gitPath], ...fs },
+      probes: { readRegistryInstallPaths: () => [], findGitExecutablesOnPath: () => [gitPath], ...fs },
     });
     expect(result).toContain('C:\\Git\\cmd');
   });
@@ -109,7 +130,7 @@ describe('Windows Git/PATH helpers', () => {
       existingPath: 'C:\\Windows',
       probes: {
         readRegistryInstallPaths: () => [],
-        whereGit: () => ['C:\\Users\\alice\\scoop\\shims\\git.exe'],
+        findGitExecutablesOnPath: () => ['C:\\Users\\alice\\scoop\\shims\\git.exe'],
         readGitExecPath: () => 'C:/Users/alice/scoop/apps/git/current/mingw64/libexec/git-core',
         ...fs,
       },
@@ -128,7 +149,7 @@ describe('Windows Git/PATH helpers', () => {
       existingPath: original,
       probes: {
         readRegistryInstallPaths: () => [],
-        whereGit: () => ['C:\\Tools\\git.cmd'],
+        findGitExecutablesOnPath: () => ['C:\\Tools\\git.cmd'],
         readGitExecPath: () => undefined,
         isDirectory: () => false,
         isFile: () => false,
@@ -146,7 +167,7 @@ describe('Windows Git/PATH helpers', () => {
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: 'C:\\Git\\CMD;c:\\git\\cmd;C:\\Windows',
-      probes: { readRegistryInstallPaths: () => ['c:\\git'], whereGit: () => [], ...fs },
+      probes: { readRegistryInstallPaths: () => ['c:\\git'], findGitExecutablesOnPath: () => [], ...fs },
     });
     expect(result.split(';')).toEqual(['C:\\Git\\CMD', 'C:\\Windows']);
   });
@@ -156,7 +177,7 @@ describe('Windows Git/PATH helpers', () => {
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: 'C:\\;C:',
-      probes: { readRegistryInstallPaths: () => ['C:\\Git'], whereGit: () => [], ...fs },
+      probes: { readRegistryInstallPaths: () => ['C:\\Git'], findGitExecutablesOnPath: () => [], ...fs },
     });
     expect(result.split(';')).toEqual(['C:\\', 'C:', 'C:\\Git\\cmd']);
   });
@@ -174,7 +195,12 @@ describe('Windows Git/PATH helpers', () => {
     expect(resolveWindowsGitPath({
       platform: 'win32',
       existingPath: original,
-      probes: { readRegistryInstallPaths: () => [], whereGit: () => [], isDirectory: () => false, isFile: () => false },
+      probes: {
+        readRegistryInstallPaths: () => [],
+        findGitExecutablesOnPath: () => [],
+        isDirectory: () => false,
+        isFile: () => false,
+      },
     })).toBe(original);
   });
 
@@ -185,7 +211,7 @@ describe('Windows Git/PATH helpers', () => {
       existingPath: original,
       probes: {
         readRegistryInstallPaths: () => ['C:\\Missing Git'],
-        whereGit: () => [],
+        findGitExecutablesOnPath: () => [],
         isDirectory: () => false,
         isFile: () => false,
       },
