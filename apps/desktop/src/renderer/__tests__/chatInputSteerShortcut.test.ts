@@ -174,6 +174,7 @@ describe('ChatInput steer shortcut contract', () => {
     );
     expect(chatInputSource).toContain('isComposerDraftMultiline(ed.state.doc)');
     expect(chatInputSource).toContain("voiceDraftTextRef.current.includes('\\n')");
+    expect(chatInputSource).toContain('browserCommentsRef.current.length > 0');
     expect(pendingQueuePanelSource).toContain('isPendingQueueSteerShortcut');
     expect(pendingQueuePanelSource).toContain('void onSteer(entry.clientId);');
   });

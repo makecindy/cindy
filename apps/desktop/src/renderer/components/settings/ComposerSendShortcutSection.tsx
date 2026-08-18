@@ -87,9 +87,10 @@ export function ComposerSendShortcutSection() {
                   align="start"
                   sideOffset={6}
                   className={cn(
+                    // DESIGN.md §4 Select & Dropdown:面板不带阴影,分层靠 Card 底色 + 边框。
+                    // (LanguageSection 的 shadow 是先于该条款的存量,不复制进新代码。)
                     'z-[10010] max-h-[18rem] w-[var(--radix-select-trigger-width)] min-w-[220px] overflow-y-auto rounded-xl p-2',
                     'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-                    'shadow-[var(--shadow-menu)]',
                   )}
                 >
                   <Select.Viewport className="flex flex-col gap-[2px]">

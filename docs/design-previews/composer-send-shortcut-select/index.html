@@ -36,7 +36,6 @@
     --menu-text-selected: #262626;
     --icon-active: #262626;        /* --settings-theme-icon-active → accent-emphasis */
     --chip: #e5e5e5;               /* --surface-chip(已自定义徽章) */
-    --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.15);
     --section-desc: #525252;       /* --settings-section-desc → text-tertiary-mid */
   }
   .dark {
@@ -54,7 +53,6 @@
     --menu-text-selected: #d4d4d4;
     --icon-active: #d4d4d4;
     --chip: #3c3c3a;
-    --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
     --section-desc: #737373;
   }
 
@@ -93,7 +91,7 @@
   .select-panel {
     position: absolute; top: 42px; right: 0; z-index: 10;
     width: 280px; border-radius: 12px; border: 1px solid var(--input-border);
-    background: var(--card-bg); box-shadow: var(--shadow-menu); padding: 8px;
+    background: var(--card-bg); padding: 8px;
     display: flex; flex-direction: column; gap: 2px;
   }
   .option {
@@ -117,7 +115,7 @@
   <p class="meta">
     设置 → 常规 → 消息输入。原「使用 ⌘+Enter 发送」Switch 替换为三选一 Select,结构与 token 逐一对齐
     <code>LanguageSection.tsx</code> 既有下拉(DESIGN.md §4 Select &amp; Dropdown:药丸 trigger、
-    12px 圆角 popper 面板、面板宽度绑定 trigger、选项行 8px 内层圆角、选中态 check + font-medium)。
+    12px 圆角 popper 面板、无阴影、面板宽度绑定 trigger、选项行 8px 内层圆角、选中态 check + font-medium)。
     色值全部取自 <code>themes/colors.ts</code> 默认主题的对应 token,Light / Dark 双列。
   </p>
 

@@ -58,6 +58,12 @@ const pastedChip = (chipText: string): FakeNode => ({
   isTextblock: false,
   attrs: { text: chipText, display: 'Pasted text' },
 });
+const quoteChip = (quoteText: string): FakeNode => ({
+  type: { name: 'composerQuote' },
+  isText: false,
+  isTextblock: false,
+  attrs: { text: quoteText },
+});
 
 describe('isMultilineDraftDoc', () => {
   it('treats an empty or single-paragraph doc as single-line', () => {
@@ -101,6 +107,11 @@ describe('isMultilineDraftDoc', () => {
 
   it('keeps a single-line paste chip single-line', () => {
     expect(isMultilineDraftDoc(fakeDoc(1, [paragraph(), pastedChip('one line only')]))).toBe(false);
+  });
+
+  it('treats a quote chip as multiline even when the quoted text is single-line', () => {
+    // formatQuoteForSend 无条件输出 marker 行 + 引用行,发送结果必然跨行。
+    expect(isMultilineDraftDoc(fakeDoc(1, [paragraph(), quoteChip('one line quote')]))).toBe(true);
   });
 
   it('stops descending once multiline is confirmed', () => {

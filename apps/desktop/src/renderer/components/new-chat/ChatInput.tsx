@@ -1114,14 +1114,6 @@ export function ChatInput({
       voiceDraftTextRef.current.length === 0
     );
   };
-  // 语音听写的可见草稿(VoiceInputDraftDecoration)还没落进 editor doc;
-  // 多行判定必须把它算进去,否则多行转写在 multiline 挡下会被普通 Enter
-  // 经 stop-and-send 路径误发。keydown 稳定闭包读 ref,render 侧同样经此取值。
-  const isComposerDraftMultiline = useCallback(
-    (doc: Parameters<typeof isMultilineDraftDoc>[0] | null | undefined): boolean =>
-      (doc ? isMultilineDraftDoc(doc) : false) || voiceDraftTextRef.current.includes('\n'),
-    [],
-  );
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
   const steerShortcutLabel = useMemo(
     () => (window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'),
@@ -1480,6 +1472,18 @@ export function ChatInput({
   const [browserComments, setBrowserComments] = useState<BrowserCommentDraftItem[]>([]);
   const browserCommentsRef = useRef<BrowserCommentDraftItem[]>(browserComments);
   browserCommentsRef.current = browserComments;
+
+  // 多行草稿判定的 ChatInput 侧合并:doc 之外还有两类"可见但不在 doc 里"的内容——
+  // 语音听写草稿(VoiceInputDraftDecoration)与浏览器评论(formatBrowserCommentsForSend
+  // 只要有评论就展开成多行块)。漏掉任何一类,multiline 挡下普通 Enter 都会误发。
+  // keydown 稳定闭包读 ref,render 侧同样经此取值。
+  const isComposerDraftMultiline = useCallback(
+    (doc: Parameters<typeof isMultilineDraftDoc>[0] | null | undefined): boolean =>
+      (doc ? isMultilineDraftDoc(doc) : false) ||
+      voiceDraftTextRef.current.includes('\n') ||
+      browserCommentsRef.current.length > 0,
+    [],
+  );
 
   // Ref bridge for Tiptap handlePaste — editorProps can't read React
   // state directly, so we expose attachment writers via stable refs.
