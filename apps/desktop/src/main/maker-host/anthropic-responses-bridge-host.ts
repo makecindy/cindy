@@ -428,10 +428,11 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 /**
  * PI already emits xAI-native payloads, so this path bypasses the Messages →
  * Responses bridge that normally supplies xAI's model-gated server tools.
- * Restore the same stable contract here while respecting the native endpoint:
- * Responses accepts `x_search`, while Chat Completions accepts `live_search`.
- * Preserve PI function tools structurally, normalize any stale search-tool
- * spelling, append one missing search declaration, and keep the Responses-only
+ * Restore the same stable contract here while respecting the native endpoint.
+ * Current xAI server-side search tools belong to Responses; Chat Completions'
+ * legacy live_search path is deprecated. Strip either search spelling from Chat
+ * requests while preserving PI function tools and tool_choice. For Responses,
+ * normalize stale spellings, append one missing x_search declaration, and keep
  * forced-function narrowing from being satisfied by x_search instead.
  */
 function withNativeXaiServerSideTools(
@@ -439,18 +440,21 @@ function withNativeXaiServerSideTools(
   wireProtocol: PiNativeWireProtocol,
 ): Record<string, unknown> | null {
   if (!isPlainRecord(body) || typeof body.model !== 'string') return null;
+  const existing = Array.isArray(body.tools) ? body.tools : [];
+  if (wireProtocol === 'openai-chat') {
+    const tools = existing.filter((tool) => (
+      !isPlainRecord(tool) ||
+      (tool.type !== XAI_X_SEARCH_TOOL_TYPE && tool.type !== XAI_LIVE_SEARCH_TOOL_TYPE)
+    ));
+    return tools.length === existing.length ? null : { ...body, tools };
+  }
+
   const model = body.model.startsWith(XAI_MODEL_PREFIX)
     ? body.model.slice(XAI_MODEL_PREFIX.length)
     : body.model;
   const serverTools = xaiServerSideTools(model);
   if (serverTools.length === 0) return null;
 
-  const existing = Array.isArray(body.tools) ? body.tools : [];
-  const searchToolType =
-    wireProtocol === 'openai-chat' ? XAI_LIVE_SEARCH_TOOL_TYPE : XAI_X_SEARCH_TOOL_TYPE;
-  const expectedServerTools = serverTools.map((tool) => (
-    tool.type === XAI_X_SEARCH_TOOL_TYPE ? { ...tool, type: searchToolType } : tool
-  ));
   let searchToolDeclared = false;
   let toolsChanged = false;
   const tools = existing.flatMap((tool) => {
@@ -465,18 +469,18 @@ function withNativeXaiServerSideTools(
       return [];
     }
     searchToolDeclared = true;
-    if (tool.type === searchToolType) return [tool];
+    if (tool.type === XAI_X_SEARCH_TOOL_TYPE) return [tool];
     toolsChanged = true;
-    // Cross-protocol search options are not interchangeable. Keep only the
-    // endpoint-native declaration instead of forwarding stale option fields.
-    return [{ type: searchToolType }];
+    // live_search options belong to the deprecated Chat Completions shape and
+    // are not interchangeable with Responses x_search options.
+    return [{ type: XAI_X_SEARCH_TOOL_TYPE }];
   });
   const declaredTypes = new Set(
     tools.map((tool) => (
       isPlainRecord(tool) && typeof tool.type === 'string' ? tool.type : ''
     )),
   );
-  const missing = expectedServerTools.filter((tool) => !declaredTypes.has(tool.type));
+  const missing = serverTools.filter((tool) => !declaredTypes.has(tool.type));
   if (missing.length > 0) {
     tools.push(...missing);
     toolsChanged = true;
@@ -486,20 +490,13 @@ function withNativeXaiServerSideTools(
   if (body.tool_choice === 'required') {
     const functionToolNames = tools.flatMap((tool) => {
       if (!isPlainRecord(tool) || tool.type !== 'function') return [];
-      if (wireProtocol === 'openai-chat') {
-        return isPlainRecord(tool.function) && typeof tool.function.name === 'string'
-          ? [tool.function.name]
-          : [];
-      }
       return typeof tool.name === 'string' ? [tool.name] : [];
     });
     if (functionToolNames.length === 1) {
       const name = functionToolNames[0]!;
       next = {
         ...next,
-        tool_choice: wireProtocol === 'openai-chat'
-          ? { type: 'function', function: { name } }
-          : { type: 'function', name },
+        tool_choice: { type: 'function', name },
       };
       return next;
     }
