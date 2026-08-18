@@ -1359,7 +1359,7 @@ export async function listPiPackages(): Promise<PiPackageListResult> {
 
 export interface PiPackageEnableIdentity {
   displayLabel: string;
-  expectedPackageFingerprint: string | null;
+  expectedPackageFingerprint: string;
 }
 
 function nativeConfirmationField(value: string, maxBytes: number): string {
@@ -1369,7 +1369,10 @@ function nativeConfirmationField(value: string, maxBytes: number): string {
   );
 }
 
-function piPackageEnableDisplayLabel(target: InspectedPackage): string {
+function piPackageEnableDisplayLabel(
+  target: InspectedPackage,
+  packageFingerprint: string,
+): string {
   let name = nativeConfirmationField(target.view.name, MAX_DISPLAY_NAME_BYTES);
   if (
     !name
@@ -1393,7 +1396,8 @@ function piPackageEnableDisplayLabel(target: InspectedPackage): string {
     && !rawVersion.includes('\\')
     ? rawVersion
     : '';
-  return version ? `${name} (${version})` : name;
+  const packageLabel = version ? `${name} (${version})` : name;
+  return `${packageLabel}\nSHA-256: ${packageFingerprint}`;
 }
 
 /**
@@ -1410,9 +1414,12 @@ export async function capturePiPackageEnableIdentity(source: string): Promise<Pi
     if (!hasToggleableResources(target.view.resources)) {
       throw new Error('Pi package has no launchable resources');
     }
+    if (!target.contentFingerprint) {
+      throw new Error('Pi package fingerprint is unavailable');
+    }
     return {
-      displayLabel: piPackageEnableDisplayLabel(target),
-      expectedPackageFingerprint: target.contentFingerprint ?? null,
+      displayLabel: piPackageEnableDisplayLabel(target, target.contentFingerprint),
+      expectedPackageFingerprint: target.contentFingerprint,
     };
   });
 }

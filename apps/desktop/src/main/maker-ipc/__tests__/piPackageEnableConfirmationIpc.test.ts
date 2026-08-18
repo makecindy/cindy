@@ -22,7 +22,7 @@ describe('Pi package enable confirmation IPC contract', () => {
     expect(trustGuard).toBeLessThan(identityCapture);
   });
 
-  it('shows only the Main-inspected package label and binds its fingerprint after confirmation', () => {
+  it('shows the Main-inspected package label and fingerprint before binding that fingerprint', () => {
     const handler = mutationHandlerSource();
     const identityCapture = handler.indexOf('capturePiPackageEnableIdentity(request.source)');
     const inspectedLabel = handler.indexOf("message: enableIdentity?.displayLabel ?? ''");

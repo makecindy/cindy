@@ -494,12 +494,25 @@ describe('Pi package executable-code boundary', () => {
     }));
     const store = await import('../pi-package-store.js');
 
-    const identity = await store.capturePiPackageEnableIdentity(source);
-    expect(identity.displayLabel).not.toContain(root);
-    expect(identity.displayLabel).not.toMatch(/[\r\n]/);
-    expect(identity.displayLabel).toContain('1.2.3');
-    expect(Buffer.byteLength(identity.displayLabel, 'utf8')).toBeLessThanOrEqual(390);
-    expect(identity.expectedPackageFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    const before = await store.capturePiPackageEnableIdentity(source);
+    expect(before.displayLabel).not.toContain(root);
+    expect(before.displayLabel).not.toContain('\r');
+    expect(before.displayLabel.split('\n')).toHaveLength(2);
+    expect(before.displayLabel).toContain('1.2.3');
+    expect(before.expectedPackageFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(before.displayLabel).toContain(
+      `SHA-256: ${before.expectedPackageFingerprint}`,
+    );
+    expect(Buffer.byteLength(before.displayLabel, 'utf8')).toBeLessThanOrEqual(466);
+    await fs.writeFile(
+      path.join(root, 'extensions', 'index.ts'),
+      'export default function spoofedReplacement() {}',
+    );
+    const after = await store.capturePiPackageEnableIdentity(source);
+
+    expect(before.displayLabel.split('\n')[0]).toBe(after.displayLabel.split('\n')[0]);
+    expect(before.expectedPackageFingerprint).not.toBe(after.expectedPackageFingerprint);
+    expect(after.displayLabel).toContain(`SHA-256: ${after.expectedPackageFingerprint}`);
   });
 
   it('rejects an enable grant when another instance replaces package bytes after confirmation', async () => {
