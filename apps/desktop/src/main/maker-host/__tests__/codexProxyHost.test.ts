@@ -1487,6 +1487,179 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  it('passes a locked Subagent effort through the Chat local bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'locked-chat-provider',
+      name: 'Locked Chat Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-chat',
+          upstream: 'https://locked-chat.invalid/v1',
+          authStrategy: 'api-key-header',
+          modelIdRewrite: { stripPrefix: 'chat/' },
+        },
+      },
+      models: { codex: [{ id: 'chat/model-a', name: 'Chat Model A' }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'locked-chat-key');
+    host.registerComposed(
+      'session-chat-parent',
+      'thread-chat-parent',
+      'PRODUCT_PROMPT',
+      {
+        subagentRoute: {
+          providerId: 'locked-chat-provider',
+          catalogModel: 'chat/model-a',
+          reasoningEffort: 'high',
+        },
+      },
+    );
+    setSessionProvider('session-chat-parent', 'openai');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const parsedBody = {
+      model: 'gpt-5.6-sol',
+      reasoning: { effort: 'medium', summary: 'auto' },
+      input: [],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-chat-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-chat-parent',
+      },
+    };
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(parsedBody, ctx));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      if (!decision?.localHandler) throw new Error('expected Chat bridge local handler');
+
+      const res = {} as never;
+      await decision.localHandler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx,
+        res,
+      });
+      const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+        | { handle: ReturnType<typeof vi.fn> }
+        | undefined;
+      expect(bridge?.handle).toHaveBeenCalledWith({
+        parsedBody: {
+          ...parsedBody,
+          model: 'chat/model-a',
+          reasoning: { effort: 'high', summary: 'auto' },
+          instructions: 'PRODUCT_PROMPT',
+        },
+        res,
+      });
+    } finally {
+      host.unregister('session-chat-parent');
+      clearSessionProvider('session-chat-parent');
+      host.clearCodexProxyAuthInjection();
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('clears an inherited effort for a default-effort Subagent through the Anthropic local bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'locked-anthropic-provider',
+      name: 'Locked Anthropic Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'anthropic-messages',
+          upstream: 'https://locked-anthropic.invalid',
+          authStrategy: 'api-key-header',
+          modelIdRewrite: { stripPrefix: 'anthropic/' },
+        },
+      },
+      models: { codex: [{ id: 'anthropic/model-a', name: 'Anthropic Model A' }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'locked-anthropic-key');
+    host.registerComposed(
+      'session-anthropic-parent',
+      'thread-anthropic-parent',
+      'PRODUCT_PROMPT',
+      {
+        subagentRoute: {
+          providerId: 'locked-anthropic-provider',
+          catalogModel: 'anthropic/model-a',
+          reasoningEffort: null,
+        },
+      },
+    );
+    setSessionProvider('session-anthropic-parent', 'openai');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const parsedBody = {
+      model: 'gpt-5.6-sol',
+      reasoning: { effort: 'medium', summary: 'auto' },
+      input: [],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-anthropic-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-anthropic-parent',
+      },
+    };
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(parsedBody, ctx));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      if (!decision?.localHandler) throw new Error('expected Anthropic bridge local handler');
+
+      const res = {} as never;
+      await decision.localHandler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx,
+        res,
+      });
+      const bridge = mockState.createResponsesAnthropicHandler.mock.results.at(-1)?.value as
+        | { handle: ReturnType<typeof vi.fn> }
+        | undefined;
+      expect(bridge?.handle).toHaveBeenCalledWith({
+        parsedBody: {
+          ...parsedBody,
+          model: 'anthropic/model-a',
+          reasoning: { summary: 'auto' },
+          instructions: 'PRODUCT_PROMPT',
+        },
+        ctx,
+        res,
+      });
+    } finally {
+      host.unregister('session-anthropic-parent');
+      clearSessionProvider('session-anthropic-parent');
+      host.clearCodexProxyAuthInjection();
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('routes a child by the locked model even when the inherited request model differs', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

@@ -339,6 +339,31 @@ function gatewayProviderIdForRewrittenModel(model: string): string | null {
   return model.startsWith('codex/') && model.length > 'codex/'.length ? 'xd' : null;
 }
 
+/** Applies the locked Subagent effort while preserving unrelated reasoning fields. */
+function applyReasoningEffortOverride(
+  body: Record<string, unknown>,
+  reasoningEffort: CodexSubagentRouteSnapshot['reasoningEffort'] | undefined,
+): Record<string, unknown> {
+  if (reasoningEffort === undefined) return body;
+  if (reasoningEffort !== null) {
+    return {
+      ...body,
+      reasoning: isPlainObject(body.reasoning)
+        ? { ...body.reasoning, effort: reasoningEffort }
+        : { effort: reasoningEffort },
+    };
+  }
+  if (!isPlainObject(body.reasoning) || !Object.hasOwn(body.reasoning, 'effort')) {
+    return body;
+  }
+  const reasoning = { ...body.reasoning };
+  delete reasoning.effort;
+  const next = { ...body };
+  if (Object.keys(reasoning).length > 0) next.reasoning = reasoning;
+  else delete next.reasoning;
+  return next;
+}
+
 /**
  * 个性化 Codex Subagent 是强制路由：Codex 内部先继承父模型创建子线程，首个
  * collab_spawn 请求按血缘登记后在这里替换成用户冻结的模型与 effort。放在所有
@@ -355,19 +380,7 @@ function createForcedSubagentRequestTransform(): RequestTransform {
       ...body,
       model: route.catalogModel,
     };
-    if (route.reasoningEffort) {
-      next.reasoning = isPlainObject(body.reasoning)
-        ? { ...body.reasoning, effort: route.reasoningEffort }
-        : { effort: route.reasoningEffort };
-    } else if (isPlainObject(body.reasoning) && Object.hasOwn(body.reasoning, 'effort')) {
-      // 子线程创建时继承了父模型请求体；锁定模型未指定 effort 表示使用目标模型默认档，
-      // 不能把父模型的档位一起带过去。保留 summary 等其它 reasoning 字段。
-      const reasoning = { ...body.reasoning };
-      delete reasoning.effort;
-      if (Object.keys(reasoning).length > 0) next.reasoning = reasoning;
-      else delete next.reasoning;
-    }
-    return next;
+    return applyReasoningEffortOverride(next, route.reasoningEffort);
   };
 }
 
@@ -765,6 +778,7 @@ function createChatBridgeDecision(
   instructions: string | undefined,
   wireModel: string,
   requestModelOverride?: string,
+  reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
@@ -816,6 +830,7 @@ function createChatBridgeDecision(
         parsedBody,
         instructions,
         requestModelOverride,
+        reasoningEffortOverride,
         bridge: 'chat',
         providerId,
         upstreamBase: route.routing.upstream,
@@ -830,6 +845,7 @@ interface PrepareLocalBridgeBodyOptions {
   parsedBody: unknown;
   instructions?: string;
   requestModelOverride?: string;
+  reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'];
   bridge: 'chat' | 'anthropic';
   providerId: string;
   upstreamBase: string;
@@ -855,6 +871,9 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
       ...body,
       model: opts.requestModelOverride,
     });
+  }
+  if (isPlainObject(body)) {
+    body = applyReasoningEffortOverride(body, opts.reasoningEffortOverride);
   }
   if (opts.instructions && isPlainObject(body)) {
     const existing = body.instructions;
@@ -978,6 +997,7 @@ function createAnthropicBridgeDecision(
   instructions: string | undefined,
   wireModel: string,
   requestModelOverride?: string,
+  reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'anthropic-messages') return null;
   const isXdGatewayBridge =
@@ -1155,6 +1175,7 @@ function createAnthropicBridgeDecision(
         parsedBody,
         instructions,
         requestModelOverride,
+        reasoningEffortOverride,
         bridge: 'anthropic',
         providerId,
         upstreamBase,
@@ -1170,6 +1191,7 @@ function createLocalBridgeDecision(
   wireModel: string,
   requestModelOverride: string | undefined,
   threadId: string,
+  reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
   if (!route) return null;
   if (route.routing.wireProtocol === 'openai-chat') {
@@ -1178,6 +1200,7 @@ function createLocalBridgeDecision(
       instructions,
       wireModel,
       requestModelOverride,
+      reasoningEffortOverride,
     );
     if (decision) {
       recordCodexThreadUpstreamForDiagnostics(threadId, route.routing.upstream);
@@ -1190,6 +1213,7 @@ function createLocalBridgeDecision(
       instructions,
       wireModel,
       requestModelOverride,
+      reasoningEffortOverride,
     );
     if (decision) {
       recordCodexThreadUpstreamForDiagnostics(
@@ -2419,6 +2443,7 @@ export function createModelRoutingTransform(
               ? subagentRoute.catalogModel
               : undefined,
             threadId,
+            subagentRoute.reasoningEffort,
           ) ?? unresolvedCollabSpawnRouteDecision();
         });
       }
