@@ -4235,38 +4235,48 @@ function RailPanels({
   /** 面板头部的新建按钮(展开态段头 SquarePen 同款配色);创建动作导航去
    *  新建页,面板随之收起。disabled = 远程写保护(与展开态 ProjectAction
    *  同语义置灰,不收面板不丢上下文,codex review)。 */
-  const panelHeadCreateButton = (label: string, onCreate: () => void, disabled = false) => (
-    <Tip text={label} side="bottom">
-      <span
-        role={disabled ? 'button' : undefined}
-        aria-disabled={disabled ? true : undefined}
-        aria-label={disabled ? label : undefined}
-        tabIndex={disabled ? 0 : undefined}
-        className="inline-flex self-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-      >
-        <button
-          type="button"
-          aria-label={label}
-          aria-hidden={disabled ? true : undefined}
-          disabled={disabled}
-          onClick={() => {
-            railPanelStore.closeAll();
-            onCreate();
-          }}
-          className={cn(
-            'flex h-6 w-6 shrink-0 items-center justify-center rounded-md -my-1',
-            'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-            // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
-            // token 化 focus 环(DESIGN.md §10;codex review)。
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'disabled:opacity-40 disabled:hover:text-[var(--text-tertiary)]',
-          )}
+  const panelHeadCreateButton = (
+    actionLabel: string,
+    onCreate: () => void,
+    disabled = false,
+    disabledReason?: string,
+  ) => {
+    const label =
+      disabled && disabledReason ? `${actionLabel} — ${disabledReason}` : actionLabel;
+
+    return (
+      <Tip text={label} side="bottom">
+        <span
+          role={disabled ? 'button' : undefined}
+          aria-disabled={disabled ? true : undefined}
+          aria-label={disabled ? label : undefined}
+          tabIndex={disabled ? 0 : undefined}
+          className="inline-flex self-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
-          <SquarePen size={14} strokeWidth={2} />
-        </button>
-      </span>
-    </Tip>
-  );
+          <button
+            type="button"
+            aria-label={actionLabel}
+            aria-hidden={disabled ? true : undefined}
+            disabled={disabled}
+            onClick={() => {
+              railPanelStore.closeAll();
+              onCreate();
+            }}
+            className={cn(
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md -my-1',
+              'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+              // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
+              // token 化 focus 环(DESIGN.md §10;codex review)。
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              'disabled:opacity-40 disabled:hover:text-[var(--text-tertiary)]',
+            )}
+          >
+            <SquarePen size={14} strokeWidth={2} />
+          </button>
+        </span>
+      </Tip>
+    );
+  };
 
   if (!panelState.openSection || !panelState.anchor) return null;
 
@@ -4290,11 +4300,10 @@ function RailPanels({
               t('ccAgent.sidebar.railNav.dialogues'),
               dialogues.length,
               panelHeadCreateButton(
-                isCreateDialogueDisabled
-                  ? t('ccAgent.sidebar.creationInProgress')
-                  : t('ccAgent.sidebar.newDialogue'),
+                t('ccAgent.sidebar.newDialogue'),
                 onCreateDialogue,
                 isCreateDialogueDisabled,
+                t('ccAgent.sidebar.creationInProgress'),
               ),
             )}
             <div className="max-h-[420px] overflow-y-auto [scrollbar-width:thin]">
@@ -4437,11 +4446,10 @@ function RailPanels({
             projectDisplayLabelWithMachine(openProject),
             openProject.sessions.length,
             panelHeadCreateButton(
-              isDeviceLinkWriteBlocked(openProject)
-                ? t('ccAgent.remoteSession.actionsUnavailable')
-                : t('ccAgent.sidebar.projectAction.newInDirectory'),
+              t('ccAgent.sidebar.projectAction.newInDirectory'),
               () => onCreateInProject(openProject),
               isDeviceLinkWriteBlocked(openProject),
+              t('ccAgent.remoteSession.actionsUnavailable'),
             ),
           )}
           <div className="max-h-[420px] overflow-y-auto [scrollbar-width:thin]">

@@ -231,7 +231,9 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
     [sessionId, taskId, stopping],
   );
   const actionLabel = t('rightSidebar.backgroundTasks.stop');
-  const label = stopping ? t('rightSidebar.backgroundTasks.stopping') : actionLabel;
+  const label = stopping
+    ? `${actionLabel} — ${t('rightSidebar.backgroundTasks.stopping')}`
+    : actionLabel;
   const button = (
     <button
       type="button"

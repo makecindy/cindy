@@ -15,6 +15,10 @@ const GUARDED_TOOLTIP_ROOTS = [
 const WINDOWS_SYSTEM_CONTROL_PATH = 'components/title-bar/WindowControls.tsx';
 const WINDOWS_SYSTEM_CONTROL_TOOLTIP_EXEMPTION = 'windows-system-control';
 
+function normalizeRendererPath(path: string): string {
+  return path.replaceAll('\\', '/');
+}
+
 function rendererSource(path: string): string {
   return readFileSync(resolve(RENDERER_ROOT, path), 'utf8');
 }
@@ -206,7 +210,7 @@ function tooltipContractViolations(): string[] {
   for (const root of GUARDED_TOOLTIP_ROOTS) {
     for (const file of rendererComponentFiles(resolve(RENDERER_ROOT, root))) {
       const source = readFileSync(file, 'utf8');
-      const rendererRelativePath = relative(RENDERER_ROOT, file);
+      const rendererRelativePath = normalizeRendererPath(relative(RENDERER_ROOT, file));
       const sourceFile = ts.createSourceFile(
         file,
         source,
@@ -240,7 +244,7 @@ function tooltipContractViolations(): string[] {
               !hasManagedTip(node, sourceFile))
           ) {
             const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-            violations.push(`${relative(RENDERER_ROOT, file)}:${line + 1}`);
+            violations.push(`${rendererRelativePath}:${line + 1}`);
           }
         }
         ts.forEachChild(node, visit);
@@ -290,6 +294,9 @@ describe('icon-only button tooltip coverage', () => {
   it('keeps Windows system window controls accessible without visible tips', () => {
     const windowControls = rendererSource(WINDOWS_SYSTEM_CONTROL_PATH);
 
+    expect(normalizeRendererPath('components\\title-bar\\WindowControls.tsx')).toBe(
+      WINDOWS_SYSTEM_CONTROL_PATH,
+    );
     expect(windowControls).not.toContain("import { Tip } from '@/components/ui/tooltip';");
     expect(windowControls).not.toContain('<Tip');
     expect(
@@ -374,6 +381,9 @@ describe('icon-only button tooltip coverage', () => {
 
   it('keeps disabled icon actions hoverable and keyboard discoverable', () => {
     const sidebar = rendererSource('features/cc-agent/CCAgentSidebarUpper.tsx');
+    const backgroundTasks = rendererSource(
+      'features/right-sidebar/plugins/background-tasks/BackgroundTasksBody.tsx',
+    );
 
     expect(sidebar).toContain("t('ccAgent.sidebar.bulkSelection.actionInProgress')");
     expect(sidebar).toContain("t('ccAgent.sidebar.bulkSelection.archiveNone')");
@@ -386,7 +396,16 @@ describe('icon-only button tooltip coverage', () => {
     expect(sidebar).toContain('aria-hidden={bulkArchiveDisabled ? true : undefined}');
     expect(sidebar).toContain("role={disabled ? 'button' : undefined}");
     expect(sidebar).toContain('tabIndex={disabled ? 0 : undefined}');
+    expect(sidebar).toContain(
+      'disabled && disabledReason ? `${actionLabel} — ${disabledReason}` : actionLabel',
+    );
+    expect(sidebar).toContain("t('ccAgent.sidebar.newDialogue')");
     expect(sidebar).toContain("t('ccAgent.sidebar.creationInProgress')");
+    expect(sidebar).toContain("t('ccAgent.sidebar.projectAction.newInDirectory')");
+    expect(sidebar).toContain("t('ccAgent.remoteSession.actionsUnavailable')");
+    expect(backgroundTasks).toContain(
+      "`${actionLabel} — ${t('rightSidebar.backgroundTasks.stopping')}`",
+    );
     const rail = rendererSource('features/cc-agent/sidebar/RailNav.tsx');
     expect(rail).toContain('controlledOpen={panelState.openSection === key ? false : undefined}');
   });
