@@ -944,6 +944,135 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('keeps host-resolved local paths out of deterministic IM and model receipts', async () => {
+    const resolvedSource = path.join(cwd, 'extension');
+    const mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: resolvedSource,
+        name: 'local-extension',
+        enabled: false,
+      },
+    }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-relative-im-receipt-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const imPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'telegram', taskId: 'message-relative' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: 'decorated channel text' }, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: imPolicy.origin,
+          rawChannelText: 'pi install ./extension',
+        },
+        turnPermissionPolicy: imPolicy,
+      });
+
+      expect(mutatePiManagedPackage).toHaveBeenCalledWith({
+        action: 'install',
+        source: resolvedSource,
+        authorization: 'authenticated-im-command',
+      });
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      expect(prompt).toContain('Requested source: "./extension"');
+      expect(prompt).toContain('"source":"./extension"');
+      expect(prompt).not.toContain(resolvedSource);
+
+      const events = handle.events()[Symbol.asyncIterator]();
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('local-extension')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      expect(visibleReceipt).toContain('"source":"./extension"');
+      expect(visibleReceipt).not.toContain(resolvedSource);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('keeps resolved local paths out of failed IM receipts and local diagnostics only', async () => {
+    const resolvedSource = path.join(cwd, 'private-extension');
+    const rawError = `EACCES inspecting ${resolvedSource}/package.json`;
+    const warn = vi.fn();
+    const deps = buildDeps();
+    deps.logger = { ...noopLogger, warn };
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationSuccess: {
+        install: 'Pi 扩展已安装。',
+        update: 'Pi 扩展已更新。',
+        remove: 'Pi 扩展已卸载。',
+      },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      throw new Error(rawError);
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-relative-im-failure-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const imPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'telegram', taskId: 'message-relative-failure' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: 'decorated channel text' }, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: imPolicy.origin,
+          rawChannelText: 'pi install ./private-extension',
+        },
+        turnPermissionPolicy: imPolicy,
+      });
+
+      const prompt = String(
+        captured.requests.find((request) => request.type === 'prompt')?.message ?? '',
+      );
+      expect(prompt).toContain('Requested source: "./private-extension"');
+      expect(prompt).toContain('Pi 扩展操作失败。');
+      expect(prompt).not.toContain(resolvedSource);
+      expect(prompt).not.toContain(rawError);
+
+      const events = handle.events()[Symbol.asyncIterator]();
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Pi 扩展操作失败。')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      expect(visibleReceipt).not.toContain(resolvedSource);
+      expect(visibleReceipt).not.toContain(rawError);
+      expect(warn).toHaveBeenCalledWith('exact Pi extension command failed', {
+        action: 'install',
+        message: rawError,
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('trusts only a Main-owned authenticated IM policy for exact package commands', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
     const deps = buildDeps();
@@ -1272,7 +1401,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   it('resolves task-relative Pi extension sources against the task working directory', async () => {
-    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const mutatePiManagedPackage = vi.fn(async (input: { source: string }) => ({
+      changed: true,
+      affectedPackage: { source: input.source },
+    }));
     const deps = buildDeps();
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
     const handle = await new PiAgent(deps).startSession({
@@ -1308,12 +1440,16 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         })) as never,
       );
       fireManagedPackageRequest('pkg-relative', 'update', '../shared/pi-extension');
-      await waitForResponse('pkg-relative');
+      const response = await waitForResponse('pkg-relative');
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'update',
         source: path.resolve(cwd, '../shared/pi-extension'),
         authorization: 'confirmed-tool-call',
       });
+      expect(response.value).toBeDefined();
+      const receipt = String(response.value);
+      expect(receipt).toContain('"source":"../shared/pi-extension"');
+      expect(receipt).not.toContain(path.resolve(cwd, '../shared/pi-extension'));
     } finally {
       await handle.close();
     }

@@ -496,7 +496,10 @@ function resolvePiManagedPackageSource(source: string, workingDir: string): stri
   return relative ? resolveRelativeLocalSource(source) : source;
 }
 
-function piManagedPackageResultSummary(result: unknown): Record<string, unknown> {
+function piManagedPackageResultSummary(
+  result: unknown,
+  requestedSource: string,
+): Record<string, unknown> {
   if (!result || typeof result !== 'object') return {};
   const record = result as Record<string, unknown>;
   const affected = record.affectedPackage;
@@ -542,7 +545,9 @@ function piManagedPackageResultSummary(result: unknown): Record<string, unknown>
   return {
     changed: record.changed === true,
     affectedPackage: {
-      source: shortString(pkg.source),
+      // The package store may report its host-resolved local path. Receipts are
+      // conversation data, so preserve only the spelling supplied by the user.
+      source: shortString(requestedSource),
       name: shortString(pkg.name),
       version: shortString(pkg.version, 128),
       enabled: pkg.enabled === true,
@@ -597,10 +602,11 @@ type PiManagedPackageCommandOutcome =
   | { ok: false; error: string; cancelled?: boolean };
 
 function piManagedPackageReceiptPayload(
+  command: ParsedPiManagedPackageCommand,
   outcome: PiManagedPackageCommandOutcome,
 ): Record<string, unknown> {
   return outcome.ok
-    ? { ok: true, result: piManagedPackageResultSummary(outcome.result) }
+    ? { ok: true, result: piManagedPackageResultSummary(outcome.result, command.source) }
     : {
         ok: false,
         ...(outcome.cancelled ? { cancelled: true } : {}),
@@ -614,7 +620,7 @@ function piManagedPackageVisibleReceipt(
   outcome: PiManagedPackageCommandOutcome,
   strings: PiExtensionUiStrings,
 ): string {
-  const receipt = piManagedPackageReceiptPayload(outcome);
+  const receipt = piManagedPackageReceiptPayload(command, outcome);
   const headline = outcome.ok
     ? strings.mutationSuccess[command.action]
     : outcome.cancelled
@@ -632,8 +638,11 @@ function piManagedPackageVisibleReceipt(
   return build(compactPiManagedPackageReceipt(receipt)).slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_PROMPT_LENGTH);
 }
 
-function boundedPiManagedPackageToolResult(result: unknown): Record<string, unknown> {
-  const summary = piManagedPackageResultSummary(result);
+function boundedPiManagedPackageToolResult(
+  result: unknown,
+  requestedSource: string,
+): Record<string, unknown> {
+  const summary = piManagedPackageResultSummary(result, requestedSource);
   if (JSON.stringify(summary).length <= MAX_PI_MANAGED_PACKAGE_RECEIPT_PROMPT_LENGTH) {
     return summary;
   }
@@ -646,7 +655,7 @@ function piManagedPackageReceiptPrompt(
   command: ParsedPiManagedPackageCommand,
   outcome: PiManagedPackageCommandOutcome,
 ): string {
-  const receipt = piManagedPackageReceiptPayload(outcome);
+  const receipt = piManagedPackageReceiptPayload(command, outcome);
   const original = command.original.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
   const source = command.source.slice(0, MAX_PI_MANAGED_PACKAGE_RECEIPT_COMMAND_LENGTH);
   const build = (value: Record<string, unknown>): string =>
@@ -4218,6 +4227,7 @@ export class PiAgent extends BaseAgent {
                 source: resolvePiManagedPackageSource(source, context.workingDir),
                 authorization: 'confirmed-tool-call',
               }),
+              source,
             );
           } catch (error) {
             // Extension UI responses are model-visible. Keep raw spawn,
