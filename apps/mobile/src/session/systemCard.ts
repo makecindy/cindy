@@ -111,7 +111,8 @@ export function buildMobileSystemCardData(
   const money = normalizeRemoteMoney(options.session?.totalMoney);
   if (!money || (money.kind === 'actual-cost' && !money.approximate)) return data;
   const reasons = money.estimateReasons ?? [];
-  const isSdkOnly = reasons.includes('sdk-estimate') &&
+  const isSdkOnly = money.kind === 'value-estimate' &&
+    reasons.includes('sdk-estimate') &&
     !reasons.includes('reference-price') &&
     !reasons.includes('subscription-value');
   return {

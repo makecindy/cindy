@@ -24,6 +24,21 @@ describe('shared session usage summaries', () => {
       title: 'Session spend',
     });
 
+    expect(summarizeSessionSpend({
+      contextTokens: 0,
+      contextWindow: 200000,
+      totalCostUsd: 99,
+      totalMoney: {
+        amount: 2.81,
+        currency: 'CNY',
+      },
+      totalTokenUsage: 1200,
+    })).toEqual({
+      available: true,
+      detail: '本任务 ¥2.81 · 1.2k tokens',
+      title: 'Session spend',
+    });
+
     expect(summarizeSessionSpend(null)).toEqual({
       available: false,
       detail: '暂无任务用量',

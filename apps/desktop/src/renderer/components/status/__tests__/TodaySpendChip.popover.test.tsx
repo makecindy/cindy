@@ -480,6 +480,30 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(within(card).getByText('本任务 SDK 估算（非供应商账单）$0.50')).toBeTruthy();
   });
 
+  it('混合实际费用与 SDK 估算时不把整笔合计标成 SDK 估算', () => {
+    mocks.sessionUsage = {
+      actualMoney: usdMoney(0.25),
+      estimatedValueMoney: usdMoney(0.5, 'value-estimate', ['sdk-estimate']),
+      totalMoney: {
+        ...usdMoney(0.75),
+        approximate: true,
+        estimateReasons: ['sdk-estimate'],
+      },
+    };
+
+    renderClaudeSubscriptionChip();
+    expect(screen.getByText('本任务 $0.75')).toBeTruthy();
+    expect(screen.queryByText('本任务 SDK 估算（非供应商账单）$0.75')).toBeNull();
+
+    const { card } = openCardFromHover();
+    const sessionSection = within(card).getByTestId('quota-session-usage');
+    expect(within(sessionSection).getByText('本任务 $0.75')).toBeTruthy();
+    expect(within(sessionSection).getByText('本任务已用 $0.25')).toBeTruthy();
+    expect(
+      within(sessionSection).getByText('本任务 SDK 估算（非供应商账单）$0.50'),
+    ).toBeTruthy();
+  });
+
   it('把混合会话合计及实际费用和价值估算拆分传入卡片', () => {
     mocks.sessionUsage = {
       actualMoney: usdMoney(0.25),

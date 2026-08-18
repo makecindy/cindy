@@ -1,4 +1,8 @@
-import { summarizeContextUsage, summarizeSessionSpend } from './sessionControls.js';
+import {
+  summarizeContextUsage,
+  summarizeSessionSpend,
+  type SessionControlsMoneyLike,
+} from './sessionControls.js';
 
 export type SystemCardType =
   | 'help'
@@ -26,6 +30,7 @@ export interface SystemCardSessionLike {
   status?: string | null;
   title?: string | null;
   totalCostUsd?: number;
+  totalMoney?: SessionControlsMoneyLike | null;
   totalTokenUsage?: number;
   workingDir?: string | null;
 }
