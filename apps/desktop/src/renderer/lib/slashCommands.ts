@@ -600,6 +600,7 @@ export async function resolvePendingPiUserSkillForDispatch(params: {
     && candidate.scope === 'user'
     && candidate.name.toLowerCase() === params.pendingInvocation.name.toLowerCase()
     && candidate.path === params.pendingInvocation.sourcePath
+    && candidate.runtimeStatus === 'loaded'
     && !!candidate.runtimeCommandName
   ));
 

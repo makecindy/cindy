@@ -729,8 +729,7 @@ describe('resolvePendingPiUserSkillForDispatch', () => {
         skill({
           name: 'demo',
           scope: 'user',
-          path: '/home/user/.agents/skills/other-demo',
-          runtimeStatus: 'loaded',
+          path: '/home/user/.agents/skills/demo',
           runtimeCommandName: 'skill:demo',
         }),
       ])
@@ -739,6 +738,7 @@ describe('resolvePendingPiUserSkillForDispatch', () => {
           name: 'Demo',
           scope: 'user',
           path: '/home/user/.agents/skills/demo',
+          runtimeStatus: 'loaded',
           runtimeCommandName: 'skill:frontmatter-demo',
         }),
       ]);
