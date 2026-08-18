@@ -4956,7 +4956,8 @@
         "resourceUsage": "Resource Usage",
         "collaboration": "Team",
         "unknown": "Unknown tab",
-        "ghostPanel": "Plugin panel"
+        "ghostPanel": "Plugin panel",
+        "botArtifacts": "Deliverables"
       },
       "controls": {
         "showAria": "Show sidebar",
@@ -6627,6 +6628,30 @@
         "done": "{{name}} · {{duration}} · done",
         "failed": "{{name}} · {{duration}} · failed",
         "stopped": "{{name}} · {{duration}} · stopped"
+      }
+    },
+    "artifacts": {
+      "open": "Open",
+      "reveal": "View in library",
+      "retry": "Retry",
+      "subtitle": "What this teammate has made",
+      "empty": "Nothing delivered yet. Finished work lands here.",
+      "emptyFiltered": "Nothing of this kind yet.",
+      "truncated": "Showing the 200 most recent.",
+      "remoteUnavailable": "The deliverables library is not available for remote tasks yet.",
+      "category": {
+        "all": "All",
+        "doc": "Document",
+        "sheet": "Spreadsheet",
+        "image": "Image",
+        "deck": "Slides",
+        "other": "Other"
+      },
+      "time": {
+        "justNow": "Just now",
+        "minutes": "{{n}} min ago",
+        "hours": "{{n}} h ago",
+        "days": "{{n}} d ago"
       }
     }
   },

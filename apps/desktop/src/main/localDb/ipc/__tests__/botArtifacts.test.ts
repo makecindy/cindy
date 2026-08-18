@@ -1,0 +1,349 @@
+/**
+ * 每伙伴交付物投影的行为契约。
+ *
+ * 覆盖:委派产物 + 会话产出文件 + 消息附件三条来源的聚合、多伙伴隔离、去重、
+ * 上限截断,以及「不存在的文件不出现」这条存在性门槛。
+ */
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const h = vi.hoisted(() => ({
+  db: null as ReturnType<typeof drizzle> | null,
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
+}));
+
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+      h.handlers.set(channel, handler);
+    }),
+  },
+}));
+vi.mock('../../client/current', () => ({
+  getDbClient: () => ({ drizzle: h.db }),
+  tryGetDbClient: () => ({ drizzle: h.db }),
+}));
+vi.mock('../../../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
+}));
+
+import { listBotArtifacts, registerBotArtifactIpc } from '../botArtifacts';
+
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-bot-artifacts-'));
+let sqlite: Database.Database | null = null;
+
+afterAll(() => {
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
+/** 在临时目录里造一个真文件并返回绝对路径(存在性门槛要求文件真的在)。 */
+function writeFile(relPath: string): string {
+  const abs = path.join(tmpRoot, relPath);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, 'x');
+  return abs;
+}
+
+function createDb(): void {
+  sqlite = new Database(':memory:');
+  sqlite.pragma('foreign_keys = ON');
+  sqlite.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL DEFAULT 'New Maker',
+      working_dir TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY NOT NULL,
+      client_id TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      tool_use_id TEXT,
+      agent_meta TEXT,
+      agent_kind TEXT,
+      created_at INTEGER NOT NULL,
+      rewind_at INTEGER
+    );
+    CREATE TABLE bot_profiles (
+      id TEXT PRIMARY KEY NOT NULL,
+      display_name TEXT NOT NULL,
+      description TEXT DEFAULT '' NOT NULL,
+      avatar TEXT DEFAULT '🤖' NOT NULL,
+      avatar_color TEXT DEFAULT 'violet' NOT NULL,
+      status TEXT DEFAULT 'active' NOT NULL,
+      current_version INTEGER DEFAULT 1 NOT NULL,
+      canonical_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE bot_session_links (
+      id TEXT PRIMARY KEY NOT NULL,
+      bot_id TEXT NOT NULL REFERENCES bot_profiles(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      profile_version INTEGER DEFAULT 1 NOT NULL,
+      role TEXT NOT NULL,
+      channel_id TEXT,
+      route_key TEXT,
+      created_at INTEGER NOT NULL,
+      archived_at INTEGER
+    );
+    CREATE TABLE bot_delegations (
+      id TEXT PRIMARY KEY NOT NULL,
+      requesting_bot_id TEXT NOT NULL REFERENCES bot_profiles(id) ON DELETE CASCADE,
+      target_bot_id TEXT NOT NULL REFERENCES bot_profiles(id) ON DELETE CASCADE,
+      parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      child_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      objective TEXT NOT NULL,
+      context_refs_json TEXT DEFAULT '[]' NOT NULL,
+      artifact_refs_json TEXT DEFAULT '[]' NOT NULL,
+      permission_snapshot_json TEXT DEFAULT '{}' NOT NULL,
+      lineage_json TEXT DEFAULT '[]' NOT NULL,
+      target_profile_version INTEGER NOT NULL,
+      depth INTEGER DEFAULT 1 NOT NULL,
+      budget_tokens INTEGER,
+      tokens_used INTEGER DEFAULT 0 NOT NULL,
+      status TEXT DEFAULT 'queued' NOT NULL,
+      result_summary TEXT,
+      output_artifacts_json TEXT DEFAULT '[]' NOT NULL,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      accepted_at INTEGER,
+      completed_at INTEGER,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  h.db = drizzle(sqlite);
+}
+
+function addBot(id: string, sessionId: string, workingDir: string): void {
+  sqlite!
+    .prepare(
+      'INSERT INTO sessions (id, working_dir, created_at, updated_at) VALUES (?, ?, 1, 1)',
+    )
+    .run(sessionId, workingDir);
+  sqlite!
+    .prepare(
+      'INSERT INTO bot_profiles (id, display_name, canonical_session_id, created_at, updated_at) VALUES (?, ?, ?, 1, 1)',
+    )
+    .run(id, id, sessionId);
+  sqlite!
+    .prepare(
+      "INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, 'canonical', 1)",
+    )
+    .run(`link-${id}`, id, sessionId);
+}
+
+function addMessage(
+  sessionId: string,
+  clientId: string,
+  role: string,
+  content: unknown,
+  createdAt: number,
+): void {
+  sqlite!
+    .prepare(
+      'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    .run(`m-${clientId}`, clientId, sessionId, role, JSON.stringify(content), createdAt);
+}
+
+beforeEach(() => {
+  h.handlers.clear();
+  createDb();
+});
+
+describe('bot artifact projection', () => {
+  it('aggregates delegation outputs, generated files and message attachments', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    const generated = writeFile('report.docx');
+    const attached = writeFile('inbox/notes.md');
+    addMessage(
+      'session-a',
+      'c1',
+      'tool_use',
+      { toolName: 'Write', input: { file_path: generated } },
+      1_000,
+    );
+    addMessage(
+      'session-a',
+      'c2',
+      'user',
+      { text: 'here', files: [{ name: 'notes.md', path: attached, size: 12 }] },
+      2_000,
+    );
+    sqlite!
+      .prepare(
+        `INSERT INTO bot_delegations
+         (id, requesting_bot_id, target_bot_id, objective, target_profile_version,
+          status, output_artifacts_json, created_at, completed_at, updated_at)
+         VALUES (?, ?, ?, 'do it', 1, 'completed', ?, 1, 3000, 3000)`,
+      )
+      .run(
+        'del-1',
+        'bot-a',
+        'bot-a',
+        JSON.stringify([{ ref: 'cindy-media://blobs/abc.png', kind: 'image' }]),
+      );
+
+    const result = await listBotArtifacts({ botId: 'bot-a' });
+    expect(result.botId).toBe('bot-a');
+    expect(result.truncated).toBe(false);
+    // 时间倒序:委派产物(3000) > 附件(2000) > 产出文件(1000)。
+    expect(result.items.map((item) => item.source)).toEqual([
+      'delegation',
+      'attachment',
+      'generated',
+    ]);
+    expect(result.items.map((item) => item.category)).toEqual(['image', 'doc', 'doc']);
+    // 协议引用不暴露磁盘路径。
+    expect(result.items[0]!.path).toBeNull();
+    expect(result.items[0]!.ref).toBe('cindy-media://blobs/abc.png');
+    // 本机文件补齐了体积。
+    expect(result.items[2]!.sizeBytes).toBe(1);
+  });
+
+  it('keeps each teammate to its own artifacts', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    addBot('bot-b', 'session-b', tmpRoot);
+    const fileA = writeFile('a/only-a.md');
+    const fileB = writeFile('b/only-b.md');
+    addMessage('session-a', 'a1', 'tool_use', { toolName: 'Write', input: { file_path: fileA } }, 10);
+    addMessage('session-b', 'b1', 'tool_use', { toolName: 'Write', input: { file_path: fileB } }, 10);
+
+    const a = await listBotArtifacts({ botId: 'bot-a' });
+    const b = await listBotArtifacts({ sessionId: 'session-b' });
+    expect(a.items.map((item) => item.name)).toEqual(['only-a.md']);
+    expect(b.botId).toBe('bot-b');
+    expect(b.items.map((item) => item.name)).toEqual(['only-b.md']);
+  });
+
+  it('attributes delegation outputs to the teammate that produced them', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    addBot('bot-b', 'session-b', tmpRoot);
+    sqlite!
+      .prepare(
+        `INSERT INTO bot_delegations
+         (id, requesting_bot_id, target_bot_id, objective, target_profile_version,
+          status, output_artifacts_json, created_at, completed_at, updated_at)
+         VALUES (?, 'bot-a', 'bot-b', 'do it', 1, 'completed', ?, 1, 5, 5)`,
+      )
+      .run('del-2', JSON.stringify([{ ref: 'xdt-file://deck.pptx', kind: 'file' }]));
+
+    expect((await listBotArtifacts({ botId: 'bot-a' })).items).toHaveLength(0);
+    const producer = await listBotArtifacts({ botId: 'bot-b' });
+    expect(producer.items).toHaveLength(1);
+    expect(producer.items[0]!.category).toBe('deck');
+    expect(producer.items[0]!.delegationId).toBe('del-2');
+  });
+
+  it('drops files that no longer exist on disk', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    const kept = writeFile('kept.csv');
+    addMessage('session-a', 'k', 'tool_use', { toolName: 'Write', input: { file_path: kept } }, 10);
+    addMessage(
+      'session-a',
+      'gone',
+      'tool_use',
+      { toolName: 'Write', input: { file_path: path.join(tmpRoot, 'never-written.xlsx') } },
+      20,
+    );
+
+    const result = await listBotArtifacts({ botId: 'bot-a' });
+    expect(result.items.map((item) => item.name)).toEqual(['kept.csv']);
+    expect(result.items[0]!.category).toBe('sheet');
+  });
+
+  it('collapses the same file seen through two sources', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    const shared = writeFile('shared.md');
+    addMessage(
+      'session-a',
+      'w',
+      'tool_use',
+      { toolName: 'Write', input: { file_path: shared } },
+      100,
+    );
+    addMessage(
+      'session-a',
+      'u',
+      'user',
+      { text: '', files: [{ name: 'shared.md', path: shared }] },
+      200,
+    );
+
+    const result = await listBotArtifacts({ botId: 'bot-a' });
+    expect(result.items).toHaveLength(1);
+    // 产出来源优先,交付时间取最早的那次。
+    expect(result.items[0]!.source).toBe('generated');
+    expect(result.items[0]!.createdAt).toBe(100);
+  });
+
+  it('caps the list and reports truncation', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    for (let index = 0; index < 5; index += 1) {
+      const file = writeFile(`bulk/file-${index}.md`);
+      addMessage(
+        'session-a',
+        `bulk-${index}`,
+        'tool_use',
+        { toolName: 'Write', input: { file_path: file } },
+        1_000 + index,
+      );
+    }
+    const result = await listBotArtifacts({ botId: 'bot-a', limit: 3 });
+    expect(result.items).toHaveLength(3);
+    expect(result.truncated).toBe(true);
+    // 截断从旧的一端丢:留下的是最新三件。
+    expect(result.items.map((item) => item.name)).toEqual([
+      'file-4.md',
+      'file-3.md',
+      'file-2.md',
+    ]);
+  });
+
+  it('ignores edits, reads and rewound rows', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    const edited = writeFile('edited.md');
+    addMessage(
+      'session-a',
+      'edit',
+      'tool_use',
+      { toolName: 'Edit', input: { file_path: edited } },
+      10,
+    );
+    addMessage(
+      'session-a',
+      'read',
+      'tool_use',
+      { toolName: 'Read', input: { file_path: edited } },
+      11,
+    );
+    const rewound = writeFile('rewound.md');
+    addMessage(
+      'session-a',
+      'rw',
+      'tool_use',
+      { toolName: 'Write', input: { file_path: rewound } },
+      12,
+    );
+    sqlite!.prepare('UPDATE messages SET rewind_at = 99 WHERE client_id = ?').run('rw');
+
+    expect((await listBotArtifacts({ botId: 'bot-a' })).items).toHaveLength(0);
+  });
+
+  it('rejects a request that names neither a teammate nor a task', async () => {
+    registerBotArtifactIpc();
+    const handler = h.handlers.get('local-db:bots:artifacts');
+    expect(handler).toBeTypeOf('function');
+    await expect(handler!({}, {})).rejects.toThrow();
+  });
+});

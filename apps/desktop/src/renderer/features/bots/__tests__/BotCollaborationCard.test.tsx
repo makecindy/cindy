@@ -18,6 +18,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, opts?: Record<string, unknown>) =>
       opts ? `${key}:${JSON.stringify(opts)}` : key,
+    i18n: { language: 'en' },
   }),
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
@@ -196,6 +197,31 @@ describe('BotCollaborationCard', () => {
     expect(screen.getByText('给伙伴协作做一版方案')).toBeTruthy();
     fireEvent.click(screen.getByText(/bots\.collab\.openTask/));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-planner/session/child-1');
+  });
+
+  it('shows what the guest delivered as deliverable cards, not raw refs', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [
+        delegation('completed', {
+          completedAt: Date.now(),
+          outputArtifacts: [
+            { ref: 'cindy-media://blobs/hero.png', kind: 'image' },
+            { ref: 'xdt-file://q3.pptx', kind: 'file' },
+          ],
+        }),
+      ],
+    });
+    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+    fireEvent.click(await screen.findByText(/bots\.collab\.report\.done/));
+
+    const cards = screen.getAllByTestId('bot-artifact-card');
+    expect(cards.map((card) => card.getAttribute('data-artifact-category'))).toEqual([
+      'image',
+      'deck',
+    ]);
+    // 原始协议地址不再直接示人。
+    expect(screen.queryByText('cindy-media://blobs/hero.png')).toBeNull();
   });
 
   it('reports a stopped delegation as stopped, not as a failure', async () => {

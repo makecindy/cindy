@@ -443,6 +443,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onErrorPersisted: (cb: (payload: unknown, ownerStamp?: unknown) => void): (() => void) =>
         onPayloadWithMetadata('local-db:session:error-persisted', cb),
     },
+    bots: {
+      // Read-only artifact projection for the detached「交付物」tab. No Bot
+      // profile/session mutation is reachable from the sidebar window.
+      artifacts: (input: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:artifacts', input),
+    },
     rightSidebarTabs: {
       list: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:right-sidebar-tabs:list', input),
       ensureSingleton: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:right-sidebar-tabs:ensure-singleton', input),

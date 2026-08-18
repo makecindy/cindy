@@ -4954,7 +4954,8 @@
         "resourceUsage": "リソース使用量",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
-        "ghostPanel": "プラグインパネル"
+        "ghostPanel": "プラグインパネル",
+        "botArtifacts": "成果物"
       },
       "controls": {
         "showAria": "サイドバーを表示",
@@ -6625,6 +6626,30 @@
         "done": "{{name}} · {{duration}} · 完了",
         "failed": "{{name}} · {{duration}} · 失敗",
         "stopped": "{{name}} · {{duration}} · 停止"
+      }
+    },
+    "artifacts": {
+      "open": "開く",
+      "reveal": "ライブラリで表示",
+      "retry": "再試行",
+      "subtitle": "このメンバーが作ったもの",
+      "empty": "まだ成果物はありません。仕上がるとここに入ります。",
+      "emptyFiltered": "この種類はまだありません。",
+      "truncated": "最新 200 件のみ表示しています。",
+      "remoteUnavailable": "リモートタスクでは成果物ライブラリをまだ利用できません。",
+      "category": {
+        "all": "すべて",
+        "doc": "ドキュメント",
+        "sheet": "スプレッドシート",
+        "image": "画像",
+        "deck": "スライド",
+        "other": "その他"
+      },
+      "time": {
+        "justNow": "たった今",
+        "minutes": "{{n}} 分前",
+        "hours": "{{n}} 時間前",
+        "days": "{{n}} 日前"
       }
     }
   },

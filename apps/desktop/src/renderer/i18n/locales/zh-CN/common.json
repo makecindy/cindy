@@ -4954,7 +4954,8 @@
         "resourceUsage": "资源用量",
         "collaboration": "协同",
         "unknown": "未知标签页",
-        "ghostPanel": "插件面板"
+        "ghostPanel": "插件面板",
+        "botArtifacts": "交付物"
       },
       "controls": {
         "showAria": "显示侧栏",
@@ -6625,6 +6626,30 @@
         "done": "{{name}} · 用时 {{duration}} · 完成",
         "failed": "{{name}} · 用时 {{duration}} · 失败",
         "stopped": "{{name}} · 用时 {{duration}} · 已停止"
+      }
+    },
+    "artifacts": {
+      "open": "打开",
+      "reveal": "在仓库中查看",
+      "retry": "重试",
+      "subtitle": "TA 做出来的东西",
+      "empty": "TA 还没交付过东西。做完一件就会收进这里。",
+      "emptyFiltered": "这一类还没有。",
+      "truncated": "只显示最近 200 件。",
+      "remoteUnavailable": "远程任务暂不支持交付物仓库。",
+      "category": {
+        "all": "全部",
+        "doc": "文档",
+        "sheet": "表格",
+        "image": "图片",
+        "deck": "演示",
+        "other": "其它"
+      },
+      "time": {
+        "justNow": "刚刚",
+        "minutes": "{{n}} 分钟前",
+        "hours": "{{n}} 小时前",
+        "days": "{{n}} 天前"
       }
     }
   },

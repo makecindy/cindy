@@ -4295,6 +4295,12 @@ interface ElectronAPI {
       }>;
       linkSession: (body: unknown) => Promise<unknown>;
       history: (botId: string) => Promise<unknown[]>;
+      /** 每伙伴「交付物仓库」的只读投影(委派产物 + 会话产出文件 + 消息附件)。 */
+      artifacts: (body: {
+        botId?: string;
+        sessionId?: string;
+        limit?: number;
+      }) => Promise<import('../shared/botArtifact').BotArtifactProjection>;
     };
     conversations: {
       search: (

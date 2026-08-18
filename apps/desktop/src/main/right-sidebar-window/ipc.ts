@@ -192,6 +192,31 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       ...(typeof r.revealSidebar === 'boolean' ? { revealSidebar: r.revealSidebar } : {}),
     };
   }
+  if (r.type === 'open-bot-artifacts-tab') {
+    const hasFocusArtifactId =
+      Object.prototype.hasOwnProperty.call(r, 'focusArtifactId')
+      && r.focusArtifactId !== undefined;
+    if (
+      hasFocusArtifactId
+      && r.focusArtifactId !== null
+      && (typeof r.focusArtifactId !== 'string' || r.focusArtifactId.length > 512)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.focusArtifactId must be string | null');
+    }
+    if (r.focusTab !== undefined && typeof r.focusTab !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'command.focusTab must be boolean');
+    }
+    if (r.revealSidebar !== undefined && typeof r.revealSidebar !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'command.revealSidebar must be boolean');
+    }
+    return {
+      type: 'open-bot-artifacts-tab',
+      sessionId: r.sessionId,
+      ...(hasFocusArtifactId ? { focusArtifactId: r.focusArtifactId as string | null } : {}),
+      ...(typeof r.focusTab === 'boolean' ? { focusTab: r.focusTab } : {}),
+      ...(typeof r.revealSidebar === 'boolean' ? { revealSidebar: r.revealSidebar } : {}),
+    };
+  }
   if (r.type === 'open-turn-review') {
     if (
       !Array.isArray(r.changeSetIds)

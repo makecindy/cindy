@@ -71,6 +71,14 @@ export type RsbWindowCommand =
       focusTab?: boolean;
       revealSidebar?: boolean;
     }
+  /** 打开/聚焦某个伙伴的「交付物」仓库；每个 Bot 任务单例。 */
+  | {
+      type: 'open-bot-artifacts-tab';
+      sessionId: string;
+      focusArtifactId?: string | null;
+      focusTab?: boolean;
+      revealSidebar?: boolean;
+    }
   | {
       type: 'open-turn-review';
       sessionId: string;

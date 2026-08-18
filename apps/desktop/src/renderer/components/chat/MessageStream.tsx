@@ -327,6 +327,11 @@ interface MessageStreamProps {
    * it at the owner): it is a prop of the memoized `MessageItem`.
    */
   assistantAvatar?: ReactNode;
+  /**
+   * 非空 = 这是一场跟伙伴的对话（值 = 该任务 id）。本轮产出文件因此升级为交付物卡,
+   * 并带上「在仓库中查看」。普通任务保持 undefined,渲染路径不变。
+   */
+  botArtifactSessionId?: string | undefined;
   messages: ChatMessage[];
   historyLoaded: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
@@ -2795,6 +2800,7 @@ export function MessageStream({
   remoteHostId,
   workingDir,
   assistantAvatar,
+  botArtifactSessionId,
   messages,
   historyLoaded,
   taskUpdates,
@@ -5407,6 +5413,7 @@ export function MessageStream({
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
+                          botSessionId={botArtifactSessionId}
                         />
                       );
                     }

@@ -167,6 +167,7 @@ import {
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { openBotDelegationsTab } from '@/features/right-sidebar/lib/openBotDelegationsTab';
+import { openBotArtifactsTab } from '@/features/right-sidebar/lib/openBotArtifactsTab';
 import { BotDelegationActivityIndicator } from '@/features/bots/BotDelegationActivityIndicator';
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import {
@@ -818,11 +819,20 @@ export function CCAgentSessionView({
   // is silent: it never expands the sidebar or replaces the user's active tab.
   useEffect(() => {
     if (!ownsWindowRoute || !viewVisible || !sessionId || session?.source !== 'bot') return;
-    void openBotDelegationsTab(sessionId, {
-      focusTab: false,
-      revealSidebar: false,
-      userInitiated: false,
-    }).catch(() => undefined);
+    // 顺序即默认落点:交付物先注册,所以桶为空时右栏开关落在「交付物」;协同 tab
+    // 随后静默注册,不抢走已经存在的激活 tab(两者共存,用户选了谁就是谁)。
+    void (async () => {
+      await openBotArtifactsTab(sessionId, {
+        focusTab: false,
+        revealSidebar: false,
+        userInitiated: false,
+      });
+      await openBotDelegationsTab(sessionId, {
+        focusTab: false,
+        revealSidebar: false,
+        userInitiated: false,
+      });
+    })().catch(() => undefined);
   }, [ownsWindowRoute, session?.source, sessionId, viewVisible]);
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。
@@ -3995,6 +4005,8 @@ export function CCAgentSessionView({
       workingDir={session?.workingDir ?? ''}
       // 伙伴对话:assistant 气泡挂 TA 的头像(普通任务传 null,渲染完全不变)。
       assistantAvatar={botAssistantAvatar}
+      // 伙伴对话:本轮产出文件升级成交付物卡 + 「在仓库中查看」。
+      botArtifactSessionId={botChatIdentity && sessionId ? sessionId : undefined}
       messages={messages}
       historyLoaded={historyLoaded}
       taskUpdates={taskUpdates}

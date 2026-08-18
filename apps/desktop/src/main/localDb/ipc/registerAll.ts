@@ -28,6 +28,7 @@ import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search';
 import { registerRemoteHistoryIpc } from './history';
 import { registerBotIpc } from './bots';
+import { registerBotArtifactIpc } from './botArtifacts';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
@@ -232,6 +233,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerMessageIpc();
   registerRemoteHistoryIpc();
   registerBotIpc();
+  registerBotArtifactIpc();
   registerSessionImportIpc();
   registerSessionShareIpc();
   registerOrcaWorkflowIpc();

@@ -478,7 +478,9 @@ export function useBotUnreadCounts(): Record<string, number> {
 
 async function hydrateFromDatabase(): Promise<void> {
   const api = botsApi();
-  if (!api || hydrated) return;
+  // 副窗口(右侧栏 detached host)只桥接了 Bot 的只读交付物投影,没有 profile
+  // 列表 —— 有 `bots` 命名空间不等于有完整 API,按能力探测而不是按存在性判定。
+  if (!api || typeof api.list !== 'function' || hydrated) return;
   hydrated = true;
   try {
     const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap() });

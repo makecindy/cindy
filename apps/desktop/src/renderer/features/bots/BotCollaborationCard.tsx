@@ -9,6 +9,10 @@ import type {
 } from '../../../shared/botCollaboration';
 import { readBotCollaborationMeta } from '../../../shared/botCollaboration';
 import type { BotDelegationView } from '../../../shared/botDelegation';
+import { makeBotArtifact, type BotArtifactItem } from '../../../shared/botArtifact';
+import { openBotArtifactsTab } from '@/features/right-sidebar/lib/openBotArtifactsTab';
+import { BotArtifactCard } from './BotArtifactCard';
+import { useBotArtifactOpen } from './useBotArtifactOpen';
 import { BotAvatar } from './BotAvatar';
 import { isActiveDelegationStatus, useBotDelegation } from './botDelegationLive';
 import { useBotProfiles } from './botStore';
@@ -79,6 +83,7 @@ function CollaborationCardBody({
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const { openArtifact, artifactLightboxes } = useBotArtifactOpen();
 
   const active = row ? isActiveDelegationStatus(row.status) : false;
 
@@ -197,6 +202,34 @@ function CollaborationCardBody({
               <p className="mt-2 whitespace-pre-wrap break-words text-[var(--error-fg)]">
                 {row.lastError}
               </p>
+            ) : null}
+            {/* 委派回传的产物:与本轮产出文件用同一张交付物卡,来源不同不代表长相不同。 */}
+            {row.outputArtifacts.length > 0 ? (
+              <div className="mt-2.5 flex flex-col gap-1.5">
+                {row.outputArtifacts.map((artifact) =>
+                  makeBotArtifact({
+                    source: 'delegation',
+                    target: artifact.ref,
+                    isRef: true,
+                    createdAt: row.completedAt ?? row.updatedAt,
+                    sessionId: row.childSessionId,
+                    delegationId: row.id,
+                  }),
+                ).map((item) => (
+                  <BotArtifactCard
+                    key={item.id}
+                    item={item}
+                    onOpen={(target) => void openArtifact(target)}
+                    {...(sessionId
+                      ? {
+                          onReveal: (target: BotArtifactItem) =>
+                            void openBotArtifactsTab(sessionId, { focusArtifactId: target.id }),
+                        }
+                      : {})}
+                  />
+                ))}
+                {artifactLightboxes}
+              </div>
             ) : null}
             {row.childSessionId ? (
               <button

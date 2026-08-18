@@ -4954,7 +4954,8 @@
         "resourceUsage": "資源用量",
         "collaboration": "協同",
         "unknown": "未知標籤頁",
-        "ghostPanel": "插件面板"
+        "ghostPanel": "插件面板",
+        "botArtifacts": "交付物"
       },
       "controls": {
         "showAria": "顯示側欄",
@@ -6625,6 +6626,30 @@
         "done": "{{name}} · 用時 {{duration}} · 完成",
         "failed": "{{name}} · 用時 {{duration}} · 失敗",
         "stopped": "{{name}} · 用時 {{duration}} · 已停止"
+      }
+    },
+    "artifacts": {
+      "open": "開啟",
+      "reveal": "在倉庫中檢視",
+      "retry": "重試",
+      "subtitle": "TA 做出來的東西",
+      "empty": "TA 還沒交付過東西。做完一件就會收進這裡。",
+      "emptyFiltered": "這一類還沒有。",
+      "truncated": "只顯示最近 200 件。",
+      "remoteUnavailable": "遠端任務暫不支援交付物倉庫。",
+      "category": {
+        "all": "全部",
+        "doc": "文件",
+        "sheet": "表格",
+        "image": "圖片",
+        "deck": "簡報",
+        "other": "其他"
+      },
+      "time": {
+        "justNow": "剛剛",
+        "minutes": "{{n}} 分鐘前",
+        "hours": "{{n}} 小時前",
+        "days": "{{n}} 天前"
       }
     }
   },

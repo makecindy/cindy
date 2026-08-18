@@ -29,6 +29,7 @@ import {
   GitPullRequestArrow,
   UsersRound,
   ListTodo,
+  Package,
   Plus,
   Puzzle,
   X,
@@ -139,6 +140,7 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'orca-workers': UsersRound,
   subagents: Bot,
   'bot-delegations': Share2,
+  'bot-artifacts': Package,
   'background-tasks': ListTodo,
   'resource-usage': Activity,
 };
@@ -152,6 +154,7 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
   subagents: 'rightSidebar.tabs.kinds.subagents',
   'bot-delegations': 'rightSidebar.tabs.kinds.botDelegations',
+  'bot-artifacts': 'rightSidebar.tabs.kinds.botArtifacts',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
 };

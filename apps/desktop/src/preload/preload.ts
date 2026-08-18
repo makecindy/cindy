@@ -4737,6 +4737,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:bots:link-session', body),
       history: (botId: string): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:history', botId),
+      /** 每伙伴「交付物仓库」的只读投影(委派产物 + 会话产出文件 + 消息附件)。 */
+      artifacts: (body: {
+        botId?: string;
+        sessionId?: string;
+        limit?: number;
+      }): Promise<import('../shared/botArtifact').BotArtifactProjection> =>
+        ipcRenderer.invoke('local-db:bots:artifacts', body),
     },
     conversations: {
       search: (request: unknown): Promise<unknown> =>

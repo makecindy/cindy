@@ -4954,7 +4954,8 @@
         "resourceUsage": "리소스 사용량",
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
-        "ghostPanel": "플러그인 패널"
+        "ghostPanel": "플러그인 패널",
+        "botArtifacts": "산출물"
       },
       "controls": {
         "showAria": "사이드바 표시",
@@ -6625,6 +6626,30 @@
         "done": "{{name}} · {{duration}} · 완료",
         "failed": "{{name}} · {{duration}} · 실패",
         "stopped": "{{name}} · {{duration}} · 중지"
+      }
+    },
+    "artifacts": {
+      "open": "열기",
+      "reveal": "보관함에서 보기",
+      "retry": "다시 시도",
+      "subtitle": "이 팀원이 만든 것",
+      "empty": "아직 산출물이 없습니다. 완성되면 여기에 담깁니다.",
+      "emptyFiltered": "이 유형은 아직 없습니다.",
+      "truncated": "최근 200개만 표시합니다.",
+      "remoteUnavailable": "원격 작업에서는 아직 산출물 보관함을 사용할 수 없습니다.",
+      "category": {
+        "all": "전체",
+        "doc": "문서",
+        "sheet": "스프레드시트",
+        "image": "이미지",
+        "deck": "슬라이드",
+        "other": "기타"
+      },
+      "time": {
+        "justNow": "방금",
+        "minutes": "{{n}}분 전",
+        "hours": "{{n}}시간 전",
+        "days": "{{n}}일 전"
       }
     }
   },
