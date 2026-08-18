@@ -5645,7 +5645,8 @@
         "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
-        "subscriptionEstimate": "Value estimate, not an actual bill"
+        "subscriptionEstimate": "Value estimate, not an actual bill",
+        "discountedVsStandard": "Discounted · {{percent}}% off standard"
       },
       "trigger": {
         "placeholder": "Select model",
@@ -5700,6 +5701,28 @@
       },
       "agentSwitch": {
         "hint": "Pick the model to use after switching to {{agent}}"
+      },
+      "unified": {
+        "railFavorites": "Favorites",
+        "railAll": "All",
+        "favoritesGroup": "Favorites",
+        "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
+        "layoutBadge": "Try style B",
+        "layoutClassic": "Back to style A",
+        "layoutTryUnified": "Try the new picker",
+        "layoutOriginal": "Back to old picker",
+        "addFavorite": "Save to favorites",
+        "removeFavorite": "Remove from favorites",
+        "favoriteConfig": "Saved setup",
+        "recommended": "Recommended",
+        "recommendedConfig": "Recommended setup",
+        "customized": "Customized",
+        "reset": "Reset to recommended",
+        "fastTip": "Fast · priority speed · uses more quota",
+        "effortEndFast": "Faster",
+        "effortEndSmart": "Smarter",
+        "railSameEngine": "{{agent}} only",
+        "crossEngineWarning": "Switching engines rebuilds context and may lose content"
       }
     },
     "permissionSelector": {

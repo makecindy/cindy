@@ -5643,7 +5643,8 @@
         "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
-        "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
+        "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません",
+        "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得"
       },
       "trigger": {
         "placeholder": "モデルを選択",
@@ -5698,6 +5699,28 @@
       },
       "agentSwitch": {
         "hint": "{{agent}} に切り替えた後に使用するモデルを選択してください"
+      },
+      "unified": {
+        "railFavorites": "お気に入り",
+        "railAll": "すべて",
+        "favoritesGroup": "お気に入り",
+        "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
+        "layoutBadge": "スタイルBを試す",
+        "layoutClassic": "スタイルAに戻す",
+        "layoutTryUnified": "新しいセレクターを試す",
+        "layoutOriginal": "旧版に戻す",
+        "addFavorite": "お気に入りに保存",
+        "removeFavorite": "お気に入りから削除",
+        "favoriteConfig": "保存した設定",
+        "recommended": "推奨",
+        "recommendedConfig": "推奨設定",
+        "customized": "カスタム済み",
+        "reset": "推奨に戻す",
+        "fastTip": "Fast · 優先処理で高速 · 使用量が増えます",
+        "effortEndFast": "高速",
+        "effortEndSmart": "高精度",
+        "railSameEngine": "{{agent}} のみ",
+        "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります"
       }
     },
     "permissionSelector": {

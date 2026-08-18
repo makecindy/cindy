@@ -5642,7 +5642,8 @@
         "discount": "立省 {{percent}}%",
         "perMillion": "模型標準價格",
         "fixedFx": "按固定匯率 1 USD = 6.7 CNY 約算",
-        "subscriptionEstimate": "價值估算，不代表實際帳單"
+        "subscriptionEstimate": "價值估算，不代表實際帳單",
+        "discountedVsStandard": "折扣中，較標準價省 {{percent}}%"
       },
       "trigger": {
         "placeholder": "選擇模型",
@@ -5697,6 +5698,28 @@
       },
       "agentSwitch": {
         "hint": "選擇切換到 {{agent}} 後使用的模型"
+      },
+      "unified": {
+        "railFavorites": "收藏",
+        "railAll": "全部",
+        "favoritesGroup": "收藏",
+        "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
+        "layoutBadge": "試用樣式B",
+        "layoutClassic": "切回樣式A",
+        "layoutTryUnified": "試用新選擇器",
+        "layoutOriginal": "切回舊版",
+        "addFavorite": "存為收藏",
+        "removeFavorite": "取消收藏",
+        "favoriteConfig": "收藏設定",
+        "recommended": "推薦",
+        "recommendedConfig": "推薦設定",
+        "customized": "已自訂",
+        "reset": "恢復推薦",
+        "fastTip": "Fast · 插隊加速 · 用量更多",
+        "effortEndFast": "更高效",
+        "effortEndSmart": "更聰明",
+        "railSameEngine": "僅 {{agent}}",
+        "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容"
       },
       "modelListAria": "模型清單"
     },

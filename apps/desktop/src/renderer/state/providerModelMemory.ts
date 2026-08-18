@@ -309,6 +309,73 @@ export function setProviderModelFast(
 }
 
 /**
+ * 从某个槽里删掉一个模型键(effort / fast 任一维),不动同槽其余键与 lastModel。
+ * 槽不存在或该键本就没有 → 返回 null 表示「无事可做」(调用方据此短路,不做无意义落盘)。
+ */
+function withoutModelKey(
+  slot: ProviderMemory | undefined,
+  field: 'effortByModel' | 'fastByModel',
+  model: string,
+): ProviderMemory | null {
+  if (!slot || !(model in slot[field])) return null;
+  const nextField = { ...slot[field] };
+  delete nextField[model];
+  return { ...slot, [field]: nextField } as ProviderMemory;
+}
+
+/**
+ * **删除**某 (agent, 模型) 的深度记忆 —— 「恢复推荐 / 回落默认」的正确语义
+ * (configuration-and-overrides §4:override 表里没有该键 ⇒ 跟随当前版本的默认,而不是
+ * 把这一版的默认**快照**写进用户配置)。写快照的老做法会把用户钉死在旧默认上:服务端
+ * 之后改了推荐档,没自定义过的用户吃不到。
+ *
+ * 权威的 `${agent}:*` 全局槽与来源兼容副本**两处都要删**:读路径是「全局优先、来源兜底」
+ * (getProviderModelEffort),只删一处的话另一处会把旧值顶回来。
+ */
+export function clearProviderModelEffort(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): void {
+  if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
+  const map = load();
+  const providerKey = keyOf(agent, providerId);
+  const presetKey = presetKeyOf(agent);
+  const nextProvider = withoutModelKey(map[providerKey], 'effortByModel', model);
+  const nextPreset = withoutModelKey(map[presetKey], 'effortByModel', model);
+  if (!nextProvider && !nextPreset) return;
+  persist({
+    ...map,
+    ...(nextProvider ? { [providerKey]: nextProvider } : {}),
+    ...(nextPreset ? { [presetKey]: nextPreset } : {}),
+  });
+}
+
+/**
+ * **删除**某 (agent, 模型) 的 Fast 记忆。语义同 clearProviderModelEffort:
+ * 表里没有该键 ⇒ 跟随默认(读侧 `getProviderModelFast` 返回 undefined,调用方按「关」解释),
+ * 而不是落一份「显式 false」的快照 —— 后者同样是把当前默认固化成用户配置。
+ */
+export function clearProviderModelFast(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): void {
+  if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
+  const map = load();
+  const providerKey = keyOf(agent, providerId);
+  const presetKey = presetKeyOf(agent);
+  const nextProvider = withoutModelKey(map[providerKey], 'fastByModel', model);
+  const nextPreset = withoutModelKey(map[presetKey], 'fastByModel', model);
+  if (!nextProvider && !nextPreset) return;
+  persist({
+    ...map,
+    ...(nextProvider ? { [providerKey]: nextProvider } : {}),
+    ...(nextPreset ? { [presetKey]: nextPreset } : {}),
+  });
+}
+
+/**
  * 快照当前全部槽的 (effortByModel, fastByModel)(丢弃 lastModel)。用于 renderer → main 缓存和
  * device-link 控制端镜像被控设备的全局模型预设。深拷贝,调用方拿到的快照不随后续本地改动变化。
  */

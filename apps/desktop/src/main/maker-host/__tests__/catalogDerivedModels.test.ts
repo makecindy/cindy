@@ -23,6 +23,7 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
 } from '../catalog-to-descriptors.js';
+import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -408,20 +409,131 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
         maxOutputTokens: 96_000,
         efforts: ['low', 'max'],
         defaultEffort: 'max',
+        perAgent: {
+          codex: {
+            contextWindow: 272_000,
+            efforts: ['low'],
+            defaultEffort: 'low',
+          },
+        },
         routes: [{ providerId: 'openai', modelId: 'gpt-retired', agents: ['codex'] }],
       }],
     };
 
     expect(deriveAvailableModels(catalog, 'pi').some((m) => m.id === 'chatgpt/gpt-retired')).toBe(false);
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-retired')).toMatchObject({
+    const localOverrides = sanitizeModelCatalogOverrides({
+      patches: {
+        'openai:gpt-retired': {
+          base: {
+            contextWindow: 444_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'high',
+          },
+        },
+      },
+    }).overrides;
+    expect(resolvePiRuntimeModelDescriptor(
+      catalog,
+      'openai',
+      'chatgpt/gpt-retired',
+      { localOverrides },
+    )).toMatchObject({
       id: 'chatgpt/gpt-retired',
       displayName: 'GPT Retired',
-      contextWindow: 300_000,
+      contextWindow: 444_000,
       maxOutputTokens: 96_000,
-      efforts: ['minimal', 'low'],
-      defaultEffort: 'low',
+      efforts: ['minimal', 'medium', 'high'],
+      defaultEffort: 'high',
     });
     expect(resolvePiRuntimeModelDescriptor(catalog, 'anthropic', 'chatgpt/gpt-retired')).toBeNull();
+  });
+
+  it('retired Pi fallback 按 addition 后 patch 的最终层顺序重建 root', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+      models: [{
+        id: 'openai/gpt-local-revival',
+        name: 'Registry baseline',
+        status: 'retired',
+        contextWindow: 300_000,
+        efforts: ['low'],
+        defaultEffort: 'low',
+        routes: [{ providerId: 'openai', modelId: 'gpt-local-revival', agents: ['codex'] }],
+      }],
+    };
+    const localOverrides = sanitizeModelCatalogOverrides({
+      additions: {
+        'openai:gpt-local-revival': {
+          agents: ['codex'],
+          base: {
+            name: 'Local addition',
+            contextWindow: 500_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'medium',
+            status: 'active',
+          },
+        },
+      },
+      patches: {
+        'openai:gpt-local-revival': {
+          base: { contextWindow: 600_000, defaultEffort: 'high' },
+        },
+      },
+    }).overrides;
+
+    expect(resolvePiRuntimeModelDescriptor(
+      catalog,
+      'openai',
+      'chatgpt/gpt-local-revival',
+      { localOverrides },
+    )).toMatchObject({
+      displayName: 'Local addition',
+      contextWindow: 600_000,
+      efforts: ['minimal', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('retired OpenAI context profile 按 alias id 与 entry baseline 重建 Pi 私有描述符', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+      models: [
+        {
+          id: 'openai/gpt-5.6-sol',
+          name: 'GPT-5.6-Sol',
+          status: 'active',
+          contextWindow: 272_000,
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+          routes: [{ providerId: 'openai', modelId: 'gpt-5.6-sol', agents: ['codex'] }],
+        },
+        {
+          id: 'openai/gpt-5.6-sol[1m]',
+          name: 'GPT-5.6-Sol (1M · Higher usage)',
+          status: 'retired',
+          contextWindow: 1_000_000,
+          maxOutputTokens: 128_000,
+          efforts: ['low', 'medium', 'high', 'xhigh'],
+          defaultEffort: 'medium',
+          routes: [{ providerId: 'openai', modelId: 'gpt-5.6-sol', agents: ['claude-code'] }],
+        },
+      ],
+    };
+
+    expect(
+      resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-5.6-sol[1m]'),
+    ).toMatchObject({
+      id: 'chatgpt/gpt-5.6-sol[1m]',
+      displayName: 'GPT-5.6-Sol (1M · Higher usage)',
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'medium',
+    });
   });
 
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {

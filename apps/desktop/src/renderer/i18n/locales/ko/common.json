@@ -5643,7 +5643,8 @@
         "discount": "{{percent}}% 절약",
         "perMillion": "모델 표준 가격",
         "fixedFx": "고정 환율 1 USD = 6.7 CNY 기준 추정",
-        "subscriptionEstimate": "가치 추정치이며 실제 청구 금액이 아닙니다"
+        "subscriptionEstimate": "가치 추정치이며 실제 청구 금액이 아닙니다",
+        "discountedVsStandard": "할인 중 · 표준가 대비 {{percent}}% 절약"
       },
       "trigger": {
         "placeholder": "모델 선택",
@@ -5698,6 +5699,28 @@
       },
       "agentSwitch": {
         "hint": "{{agent}}(으)로 전환한 후 사용할 모델을 선택하세요"
+      },
+      "unified": {
+        "railFavorites": "즐겨찾기",
+        "railAll": "전체",
+        "favoritesGroup": "즐겨찾기",
+        "favoritesEmpty": "즐겨찾기가 없습니다 — 모델 행에 마우스를 올리고 ☆를 눌러 저장하세요",
+        "layoutBadge": "스타일 B 사용해 보기",
+        "layoutClassic": "스타일 A로 돌아가기",
+        "layoutTryUnified": "새 선택기 사용해 보기",
+        "layoutOriginal": "이전 버전으로 돌아가기",
+        "addFavorite": "즐겨찾기에 저장",
+        "removeFavorite": "즐겨찾기 해제",
+        "favoriteConfig": "저장된 설정",
+        "recommended": "추천",
+        "recommendedConfig": "추천 설정",
+        "customized": "사용자 지정됨",
+        "reset": "추천으로 되돌리기",
+        "fastTip": "Fast · 우선 처리로 빠르게 · 사용량 증가",
+        "effortEndFast": "더 빠르게",
+        "effortEndSmart": "더 똑똑하게",
+        "railSameEngine": "{{agent}} 전용",
+        "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다"
       }
     },
     "permissionSelector": {

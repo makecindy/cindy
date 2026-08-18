@@ -5643,7 +5643,8 @@
         "discount": "立省 {{percent}}%",
         "perMillion": "模型标准价格",
         "fixedFx": "按固定汇率 1 USD = 6.7 CNY 约算",
-        "subscriptionEstimate": "价值估算，不代表实际账单"
+        "subscriptionEstimate": "价值估算，不代表实际账单",
+        "discountedVsStandard": "折扣中，较标准价省 {{percent}}%"
       },
       "trigger": {
         "placeholder": "选择模型",
@@ -5698,6 +5699,28 @@
       },
       "agentSwitch": {
         "hint": "选择切换到 {{agent}} 后使用的模型"
+      },
+      "unified": {
+        "railFavorites": "收藏",
+        "railAll": "全部",
+        "favoritesGroup": "收藏",
+        "favoritesEmpty": "还没有收藏——把鼠标停到模型行上，点 ☆ 存到这里",
+        "layoutBadge": "尝试样式B",
+        "layoutClassic": "切回样式A",
+        "layoutTryUnified": "尝试新选择器",
+        "layoutOriginal": "切回老版",
+        "addFavorite": "存为收藏",
+        "removeFavorite": "取消收藏",
+        "favoriteConfig": "收藏配置",
+        "recommended": "推荐",
+        "recommendedConfig": "推荐配置",
+        "customized": "已自定义",
+        "reset": "恢复推荐",
+        "fastTip": "Fast · 插队加速 · 用量更多",
+        "effortEndFast": "更高效",
+        "effortEndSmart": "更智能",
+        "railSameEngine": "仅 {{agent}}",
+        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容"
       }
     },
     "permissionSelector": {

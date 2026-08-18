@@ -34,6 +34,8 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
+import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
+import type { SessionMoveTarget } from './sessionMoveTarget';
 
 export interface AutomationSessionGroupItemProps {
   group: AutomationSessionGroup;
@@ -46,7 +48,12 @@ export interface AutomationSessionGroupItemProps {
   onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
+  onMoveSession?: (id: string, target: SessionMoveTarget) => void;
+  projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
+  /** 平铺列表由段头批量折叠状态机控制时传入；其它场景继续使用组件自身持久化状态。 */
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   indented?: boolean;
   /**
    * 展开的子 SessionItem 行 hover 时右侧浮层展示的"项目来源"标签映射(sessionId →
@@ -54,6 +61,8 @@ export interface AutomationSessionGroupItemProps {
    * 传给子行,自动化 group 里的子会话也能显示来源。
    */
   sourceLabelMap?: ReadonlyMap<string, string>;
+  /** 搜索命中字符下标；分组后的子行仍沿用普通会话行高亮。 */
+  matchMap?: ReadonlyMap<string, readonly number[]>;
   /** 项目置顶列表模式下，展开的自动化运行也使用同一套列表行。 */
   sessionVariant?: 'text' | 'list';
 }
@@ -76,15 +85,31 @@ export function AutomationSessionGroupItem({
   onAction,
   onRename,
   onTogglePin,
+  onMoveSession,
+  projectOptions,
   onScheduleAction,
+  collapsed: controlledCollapsed,
+  onCollapsedChange,
   indented = false,
   sourceLabelMap,
+  matchMap,
   sessionVariant = 'text',
 }: AutomationSessionGroupItemProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   // 轴 1:文件夹开/关,持久化、记忆上次展开(默认收起)。
-  const [collapsed, toggleCollapsed] = useAutomationGroupCollapsed(group.id);
+  const [storedCollapsed, toggleStoredCollapsed] = useAutomationGroupCollapsed(
+    group.id,
+    group.legacyId,
+  );
+  const collapsed = controlledCollapsed ?? storedCollapsed;
+  const toggleCollapsed = useCallback(() => {
+    if (onCollapsedChange) {
+      onCollapsedChange(!collapsed);
+      return;
+    }
+    toggleStoredCollapsed();
+  }, [collapsed, onCollapsedChange, toggleStoredCollapsed]);
   // 轴 2:展开后运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
   const [showAll, setShowAll] = useState(false);
   const [frozen, setFrozen] = useState<FrozenGroupState | null>(null);
@@ -635,7 +660,10 @@ export function AutomationSessionGroupItem({
               onAction,
               onRename,
               onTogglePin,
+              onMoveSession,
+              projectOptions,
               indented,
+              matchIndices: matchMap?.get(session.id),
               sourceLabel: sourceLabelMap?.get(session.id),
             };
 

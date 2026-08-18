@@ -426,6 +426,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         {
           id: 'chatgpt/gpt-5.6-sol',
           wireId: 'gpt-5.6-sol',
+          api: 'openai-codex-responses',
         },
         {
           id: 'chatgpt/gpt-5.7',
@@ -434,8 +435,11 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         },
       ],
     });
-    expect(providers[1]?.models[0]?.api).toBeUndefined();
     expect(providers[1]?.models[0]?.catalogAddition).toBeUndefined();
+    expect(providers[1]?.models[0]).toMatchObject({
+      api: 'openai-codex-responses',
+      contextWindow: 272_000,
+    });
     expect(providers[2]).toMatchObject({
       sourceProviderId: 'xai',
       baseUrl: 'http://127.0.0.1:4567/v1',
@@ -456,6 +460,129 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         'x-cindy-pi-provider-id': provider.sourceProviderId,
       });
     }
+  });
+
+  it('publishes a distinct Pi 1M profile while inheriting the bundled ChatGPT adapter', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.pi = [
+      {
+        id: 'chatgpt/gpt-5.6-sol',
+        name: 'GPT-5.6-Sol',
+        contextWindow: 272_000,
+        maxOutput: 128_000,
+        efforts: ['low', 'medium', 'high', 'xhigh'],
+        defaultEffort: 'medium',
+      },
+      {
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        name: 'GPT-5.6-Sol (1M · 高消耗)',
+        contextWindow: 1_000_000,
+        maxOutput: 128_000,
+        efforts: ['low', 'medium', 'high', 'xhigh'],
+        defaultEffort: 'medium',
+      },
+    ];
+    const bundled = piBundledModel('gpt-5.6-sol', 'openai-codex-responses', {
+      // readPiBundledModels probes with this deliberately unreachable endpoint.
+      // It must never override the provider-level runtime compat proxy.
+      baseUrl: 'http://127.0.0.1:1',
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+      cost: {
+        input: 5,
+        output: 30,
+        cacheRead: 0.5,
+        cacheWrite: 6.25,
+        tiers: [{
+          inputTokensAbove: 272_000,
+          input: 10,
+          output: 45,
+          cacheRead: 1,
+          cacheWrite: 12.5,
+        }],
+      },
+      compat: { supportsStrictTools: true },
+    });
+
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['openai-codex', new Map([[bundled.id, bundled]])]]),
+    ).providers.find((candidate) => candidate.id === 'openai-codex');
+
+    expect(provider?.models).toEqual([
+      expect.objectContaining({
+        id: 'chatgpt/gpt-5.6-sol',
+        wireId: 'gpt-5.6-sol',
+        api: 'openai-codex-responses',
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+        compat: bundled.compat,
+      }),
+      expect.objectContaining({
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        wireId: 'gpt-5.6-sol[1m]',
+        catalogAddition: true,
+        name: 'GPT-5.6-Sol (1M · 高消耗)',
+        contextWindow: 1_000_000,
+        cost: bundled.cost,
+        compat: bundled.compat,
+      }),
+    ]);
+    expect(provider?.models[0]?.catalogAddition).toBeUndefined();
+    expect(provider?.models[0]).not.toHaveProperty('baseUrl');
+    expect(provider?.baseUrl).toBe('http://127.0.0.1:4567/');
+
+    const withoutProbe = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+    ).providers.find((candidate) => candidate.id === 'openai-codex');
+    expect(withoutProbe?.models[1]).toMatchObject({
+      id: 'chatgpt/gpt-5.6-sol[1m]',
+      wireId: 'gpt-5.6-sol[1m]',
+      catalogAddition: true,
+      contextWindow: 1_000_000,
+    });
+  });
+
+  it('keeps a retired OpenAI profile private to its native subscription resume', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.pi = openai.models.pi?.filter(
+      (model) => model.id !== 'chatgpt/gpt-5.6-sol[1m]',
+    );
+    const bundled = piBundledModel('gpt-5.6-sol', 'openai-codex-responses', {
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+      compat: { supportsStrictTools: true },
+    });
+
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['openai-codex', new Map([[bundled.id, bundled]])]]),
+      undefined,
+      {
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        displayName: 'GPT-5.6-Sol (1M · Higher usage)',
+        contextWindow: 1_000_000,
+        maxOutputTokens: 128_000,
+        efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+        defaultEffort: 'medium',
+      },
+    ).providers.find((candidate) => candidate.id === 'openai-codex');
+
+    expect(provider?.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        wireId: 'gpt-5.6-sol[1m]',
+        catalogAddition: true,
+        contextWindow: 1_000_000,
+        compat: bundled.compat,
+      }),
+    ]));
+    expect(openai.models.pi?.some((model) => model.id.endsWith('[1m]'))).toBe(false);
   });
 
   it('publishes SuperGrok catalog models missing from this PI binary as catalog additions', () => {

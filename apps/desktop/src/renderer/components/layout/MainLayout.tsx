@@ -1245,6 +1245,7 @@ export function MainLayout() {
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}
               width={sidebarWidth}
               isDragging={isDragging}
+              forceMountFeatureContent={location.pathname === '/cc-agent/new'}
               onDragStart={handleDragStart}
               onResetWidth={resetWidth}
               onOpenUpdateNotice={openNotice}

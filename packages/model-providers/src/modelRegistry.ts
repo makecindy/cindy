@@ -84,8 +84,13 @@ function calendarDate(value: string | Date | undefined): string {
 
 function routeModelCandidates(providerId: string, modelId: string): string[] {
   const ids = [modelId];
+  const withoutContextProfile = modelId.replace(/\[1m\]$/, "");
+  if (withoutContextProfile !== modelId) ids.push(withoutContextProfile);
   if (providerId === "openai" && modelId.startsWith("chatgpt/")) {
-    ids.push(modelId.slice("chatgpt/".length));
+    const stripped = modelId.slice("chatgpt/".length);
+    ids.push(stripped);
+    const strippedWithoutContextProfile = stripped.replace(/\[1m\]$/, "");
+    if (strippedWithoutContextProfile !== stripped) ids.push(strippedWithoutContextProfile);
   }
   if (providerId === "anthropic") {
     const undatedModel = modelId.replace(/-\d{8}$/, "");
