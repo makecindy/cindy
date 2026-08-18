@@ -149,6 +149,24 @@ export function applyDesktopDevStartupConfig(options) {
 }
 
 /**
+ * 清除继承自宿主的 dev 启动覆写（返回清除后的新对象，不改入参）。
+ *
+ * 当宿主 Desktop 以 --isolated 模式运行、Agent 从它 spawn 时，XDT_USER_DATA_DIR /
+ * XDT_USER_DATA_DIR_EPOCH / XDT_DEVICE_ID_OVERRIDE 会留在 process.env 并被 agent
+ * 继承。worktree 自动隔离命中后若不清除，resolveDevCliFlags 会优先采用宿主 userData、
+ * 且因已有 device override 不派生新身份——注入的沙箱语义被覆盖（review-pr P1,
+ * PR #2640）。清除后沙箱目录与独立 deviceId 由注入的 XDT_ISOLATED / XDT_ISOLATED_NAME
+ * 正常派生。
+ */
+export function clearInheritedIsolationOverrides(env) {
+  const next = { ...env };
+  delete next.XDT_USER_DATA_DIR;
+  delete next.XDT_USER_DATA_DIR_EPOCH;
+  delete next.XDT_DEVICE_ID_OVERRIDE;
+  return next;
+}
+
+/**
  * 从启动 cwd 提取托管 worktree 名；不在 worktree 目录下时返回 null。
  * cwd 可以是 worktree 根或其任意子目录（如 apps/desktop），沿路径段找
  * `.cindy-worktrees` / `.xdt-worktrees`，取紧随其后的目录名。

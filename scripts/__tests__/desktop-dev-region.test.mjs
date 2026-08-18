@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   applyDesktopDevStartupConfig,
+  clearInheritedIsolationOverrides,
   desktopUserDataDirForRegion,
   desktopUserDataDirNameForRegion,
   resolveDesktopDevRegion,
@@ -415,4 +416,30 @@ test("bare dev:remote with --preserve-running in a worktree is isolated (no sile
     }),
     null,
   );
+});
+
+test("clearInheritedIsolationOverrides drops host-inherited launch overrides", () => {
+  // 宿主 --isolated Desktop → agent 继承的启动覆写，会覆盖 worktree 自动隔离注入的
+  // 沙箱语义（review-pr P1，PR #2640）。命中隔离时必须清除，让沙箱目录/deviceId
+  // 由注入的 XDT_ISOLATED / XDT_ISOLATED_NAME 正常派生。
+  const base = {
+    XDT_USER_DATA_DIR: "C:\\host\\sandbox",
+    XDT_USER_DATA_DIR_EPOCH: "1",
+    XDT_DEVICE_ID_OVERRIDE: "dev-host-abc",
+    XDT_ISOLATED: "1",
+    XDT_ISOLATED_NAME: "host-sandbox",
+    XDT_SCHEDULER_PASSIVE: "1",
+  };
+  const cleared = clearInheritedIsolationOverrides(base);
+  assert.equal(cleared.XDT_USER_DATA_DIR, undefined);
+  assert.equal(cleared.XDT_USER_DATA_DIR_EPOCH, undefined);
+  assert.equal(cleared.XDT_DEVICE_ID_OVERRIDE, undefined);
+  // 其它字段保留（注入的隔离意图 + 无关变量不动）
+  assert.equal(cleared.XDT_ISOLATED, "1");
+  assert.equal(cleared.XDT_ISOLATED_NAME, "host-sandbox");
+  assert.equal(cleared.XDT_SCHEDULER_PASSIVE, "1");
+  // 纯函数：不改入参
+  assert.equal(base.XDT_USER_DATA_DIR, "C:\\host\\sandbox");
+  // 无覆写时原样返回
+  assert.deepEqual(clearInheritedIsolationOverrides({ A: "1" }), { A: "1" });
 });

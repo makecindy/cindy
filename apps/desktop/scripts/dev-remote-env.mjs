@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 
 import {
   applyDesktopDevStartupConfig,
+  clearInheritedIsolationOverrides,
   resolveWorktreeIsolationFromCwd,
   stripDesktopDevRegionArgs,
 } from '../../../scripts/shared/desktop-dev-region.mjs';
@@ -53,6 +54,12 @@ delete env.XDT_RESTART_MANAGED;
 // restart 会翻译成 XDT_SCHEDULER_PASSIVE=1），豁免它会共享 userData 却正常调度 +
 // 正常单实例锁（review-pr P1, PR #2640）。
 if (worktreeIsolation) {
+  // 清除继承自宿主（--isolated Desktop → agent 子进程）的启动覆写：XDT_USER_DATA_DIR
+  // / XDT_USER_DATA_DIR_EPOCH / XDT_DEVICE_ID_OVERRIDE 残留会让 resolveDevCliFlags
+  // 优先采用宿主 userData、且因已有 device override 不派生新身份，覆盖掉这里注入的
+  // worktree 沙箱语义（review-pr P1, PR #2640）。清除后沙箱目录与独立 deviceId 由
+  // 注入的 XDT_ISOLATED / XDT_ISOLATED_NAME 正常派生。
+  Object.assign(env, clearInheritedIsolationOverrides(env));
   env.XDT_ISOLATED = '1';
   if (worktreeIsolation.worktreeName) {
     env.XDT_ISOLATED_NAME = worktreeIsolation.worktreeName;
