@@ -39,10 +39,16 @@ async function tempRoot(): Promise<string> {
  * `what` is only used to make a CI timeout readable: without it the failure
  * surfaces later as a confusing assertion on a half-written record instead of
  * "the child never reached this state".
+ *
+ * The default window has to match the suite budget, not a Linux stopwatch: the
+ * heavier cases incubate several real child processes in sequence and a single
+ * spawn costs 2-4s on the Windows CI runner, so a 10s window expired inside
+ * this helper while the run was still healthy. 30s leaves room under the 60s
+ * per-test budget for the poll to fail with its readable message first.
  */
 async function waitFor<T>(
   read: () => Promise<T | null>,
-  timeoutMs = 10_000,
+  timeoutMs = 30_000,
   what = 'runner state',
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -81,6 +87,8 @@ async function makeFixture(options: {
   hangOnMessage?: string;
   delayExitAfterInputEndMs?: number;
   runtimeOwnerId?: string;
+  /** Point this task's sessionDir at an existing *file* so launchTask throws. */
+  poisonSessionDirIndex?: number;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -99,6 +107,8 @@ async function makeFixture(options: {
   const commandsFile = path.join(root, 'commands.jsonl');
   const stdinEndedFile = path.join(root, 'stdin-ended');
   const tokensFile = path.join(root, 'tokens.jsonl');
+  const pidsFile = path.join(root, 'child-pids.jsonl');
+  const poisonedSessionDir = path.join(root, 'poisoned-session-dir');
   await writeFile(runnerFile, CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
   await chmod(runnerFile, 0o700);
   await writeFile(bridgeFile, 'export default function () {}\n');
@@ -143,6 +153,9 @@ if (!subagentRunDir || path.dirname(subagentRunDir) !== ${JSON.stringify(root)} 
   process.exit(12);
 }
 fs.appendFileSync(process.env.CINDY_TEST_PI_ARGS, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.env.CINDY_TEST_PI_PIDS) {
+  fs.appendFileSync(process.env.CINDY_TEST_PI_PIDS, String(process.pid) + '\\n');
+}
 if (process.env.CINDY_TEST_PI_TOKENS) {
   fs.appendFileSync(process.env.CINDY_TEST_PI_TOKENS, JSON.stringify(process.env.CINDY_PI_SESSION_TOKEN || null) + '\\n');
 }
@@ -212,7 +225,7 @@ process.stdin.on('end', () => {
       stepId: `step-${index + 1}`,
       dependsOn: options.chain && index > 0 ? [`step-${index}`] : [],
       sessionId: `${runId}-${index + 1}`,
-      sessionDir: sessions,
+      sessionDir: options.poisonSessionDirIndex === index ? poisonedSessionDir : sessions,
       agent: 'scout',
       title: `scout ${index + 1}`,
       task: `task ${index + 1}`,
@@ -226,10 +239,16 @@ process.stdin.on('end', () => {
   };
   const configPath = path.join(runDir, 'config.json');
   await writeFile(configPath, `${JSON.stringify(config)}\n`, { mode: 0o600 });
+  if (options.poisonSessionDirIndex !== undefined) {
+    // A plain file where the runner expects to mkdir a session directory: the
+    // launch throws mid-flight, after sibling lanes have already spawned.
+    await writeFile(poisonedSessionDir, 'not a directory\n', { mode: 0o600 });
+  }
   const child = spawn(process.execPath, [runnerFile, configPath], {
     cwd: root,
     env: {
       ...process.env,
+      CINDY_TEST_PI_PIDS: pidsFile,
       CINDY_TEST_PI_ARGS: argsFile,
       CINDY_TEST_PI_PROMPTS: promptsFile,
       CINDY_TEST_PI_COMMANDS: commandsFile,
@@ -245,6 +264,7 @@ process.stdin.on('end', () => {
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   return {
     root, runId, runDir, argsFile, promptsFile, commandsFile, stdinEndedFile, tokensFile,
+    pidsFile,
     child, stderr: () => stderr,
   };
 }
@@ -816,6 +836,66 @@ describe('Cindy durable PI Subagent runner', () => {
       return run?.state === 'stopped' ? run : null;
     });
     await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('kills every launched child before publishing a mid-flight failure terminal', async () => {
+    // A parallel lane rejects (poisoned session dir) after a sibling lane has
+    // already spawned. Publishing `failed` first would hand the run back to the
+    // Host — stop controls ignored, proxy lease released — while that detached
+    // child keeps running against the workspace.
+    // Lane A runs task 1 to completion, then picks up the poisoned task 3 and
+    // throws. Lane B is still parked on task 2's hanging child at that moment,
+    // so a real, running child exists when the failure is published.
+    const fixture = await makeFixture({
+      tasks: 3,
+      concurrency: 2,
+      hangOnMessage: 'task 2',
+      poisonSessionDirIndex: 2,
+    });
+
+    const failed = await waitFor(
+      async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      },
+      15_000,
+      'the runner to publish its mid-flight failure terminal',
+    );
+
+    // The terminal snapshot itself proves the ordering: the still-running child
+    // is already recorded as terminated, which only happens in the kill step
+    // that runs before the status is flushed.
+    expect(failed.tasks[1]).toMatchObject({ status: 'failed' });
+    expect(failed.tasks[1]?.error).toMatch(/Runner failed before this child finished/i);
+    expect(failed.tasks.every((task) => task.status !== 'running')).toBe(true);
+
+    const pids = (await readFile(fixture.pidsFile, 'utf8'))
+      .trim().split('\n').filter(Boolean).map((line) => Number(line));
+    // task 1 ran to completion and task 2 was launched and hung; task 3 never
+    // spawned because its launch is what threw.
+    expect(pids.length).toBeGreaterThanOrEqual(2);
+    await waitFor(
+      async () => pids.every((pid) => {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === 'ESRCH';
+        }
+      }) ? true : null,
+      15_000,
+      'every launched child process to be gone after the failure terminal',
+    );
+
+    // The runner must also stop itself. A launch throw used to leave the task
+    // scheduled-but-queued, so every other lane spun on its 10ms retry forever:
+    // the run read as finished while this process stayed alive.
+    await waitFor(
+      async () => (fixture.child.exitCode !== null || fixture.child.signalCode !== null ? true : null),
+      15_000,
+      'the runner process to exit after publishing its failure terminal',
+    );
+    expect(fixture.child.exitCode).toBe(1);
   });
 
   it('stops all owned children before removing durable files on parent deletion', async () => {

@@ -230,6 +230,76 @@ describe('Cindy PI Subagent foreground durable path', () => {
   );
 
   it.skipIf(process.platform === 'win32')(
+    'ends the parent turn on a bounded stop deadline when an aborted runner never answers',
+    async () => {
+      // Regression: the abort branch consumed the single stopWritten latch
+      // without arming a deadline, so the run-deadline branch could never arm
+      // one either. A runner that never consumes the control file left the
+      // parent turn polling forever with no way to finish cancelling.
+      const f = await fixture();
+      // Wedged runner: publishes a running status, ignores every control, and
+      // stays alive so the "runner exited" fallback cannot rescue the wait.
+      await writeFile(f.runnerFile, `
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const now = Date.now();
+fs.writeFileSync(path.join(config.runDir, 'status.json'), JSON.stringify({
+  version: 1, runId: config.runId, taskId: config.taskId,
+  parentSessionId: config.parentSessionId, runnerInstanceId: 'wedged-fixture',
+  runnerPid: process.pid, state: 'running', startedAt: now, updatedAt: now,
+  tasks: config.tasks.map((task) => ({
+    childId: task.childId, sessionId: task.sessionId, agent: task.agent, status: 'running',
+  })),
+}) + '\\n');
+setInterval(() => {}, 1000);
+setTimeout(() => process.exit(0), 20000).unref();
+`, { mode: 0o700 });
+      const previous = { ...process.env };
+      Object.assign(process.env, {
+        [CINDY_SUBAGENT_ENV.binary]: process.execPath,
+        [CINDY_SUBAGENT_ENV.depth]: '0',
+        [CINDY_SUBAGENT_ENV.runtimeFile]: f.runtimeFile,
+        [CINDY_SUBAGENT_ENV.runRoot]: f.runRoot,
+        [CINDY_SUBAGENT_ENV.runnerFile]: f.runnerFile,
+        [CINDY_SUBAGENT_ENV.nodeExecutable]: process.execPath,
+        [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
+        CINDY_PI_PERMISSION_FILE: f.permissionFile,
+        CINDY_PI_SESSION_ID: 'parent-session',
+        PI_CODING_AGENT_DIR: f.configHome,
+      });
+      const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
+      const controller = new AbortController();
+      try {
+        const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
+        await extension({ registerTool: (tool) => Object.assign(registered, tool) });
+        const startedAt = Date.now();
+        const execution = registered.execute!(
+          'tool-abort-wedged-runner',
+          { agent: 'scout', task: 'inspect the fixture' },
+          controller.signal,
+          () => undefined,
+          { sessionManager: { getBranch: () => [] } },
+        );
+        setTimeout(() => controller.abort(), 50);
+        // The bound is the 5s stop grace, not the run deadline (which is at
+        // least 25s out) and not the runner exiting (it does not).
+        await expect(Promise.race([
+          execution,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('parent turn polled past its stop deadline')), 20_000)),
+        ])).rejects.toThrow(/did not acknowledge the cancellation/i);
+        expect(Date.now() - startedAt).toBeLessThan(15_000);
+      } finally {
+        for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+        Object.assign(process.env, previous);
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
     'delivers abort before the runner has written its first status snapshot',
     async () => {
       const f = await fixture();

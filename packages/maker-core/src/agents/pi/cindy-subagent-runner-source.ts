@@ -763,7 +763,22 @@ function main() {
           await new Promise(function (resolve) { setTimeout(resolve, 10); });
           continue;
         }
-        await launchTask(task);
+        try {
+          await launchTask(task);
+        } catch (error) {
+          // takeReady() already marked this task scheduled. Leaving it queued
+          // after a launch throw makes takeReady() return null forever, so every
+          // *other* lane spins on its 10ms retry and the runner never exits —
+          // the terminal status says finished while this process and its
+          // children stay alive. Record the failure, then rethrow so the run
+          // still fails.
+          if (task.status === 'queued') {
+            task.status = 'failed';
+            task.error = 'Subagent launch failed: ' + String(error);
+            task.endedAt = Date.now();
+          }
+          throw error;
+        }
       }
     };
     const lanes = [];
@@ -805,13 +820,60 @@ function main() {
   }, timeoutMs);
   if (state.timeoutTimer && typeof state.timeoutTimer.unref === 'function') state.timeoutTimer.unref();
 
-  pruneControlReceipts(true);
-  flushStatusNow();
-  runAll().then(function () {
+  // Publishing a terminal status is a handover: the Host stops honouring stop
+  // controls for this run and releases its proxy credential lease. Nothing this
+  // runner owns may still be alive at that moment, so every terminal path goes
+  // through these two helpers first — kill and disarm, then publish.
+  function clearRunnerTimers() {
     if (state.controlTimer) clearInterval(state.controlTimer);
     if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
     if (state.parentWatchdogTimer) clearInterval(state.parentWatchdogTimer);
     if (state.timeoutTimer) clearTimeout(state.timeoutTimer);
+    state.controlTimer = undefined;
+    state.heartbeatTimer = undefined;
+    state.parentWatchdogTimer = undefined;
+    state.timeoutTimer = undefined;
+  }
+
+  // Terminate every child this runner actually spawned, plus its process group.
+  // A no-op on the normal path (settle() already dropped each handle); the
+  // partial-failure paths are the ones that would otherwise leave a detached
+  // child writing the workspace after the run reads as finished.
+  function terminateOwnedChildren(reason) {
+    for (const task of tasks) {
+      if (task.hardKillTimer) {
+        clearTimeout(task.hardKillTimer);
+        task.hardKillTimer = undefined;
+      }
+      const child = task.child;
+      if (!child) continue;
+      terminateOwnedTree(child, 'SIGTERM');
+      terminateOwnedTree(child, 'SIGKILL');
+      task.child = undefined;
+      task.stdin = undefined;
+      task.inputClosed = true;
+      task.pendingApproval = undefined;
+      if (task.status === 'running' || task.status === 'queued') {
+        task.status = state.stopRequested || task.stopRequested ? 'stopped' : 'failed';
+        task.error = task.error || reason;
+        task.endedAt = Date.now();
+      }
+    }
+  }
+
+  // Last resort for an exit none of the terminal paths handled (fatal error in
+  // a timer callback, an external SIGTERM). Synchronous work only.
+  process.on('exit', function () {
+    for (const task of tasks) {
+      if (task.child) terminateOwnedTree(task.child, 'SIGKILL');
+    }
+  });
+
+  pruneControlReceipts(true);
+  flushStatusNow();
+  runAll().then(function () {
+    terminateOwnedChildren('Runner stopped this child before publishing its terminal status.');
+    clearRunnerTimers();
     state.terminal = true;
     state.state = state.stopRequested
       ? 'stopped'
@@ -844,9 +906,37 @@ function main() {
     atomicWriteJson(resultPath, result);
     flushStatusNow();
   }).catch(function (error) {
+    // A parallel lane can reject (session dir staging, spawn) after sibling
+    // lanes already launched. Publishing failed first would tell the Host the
+    // run is over — stop controls ignored, proxy lease released — while those
+    // detached children keep running against the workspace. Kill and disarm
+    // before the handover, and report the killed children in the same status.
+    terminateOwnedChildren('Runner failed before this child finished: ' + String(error));
+    clearRunnerTimers();
     state.terminal = true;
     state.state = 'failed';
-    atomicWriteJson(resultPath, { version: 1, runId: config.runId, taskId: config.taskId, state: 'failed', error: String(error) });
+    atomicWriteJson(resultPath, {
+      version: 1,
+      runId: config.runId,
+      taskId: config.taskId,
+      state: 'failed',
+      error: String(error),
+      completedAt: Date.now(),
+      tasks: tasks.map(function (task) {
+        return {
+          childId: task.childId,
+          stepId: task.stepId,
+          sessionId: task.sessionId,
+          agent: task.agent,
+          status: task.status,
+          output: task.output,
+          outputTruncated: task.outputTruncated || undefined,
+          error: task.error,
+          usage: task.usage,
+          toolUses: task.toolUses,
+        };
+      }),
+    });
     flushStatusNow();
     fail(String(error));
   });

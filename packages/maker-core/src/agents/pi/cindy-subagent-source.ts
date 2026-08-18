@@ -161,6 +161,10 @@ const MAX_PROFILE_PROMPT_CHARS = 16000;
 const MAX_PARENT_CONTEXT_CHARS = 32000;
 // 兜底超时:卡死的子代理不能把父 turn 永久挂住。
 const TASK_TIMEOUT_MS = 10 * 60 * 1000;
+// 写下 stop 控制之后,等 runner 发布终态的宽限期。**每条写 stop 的路径都必须
+// 配一个 deadline**:stopWritten 是单闩,谁先写谁就把它占住,没配 deadline 的那条
+// 会让后面的 deadline 分支永远进不去,runner 卡死时父 turn 就无限轮询下去。
+const STOP_GRACE_MS = 5000;
 
 // tools 同时是 --tools 白名单。只读角色永不拿写工具；worker/custom-write 的 Ask/Auto
 // 审批通过 child RPC → durable runner → Cindy 审批 UI 往返，未获明确 allow 就 fail-closed。
@@ -574,6 +578,12 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
     try { status = JSON.parse(readFileSync(join(launched.runDir, 'status.json'), 'utf8')); } catch (err) { status = null; }
     if (signal && signal.aborted && !stopWritten) {
       stopWritten = true;
+      // Abort must be bounded exactly like the run deadline is. Without its own
+      // grace window this branch consumed the single stopWritten latch, the
+      // deadline branch below could then never arm one, and a runner that never
+      // consumes the control file left this loop polling forever — the parent
+      // turn could not finish cancelling.
+      stopDeadline = Date.now() + STOP_GRACE_MS;
       writeControlRequest(launched.runDir, { action: 'stop' });
     }
     if (status) {
@@ -624,10 +634,14 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
     }
     if (Date.now() >= launched.deadlineAt && !stopWritten) {
       stopWritten = true;
-      stopDeadline = Date.now() + 5000;
+      stopDeadline = Date.now() + STOP_GRACE_MS;
       writeControlRequest(launched.runDir, { action: 'stop' });
     } else if (stopDeadline > 0 && Date.now() >= stopDeadline) {
-      return launched.failureStatus('Durable runner did not publish a terminal status before its deadline.');
+      return launched.failureStatus(
+        signal && signal.aborted
+          ? 'Durable runner did not acknowledge the cancellation before its stop deadline.'
+          : 'Durable runner did not publish a terminal status before its deadline.',
+      );
     }
     await new Promise(function (resolve) { setTimeout(resolve, 100); });
   }
