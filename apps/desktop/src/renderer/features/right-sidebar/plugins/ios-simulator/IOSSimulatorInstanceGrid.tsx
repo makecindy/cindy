@@ -81,7 +81,7 @@ function SimulatorIconButton({
   disabledLabel?: string;
   onClick: () => void;
 }) {
-  const accessibleLabel = disabled ? (disabledLabel ?? label) : label;
+  const accessibleLabel = disabled && disabledLabel ? `${label} — ${disabledLabel}` : label;
   const button = (
     <button
       type="button"

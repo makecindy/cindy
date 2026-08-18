@@ -173,7 +173,7 @@ function preparePointerTarget(container: HTMLElement): HTMLImageElement {
   return image;
 }
 
-function expectDisabledIconButton(label: string, disabledReason: string): void {
+function expectDisabledIconButton(label: string, accessibleLabel: string): void {
   const button = Array.from(
     document.querySelectorAll<HTMLButtonElement>('button[aria-label]'),
   ).find((candidate) => candidate.getAttribute('aria-label') === label);
@@ -181,7 +181,7 @@ function expectDisabledIconButton(label: string, disabledReason: string): void {
   expect(button?.getAttribute('aria-hidden')).toBe('true');
   expect(button?.parentElement?.getAttribute('role')).toBe('button');
   expect(button?.parentElement?.getAttribute('aria-disabled')).toBe('true');
-  expect(button?.parentElement?.getAttribute('aria-label')).toBe(disabledReason);
+  expect(button?.parentElement?.getAttribute('aria-label')).toBe(accessibleLabel);
 }
 
 function installFakeH264DecoderRuntime(): void {
@@ -2685,6 +2685,10 @@ describe('IOSSimulatorTabBody', () => {
         }),
       );
     });
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.sendText',
+      'iPhone B rightSidebar.iosSimulator.sendText — rightSidebar.iosSimulator.enterTextBeforeSending',
+    );
 
     fireEvent.click(
       screen.getByRole('button', {
@@ -2833,7 +2837,23 @@ describe('IOSSimulatorTabBody', () => {
     });
     expectDisabledIconButton(
       'iPhone B rightSidebar.iosSimulator.pressHome',
-      'rightSidebar.iosSimulator.agentBusyDescription',
+      'iPhone B rightSidebar.iosSimulator.pressHome — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.rotateDevice',
+      'iPhone B rightSidebar.iosSimulator.rotateDevice — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.lockScreen',
+      'iPhone B rightSidebar.iosSimulator.lockScreen — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.unlockScreen',
+      'iPhone B rightSidebar.iosSimulator.unlockScreen — rightSidebar.iosSimulator.agentBusyDescription',
+    );
+    expectDisabledIconButton(
+      'iPhone B rightSidebar.iosSimulator.sendText',
+      'iPhone B rightSidebar.iosSimulator.sendText — rightSidebar.iosSimulator.agentBusyDescription',
     );
 
     fireEvent.pointerDown(image, { pointerId: 41, button: 0, clientX: 20, clientY: 40 });
@@ -2878,7 +2898,7 @@ describe('IOSSimulatorTabBody', () => {
       () =>
         expectDisabledIconButton(
           'iPhone B rightSidebar.iosSimulator.pressHome',
-          'rightSidebar.iosSimulator.agentBusyDescription',
+          'iPhone B rightSidebar.iosSimulator.pressHome — rightSidebar.iosSimulator.agentBusyDescription',
         ),
       { timeout: 2_000 },
     );
@@ -2988,7 +3008,7 @@ describe('IOSSimulatorTabBody', () => {
     await waitFor(() => expect(screen.queryByAltText('iPhone B')).toBeNull());
     expectDisabledIconButton(
       'iPhone B rightSidebar.iosSimulator.pressHome',
-      'rightSidebar.iosSimulator.controlsUnavailable',
+      'iPhone B rightSidebar.iosSimulator.pressHome — rightSidebar.iosSimulator.controlsUnavailable',
     );
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:ios-simulator-1');
     fireEvent.pointerUp(staleImage, {
