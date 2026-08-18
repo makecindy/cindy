@@ -1274,6 +1274,59 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('does not live-refresh xAI when the caller pins the gateway with providerId null', async () => {
+    let resolves = 0;
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'user', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          { id: 'local-model', displayName: 'Local', contextWindow: 128_000, efforts: [], defaultEffort: null },
+          { id: 'xai/grok-4.6', displayName: 'Grok 4.6', contextWindow: 500_000, efforts: [], defaultEffort: null },
+        ],
+      },
+      resolvePiGatewayModelApi: () => 'openai-responses',
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => {
+        resolves += 1;
+        return {
+          providers: [{
+            id: 'native-a',
+            name: 'Native A',
+            baseUrl: 'http://a.test',
+            api: 'openai-completions',
+            models: [{ id: 'local-model' }],
+          }],
+          env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+        };
+      },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'gateway-pin-skips-xai-reload',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+    });
+    expect(resolves).toBe(1);
+    captured.requests.length = 0;
+    await handle.setModel!('xai/grok-4.6', { providerId: null });
+    expect(resolves).toBe(1);
+    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'switch_session' }));
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'cindy',
+      modelId: 'xai/grok-4.6',
+    });
+    await handle.close();
+  });
+
   it('refuses to add a remote xAI proxy that was not provisioned at startup', async () => {
     let resolves = 0;
     const agent = new PiAgent({

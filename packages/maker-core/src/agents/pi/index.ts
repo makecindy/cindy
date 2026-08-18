@@ -2760,8 +2760,11 @@ export class PiAgent extends BaseAgent {
         });
         return;
       }
-      const sourceHint = requestedProviderId
-        ?? (model.startsWith('xai/') ? 'xai' : undefined);
+      // null = 钉回网关,绝不按模型名推断 xAI。只有 undefined(旧会话未持久化来源)
+      // 才允许 xai/ 前缀回退。`??` 会把 null 也吃掉,误进 live catalog 刷新。
+      const sourceHint = requestedProviderId === undefined
+        ? (model.startsWith('xai/') ? 'xai' : undefined)
+        : (requestedProviderId ?? undefined);
       const liveProviderHint = sourceHint ? nativeProviderForSource(sourceHint) : undefined;
       const needsXaiCatalogReload = sourceHint === 'xai'
         && (!liveProviderHint || !nativeOffersModel(liveProviderHint.id, model));
