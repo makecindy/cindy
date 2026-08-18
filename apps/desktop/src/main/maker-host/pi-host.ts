@@ -34,6 +34,7 @@ import type {
 } from '@cindy/maker-core';
 import {
   PI_REASONING_EFFORTS,
+  resolvePiModelRoute,
   runtimeCustomProviderId,
   storedCustomProviderId,
 } from '@cindy/model-providers';
@@ -41,6 +42,7 @@ import piModelCatalogJson from '@cindy/model-providers/pi-model-catalog' with { 
 import type {
   Catalog,
   CustomProviderConfig,
+  PiModelApi,
   PiReasoningEffort,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -928,7 +930,7 @@ export function buildPiNativeProvidersFromConfigs(
           supportsImageInput?: boolean;
           reasoning?: boolean;
           reasoningEfforts?: PiReasoningEffort[];
-          piApi?: PiNativeApi;
+          piApi?: PiModelApi;
           route?: {
             baseUrl: string;
             wireProtocol: ProviderWireProtocol;
@@ -1043,14 +1045,23 @@ export function buildPiNativeProvidersFromConfigs(
         const supportedEfforts = new Set(m.reasoningEfforts ?? []);
         const modelApi = modelApis[index]!;
         const bundledModel = metadataModels[index];
+        const explicitRoute = resolvePiModelRoute(m, {
+          baseUrl: rt.baseUrl,
+          wireProtocol: rt.wireProtocol,
+        });
+        const explicitRouteApi = explicitRoute
+          ? wireProtocolToPiApi(explicitRoute.wireProtocol)
+          : undefined;
+        const modelBaseUrl =
+          explicitRouteApi === modelApi
+            ? explicitRoute?.baseUrl
+            : bundledModel?.api === modelApi
+              ? bundledModel.baseUrl
+              : undefined;
         return {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
-          ...(m.route?.baseUrl
-            ? { baseUrl: m.route.baseUrl }
-            : bundledModel?.baseUrl
-              ? { baseUrl: bundledModel.baseUrl }
-              : {}),
+          ...(modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
           name: bundledModel?.name ?? m.name,
           contextWindow: bundledModel?.contextWindow ?? m.contextWindow,
           ...(bundledModel?.maxTokens ? { maxTokens: bundledModel.maxTokens } : {}),

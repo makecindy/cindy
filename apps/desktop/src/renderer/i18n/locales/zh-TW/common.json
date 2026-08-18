@@ -474,6 +474,13 @@
         "hint": "側邊欄主列表（置頂以外）的顯示形態：文字為緊湊單行，列表為帶預覽的兩行。",
         "aria": "切換任務列表顯示方式"
       },
+      "ghostPanelRestore": {
+        "label": "插件面板恢復入口",
+        "hint": "選擇最小化插件面板後從哪裡恢復。",
+        "aria": "選擇插件面板恢復入口",
+        "bubble": "浮動氣泡",
+        "sidebar": "側邊欄"
+      },
       "layout": {
         "label": "面板佈局",
         "hint": "面板位置和寬度會保留到下次啟動。如果佈局變得難以使用，可以恢復預設排列。",
@@ -4579,7 +4586,7 @@
     "maximizeAria": "撐滿內容區",
     "restoreAria": "還原面板大小",
     "detachAria": "在獨立視窗中開啟",
-    "minimizeAria": "最小化為浮動氣泡",
+    "minimizeAria": "最小化面板",
     "closeAria": "關閉面板並停用插件"
   },
   "ghostPanel": {
@@ -4597,6 +4604,11 @@
     "restoreAria": "恢復 {{name}} 面板",
     "stackExpandAria": "已收起 {{count}} 個插件面板，點選展開",
     "stackCollapseAria": "收攏插件面板列表"
+  },
+  "ghostPanelRestore": {
+    "single": "恢復 {{name}}",
+    "multiple": "已收起的插件面板",
+    "multipleAria": "已收起 {{count}} 個插件面板，點擊選擇要恢復的面板"
   },
   "rightSidebar": {
     "ariaLabel": "右側邊欄",
@@ -6252,6 +6264,10 @@
       "retry": "重試",
       "continueAfterReset": "恢復後繼續",
       "continueAfterResetTitle": "建立一次性自動化，在用量恢復後繼續當前任務",
+      "codexOrganizationUsageLimitWithReset": "目前連線的是企業 Codex 帳號，已達到用量上限，預計於 {{resetAt}} 恢復。",
+      "codexOrganizationUsageLimit": "目前連線的是企業 Codex 帳號，已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
+      "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
+      "codexUsageLimit": "目前連線的 Codex 帳號已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "gatewayQuotaExhausted": "Cindy AI 餘額不足，請充值後繼續",
       "viewBalance": "檢視餘額",
       "viewBalanceTitle": "開啟「用量和計費」檢視餘額並充值",
@@ -8378,7 +8394,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
+      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；整理時預設概括或泛化使用者提供的原話與範例，不要直接複製可識別個人、對話或業務的資訊；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -8387,7 +8403,8 @@
       "typeFeature": "功能建議",
       "titleLabel": "標題",
       "bodyLabel": "正文(Markdown)",
-      "privacyHint": "偵測到常見金鑰、個人路徑及電子郵件地址時，系統會自動遮蔽。提交前請檢查公開內容。",
+      "privacyHint": "Issue 的標題與正文將公開顯示，且可能被搜尋或快取。系統只能遮蔽部分常見敏感資訊，無法辨識所有語意隱私。",
+      "privacyConfirm": "我已檢查以上公開內容，不包含不應公開的個人、對話或業務資訊",
       "submissionMethodLabel": "釋出方式",
       "identityGithubUser": "GitHub 帳號 @{{login}} 直接釋出",
       "identityGithubUserHint": "你將成為該 Issue 的 GitHub 作者，可以在 GitHub 編輯或關閉",

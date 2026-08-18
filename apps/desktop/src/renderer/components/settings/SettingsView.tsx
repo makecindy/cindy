@@ -5,8 +5,9 @@ import { useSyncExternalStore } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { TAB_IDS, TAB_LABEL_KEY, isSettingsTab } from '@/lib/tabLabels';
+import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
+import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
 import { AppearanceSection } from './AppearanceSection';
@@ -42,6 +43,7 @@ import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
 import { ComputerUseSection } from './ComputerUseSection';
 import { useAuth } from '@/contexts/AuthContext';
+import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BillingSettingsSection } from '@/features/billing/BillingPage';
 import { canAccessBillingSettings } from './billingVisibility';
@@ -71,8 +73,7 @@ export function SettingsView() {
     mode,
     membershipKind: user?.membershipKind ?? null,
   });
-  const shouldRedirectToPlugins =
-    rawTab === 'ghosts' || rawTab === 'api-keys' || rawTab === 'connections';
+  const shouldRedirectLegacyPluginTabs = rawTab === 'api-keys' || rawTab === 'connections';
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;
@@ -121,6 +122,7 @@ export function SettingsView() {
       const next = new URLSearchParams(searchParams);
       next.delete('openPanel');
       next.delete('ghost');
+      next.delete('panel');
       next.delete('imGroup');
       next.delete('section');
       // providers 页深链参数(connect/wizard)与计费页深链参数(intent):切走 tab 即
@@ -174,9 +176,10 @@ export function SettingsView() {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [searchParams]);
 
-  // The plugin catalog moved to the top-level /plugins route. Keep old links
-  // working without leaving a second plugin management UI under Settings.
-  if (shouldRedirectToPlugins) return <Navigate to="/plugins" replace />;
+  // 旧「工具密钥」「第三方平台」深链落到设置里的插件分区,不再离开设置。
+  if (shouldRedirectLegacyPluginTabs) {
+    return <Navigate to="/settings?tab=ghosts" replace />;
+  }
 
   return (
     <div
@@ -207,36 +210,16 @@ export function SettingsView() {
             </h1>
           </div>
 
-          {/* Tab list —— 全部是普通 cell(「IM 机器人」的分栏切换在其页面内部) */}
-          <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
-            {visibleTabIds.map((tabId) => {
-              const selected = activeTab === tabId;
-              return (
-                <button
-                  key={tabId}
-                  id={`settings-tab-${tabId}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  aria-controls={`settings-panel-${tabId}`}
-                  onClick={() => handleSelectTab(tabId)}
-                  className={cn(
-                    'flex h-9 items-center rounded-full px-3 text-sm transition-colors',
-                    selected
-                      ? 'border border-[var(--sidebar-item-active-border)] bg-sidebar-item-active font-medium text-[var(--sidebar-item-active-foreground)]'
-                      : 'border border-transparent text-[var(--settings-menu-text)] hover:bg-sidebar-item-hover',
-                  )}
-                >
-                  {t(TAB_LABEL_KEY[tabId])}
-                </button>
-              );
-            })}
-          </nav>
+          <SettingsSidebarNav
+            tabIds={visibleTabIds}
+            activeTab={activeTab}
+            onSelectTab={handleSelectTab}
+          />
         </aside>
 
         {/* Content column — capped and centered in the remaining space.
-            Most tabs scroll as a page; Session Import uses a fixed-height workspace
-            so only its candidate list scrolls and the import action stays visible.
+            Most tabs scroll as a page; Session Import and Plugins use a fixed-height
+            workspace so only their inner lists scroll.
             right padding mirrors sidebar's 24px left inset.
             pt-[56px] pushes content top to align with the first nav tab (General),
             skipping the "Settings" header height (h1 24/1.1 + pb-18 + gap-2 ≈ 52px).
@@ -246,7 +229,9 @@ export function SettingsView() {
           ref={contentScrollRef}
           className={cn(
             'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 pt-[56px] [scrollbar-gutter:stable]',
-            activeTab === 'import' ? 'overflow-hidden' : 'overflow-y-auto',
+            activeTab === 'import' || activeTab === 'ghosts'
+              ? 'overflow-hidden'
+              : 'overflow-y-auto',
           )}
         >
           {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
@@ -255,7 +240,8 @@ export function SettingsView() {
             key={activeTab}
             className={cn(
               'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
-              activeTab === 'import' ? 'h-full min-h-0' : 'pb-32',
+              activeTab === 'import' || activeTab === 'ghosts' ? 'h-full min-h-0' : 'pb-32',
+              activeTab === 'ghosts' && 'max-w-none px-0',
             )}
           >
             {activeTab === 'general' && (
@@ -380,10 +366,7 @@ export function SettingsView() {
                 <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
-                <section
-                  className="pb-[18px]"
-                  aria-label={t('settings.sections.visionBridge')}
-                >
+                <section className="pb-[18px]" aria-label={t('settings.sections.visionBridge')}>
                   <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
                 {/* 通讯录是本机全局库(数据与开关都不依赖云端账号),local 模式同样可用 */}
@@ -464,6 +447,17 @@ export function SettingsView() {
                 <section aria-label={t('settings.sections.remoteControl')}>
                   <RemoteControlSection />
                 </section>
+              </div>
+            )}
+
+            {activeTab === 'ghosts' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-ghosts"
+                aria-labelledby="settings-tab-ghosts"
+                className="h-full min-h-0"
+              >
+                <SettingsCatalogPanel />
               </div>
             )}
 

@@ -1596,7 +1596,7 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('keeps the default route while validating connected sources when only the worker model is explicit', async () => {
+  it('pins the sole runtime provider when only the worker model is explicit', async () => {
     const availability = {
       'claude-code': [],
       codex: [
@@ -1618,12 +1618,47 @@ describe('OrcaWorkerCreationService', () => {
       model: 'gpt-5.4',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: null, model: 'gpt-5.4' },
+      resolved: { providerId: 'xd', model: 'gpt-5.4' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: null,
+      providerId: 'xd',
       model: 'gpt-5.4',
+    }));
+  });
+
+  it('uses the sole XD catalog route for an explicit DeepSeek model instead of Codex native auth', async () => {
+    const model = 'deepseek/deepseek-v4-pro';
+    const { deps, service } = createDeps({
+      getAvailableModels: vi.fn(() => [
+        { id: model, efforts: ['high'], defaultEffort: 'high', supportsFastMode: false },
+      ]),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{
+          id: 'xd',
+          name: 'XD Gateway',
+          models: [model],
+          // gateway-key 不属于 requiresExplicitRoute；唯一来源仍必须固化。
+          requiresExplicitRoute: false,
+        }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'codex',
+      label: 'deepseek_worker',
+      model,
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { model, providerId: 'xd' },
+    });
+
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      model,
+      providerId: 'xd',
     }));
   });
 
@@ -1921,7 +1956,7 @@ describe('buildNoProviderMessage', () => {
     }));
   });
 
-  it('treats an empty-string providerId as not-explicit and keeps the forced default route', async () => {
+  it('treats an empty-string providerId as not-explicit and pins a sole runtime source', async () => {
     const { service } = createDeps();
 
     await expect(service.createWorker({
@@ -1933,8 +1968,8 @@ describe('buildNoProviderMessage', () => {
       providerId: '',
     })).resolves.toMatchObject({
       ok: true,
-      // 与「显式 model 未显式来源」同语义:providerId 强制默认路由,不进显式 preflight。
-      resolved: { providerId: null, model: 'gpt-5.5' },
+      // 空串仍按未显式处理；唯一可用来源由运行时目录解析,不按模型名写死。
+      resolved: { providerId: 'xd', model: 'gpt-5.5' },
     });
   });
 

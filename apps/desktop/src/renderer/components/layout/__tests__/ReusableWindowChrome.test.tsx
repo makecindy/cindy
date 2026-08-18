@@ -283,7 +283,7 @@ describe('reusable auxiliary window chrome', () => {
     );
   });
 
-  it('minimizes a detached plugin window into the main-window Ghost bubble', async () => {
+  it('minimizes a detached plugin window through the main-window restore flow', async () => {
     render(<GhostPanelWindowLayout />);
 
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.minimize' }));

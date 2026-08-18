@@ -864,6 +864,55 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     }
   });
 
+  it('keeps a model endpoint only when it matches the final Pi protocol', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'legacy-route',
+          name: 'Legacy Route',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://api.example/v1',
+              wireProtocol: 'anthropic-messages',
+              models: [
+                {
+                  id: 'stale-route',
+                  name: 'Stale Route',
+                  piApi: 'openai-responses',
+                  route: {
+                    baseUrl: 'https://api.example/messages',
+                    wireProtocol: 'anthropic-messages',
+                  },
+                },
+                {
+                  id: 'matching-route',
+                  name: 'Matching Route',
+                  piApi: 'openai-responses',
+                  route: {
+                    baseUrl: 'https://api.example/responses',
+                    wireProtocol: 'openai-responses',
+                  },
+                },
+              ],
+            }),
+          },
+        },
+      ],
+      () => null,
+    );
+
+    expect(providers[0]?.models).toMatchObject([
+      { id: 'stale-route', api: 'openai-responses' },
+      {
+        id: 'matching-route',
+        api: 'openai-responses',
+        baseUrl: 'https://api.example/responses',
+      },
+    ]);
+    expect(providers[0]?.models[0]).not.toHaveProperty('baseUrl');
+  });
+
   it('skips a provider when any model has no explicit or authoritative Pi protocol', () => {
     const skipped: Array<[string, string]> = [];
     const { providers } = buildPiNativeProvidersFromConfigs(

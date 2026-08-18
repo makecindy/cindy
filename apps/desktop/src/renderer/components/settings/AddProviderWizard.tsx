@@ -145,8 +145,8 @@ function isDiscoverySourceValidForRuntime(
  * 推荐模型兜底——拉取因网络/限流失败时降级为「仅推荐模型」仍可完成创建,
  * 不把用户堵死(与目录预设同语义;Greptile P1 反馈 2026-07-24)。
  * 每个 runtime 都独立声明 wire protocol：Anthropic API 同时提供 Claude Code 的
- * Messages 与 Codex 桥接所需的 Messages 端点；openai/xai 仅声明 Codex(两家无
- * Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
+ * Messages 与 Codex 桥接所需的 Messages 端点；openai/xai 声明 Codex 与 Pi 原生协议
+ * runtime(两家无 Anthropic 兼容端点),表单会自动展示实际支持的 runtime。
  */
 const ANTHROPIC_API_MODELS = [
   { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
@@ -158,8 +158,9 @@ const OPENAI_API_MODELS = [
   { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
 ];
 const XAI_API_MODELS = [
-  { id: 'grok-4.5', name: 'Grok 4.5' },
-  { id: 'grok-4.3', name: 'Grok 4.3' },
+  { id: 'grok-4.6', name: 'Grok 4.6', contextWindow: 500_000 },
+  { id: 'grok-4.5', name: 'Grok 4.5', contextWindow: 500_000 },
+  { id: 'grok-4.3', name: 'Grok 4.3', contextWindow: 1_000_000 },
 ];
 
 export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
@@ -214,6 +215,8 @@ export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
       codex: {
         baseUrl: 'https://api.x.ai/v1',
         wireProtocol: 'openai-chat',
+        // contextWindow 必须与目录一致:拉取失败时 handleFinish 只读预设窗口,
+        // 缺省会落 toCatalogModel 的 200k 默认。
         models: XAI_API_MODELS,
       },
       pi: {

@@ -733,9 +733,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     const explicitModelProviders = params.model !== undefined
       ? agentProviders.filter((provider) => provider.models.includes(resolvedConfig.model))
       : [];
-    const explicitModelProvider = explicitModelDefaultProviderId === null
-      ? undefined
-      : agentProviders.find((provider) => provider.id === explicitModelDefaultProviderId);
     const cachedProviderRouteIsStale = params.model === undefined
       && inheritedModelComesFromDefaults
       && defaults.providerId !== undefined
@@ -756,14 +753,16 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       : agentProviders.find((provider) => provider.id === inheritedDefaultProviderId);
     const resolved = {
       ...resolvedConfig,
-      // 仅显式指定 model 不等于显式选择来源：providerId=null 必须保留 spawn-aware 默认路由。
-      // 例外是该模型只有一个来源且它必须依赖 session provider store 注入自己的凭证。
+      // 仅显式指定 model 不等于显式选择来源：多来源模型仍保留 spawn-aware 默认路由。
+      // 但若当前只有一个可用来源,必须把该来源固化到 session。否则 preflight 虽会按
+      // 这个唯一来源校验通过,实际 spawn 却收到 providerId=null 并回落到 agent 原生认证
+      // 链路,形成「校验走 A、执行走 B」的分裂状态(如 XD 独有 DeepSeek 模型误走
+      // Codex ChatGPT OAuth)。来源取运行时 provider registry,不按模型名写死 provider id。
       providerId: explicitSourceId !== null
         ? explicitSourceId
         : params.model !== undefined
           && explicitModelProviders.length === 1
-          && explicitModelProvider?.requiresExplicitRoute
-          ? explicitModelProvider.id
+          ? explicitModelProviders[0]!.id
           : params.model !== undefined
             ? null
             : inheritedDefaultNeedsRouteResolution
