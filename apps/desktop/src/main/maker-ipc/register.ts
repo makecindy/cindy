@@ -831,6 +831,10 @@ import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnL
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
 import {
+  assertAgentCommandListIpcCaller,
+  toAgentCommandListFailure,
+} from './agentCommandListIpcBoundary.js';
+import {
   captureDataOwnerBroadcastScope,
   tapWindowBroadcast,
 } from '../device-link/broadcast-tap.js';
@@ -6046,7 +6050,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await getDesktopCommandRegistry().execute(name, c);
   });
 
-  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, async (_e, agentKind: unknown, rawParams?: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, async (event, agentKind: unknown, rawParams?: unknown) => {
+    assertAgentCommandListIpcCaller(event, {
+      isDeviceLinkInvoke,
+      assertTrustedSender: (sourceEvent) =>
+        assertTrustedAppRendererEvent(
+          sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
+        ),
+    });
     try {
       const kind = requireAgentKind(agentKind);
       const params = rawParams === undefined ? {} : requireObject(rawParams);
@@ -6105,11 +6116,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const commands = mergePiPackageCommands(kind, builtins, packageCommands);
       return { success: true, commands, ...(runtimeStatus ? { runtimeStatus } : {}) };
     } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-        commands: [],
-      };
+      return toAgentCommandListFailure(err, {
+        reportError: (error) => {
+          log.warn('Agent command list failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      });
     }
   });
 
