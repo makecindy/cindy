@@ -5,14 +5,10 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
-import type { GhostInstallApproval } from '../../../../shared/ghost';
+import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
-export type PluginPresentationOrigin =
-  | 'public'
-  | 'organization'
-  | 'local'
-  | 'custom';
+export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
 
 export type PluginCatalogPresentationItem<TInstalled> =
   { kind: 'installed'; item: TInstalled } | { kind: 'market'; item: PluginMarketItem };
@@ -57,7 +53,11 @@ export function marketReviewTargetsInstalledGhost(
   approvalState: GhostInstallApproval['state'] | undefined,
 ): boolean {
   if (item?.installState === 'update-available') return true;
-  return item?.installState === 'installed' && approvalState !== undefined && approvalState !== 'approved';
+  return (
+    item?.installState === 'installed' &&
+    approvalState !== undefined &&
+    approvalState !== 'approved'
+  );
 }
 
 /**
@@ -115,4 +115,13 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
     ordered.push({ kind: 'installed', item: installedItem });
   }
   return ordered;
+}
+
+/** 浏览可看公开目录；安装只在当前会话真能跑这个插件时露出。 */
+export function canOfferMarketInstall(
+  mode: 'signed-out' | 'local' | 'cloud',
+  ghostId: string,
+): boolean {
+  if (mode === 'signed-out') return false;
+  return mode === 'cloud' || !isCindyAccountGhostId(ghostId);
 }

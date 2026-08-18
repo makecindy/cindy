@@ -42,6 +42,7 @@ import type {
   TurnContinuationState,
 } from '@cindy/maker-core';
 import { clampEffortToSupported } from '@cindy/model-providers';
+import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type {
   Schedule,
@@ -849,7 +850,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           `schedule route unavailable: model "${model}" is disabled in settings (${verdict.reason})`,
         );
       }
-      if (verdict.kind === 'reroute' && !createProviderId) {
+      if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(createProviderId)) {
         createProviderId = verdict.providerId;
         reroutedProviderId = verdict.providerId;
       }
@@ -1307,7 +1308,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             `schedule route unavailable: model "${runtimeModel}" is disabled in settings (${verdict.reason}, revalidated before dispatch)`,
           );
         }
-        if (verdict.kind === 'reroute' && !dispatchProviderId) {
+        if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(dispatchProviderId)) {
           // 晚到的隐式改道(createSession 之后目录才变)跨凭证形态时不能只热换
           // provider store:进程是旧凭证形态 spawn 的,热换后这次 send 仍用旧凭证
           // 下单或直接鉴权失败。需要关会话重建的组合按明确错误失败收口 —— 下一轮
@@ -2078,7 +2079,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           `schedule route unavailable: model "${targetModel}" is disabled in settings (${verdict.reason})`,
         );
       }
-      if (verdict.kind === 'reroute' && !routeProviderId) {
+      if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(routeProviderId)) {
         applyProviderId = verdict.providerId;
       }
     }

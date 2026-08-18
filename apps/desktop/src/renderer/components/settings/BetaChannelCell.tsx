@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 export function BetaChannelCell() {
   const { t } = useTranslation();
@@ -71,9 +72,7 @@ export function BetaChannelCell() {
         }
       } catch (err) {
         toast.error(
-          err instanceof Error
-            ? err.message
-            : t('settings.betaChannel.toast.toggleFailed'),
+          t(mapIpcErrorToI18nKey(err, { fallback: 'settings.betaChannel.toast.toggleFailed' })),
         );
       } finally {
         setPending(false);

@@ -298,15 +298,26 @@ describe('auth login-flow reset', () => {
   it('synchronizes canary flags on every path that establishes a new auth identity', () => {
     expect(source).not.toContain('canaryFlagStore.sync(false)');
     expect(source.match(/scheduleCanaryFlagSync\(\{/g)).toHaveLength(3);
+    expect(source.match(/scheduleXdOrgBetaDefault\(\{/g)).toHaveLength(3);
     expect(source).toContain("getClientEndpoint('oauthBrokerApiBaseUrl')");
     expect(source).toContain("apiFetch('/api/user/feature-flags'");
 
     const syncStart = source.indexOf('function scheduleCanaryFlagSync(');
-    const syncEnd = source.indexOf('\n}\n\n/**\n * 冷启动流程的进程内去重', syncStart);
+    const syncEnd = source.indexOf('\n}\n\n/**\n * 登录态落地后为 xd 组织补一次设备级 beta 默认值', syncStart);
     expect(syncEnd).toBeGreaterThan(syncStart);
     const syncBody = source.slice(syncStart, syncEnd);
     expect(syncBody).toContain("if (outcome.kind === 'synced')");
     expect(syncBody).toContain('notifyRenderer();');
+
+    const betaStart = source.indexOf('function scheduleXdOrgBetaDefault(');
+    const betaEnd = source.indexOf('\n}\n\n/**\n * 冷启动流程的进程内去重', betaStart);
+    expect(betaEnd).toBeGreaterThan(betaStart);
+    const betaBody = source.slice(betaStart, betaEnd);
+    expect(betaBody).toContain('if (isPassiveSharedUserDataInstance()) return;');
+    expect(betaBody).toContain('decodeAccessTokenOrgSlug(accessToken)');
+    expect(betaBody).toContain('enableUncustomizedBetaChannel');
+    expect(betaBody).toContain('authStateEpoch === input.expectedAuthEpoch');
+    expect(source).not.toContain('relaunchForChannelChange');
 
     const clearIntegrationsStart = source.indexOf('async function clearPerAccountIntegrations(');
     const clearIntegrationsEnd = source.indexOf('\n}', clearIntegrationsStart);

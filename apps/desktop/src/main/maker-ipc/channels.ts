@@ -633,6 +633,7 @@ export const MAKER_INVOKE = {
   IOS_SIMULATOR_SET_AGENT_CONTROL: 'maker:ios-simulator:set-agent-control',
   IOS_SIMULATOR_SET_MUTATION_CONTROL: 'maker:ios-simulator:set-mutation-control',
   IOS_SIMULATOR_SET_VIEWER_VISIBILITY: 'maker:ios-simulator:set-viewer-visibility',
+  IOS_SIMULATOR_RETRY_NATIVE_ROUTE: 'maker:ios-simulator:retry-native-route',
   IOS_SIMULATOR_LATEST_FRAME: 'maker:ios-simulator:latest-frame',
   IOS_SIMULATOR_SET_STREAM_PROFILE: 'maker:ios-simulator:set-stream-profile',
   IOS_SIMULATOR_LIVE_TOUCH: 'maker:ios-simulator:live-touch',

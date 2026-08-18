@@ -34,7 +34,7 @@ import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
  *   持久化;双击缝 = 两侧份额均分。非 chat 面板的像素宽 = **在场份额** × 可用宽
  *   (经 PaneWidthContext 下发,面板消费);chat-main 弹性吸收剩余(flex-1)。
  * - **在场份额(active share)**:树上的 fraction 是"全体 pane"的账本,而不渲染的
- *   pane(未安装残留 / 已抽离 / 已最小化成气泡)那份地方实际被弹性的 chat 吸收 ——
+ *   pane(未安装残留 / 已抽离 / 已最小化)那份地方实际被弹性的 chat 吸收 ——
  *   账本与画面脱钩后,像素换算与拖缝余量全都失真。引擎因此一律按
  *   `share = fraction / Σ在场 fraction` 计算(见 activeSplitLedger),隐藏面板的
  *   fraction 一字不动(位置与宽度记忆保留,重装/合并/恢复即原位复活,
@@ -59,7 +59,7 @@ const NON_CHAT_FLOOR_PX = 120;
 
 /**
  * pane 是否在本窗口渲染:未注册 kind(未安装/停用的插件残留)、已抽离进
- * 独立窗口、以及已最小化为浮动气泡的面板都不渲染 —— 树数据一律保留,
+ * 独立窗口、以及已最小化的面板都不渲染 —— 树数据一律保留,
  * 重装/合并/恢复即原位复活(architecture-invariants「已抽离的面板允许保留
  * 在存档中但不渲染」)。
  */

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { listMigrations, runMigrationReplay } from '../migrationRunner';
 
-const MIGRATIONS = ['0092_motionless_hiroim.sql', '0093_bot_session_event_inbox.sql'] as const;
+const MIGRATIONS = ['0093_bots_runtime_foundation.sql'] as const;
 const cleanups: Array<() => void> = [];
 const canReplayPublishedLineage = process.platform === 'darwin' || process.platform === 'win32';
 const lineageIt = canReplayPublishedLineage ? it : it.skip;

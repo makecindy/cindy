@@ -47,7 +47,11 @@ import {
   getResponsesBridgeHandler,
 } from './anthropic-responses-bridge-host.js';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
-import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
+import {
+  isExclusiveXaiModelId,
+  isSubscriptionDirectRoute,
+  XAI_MODEL_PREFIX,
+} from '../../shared/subscriptionModels.js';
 import {
   composeResponseObservers,
   createClaudeRateLimitHeadersObserver,
@@ -59,6 +63,7 @@ import {
   type ClaudeSessionBillingRoute,
 } from './claude-session-route-registry.js';
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
+import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
@@ -136,6 +141,34 @@ export function setClaudeProxySessionIdResolver(
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function refuseExclusiveXaiDefaultGateway(wireModel: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          code: 'exclusive_xai_route_required',
+          message:
+            `model '${wireModel}' requires SuperGrok (xAI) and cannot use the default Anthropic gateway`,
+        },
+      });
+      res.writeHead(400, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function bridgedSubscriptionModel(wireModel: string): string {
+  if (wireModel.startsWith(XAI_MODEL_PREFIX) || !isExclusiveXaiModelId(wireModel)) {
+    return wireModel;
+  }
+  return `${XAI_MODEL_PREFIX}${wireModel.replace(/\[1m\]$/i, '')}`;
 }
 
 /** 大小写不敏感取 header 值;缺失或空串 → null。 */
@@ -271,6 +304,16 @@ export function createModelRoutingTransform(): RoutingTransform {
       : null;
     if (pendingRoute) return pendingRoute;
 
+    const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    const applyExclusiveReroute = shouldApplyExclusiveProviderReroute(
+      selectedProviderId,
+      getActiveCatalog().providers,
+    );
+    const explicitCustomProvider =
+      !!selectedProviderId
+      && selectedProviderId !== 'xai'
+      && !applyExclusiveReroute;
+
     // ⓪ 订阅直连翻译:model 带 `chatgpt/` / `xai/` 前缀 → 交给本地 responses handler
     //    (localHandler 插槽,进程内直调,不多一跳;它把 Anthropic Messages ↔ OpenAI Responses
     //    双向翻译,用对应订阅 OAuth 直打 codex / api.x.ai)。
@@ -279,9 +322,31 @@ export function createModelRoutingTransform(): RoutingTransform {
     //    放在最前:优先级高于 per-session 供应商与 spawn 默认路由。
     //    ⚠ 本分支是订阅直连的**唯一注册点**:整块摘掉 = 订阅前缀请求 passthrough 到默认上游
     //    (预期 400/502,fail-open),不需要 revert 其它代码。
-    if (!piSessionId && isSubscriptionDirectModel(wireModel)) {
+    // 非自定义、非 xAI 来源上的裸 Grok 不能偷走 SuperGrok 额度。
+    if (
+      !piSessionId
+      && isExclusiveXaiModelId(wireModel)
+      && !wireModel.startsWith(XAI_MODEL_PREFIX)
+      && selectedProviderId
+      && applyExclusiveReroute
+    ) {
+      return refuseExclusiveXaiDefaultGateway(wireModel);
+    }
+    // 显式自定义供应商 + 裸 grok id 必须走 ① 的用户上游,不能仅凭模型名劫持到 SuperGrok。
+    // `xai/` / `chatgpt/` 前缀仍是订阅户口,按 per-request 进 bridge。
+    if (
+      !piSessionId
+      && isSubscriptionDirectRoute(wireModel)
+      && !(explicitCustomProvider && isExclusiveXaiModelId(wireModel) && !wireModel.startsWith(XAI_MODEL_PREFIX))
+    ) {
       const bridgeHandler = getResponsesBridgeHandler();
       if (!bridgeHandler) {
+        if (isExclusiveXaiModelId(wireModel)) {
+          log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {
+            wireModel,
+          });
+          return refuseExclusiveXaiDefaultGateway(wireModel);
+        }
         log.warn('订阅前缀模型但 responses handler 不可用,passthrough(该请求预期会 400)', { wireModel });
         return null;
       }
@@ -289,14 +354,21 @@ export function createModelRoutingTransform(): RoutingTransform {
       // effort / fast 放进请求体,而引擎保持零会话概念,不走任何伪 header。
       const effort = sessionId ? getSessionEffort(sessionId) : null;
       const fast = sessionId ? getSessionFastMode(sessionId) : false;
+      const bridgedModel = bridgedSubscriptionModel(wireModel);
       return {
-        localHandler: (args) =>
-          bridgeHandler.handle({ ...args, prefs: { reasoningEffort: effort ?? undefined, fast } }),
+        localHandler: (args) => {
+          if (bridgedModel !== wireModel && isPlainObject(args.parsedBody)) {
+            args.parsedBody.model = bridgedModel;
+          }
+          return bridgeHandler.handle({
+            ...args,
+            prefs: { reasoningEffort: effort ?? undefined, fast },
+          });
+        },
       };
     }
 
     const gatewayKey = _readGatewayKey();
-    const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
@@ -341,6 +413,13 @@ export function createModelRoutingTransform(): RoutingTransform {
     // passthrough 会在网关吃确定性 401 → 误触发 auto→ask 降级(#831)。与 codex
     // ①.5 段 #890 修复同语义:占位 key 按「无可用凭证」处理,走下方换网关 key 的
     // 默认路由;真实 key(gateway-spawn)照旧 passthrough。
+    if (isExclusiveXaiModelId(wireModel)) {
+      log.warn('exclusive xAI model escaped subscription routing; refusing default gateway', {
+        wireModel,
+        selectedProviderId,
+      });
+      return refuseExclusiveXaiDefaultGateway(wireModel);
+    }
     const apiKeyHeader = headerValue(ctx.headers, 'x-api-key');
     const hasUsableApiKey =
       apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;

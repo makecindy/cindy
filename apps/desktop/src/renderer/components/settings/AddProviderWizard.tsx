@@ -205,9 +205,12 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
       codex: {
         baseUrl: 'https://api.x.ai/v1',
         wireProtocol: 'openai-chat',
+        // contextWindow 必须与目录一致:拉取失败时 handleFinish 只读预设窗口,
+        // 缺省会落 toCatalogModel 的 200k 默认。
         models: [
-          { id: 'grok-4.5', name: 'Grok 4.5' },
-          { id: 'grok-4.3', name: 'Grok 4.3' },
+          { id: 'grok-4.6', name: 'Grok 4.6', contextWindow: 500_000 },
+          { id: 'grok-4.5', name: 'Grok 4.5', contextWindow: 500_000 },
+          { id: 'grok-4.3', name: 'Grok 4.3', contextWindow: 1_000_000 },
         ],
       },
     },

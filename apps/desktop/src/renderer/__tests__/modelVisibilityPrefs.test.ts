@@ -7,10 +7,11 @@
  *   3. set/get 往返 + owner-scoped localStorage 持久化(模拟 app 重启)
  *   4. 按 (agent, providerId, modelId) 分槽:同名模型在 cc / codex 互不覆盖
  *   5. setManyVisibility 批量(全部关 / 全部开)写显式 override
- *   6. 同值写入短路(不抛)
- *   7. 旧全局 key 只由 Main 仲裁出的首个 owner 认领,新账号默认隔离
- *   8. schema 损坏 / 脏数据 → 静默回退,跟随目录默认
- *   9. main 镜像同步异步失败时不产生未处理 rejection
+ *   6. 跨 agent 的一次用户操作原子落盘，失败不留下部分状态
+ *   7. 同值写入短路(不抛)
+ *   8. 旧全局 key 只由 Main 仲裁出的首个 owner 认领,新账号默认隔离
+ *   9. schema 损坏 / 脏数据 → 静默回退,跟随目录默认
+ *  10. main 镜像同步异步失败时不产生未处理 rejection
  *
  * 项目 vitest env=node,无 window。沿用 providerModelMemory.test.ts 的最小 localStorage stub。
  */
@@ -35,9 +36,11 @@ class MemLocalStorage {
 
 let memStorage: MemLocalStorage;
 const syncModelVisibility = vi.fn(async () => undefined);
+const logToMain = vi.fn();
 let ownerClaim: {
   dataOwnerId: string | null;
   ownerGeneration: number;
+  canWriteOwnerScoped: boolean;
   claimed: boolean;
   claimedByOtherOwner?: boolean;
   canInitialize: boolean;
@@ -49,10 +52,12 @@ function setOwnerClaim(
   claimed = true,
   canInitialize = true,
   claimedByOtherOwner = false,
+  canWriteOwnerScoped = true,
 ): void {
   ownerClaim = {
     dataOwnerId,
     ownerGeneration,
+    canWriteOwnerScoped,
     claimed,
     claimedByOtherOwner,
     canInitialize,
@@ -62,10 +67,12 @@ function setOwnerClaim(
 beforeEach(() => {
   memStorage = new MemLocalStorage();
   syncModelVisibility.mockClear();
+  logToMain.mockClear();
   setOwnerClaim('owner-a', 1);
   vi.stubGlobal('window', {
     localStorage: memStorage,
     electronAPI: {
+      logToMain,
       maker: {
         syncModelVisibility,
         claimLegacyModelVisibilityOwner: () => ownerClaim,
@@ -149,10 +156,58 @@ describe('modelVisibilityPrefs store', () => {
     expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(true);
   });
 
+  it('setModelVisibilities:跨 agent 一次落盘并同时更新全部目标', async () => {
+    const module = await loadModuleForOwner();
+    const setItem = vi.spyOn(memStorage, 'setItem');
+
+    expect(
+      module.setModelVisibilities(
+        'xd',
+        [
+          { agent: 'claude-code', modelId: 'claude-sonnet-4-6' },
+          { agent: 'codex', modelId: 'gpt-5.6' },
+        ],
+        false,
+      ),
+    ).toBe(true);
+
+    expect(
+      setItem.mock.calls.filter(([key]) => key === 'xdt:modelVisibilityPrefs:v1.owner.owner-a'),
+    ).toHaveLength(1);
+    expect(module.isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6' })).toBe(false);
+    expect(module.isModelEnabled('codex', 'xd', { id: 'gpt-5.6' })).toBe(false);
+    setItem.mockRestore();
+  });
+
+  it('setModelVisibilities:落盘失败不部分提交，按同一方向重试可整体成功', async () => {
+    const module = await loadModuleForOwner();
+    const storageKey = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
+    const rawBeforeFailure = memStorage.getItem(storageKey);
+    const mirrorCallsBeforeFailure = syncModelVisibility.mock.calls.length;
+    const setItem = vi.spyOn(memStorage, 'setItem').mockImplementationOnce(() => {
+      throw new Error('injected storage failure');
+    });
+    const targets = [
+      { agent: 'claude-code' as const, modelId: 'claude-sonnet-4-6' },
+      { agent: 'codex' as const, modelId: 'gpt-5.6' },
+    ];
+
+    expect(module.setModelVisibilities('xd', targets, false)).toBe(false);
+    expect(memStorage.getItem(storageKey)).toBe(rawBeforeFailure);
+    expect(module.isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6' })).toBe(true);
+    expect(module.isModelEnabled('codex', 'xd', { id: 'gpt-5.6' })).toBe(true);
+    expect(syncModelVisibility).toHaveBeenCalledTimes(mirrorCallsBeforeFailure);
+
+    expect(module.setModelVisibilities('xd', targets, false)).toBe(true);
+    expect(module.isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6' })).toBe(false);
+    expect(module.isModelEnabled('codex', 'xd', { id: 'gpt-5.6' })).toBe(false);
+    setItem.mockRestore();
+  });
+
   it('同值写入短路:不抛,值保持', async () => {
     const { isModelEnabled, setModelVisibility } = await loadModuleForOwner();
-    setModelVisibility('codex', 'openai', 'gpt-5.4', false);
-    expect(() => setModelVisibility('codex', 'openai', 'gpt-5.4', false)).not.toThrow();
+    expect(setModelVisibility('codex', 'openai', 'gpt-5.4', false)).toBe(true);
+    expect(setModelVisibility('codex', 'openai', 'gpt-5.4', false)).toBe(true);
     expect(isModelEnabled('codex', 'openai', { id: 'gpt-5.4' })).toBe(false);
   });
 
@@ -214,7 +269,7 @@ describe('modelVisibilityPrefs store', () => {
     )).toBe('1');
   });
 
-  it('旧 key 尚未归属任何账号时继续阻止写入，避免抢占未知 owner 的迁移输入', async () => {
+  it('旧 key 尚未认领时仍允许稳定 owner 写自己的隔离 key', async () => {
     memStorage.setItem(
       'xdt:modelVisibilityPrefs:v1',
       JSON.stringify({ 'codex:openai:gpt-5.6': false }),
@@ -222,10 +277,51 @@ describe('modelVisibilityPrefs store', () => {
     setOwnerClaim('owner-a', 1, false, false);
     const module = await loadModuleForOwner();
 
-    module.setModelVisibility('codex', 'openai', 'gpt-5.5', false);
+    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
 
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-a')).toBe(
+      JSON.stringify({ 'codex:openai:gpt-5.5': false }),
+    );
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1')).toBe(
+      JSON.stringify({ 'codex:openai:gpt-5.6': false }),
+    );
+    expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(false);
+
+    setOwnerClaim('owner-a', 1, true, true);
+    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
+    expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6' })).toBe(false);
+    expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(false);
+  });
+
+  it('当前 owner 会话尚未稳定时继续阻止写入', async () => {
+    setOwnerClaim('owner-a', 1, false, false, false, false);
+    const module = await loadModuleForOwner();
+
+    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(false);
     expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.owner.owner-a')).toBeNull();
+    expect(logToMain).toHaveBeenCalledWith(
+      'warn',
+      'ModelVisibilityPrefs',
+      expect.stringContaining('owner-write-not-ready'),
+    );
+  });
+
+  it('owner-scoped 存储失败时返回失败并保持旧状态', async () => {
+    const module = await loadModuleForOwner();
+    const mirrorCallsBeforeFailure = syncModelVisibility.mock.calls.length;
+    const setItem = vi.spyOn(memStorage, 'setItem').mockImplementation(() => {
+      throw new Error('injected storage failure');
+    });
+
+    expect(module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(false);
     expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.5' })).toBe(true);
+    expect(syncModelVisibility).toHaveBeenCalledTimes(mirrorCallsBeforeFailure);
+    expect(logToMain).toHaveBeenCalledWith(
+      'warn',
+      'ModelVisibilityPrefs',
+      expect.stringContaining('storage-write-failed'),
+    );
+    setItem.mockRestore();
   });
 
   it('已有 owner-scoped override 优先，迁移不会覆盖', async () => {

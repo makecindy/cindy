@@ -68,6 +68,7 @@ export interface AgentIslandNativeScreenMetrics {
 interface MacAgentIslandNativeHostOptions {
   onPointerZones: (zones: { menuBar: boolean; panel: boolean; displayId?: number | null }) => void;
   onExpand: (displayId?: number | null) => void;
+  onCollapse: (displayId?: number | null) => void;
   onFocusSession: (sessionId: string) => void;
   onOpenSettings: () => void;
   onNewMessage: () => void;
@@ -499,6 +500,11 @@ export class MacAgentIslandNativeHost {
       return;
     }
 
+    if (payload.type === 'collapse' && this.child === child) {
+      this.options.onCollapse(typeof payload.displayId === 'number' ? payload.displayId : null);
+      return;
+    }
+
     if (payload.type === 'focus-session' && this.child === child && typeof payload.sessionId === 'string') {
       this.options.onFocusSession(payload.sessionId);
       return;
@@ -779,7 +785,9 @@ async function buildDevMacAgentIslandHelper(): Promise<void> {
     return;
   }
   fs.mkdirSync(path.dirname(binary), { recursive: true });
-  await execFilePromise('swiftc', [source, '-O', '-o', binary], 20_000);
+  // Cold -O compile of the single-file helper is ~20s+ on this machine;
+  // a 20s cap kills the first build and permanently hides the island.
+  await execFilePromise('swiftc', [source, '-O', '-o', binary], 120_000);
   fs.chmodSync(binary, 0o755);
   fs.writeFileSync(hashFile, `${sourceHash}\n`, 'utf8');
   log.info('built dev macOS agent island helper', { path: binary });

@@ -102,6 +102,16 @@ describe("model registry", () => {
 
   it("selects xAI token bands and time-effective Anthropic prices", () => {
     expect(
+      resolveModelReferencePrice(registry, "xai", "xai/grok-4.6", {
+        inputTokens: 199_999,
+      })?.price,
+    ).toMatchObject({ inputPerMtok: 2, outputPerMtok: 6, cacheReadPerMtok: 0.5 });
+    expect(
+      resolveModelReferencePrice(registry, "xai", "xai/grok-4.6", {
+        inputTokens: 200_000,
+      })?.price,
+    ).toMatchObject({ inputPerMtok: 2, outputPerMtok: 6, cacheReadPerMtok: 0.5 });
+    expect(
       resolveModelReferencePrice(registry, "xai", "xai/grok-4.5", {
         inputTokens: 199_999,
       })?.price,
