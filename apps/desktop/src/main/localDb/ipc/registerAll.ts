@@ -24,6 +24,7 @@ import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';
 import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
 import { registerSubagentRunsIpc } from './subagentRuns';
+import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search';
 import { registerRemoteHistoryIpc } from './history';
@@ -236,7 +237,11 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerRecentWorkdirsIpc();
   registerProjectAliasesIpc();
   registerRightSidebarTabsIpc();
-  registerSubagentRunsIpc();
+  // Durable Subagent projection writes share the agent event path's FIFO, so a
+  // reconciliation and an agent_task_update cannot both insert the first
+  // sighting of the same run. Supplied here because the storage layer must not
+  // import the broadcaster back (it already depends on localDb).
+  registerSubagentRunsIpc({ enqueueDurableWrite });
   registerSearchIpc();
   registerDevSqliteVecIpc();
 }

@@ -92,7 +92,7 @@ describe('SubagentsBody', () => {
   }));
   const stopAgentTask = vi.fn(async () => ({ ok: true as const }));
   const controlPiSubagent = vi.fn(async () => ({ ok: true, controlled: 1 }));
-  const deviceInvoke = vi.fn(async (_deviceId: string, channel: string) => {
+  const defaultDeviceInvoke = async (_deviceId: string, channel: string) => {
     if (channel === 'local-db:subagent-runs:list') {
       return { supported: true, runs: currentDetail ? [currentDetail] : [] };
     }
@@ -100,7 +100,8 @@ describe('SubagentsBody', () => {
       return { supported: true, run: currentDetail };
     }
     return { supported: false, run: null, entries: [] };
-  });
+  };
+  const deviceInvoke = vi.fn(defaultDeviceInvoke);
   const loadTranscript = vi.fn(async (): Promise<SubagentTranscriptPageResponse> => ({
     supported: false,
     entries: [],
@@ -120,7 +121,10 @@ describe('SubagentsBody', () => {
     // read happening.
     loadTranscript.mockReset();
     loadTranscript.mockResolvedValue({ supported: false, entries: [] });
-    deviceInvoke.mockClear();
+    // Same reason as loadTranscript: mockClear keeps implementations, so a test
+    // that models a slow or failing link would leak into the next one.
+    deviceInvoke.mockReset();
+    deviceInvoke.mockImplementation(defaultDeviceInvoke);
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -204,6 +208,75 @@ describe('SubagentsBody', () => {
       [{ sessionId: 'session-1' }],
     );
   });
+
+  it('never overlaps remote poll rounds while a device-link read is slow', async () => {
+    // deviceLink.invoke defaults to ~30s and the breaker only trips after that,
+    // so an unfenced 1s interval could stack ~90 in-flight invokes before the
+    // first failure — starving the reliable-transport queue the user's own
+    // stop/steer controls share.
+    let releaseList: (() => void) | undefined;
+    const listGate = new Promise<void>((resolve) => { releaseList = resolve; });
+    let listCalls = 0;
+    deviceInvoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'local-db:subagent-runs:list') {
+        listCalls += 1;
+        await listGate;
+        return { supported: true, runs: currentDetail ? [currentDetail] : [] };
+      }
+      if (channel === 'local-db:subagent-runs:detail') return { supported: true, run: currentDetail };
+      return { supported: false, run: null, entries: [] };
+    });
+
+    render(
+      <SubagentsBody
+        state={{}}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: 'device-1', patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(listCalls).toBe(1));
+    // Several poll periods elapse while the first read is still outstanding.
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+    expect(listCalls).toBe(1);
+
+    releaseList!();
+    // The chain resumes once the slow round settles.
+    await waitFor(() => expect(listCalls).toBeGreaterThan(1), { timeout: 5_000 });
+  }, 15_000);
+
+  it('keeps polling after a failed remote round and stops once unmounted', async () => {
+    let listCalls = 0;
+    deviceInvoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'local-db:subagent-runs:list') {
+        listCalls += 1;
+        throw new Error('device-link unavailable');
+      }
+      return { supported: false, run: null, entries: [] };
+    });
+
+    const view = render(
+      <SubagentsBody
+        state={{}}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: 'device-1', patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // A failing round must still arm the next one.
+    await waitFor(() => expect(listCalls).toBeGreaterThan(1), { timeout: 5_000 });
+
+    view.unmount();
+    const afterUnmount = listCalls;
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(listCalls).toBe(afterUnmount);
+  }, 15_000);
 
   it('does not expose Claude or Codex runs through the new remote PI path', async () => {
     currentDetail = { ...detail('remote codex'), provider: 'codex', title: 'Remote Codex run' };

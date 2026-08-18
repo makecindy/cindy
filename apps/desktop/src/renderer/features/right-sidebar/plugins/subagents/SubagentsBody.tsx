@@ -50,6 +50,9 @@ import {
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error';
 
+/** Remote polling cadence; each tick is fenced behind the previous round. */
+const REMOTE_POLL_INTERVAL_MS = 1_000;
+
 /** Host clamps the page size; 200 is its maximum. */
 const TRANSCRIPT_PAGE_SIZE = 200;
 /**
@@ -105,6 +108,18 @@ function ScopedSubagentsBody({
   const transcriptTailRef = useRef<string | null>(null);
   /** Refresh version already consumed, so one push causes exactly one read. */
   const transcriptSyncedVersionRef = useRef<number>(-1);
+  /**
+   * Outstanding dependent reads for the remote poll's single-flight fence.
+   *
+   * A remote round is list + detail + transcript, and the latter two are driven
+   * by their own effects off the version bumps. `setInterval` did not wait for
+   * any of it: a device-link invoke defaults to ~30s and the breaker only trips
+   * after that, so one slow detail page could stack ~90 in-flight invokes before
+   * the first failure — starving the reliable-transport queue that the user's
+   * stop/steer controls share.
+   */
+  const detailReadsInFlightRef = useRef(0);
+  const transcriptReadsInFlightRef = useRef(0);
   const selectedProviderHint = state.selectedProvider === 'pi' ? 'pi' : null;
   const selectedRunAlias = state.selectedProvider && state.selectedProvider !== 'pi'
     ? null
@@ -160,15 +175,47 @@ function ScopedSubagentsBody({
 
   useEffect(() => {
     if (!visible) return;
-    void loadRuns();
     if (remoteDevice) {
-      const poll = setInterval(() => {
-        void loadRuns();
-        setDetailRefreshVersion((version) => version + 1);
-        setTranscriptRefreshVersion((version) => version + 1);
-      }, 1000);
-      return () => clearInterval(poll);
+      // Chained scheduling, not setInterval: the next round is only armed once
+      // this one's list read has settled, and it is skipped entirely while the
+      // previous round's detail/transcript reads are still outstanding. Slow or
+      // failing device-link responses therefore stretch the cadence instead of
+      // stacking requests. Failure still schedules — `loadRuns` swallows its own
+      // errors, and the guard below re-arms regardless.
+      //
+      // Only the polled reads are fenced; stop/steer go through
+      // `controlPiSubagent`, which never passes through here.
+      let cancelled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const armNextRound = (): void => {
+        if (cancelled) return;
+        timer = setTimeout(() => void runRound(), REMOTE_POLL_INTERVAL_MS);
+      };
+      const runRound = async (): Promise<void> => {
+        if (cancelled) return;
+        if (detailReadsInFlightRef.current > 0 || transcriptReadsInFlightRef.current > 0) {
+          armNextRound();
+          return;
+        }
+        try {
+          await loadRuns();
+        } finally {
+          if (!cancelled) {
+            setDetailRefreshVersion((version) => version + 1);
+            setTranscriptRefreshVersion((version) => version + 1);
+            armNextRound();
+          }
+        }
+      };
+      // The first round runs immediately and the chain arms the rest, so the
+      // opening read is inside the fence too rather than racing the first tick.
+      void runRound();
+      return () => {
+        cancelled = true;
+        if (timer) clearTimeout(timer);
+      };
     }
+    void loadRuns();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
       if (!isCurrentSubagentRunsChange(payload, ownerStamp, ctx.sessionId)) return;
@@ -199,6 +246,7 @@ function ScopedSubagentsBody({
     let disposed = false;
     const requestOwner = getDataOwnerGeneration();
     setDetailLoading(true);
+    detailReadsInFlightRef.current += 1;
     const input = {
       sessionId: ctx.sessionId,
       provider: selectedProvider,
@@ -228,6 +276,7 @@ function ScopedSubagentsBody({
         if (!disposed && isCurrentSubagentReadOwner(requestOwner)) setDetail(null);
       })
       .finally(() => {
+        detailReadsInFlightRef.current = Math.max(0, detailReadsInFlightRef.current - 1);
         if (!disposed && isCurrentSubagentReadOwner(requestOwner)) setDetailLoading(false);
       });
     return () => {
@@ -276,6 +325,7 @@ function ScopedSubagentsBody({
       const append = fromCursor !== undefined;
       transcriptTargetRef.current = targetRunId;
       setTranscriptLoading(true);
+      transcriptReadsInFlightRef.current += 1;
       try {
         let cursor = fromCursor;
         let tail: string | null = append ? fromCursor ?? null : null;
@@ -324,6 +374,7 @@ function ScopedSubagentsBody({
           setTranscriptCursor(null);
         }
       } finally {
+        transcriptReadsInFlightRef.current = Math.max(0, transcriptReadsInFlightRef.current - 1);
         if (
           isCurrentSubagentReadOwner(requestOwner)
           && transcriptTargetRef.current === targetRunId

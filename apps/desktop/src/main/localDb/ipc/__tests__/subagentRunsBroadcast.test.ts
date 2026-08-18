@@ -96,6 +96,62 @@ describe('Subagent runs broadcast boundary', () => {
     __resetSubagentReconcileFingerprintsForTests();
   });
 
+  it('serialises reconciliation writes onto the injected durable FIFO', async () => {
+    // The agent event path writes this projection through the main durable FIFO.
+    // Reconciliation used to call persistSubagentTaskUpdate directly, so the
+    // first sighting of a run could be projected twice — both writers saw no
+    // matching row, both inserted, and nothing in the schema stops a duplicate
+    // at that visible generation.
+    const order: string[] = [];
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    let chain: Promise<unknown> = Promise.resolve();
+    // A plain generic function, not vi.fn: the mock wrapper erases the generic
+    // and no longer matches the injected queue's type.
+    const enqueueDurableWrite = <T,>(label: string, fn: () => Promise<T> | T): Promise<T> => {
+      order.push(label);
+      const run = chain.then(async () => {
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        try {
+          return await fn();
+        } finally {
+          inFlight -= 1;
+        }
+      });
+      chain = run.catch(() => undefined);
+      return run as Promise<T>;
+    };
+    // Yield inside the write so an unserialised caller would interleave.
+    h.persistSubagentTaskUpdate.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return null;
+    });
+    registerSubagentRunsIpc({ enqueueDurableWrite });
+    const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+    const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+    h.listPiSubagentRuns.mockResolvedValue([{
+      version: 1, runId: '123e4567-e89b-42d3-a456-426614174000', taskId: 'parent-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'running',
+      context: 'fresh', title: 'Live run', startedAt: 1_000, updatedAt: 2_000,
+      tasks: [{
+        childId: 'child-1', sessionId: 'session-child', agent: 'worker', status: 'running',
+      }],
+    }]);
+
+    // A list and a detail reconciling the same first-seen run concurrently.
+    await Promise.all([
+      list({}, { sessionId: 'session-1' }),
+      detail({}, { sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool' }),
+    ]);
+
+    // Every projection write went through the queue, and none overlapped.
+    expect(order.length).toBeGreaterThan(0);
+    expect(order.every((label) => label.startsWith('subagent_reconcile:session-1:'))).toBe(true);
+    expect(maxConcurrent).toBe(1);
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledTimes(order.length);
+  });
+
   it('skips reconciliation writes while durable state is unchanged', async () => {
     // The remote detail view polls list + detail once a second and both
     // reconcile, so every readable run used to re-write its alias rows and main

@@ -93,6 +93,37 @@ export function __resetSubagentReconcileFingerprintsForTests(): void {
   reconcileFingerprints.clear();
 }
 
+/**
+ * Serialiser for durable Subagent projection writes.
+ *
+ * The agent event path writes this projection through the main-process durable
+ * FIFO (`enqueueDurableWrite`). Reconciliation used to call
+ * `persistSubagentTaskUpdate` directly, so the first sighting of a run could be
+ * projected twice: both writers read "no matching row" and both inserted, and
+ * no unique constraint stops a duplicate at that visible generation — the
+ * sidebar then shows the same Subagent twice and later updates land on only one
+ * of the rows.
+ *
+ * Injected rather than imported: `messagePersistBroadcaster` (which owns the
+ * FIFO) already imports `localDb/client` and `localDb/schema`, so importing it
+ * back from here would close a module cycle and invert the storage layering.
+ * The composition root (`localDb/ipc/registerAll.ts`) already depends upward on
+ * main-level modules, so it is the clean place to supply it.
+ *
+ * An atomic select-then-insert inside one SQLite transaction was the other
+ * candidate. It is not reachable cheaply: `DbClient.drizzle` is a
+ * `createDrizzleProxy` over a worker transport, so better-sqlite3's synchronous
+ * transaction is not available in this process and a transactional op would
+ * have to be added to the worker protocol first.
+ */
+type DurableWriteEnqueue = <T>(label: string, fn: () => Promise<T> | T) => Promise<T>;
+
+/** No queue injected (unit tests): run inline, preserving the previous shape. */
+const runProjectionWriteDirectly: DurableWriteEnqueue = (_label, fn) =>
+  Promise.resolve().then(fn);
+
+let enqueueProjectionWrite: DurableWriteEnqueue = runProjectionWriteDirectly;
+
 async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
   const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
   const statuses = await listPiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
@@ -104,7 +135,8 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
   ): Promise<void> => {
     const fingerprint = reconcileFingerprint(update, observedAt);
     if (fingerprints.get(key) === fingerprint) return;
-    await persistSubagentTaskUpdate(sessionId, update, 'pi', observedAt);
+    await enqueueProjectionWrite(`subagent_reconcile:${sessionId}:${key}`, () =>
+      persistSubagentTaskUpdate(sessionId, update, 'pi', observedAt));
     fingerprints.set(key, fingerprint);
   };
   const seenTaskIds = new Set<string>();
@@ -237,7 +269,10 @@ export function broadcastSubagentRunsInvalidated(
   );
 }
 
-export function registerSubagentRunsIpc(): void {
+export function registerSubagentRunsIpc(
+  options: { enqueueDurableWrite?: DurableWriteEnqueue } = {},
+): void {
+  enqueueProjectionWrite = options.enqueueDurableWrite ?? runProjectionWriteDirectly;
   const assertTrustedCaller = (event: Electron.IpcMainInvokeEvent): void => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
   };
