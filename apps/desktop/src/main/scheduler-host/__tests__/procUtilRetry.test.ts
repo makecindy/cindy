@@ -145,6 +145,35 @@ describe('killProcessTree win32 PID identity safety', () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
+  it('严格模式持续观察仍存活的已捕获身份，并在延迟退出后只 settle 一次', async () => {
+    const snapshotQuery = fakeProcess();
+    const killer = new EventEmitter();
+    const firstVerification = fakeProcess();
+    const secondVerification = fakeProcess();
+    spawnMock
+      .mockImplementationOnce(() => snapshotQuery)
+      .mockImplementationOnce(() => killer)
+      .mockImplementationOnce(() => firstVerification)
+      .mockImplementationOnce(() => secondVerification);
+    const child = fakeProcess();
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    emitTable(snapshotQuery, [ROOT, CHILD]);
+    killer.emit('exit', 0);
+    emitTable(firstVerification, [CHILD]);
+
+    expect(onSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(150);
+    emitTable(secondVerification, []);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(spawnMock.mock.calls.filter(([command]) => command === 'taskkill')).toHaveLength(1);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
   it('严格模式忽略已复用 PID 和它的新后代，绝不把它们当 kill 目标', () => {
     const snapshotQuery = fakeProcess();
     const killer = new EventEmitter();
@@ -302,14 +331,43 @@ describe('killProcessTree win32 PID identity safety', () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
-  it('严格模式确认查询失败或超时均保持 fail closed', async () => {
+  it('严格模式确认查询暂时失败后继续观察，并在身份消失时 settle', async () => {
     const snapshotQuery = fakeProcess();
     const killer = new EventEmitter();
-    const verificationQuery = fakeProcess();
+    const failedVerification = fakeProcess();
+    const recoveredVerification = fakeProcess();
     spawnMock
       .mockImplementationOnce(() => snapshotQuery)
       .mockImplementationOnce(() => killer)
-      .mockImplementationOnce(() => verificationQuery);
+      .mockImplementationOnce(() => failedVerification)
+      .mockImplementationOnce(() => recoveredVerification);
+    const child = fakeProcess();
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    emitTable(snapshotQuery, [ROOT]);
+    killer.emit('exit', 0);
+    failedVerification.emit('error', new Error('temporary CIM failure'));
+
+    expect(onSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(150);
+    emitTable(recoveredVerification, []);
+
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('严格模式确认查询超时后继续观察，并在身份消失时 settle', async () => {
+    const snapshotQuery = fakeProcess();
+    const killer = new EventEmitter();
+    const timedOutVerification = fakeProcess();
+    const recoveredVerification = fakeProcess();
+    spawnMock
+      .mockImplementationOnce(() => snapshotQuery)
+      .mockImplementationOnce(() => killer)
+      .mockImplementationOnce(() => timedOutVerification)
+      .mockImplementationOnce(() => recoveredVerification);
     const child = fakeProcess();
     const onSettled = vi.fn();
 
@@ -320,7 +378,67 @@ describe('killProcessTree win32 PID identity safety', () => {
     killer.emit('exit', 0);
     await vi.advanceTimersByTimeAsync(3_000);
 
-    expect(verificationQuery.kill).toHaveBeenCalledTimes(1);
+    expect(timedOutVerification.kill).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(150);
+    emitTable(recoveredVerification, []);
+
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('严格模式连续无法查询身份时进入 fail-closed 终态', async () => {
+    const snapshotQuery = fakeProcess();
+    const killer = new EventEmitter();
+    const failedVerifications = [fakeProcess(), fakeProcess(), fakeProcess()];
+    spawnMock
+      .mockImplementationOnce(() => snapshotQuery)
+      .mockImplementationOnce(() => killer)
+      .mockImplementationOnce(() => failedVerifications[0])
+      .mockImplementationOnce(() => failedVerifications[1])
+      .mockImplementationOnce(() => failedVerifications[2]);
+    const child = fakeProcess();
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    emitTable(snapshotQuery, [ROOT]);
+    killer.emit('exit', 0);
+    failedVerifications[0].emit('error', new Error('CIM unavailable'));
+    await vi.advanceTimersByTimeAsync(150);
+    failedVerifications[1].emit('error', new Error('CIM unavailable'));
+    await vi.advanceTimersByTimeAsync(150);
+    failedVerifications[2].emit('error', new Error('CIM unavailable'));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(spawnMock).toHaveBeenCalledTimes(5);
     expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  it('严格模式不因固定轮数放弃仍存活的身份，并在最终消失后释放', async () => {
+    const snapshotQuery = fakeProcess();
+    const killer = new EventEmitter();
+    const verifications = Array.from({ length: 21 }, () => fakeProcess());
+    spawnMock.mockImplementationOnce(() => snapshotQuery).mockImplementationOnce(() => killer);
+    for (const verification of verifications) {
+      spawnMock.mockImplementationOnce(() => verification);
+    }
+    const child = fakeProcess();
+    const onSettled = vi.fn();
+
+    killProcessTree(123, child as unknown as ChildProcess, onSettled, {
+      requireWindowsDescendantConfirmation: true,
+    });
+    emitTable(snapshotQuery, [ROOT, CHILD]);
+    killer.emit('exit', 0);
+    emitTable(verifications[0], [CHILD]);
+    for (const verification of verifications.slice(1, -1)) {
+      await vi.advanceTimersByTimeAsync(150);
+      emitTable(verification, [CHILD]);
+    }
+    await vi.advanceTimersByTimeAsync(150);
+    emitTable(verifications.at(-1)!, []);
+
+    expect(spawnMock).toHaveBeenCalledTimes(23);
+    expect(onSettled).toHaveBeenCalledTimes(1);
   });
 });

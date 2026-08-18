@@ -128,7 +128,6 @@ function isolatedBashEnvironment(
 // the host-only mutation capability and never treats this parser as isolation.
 const PI_PACKAGE_MUTATION_SUBCOMMANDS = new Set(['install', 'update', 'remove']);
 const PI_SHELL_WRAPPERS = new Set(['sh', 'bash', 'dash', 'ksh', 'zsh']);
-const PI_PACKAGE_MUTATION_CURRENT_SHELL_EVALUATORS = new Set(['source', '.', 'eval']);
 const PI_XARGS_OPTIONS_WITH_VALUE = new Set([
   '-a', '--arg-file', '-E', '--eof', '-I', '--replace', '-J',
   '-L', '--max-lines', '-n', '--max-args', '-P', '--max-procs',
@@ -353,16 +352,15 @@ function bashStaticCommandMutatesPiPackages(
         }
       }
       if (words.slice(cursor).some((word) => /^-[A-Za-z]*c[A-Za-z]*$/.test(word))) return true;
-      // A script path or stdin-fed shell is executable source that cannot be
-      // inspected here. Version/help probes remain available.
-      return words.slice(cursor).some((word) =>
-        word === '-' || word === '-s' || (!word.startsWith('-') && word !== '--version' && word !== '--help'));
+      // Opaque scripts cannot be proven to mutate Pi packages statically. They
+      // still run with the isolated bash package home and without Cindy's
+      // host-owned mutation capability, so do not break ordinary Full Access
+      // script execution by pretending this parser is an OS sandbox.
+      return false;
     }
-    if (PI_PACKAGE_MUTATION_CURRENT_SHELL_EVALUATORS.has(command)) {
-      // eval's arguments are executable shell source. Static arguments can be
-      // inspected recursively; dynamic eval and sourced files cannot be proven
-      // package-safe, so they must use Cindy's host-owned mutation flow.
-      if (command !== 'eval') return cursor < words.length;
+    if (command === 'eval') {
+      // Static eval arguments can be inspected recursively. Dynamic eval stays
+      // fail closed because it directly evaluates model-authored shell source.
       const nestedWords: string[] = [];
       for (; cursor < words.length; cursor += 1) {
         const nestedWord = bashResolveStaticWord(words[cursor], variables);

@@ -37,6 +37,8 @@ export interface KillProcessTreeOptions {
 }
 
 const WIN32_PROCESS_QUERY_TIMEOUT_MS = 3_000;
+const WIN32_SNAPSHOT_CONFIRM_RETRY_DELAY_MS = 150;
+const WIN32_SNAPSHOT_CONFIRM_MAX_UNAVAILABLE_ATTEMPTS = 3;
 
 interface Win32ProcessRow {
   pid: number;
@@ -159,11 +161,33 @@ function captureWindowsTreeWhileParentLives(
   });
 }
 
-function confirmWindowsSnapshotGone(snapshot: Win32TreeSnapshot, onSettled?: () => void): void {
+function confirmWindowsSnapshotGone(
+  snapshot: Win32TreeSnapshot,
+  onSettled?: () => void,
+  unavailableAttempts = 0,
+): void {
   queryWindowsProcessTable((rows) => {
-    if (!rows) return;
+    const retry = (nextUnavailableAttempts: number): void => {
+      if (nextUnavailableAttempts >= WIN32_SNAPSHOT_CONFIRM_MAX_UNAVAILABLE_ATTEMPTS) {
+        // 进程表连续不可用时，无法证明共享 store 已安全静止。明确终止
+        // 观察但不调用 onSettled，让安全敏感调用方保持 fail closed。
+        return;
+      }
+      setTimeout(
+        () => confirmWindowsSnapshotGone(snapshot, onSettled, nextUnavailableAttempts),
+        WIN32_SNAPSHOT_CONFIRM_RETRY_DELAY_MS,
+      ).unref?.();
+    };
+    if (!rows) {
+      retry(unavailableAttempts + 1);
+      return;
+    }
     const present = new Set(rows.map(win32ProcessIdentity));
-    if ([...snapshot.identities].every((identity) => !present.has(identity))) onSettled?.();
+    if ([...snapshot.identities].every((identity) => !present.has(identity))) {
+      onSettled?.();
+      return;
+    }
+    retry(0);
   });
 }
 
@@ -307,11 +331,17 @@ function killWindowsTreeConfirmedAttempt(
  * 后续只核验已捕获身份是否消失，绝不拿已释放的父 PID 枚举或杀新进程。
  */
 function killWindowsTreeConfirmed(pid: number, child: ChildProcess, onSettled?: () => void): void {
+  let settled = false;
+  const settleOnce = (): void => {
+    if (settled) return;
+    settled = true;
+    onSettled?.();
+  };
   captureWindowsTreeWhileParentLives(
     pid,
     child,
     undefined,
-    (snapshot) => killWindowsTreeConfirmedAttempt(pid, child, snapshot, 1, onSettled),
+    (snapshot) => killWindowsTreeConfirmedAttempt(pid, child, snapshot, 1, settleOnce),
     () => {
       // 无法证明 PID 仍属于原始子进程时不再对数字 PID 发 taskkill。只使用
       // Node 保存的原进程句柄终止直接子进程，并保持安全锁 fail closed。
