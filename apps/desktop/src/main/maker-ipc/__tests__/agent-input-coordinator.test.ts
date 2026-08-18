@@ -6152,6 +6152,108 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['Stop', (h: ReturnType<typeof createHarness>, sid: string) => h.coordinator.stop(sid)],
+    [
+      'session close',
+      (h: ReturnType<typeof createHarness>, sid: string) => h.coordinator.onSessionClosed(sid),
+    ],
+  ])(
+    'persists a provider-accepted direct steer after %s clears its marker',
+    async (_boundaryName, closeBoundary) => {
+      const h = createHarness();
+      const sid = 'steer-provider-accepted-after-boundary';
+      const active = makeItem('q-1', 'active turn');
+      const composer = makeItem('composer-accepted', 'accepted after boundary');
+      const gate = deferred<void>();
+
+      h.setAgentKind('codex');
+      h.steerToAgent.mockImplementationOnce(() => gate.promise);
+
+      h.coordinator.enqueue(sid, active);
+      await flush();
+      const steerPromise = h.coordinator.steer(sid, composer, { touchUserSend: true });
+      await flush();
+
+      closeBoundary(h, sid);
+      expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+
+      gate.resolve();
+      await expect(steerPromise).resolves.toBe(true);
+      await flush();
+
+      expect(mocks.createMessage).toHaveBeenNthCalledWith(
+        2,
+        sid,
+        expect.objectContaining({
+          clientId: composer.clientId,
+          content: composer.persistedContent,
+          agentMeta: expect.objectContaining({ delivery: 'steer' }),
+        }),
+        expect.objectContaining({ shouldBroadcast: expect.any(Function) }),
+      );
+      expect(h.onUserMessageQueryable).toHaveBeenCalledWith(
+        sid,
+        expect.objectContaining({ clientId: composer.clientId }),
+      );
+      const state = (
+        h.coordinator as unknown as {
+          getState: (sessionId: string) => {
+            activeTurn: { item: AgentInputQueuedMessage | null } | null;
+          };
+        }
+      ).getState(sid);
+      expect(state.activeTurn?.item?.clientId).not.toBe(composer.clientId);
+
+      await expect(h.coordinator.steer(sid, composer)).resolves.toBe(true);
+      expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections)).toMatchObject({
+        pendingQueue: [],
+        queuePaused: false,
+        steeringQueueClientIds: [],
+      });
+    },
+  );
+
+  it('removes a queued steer after Stop when the provider confirms acceptance late', async () => {
+    const h = createHarness();
+    const sid = 'queued-steer-provider-accepted-after-stop';
+    const active = makeItem('q-1', 'active turn');
+    const queued = makeItem('q-2', 'queued steer');
+    const gate = deferred<void>();
+
+    h.setAgentKind('codex');
+    h.steerToAgent.mockImplementationOnce(() => gate.promise);
+
+    h.coordinator.enqueue(sid, active);
+    await flush();
+    h.coordinator.enqueue(sid, queued);
+    await flush();
+    const steerPromise = h.coordinator.steer(sid, queued, { removeFromQueue: true });
+    await flush();
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual([
+      queued.clientId,
+    ]);
+
+    gate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      2,
+      sid,
+      expect.objectContaining({
+        clientId: queued.clientId,
+        content: queued.persistedContent,
+        agentMeta: expect.objectContaining({ delivery: 'steer' }),
+      }),
+      expect.objectContaining({ shouldBroadcast: expect.any(Function) }),
+    );
+  });
+
   it('does not let a stale steer failure clear a reused clientId in a new generation', async () => {
     const h = createHarness();
     const sid = 'steer-stale-generation-reused-client-id';

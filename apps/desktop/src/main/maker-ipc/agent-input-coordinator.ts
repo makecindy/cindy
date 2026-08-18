@@ -2077,24 +2077,67 @@ export class AgentInputCoordinator {
       return finishSteerRequest(false);
     }
     const accepted = this.getState(sessionId);
-    if (
-      !this.isCurrentSteerRequest(
-        accepted,
-        item.clientId,
-        steerGeneration,
-        steerRequestToken,
-      )
-    ) {
+    const ownsCurrentSteerMarker = this.isCurrentSteerRequest(
+      accepted,
+      item.clientId,
+      steerGeneration,
+      steerRequestToken,
+    );
+    if (!ownsCurrentSteerMarker) {
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
-      log.warn(
-        'steer accepted by agent but marker already cancelled (stop/close raced); dropping',
-        {
+      if (
+        accepted.generation !== steerGeneration ||
+        accepted.clearBoundaryMs !== steerClearBoundaryMs
+      ) {
+        // Provider acceptance is still irreversible, so report success instead of inviting a
+        // duplicate retry. A concurrent clear owns the replacement generation and intentionally
+        // prevents the accepted row from being reintroduced into cleared history.
+        log.info('steer accepted after session clear; preserving cleared replacement state', {
           sessionId,
           clientId: item.clientId,
-        },
-      );
+          steerGeneration,
+          currentGeneration: accepted.generation,
+        });
+        return finishSteerRequest(true);
+      }
+
+      // Stop/close clears the visible marker and direct item before the provider promise must
+      // settle. A resolved provider call has crossed the irreversible boundary nonetheless:
+      // persist it and remember the clientId without rebuilding activeTurn or releasing the
+      // Stop/close boundary that now owns the session lifecycle.
+      this.clearDirectSteeringItem(accepted, item.clientId);
+      this.rememberEnqueuedClientId(accepted, item.clientId);
+      if (opts?.removeFromQueue) {
+        accepted.pendingQueue = accepted.pendingQueue.filter(
+          (queued) => queued.clientId !== item.clientId,
+        );
+        this.removePendingCompactWaitClientId(accepted, item.clientId);
+        accepted.queueEditLocks = accepted.queueEditLocks.filter((id) => id !== item.clientId);
+        if (accepted.pendingQueue.length === 0) accepted.queuePaused = false;
+      }
+      const detachedAcceptedTurn: ActiveTurn = {
+        item,
+        delivery: 'steer',
+        messageUuid,
+        createdAt,
+        generation: steerGeneration,
+        clearBoundaryMs: steerClearBoundaryMs,
+        persisted: false,
+        persisting: true,
+        sendStarted: true,
+        dispatchLifecycle: 'dispatched',
+        pendingTerminalEvent: null,
+        continuationOwnerClientId: null,
+      };
+      const persisted = await this.persistAcceptedUserMessage(sessionId, detachedAcceptedTurn);
+      if (opts?.touchUserSend && persisted === 'persisted') this.touchUserSend(sessionId);
+      log.info('steer accepted after marker cancellation; persisted without reopening boundary', {
+        sessionId,
+        clientId: item.clientId,
+        persisted,
+      });
       this.emit(sessionId);
-      return finishSteerRequest(false);
+      return finishSteerRequest(true);
     }
     this.clearDirectSteeringItem(accepted, item.clientId);
     this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
