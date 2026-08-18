@@ -2,7 +2,7 @@
 // GhostPanelBubbleLayer:幽灵球单形态(≥1 个最小化即一枚球)/ 展开点子气泡
 // 恢复(先缩没后还原)/ 拖后吞点击 / left-top 定位 / detach 隐藏。
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
 import {
@@ -14,6 +14,10 @@ import {
   __resetGhostPanelWindowsStateForTest,
   __setGhostPanelWindowsStateForTest,
 } from '../../lib/ghostPanelWindowState';
+import {
+  __resetGhostPanelRestoreModeForTest,
+  setGhostPanelRestoreMode,
+} from '../../hooks/useGhostPanelRestoreMode';
 import { __resetInstalledGhostsStoreForTest } from '../useInstalledGhosts';
 import { GhostPanelBubbleLayer } from '../GhostPanelBubbleLayer';
 
@@ -56,9 +60,11 @@ function stubGhostsBridge(ghosts: InstalledGhost[]): void {
 afterEach(() => {
   cleanup();
   __resetGhostPanelBubbleStateForTest();
+  __resetGhostPanelRestoreModeForTest();
   __resetGhostPanelWindowsStateForTest();
   __resetInstalledGhostsStoreForTest();
   window.localStorage.removeItem('xdt:ghostPanelBubbleStack:v1');
+  window.localStorage.removeItem('ghostPanel.restoreMode');
   delete (window as unknown as { electronAPI?: unknown }).electronAPI;
 });
 
@@ -77,6 +83,14 @@ describe('GhostPanelBubbleLayer', () => {
 
   it('全部面板都开着(无最小化)整层不渲染', () => {
     stubGhostsBridge([ghost('a'), ghost('b')]);
+    render(<GhostPanelBubbleLayer />);
+    expect(screen.queryByTestId('ghost-panel-bubble-stack')).toBeNull();
+  });
+
+  it('选择侧栏恢复入口时不渲染浮动幽灵球', () => {
+    stubGhostsBridge([ghost('a')]);
+    minimizeGhostPanel('a');
+    setGhostPanelRestoreMode('sidebar');
     render(<GhostPanelBubbleLayer />);
     expect(screen.queryByTestId('ghost-panel-bubble-stack')).toBeNull();
   });
@@ -107,7 +121,7 @@ describe('GhostPanelBubbleLayer', () => {
     __setGhostPanelWindowsStateForTest({ a: { detached: true, lastOpen: true, open: true } });
     const { rerender } = render(<GhostPanelBubbleLayer />);
     expect(screen.queryByTestId('ghost-panel-bubble-stack')).toBeNull();
-    __setGhostPanelWindowsStateForTest({});
+    act(() => __setGhostPanelWindowsStateForTest({}));
     rerender(<GhostPanelBubbleLayer />);
     expect(screen.getByTestId('ghost-panel-bubble-stack')).toBeTruthy();
   });

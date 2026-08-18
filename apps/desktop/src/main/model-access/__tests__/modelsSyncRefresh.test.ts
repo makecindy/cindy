@@ -22,13 +22,13 @@ describe('parseModelsSyncPayload', () => {
     modalities: { input: ['text'], output: ['text'] },
   };
 
-  it('does not downgrade a v3 sync request to a v1 response', () => {
+  it('does not downgrade a v4 sync request to a v1 response', () => {
     expect(parseModelsSyncPayload({ schemaVersion: 1, models: [baseModel] })).toMatchObject({
       ok: false,
     });
   });
 
-  it('does not downgrade a v3 sync request to a v2 response', () => {
+  it('does not downgrade a v4 sync request to a v2 response', () => {
     const model = {
       ...baseModel,
       newSessionDefault: ['claude-code', 'codex'] as const,
@@ -66,7 +66,7 @@ describe('parseModelsSyncPayload', () => {
   it.each([
     {
       label: 'unknown schema version',
-      payload: { schemaVersion: 4, models: [baseModel] },
+      payload: { schemaVersion: 5, models: [baseModel] },
       errorPath: 'response.schemaVersion',
     },
     {
@@ -112,9 +112,9 @@ describe('parseModelsSyncPayload', () => {
     expect(lastKnownGood).toEqual([{ id: 'last-known-model' }]);
   });
 
-  it('reads v3 Pi routing and filters future agent kinds without rejecting the catalog', () => {
+  it('reads v4 Pi routing and filters future agent kinds without rejecting the catalog', () => {
     const payload = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       models: [
         {
           ...baseModel,
@@ -151,7 +151,7 @@ describe('parseModelsSyncPayload', () => {
 describe('waitForModelsSyncRefresh', () => {
   it('gives the shared XD model-list request a finite deadline', () => {
     expect(buildModelsSyncRequest('https://model-access.example.com')).toEqual({
-      path: '/api/model-access/models?schemaVersion=3',
+      path: '/api/model-access/models?schemaVersion=4',
       options: {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,

@@ -30,10 +30,11 @@
  * --error-fg / --error-fg-strong(与 ErrorMessageCard 同组),不硬编码 Tailwind red。
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { ErrorBanner } from './ErrorBanner';
 
 export function InterruptedTurnBanner({
@@ -90,7 +91,9 @@ export function InterruptedTurnBanner({
         title={t('chat.interruptedBanner.continueTitle')}
       >
         <Play size={12} />
-        {sending ? t('chat.interruptedBanner.continuing') : t('chat.interruptedBanner.continueAction')}
+        {sending
+          ? t('chat.interruptedBanner.continuing')
+          : t('chat.interruptedBanner.continueAction')}
       </button>
       <button
         type="button"
@@ -150,6 +153,11 @@ export function ErrorTailErrorBanner({
   className?: string;
   style?: React.CSSProperties;
 }) {
+  const usageLimitRecovery = useMemo(
+    () => extractUsageLimitRecoveryHint({ message: errorText }),
+    [errorText],
+  );
+
   return (
     <ErrorBanner
       error={errorText}
@@ -158,6 +166,7 @@ export function ErrorTailErrorBanner({
       onRetry={() => void onContinue()}
       onCancel={onDismiss}
       onSilentStopContinue={onSilentStopContinue}
+      usageLimitRecovery={usageLimitRecovery}
       agentKind={agentKind}
       remoteHostId={remoteHostId}
       deviceLinkDeviceId={deviceLinkDeviceId}

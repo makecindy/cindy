@@ -18,6 +18,11 @@ import type { Session } from '@/lib/ccAgent.types';
 import { resolveSidebarRightStatus } from '../features/cc-agent/sidebar/sidebarRightStatus';
 import { SessionStatusIcon } from '../features/cc-agent/sidebar/SessionStatusIcon';
 
+const sidebarState = vi.hoisted(() => ({
+  hasDraft: false,
+  hasPausedQueue: false,
+}));
+
 vi.mock('react-i18next', () => ({
   initReactI18next: {
     type: '3rdParty',
@@ -27,11 +32,11 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/hooks/useComposerDraftPresence', () => ({
-  useComposerDraftPresence: () => false,
+  useComposerDraftPresence: () => sidebarState.hasDraft,
 }));
 
 vi.mock('@/hooks/useSessionPausedQueue', () => ({
-  useSessionPausedQueue: () => false,
+  useSessionPausedQueue: () => sidebarState.hasPausedQueue,
 }));
 
 vi.mock('@/components/sidebar/VendorIcon', () => ({
@@ -42,6 +47,8 @@ vi.mock('@/components/sidebar/VendorIcon', () => ({
 
 afterEach(() => {
   cleanup();
+  sidebarState.hasDraft = false;
+  sidebarState.hasPausedQueue = false;
 });
 
 const session = {
@@ -145,5 +152,25 @@ describe('sidebar attention badge', () => {
     );
 
     expect(attentionDot(container)).toBeUndefined();
+  });
+});
+
+describe('sidebar draft indicator', () => {
+  it('uses the dedicated high-contrast color for unsent content', () => {
+    sidebarState.hasDraft = true;
+
+    const { getByTitle } = render(
+      createElement(SessionStatusIcon, {
+        session,
+        isRunning: false,
+        isAttached: false,
+        hasAttentionNotification: false,
+        isActive: false,
+      }),
+    );
+
+    expect(getByTitle('ccAgent.sidebar.hasDraft').className).toContain(
+      'text-[var(--sidebar-draft-indicator)]',
+    );
   });
 });

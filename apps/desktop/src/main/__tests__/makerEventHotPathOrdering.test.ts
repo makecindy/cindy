@@ -789,7 +789,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
     expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
     expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
-    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\(XAI_MODEL_PREFIX\);/);
+    expect(codexDoneSource).toMatch(/&&\s*isExclusiveXaiModelId\(pricingModel\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
     expect(codexDoneSource).toContain('!isCustomProviderRoute');
@@ -892,7 +892,7 @@ describe('maker:event hot path ordering', () => {
       "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",
     );
     expect(claudeDoneSource).toContain(
-      "m.source === 'subscription' && isSubscriptionDirectModel(m.model)",
+      "m.source === 'subscription' && isSubscriptionDirectRoute(m.model)",
     );
     expect(claudeDoneSource).toMatch(
       /estimateClaudeSubscriptionTurnValue\(\s*perModel,\s*currentLedgerCurrency\(\),\s*pricing,\s*\)/,

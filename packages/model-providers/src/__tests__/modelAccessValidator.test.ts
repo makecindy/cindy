@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
@@ -48,7 +49,7 @@ const VALID_RESPONSE: ListModelsResponse = {
 
 const VALID_V3_RESPONSE: ListModelsResponse = {
   ...VALID_RESPONSE,
-  schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  schemaVersion: MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
   models: [
     {
       ...VALID_RESPONSE.models[0]!,
@@ -58,6 +59,11 @@ const VALID_V3_RESPONSE: ListModelsResponse = {
       },
     },
   ],
+};
+
+const VALID_V4_RESPONSE: ListModelsResponse = {
+  ...VALID_V3_RESPONSE,
+  schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
 };
 
 const VALID_REGISTRY: ModelRegistry = {
@@ -136,7 +142,8 @@ describe('model access catalog contract', () => {
     const versions = [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
       [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
-      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V4_RESPONSE.models[0]!],
     ] as const;
 
     for (const [schemaVersion, model] of versions) {
@@ -216,7 +223,8 @@ describe('model access catalog contract', () => {
     for (const [schemaVersion, model] of [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
       [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
-      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V4_RESPONSE.models[0]!],
     ] as const) {
       expect(parseListModelsResponse({ schemaVersion, models: [model] }).ok).toBe(true);
       expectReject({ schemaVersion, models: [{ ...model, mode: 42 }] }, 'response.models[0].mode');
@@ -228,6 +236,57 @@ describe('model access catalog contract', () => {
           models: [{ ...model, modalities: { input: ['text', 42], output: ['text'] } }],
         },
         'response.models[0].modalities.input',
+      );
+    }
+  });
+
+  it.each([undefined, 'responses'] as const)(
+    '仍要求 mode=%s 的可聊天模型提供 contextWindow',
+    (mode) => {
+      const { contextWindow: _contextWindow, mode: _mode, ...withoutContextWindow } =
+        VALID_V3_RESPONSE.models[0]!;
+      expectReject(
+        {
+          schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+          models: [{ ...withoutContextWindow, ...(mode === undefined ? {} : { mode }) }],
+        },
+        'response.models[0].contextWindow',
+      );
+    },
+  );
+
+  it('v4 允许媒体模型省略 contextWindow，v3 保持已发布约束', () => {
+    for (const mode of ['image_generation', 'video_generation'] as const) {
+      const mediaModel = {
+        id: `${mode}-model`,
+        name: `${mode} model`,
+        mode,
+        currency: 'CNY',
+        agents: [],
+        modalities: {
+          input: mode === 'image_generation' ? ['text'] : ['text', 'image'],
+          output: [mode === 'image_generation' ? 'image' : 'video'],
+        },
+      } as const;
+      expect(
+        parseListModelsResponse({
+          schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+          models: [mediaModel],
+        }).ok,
+      ).toBe(true);
+      expectReject(
+        {
+          schemaVersion: MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
+          models: [mediaModel],
+        },
+        'response.models[0].agents',
+      );
+      expectReject(
+        {
+          schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+          models: [{ ...mediaModel, agents: ['codex'] }],
+        },
+        'response.models[0].agents must be empty',
       );
     }
   });
@@ -296,7 +355,7 @@ describe('model access catalog contract', () => {
   });
 
   it('rejects unsupported schema versions and malformed nested pricing', () => {
-    expectReject({ ...VALID_RESPONSE, schemaVersion: 4 }, 'response.schemaVersion');
+    expectReject({ ...VALID_RESPONSE, schemaVersion: 5 }, 'response.schemaVersion');
     expectReject(
       {
         ...VALID_RESPONSE,

@@ -1,7 +1,8 @@
 /**
  * SidebarTopNav —— 侧栏顶部常驻动作/导航列表(取代原 HorizontalTabbar)。
  * ---------------------------------------------------------------------------
- * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins / 搜索。
+ * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins /
+ * 最小化插件面板恢复入口(按需) / 搜索。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
  *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
@@ -26,6 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
+import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
@@ -43,10 +45,10 @@ const ROW_ACTIVE_CLASS =
 /**
  * 渲染范围。任务列表页把「新建」以外的行搬进列表滚动区(向上滚时一起滚走,
  * 对齐 Codex;2026-08-12 用户裁决),因此本组件要能分两段渲染:
- *   - 'all'(默认):五行全渲染。非 cc-agent 视图(插件页 / Skill 页等)沿用,
+ *   - 'all'(默认):常驻行全渲染。非 cc-agent 视图(插件页 / Skill 页等)沿用,
  *     那些页的侧栏没有长列表,不存在滚动需求。
  *   - 'pinned':只渲染「新建」——Shell 顶部固定段。
- *   - 'scrollable':渲染其余行(自动任务 / 插件 / 搜索 / 远程机器),由 cc-agent
+ *   - 'scrollable':渲染其余行(自动任务 / 插件 / 按需恢复入口 / 搜索),由 cc-agent
  *     的侧栏滚动容器在列表最上方绘制。
  */
 export type SidebarTopNavSection = 'all' | 'pinned' | 'scrollable';
@@ -124,6 +126,9 @@ export function SidebarTopNav({
       {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
     </button>
   ) : null;
+  const restoreRow = showScrollable ? (
+    <GhostPanelRestoreEntry variant="row" className={ROW_CLASS} />
+  ) : null;
   const searchRow = showScrollable ? (
     <SidebarInlineSearch
       search={search}
@@ -141,6 +146,7 @@ export function SidebarTopNav({
         <div className="flex flex-col gap-0.5 pr-3 pl-3">
           {automationsRow}
           {pluginsRow}
+          {restoreRow}
         </div>
         <div
           className={cn(
@@ -180,6 +186,7 @@ export function SidebarTopNav({
       )}
       {automationsRow}
       {pluginsRow}
+      {restoreRow}
       {searchRow}
     </div>
   );

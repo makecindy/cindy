@@ -63,11 +63,22 @@
       "models": {
         "claude-code": [
           {
+            "id": "xai/grok-4.6",
+            "name": "Grok 4.6",
+            "group": "grok",
+            "sortOrder": 48,
+            "description": "xAI Grok 4.6 旗舰,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
+            "contextWindow": 500000,
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "high",
+            "status": "active"
+          },
+          {
             "id": "xai/grok-4.5",
             "name": "Grok 4.5",
             "group": "grok",
             "sortOrder": 49,
-            "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
+            "description": "xAI Grok 4.5,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
             "contextWindow": 500000,
             "efforts": ["low", "medium", "high"],
             "defaultEffort": "high",
@@ -159,11 +170,22 @@
         ],
         "codex": [
           {
+            "id": "xai/grok-4.6",
+            "name": "Grok 4.6",
+            "group": "grok",
+            "sortOrder": 48,
+            "description": "xAI Grok 4.6 旗舰,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
+            "contextWindow": 500000,
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "high",
+            "status": "active"
+          },
+          {
             "id": "xai/grok-4.5",
             "name": "Grok 4.5",
             "group": "grok",
             "sortOrder": 49,
-            "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
+            "description": "xAI Grok 4.5,编码/agent 任务,500k 上下文(SuperGrok 订阅直连)",
             "contextWindow": 500000,
             "efforts": ["low", "medium", "high"],
             "defaultEffort": "high",

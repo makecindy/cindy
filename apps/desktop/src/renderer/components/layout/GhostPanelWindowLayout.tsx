@@ -68,14 +68,14 @@ export function GhostPanelWindowLayout() {
   // 与资源用量窗口一致，隐藏时重挂载 chrome，确保再次显示从干净状态开始�?
   const [windowChromeRevision, setWindowChromeRevision] = useState(0);
 
-  const minimizeToBubble = async (): Promise<void> => {
+  const minimizePanel = async (): Promise<void> => {
     if (!ghostId || !minimizeEnabled) return;
     minimizeGhostPanel(ghostId);
     try {
       await window.electronAPI.ghostPanelWindow.setDetached(ghostId, false);
     } catch (err) {
       restoreGhostPanel(ghostId);
-      log.warn('minimize ghost panel to bubble failed', err);
+      log.warn('minimize ghost panel failed', err);
     }
   };
 
@@ -132,7 +132,7 @@ export function GhostPanelWindowLayout() {
   useEffect(() => {
     if (!minimizeEnabled) return;
     return window.electronAPI.ghostPanelWindow.onMinimizeRequested(() => {
-      void minimizeToBubble();
+      void minimizePanel();
     });
   }, [ghostId, minimizeEnabled, window.electronAPI.ghostPanelWindow]);
 
@@ -189,7 +189,7 @@ export function GhostPanelWindowLayout() {
           >
             <WindowControls
               key={windowChromeRevision}
-              onMinimize={minimizeToBubble}
+              onMinimize={minimizePanel}
               showMinimize={minimizeEnabled}
               onClose={disableAndClose}
             />
