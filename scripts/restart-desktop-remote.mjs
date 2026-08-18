@@ -111,7 +111,7 @@ function stripTrailingSlashes(value) {
   return value.replace(/\/+$/, '');
 }
 
-export function commandContainsPath(command, candidatePath) {
+export function commandContainsPath(command, candidatePath, { spaceEndsPath = false } = {}) {
   const normalizedCommand = normalize(command);
   const normalizedPath = stripTrailingSlashes(normalize(candidatePath));
   if (!normalizedPath) return false;
@@ -120,9 +120,10 @@ export function commandContainsPath(command, candidatePath) {
     const before = normalizedCommand[index - 1];
     const after = normalizedCommand[index + normalizedPath.length];
     const hasStartBoundary = before === undefined || /\s|["'=]/.test(before);
-    // 命令行字符串无法安全区分裸 root 参数后接参数，和带空格的 sibling 路径。
-    // kill 旧进程宁可漏杀也不能误杀其它 checkout，所以这里不把空格当结束边界。
-    const hasEndBoundary = after === undefined || after === '/' || after === '"' || after === "'";
+    // kill 旧进程宁可漏杀也不能误杀其它 checkout，默认不把空格当结束边界。
+    // 宿主身份判定相反：漏认当前 checkout 会自杀，所以允许空格结束。
+    const hasEndBoundary = after === undefined || after === '/' || after === '"' || after === "'"
+      || (spaceEndsPath && /\s/.test(after));
     if (hasStartBoundary && hasEndBoundary) return true;
     index = normalizedCommand.indexOf(normalizedPath, index + 1);
   }
@@ -605,12 +606,12 @@ export function shouldRefuseHostedRestart(ancestor, {
   isolated = false,
 }) {
   if (!ancestor || preserveRunning) return false;
-  if (commandContainsPath(ancestor.command, ownRootDir)) return true;
+  if (commandContainsPath(ancestor.command, ownRootDir, { spaceEndsPath: true })) return true;
   return isolated !== true;
 }
 
 export function hostedRestartRefusal(ancestor, { ownRootDir }) {
-  return commandContainsPath(ancestor.command, ownRootDir)
+  return commandContainsPath(ancestor.command, ownRootDir, { spaceEndsPath: true })
     ? {
       code: 'HOSTED_RESTART_REFUSED',
       message: "Refusing to restart from within this checkout's desktop dev process tree.",
@@ -805,7 +806,9 @@ function launchInSystemTerminal(mode) {
       stdio: 'inherit',
       windowsHide: false,
     });
-    if (result.status !== 0) process.exit(result.status ?? 1);
+    if (result.status !== 0) {
+      throw new Error(`Failed to open cmd window (exit ${result.status ?? 1})`);
+    }
     console.log(`==> Opened desktop ${mode} dev in a new cmd window.`);
     return;
   }
@@ -818,8 +821,7 @@ function launchInSystemTerminal(mode) {
     });
     child.unref();
     if (child.pid === undefined) {
-      console.error('Failed to open Terminal.app');
-      process.exit(1);
+      throw new Error('Failed to open Terminal.app');
     }
     console.log(`==> Opened desktop ${mode} dev in a new Terminal window.`);
     return;
@@ -967,7 +969,7 @@ async function main() {
   const isolationName = isolatedArg ? parseIsolationName(isolatedArg) : '';
   const verdictContext = {
     rootDir,
-    isolated: Boolean(isolatedArg),
+    isolated: Boolean(isolatedArg) || process.env.XDT_ISOLATED === '1',
     sandbox: isolationName || undefined,
     local: mode === 'local',
     region: selectedRegion,

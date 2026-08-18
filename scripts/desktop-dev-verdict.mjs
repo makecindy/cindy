@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { resolveDesktopDevRegion } from './shared/desktop-dev-region.mjs';
 
 export const DESKTOP_DEV_VERDICT_PREFIX = 'DESKTOP_DEV_VERDICT';
 export const WORKTREE_ISOLATED_ARG = '--isolated=@worktree';
@@ -33,6 +34,12 @@ function normalizeRoot(value) {
   return path.resolve(value).replaceAll('\\', '/').toLowerCase();
 }
 
+function worktreeHashKey(rootDir) {
+  const resolved = path.resolve(rootDir).replaceAll('\\', '/');
+  // Linux 区分大小写：Foo 与 foo 可以是两个 worktree。macOS / Windows 默认不区分。
+  return process.platform === 'linux' ? resolved : resolved.toLowerCase();
+}
+
 function singleLine(value) {
   return String(value).replace(/\s+/g, ' ').trim();
 }
@@ -44,7 +51,7 @@ export function isolationNameFromWorktree(rootDir) {
   name = name.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!name) name = 'worktree';
   const digest = createHash('sha256')
-    .update(normalizeRoot(resolved))
+    .update(worktreeHashKey(resolved))
     .digest('hex')
     .slice(0, WORKTREE_NAME_DIGEST_LEN);
   const maxBase = 32 - 1 - digest.length;
@@ -60,12 +67,18 @@ export function isolatedRestartNextCommand({ local = false, region } = {}) {
 
 export const ISOLATED_RESTART_NEXT = isolatedRestartNextCommand();
 
-export function restartContextFromArgv(argv = []) {
-  const regionArg = argv.find((arg) => arg.startsWith('--region='));
+export function restartContextFromArgv(argv = [], env = process.env) {
+  let region;
+  try {
+    region = resolveDesktopDevRegion(argv, env);
+  } catch {
+    region = undefined;
+  }
   return {
-    isolated: argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')),
+    isolated: argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated='))
+      || env.XDT_ISOLATED === '1',
     local: argv.includes('--local'),
-    region: regionArg ? regionArg.slice('--region='.length) : undefined,
+    region,
   };
 }
 

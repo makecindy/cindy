@@ -29,6 +29,7 @@ import {
 	osascriptLaunchDarwinTerminalArgs,
 	waitForDesktopStartup,
 	shouldRefuseHostedRestart,
+	commandContainsPath,
 } from "../restart-desktop-remote.mjs";
 import {
 	DESKTOP_DEV_VERDICT_PREFIX,
@@ -41,6 +42,7 @@ import {
 	isolationNameFromWorktree,
 	isolatedRestartNextCommand,
 	resolveIsolatedArg,
+	restartContextFromArgv,
 	shouldSuggestIsolatedNext,
 } from "../desktop-dev-verdict.mjs";
 import {
@@ -964,6 +966,38 @@ test("isolatedRestartNextCommand keeps region and local mode", () => {
 		{ isolated: false, region: "cn" },
 	);
 	assert.equal(verdict.next, "pnpm restart:desktop:remote --region=cn -- --isolated=@worktree");
+});
+
+test("host identity treats a trailing space as the end of the checkout path", () => {
+	const own = "/repo/cindy-feature";
+	const command = `electron-forge start ${own} --isolated=feature`;
+	assert.equal(commandContainsPath(command, own), false);
+	assert.equal(commandContainsPath(command, own, { spaceEndsPath: true }), true);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
+		),
+		true,
+	);
+});
+
+test("restartContextFromArgv reads --region cn and XDT_ISOLATED", () => {
+	assert.equal(restartContextFromArgv(["--region", "cn"]).region, "cn");
+	assert.equal(restartContextFromArgv([], { XDT_ISOLATED: "1" }).isolated, true);
+	assert.equal(
+		buildDesktopDevVerdictFromFailure(new Error("WHOAMI_MISMATCH"), {
+			...restartContextFromArgv(["--region", "cn"]),
+		}).next,
+		"pnpm restart:desktop:remote --region=cn -- --isolated=@worktree",
+	);
+});
+
+test("worktree sandbox hash keeps case on Linux and folds it elsewhere", () => {
+	const upper = isolationNameFromWorktree("/repo/Foo/cindy-feature");
+	const lower = isolationNameFromWorktree("/repo/foo/cindy-feature");
+	if (process.platform === "linux") assert.notEqual(upper, lower);
+	else assert.equal(upper, lower);
 });
 
 test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", () => {
