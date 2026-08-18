@@ -791,9 +791,7 @@ describe('automation-generated sessions', () => {
     expect(source).not.toContain('<Pause');
     // text 沿用 vendor → Timer → 标题的 6px 节奏；list 把 Timer 排到标题后，
     // 标题与普通列表任务落在同一列。
-    expect(source).toContain(
-      'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
-    );
+    expect(source).toContain('className="min-w-0 truncate text-left disabled:cursor-default"');
     expect(source).toContain('className="flex min-w-0 items-center gap-1.5"');
     expect(source).toContain("sessionVariant === 'list' && 'order-2'");
     expect(source).toContain('runningSessionIds,');

@@ -176,7 +176,6 @@ export function GhostPanelWindowLayout() {
           {/* 合并回主窗口:关偏�?+ 关本�?面板原位回停�?*/}
           <ChromeIconButton
             onClick={mergeBack}
-            title={t('rightSidebar.window.mergeBack')}
             aria-label={t('rightSidebar.window.mergeBack')}
           >
             <PictureInPicture2 size={14} />

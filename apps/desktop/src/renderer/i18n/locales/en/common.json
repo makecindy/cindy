@@ -2391,13 +2391,13 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code automatically compacts context.",
+      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code only",
+        "badge": "Claude Code and Pi",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
-        "hint": "Automatically compacts when context usage reaches this percentage, equivalent to running /compact automatically. Changes take effect immediately and are checked after the next chat turn ends.",
-        "sliderAria": "Adjust Claude Code auto-compaction trigger threshold"
+        "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
+        "sliderAria": "Adjust auto-compaction trigger threshold"
       }
     },
     "personalization": {
@@ -4857,7 +4857,7 @@
   "titleBar": {
     "menu": "Menu",
     "minimize": "Minimize",
-    "maximize": "Maximize",
+    "maximizeOrRestore": "Maximize or Restore Window",
     "close": "Close",
     "menuItems": {
       "settings": "Settings",
@@ -4886,6 +4886,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "Toggle sidebar",
+    "collapseSidebar": "Collapse Sidebar",
+    "expandSidebar": "Expand Sidebar",
     "collapsePanel": "Collapse",
     "expandPanel": "Expand"
   },
@@ -5100,6 +5102,8 @@
       "rotateDevice": "Rotate Device",
       "lockScreen": "Lock Screen",
       "unlockScreen": "Unlock Screen",
+      "controlsUnavailable": "Simulator controls are temporarily unavailable",
+      "enterTextBeforeSending": "Enter text before sending",
       "agentBusyTitle": "Agent Using This Device",
       "agentBusyDescription": "Manual input is paused until the current Agent action finishes.",
       "takeControl": "Take Control",
@@ -5176,19 +5180,24 @@
       "urlPlaceholder": "Enter URL or search",
       "goBack": "Back",
       "goForward": "Forward",
+      "goBackUnavailable": "No previous page",
+      "goForwardUnavailable": "No next page",
       "reload": "Reload",
       "stop": "Stop loading",
       "screenshot": "Screenshot",
       "screenshotCopied": "Screenshot copied to clipboard",
       "screenshotFailed": "Screenshot failed",
       "comment": "Comment on the page",
+      "exitCommentMode": "Exit comment mode",
       "commentModeHint": "Click an element or Shift-drag an area · Cmd/Ctrl-click to add instantly · Esc to exit",
       "commentPlaceholder": "Describe the change you want here…",
       "commentSubmit": "Add comment",
       "commentCancel": "Cancel",
       "commentAdded": "Comment added to the chat input",
       "commentFailed": "Failed to add comment",
-      "styleTweaks": "Style tweaks",
+      "styleTweaksExpand": "Show style controls",
+      "styleTweaksCollapse": "Hide style controls",
+      "styleTweaksSubmitting": "Submitting comment…",
       "styleReset": "Reset",
       "styleTextLabel": "Text",
       "moreTools": "More",
@@ -5584,6 +5593,7 @@
       "completed": "Completed",
       "empty": "No background tasks in this session yet",
       "stop": "Stop",
+      "stopping": "Stopping…",
       "back": "Back",
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
@@ -7446,6 +7456,7 @@
       "scopeLocalSessions": "This device’s sessions",
       "dialogues": "Chat",
       "newDialogue": "New session",
+      "creationInProgress": "Creation is already in progress",
       "dialoguesToggleExpand": "Expand Chat",
       "dialoguesToggleCollapse": "Collapse Chat",
       "loadingDialogues": "Loading…",
@@ -7565,6 +7576,8 @@
         "hiddenCount": "{{count}} hidden",
         "stopped": "Stopped",
         "aria": "{{title}} automation sessions, {{count}} runs, {{attention}} pending",
+        "expand": "Expand {{title}} runs",
+        "collapse": "Collapse {{title}} runs",
         "menu": {
           "runNow": "Run now",
           "more": "More actions",
@@ -7634,6 +7647,7 @@
         "delete": "Delete selected sessions",
         "clear": "Clear selection",
         "archiveNone": "No selected sessions can be archived",
+        "actionInProgress": "Another action is already in progress",
         "skipRunning": "{{count}} running",
         "skipAttached": "{{count}} remotely controlled",
         "skipNotActive": "{{count}} not active",

@@ -643,18 +643,20 @@ export function SessionContentHeader({
           }}
         >
           <DropdownMenuTrigger asChild>
-            <button
-              className={cn(
-                'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
-                'text-[var(--cmd-palette-item-meta)] transition-colors',
-                'hover:bg-titlebar-button-hover hover:text-foreground',
-                'focus-visible:outline-none data-[state=open]:bg-titlebar-button-hover',
-              )}
-              aria-label={t('ccAgent.sessionHeader.moreActions')}
-              style={WINDOW_NO_DRAG_STYLE}
-            >
-              <Ellipsis size={15} />
-            </button>
+            <Tip text={t('ccAgent.sessionHeader.moreActions')} side="bottom">
+              <button
+                className={cn(
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                  'text-[var(--cmd-palette-item-meta)] transition-colors',
+                  'hover:bg-titlebar-button-hover hover:text-foreground',
+                  'focus-visible:outline-none data-[state=open]:bg-titlebar-button-hover',
+                )}
+                aria-label={t('ccAgent.sessionHeader.moreActions')}
+                style={WINDOW_NO_DRAG_STYLE}
+              >
+                <Ellipsis size={15} />
+              </button>
+            </Tip>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"

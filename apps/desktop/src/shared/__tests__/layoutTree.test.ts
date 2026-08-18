@@ -16,6 +16,7 @@ import {
   swapPanesByKind,
   swapRootSplitChildrenByKind,
   transferSplitFraction,
+  transferSplitFractionRelay,
   setPaneCollapsed,
   setSplitChildFraction,
   validateLayout,
@@ -643,6 +644,64 @@ describe('transferSplitFraction(缝把手拖宽提交)', () => {
     expect(transferSplitFraction(layout, 'root', 1, 1, 0.1).applied).toBe(false);
     expect(transferSplitFraction(layout, 'root', 0, 9, 0.1).applied).toBe(false);
     expect(transferSplitFraction(layout, 'ghost', 0, 1, 0.1).applied).toBe(false);
+  });
+});
+
+describe('transferSplitFractionRelay(压缩 chat 的多来源接力提交)', () => {
+  /** 现场树形:chat 份额已顶 0.05 下限,右侧栏折叠着但账上还有 0.206。 */
+  function userTreeWithCollapsedRsb(): Layout {
+    const layout = createDefaultLayout();
+    const split = layout.content as SplitNode;
+    split.children = [
+      { fraction: 0.206, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+      { fraction: 0.122, node: { type: 'pane', id: 'ghost-pr', panelKind: 'ghost:pr' } },
+      { fraction: 0.05, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+      { fraction: 0.622, node: { type: 'pane', id: 'ghost-canvas', panelKind: 'ghost:canvas' } },
+    ];
+    return layout;
+  }
+
+  it('主来源够用时与两方转移等价:只动 chat 与收方', () => {
+    const layout = createDefaultLayout();
+    const r = transferSplitFractionRelay(layout, 'root', [0], 1, 0.1);
+    expect(r.applied).toBe(true);
+    const fractions = (r.layout.content as SplitNode).children.map((c) => c.fraction);
+    expect(fractions[0]).toBeCloseTo(0.4);
+    expect(fractions[1]).toBeCloseTo(0.6);
+    expect(validateLayout(r.layout)).toEqual({ ok: true });
+  });
+
+  it('主来源(已顶 0.05)不够:差额由后面的折叠兄弟接力,三方各保下限', () => {
+    const layout = userTreeWithCollapsedRsb();
+    // 拖 25px(share 0.0151):chat 无账可出,全部从折叠的 right-tabs 出。
+    const r = transferSplitFractionRelay(layout, 'root', [2, 0], 3, 0.0151);
+    expect(r.applied).toBe(true);
+    const fractions = (r.layout.content as SplitNode).children.map((c) => c.fraction);
+    expect(fractions[2]).toBeCloseTo(0.05, 6); // chat 仍顶下限
+    expect(fractions[0]).toBeCloseTo(0.206 - 0.0151, 6); // 折叠兄弟出账
+    expect(fractions[3]).toBeCloseTo(0.622 + 0.0151, 6); // 收方全额进账
+    expect(fractions.reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+    expect(validateLayout(r.layout)).toEqual({ ok: true });
+  });
+
+  it('接力总额不够 → 整单拒绝并返回原引用(拖缝松手回弹的判据)', () => {
+    const layout = userTreeWithCollapsedRsb();
+    // chat 0(0.05 顶死)+ right-tabs 最多让 0.156,0.2 必然不够。
+    const r = transferSplitFractionRelay(layout, 'root', [2, 0], 3, 0.2);
+    expect(r.applied).toBe(false);
+    expect(r.layout).toBe(layout);
+  });
+
+  it('非法入参(空 sources / 收方在 sources 里 / 重复下标 / amount≤0 / 越界)全部拒绝', () => {
+    const layout = userTreeWithCollapsedRsb();
+    expect(transferSplitFractionRelay(layout, 'root', [], 3, 0.1).applied).toBe(false);
+    expect(transferSplitFractionRelay(layout, 'root', [2, 3], 3, 0.1).applied).toBe(false);
+    expect(transferSplitFractionRelay(layout, 'root', [0, 0], 3, 0.1).applied).toBe(false);
+    expect(transferSplitFractionRelay(layout, 'root', [2], 3, 0).applied).toBe(false);
+    expect(transferSplitFractionRelay(layout, 'root', [2], 3, -0.1).applied).toBe(false);
+    expect(transferSplitFractionRelay(layout, 'root', [9], 3, 0.1).applied).toBe(false);
+    expect(transferSplitFractionRelay(layout, 'root', [2], 9, 0.1).applied).toBe(false);
+    expect(transferSplitFractionRelay(layout, 'nope', [2], 3, 0.1).applied).toBe(false);
   });
 });
 

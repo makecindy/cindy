@@ -9,10 +9,10 @@
  *   - logger 全可选,host 不传就静默(包本身永远不 console.log)
  */
 
-import type { Buffer } from 'node:buffer';
-import type { ServerResponse } from 'node:http';
+import type { Buffer } from "node:buffer";
+import type { ServerResponse } from "node:http";
 
-import type { OutboundProxyResolver } from './outbound-proxy.js';
+import type { OutboundProxyResolver } from "./outbound-proxy.js";
 
 /**
  * 请求 transform 上下文。
@@ -174,6 +174,18 @@ export interface RecoveryRule {
   onRetry?: (threadId: string, model: string) => void;
   /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */
   threadIdHeaders?: readonly string[];
+  /**
+   * 别的规则命中 400/422 时,是否把本规则的 strip 顺手叠上去。
+   * 默认 true(encrypted / empty thinking 这类对任意上游都安全)。
+   * 语义绑在特定上游的规则必须显式 false,否则会在 GPT 的
+   * invalid_encrypted_content 重试里改写 OpenAI 历史。
+   */
+  applyOnUnmatchedRetry?: boolean;
+  /**
+   * 本规则作为主匹配时,是否还叠其它 extra strip。默认 true。
+   * xAI ModelInput 必须 false:叠 encrypted-content 会删掉本来可回放的 reasoning blob。
+   */
+  allowExtraRules?: boolean;
 }
 
 /**

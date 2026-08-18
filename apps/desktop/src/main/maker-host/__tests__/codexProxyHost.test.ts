@@ -80,40 +80,44 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
   return { effectiveXdGatewayBaseUrl: () => TEST_XD_GATEWAY_BASE_URL };
 });
 
-vi.mock('@cindy/anthropic-compat-proxy', () => ({
-  createAnthropicCompatProxy: mockState.createAnthropicCompatProxy,
-  createInstructionsInjectionTransform: mockState.createInstructionsInjectionTransform,
-  createActiveStripTransform: () => (() => null),
-  createThreadStripController: () => ({ markActive: () => {}, reconcile: () => {}, shouldStrip: () => false, clear: () => {} }),
-  createEncryptedContentRecoveryRule: (opts: { enabled: () => boolean }) => ({
-    id: 'encrypted_content',
-    enabled: opts.enabled,
-    matches: (text: string) =>
-      /invalid_encrypted_content|could not decrypt the provided encrypted_content/i.test(text),
-    strip: () => null,
-  }),
-  createImageGenerationIdRecoveryRule: () => ({
-    id: 'image_generation_id',
-    enabled: () => true,
-    matches: (text: string) =>
-      /image generation items without [`']?id[`']? are not supported/i.test(text),
-    strip: () => null,
-  }),
-  stripEncryptedContentFromBody: () => null,
-  stripImageGenerationItemsWithoutIdFromBody: () => null,
-  stripNonAnthropicFields: mockState.stripNonAnthropicFields,
-  // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
-  createVisionBridgeTransform: () => (() => null),
-  createInstructionsRegistry: () => {
-    const map = new Map<string, string>();
-    return {
-      set: (threadId: string, text: string) => { map.set(threadId, text); },
-      get: (threadId: string) => map.get(threadId),
-      delete: (threadId: string) => { map.delete(threadId); },
-      get size() { return map.size; },
-    };
-  },
-}));
+vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/anthropic-compat-proxy')>();
+  return {
+    ...actual,
+    createAnthropicCompatProxy: mockState.createAnthropicCompatProxy,
+    createInstructionsInjectionTransform: mockState.createInstructionsInjectionTransform,
+    createActiveStripTransform: () => (() => null),
+    createThreadStripController: () => ({ markActive: () => {}, reconcile: () => {}, shouldStrip: () => false, clear: () => {} }),
+    createEncryptedContentRecoveryRule: (opts: { enabled: () => boolean }) => ({
+      id: 'encrypted_content',
+      enabled: opts.enabled,
+      matches: (text: string) =>
+        /invalid_encrypted_content|could not decrypt the provided encrypted_content/i.test(text),
+      strip: () => null,
+    }),
+    createImageGenerationIdRecoveryRule: () => ({
+      id: 'image_generation_id',
+      enabled: () => true,
+      matches: (text: string) =>
+        /image generation items without [`']?id[`']? are not supported/i.test(text),
+      strip: () => null,
+    }),
+    stripEncryptedContentFromBody: () => null,
+    stripImageGenerationItemsWithoutIdFromBody: () => null,
+    stripNonAnthropicFields: mockState.stripNonAnthropicFields,
+    // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
+    createVisionBridgeTransform: () => (() => null),
+    createInstructionsRegistry: () => {
+      const map = new Map<string, string>();
+      return {
+        set: (threadId: string, text: string) => { map.set(threadId, text); },
+        get: (threadId: string) => map.get(threadId),
+        delete: (threadId: string) => { map.delete(threadId); },
+        get size() { return map.size; },
+      };
+    },
+  };
+});
 
 vi.mock('@cindy/responses-chat-bridge', () => ({
   createResponsesChatHandler: mockState.createResponsesChatHandler,
@@ -2403,12 +2407,13 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, strict gateway history 兼容, xAI ModelInput sanitize, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
           expect.objectContaining({ id: 'image_generation_id' }),
+          expect.objectContaining({ id: 'xai_model_input' }),
         ]),
       }),
     );
@@ -3667,6 +3672,119 @@ describe('codex proxy host', () => {
     });
   });
 
+  it('sanitizes ModelInput for gateway grok without an xAI subscription session', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-gateway-grok', 'thread-gateway-grok', 'PRODUCT_PROMPT');
+    setSessionProvider('session-gateway-grok', 'xd');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'x-ai/grok-4.5',
+      input: [
+        { type: 'message', role: 'user', content: 'go' },
+        {
+          type: 'agent_message',
+          author: '/root',
+          content: [{ type: 'input_text', text: 'done' }],
+        },
+        {
+          type: 'reasoning',
+          id: 'rs_1',
+          content: null,
+          encrypted_content: 'BLOB',
+        },
+      ],
+    };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-gateway-grok' },
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    const input = (current as { input: Array<Record<string, unknown>> }).input;
+    expect(input).toEqual(expect.arrayContaining([
+      { type: 'message', role: 'user', content: 'go' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[collab /root]\ndone' }],
+      },
+      { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+    ]));
+    expect(input.some((item) => item.type === 'agent_message')).toBe(false);
+    expect(JSON.stringify(current)).not.toContain('"content":null');
+    clearSessionProvider('session-gateway-grok');
+  });
+
+  it.each(['x-ai/grok-code-fast', 'x-ai/grok-build-0.1'])(
+    'drops reasoning for gateway non-reasoning model %s',
+    async (model) => {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-gateway-${model}`;
+      const threadId = `thread-gateway-${model}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xd');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model,
+        input: [
+          { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+          { type: 'message', role: 'user', content: 'hi' },
+        ],
+      };
+      const ctx = {
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': threadId },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+
+      const input = (current as { input: Array<Record<string, unknown>> }).input;
+      expect(input.some((item) => item.type === 'reasoning')).toBe(false);
+      expect(input).toEqual(expect.arrayContaining([
+        { type: 'message', role: 'user', content: 'hi' },
+      ]));
+      clearSessionProvider(sessionId);
+    },
+  );
+
+  it('registers a ModelInput 422 recovery rule for LiteLLM-wrapped xAI errors', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    const rules = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.recoveryRules ?? [];
+    const rule = rules.find((candidate: { id?: string }) => candidate.id === 'xai_model_input');
+    expect(rule).toBeDefined();
+    expect(rule.matches(
+      'unexpected status 422 Unprocessable Entity: litellm.BadRequestError: XaiException - '
+      + '{"error":"Failed to deserialize the JSON body into the target type: '
+      + 'data did not match any variant of untagged enum ModelInput"}',
+    )).toBe(true);
+  });
+
   it('leaves custom_tool_call history untouched for non-xAI requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -4630,7 +4748,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(16); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(18); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, strict gateway history 兼容, xAI ModelInput sanitize, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

@@ -78,6 +78,7 @@ import {
   getDesktopMcpToolApprovalPolicy,
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
+import { readCompactionPct } from './compaction-settings-store.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import {
   getActiveCatalog,
@@ -789,6 +790,11 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     },
     makerMemoryEnabled: {
       get: () => readMemorySettings().maker,
+      enumerable: true,
+    },
+    // 与 Claude Code 共用 compaction-settings.json；Codex 不读。
+    autoCompactThresholdPct: {
+      get: () => readCompactionPct(),
       enumerable: true,
     },
   });

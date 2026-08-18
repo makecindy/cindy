@@ -11,6 +11,7 @@
 import { PictureInPicture2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 interface RightSidebarDetachProps {
@@ -22,23 +23,25 @@ interface RightSidebarDetachProps {
 export function RightSidebarDetach({ onDetach, size = 'toolbar' }: RightSidebarDetachProps) {
   const { t } = useTranslation();
   const isToolbar = size === 'toolbar';
+  const label = t('rightSidebar.tabs.controls.detachAria');
 
   return (
-    <button
-      type="button"
-      // toolbar(mac 浮层)与左簇 28px 规格族对齐(rounded-md);chip(Win TabBar)保持圆形。
-      className={cn(
-        'pointer-events-auto flex h-7 w-7 items-center justify-center',
-        isToolbar ? 'rounded-md' : 'rounded-full',
-        'text-titlebar-icon',
-        'transition-colors',
-        'hover:bg-titlebar-button-hover',
-      )}
-      onClick={onDetach}
-      aria-label={t('rightSidebar.tabs.controls.detachAria')}
-      title={t('rightSidebar.tabs.controls.detachAria')}
-    >
-      <PictureInPicture2 size={14} />
-    </button>
+    <Tip text={label} side="bottom">
+      <button
+        type="button"
+        // toolbar(mac 浮层)与左簇 28px 规格族对齐(rounded-md);chip(Win TabBar)保持圆形。
+        className={cn(
+          'pointer-events-auto flex h-7 w-7 items-center justify-center',
+          isToolbar ? 'rounded-md' : 'rounded-full',
+          'text-titlebar-icon',
+          'transition-colors',
+          'hover:bg-titlebar-button-hover',
+        )}
+        onClick={onDetach}
+        aria-label={label}
+      >
+        <PictureInPicture2 size={14} />
+      </button>
+    </Tip>
   );
 }

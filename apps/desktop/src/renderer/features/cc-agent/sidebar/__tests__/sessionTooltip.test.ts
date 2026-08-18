@@ -92,6 +92,30 @@ describe('SessionTooltip', () => {
     expect(screen.queryByText('XDMaker')).toBeNull();
   });
 
+  it('honors the controlled open state used to suppress row details over inline actions', async () => {
+    const renderTooltip = (controlledOpen: boolean) =>
+      createElement(
+        SessionTooltip,
+        {
+          sessionId: 'session-1',
+          prRefs: [],
+          sourceLabel: 'XDMaker',
+          controlledOpen,
+        } as unknown as ComponentProps<typeof SessionTooltip>,
+        createElement('div', null, 'Session row'),
+      );
+
+    const { rerender } = render(renderTooltip(false));
+    fireEvent.pointerMove(screen.getByText('Session row'), { pointerType: 'mouse' });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    rerender(renderTooltip(true));
+    expect((await screen.findByRole('tooltip')).textContent).toContain('XDMaker');
+
+    rerender(renderTooltip(false));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
   it('lets a long repository label shrink without pushing the PR status outside the tooltip', async () => {
     const longRepoRef = {
       ...prRef,

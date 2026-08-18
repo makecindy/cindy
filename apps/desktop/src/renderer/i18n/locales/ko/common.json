@@ -2390,13 +2390,13 @@
     },
     "compaction": {
       "title": "컨텍스트 압축",
-      "description": "Claude Code가 언제 컨텍스트를 자동 압축할지 제어합니다.",
+      "description": "Claude Code와 Pi가 언제 컨텍스트를 자동 압축할지 제어합니다. 이 설정은 Codex에 영향을 주지 않습니다. Codex는 컨텍스트 압축을 따로 관리합니다.",
       "card": {
         "label": "압축 트리거 임계값",
-        "badge": "Claude Code 전용",
+        "badge": "Claude Code와 Pi",
         "description": "컨텍스트 사용량이 이 비율에 도달하면 자동 압축합니다. 낮추면 더 일찍 압축해 여유를 더 남기고, 높이면 더 늦게 압축해 한 턴의 컨텍스트를 더 많이 사용합니다.",
-        "hint": "컨텍스트 사용량이 이 비율에 도달하면 자동으로 압축합니다(/compact를 자동 실행하는 것과 동일). 변경 사항은 즉시 적용되며 다음 채팅 턴이 끝날 때 새 비율로 판단합니다.",
-        "sliderAria": "Claude Code 자동 압축 트리거 임계값 조정"
+        "hint": "컨텍스트 사용량이 이 비율에 도달하면 자동으로 압축합니다. 변경 사항은 즉시 적용되며 다음 턴이 끝나거나 더 작은 창으로 전환한 뒤에 새 비율로 판단합니다.",
+        "sliderAria": "자동 압축 트리거 임계값 조정"
       }
     },
     "personalization": {
@@ -4855,7 +4855,7 @@
   "titleBar": {
     "menu": "메뉴",
     "minimize": "최소화",
-    "maximize": "최대화",
+    "maximizeOrRestore": "창 최대화 또는 복원",
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
@@ -4884,6 +4884,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "사이드바 전환",
+    "collapseSidebar": "사이드바 접기",
+    "expandSidebar": "사이드바 펼치기",
     "collapsePanel": "접기",
     "expandPanel": "펼치기"
   },
@@ -5098,6 +5100,8 @@
       "rotateDevice": "기기 회전",
       "lockScreen": "화면 잠금",
       "unlockScreen": "화면 잠금 해제",
+      "controlsUnavailable": "시뮬레이터 제어를 일시적으로 사용할 수 없습니다",
+      "enterTextBeforeSending": "보낼 텍스트를 먼저 입력하세요",
       "agentBusyTitle": "Agent가 이 기기를 사용 중",
       "agentBusyDescription": "현재 Agent 작업이 끝날 때까지 수동 입력이 일시 중지됩니다.",
       "takeControl": "기기 제어권 가져오기",
@@ -5174,19 +5178,24 @@
       "urlPlaceholder": "URL 입력 또는 검색",
       "goBack": "뒤로",
       "goForward": "앞으로",
+      "goBackUnavailable": "이전 페이지가 없습니다",
+      "goForwardUnavailable": "다음 페이지가 없습니다",
       "reload": "새로 고침",
       "stop": "로드 중지",
       "screenshot": "스크린샷",
       "screenshotCopied": "스크린샷을 클립보드에 복사했습니다",
       "screenshotFailed": "스크린샷에 실패했습니다",
       "comment": "페이지에 코멘트",
+      "exitCommentMode": "코멘트 모드 종료",
       "commentModeHint": "요소 클릭 / Shift 드래그로 영역 선택 · Cmd/Ctrl+클릭 시 바로 추가 · Esc로 종료",
       "commentPlaceholder": "여기를 어떻게 바꿀지 설명하세요…",
       "commentSubmit": "코멘트 추가",
       "commentCancel": "취소",
       "commentAdded": "코멘트를 입력창에 추가했습니다",
       "commentFailed": "코멘트 추가에 실패했습니다",
-      "styleTweaks": "스타일 조정",
+      "styleTweaksExpand": "스타일 조정 열기",
+      "styleTweaksCollapse": "스타일 조정 닫기",
+      "styleTweaksSubmitting": "코멘트 제출 중…",
       "styleReset": "재설정",
       "styleTextLabel": "텍스트",
       "moreTools": "더 보기",
@@ -5582,6 +5591,7 @@
       "completed": "완료",
       "empty": "이 세션에는 아직 백그라운드 작업이 없습니다",
       "stop": "중지",
+      "stopping": "중지 중…",
       "back": "뒤로",
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
@@ -7434,6 +7444,7 @@
       "scopeLocalSessions": "이 기기의 세션",
       "dialogues": "대화",
       "newDialogue": "새 세션",
+      "creationInProgress": "생성이 이미 진행 중입니다",
       "dialoguesToggleExpand": "대화 펼치기",
       "dialoguesToggleCollapse": "대화 접기",
       "loadingDialogues": "불러오는 중…",
@@ -7553,6 +7564,8 @@
         "hiddenCount": "{{count}}개 접힘",
         "stopped": "중지됨",
         "aria": "{{title}} 자동화 세션, {{count}}회 실행, {{attention}}개 대기",
+        "expand": "{{title}} 실행 기록 펼치기",
+        "collapse": "{{title}} 실행 기록 접기",
         "menu": {
           "runNow": "지금 실행",
           "more": "추가 작업",
@@ -7622,6 +7635,7 @@
         "delete": "선택한 세션 삭제",
         "clear": "선택 해제",
         "archiveNone": "선택한 세션 중 보관할 수 있는 항목이 없습니다",
+        "actionInProgress": "다른 작업을 처리하는 중입니다",
         "skipRunning": "{{count}}개 실행 중",
         "skipAttached": "{{count}}개 원격 인계 중",
         "skipNotActive": "{{count}}개 비활성 상태",
