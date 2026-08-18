@@ -963,9 +963,26 @@ export class AgentInputCoordinator {
     this.restoreAttempted.add(sessionId);
     const existing = this.queueRestorePromises.get(sessionId);
     if (existing) return existing;
-    const promise = this.restoreQueueSnapshot(sessionId).finally(() => {
-      this.queueRestorePromises.delete(sessionId);
-    });
+    const restoreState = this.getState(sessionId);
+    const restoreGeneration = restoreState.generation;
+    let restoreFailed = false;
+    const promise = this.restoreQueueSnapshot(sessionId)
+      .catch((err) => {
+        restoreFailed = true;
+        throw err;
+      })
+      .finally(() => {
+        this.queueRestorePromises.delete(sessionId);
+        if (!restoreFailed) return;
+        const currentState = this.getState(sessionId);
+        const restoreWasSuperseded =
+          currentState !== restoreState || currentState.generation !== restoreGeneration;
+        // 同代失败必须继续 fail closed;clearSession 已让新代成为 restored 权威态时,
+        // 旧 restore 只剩 drain gate。先删 gate,再让新代重新经过现有调度门禁。
+        if (restoreWasSuperseded && this.restoredQueueSessions.has(sessionId)) {
+          this.scheduleDrain(sessionId, 'queue-snapshot-restore-failed-superseded');
+        }
+      });
     this.queueRestorePromises.set(sessionId, promise);
     return promise;
   }
@@ -992,6 +1009,7 @@ export class AgentInputCoordinator {
       this.restoredQueueSessions.add(sessionId);
       this.queueRestorePromises.delete(sessionId);
       this.maybePersistQueueSnapshot(sessionId);
+      if (!state.queuePaused) this.scheduleDrain(sessionId, 'queue-snapshot-restore-superseded');
       return;
     }
     // 去重:内存态 + DB 已落库的消息。DB 查询覆盖"消息已被 agent 接受落库但删快照
@@ -1016,6 +1034,8 @@ export class AgentInputCoordinator {
             this.deps.onDiscardedQueuedMessage?.(sessionId, item);
           }
           this.maybePersistQueueSnapshot(sessionId);
+          if (!currentState.queuePaused)
+            this.scheduleDrain(sessionId, 'queue-snapshot-restore-superseded');
           return;
         }
         for (const cid of persisted) existingIds.add(cid);
@@ -1091,6 +1111,9 @@ export class AgentInputCoordinator {
       // 快照为空 / 全部与内存态重复:同步一次收口点,让内存态成为权威快照。
       this.queueRestorePromises.delete(sessionId);
       this.maybePersistQueueSnapshot(sessionId);
+      // restore gate 可能已经吞掉了门解除时的唯一一次 wakeSession;簿记完成后
+      // 重新走 generation-aware drain,让恢复窗口内已有的内存队列获得新唤醒源。
+      if (!state.queuePaused) this.scheduleDrain(sessionId, 'queue-snapshot-restored');
       return;
     }
     // 静默会话(无排队、无在飞 turn)恢复为**暂停中的队列**:重启后不自动替用户

@@ -6185,6 +6185,201 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
   });
 
+  it('replays a wake that races an empty queue restore without duplicate dispatch', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-empty-restore-wake-race';
+    const restoreGate = deferred<AgentInputQueuedMessage[]>();
+    let restartPending = true;
+    h.setLoadQueueSnapshot(() => restoreGate.promise);
+    h.setHasPendingCredentialSwitch(() => restartPending);
+
+    const restoring = h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'queued during deferred restart'));
+    await flush();
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual([
+      'q-1',
+    ]);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    restartPending = false;
+    h.coordinator.wakeSession(sid, 'deferred-codex-restart-applied');
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    restoreGate.resolve([]);
+    await restoring;
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'queued during deferred restart',
+    });
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not dispatch an in-memory queue item removed before an empty restore finishes', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-empty-restore-remove-race';
+    const restoreGate = deferred<AgentInputQueuedMessage[]>();
+    h.setLoadQueueSnapshot(() => restoreGate.promise);
+
+    const restoring = h.coordinator.ensureQueueRestored(sid);
+    const item = makeItem('q-1', 'cancel before restore');
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.coordinator.remove(sid, item.clientId);
+    await flush();
+
+    restoreGate.resolve([]);
+    await restoring;
+    await flush();
+
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: item.clientId, text: item.text }),
+    );
+  });
+
+  it('drains only the post-clear generation after clearSession wins an in-flight restore', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-empty-restore-clear-race';
+    const restoreGate = deferred<AgentInputQueuedMessage[]>();
+    h.setLoadQueueSnapshot(() => restoreGate.promise);
+
+    const generation = h.coordinator.getGeneration(sid);
+    const restoring = h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('q-old', 'stale generation'));
+    await flush();
+    h.coordinator.clearSession(sid);
+    expect(h.coordinator.getGeneration(sid)).toBe(generation + 1);
+    h.coordinator.enqueue(sid, makeItem('q-new', 'post-clear generation'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    restoreGate.resolve([]);
+    await restoring;
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'post-clear generation',
+    });
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains only the post-clear generation when durable restore de-duplication is in flight', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-dedup-restore-clear-race';
+    const dedupStarted = deferred<void>();
+    const dedupGate = deferred<Set<string>>();
+    h.setLoadQueueSnapshot(async () => [makeItem('r-old', 'restored stale generation')]);
+    h.setGetPersistedClientIds(() => {
+      dedupStarted.resolve();
+      return dedupGate.promise;
+    });
+
+    const generation = h.coordinator.getGeneration(sid);
+    const restoring = h.coordinator.ensureQueueRestored(sid);
+    await dedupStarted.promise;
+    h.coordinator.enqueue(sid, makeItem('q-old', 'queued stale generation'));
+    await flush();
+    h.coordinator.clearSession(sid);
+    expect(h.coordinator.getGeneration(sid)).toBe(generation + 1);
+    h.coordinator.enqueue(sid, makeItem('q-new', 'post-clear after de-dup'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    dedupGate.resolve(new Set());
+    await restoring;
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'post-clear after de-dup',
+    });
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'r-old' }),
+    );
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains only the post-clear generation when snapshot loading rejects after clearSession', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-load-reject-clear-race';
+    const restoreGate = deferred<AgentInputQueuedMessage[]>();
+    h.setLoadQueueSnapshot(() => restoreGate.promise);
+
+    const generation = h.coordinator.getGeneration(sid);
+    const restoring = h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('q-old', 'queued stale generation'));
+    await flush();
+    h.coordinator.clearSession(sid);
+    expect(h.coordinator.getGeneration(sid)).toBe(generation + 1);
+    h.coordinator.enqueue(sid, makeItem('q-new', 'post-clear after load failure'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    restoreGate.reject(new Error('snapshot load failed'));
+    await expect(restoring).rejects.toThrow('snapshot load failed');
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'post-clear after load failure',
+    });
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains only the post-clear generation when durable de-duplication rejects after clearSession', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-dedup-reject-clear-race';
+    const dedupStarted = deferred<void>();
+    const dedupGate = deferred<Set<string>>();
+    h.setLoadQueueSnapshot(async () => [makeItem('r-old', 'restored stale generation')]);
+    h.setGetPersistedClientIds(() => {
+      dedupStarted.resolve();
+      return dedupGate.promise;
+    });
+
+    const generation = h.coordinator.getGeneration(sid);
+    const restoring = h.coordinator.ensureQueueRestored(sid);
+    await dedupStarted.promise;
+    h.coordinator.enqueue(sid, makeItem('q-old', 'queued stale generation'));
+    await flush();
+    h.coordinator.clearSession(sid);
+    expect(h.coordinator.getGeneration(sid)).toBe(generation + 1);
+    h.coordinator.enqueue(sid, makeItem('q-new', 'post-clear after de-dup failure'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    dedupGate.reject(new Error('durable de-duplication failed'));
+    await expect(restoring).rejects.toThrow('durable de-duplication failed');
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'post-clear after de-dup failure',
+    });
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
   it('restores a quiet session as a paused queue and only drains after explicit resume', async () => {
     const h = createHarness();
     const sid = 'snapshot-restore-paused';
@@ -6571,13 +6766,15 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     });
 
     await h.coordinator.ensureQueueRestored(sid).catch(() => undefined);
-    // 读失败:不标记已恢复,收口点保持关闭。
-    h.setRunning(true);
+    // 读失败:不标记已恢复,既不打开持久化闸门,也不唤醒本可立即派发的内存队列。
     h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
     await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
     expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
 
     // 下一个入口重试成功:恢复项 prepend 并开闸。
+    h.setRunning(true);
     await h.coordinator.ensureQueueRestored(sid);
     await flush();
     expect(attempts).toBe(2);
@@ -6586,6 +6783,23 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
       'q-1',
     ]);
     expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['r-1', 'q-1']);
+  });
+
+  it('keeps the persistence gate closed when durable restore de-duplication fails', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-dedup-failure';
+    h.setLoadQueueSnapshot(async () => [makeItem('r-1', 'not safely de-duplicated')]);
+    h.setGetPersistedClientIds(async () => {
+      throw new Error('db not ready');
+    });
+
+    await expect(h.coordinator.ensureQueueRestored(sid)).rejects.toThrow('db not ready');
+    h.coordinator.enqueue(sid, makeItem('q-1', 'queued while restore is unsafe'));
+    await flush();
+
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
+    expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
   });
 
   it('skips the redundant snapshot write when memory state already matches the loaded snapshot', async () => {
