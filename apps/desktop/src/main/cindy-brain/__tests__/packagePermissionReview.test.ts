@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { GhostManifest } from '../../../shared/ghost';
 import {
+  marketPackageManualSummaryChanged,
   marketPackageNeedsHostReview,
   marketPackageOauthIdentityChanged,
 } from '../packagePermissionReview';
@@ -60,6 +61,19 @@ describe('marketPackageNeedsHostReview', () => {
       marketPackageNeedsHostReview({
         mode: 'manual',
         builtinOauthClientChanged: true,
+        addedCount: 0,
+        unreviewedCount: 0,
+        extrasVersusReviewedCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it('reviews when only the bundled manual summary changed', () => {
+    expect(
+      marketPackageNeedsHostReview({
+        mode: 'manual',
+        builtinOauthClientChanged: false,
+        manualSummaryChanged: true,
         addedCount: 0,
         unreviewedCount: 0,
         extrasVersusReviewedCount: 0,
@@ -148,5 +162,53 @@ describe('marketPackageOauthIdentityChanged', () => {
         oauthManifest('real-client'),
       ),
     ).toBe(false);
+  });
+});
+
+function manualManifest(items: Array<{ name: string; dir: string; description: string }>): GhostManifest {
+  return {
+    schemaVersion: 2,
+    id: 'manual-plugin',
+    name: 'Manual Plugin',
+    version: '1.0.0',
+    kind: 'chip',
+    entry: 'main.js',
+    slots: ['notify'],
+    ...(items.length > 0 ? { manual: { items } } : {}),
+  };
+}
+
+describe('marketPackageManualSummaryChanged', () => {
+  const guide = {
+    name: 'getting-started',
+    dir: 'manual/getting-started',
+    description: 'Start here',
+  };
+
+  it('stays quiet when reviewed and real package share the same manuals', () => {
+    expect(marketPackageManualSummaryChanged(manualManifest([guide]), manualManifest([guide]))).toBe(
+      false,
+    );
+  });
+
+  it('detects a count change between the reviewed catalog and the real package', () => {
+    expect(marketPackageManualSummaryChanged(manualManifest([]), manualManifest([guide]))).toBe(
+      true,
+    );
+  });
+
+  it('detects a swapped manual identity even when the count stays the same', () => {
+    expect(
+      marketPackageManualSummaryChanged(
+        manualManifest([guide]),
+        manualManifest([
+          { name: 'ops', dir: 'manual/ops', description: 'Operations' },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not invent a reviewed baseline when the caller omitted the catalog', () => {
+    expect(marketPackageManualSummaryChanged(undefined, manualManifest([guide]))).toBe(false);
   });
 });

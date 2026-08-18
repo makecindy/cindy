@@ -15,6 +15,10 @@ describe('market install confirmation', () => {
 
   it('shows an immediate catalog permission card before download', () => {
     expect(pageSource).toContain('<GhostUpdateReview');
+    expect(pageSource).toContain('manualCount={next.manifest.manual?.items.length ?? 0}');
+    expect(pageSource).toContain(
+      'manualCount={marketDetail.manifest.manual?.items.length ?? 0}',
+    );
     expect(pageSource).toContain('<GhostManualSummary');
     expect(pageSource).toContain('<GhostPermissionList');
     expect(pageSource).toContain(

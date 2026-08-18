@@ -898,7 +898,12 @@ export function GhostPluginPage({
             from: installedGhost?.manifest.version ?? next.version,
             to: next.version,
           }),
-          content: <GhostUpdateReview diff={diff} />,
+          content: (
+            <GhostUpdateReview
+              diff={diff}
+              manualCount={next.manifest.manual?.items.length ?? 0}
+            />
+          ),
           maxWidth: 520,
           confirmText: t('settings.ghosts.updateConfirm.confirm'),
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
@@ -1295,7 +1300,10 @@ export function GhostPluginPage({
                   : 'settings.ghosts.market.customInstallConfirmDescription',
               ),
           content: isUpdate ? (
-            <GhostUpdateReview diff={diff!} />
+            <GhostUpdateReview
+              diff={diff!}
+              manualCount={marketDetail.manifest.manual?.items.length ?? 0}
+            />
           ) : (
             <div>
               <GhostManualSummary count={marketDetail.manifest.manual?.items.length ?? 0} />

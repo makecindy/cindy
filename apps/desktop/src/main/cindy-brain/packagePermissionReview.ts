@@ -19,6 +19,8 @@ export class GhostPackagePermissionReviewRequiredError extends Error {
 export function marketPackageNeedsHostReview(input: {
   mode: 'manual' | 'cap';
   builtinOauthClientChanged: boolean;
+  /** 已审预览与真实包的随包手册摘要不一致。 */
+  manualSummaryChanged?: boolean;
   /** null = 没有已装批准基线。 */
   addedCount: number | null;
   unreviewedCount: number;
@@ -26,6 +28,7 @@ export function marketPackageNeedsHostReview(input: {
   extrasVersusReviewedCount: number | null;
 }): boolean {
   if (input.builtinOauthClientChanged) return true;
+  if (input.manualSummaryChanged) return true;
   if (input.extrasVersusReviewedCount !== null) {
     return input.extrasVersusReviewedCount > 0;
   }
@@ -55,6 +58,25 @@ export function marketPackageOauthIdentityChanged(
   // 已装基线的空 clientId→默认值不算迁移(令牌仍有效)。已审预览清单则相反:
   // 用户没见过的具体 clientId 必须再确认。
   return reviewedOauthClientBecameConcrete(reviewed, actual);
+}
+
+/**
+ * 已审预览与真实包的随包手册是否不一致。
+ * 页面确认只展示手册条数与条目身份;真实包改了这些事实就必须再审。
+ */
+export function marketPackageManualSummaryChanged(
+  reviewed: GhostManifest | undefined,
+  actual: GhostManifest,
+): boolean {
+  if (!reviewed) return false;
+  return manualSummaryKey(reviewed) !== manualSummaryKey(actual);
+}
+
+function manualSummaryKey(manifest: GhostManifest): string {
+  return (manifest.manual?.items ?? [])
+    .map((item) => `${item.name}\0${item.dir}\0${item.description}`)
+    .sort()
+    .join('\n');
 }
 
 function reviewedOauthClientBecameConcrete(
