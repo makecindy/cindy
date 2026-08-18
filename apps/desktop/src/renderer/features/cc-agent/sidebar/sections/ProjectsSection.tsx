@@ -87,6 +87,7 @@ import type {
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
+import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
 
 /** 设备段折叠/对话组折叠共用的段 key:本机段 'local',远程段用 deviceId。 */
 const deviceSectionKey = (deviceId: string | null) => deviceId ?? 'local';
@@ -318,6 +319,18 @@ export function ProjectsSection({
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const collapsedAttentionToneFor = useCallback(
+    (sessions: readonly Session[]) =>
+      resolveCollapsedProjectAttentionTone({
+        sessions,
+        notifications,
+        attentionKinds,
+        urgentSessionIds: urgentSet,
+        remotePhaseOf: (sessionId) => getRemoteSessionActivity(sessionId)?.phase,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
+    [notifications, attentionKinds, urgentSet, remoteActivityRevision],
+  );
   // 正在看的任务 id:files 路由下回落到被浏览文件所属任务。
   const viewedIdForSort = viewedSessionId ?? activeSessionId;
   const priorityContext = useMemo(() => {
@@ -617,6 +630,9 @@ export function ProjectsSection({
       project={project}
       statusFilter={filter.status}
       isCollapsed={collapsed.has(project.projectKey)}
+      collapsedAttentionTone={
+        collapsed.has(project.projectKey) ? collapsedAttentionToneFor(project.sessions) : null
+      }
       parentSectionCollapsed={false}
       activeSessionId={activeSessionId}
       runningSessionIds={runningSessionIds}

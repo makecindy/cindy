@@ -169,9 +169,11 @@ import type {
 } from './lib/automationSidebarGrouping';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import {
+  getRemoteSessionActivity,
   useRemoteSessionActivity,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { resolveCollapsedProjectAttentionTone } from './sidebar/projectCollapsedAttention';
 import { WorkdirBrowseSidebar } from './workdir-browse/WorkdirBrowseSidebar';
 import {
   buildDocModeSwitchProjects,
@@ -1073,6 +1075,19 @@ function ExpandedView({
     if (unreadScheduleSessionIds.size === 0) return notifications;
     return new Set([...notifications, ...unreadScheduleSessionIds]);
   }, [notifications, unreadScheduleSessionIds]);
+  const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const collapsedAttentionToneFor = useCallback(
+    (sessions: readonly Session[]) =>
+      resolveCollapsedProjectAttentionTone({
+        sessions,
+        notifications: sidebarNotifications,
+        attentionKinds,
+        urgentSessionIds: urgentSet,
+        remotePhaseOf: (sessionId) => getRemoteSessionActivity(sessionId)?.phase,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
+    [sidebarNotifications, attentionKinds, urgentSet, remoteActivityRevision],
+  );
 
   const markAutomationSessionRunsRead = useCallback(
     (sessionId: string) => {
@@ -3346,6 +3361,11 @@ function ExpandedView({
                     sessionVariant={sessionVariant}
                     statusFilter={filter.status}
                     isCollapsed={collapse.collapsed.has(project.projectKey)}
+                    collapsedAttentionTone={
+                      collapse.collapsed.has(project.projectKey)
+                        ? collapsedAttentionToneFor(displaySessions ?? project.sessions)
+                        : null
+                    }
                     parentSectionCollapsed={parentSectionCollapsed}
                     activeSessionId={activeSessionId}
                     runningSessionIds={displayRunningSessionIds}
