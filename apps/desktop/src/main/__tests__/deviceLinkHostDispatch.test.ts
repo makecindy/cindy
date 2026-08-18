@@ -24,6 +24,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 // ── mocks(hoist 前置)──────────────────────────────────────────────────────────
 const h = vi.hoisted(() => ({
   settings: { remoteControlEnabled: true, revokedControllers: [] as string[] },
+  customProviderBilling: {
+    showSdkCostForCustomProviders: true,
+    isCustomized: true,
+    defaultShowSdkCostForCustomProviders: false,
+  },
   // ⚠️ 绝不能回落 process.cwd():TEMP 是 Windows 独有变量,macOS 上回落 cwd 曾让
   // auth-adapters 的 codex-home 骨架(含真实凭证硬链)生成进仓库 apps/desktop/ 下
   // (2026-07-03 事故)。统一走系统临时目录:macOS TMPDIR / Windows TEMP / 其余 /tmp。
@@ -50,6 +55,9 @@ vi.mock('../logger', () => ({
 // 被控开关:由 h.settings 控制(双层门禁第一道)。
 vi.mock('../device-link/settings-store', () => ({
   readDeviceLinkSettings: () => h.settings,
+}));
+vi.mock('../maker-host/custom-provider-billing-settings-store', () => ({
+  customProviderBillingWire: () => h.customProviderBilling,
 }));
 import {
   runInvoke,
@@ -295,5 +303,19 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
     expect(res.ok).toBe(false);
     expect(res.error.code).toBe('IPC_ERROR');
     expect(res.error.message).toContain('[NOT_FOUND]');
+  });
+
+  it('custom provider billing GET 走只读 device-link 投影,不经过 trusted-renderer IPC handler', async () => {
+    const handler = registerHandler('maker:custom-provider-billing:get', () => {
+      throw new Error('synthetic event must not reach renderer-only handler');
+    });
+    const res = (await runInvoke(SRC, {
+      channel: 'maker:custom-provider-billing:get',
+      args: [],
+    })) as Extract<InvokeResultPayload, { ok: true }>;
+
+    expect(res.ok).toBe(true);
+    expect(res.result).toEqual(h.customProviderBilling);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

@@ -646,7 +646,7 @@ import {
   writeGitSafetyAutoSnapshotEnabled,
 } from './maker-host/git-safety-settings-store.js';
 import {
-  readCustomProviderBillingSettingsState,
+  customProviderBillingWire,
   resetCustomProviderBillingSettings,
   writeCustomProviderShowSdkCostEnabled,
 } from './maker-host/custom-provider-billing-settings-store.js';
@@ -7900,15 +7900,6 @@ function gitSafetyWire() {
     autoSnapshotEnabled: state.value.autoSnapshotEnabled,
     isCustomized: state.isCustomized,
     defaultAutoSnapshotEnabled: state.defaults.autoSnapshotEnabled,
-  };
-}
-
-function customProviderBillingWire() {
-  const state = readCustomProviderBillingSettingsState();
-  return {
-    showSdkCostForCustomProviders: state.value.showSdkCostForCustomProviders,
-    isCustomized: state.isCustomized,
-    defaultShowSdkCostForCustomProviders: state.defaults.showSdkCostForCustomProviders,
   };
 }
 

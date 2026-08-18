@@ -27,6 +27,11 @@ export interface CustomProviderBillingSettings {
   showSdkCostForCustomProviders: boolean;
 }
 
+export interface CustomProviderBillingSettingsWire extends CustomProviderBillingSettings {
+  isCustomized: boolean;
+  defaultShowSdkCostForCustomProviders: boolean;
+}
+
 const DEFAULTS: CustomProviderBillingSettings = {
   showSdkCostForCustomProviders: false,
 };
@@ -60,6 +65,22 @@ export function readCustomProviderBillingSettings(): CustomProviderBillingSettin
 
 export function readCustomProviderBillingSettingsState(): OverrideSettingsState<CustomProviderBillingSettings> {
   return store.readState();
+}
+
+/**
+ * Read-only projection shared by trusted renderer IPC and device-link.
+ *
+ * Device-link must not call the renderer IPC handler because its synthetic Electron event has
+ * no trusted sender. Keeping the projection here lets both entry points return the same shape
+ * without weakening the renderer sender check or exposing the SET/RESET operations remotely.
+ */
+export function customProviderBillingWire(): CustomProviderBillingSettingsWire {
+  const state = store.readState();
+  return {
+    showSdkCostForCustomProviders: state.value.showSdkCostForCustomProviders,
+    isCustomized: state.isCustomized,
+    defaultShowSdkCostForCustomProviders: state.defaults.showSdkCostForCustomProviders,
+  };
 }
 
 export function writeCustomProviderShowSdkCostEnabled(

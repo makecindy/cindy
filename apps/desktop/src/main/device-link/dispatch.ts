@@ -65,6 +65,7 @@ import { app } from 'electron';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { createLogger } from '../logger';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
+import { customProviderBillingWire } from '../maker-host/custom-provider-billing-settings-store.js';
 import { readDeviceLinkSettings } from './settings-store';
 import { dispatchLocalInvoke } from './invoke-registry';
 import { getControllerPlatform } from './controllerPlatform';
@@ -2827,6 +2828,14 @@ export async function runInvoke(
       log.warn(`voice:dictionary-learning failed from ${shortId(src)}: ${message}`);
       return { ok: false, error: { code: 'VOICE_DICTIONARY_LEARNING_FAILED', message } };
     }
+  }
+
+  // This read-only preference is allowlisted for Mobile, but its local renderer IPC handler
+  // intentionally requires a real trusted webContents sender. device-link dispatch uses a
+  // synthetic event, so intercept the GET after the remote-control/allowlist/revocation gates
+  // instead of weakening that renderer boundary. SET/RESET remain local-only.
+  if (payload.channel === 'maker:custom-provider-billing:get') {
+    return { ok: true, result: customProviderBillingWire() };
   }
 
   // 参数级收敛:create-session 的 workingDir / worktree:create 的 baseRepo 决定 agent
