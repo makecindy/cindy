@@ -1221,24 +1221,25 @@ export function MainLayout() {
         case 'toggleReviewTab': {
           const sessionId = rightSidebarSessionIdRef.current;
           if (!sessionId) return false;
-          void ensureHydrated(sessionId)
-            .then(async () => {
-              if (rightSidebarSessionIdRef.current !== sessionId) return;
-              const bucket = getBucket(sessionId);
-              const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');
-              const reviewIsActive =
-                !rsbDetachedRef.current &&
-                !isRightSidebarCollapsedRef.current &&
-                reviewTab != null &&
-                bucket.activeTabId === reviewTab.id;
-              if (reviewIsActive && reviewTab) {
-                await closeTab(sessionId, reviewTab.id);
-                return;
-              }
-              requestRightSidebarVisibility('open', { sessionId });
-              await addOrFocusSingletonTab(sessionId, 'review', null);
-            })
-            .catch((error) => applicationMenuLog.warn('Codex Micro review action failed', error));
+          void (async () => {
+            const routed = await routeSidebarCommand({ type: 'toggle-review-tab', sessionId });
+            if (routed !== 'attached') return;
+            if (rightSidebarSessionIdRef.current !== sessionId) return;
+            await ensureHydrated(sessionId);
+            if (rightSidebarSessionIdRef.current !== sessionId) return;
+            const bucket = getBucket(sessionId);
+            const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');
+            const reviewIsActive =
+              !isRightSidebarCollapsedRef.current &&
+              reviewTab != null &&
+              bucket.activeTabId === reviewTab.id;
+            if (reviewIsActive && reviewTab) {
+              await closeTab(sessionId, reviewTab.id);
+              return;
+            }
+            requestRightSidebarVisibility('open', { sessionId });
+            await addOrFocusSingletonTab(sessionId, 'review', null);
+          })().catch((error) => applicationMenuLog.warn('Codex Micro review action failed', error));
           return true;
         }
         default:

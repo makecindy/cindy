@@ -196,6 +196,7 @@ describe('account provider readiness wiring', () => {
 
   it('clears owner-scoped custom routes before replacing account runtimes', () => {
     const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
+    const suspendHardware = bootstrapSource.indexOf('suspendInputDeviceTaskSlots();', teardown);
     const clearCustomProviders = bootstrapSource.indexOf('setCustomProviders([])', teardown);
     const makerShutdown = bootstrapSource.indexOf('await maker.shutdown()', teardown);
     const joinPrevious = bootstrapSource.indexOf(
@@ -208,6 +209,8 @@ describe('account provider readiness wiring', () => {
     );
 
     expect(teardown).toBeGreaterThanOrEqual(0);
+    expect(suspendHardware).toBeGreaterThan(teardown);
+    expect(suspendHardware).toBeLessThan(clearCustomProviders);
     expect(clearCustomProviders).toBeGreaterThan(teardown);
     expect(makerShutdown).toBeGreaterThan(clearCustomProviders);
     expect(joinPrevious).toBeGreaterThan(makerShutdown);

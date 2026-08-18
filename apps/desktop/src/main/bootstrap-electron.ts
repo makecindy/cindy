@@ -1225,6 +1225,9 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const blockingFailures: unknown[] = [];
+  // Hardware must stop before the long async drain. Otherwise a held stick or
+  // microphone keeps acting on the outgoing account while caches and IM stop.
+  suspendInputDeviceTaskSlots();
   // The boundary is already marked pending by every caller. New actions now
   // fail closed; drain an action that crossed the boundary before closing its DB.
   try {
@@ -1310,7 +1313,6 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   resetSchedulerReady();
   const agentIslandService = getAgentIslandService();
   agentIslandService?.resetRuntimeState();
-  suspendInputDeviceTaskSlots();
   // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
   // closeLocalDb 之前先 stop;否则下一秒 tick 会撞 'localDb not ready'。
   // resetScheduler 把 scheduler-host 的 _scheduler 单例置 null,下一次

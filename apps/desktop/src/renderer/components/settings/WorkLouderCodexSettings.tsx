@@ -318,7 +318,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
         name: custom
           ? (actionLabel(settings.customAgentKeys[index] ?? null, t, state) ??
             t('settings.shortcuts.workLouderCodex.agentKeys.newTask'))
-          : (slot?.title ?? t('settings.shortcuts.workLouderCodex.agentKeys.newTask')),
+          : (slot?.title || t('settings.shortcuts.workLouderCodex.agentKeys.newTask')),
         // Say which rule the key is following, so it is clear why it is not
         // individually editable outside "custom".
         description: custom
@@ -873,7 +873,7 @@ function ActionSelect({
       label: t('settings.shortcuts.workLouderCodex.actions.tasks'),
       options: state.taskOptions.map((task) => ({
         value: `task:${task.id}`,
-        label: task.title,
+        label: task.title || t('ccAgent.common.unnamedSession'),
       })),
     });
   }

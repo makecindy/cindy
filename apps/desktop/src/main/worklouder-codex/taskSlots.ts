@@ -90,7 +90,7 @@ export function buildWorkLouderCodexTaskCatalog(
   const publishedRows: WorkLouderCodexTaskCatalogRow[] = rows.slice(0, TASK_OPTION_LIMIT).map((row) => ({
     id: row.id,
     // An untitled task still gets a key; the UI supplies its own placeholder.
-    title: row.title ?? '',
+    title: row.title,
     pinned: row.pinnedAt !== null,
     pinnedAt: row.pinnedAt,
     userSendAt: row.userSendAt,

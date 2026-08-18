@@ -637,7 +637,8 @@ export function CCAgentSidebarUpper() {
     const visibleOnly = visibleSessionsWithRemote.filter(
       (session) => !catalogSessions.some((active) => active.id === session.id),
     );
-    const tasks = [...catalogSessions, ...visibleOnly].slice(0, 100).map((session) => {
+    const remainingCatalogSlots = Math.max(0, 100 - visibleOnly.length);
+    const tasks = [...visibleOnly, ...catalogSessions.slice(0, remainingCatalogSlots)].map((session) => {
       const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
       const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
       const order = sidebarOrder.get(session.id);

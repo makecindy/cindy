@@ -114,6 +114,6 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
       { id: 'blank', title: null, pinnedAt: null, userSendAt: null },
     ]);
 
-    expect(catalog.sidebar).toEqual([{ id: 'blank', title: '', pinned: false }]);
+    expect(catalog.sidebar).toEqual([{ id: 'blank', title: null, pinned: false }]);
   });
 });

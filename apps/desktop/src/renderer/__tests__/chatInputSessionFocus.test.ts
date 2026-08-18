@@ -97,6 +97,7 @@ describe('ChatInput session switch focus contract', () => {
     expect(messageStreamSource).toContain('ownsHardwareScrollActions?: boolean;');
     expect(messageStreamSource).toContain('if (!ownsHardwareScrollActions) return false;');
     expect(mainLayoutSource).toContain("const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');");
+    expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'toggle-review-tab', sessionId })");
     expect(mainLayoutSource).toContain('if (reviewIsActive && reviewTab) {');
     expect(mainLayoutSource).toContain('await closeTab(sessionId, reviewTab.id);');
     expect(mainLayoutSource).toContain(
@@ -108,6 +109,7 @@ describe('ChatInput session switch focus contract', () => {
       "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
     );
     expect(sidebarUpperSource).toContain('catalogEligible: false');
+    expect(sidebarUpperSource).toContain('const remainingCatalogSlots = Math.max(0, 100 - visibleOnly.length);');
     expect(sidebarUpperSource).not.toContain(
       '[...visibleSessionsWithRemote, ...remoteProjectSessions]',
     );

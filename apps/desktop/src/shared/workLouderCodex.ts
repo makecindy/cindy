@@ -225,7 +225,7 @@ export interface WorkLouderCodexDeviceState {
 
 export interface WorkLouderCodexTaskOption {
   id: string;
-  title: string;
+  title: string | null;
   pinned: boolean;
 }
 
