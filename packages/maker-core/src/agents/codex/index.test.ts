@@ -6022,6 +6022,37 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('restarts a provider OAuth host with the credential mode required by locked routing', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => ({
+      extraArgs: [],
+      extraEnv: {},
+      codexProxyActive: true,
+      ...(ctx.credentialMode === 'provider-oauth'
+        ? { requiredSpawnCredentialMode: 'oauth-bearer' as const }
+        : {}),
+    }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-oauth-locked-openai',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    expect(createdTransports).toHaveLength(1);
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(1, [], {
+      remoteHostId: undefined,
+      credentialMode: 'provider-oauth',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+    });
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('infers provider OAuth host mode from implicit xAI model ids', async () => {
     const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => ({
       extraArgs: [],

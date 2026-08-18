@@ -8,6 +8,7 @@ import {
 import {
   buildCodexSubagentSpawnArgs,
   codexSubagentRouteResolutionFailed,
+  resolveCodexSubagentHostCredentialPlan,
   resolveCodexSubagentModelFallback,
   resolveCodexSubagentRouteSnapshot,
 } from '../codex-subagent-config';
@@ -463,5 +464,35 @@ describe('resolveCodexSubagentRouteSnapshot', () => {
         { forceDisableSubagents: true },
       )),
     ).toEqual(['-c', 'agents.enabled=false']);
+  });
+});
+
+describe('resolveCodexSubagentHostCredentialPlan', () => {
+  const openAiRoute = {
+    providerId: 'openai',
+    catalogModel: 'gpt-5.6-terra',
+    reasoningEffort: null,
+  };
+  const openAiViews = [providerView('openai', 'gpt-5.6-terra')];
+
+  it('upgrades a provider OAuth parent host for a connected ChatGPT locked route', () => {
+    expect(resolveCodexSubagentHostCredentialPlan(
+      openAiRoute,
+      openAiViews,
+      'provider-oauth',
+      true,
+    )).toEqual({
+      forceDisableSubagents: false,
+      requiredSpawnCredentialMode: 'oauth-bearer',
+    });
+  });
+
+  it('fails closed when the ChatGPT locked route has no OAuth credential', () => {
+    expect(resolveCodexSubagentHostCredentialPlan(
+      openAiRoute,
+      openAiViews,
+      'provider-oauth',
+      false,
+    )).toEqual({ forceDisableSubagents: true });
   });
 });

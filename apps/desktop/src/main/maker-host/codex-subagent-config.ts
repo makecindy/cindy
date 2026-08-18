@@ -40,6 +40,37 @@ export interface CodexSubagentRouteSnapshot {
   reasoningEffort: CodexSubagentEffort | 'none' | 'minimal' | null;
 }
 
+export interface CodexSubagentHostCredentialPlan {
+  forceDisableSubagents: boolean;
+  requiredSpawnCredentialMode?: 'oauth-bearer';
+}
+
+/**
+ * OpenAI/ChatGPT 路由依赖 Codex 原生 OAuth passthrough。父任务可能使用另一家
+ * Provider OAuth，因此锁定子代理必须要求带 ChatGPT OAuth 的 app-server；不能接受
+ * 只有占位 key 的 provider-oauth host，再等 Proxy 在请求期拒绝。
+ */
+export function resolveCodexSubagentHostCredentialPlan(
+  route: CodexSubagentRouteSnapshot | undefined,
+  providerViews: ProviderView[] | undefined,
+  credentialMode: 'gateway-key' | 'oauth-bearer' | 'provider-oauth',
+  hasCodexOAuthLogin: boolean,
+): CodexSubagentHostCredentialPlan {
+  if (!route) return { forceDisableSubagents: false };
+  const routing = providerViews
+    ?.find((provider) => provider.id === route.providerId)
+    ?.routing.codex;
+  if (routing?.authStrategy !== 'oauth-passthrough') {
+    return { forceDisableSubagents: false };
+  }
+  if (!hasCodexOAuthLogin) {
+    return { forceDisableSubagents: true };
+  }
+  return credentialMode === 'oauth-bearer'
+    ? { forceDisableSubagents: false }
+    : { forceDisableSubagents: false, requiredSpawnCredentialMode: 'oauth-bearer' };
+}
+
 /**
  * 按需委托策略(Claude Code 式):替换上游按 effort 推导的内置 multi-agent 模式
  * (非 ultra 档一律 explicitRequestOnly——模型被明确禁止自发 spawn 子代理)。设置

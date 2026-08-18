@@ -1237,30 +1237,35 @@ function handleAssistant(
       ?? assistantModel;
     const publishedModel = ctx.rt.publishedSubagentModelByParentToolUseId.get(parentToolUseId);
     if (publishedModel !== actualModel) {
-      let taskId = parentToolUseId;
+      let taskId: string | undefined;
       for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
         if (candidateParentId !== parentToolUseId) continue;
         taskId = candidateTaskId;
         break;
       }
-      const status = ctx.rt.subagentStatusByParentToolUseId.get(parentToolUseId) ?? 'running';
-      ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
-      queue.push({
-        type: 'agent_task_update',
-        data: {
-          provider: 'claude-code',
-          taskId,
-          parentToolUseId,
-          status,
-          model: actualModel,
-          subagentObservation: {
-            kind: status === 'running' ? 'progress' : 'terminal',
-            logicalSubagentId: taskId,
+      if (!taskId) {
+        // child assistant 可能早于稳定 taskId 到达。只保留模型观测，等后续生命周期
+        // 事件用真实 taskId 发布，避免按 parentToolUseId 造出无法收口的第二条任务。
+      } else {
+        const status = ctx.rt.subagentStatusByParentToolUseId.get(parentToolUseId) ?? 'running';
+        ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            provider: 'claude-code',
+            taskId,
             parentToolUseId,
+            status,
+            model: actualModel,
+            subagentObservation: {
+              kind: status === 'running' ? 'progress' : 'terminal',
+              logicalSubagentId: taskId,
+              parentToolUseId,
+            },
           },
-        },
-        source: 'claude-code',
-      });
+          source: 'claude-code',
+        });
+      }
     }
   }
 

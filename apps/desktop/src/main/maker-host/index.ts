@@ -222,6 +222,7 @@ import {
   buildCodexSubagentSpawnArgs,
   codexSubagentRouteResolutionFailed,
   resolveCodexSubagentModelFallback,
+  resolveCodexSubagentHostCredentialPlan,
   resolveCodexSubagentRouteSnapshot,
 } from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
@@ -1479,6 +1480,34 @@ export function getMaker(): Maker {
           );
           forceDisableSubagents = true;
           subagentRoute = undefined;
+        } else if (subagentRoute) {
+          const selectedRouting = subagentProviderViews
+            ?.find((provider) => provider.id === subagentRoute?.providerId)
+            ?.routing.codex;
+          const hasRequiredOAuth = selectedRouting?.authStrategy === 'oauth-passthrough'
+            ? await desktopCodexAuthAdapter.hasCodexOAuthLogin().catch(() => false)
+            : false;
+          const credentialPlan = resolveCodexSubagentHostCredentialPlan(
+            subagentRoute,
+            subagentProviderViews,
+            credentialMode,
+            hasRequiredOAuth,
+          );
+          if (credentialPlan.forceDisableSubagents) {
+            desktopMakerLogger.warn(
+              'Codex subagents disabled: configured Provider route requires unavailable ChatGPT OAuth',
+              { providerId: subagentRoute.providerId, catalogModel: subagentRoute.catalogModel },
+            );
+            forceDisableSubagents = true;
+            subagentRoute = undefined;
+          } else if (credentialPlan.requiredSpawnCredentialMode) {
+            return {
+              extraArgs: [],
+              extraEnv: {},
+              requiredSpawnCredentialMode: credentialPlan.requiredSpawnCredentialMode,
+              codexProxyActive: ready,
+            };
+          }
         }
         const openAiWebSocketsEnabled = !subagentRoute;
         return {

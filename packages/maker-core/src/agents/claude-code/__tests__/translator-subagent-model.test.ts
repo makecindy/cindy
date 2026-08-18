@@ -538,7 +538,7 @@ describe('Claude Code assistant text streaming contract', () => {
 });
 
 describe('Claude Code translator subagent model attribution', () => {
-  it('promotes the full child assistant actual model into the parent task update', async () => {
+  it('keeps an early full child model without publishing a temporary task id', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
 
@@ -572,24 +572,50 @@ describe('Claude Code translator subagent model attribution', () => {
     );
 
     const events = await collect(queue);
-    expect(events.find((event) => event.type === 'agent_task_update')?.data).toEqual({
-      provider: 'claude-code',
-      taskId: 'toolu_agent_a',
-      parentToolUseId: 'toolu_agent_a',
-      status: 'running',
-      model: 'codex/gpt-5.6-sol',
-      subagentObservation: {
-        kind: 'progress',
-        logicalSubagentId: 'toolu_agent_a',
-        parentToolUseId: 'toolu_agent_a',
-      },
-    });
+    expect(events.find((event) => event.type === 'agent_task_update')).toBeUndefined();
     expect(events.find((event) => event.type === 'text')?.agentMeta).toEqual(
       expect.objectContaining({
         parentUuid: 'toolu_agent_a',
         model: 'codex/gpt-5.6-sol',
       }),
     );
+  });
+
+  it('publishes the saved child model when the stable task id arrives', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent_a',
+        message: { model: 'codex/gpt-5.6-sol', content: [] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_agent_a',
+        task_type: 'local_agent',
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0]?.data).toMatchObject({
+      taskId: 'agent-a',
+      parentToolUseId: 'toolu_agent_a',
+      status: 'running',
+      model: 'codex/gpt-5.6-sol',
+    });
   });
 
   it('keeps the child actual model on the later terminal task update', async () => {
@@ -622,6 +648,7 @@ describe('Claude Code translator subagent model attribution', () => {
       (event): event is AgentTaskUpdateEvent =>
         event.type === 'agent_task_update',
     );
+    expect(taskUpdates).toHaveLength(1);
     expect(taskUpdates.at(-1)?.data).toMatchObject({
       taskId: 'agent-a',
       parentToolUseId: 'toolu_agent_a',

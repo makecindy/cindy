@@ -2542,6 +2542,19 @@ export class CodexAgent extends BaseAgent {
             },
           );
           assertCurrentGeneration('spawn config');
+          if (
+            cfg.requiredSpawnCredentialMode
+            && cfg.requiredSpawnCredentialMode !== spawnCredentialMode
+          ) {
+            this.deps.logger.info('codex createHost: host routing requires a compatible spawn credential mode', {
+              key,
+              requestedCredentialMode: credentialMode ?? 'fallback',
+              previousSpawnCredentialMode: spawnCredentialMode ?? 'fallback',
+              requiredSpawnCredentialMode: cfg.requiredSpawnCredentialMode,
+            });
+            spawnCredentialMode = cfg.requiredSpawnCredentialMode;
+            continue;
+          }
           Object.assign(env, cfg.extraEnv);
           extraArgs = cfg.extraArgs;
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;

@@ -316,6 +316,8 @@ export interface PiExtraSpawnConfigContext {
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
+  requiredSpawnCredentialMode?: 'oauth-bearer';
   /** Cindy-side display fallback for Codex subagent cards. */
   subagentModelFallback?: string;
   /** Provider route frozen alongside the locked subagent model for this app-server. */
