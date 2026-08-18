@@ -78,10 +78,10 @@ describe('automation group collapsed owner binding', () => {
   it('synchronizes mounted groups with the batch collapse control', () => {
     setDataOwnerGeneration('owner-a', 1);
     const hook = renderHook(() => {
-      const [allCollapsed, setAllCollapsed, isCollapsed] = useAutomationGroupsCollapsed([
-        'schedule:a',
-        'schedule:b',
-      ]);
+      const [allCollapsed, setAllCollapsed, isCollapsed] = useAutomationGroupsCollapsed(
+        ['schedule:a', 'schedule:b'],
+        'flat',
+      );
       const groupACollapsed = isCollapsed('schedule:a');
       const groupBCollapsed = isCollapsed('schedule:b');
       return { groupACollapsed, groupBCollapsed, allCollapsed, setAllCollapsed };
@@ -120,7 +120,7 @@ describe('automation group collapsed owner binding', () => {
     const hook = renderHook(
       ({ groupKeys }: { groupKeys: readonly string[] }) => {
         const [allCollapsed, setAllCollapsed, isCollapsed, setCollapsed] =
-          useAutomationGroupsCollapsed(groupKeys);
+          useAutomationGroupsCollapsed(groupKeys, 'flat');
         const groupACollapsed = isCollapsed('schedule:a');
         const groupBCollapsed = isCollapsed('schedule:b');
         return {
@@ -168,6 +168,36 @@ describe('automation group collapsed owner binding', () => {
       allCollapsed: true,
     });
     expect(window.localStorage.getItem(ownerStorageKey)).toBeNull();
+  });
+
+  it('reloads persistence after another display mode updates the same group', () => {
+    setDataOwnerGeneration('owner-a', 1);
+    const hook = renderHook(
+      ({ projectionScope }: { projectionScope: 'flat' | 'project' }) => {
+        const [, , isCollapsed, setCollapsed] = useAutomationGroupsCollapsed(
+          ['schedule:a'],
+          projectionScope,
+        );
+        return {
+          groupACollapsed: isCollapsed('schedule:a'),
+          setGroupACollapsed: (collapsed: boolean) => setCollapsed('schedule:a', collapsed),
+        };
+      },
+      {
+        initialProps: {
+          projectionScope: 'flat' as 'flat' | 'project',
+        },
+      },
+    );
+
+    act(() => hook.result.current.setGroupACollapsed(false));
+    expect(hook.result.current.groupACollapsed).toBe(false);
+
+    hook.rerender({ projectionScope: 'project' });
+    act(() => setAutomationGroupCollapsed('schedule:a', true, 'owner-a'));
+    hook.rerender({ projectionScope: 'flat' });
+
+    expect(hook.result.current.groupACollapsed).toBe(true);
   });
 
   it('keeps the uncontrolled group behavior local to its mounted component', () => {

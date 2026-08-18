@@ -558,7 +558,11 @@ export function ProjectsSection({
     setAllAutomationGroupsCollapsed,
     isAutomationGroupCollapsed,
     setAutomationGroupCollapsed,
-  ] = useAutomationGroupsCollapsed(visibleAutomationGroupKeys, legacyAutomationGroupKeys);
+  ] = useAutomationGroupsCollapsed(
+    visibleAutomationGroupKeys,
+    filter.groupBy,
+    legacyAutomationGroupKeys,
+  );
   // 组层是否收齐必须看**当前范围**有没有项目行。allKnownProjects 是全机器宇宙,
   // 单机范围下本机只有对话组、远端仍有项目时 length>0;isAllCollapsed 却来自
   // 当前范围的 activeWorkingDirs,此时为空并恒为 false,foldState 会卡在

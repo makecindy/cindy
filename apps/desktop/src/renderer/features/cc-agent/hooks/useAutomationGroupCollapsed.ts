@@ -211,10 +211,12 @@ export function useAutomationGroupCollapsed(
 /**
  * 平铺列表段头使用的受控投影。状态留在 ProjectsSection 生命周期内，因此 storage
  * 暂时不可写时，组行即使因筛选或「显示全部」卸载再挂载，也会继续读取本次明确操作。
- * 这不是跨页面缓存；owner 代次变化时整份投影会在绘制前清空并重新回落到持久化值。
+ * 这不是跨页面缓存；owner 代次或展示模式变化时整份投影会在绘制前清空并重新回落到
+ * 持久化值，避免其它渲染路径写入后仍被旧内存值覆盖。
  */
 export function useAutomationGroupsCollapsed(
   groupKeys: readonly string[],
+  projectionScope: string,
   legacyGroupKeys?: ReadonlyMap<string, string>,
 ): readonly [
   boolean,
@@ -227,7 +229,7 @@ export function useAutomationGroupsCollapsed(
 
   useLayoutEffect(() => {
     setMemoryCollapsedByGroup({});
-  }, [ownerGeneration, ownerId]);
+  }, [ownerGeneration, ownerId, projectionScope]);
 
   const isCollapsed = useCallback(
     (groupKey: string): boolean => {
