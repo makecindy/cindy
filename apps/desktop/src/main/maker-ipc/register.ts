@@ -10840,6 +10840,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           remoteHostId: sessions.remoteHostId,
           clearedAt: sessions.clearedAt,
           sdkSessionId: sessions.sdkSessionId,
+          contextTokens: sessions.contextTokens,
+          contextWindow: sessions.contextWindow,
+          model: sessions.model,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))

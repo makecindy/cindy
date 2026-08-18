@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createContextOverflowRollover,
+  effectivePiContextWindow,
   findLatestRebuildableError,
   isContextOverflowErrorData,
   isPiPromptRpcTimeoutError,
   persistedUserContentToWireMessage,
   planContextOverflowRollover,
+  shouldRebuildForContextPressure,
   shouldRebuildPiNativeSession,
   type OverflowSourceMessage,
 } from '../contextOverflowRollover';
@@ -49,6 +51,14 @@ describe('shouldRebuildPiNativeSession', () => {
       isPiPromptRpcTimeoutError({ message: 'pi rpc timeout after 30000ms: prompt' }),
     ).toBe(true);
     expect(shouldRebuildPiNativeSession({ message: 'pi rpc timeout after 30000ms: prompt' })).toBe(
+      true,
+    );
+  });
+
+  it('treats Grok 4 remaining-window pressure as a rebuild even if the DB window is inflated', () => {
+    expect(effectivePiContextWindow('x-ai/grok-4.6', 1_050_000)).toBe(500_000);
+    expect(shouldRebuildForContextPressure(553_582, 1_050_000)).toBe(false);
+    expect(shouldRebuildForContextPressure(553_582, effectivePiContextWindow('x-ai/grok-4.6', 1_050_000))).toBe(
       true,
     );
   });
@@ -136,6 +146,9 @@ describe('createContextOverflowRollover', () => {
         remoteHostId: null,
         clearedAt: null,
         sdkSessionId: '/tmp/dead.jsonl',
+        contextTokens: 0,
+        contextWindow: 200_000,
+        model: 'x-ai/grok-4.6',
       })),
       listMessages: vi.fn(async () => source),
       findLatestRebuildMeta: vi.fn(async () => null),
@@ -189,6 +202,27 @@ describe('createContextOverflowRollover', () => {
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds before send when Grok context is already over the real window', async () => {
+    const deps = makeDeps([
+      msg('user', '继续', 'u1'),
+      msg('assistant', '好', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'pi',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead.jsonl',
+      contextTokens: 553_582,
+      contextWindow: 1_050_000,
+      model: 'x-ai/grok-4.6',
+    });
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).toHaveBeenCalled();
   });
 
   it('rebuilds a timed-out PI session before send without replaying', async () => {

@@ -57,6 +57,28 @@ export function shouldRebuildPiNativeSession(data: unknown): boolean {
   return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data);
 }
 
+const GROK_4_CONTEXT_CAP = 500_000;
+const CONTEXT_PRESSURE_RATIO = 0.8;
+const CONTEXT_PRESSURE_REMAINING = 32_000;
+
+export function effectivePiContextWindow(
+  model: string | null | undefined,
+  reportedWindow: number,
+): number {
+  const reported = Number.isFinite(reportedWindow) && reportedWindow > 0 ? reportedWindow : 0;
+  if (typeof model === 'string' && /grok-4/i.test(model)) {
+    return reported > 0 ? Math.min(reported, GROK_4_CONTEXT_CAP) : GROK_4_CONTEXT_CAP;
+  }
+  return reported;
+}
+
+export function shouldRebuildForContextPressure(tokens: number, window: number): boolean {
+  if (!(window > 0) || !Number.isFinite(tokens) || tokens < 0) return false;
+  if (tokens >= window) return true;
+  if (tokens / window >= CONTEXT_PRESSURE_RATIO) return true;
+  return window - tokens < CONTEXT_PRESSURE_REMAINING;
+}
+
 function isSyntheticUser(message: OverflowSourceMessage): boolean {
   if (message.role !== 'user') return false;
   return extractPlainText(message.content).startsWith(SYNTHETIC_TRIGGER_PREFIX);
@@ -190,6 +212,9 @@ export interface ContextOverflowRolloverDeps {
     remoteHostId: string | null;
     clearedAt: number | null;
     sdkSessionId?: string | null;
+    contextTokens?: number | null;
+    contextWindow?: number | null;
+    model?: string | null;
   } | null>;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
   findLatestRebuildMeta(
@@ -300,7 +325,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning()) return false;
     const source = await deps.listMessages(sessionId);
-    if (!findLatestRebuildableError(source)) return false;
+    const lastError = findLatestRebuildableError(source);
+    const window = effectivePiContextWindow(
+      sessionRow.model,
+      typeof sessionRow.contextWindow === 'number' ? sessionRow.contextWindow : 0,
+    );
+    const tokens = typeof sessionRow.contextTokens === 'number' ? sessionRow.contextTokens : 0;
+    const pressure = shouldRebuildForContextPressure(tokens, window);
+    if (!lastError && !pressure) return false;
     let lastUser: OverflowSourceMessage | undefined;
     for (let i = source.length - 1; i >= 0; i -= 1) {
       const message = source[i];
@@ -310,7 +342,6 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
     }
     if (!lastUser) return false;
-    const lastError = findLatestRebuildableError(source);
     const rebuildReason = isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
