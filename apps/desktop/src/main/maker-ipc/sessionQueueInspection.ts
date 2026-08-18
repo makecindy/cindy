@@ -16,7 +16,8 @@ export interface SessionQueueInspectionEntry {
 }
 
 export interface SessionQueueCountDeps {
-  getLiveQueue: (sessionId: string) => SessionQueueInspectionEntry[] | null;
+  /** null = cold/read SQLite; undefined = live but not safely inspectable yet. */
+  getLiveQueue: (sessionId: string) => SessionQueueInspectionEntry[] | null | undefined;
   loadPersistedCounts: (sessionIds: readonly string[]) => Promise<Record<string, number>>;
 }
 

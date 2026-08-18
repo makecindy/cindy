@@ -941,13 +941,15 @@ export class AgentInputCoordinator {
     return this.projectQueueInspection(state);
   }
 
-  /** Cold sessions return null for SQLite counting; live-but-unrestored state fails closed. */
-  getQueueInspectionIfRestored(sessionId: string): SessionQueueInspectionEntry[] | null {
+  /** Cold sessions return null for SQLite counting; live-but-unrestored sessions stay unknown. */
+  getQueueInspectionIfRestored(
+    sessionId: string,
+  ): SessionQueueInspectionEntry[] | null | undefined {
     if (!this.isQueueRestored(sessionId)) {
       // A cold session can be counted directly from SQLite. Once live state exists, however,
       // combining it with an unread snapshot without clientIds could double-count or omit rows.
       if (this.states.has(sessionId)) {
-        throw new Error(`queue restore incomplete for ${sessionId}`);
+        return undefined;
       }
       return null;
     }

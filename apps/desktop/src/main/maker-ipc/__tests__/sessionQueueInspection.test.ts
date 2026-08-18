@@ -162,6 +162,24 @@ describe('projectSessionQueueForInspection', () => {
     ).resolves.toEqual({ live: 2, cold: 3, raced: 1 });
   });
 
+  it('isolates a live session whose queue has not finished restoring', async () => {
+    const loadPersistedCounts = vi.fn<SessionQueueCountDeps['loadPersistedCounts']>(
+      async () => ({ cold: 3 }),
+    );
+
+    await expect(
+      resolveSessionQueueCounts(['live-unrestored', 'cold', 'live'], {
+        getLiveQueue: (sessionId) => {
+          if (sessionId === 'live-unrestored') return undefined;
+          if (sessionId === 'live') return [inspectionEntry('live-1')];
+          return null;
+        },
+        loadPersistedCounts,
+      }),
+    ).resolves.toEqual({ 'live-unrestored': 0, cold: 3, live: 1 });
+    expect(loadPersistedCounts).toHaveBeenCalledWith(['cold']);
+  });
+
   it('propagates persisted count failures instead of reporting zero', async () => {
     await expect(
       resolveSessionQueueCounts(['cold'], {

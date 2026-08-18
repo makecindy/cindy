@@ -698,15 +698,13 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getQueueInspectionIfRestored(sid)).toEqual([]);
   });
 
-  it('fails closed when live state exists before its crash snapshot is restored', () => {
+  it('keeps live-but-unrestored queue inspection unknown without failing the whole page', () => {
     const h = createHarness();
     const sid = 'inspection-live-unrestored';
     h.setRunning(true);
     h.coordinator.enqueue(sid, makeItem('q-live', 'live'));
 
-    expect(() => h.coordinator.getQueueInspectionIfRestored(sid)).toThrow(
-      `queue restore incomplete for ${sid}`,
-    );
+    expect(h.coordinator.getQueueInspectionIfRestored(sid)).toBeUndefined();
   });
 
   it('silently keeps a queue head when dispatch races with an already running turn', async () => {

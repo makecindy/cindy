@@ -220,16 +220,20 @@ describe('agent input queue snapshot durability boundary', () => {
     }
   });
 
-  it('fails closed for corrupt snapshots and database read failures', async () => {
+  it('isolates corrupt snapshots while preserving database read failures', async () => {
     const query = vi
       .fn()
-      .mockResolvedValueOnce([{ sessionId: 'corrupt', itemCount: null }])
+      .mockResolvedValueOnce([
+        { sessionId: 'corrupt', itemCount: null },
+        { sessionId: 'healthy', itemCount: 2 },
+      ])
       .mockRejectedValueOnce(new Error('db unavailable'));
     mocks.getDbClient.mockReturnValue({ query } as never);
 
-    await expect(loadAgentInputQueueSnapshotCounts(['corrupt'])).rejects.toThrow(
-      'corrupt queue snapshot for corrupt',
-    );
+    await expect(loadAgentInputQueueSnapshotCounts(['corrupt', 'healthy'])).resolves.toEqual({
+      corrupt: 0,
+      healthy: 2,
+    });
     await expect(loadAgentInputQueueSnapshotCounts(['unavailable'])).rejects.toThrow(
       'db unavailable',
     );

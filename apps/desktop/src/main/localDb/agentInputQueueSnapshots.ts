@@ -253,7 +253,9 @@ export async function loadAgentInputQueueSnapshotCounts(
     );
     for (const row of rows) {
       if (!Number.isSafeInteger(row.itemCount) || (row.itemCount ?? -1) < 0) {
-        throw new Error(`corrupt queue snapshot for ${row.sessionId}`);
+        // One malformed snapshot is session-local damage. Keep its fail-closed zero while
+        // preserving valid counts from the same list_sessions page; query failures still throw.
+        continue;
       }
       counts[row.sessionId] = row.itemCount!;
     }
