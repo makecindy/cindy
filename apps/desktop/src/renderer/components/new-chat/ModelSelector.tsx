@@ -762,6 +762,7 @@ function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi' | 'kimi'): AgentKind | n
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'kimi') return 'kimi-code';
   return null;
 }
 

@@ -384,6 +384,10 @@ function draftEnableOrcaOptions(
   const workerAgent: 'claude-code' | 'codex' | 'pi' | 'kimi-code' = (() => {
     if (!providersReady) return preferredAgent;
     if (connectedProvidersForAgent(providers, preferredAgent).length > 0) return preferredAgent;
+    // 显式选择的 kimi-code 不做跨 agent 收窄:Phase 1 没有任何供应商声明支持它,
+    // 恒为空是预期状态——静默换成其他 agent 会把任务发给用户未选择的引擎并绕过
+    // Kimi 的 NO_PROVIDER_FOR_AGENT preflight(与 MCP create_worker 路径同口径)。
+    if (preferredAgent === 'kimi-code') return preferredAgent;
     const fallback = (['claude-code', 'codex', 'pi'] as const).find(
       (agent) =>
         agent !== preferredAgent && connectedProvidersForAgent(providers, agent).length > 0,

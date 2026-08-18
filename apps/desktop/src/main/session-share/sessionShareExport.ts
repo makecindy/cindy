@@ -424,7 +424,8 @@ async function collectOrcaWorkerSources(
     if (
       workerSession.agentKind !== 'cc' &&
       workerSession.agentKind !== 'codex' &&
-      workerSession.agentKind !== 'pi'
+      workerSession.agentKind !== 'pi' &&
+      workerSession.agentKind !== 'kimi'
     ) {
       throw codedError(
         'SHARE_EXPORT_FAILED',
@@ -460,7 +461,7 @@ export async function exportSessionShare(
       'orca worker sessions cannot be exported directly; export the lead session',
     );
   }
-  if (session.agentKind !== 'cc' && session.agentKind !== 'codex' && session.agentKind !== 'pi') {
+  if (session.agentKind !== 'cc' && session.agentKind !== 'codex' && session.agentKind !== 'pi' && session.agentKind !== 'kimi') {
     throw codedError('PRECONDITION_FAILED', `unsupported agentKind: ${session.agentKind}`);
   }
 

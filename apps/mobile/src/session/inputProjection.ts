@@ -113,7 +113,9 @@ export function buildQueuedTextMessage(
   const permissionMode = permissionModeOrAsk(session.permissionMode);
   const agentKind = session.agentKind === 'codex' || session.agentKind === 'pi'
     ? session.agentKind
-    : 'claude-code';
+    : session.agentKind === 'kimi'
+      ? 'kimi-code'
+      : 'claude-code';
   const persistedContent = stringifyUserContent(
     trimmed,
     persistedImageRefs,
