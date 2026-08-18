@@ -73,7 +73,7 @@ describe('Pi runtime capability parsing', () => {
         runtimeCommand,
         Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
       );
-      expect(provenance).toBe(fs.realpathSync(firstTarget));
+      expect(provenance).toBe(await fs.promises.realpath(firstTarget));
       expect(JSON.stringify(manifest)).not.toContain(String(provenance));
 
       fs.unlinkSync(linkedSource);
@@ -85,7 +85,7 @@ describe('Pi runtime capability parsing', () => {
       expect(Reflect.get(
         runtimeCommand,
         Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
-      )).toBe(fs.realpathSync(firstTarget));
+      )).toBe(await fs.promises.realpath(firstTarget));
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

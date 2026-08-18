@@ -342,7 +342,7 @@ describe('Pi Skill invocation validation', () => {
       Object.defineProperty(
         pathlessRuntimeManifest.commands[0]!,
         Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
-        { value: fs.realpathSync(linkedSource), enumerable: false },
+        { value: await fs.promises.realpath(linkedSource), enumerable: false },
       );
 
       expect(await isCurrentPiSkillInvocation(
