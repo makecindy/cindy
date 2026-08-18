@@ -86,7 +86,7 @@ describe('WorkLouderCodexKeyboardLayout', () => {
     const encoder = screen.getByRole('button', { name: /旋钮/ }).querySelector('[data-encoder-turns]');
     const stick = screen.getByTestId('worklouder-codex-stick-cap');
     expect(encoder?.getAttribute('data-encoder-turns')).toBe('2');
-    expect((encoder as HTMLElement | null)?.style.transform).toBe('rotate(36deg)');
+    expect((encoder as HTMLElement | null)?.style.transform).toBe('rotate(-36deg)');
     expect(stick.getAttribute('style')).toContain('translate(0px, -10px)');
 
     rerender(

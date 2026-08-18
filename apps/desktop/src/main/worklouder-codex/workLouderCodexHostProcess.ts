@@ -75,6 +75,7 @@ let unsubscribeJoystick: (() => void) | null = null;
 let latestFrame: WorkLouderCodexLightingFrame | null = null;
 let applyPending = false;
 let listenPending = false;
+let probePending = false;
 let hidListeningRequested = false;
 let applying = false;
 let applyTask: Promise<void> | null = null;
@@ -82,6 +83,8 @@ let stopping = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastLoggedError: string | null = null;
 let lastActivityPostedAt = 0;
+/** The native SDK often logs a dead USB/BT handle instead of throwing. */
+let transportFaulted = false;
 /** Which device the current `api` handle belongs to, so probes can refresh it. */
 let connectedDevice: { deviceType: 'codex-micro' | 'creator-micro-2'; isUsb: boolean } | null =
   null;
@@ -98,7 +101,7 @@ if (parentPort) {
       latestFrame = request.frame;
       requestApply();
     } else if (request?.kind === 'probe') {
-      void probeConnection();
+      requestProbe();
     } else if (request?.kind === 'stop') {
       void stop();
     }
@@ -116,8 +119,12 @@ function hostLog(level: 'debug' | 'info' | 'warn' | 'error', message: string): v
 const sdkLogger: WorkLouderLogger = {
   debug: () => undefined,
   info: () => undefined,
-  warn: () => hostLog('warn', 'Work Louder SDK reported a warning'),
-  error: () => hostLog('error', 'Work Louder SDK reported an error'),
+  warn: (...args) => hostLog('warn', `Work Louder SDK reported a warning${formatSdkLog(args)}`),
+  error: (...args) => {
+    transportFaulted = true;
+    hostLog('error', `Work Louder SDK reported an error${formatSdkLog(args)}`);
+    if (api && !stopping && !probePending && !applying) requestProbe();
+  },
 };
 
 function loadSdk(): WorkLouderSdk {
@@ -139,33 +146,40 @@ function loadSdk(): WorkLouderSdk {
 function requestApply(): void {
   if (stopping) return;
   applyPending = true;
-  if (!applying) {
-    const task = drainApplyQueue();
-    applyTask = task;
-    const clearApplyTask = () => {
-      if (applyTask === task) applyTask = null;
-    };
-    void task.then(clearApplyTask, clearApplyTask);
-  }
+  kickQueue();
 }
 
 function requestListen(): void {
   if (stopping) return;
   listenPending = true;
-  if (!applying) {
-    const task = drainApplyQueue();
-    applyTask = task;
-    const clearApplyTask = () => {
-      if (applyTask === task) applyTask = null;
-    };
-    void task.then(clearApplyTask, clearApplyTask);
-  }
+  kickQueue();
+}
+
+function requestProbe(): void {
+  if (stopping) return;
+  probePending = true;
+  kickQueue();
+}
+
+function kickQueue(): void {
+  if (applying) return;
+  const task = drainApplyQueue();
+  applyTask = task;
+  const clearApplyTask = () => {
+    if (applyTask === task) applyTask = null;
+  };
+  void task.then(clearApplyTask, clearApplyTask);
 }
 
 async function drainApplyQueue(): Promise<void> {
   applying = true;
   try {
-    while ((applyPending || listenPending) && !stopping) {
+    while ((applyPending || listenPending || probePending) && !stopping) {
+      // Drop a stale handle before lighting or HID reuse it.
+      if (probePending) {
+        probePending = false;
+        await probeConnection();
+      }
       if (listenPending) {
         listenPending = false;
         await listenForAgentKeys();
@@ -198,7 +212,9 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
       keys: frame.keys,
     });
     const threadsOk = await deviceApi.sendThreadsLighting(frame.threads);
-    if (!lightingOk || !threadsOk) throw new Error('lighting RPC returned false');
+    if (!lightingOk || !threadsOk || transportFaulted) {
+      throw new Error(transportFaulted ? 'lighting transport faulted' : 'lighting RPC returned false');
+    }
     clearRetry();
     lastLoggedError = null;
     post({ kind: 'state', status: 'connected' });
@@ -228,39 +244,42 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
  */
 async function probeConnection(): Promise<void> {
   if (stopping) return;
-  const connectedApi = api;
-  if (!connectedApi) {
-    // Not connected as far as we know — see whether it has come back.
-    try {
-      const deviceApi = await ensureConnected();
-      if (!deviceApi) {
-        post({ kind: 'state', status: 'not-detected' });
-        return;
+  if (api) {
+    const faulted = transportFaulted;
+    if (typeof api.getDeviceStatus === 'function' && !faulted) {
+      try {
+        // Call it directly rather than through postDeviceStatus, which swallows
+        // failures — swallowing here would make every probe "succeed" and defeat
+        // the whole point. Same round trip also keeps battery and firmware fresh.
+        const status = await api.getDeviceStatus();
+        if (!transportFaulted) {
+          const device = connectedDevice;
+          if (device) postDeviceState(device.deviceType, device.isUsb, status);
+          post({ kind: 'state', status: 'connected' });
+          return;
+        }
+      } catch (error) {
+        hostLog('debug', `probe found the device gone: ${safeErrorMessage(error)}`);
       }
-      lastLoggedError = null;
-      post({ kind: 'state', status: 'connected' });
-      // Reconnected: re-arm whatever the host was doing before it dropped.
-      if (hidListeningRequested) requestListen();
-      if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
-    } catch {
-      post({ kind: 'state', status: 'not-detected' });
     }
-    return;
-  }
-  if (typeof connectedApi.getDeviceStatus !== 'function') return;
-  try {
-    // Call it directly rather than through postDeviceStatus, which swallows
-    // failures — swallowing here would make every probe "succeed" and defeat
-    // the whole point. Same round trip also keeps battery and firmware fresh.
-    const status = await connectedApi.getDeviceStatus();
-    const device = connectedDevice;
-    if (device) postDeviceState(device.deviceType, device.isUsb, status);
-    post({ kind: 'state', status: 'connected' });
-  } catch (error) {
-    // The handle is stale: drop it so the next probe rediscovers the device.
-    hostLog('debug', `probe found the device gone: ${safeErrorMessage(error)}`);
+    hostLog('debug', 'probe dropped a stale Work Louder transport');
     await disconnect();
+  }
+
+  try {
+    const deviceApi = await ensureConnected();
+    if (!deviceApi) {
+      post({ kind: 'state', status: 'not-detected' });
+      scheduleRetry();
+      return;
+    }
+    lastLoggedError = null;
+    post({ kind: 'state', status: 'connected' });
+    if (hidListeningRequested) requestListen();
+    if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
+  } catch {
     post({ kind: 'state', status: 'not-detected' });
+    scheduleRetry();
   }
 }
 
@@ -287,6 +306,16 @@ async function listenForAgentKeys(): Promise<void> {
   }
 }
 
+function formatSdkLog(args: unknown[]): string {
+  if (args.length === 0) return '';
+  const detail = args
+    .map((value) => safeErrorMessage(value))
+    .filter((value) => value.length > 0)
+    .join(' ')
+    .trim();
+  return detail ? `: ${detail}` : '';
+}
+
 function safeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message
@@ -296,6 +325,7 @@ function safeErrorMessage(error: unknown): string {
 }
 
 async function ensureConnected(): Promise<WorkLouderApi | null> {
+  if (api && transportFaulted) await disconnect();
   if (api) return api;
   const loaded = loadSdk();
   const discovery = new loaded.WLDeviceDiscovery(sdkLogger);
@@ -411,6 +441,7 @@ function scheduleRetry(): void {
   }
   retryTimer = setTimeout(() => {
     retryTimer = null;
+    requestProbe();
     if (hidListeningRequested) requestListen();
     if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
   }, RETRY_MS);
@@ -424,6 +455,7 @@ function clearRetry(): void {
 }
 
 async function disconnect(): Promise<void> {
+  transportFaulted = false;
   connectedDevice = null;
   const unsubscribe = unsubscribeHid;
   unsubscribeHid = null;
@@ -458,6 +490,7 @@ async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
   listenPending = false;
+  probePending = false;
   hidListeningRequested = false;
   clearRetry();
   try {

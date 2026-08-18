@@ -3370,6 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
+        "beta": "Beta",
         "entryDescription": "用 Agent 鍵開啟任務，並用燈光顯示任務狀態。",
         "openAria": "開啟 Work Louder Codex Micro 設定",
         "back": "返回鍵盤快捷鍵",

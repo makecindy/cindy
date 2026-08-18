@@ -132,8 +132,11 @@ export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodex
         <CodexMicroGlyph />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t('settings.shortcuts.workLouderCodex.title')}
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+            {t('settings.shortcuts.workLouderCodex.title')}
+          </span>
+          <BetaBadge />
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
           {t('settings.shortcuts.workLouderCodex.entryDescription')}
@@ -381,6 +384,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
             {t('settings.shortcuts.workLouderCodex.title')}
           </h2>
+          <BetaBadge />
         </div>
         <button
           type="button"
@@ -1060,6 +1064,15 @@ function SettingsRow({
 
 function SettingsDivider() {
   return <div className="my-1 h-px bg-[var(--settings-theme-card-border)]" />;
+}
+
+function BetaBadge() {
+  const { t } = useTranslation();
+  return (
+    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+      {t('settings.shortcuts.workLouderCodex.beta')}
+    </span>
+  );
 }
 
 function DeviceChip({ icon, children }: { icon?: ReactNode; children: ReactNode }) {

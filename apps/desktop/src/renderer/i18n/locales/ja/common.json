@@ -3370,6 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
+        "beta": "Beta",
         "entryDescription": "Agent キーでタスクを開き、ライトで状態を表示します。",
         "openAria": "Work Louder Codex Micro の設定を開く",
         "back": "キーボードショートカットに戻る",

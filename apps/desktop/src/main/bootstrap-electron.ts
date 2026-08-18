@@ -7326,15 +7326,7 @@ app.on('ready', async () => {
   registerGitReviewDeviceOp();
   registerModelVisibilityOwnerClaimIpc();
   registerModelVisibilitySyncIpc();
-  registerSidebarSettingsIpc({
-    onPinnedOrderChanged: () => {
-      void resumeInputDeviceTaskSlots().catch((error) => {
-        dbClientLog.warn('Input device task slot refresh failed after pinned-order change', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    },
-  });
+  registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
   // + listAvailableShells / get|setDefaultShellPref)。owner WebContents destroyed 时:

@@ -169,7 +169,9 @@ describe('WorkLouderCodexHostClient', () => {
       'connecting',
       'connected',
       'not-detected',
+      'connecting',
     ]);
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 
   it('forwards HID, joystick, device, and connection reasons from the host', () => {
@@ -335,5 +337,22 @@ describe('WorkLouderCodexHostClient', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('recycles the host immediately after a live session drops', () => {
+    const children = [new FakeChild(), new FakeChild()];
+    const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    children[0].emit('message', { kind: 'state', status: 'connected' });
+    children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+    expect(children[0].kill).toHaveBeenCalledOnce();
+    expect(fork).toHaveBeenCalledTimes(2);
+    expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
   });
 });

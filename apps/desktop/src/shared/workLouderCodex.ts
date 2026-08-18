@@ -131,7 +131,7 @@ export type WorkLouderCodexPreviewPart =
 export interface WorkLouderCodexPreviewInput {
   part: WorkLouderCodexPreviewPart;
   pressed: boolean;
-  /** Encoder detents: +1 is ENC_CW, −1 is ENC_CC. */
+  /** Encoder detents: +1 is firmware ENC_CW, −1 is ENC_CC. Visual rotation flips this. */
   turn?: number;
   /** Stick angle on the hardware circle, 0–1. 0 is right, 0.25 down, 0.5 left, 0.75 up. */
   angle?: number;

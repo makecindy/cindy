@@ -1,4 +1,3 @@
-import type { WorkLouderCodexRendererAction } from '../../shared/workLouderCodex';
 import {
   attachInputDeviceActionBridge,
   dispatchInputDeviceAction,
@@ -14,9 +13,7 @@ let bridged = false;
  * Codex Micro still owns the preload channel. The subscriber set is shared
  * so a later keyboard can attach another bridge without a second bus.
  */
-export function subscribeWorkLouderCodexAction(
-  handler: (action: WorkLouderCodexRendererAction) => boolean | void,
-): () => void {
+export function subscribeWorkLouderCodexAction(handler: InputDeviceActionHandler): () => void {
   ensureCodexMicroBridge();
   return subscribeInputDeviceAction(handler);
 }
@@ -27,6 +24,7 @@ function ensureCodexMicroBridge(): void {
   attachInputDeviceActionBridge(
     () =>
       window.electronAPI?.workLouderCodex?.onAction((action) => {
+        if (action.type === 'keycap') return;
         dispatchInputDeviceAction(action);
       }) ?? null,
   );

@@ -59,6 +59,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private consecutiveCrashes = 0;
   private stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus: 'connected' | 'not-detected' | 'error' | null = null;
+  private recyclingChild = false;
   private disposed = false;
   private unavailableLogged = false;
   private disposePromise: Promise<void> | null = null;
@@ -309,20 +310,43 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.clearConnectWatchdog();
     this.updateConnectionReason(message.reason ?? null);
     if (message.status === this.lastStatus) return;
+    const previousStatus = this.lastStatus;
     this.lastStatus = message.status;
     this.updateConnectionStatus(message.status);
     if (message.status === 'connected') {
       this.armStableConnection();
       this.deps.log.info('Codex Micro lighting connected');
-    } else if (message.status === 'not-detected') {
+      return;
+    }
+    if (message.status === 'not-detected') {
       this.deps.log.debug('Codex Micro lighting device not detected');
     } else {
       this.deps.log.warn('Codex Micro lighting host could not apply the current frame');
     }
+    // Pairing / USB re-enumeration leaves the native SDK handle alive but
+    // unusable. ChatGPT recovers by opening a fresh transport; we do the same
+    // by recycling the utility process once the live session drops.
+    if (previousStatus === 'connected') this.recycleStaleHost(child);
+  }
+
+  private recycleStaleHost(child: WorkLouderCodexChildLike): void {
+    if (this.disposed || this.recyclingChild || this.child !== child) return;
+    this.recyclingChild = true;
+    this.clearConnectWatchdog();
+    this.clearStableConnection();
+    this.deps.log.info('Codex Micro lighting host recycled after the device dropped');
+    try {
+      child.kill();
+    } catch {
+      // Recycle owns recovery even if the native host already disappeared.
+    }
+    this.handleExit(child, 0);
   }
 
   private handleExit(child: WorkLouderCodexChildLike, code: number): void {
     if (this.child !== child) return;
+    const recycled = this.recyclingChild;
+    this.recyclingChild = false;
     this.clearConnectWatchdog();
     this.clearStableConnection();
     this.child = null;
@@ -331,12 +355,22 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.completeDispose(child);
       return;
     }
+    if (recycled) {
+      this.restartHost();
+      return;
+    }
     this.deps.log.warn('Codex Micro lighting host exited', { code });
     if (this.connectionReason !== 'connection-timeout') {
       this.updateConnectionReason('connection-failed');
     }
     this.updateConnectionStatus('error');
     this.scheduleRestart();
+  }
+
+  private restartHost(): void {
+    if (this.disposed) return;
+    if (this.wantsHidInput) this.requestHidListening();
+    if (this.latestFrame) this.update(this.latestFrame);
   }
 
   private scheduleRestart(): void {

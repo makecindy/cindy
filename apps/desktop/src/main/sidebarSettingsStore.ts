@@ -411,6 +411,7 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
   }
   if (changed) {
     broadcastPinnedOrderChanged(nextSettings.pinnedOrder, ownerStamp);
+    refreshInputDeviceTaskSlotsAfterPinnedOrderChange();
   }
   return Array.from(nextSettings.pinnedOrder);
 }
@@ -739,6 +740,16 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   }
   if (legacyPathState === 'blocked') return 'blocked';
   return initializeScopedSidebarSettings(scopedPath, ownerKey, legacyPath);
+}
+
+function refreshInputDeviceTaskSlotsAfterPinnedOrderChange(): void {
+  void import('./input-devices/index.js')
+    .then(({ resumeInputDeviceTaskSlots }) => resumeInputDeviceTaskSlots())
+    .catch((error: unknown) => {
+      log.warn('Input device task slot refresh failed after pinned-order change', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 }
 
 export function registerSidebarSettingsIpc(): void {

@@ -217,9 +217,12 @@ const WORKLOUDER_CODEX_BOARD_TOKENS = {
   '--wl-command-shadow':
     'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
   '--wl-command-glyph': 'rgb(236 236 236)',
-  // The stick: a keycap-sized housing with a small black thumb cap in it.
-  '--wl-stick-housing': '#23252c',
-  '--wl-stick-cap': '#111111',
+  // The stick: a well the same colour family as the task keys, so the dark
+  // thumb cap reads against it instead of disappearing into a black square.
+  '--wl-stick-housing': 'rgb(198 198 200 / 0.96)',
+  '--wl-stick-housing-shadow':
+    'inset 0 1px 3px rgb(0 0 0 / 0.22), inset 0 0 0 1px rgb(0 0 0 / 0.08), 0 1px 0 rgb(255 255 255 / 0.35)',
+  '--wl-stick-cap': '#2a2b30',
 } as CSSProperties;
 
 /**
@@ -297,8 +300,8 @@ function KeyHint({ hint }: { hint: WorkLouderCodexKeyHint }) {
 }
 
 /**
- * The stick sits in a square housing the size of a keycap, with a small black
- * thumb cap in the middle — it is not a bare circle like the encoder.
+ * The stick sits in a square well the size of a keycap, with a dark thumb
+ * cap in the middle — it is not a bare circle like the encoder.
  */
 function AnalogStick({
   label,
@@ -316,11 +319,11 @@ function AnalogStick({
       title={label}
       data-stick-angle={distance > 0 ? String(angle) : undefined}
       data-stick-distance={String(distance)}
-      className="relative flex size-full items-center justify-center rounded-xl bg-[var(--wl-stick-housing)] shadow-[var(--wl-command-shadow)]"
+      className="relative flex size-full items-center justify-center rounded-xl bg-[var(--wl-stick-housing)] shadow-[var(--wl-stick-housing-shadow)]"
     >
       <span
         data-testid="worklouder-codex-stick-cap"
-        className="block size-[72%] rounded-full bg-[var(--wl-stick-cap)] shadow-[inset_0_-1px_2px_rgb(255_255_255/0.12),0_1px_2px_rgb(0_0_0/0.28)]"
+        className="block size-[68%] rounded-full bg-[var(--wl-stick-cap)] shadow-[inset_0_1px_1px_rgb(255_255_255/0.18),0_1px_2px_rgb(0_0_0/0.28)]"
         style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
       />
     </span>
@@ -329,13 +332,15 @@ function AnalogStick({
 
 /** The encoder is a round wheel that stands proud of the board. */
 function Encoder({ label, turns }: { label: string; turns: number }) {
+  // Firmware ENC_CW is visually counterclockwise on this board. CSS rotate()
+  // is clockwise-positive, so the drawn knob has to flip the sign.
   return (
     <span
       aria-hidden="true"
       title={label}
       data-encoder-turns={String(turns)}
       className="block size-full overflow-hidden rounded-full bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]"
-      style={{ transform: `rotate(${turns * WORKLOUDER_CODEX_ENCODER_DETENT_DEG}deg)` }}
+      style={{ transform: `rotate(${-turns * WORKLOUDER_CODEX_ENCODER_DETENT_DEG}deg)` }}
     >
       <span className="relative block size-full bg-gradient-to-br from-white/[0.14] to-transparent">
         <span className="absolute left-1/2 top-[3px] h-[22%] w-[2px] -translate-x-1/2 rounded-full bg-white/55" />

@@ -3370,6 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
+        "beta": "Beta",
         "entryDescription": "Agent 키로 작업을 열고 조명으로 상태를 표시합니다.",
         "openAria": "Work Louder Codex Micro 설정 열기",
         "back": "키보드 단축키로 돌아가기",

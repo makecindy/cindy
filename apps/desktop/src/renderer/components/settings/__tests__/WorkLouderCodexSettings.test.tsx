@@ -145,6 +145,7 @@ describe('WorkLouderCodexSettings', () => {
     );
 
     expect(onOpen).toHaveBeenCalledOnce();
+    expect(screen.getByText('settings.shortcuts.workLouderCodex.beta')).toBeTruthy();
     expect(
       screen.getByText('settings.shortcuts.workLouderCodex.connection.status.connected'),
     ).toBeTruthy();
