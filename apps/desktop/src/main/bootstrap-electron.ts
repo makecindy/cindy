@@ -6982,6 +6982,15 @@ app.on('ready', async () => {
         // held across a Ghost boundary), and starts consumers if the original
         // then() skipped them while boundaryPending.
         void ensureCurrentAccountProviderReadiness();
+        // Logout suspends the keyboard. Relogin of the same owner still lands
+        // here, so restore task slots even when the lifecycle client is reused.
+        try {
+          await resumeInputDeviceTaskSlots();
+        } catch (error) {
+          dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       }
       try {

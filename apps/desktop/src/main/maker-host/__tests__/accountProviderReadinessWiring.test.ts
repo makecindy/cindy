@@ -145,10 +145,12 @@ describe('account provider readiness wiring', () => {
       'ensureCurrentAccountProviderReadiness()',
       unchanged,
     );
-    const unchangedReturn = bootstrapSource.indexOf('return;', unchangedEnsure);
+    const unchangedResume = bootstrapSource.indexOf('await resumeInputDeviceTaskSlots();', unchanged);
+    const unchangedReturn = bootstrapSource.indexOf('return;', unchangedResume);
     expect(unchanged).toBeGreaterThanOrEqual(0);
     expect(unchangedEnsure).toBeGreaterThan(unchanged);
-    expect(unchangedReturn).toBeGreaterThan(unchangedEnsure);
+    expect(unchangedResume).toBeGreaterThan(unchangedEnsure);
+    expect(unchangedReturn).toBeGreaterThan(unchangedResume);
     expect(bootstrapSource).toContain('shouldKeepPendingReadinessStart');
     expect(bootstrapSource).toContain('shouldClearCatalogAfterJoiningPreviousScope');
     expect(bootstrapSource).toMatch(

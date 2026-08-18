@@ -27,6 +27,11 @@ const newMakerDraftRouteSource = readFileSync(
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
+const sidebarUpperSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 const pluginPageSource = readFileSync(
   resolve(__dirname, '..', 'features', 'plugin', 'GhostPluginPage.tsx'),
   'utf8',
@@ -93,6 +98,12 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(newMakerDraftRouteSource).toContain('readNewMakerFolderPickerRequest(location.state)');
     expect(newMakerDraftRouteSource).toContain('setFolderPickerOpen(true)');
+    expect(sidebarUpperSource).toContain(
+      "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
+    );
+    expect(sidebarUpperSource).not.toContain(
+      '[...visibleSessionsWithRemote, ...remoteProjectSessions]',
+    );
     expect(newMakerDraftRouteSource).toContain('focusOnStorageKeyChange');
   });
 

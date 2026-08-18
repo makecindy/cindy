@@ -633,11 +633,9 @@ export function CCAgentSidebarUpper() {
     // 空可见列表也要上报:换机器、折叠或搜索把可见行清掉时,侧栏映射必须让位,
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
+    const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
     const byId = new Map(
-      [...visibleSessionsWithRemote, ...remoteProjectSessions].map((session) => [
-        session.id,
-        session,
-      ]),
+      [...visibleSessionsWithRemote, ...catalogSessions].map((session) => [session.id, session]),
     );
     const tasks = [...byId.values()].slice(0, 100).map((session) => {
       const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
@@ -659,7 +657,7 @@ export function CCAgentSidebarUpper() {
       // 键盘没接或 IPC 不可用都不影响侧栏本身。
       publishedTaskKeyRef.current = '';
     });
-  }, [visibleSessionsWithRemote, remoteProjectSessions]);
+  }, [sessionsWithRemote, visibleSessionsWithRemote]);
   useEffect(() => {
     publishSidebarTasks();
     // 展开/折叠项目、分组重排这类纯 UI 变化不会动 visibleSessionsWithRemote,
