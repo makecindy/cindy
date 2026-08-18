@@ -196,37 +196,42 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     broadcaster.beginGlmCodingPlanUsageWrite('p1');
     resolveInsert();
     await rec;
-    // 补偿 DELETE 走捕获的同一 client(且带内容匹配);「新连接」零调用。
+    // 补偿 DELETE 走捕获的同一 client(且带 updated_at 区分子,十一轮);「新连接」零调用。
     expect(capturedExec).toHaveBeenCalledTimes(2);
-    expect(String((capturedExec.mock.calls[1] as unknown[])[0])).toContain('AND snapshot =');
-    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', aJson]);
+    expect(String((capturedExec.mock.calls[1] as unknown[])[0])).toContain('AND updated_at =');
+    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', expect.any(Number)]);
     expect(postSwitch.exec).not.toHaveBeenCalled();
     expect(postSwitch.queryOne).not.toHaveBeenCalled();
   });
 
-  it('八轮 Paw: 补偿删除带内容匹配,不误删新世代已落库的快照', async () => {
+  it('八轮 Paw(十一轮重构): 补偿删除按捕获的 updated_at 区分子,同内容新行也不误删', async () => {
     const broadcaster = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue(null);
     const aJson = JSON.stringify(snapshotOf(10));
     const bJson = JSON.stringify(snapshotOf(60));
-    // 模拟行语义:INSERT upsert 覆盖行;DELETE 带内容参数时仅当行内容等于该参数
-    // 才删(新代码形态),单参数 DELETE 无条件删(旧形态,留给回归对照)。
-    let row: string | null = null;
+    // 模拟行语义({snapshot, updatedAt}):INSERT upsert 覆盖行;DELETE 按捕获的
+    // updated_at 匹配,仅当行是该写入本身才删(十一轮结构区分子),内容匹配旧形态
+    // 在「新旧写入序列化完全相同」时仍会误删(十一轮 Greptile 场景,回归对照)。
+    let row: { snapshot: string; updatedAt: number } | null = null;
     const gates: Array<(v?: void) => void> = [];
     const capturedExec = vi.fn((sql: string, params: unknown[]) => {
       if (sql.includes('INSERT')) {
-        return new Promise<void>((res) => { gates.push(() => { row = params[1] as string; res(); }); });
+        return new Promise<void>((res) => {
+          gates.push(() => {
+            row = { snapshot: params[1] as string, updatedAt: params[2] as number };
+            res();
+          });
+        });
       }
       return new Promise<void>((res) => {
         gates.push(() => {
-          if (params.length > 1) { if (row === params[1]) row = null; }
-          else row = null;
+          if (row && row.updatedAt === params[1]) row = null;
           res();
         });
       });
     });
     const newGenExec = vi.fn(async (sql: string, params: unknown[]) => {
-      if (sql.includes('INSERT')) row = params[1] as string;
+      if (sql.includes('INSERT')) row = { snapshot: params[1] as string, updatedAt: params[2] as number };
       return undefined;
     });
     mocks.clientQueue.push(
@@ -246,10 +251,61 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     const tokenB = broadcaster.beginGlmCodingPlanUsageWrite('p1');
     const recB = broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(60), tokenB);
     await vi.waitFor(() => expect(newGenExec).toHaveBeenCalledTimes(1));
-    gates[1](); // A 的补偿 DELETE 恢复 —— 行内容已不是 A 写的那笔
+    gates[1](); // A 的补偿 DELETE 恢复 —— 行已不是 A 写的那笔(updated_at 不同)
     await Promise.all([recA, recB]);
-    expect(row).toBe(bJson); // B 的快照存活(旧形态按 provider_id 裸删会把它抹掉)
-    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', aJson]);
+    expect(row).toEqual({ snapshot: bJson, updatedAt: expect.any(Number) }); // B 的快照存活
+    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', expect.any(Number)]);
+  });
+
+  it('十一轮 Greptile: 新旧写入序列化完全相同时,补偿删除按 updated_at 仍不误删', async () => {
+    // 场景:旧世代写库挂起期间世代前进,新世代先写入**序列化完全相同**的快照 ——
+    // 内容匹配形态会把新世代的有效行一起删掉;updated_at(INSERT 时的 Date.now())
+    // 两次写入不同,新行存活。
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    const sameJson = JSON.stringify(snapshotOf(10));
+    let row: { snapshot: string; updatedAt: number } | null = null;
+    const gates: Array<(v?: void) => void> = [];
+    const capturedExec = vi.fn((sql: string, params: unknown[]) => {
+      if (sql.includes('INSERT')) {
+        return new Promise<void>((res) => {
+          gates.push(() => {
+            row = { snapshot: params[1] as string, updatedAt: params[2] as number };
+            res();
+          });
+        });
+      }
+      return new Promise<void>((res) => {
+        gates.push(() => {
+          if (row && row.updatedAt === params[1]) row = null;
+          res();
+        });
+      });
+    });
+    const newGenExec = vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes('INSERT')) row = { snapshot: params[1] as string, updatedAt: params[2] as number };
+      return undefined;
+    });
+    mocks.clientQueue.push(
+      { queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} },
+      { queryOne: vi.fn(async () => null), exec: capturedExec, drizzle: {} },
+      { queryOne: vi.fn(async () => null), exec: newGenExec, drizzle: {} },
+    );
+    const tokenA = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    const recA = broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(10), tokenA);
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    broadcaster.invalidateGlmCodingPlanUsageWrites('p1');
+    gates[0](); // A 落库(挂起后恢复) → 补偿 DELETE 挂起
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
+    // 新世代写入序列化**完全相同**的快照
+    const tokenB = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    const recB = broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(10), tokenB);
+    await vi.waitFor(() => expect(newGenExec).toHaveBeenCalledTimes(1));
+    gates[1](); // 补偿恢复:行是 B 写的(updated_at 是 B 的时刻),不是 A 那笔
+    await Promise.all([recA, recB]);
+    expect(row).toEqual({ snapshot: sameJson, updatedAt: expect.any(Number) });
+    const aDeletePredicate = ((capturedExec.mock.calls[1] as unknown[])[1] as unknown[])[1];
+    expect(row!.updatedAt).not.toBe(aDeletePredicate); // A 的删除谓词 ≠ B 的写入时刻
   });
 
   it('replaces the snapshot wholesale on record (single source, no merge)', async () => {

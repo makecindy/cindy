@@ -1105,28 +1105,33 @@ export async function recordGlmCodingPlanUsageSnapshot(
     return;
   }
   try {
-    // 写库与补偿删除用**同一捕获的 client + 内容匹配**(#2768 八轮 review):INSERT
-    // 挂起期间 owner 切换的话,重新 getDbClient() 会落到新账号的 DB 切片(删错库);
-    // 新世代也可能已把更新的快照写进同一行(删错数据)。补偿只删「本次写入的那笔」
-    // ——行内容已不是我们写的就不再动它,残留清理由新世代的写入自然覆盖。
+    // 写库与补偿删除用**同一捕获的 client + 捕获的 updated_at 区分子**(#2768
+    // 八轮 review + 十一轮 review):INSERT 挂起期间 owner 切换的话,重新
+    // getDbClient() 会落到新账号的 DB 切片(删错库);新世代也可能已把快照写进
+    // 同一行——即使序列化内容恰好完全相同,写入时刻列(updated_at,INSERT 时的
+    // Date.now(),与快照内部 updatedAt 是两回事)也唯一标识本次写入(十一轮
+    // Greptile P1 结构修复,不再靠「内容相同概率低」)。补偿只删「本次写入的
+    // 那笔」——行已不是我们写的就不再动它,残留清理由新世代的写入自然覆盖。
     const db = getDbClient();
     const written = JSON.stringify(next);
+    const writtenAt = Date.now();
     await db.exec(
       `INSERT INTO coding_plan_usage_snapshots (provider_id, snapshot, updated_at)
        VALUES (?, ?, ?)
        ON CONFLICT(provider_id) DO UPDATE SET
          snapshot = excluded.snapshot,
          updated_at = excluded.updated_at`,
-      [providerId, written, Date.now()],
+      [providerId, written, writtenAt],
     );
     if (
-      ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+      ownerGeneration !== getActiveAppSession().generation
+      || ownerEpoch !== glmCodingPlanUsageOwnerEpoch
       || generation !== glmGenerationOf(providerId)
     ) {
       // clear 在写库 await 期间抢先:补偿删除,防下次冷启动读回残留。
       await db.exec(
-        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ? AND snapshot = ?',
-        [providerId, written],
+        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ? AND updated_at = ?',
+        [providerId, writtenAt],
       );
     }
   } catch (err) {
