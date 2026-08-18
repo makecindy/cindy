@@ -1041,6 +1041,10 @@ test("named isolated does not keep another checkout's inherited userData dir", (
 		inheritedUserDataBlocksNamedIsolation("--isolated", defaultIsolatedUserDataDir("other-sandbox", "global"), derived),
 		false,
 	);
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation("--isolated=local-ollama-models-abc123", "/custom/profile", derived),
+		false,
+	);
 });
 
 test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", () => {
@@ -1057,6 +1061,13 @@ test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", (
 		() => assertDesktopRestartStepSucceeded(
 			{ label: "start desktop and wait for readiness", args: ["restart.mjs", "--wait-ready"] },
 			{ status: 2 },
+		),
+		(error) => error instanceof DesktopRestartStepError && error.alreadyHasVerdict === true,
+	);
+	assert.throws(
+		() => assertDesktopRestartStepSucceeded(
+			{ label: "stop existing desktop dev processes", args: ["restart.mjs", "--kill-only"] },
+			{ status: 1 },
 		),
 		(error) => error instanceof DesktopRestartStepError && error.alreadyHasVerdict === true,
 	);

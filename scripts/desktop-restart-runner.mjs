@@ -74,7 +74,8 @@ export function assertDesktopRestartStepSucceeded(step, result) {
     throw new DesktopRestartStepError(
       `${step.label} failed with exit ${result.status ?? 1}`,
       {
-        alreadyHasVerdict: Array.isArray(step.args) && step.args.includes('--wait-ready'),
+        alreadyHasVerdict: Array.isArray(step.args)
+          && (step.args.includes('--wait-ready') || step.args.includes('--kill-only')),
         exitCode: result.status ?? 1,
       },
     );

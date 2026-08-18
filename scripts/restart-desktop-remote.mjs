@@ -515,9 +515,15 @@ export function sanitizeIsolationName(raw) {
   return ISOLATION_NAME_RE.test(name) ? name : '';
 }
 
-/** Named `--isolated=<name>` must not inherit another checkout's XDT_USER_DATA_DIR. */
+export function looksLikeCindyManagedUserDataDir(dir) {
+  const base = path.basename(path.resolve(dir));
+  return /^(Cindy|CindyGlobal|CindyDev)(?:-dev2(?:-[A-Za-z0-9_-]+)?)?$/i.test(base);
+}
+
+/** Named `--isolated=<name>` must not inherit another Cindy profile. Custom dirs stay. */
 export function inheritedUserDataBlocksNamedIsolation(isolatedArg, envUserDataDir, derivedDir) {
   if (!envUserDataDir || !isolatedArg || !isolatedArg.includes('=')) return false;
+  if (!looksLikeCindyManagedUserDataDir(envUserDataDir)) return false;
   return canonicalizeUserDataDir(envUserDataDir) !== canonicalizeUserDataDir(derivedDir);
 }
 
@@ -986,7 +992,9 @@ async function main() {
     if (inheritedUserDataBlocksNamedIsolation(isolatedArg, process.env.XDT_USER_DATA_DIR, derivedDir)) {
       delete process.env.XDT_USER_DATA_DIR;
       delete process.env.XDT_USER_DATA_DIR_EPOCH;
-      console.log(`==> Ignoring inherited XDT_USER_DATA_DIR so --isolated=${parseIsolationName(isolatedArg)} can use its own sandbox.`);
+      delete process.env.XDT_DEVICE_ID_OVERRIDE;
+      delete process.env.XDT_ISOLATED_NAME;
+      console.log(`==> Ignoring inherited Cindy profile so --isolated=${parseIsolationName(isolatedArg)} can use its own sandbox.`);
     }
   }
   const isolationName = isolatedArg ? parseIsolationName(isolatedArg) : '';
