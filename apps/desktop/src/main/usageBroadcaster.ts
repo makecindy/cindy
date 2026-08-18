@@ -1129,9 +1129,12 @@ export async function recordGlmCodingPlanUsageSnapshot(
       || generation !== glmGenerationOf(providerId)
     ) {
       // clear 在写库 await 期间抢先:补偿删除,防下次冷启动读回残留。
+      // 双条件谓词(十一轮复审裁决):内容+写入时刻并集——同毫秒边界上失效方向
+      // 偏向「不删」(残留由下次刷新 upsert 盖掉,节流窗内自愈)而非「误删」
+      // (用户额度变空最长 180s),与「宁可补偿不足不可误删」同原则。
       await db.exec(
-        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ? AND updated_at = ?',
-        [providerId, writtenAt],
+        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ? AND snapshot = ? AND updated_at = ?',
+        [providerId, written, writtenAt],
       );
     }
   } catch (err) {

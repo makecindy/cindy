@@ -199,7 +199,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     // 补偿 DELETE 走捕获的同一 client(且带 updated_at 区分子,十一轮);「新连接」零调用。
     expect(capturedExec).toHaveBeenCalledTimes(2);
     expect(String((capturedExec.mock.calls[1] as unknown[])[0])).toContain('AND updated_at =');
-    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', expect.any(Number)]);
+    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', expect.any(String), expect.any(Number)]);
     expect(postSwitch.exec).not.toHaveBeenCalled();
     expect(postSwitch.queryOne).not.toHaveBeenCalled();
   });
@@ -225,7 +225,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
       }
       return new Promise<void>((res) => {
         gates.push(() => {
-          if (row && row.updatedAt === params[1]) row = null;
+          if (row && row.snapshot === params[1] && row.updatedAt === params[2]) row = null;
           res();
         });
       });
@@ -254,7 +254,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     gates[1](); // A 的补偿 DELETE 恢复 —— 行已不是 A 写的那笔(updated_at 不同)
     await Promise.all([recA, recB]);
     expect(row).toEqual({ snapshot: bJson, updatedAt: expect.any(Number) }); // B 的快照存活
-    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', expect.any(Number)]);
+    expect((capturedExec.mock.calls[1] as unknown[])[1]).toEqual(['p1', expect.any(String), expect.any(Number)]);
   });
 
   it('十一轮 Greptile: 新旧写入序列化完全相同时,补偿删除按 updated_at 仍不误删', async () => {
@@ -277,7 +277,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
       }
       return new Promise<void>((res) => {
         gates.push(() => {
-          if (row && row.updatedAt === params[1]) row = null;
+          if (row && row.snapshot === params[1] && row.updatedAt === params[2]) row = null;
           res();
         });
       });
@@ -304,7 +304,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     gates[1](); // 补偿恢复:行是 B 写的(updated_at 是 B 的时刻),不是 A 那笔
     await Promise.all([recA, recB]);
     expect(row).toEqual({ snapshot: sameJson, updatedAt: expect.any(Number) });
-    const aDeletePredicate = ((capturedExec.mock.calls[1] as unknown[])[1] as unknown[])[1];
+    const aDeletePredicate = ((capturedExec.mock.calls[1] as unknown[])[1] as unknown[])[2];
     expect(row!.updatedAt).not.toBe(aDeletePredicate); // A 的删除谓词 ≠ B 的写入时刻
   });
 
