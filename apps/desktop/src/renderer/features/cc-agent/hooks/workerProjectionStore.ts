@@ -16,7 +16,7 @@ export interface WorkerInfo {
   workerId: string;
   sessionId: string;
   role: string;
-  agent: 'claude-code' | 'codex' | 'pi';
+  agent: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model: string;
   effort: string | null;
   label: string | null;

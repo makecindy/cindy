@@ -82,7 +82,7 @@ const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
   new Set(['plugin-command']),
 ];
 
-export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi';
+export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi' | 'kimi-code';
 
 export interface AtResourceScanContext {
   /** Current local task. Its built-in browser tabs are the only tabs exposed. */

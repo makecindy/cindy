@@ -76,7 +76,7 @@ const grokEntry = (overrides: Record<string, unknown> = {}): RegistryEntry =>
     ...overrides,
   }) as RegistryEntry;
 
-function models(providerId: string, agent: 'claude-code' | 'codex' | 'pi'): CatalogModel[] {
+function models(providerId: string, agent: 'claude-code' | 'codex' | 'pi' | 'kimi-code'): CatalogModel[] {
   const p = getActiveCatalog().providers.find((x) => x.id === providerId);
   return p?.models[agent] ?? [];
 }

@@ -51,7 +51,7 @@ import type { SessionReference } from '../../../../shared/sessionReference';
 import { isReviewSessionSource } from '../../../../shared/sessionSource';
 
 export type Destination = 'local' | 'worktree' | 'thread';
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'kimi-code';
 
 interface ChipButtonProps {
   icon?: React.ReactNode;
@@ -1147,7 +1147,7 @@ export function ModelEffortChip({
       : t('scheduler.chips.model.default');
 
   // railSources 仅用于 nativeDefault 归一化(下拉宽度由 ModelSelectorContent 内容自适应,见 w-auto)。
-  const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind;
+  const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind === 'kimi-code' ? 'kimi' : agentKind;
   const railSources = useMemo(
     () => connectedProvidersForAgent(providers, agentKind),
     [providers, agentKind],

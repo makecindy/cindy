@@ -50,7 +50,7 @@ import type {
 // ── kind 配置表 ──────────────────────────────────────────────────────────────
 //
 // agent-binaries 的 kind 直接复用 maker-core AgentKind 字面量
-// ('claude-code' | 'codex' | 'pi'), 跟 maker-core 保持同步; vendorKey 字段是给底层
+// ('claude-code' | 'codex' | 'pi' | 'kimi-code'), 跟 maker-core 保持同步; vendorKey 字段是给底层
 // createBinaryProvisioner 用的内部 enum, 历史叫 'claude' / 'codex' (factory 内部
 // 硬约定, 不改)。
 //

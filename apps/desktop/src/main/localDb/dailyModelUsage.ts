@@ -16,7 +16,7 @@ import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 const log = createLogger('localDb/dailyModelUsage');
 
 export interface DailyModelUsageDelta {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model: string;
   money?: RegionalMoney | null;
   inputTokensDelta: number;

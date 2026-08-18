@@ -83,7 +83,7 @@ export interface CollabWorkerConfig {
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex' | 'pi';
+  worker: 'cc' | 'codex' | 'pi' | 'kimi';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -218,6 +218,7 @@ function makeDefault(): NewMakerDraft {
       pi: defaultVendorPrefs('pi'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
+      kimi: defaultVendorPrefs('kimi'),
     },
     modelChosenByVendor: {},
   };
@@ -385,6 +386,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
+      kimi: sanitizeVendorPrefs(lastByVendorRaw.kimi, 'kimi'),
     },
     modelChosenByVendor,
   };

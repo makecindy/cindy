@@ -24,11 +24,11 @@ interface StubModel {
   sortOrder?: number;
   defaultEnabled?: boolean;
   /** 新对话默认种子标记(与 sortOrder 解耦)。 */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'kimi-code')[];
 }
 
 /** pi 也是一个 vendor;缺省的 agent 一律回落空清单。 */
-type StubByAgent = Partial<Record<'claude-code' | 'codex' | 'pi', StubModel[]>>;
+type StubByAgent = Partial<Record<'claude-code' | 'codex' | 'pi' | 'kimi-code', StubModel[]>>;
 
 function model(id: string, over: Partial<StubModel> = {}): StubModel {
   return {
@@ -42,7 +42,7 @@ function model(id: string, over: Partial<StubModel> = {}): StubModel {
 }
 
 function stubCapabilities(byAgent: StubByAgent): void {
-  const getCapabilities = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi') => ({
+  const getCapabilities = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi' | 'kimi-code') => ({
     availableModels: byAgent[kind] ?? [],
     hasFastMode: false,
     effortLevels: [],

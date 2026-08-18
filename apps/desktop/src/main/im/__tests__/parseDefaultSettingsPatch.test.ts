@@ -75,6 +75,7 @@ describe('parseImDefaultSettingsPatch', () => {
         'claude-code': { providerId: 'p-cc', model: 'm-cc', effort: 'low' },
         codex: { providerId: 'p-codex', model: 'm-codex', effort: 'low' },
         pi: { providerId: 'p-pi', model: 'm-pi', effort: 'low' },
+        'kimi-code': { providerId: 'p-kimi', model: 'm-kimi', effort: 'low' },
       },
     };
     for (const key of Object.keys(IM_DEFAULT_SETTINGS) as Array<keyof ImDefaultSettings>) {

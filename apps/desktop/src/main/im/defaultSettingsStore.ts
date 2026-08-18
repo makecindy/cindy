@@ -81,6 +81,10 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
         'pi',
         rawAgentOrLegacy(rawAgents, 'pi', agentKind, legacySettings),
       ),
+      'kimi-code': normalizeAgentSettings(
+        'kimi-code',
+        rawAgentOrLegacy(rawAgents, 'kimi-code', agentKind, legacySettings),
+      ),
     },
   };
 }
@@ -385,6 +389,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },
       pi: { ...settings.agents.pi },
+      'kimi-code': { ...settings.agents['kimi-code'] },
     },
   };
 }

@@ -657,7 +657,7 @@ export async function exportSessionShare(
         teamStatus: orcaSources.teamStatus,
         workers: workerSources.map((w, i): XdtshareOrcaWorkerManifest => ({
           index: i,
-          agentKind: w.session.agentKind as 'cc' | 'codex' | 'pi',
+          agentKind: w.session.agentKind as 'cc' | 'codex' | 'pi' | 'kimi',
           title: w.session.title,
           role: w.record.role,
           label: w.record.label,
@@ -679,7 +679,7 @@ export async function exportSessionShare(
     appVersion: safeAppVersion(),
     platform: process.platform,
     exportedAt: new Date().toISOString(),
-    agentKind: session.agentKind as 'cc' | 'codex' | 'pi',
+    agentKind: session.agentKind as 'cc' | 'codex' | 'pi' | 'kimi',
     title: session.title,
     workspaceKind: session.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     originalWorkingDir: session.workingDir,

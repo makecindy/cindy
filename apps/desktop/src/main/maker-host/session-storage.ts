@@ -27,7 +27,7 @@ import { normalizeRemoteHostId } from '../localDb/mapper.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
+type DbAgentKind = 'cc' | 'codex' | 'pi' | 'kimi';
 
 // 形态映射走 shared/agentKindConversion 正本(支持 pi;此前 pi 被误落成 codex)。
 function toDbKind(k: AgentKind): DbAgentKind {

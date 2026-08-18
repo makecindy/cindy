@@ -217,7 +217,7 @@ export interface XdtshareTranscriptRef {
 export interface XdtshareOrcaWorkerManifest {
   /** zip 前缀序号(orca/workers/<index>/session.json 等)。 */
   index: number;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'kimi';
   title: string;
   role: string;
   label: string | null;
@@ -242,7 +242,7 @@ export interface XdtshareManifest {
   appVersion: string;
   platform: string;
   exportedAt: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'kimi';
   title: string;
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
@@ -309,7 +309,7 @@ export function validateManifest(value: unknown): XdtshareManifest {
     appVersion: expectString(value.appVersion, 'appVersion'),
     platform: expectString(value.platform, 'platform'),
     exportedAt: expectString(value.exportedAt, 'exportedAt'),
-    agentKind: agentKind as 'cc' | 'codex' | 'pi',
+    agentKind: agentKind as 'cc' | 'codex' | 'pi' | 'kimi',
     title: expectString(value.title, 'title'),
     workspaceKind: workspaceKind as 'project' | 'dialogue',
     originalWorkingDir:
@@ -361,7 +361,7 @@ function validateOrcaSection(value: unknown): XdtshareOrcaManifest {
     const counts = isRecord(raw.counts) ? raw.counts : {};
     return {
       index: expectNonNegativeInt(raw.index, `orca.workers[${i}].index`),
-      agentKind: agentKind as 'cc' | 'codex' | 'pi',
+      agentKind: agentKind as 'cc' | 'codex' | 'pi' | 'kimi',
       title: expectString(raw.title, `orca.workers[${i}].title`),
       role: expectString(raw.role, `orca.workers[${i}].role`),
       label: raw.label == null ? null : expectString(raw.label, `orca.workers[${i}].label`),

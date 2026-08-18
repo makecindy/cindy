@@ -55,6 +55,7 @@ export function RemoteHostDetail({ hostId }: Props) {
     'claude-code': { ...EMPTY_AGENT_STATE },
     codex: { ...EMPTY_AGENT_STATE },
     pi: { ...EMPTY_AGENT_STATE },
+    'kimi-code': { ...EMPTY_AGENT_STATE },
   }));
   const [codexSyncBusy, setCodexSyncBusy] = useState(false);
 

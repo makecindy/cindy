@@ -16,8 +16,9 @@
 import { cn } from '@/lib/utils';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { KimiMark } from '@/components/icons/KimiMark';
 
-export type VendorIconKind = 'cc' | 'codex' | 'pi';
+export type VendorIconKind = 'cc' | 'codex' | 'pi' | 'kimi';
 
 /**
  * agentKind → VendorIcon vendor 的唯一映射。所有渲染 agent 身份图标的调用点
@@ -25,7 +26,7 @@ export type VendorIconKind = 'cc' | 'codex' | 'pi';
  * 吞成 Claude 脸,2026-07-30 实测 bug)。兼容 'claude-code' 别名与 null。
  */
 export function agentKindToVendor(kind: string | null | undefined): VendorIconKind {
-  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : kind === 'kimi' || kind === 'kimi-code' ? 'kimi' : 'cc';
 }
 
 interface VendorIconProps {
@@ -59,6 +60,8 @@ export function VendorIcon({
     <span className={wrapperClassName}>
       {vendor === 'codex' ? (
         <CodexMark size={size} />
+      ) : vendor === 'kimi' ? (
+        <KimiMark size={size} />
       ) : vendor === 'pi' ? (
         <span
           aria-hidden

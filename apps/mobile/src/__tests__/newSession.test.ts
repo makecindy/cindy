@@ -49,7 +49,7 @@ function modelRow(
   id: string,
   efforts: readonly string[] = [],
   defaultEffort: string | null = null,
-  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[],
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi' | 'kimi-code')[],
 ): ProviderModelRow {
   return {
     provider: { id: `prov-${id}`, name: id } as ProviderModelRow['provider'],

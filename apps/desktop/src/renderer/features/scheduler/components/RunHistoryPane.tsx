@@ -97,7 +97,7 @@ export function RunHistoryPane({
       const referenceAgent = sessionReferences.get(run.sessionId)?.agentKind;
       return (
         sessionAgentMap.get(run.sessionId) ||
-        (referenceAgent === 'cc' ? 'claude-code' : referenceAgent) ||
+        (referenceAgent === 'cc' ? 'claude-code' : referenceAgent === 'kimi' ? 'kimi-code' : referenceAgent) ||
         s.agentKind
       );
     },

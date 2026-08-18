@@ -24,13 +24,13 @@ export type Readiness = 'ready' | 'unauthenticated' | 'binary-missing' | 'loadin
  * 两种不同的恢复路径，不能把 Pi 的缺包状态伪装成未授权。
  */
 export function readinessFromBinaryStatus(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'kimi',
   binaryReady: boolean,
 ): Readiness | null {
   return vendorKey !== 'cc' && !binaryReady ? 'binary-missing' : null;
 }
 
-export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
+export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi' | 'kimi'): {
   readiness: Readiness;
   revalidate: (opts?: { includeSuspended?: boolean }) => Promise<Readiness>;
 } {

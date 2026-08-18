@@ -82,6 +82,7 @@ const providerRouting = (
         'pi-model': { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
       },
     }],
+    'kimi-code': [],
   },
   resolveDefaultProviderIdForModel: (agent: AgentKind) => defaults[agent] ?? (
     agent === 'claude-code' ? 'anthropic' : agent === 'codex' ? 'openai' : 'xd'
@@ -97,6 +98,7 @@ const sourceFor = (agent: AgentKind) => {
       effort: 'xhigh' as const,
       fastMode: true,
       providerId: 'openai',
+      'kimi-code': [],
     };
   }
   return {
@@ -311,6 +313,7 @@ describe('resolveSendToSessionExecutionConfig', () => {
             },
           }],
           pi: [],
+          'kimi-code': [],
         },
         resolveDefaultProviderIdForModel: () => 'xd',
       },

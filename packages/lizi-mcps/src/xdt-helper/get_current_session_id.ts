@@ -5,7 +5,7 @@ import { errorPayload, okPayload } from './_payload.js';
 export interface GetCurrentSessionIdDeps {
   getSessionContext: () => {
     sessionId?: string;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
     workingDir: string;
   };
 }

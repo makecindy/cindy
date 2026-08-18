@@ -17,7 +17,7 @@ export const MODEL_ACCESS_CURRENCIES = ['CNY', 'USD'] as const;
 export type ModelCurrency = (typeof MODEL_ACCESS_CURRENCIES)[number];
 
 export const MODEL_ACCESS_V2_AGENTS = ['claude-code', 'codex'] as const;
-export const MODEL_ACCESS_AGENTS = ['claude-code', 'codex', 'pi'] as const;
+export const MODEL_ACCESS_AGENTS = ['claude-code', 'codex', 'pi', 'kimi-code'] as const;
 export type ModelAgent = (typeof MODEL_ACCESS_AGENTS)[number];
 export type ModelAccessV2Agent = (typeof MODEL_ACCESS_V2_AGENTS)[number];
 

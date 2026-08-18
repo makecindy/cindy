@@ -73,6 +73,10 @@ export function isRegistryTombstoneForConsumer(
   let registryAgent: RootAgentKind | null;
   if (agent === 'pi') {
     registryAgent = providerId === 'openai' ? 'codex' : 'claude-code';
+  } else if (agent === 'kimi-code') {
+    // Kimi Code 的模型与供应商由 Kimi CLI 侧自管(~/.kimi-code),不消费 Cindy
+    // registry 目录, tombstone 判定对其无意义。
+    registryAgent = null;
   } else if (policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent)) {
     registryAgent = agent;
   } else {

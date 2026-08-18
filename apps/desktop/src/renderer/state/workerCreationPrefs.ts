@@ -9,7 +9,7 @@ import {
 const STORAGE_KEY = 'workerCreationPrefs';
 const CHANGE_EVENT = 'cindy:worker-creation-prefs-changed';
 
-export type WorkerAgentKind = 'codex' | 'claude-code' | 'pi';
+export type WorkerAgentKind = 'codex' | 'claude-code' | 'pi' | 'kimi-code';
 
 export interface WorkerAgentPrefs {
   model: string;
@@ -24,6 +24,7 @@ export interface WorkerCreationPrefs {
   codex: WorkerAgentPrefs;
   'claude-code': WorkerAgentPrefs;
   pi: WorkerAgentPrefs;
+  'kimi-code': WorkerAgentPrefs;
   /** 新 Worker 的默认权限；UI 与 Orca tool 共用。 */
   workerPermissionMode: OrcaWorkerPermissionMode;
 }
@@ -34,6 +35,8 @@ export const DEFAULT_WORKER_CREATION_PREFS: WorkerCreationPrefs = {
   'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false, providerId: null },
   // pi worker 默认模型与 orcaWorkerCreationService.resolveWorkerConfig 的 pi 分支一致。
   pi: { model: 'claude-sonnet-4-6', effort: 'high', fast: false, providerId: null },
+  // kimi-code worker 默认模型与 orcaWorkerCreationService 的 kimi-code 分支一致(Kimi 官方 coding 模型)。
+  'kimi-code': { model: 'kimi-for-coding', effort: 'high', fast: false, providerId: null },
   workerPermissionMode: DEFAULT_ORCA_WORKER_PERMISSION_MODE,
 };
 
@@ -43,6 +46,7 @@ function defaultPrefs(): WorkerCreationPrefs {
     codex: { ...DEFAULT_WORKER_CREATION_PREFS.codex },
     'claude-code': { ...DEFAULT_WORKER_CREATION_PREFS['claude-code'] },
     pi: { ...DEFAULT_WORKER_CREATION_PREFS.pi },
+    'kimi-code': { ...DEFAULT_WORKER_CREATION_PREFS['kimi-code'] },
   };
 }
 
@@ -70,10 +74,13 @@ export function readWorkerCreationPrefs(): WorkerCreationPrefs {
           ? 'claude-code'
           : parsed.lastAgent === 'pi'
             ? 'pi'
-            : 'codex',
+            : parsed.lastAgent === 'kimi-code'
+              ? 'kimi-code'
+              : 'codex',
       codex: agentPrefs('codex'),
       'claude-code': agentPrefs('claude-code'),
       pi: agentPrefs('pi'),
+      'kimi-code': agentPrefs('kimi-code'),
       workerPermissionMode: resolveOrcaWorkerPermissionMode(parsed.workerPermissionMode),
     };
   } catch {

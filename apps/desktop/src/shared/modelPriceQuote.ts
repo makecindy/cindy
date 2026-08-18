@@ -212,9 +212,10 @@ export function providerReferencePriceQuote(
 ): ModelPriceQuote | undefined {
   // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
   // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
+  // Kimi Code 同理(模型由 Kimi CLI 侧自管)。
   const resolved = resolveModelReferencePrice(registry, providerId, modelId, {
     ...options,
-    agent: options.agent === 'pi' ? undefined : options.agent,
+    agent: options.agent === 'pi' || options.agent === 'kimi-code' ? undefined : options.agent,
   });
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);

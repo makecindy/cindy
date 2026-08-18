@@ -16,7 +16,7 @@ import type {
 } from '../../types/customizations.js';
 
 export interface SourceDef {
-  engine: 'claude-code' | 'codex' | 'pi';
+  engine: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   kind: 'skill' | 'command' | 'agent';
   scope: string;
   dir: string;

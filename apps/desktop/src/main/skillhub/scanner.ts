@@ -56,10 +56,10 @@ export interface Skill {
   /** 同一 URL 基键存在多个来源时，详情路由必须携带 sourceKey。 */
   requiresSourceKey?: boolean;
   /** 来自哪个 agent 引擎。 */
-  engine: 'claude-code' | 'codex' | 'pi';
+  engine: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   /** 发现该 skill 的所有引擎专属路径（去重后）。~/.agents/ 通用路径不算引擎。 */
   linkedEngines: Array<{
-    engine: 'claude-code' | 'codex' | 'pi';
+    engine: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
     label: string;
     runtimeStatus?: PiRuntimeCapabilityStatus;
   }>;

@@ -180,7 +180,7 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
    */
   currency?: 'USD' | 'CNY';
   /** 进哪些 runtime tab；Desktop 固定使用 v3，本字段由服务端明确下发。 */
-  agents?: ('claude-code' | 'codex' | 'pi')[];
+  agents?: ('claude-code' | 'codex' | 'pi' | 'kimi-code')[];
   name?: string;
   group?: string;
   description?: string;
@@ -200,14 +200,14 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
    * 服务端权威、按区域下发)。与 sortOrder / defaultEnabled 独立;客户端据它选新对话默认。
    * 缺省 = 不作为任何 agent 的默认。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'kimi-code')[];
   /**
    * 展示图标 id(AI Gateway 侧登记,见 @cindy/model-providers CatalogModel.icon /
    * resolveModelIconKind);缺省或未知值客户端回落来源供应商标。
    */
   icon?: string;
   /** per-tab 能力覆盖(基线字段之上按 agent 应用)。 */
-  perAgent?: Partial<Record<'claude-code' | 'codex' | 'pi', ModelAccessAgentOverride>>;
+  perAgent?: Partial<Record<'claude-code' | 'codex' | 'pi' | 'kimi-code', ModelAccessAgentOverride>>;
 }
 
 /**

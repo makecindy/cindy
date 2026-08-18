@@ -27,9 +27,9 @@ function model(id: string): CatalogModel {
 function provider(
   id: string,
   source: Provider['source'],
-  models: Partial<Record<'claude-code' | 'codex' | 'pi', string[]>>,
+  models: Partial<Record<'claude-code' | 'codex' | 'pi' | 'kimi-code', string[]>>,
 ): ProviderView {
-  const agents = Object.keys(models) as Array<'claude-code' | 'codex' | 'pi'>;
+  const agents = Object.keys(models) as Array<'claude-code' | 'codex' | 'pi' | 'kimi-code'>;
   return {
     id,
     name: id,

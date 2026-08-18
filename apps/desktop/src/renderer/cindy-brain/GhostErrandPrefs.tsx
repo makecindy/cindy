@@ -41,7 +41,7 @@ const PERMISSION_ALLOWED = new Set(['plan', 'acceptEdits', 'auto']);
 const ERRAND_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 interface ErrandConfig {
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'kimi';
   model?: string;
   effort?: string;
   fastMode?: boolean;
@@ -90,9 +90,9 @@ export function GhostErrandPrefs({
   // 保证非空,种子默认兜底)。不能用 getPersistedVendorModel:那是调度专用的严格口径,
   // 仅当用户在新建对话里显式选过该 vendor 模型才返回,否则返回 '',会让 trigger 落到
   // 「选择模型」占位(2026-07-31 Lizi 反馈:应像草稿一样直接显示当前模型)。
-  const followVendor: 'cc' | 'codex' | 'pi' =
+  const followVendor: 'cc' | 'codex' | 'pi' | 'kimi' =
     draft.vendor === 'pi' ? 'pi' : draft.vendor === 'codex' ? 'codex' : 'cc';
-  const vendor: 'cc' | 'codex' | 'pi' = config.agentKind ?? followVendor;
+  const vendor: 'cc' | 'codex' | 'pi' | 'kimi' = config.agentKind ?? followVendor;
   const shownModel = config.model ?? draft.lastByVendor[vendor].model;
   const shownEffort = (config.effort ??
     getEffortForModel(shownModel) ??

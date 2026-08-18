@@ -2749,6 +2749,7 @@ const AGENT_TASK_PROVIDER_LABEL: Record<AgentTaskCardModel['provider'], string> 
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  'kimi-code': 'Kimi Code',
 };
 
 function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTaskStatus; size?: number }) {

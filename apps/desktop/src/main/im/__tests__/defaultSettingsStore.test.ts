@@ -174,6 +174,12 @@ describe('im default settings store', () => {
         model: 'claude-sonnet-5',
         effort: 'high',
       },
+      // kimi-code 槽同为系统默认。
+      'kimi-code': {
+        providerId: null,
+        model: 'kimi-for-coding',
+        effort: 'high',
+      },
     });
   });
 

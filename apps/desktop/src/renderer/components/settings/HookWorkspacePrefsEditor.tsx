@@ -486,8 +486,8 @@ function PrefsField({
 }
 
 /** hook prefs 的 agentKind → 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' | 'kimi' {
+  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : agentKind === 'kimi-code' ? 'kimi' : 'cc';
 }
 
 /**

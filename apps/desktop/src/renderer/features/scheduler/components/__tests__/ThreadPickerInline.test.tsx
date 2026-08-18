@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
       [] as Array<{
         id: string;
         title: string;
-        agentKind: 'cc' | 'codex' | 'pi';
+        agentKind: 'cc' | 'codex' | 'pi' | 'kimi';
         source?: string;
       }>,
   ),

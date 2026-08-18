@@ -50,7 +50,7 @@ function pushMakerStatus(sessionId: string, data: Record<string, unknown>): void
 function pushMakerTaskUpdate(
   sessionId: string,
   taskId: string,
-  opts: { source?: 'claude-code' | 'codex' | 'pi'; status?: string; description?: string } = {},
+  opts: { source?: 'claude-code' | 'codex' | 'pi' | 'kimi-code'; status?: string; description?: string } = {},
 ): void {
   remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
     sessionId,
