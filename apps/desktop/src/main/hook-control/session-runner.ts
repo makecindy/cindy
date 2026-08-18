@@ -64,7 +64,11 @@ import {
   type InteractionRouteLease,
   type TurnOrigin as RoutedTurnOrigin,
 } from '../maker-ipc/interactionRouter.js';
-import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
+import {
+  buildHandoffText,
+  prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
+} from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
@@ -956,10 +960,87 @@ export function createMakerHookSessionRunner(deps: {
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
       const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}`;
-      const sendContent =
+      let replacementHandoff: string | null = null;
+      if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
+        try {
+          const previousMessages = await enqueueDurableWrite(
+            `hook-replacement-handoff:${req.replacementOfSessionId}`,
+            () => listMessagesForAgentHandoff(req.replacementOfSessionId!, 400),
+          );
+          let handoffMessages: typeof previousMessages;
+          if (previousMessages.length > 0) {
+            const hasFirstUserMessage = previousMessages.some(
+              (m, i) => i === 0 && m.role === 'user',
+            );
+            if (!hasFirstUserMessage && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: previousMessages[0].createdAt - 1,
+                  agentMeta: null,
+                },
+                ...previousMessages,
+              ];
+            } else {
+              handoffMessages = previousMessages;
+            }
+          } else {
+            const sessionRow = await getSessionRowSnapshotStrict(
+              req.replacementOfSessionId,
+            );
+            const sessionPersistedAndCleared = sessionRow !== null;
+            if (!sessionPersistedAndCleared && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: startedAt,
+                  agentMeta: null,
+                },
+              ];
+            } else {
+              handoffMessages = [];
+            }
+          }
+          if (handoffMessages.length > 0) {
+            replacementHandoff = buildHandoffText(handoffMessages, {
+              fromLabel: 'Cindy',
+              toLabel: 'Cindy',
+            });
+          }
+        } catch (err) {
+          if (req.replacementPrompt) {
+            replacementHandoff = buildHandoffText(
+              [
+                {
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: startedAt,
+                },
+              ],
+              { fromLabel: 'Cindy', toLabel: 'Cindy' },
+            );
+          }
+          log.warn(
+            `hook replacement history unavailable; ${
+              replacementHandoff ? 'using in-memory dispatch context' : 'continuing without handoff'
+            }: ${err instanceof Error ? err.name : 'unknown-error'}`,
+          );
+        }
+      }
+      const sendContentBase =
         imageBlocks.length > 0 || fileBlocks.length > 0
           ? [{ type: 'text' as const, text: promptWithNote }, ...imageBlocks, ...fileBlocks]
           : promptWithNote;
+      const sendContent = replacementHandoff
+        ? (prependHandoffToUserMessage(
+            { type: 'user', content: sendContentBase },
+            replacementHandoff,
+          ) as UserMessage).content
+        : sendContentBase;
       // 落库形态: 有附件用 {text, images, files} 对象(createMessage safeStringify
       // 存 JSON, 读回 parseUserContent 提取 images/files); 无附件纯文本 string。
       const userMessageContent =
