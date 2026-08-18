@@ -456,6 +456,29 @@ describe('agentInputQueue', () => {
     });
   });
 
+  it('preserves leading whitespace while sending a Pi Skill runtime command', () => {
+    const entry = queuedMessage(undefined);
+    entry.createOpts.agentKind = 'pi';
+    entry.text = '  \n/demo inspect this';
+    entry.persistedContent = JSON.stringify({
+      text: entry.text,
+      slashCommandRanges: [{ start: 3, end: 8 }],
+    });
+    entry.chatMessage.content = entry.text;
+    entry.chatMessage.slashCommandRanges = [{ start: 3, end: 8 }];
+    entry.agentSkillInvocation = {
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+    };
+
+    expect(buildMakerUserMessage(entry)).toEqual({
+      type: 'user',
+      content: '  \n/skill:demo inspect this',
+    });
+    expect(entry.text).toBe('  \n/demo inspect this');
+    expect(entry.chatMessage.content).toBe('  \n/demo inspect this');
+  });
+
   it('does not let a queue content edit introduce or replace a Pi Skill runtime mapping', () => {
     const old = queuedMessage(undefined);
     old.createOpts.agentKind = 'pi';

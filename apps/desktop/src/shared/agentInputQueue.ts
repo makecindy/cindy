@@ -9,6 +9,7 @@
  */
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import { leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   describeAgentInputReference,
@@ -732,9 +733,9 @@ function getRuntimeFacingText(queued: AgentInputQueuedMessage): string {
     || !invocation.name
     || !/^skill:[^\s/]+$/i.test(invocation.runtimeCommandName)
   ) return projected;
-  const match = projected.match(/^\/(\S+)([\s\S]*)$/);
-  if (!match || match[1].toLowerCase() !== invocation.name.toLowerCase()) return projected;
-  return `/${invocation.runtimeCommandName}${match[2]}`;
+  const leading = leadingSlashInvocation(projected);
+  if (!leading || leading.name.toLowerCase() !== invocation.name.toLowerCase()) return projected;
+  return `${projected.slice(0, leading.start)}/${invocation.runtimeCommandName}${projected.slice(leading.end)}`;
 }
 
 /**
