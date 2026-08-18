@@ -3789,6 +3789,16 @@ export class PiAgent extends BaseAgent {
         if (images.length > 0) command.images = images;
         const resp = await runExclusivePiRpc(() => proc.request(command));
         if (!resp.success) {
+          if (managedPackageRoute.accepted) {
+            // The host-owned mutation already completed and its deterministic
+            // receipt was published before this best-effort same-turn delivery.
+            // Resolving steer preserves the irreversible acceptance boundary so
+            // the input coordinator cannot retain and dispatch the command again.
+            deps.logger.warn('pi managed package receipt steer rejected after mutation', {
+              message: resp.error ?? 'unknown',
+            });
+            return;
+          }
           throw new Error(`pi ${managedExtensionCommand ? 'prompt' : 'steer'} rejected: ${resp.error ?? 'unknown'}`);
         }
       },

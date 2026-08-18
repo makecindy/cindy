@@ -34,6 +34,7 @@ const captured = vi.hoisted(() => ({
   failSetModel: false,
   rejectSetModel: false,
   failPrompt: false,
+  failSteer: false,
   failNextGetState: false,
   commandCatalog: null as null | Array<Record<string, unknown>>,
   onPrompt: null as null | ((command: Record<string, unknown>) => void),
@@ -89,6 +90,9 @@ vi.mock('../rpc-client.js', () => ({
       }
       if (cmd.type === 'prompt' && captured.failPrompt) {
         return { command: 'prompt', success: false };
+      }
+      if (cmd.type === 'steer' && captured.failSteer) {
+        return { command: 'steer', success: false, error: 'receipt steer rejected' };
       }
       if (cmd.type === 'prompt') captured.onPrompt?.(cmd);
       if (cmd.type === 'get_commands' && captured.commandCatalog) {
@@ -168,6 +172,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.failSetModel = false;
     captured.rejectSetModel = false;
     captured.failPrompt = false;
+    captured.failSteer = false;
     captured.failNextGetState = false;
     captured.commandCatalog = null;
     captured.onPrompt = null;
@@ -1416,6 +1421,66 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       captured.failPrompt = false;
       unsubscribe();
       await session.close();
+    }
+  });
+
+  it('keeps a completed steer mutation accepted when receipt delivery fails', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: 'npm:context-mode',
+        name: 'context-mode',
+        version: '1.0.169',
+        enabled: false,
+        requiresExtensionApproval: true,
+      },
+    }));
+    const warn = vi.fn();
+    const deps = buildDeps();
+    deps.logger = { ...noopLogger, warn };
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: '确认',
+      cancel: '取消',
+      mutationFailed: 'Pi 扩展操作失败。',
+      mutationSuccess: {
+        install: 'Pi 扩展已安装；重启任务后生效。',
+        update: 'Pi 扩展已更新；重启任务后生效。',
+        remove: 'Pi 扩展已卸载。',
+      },
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-durable-steer-receipt-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      captured.failSteer = true;
+      await expect(handle.steer({
+        type: 'user',
+        content: 'pi install npm:context-mode',
+      })).resolves.toBeUndefined();
+
+      let visibleReceipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        if (event.value.type === 'text' && event.value.data.text.includes('Pi 扩展已安装')) {
+          visibleReceipt = event.value.data.text;
+          break;
+        }
+      }
+      expect(visibleReceipt).toContain('Pi 扩展已安装；重启任务后生效。');
+      expect(captured.requests.filter((request) => request.type === 'steer')).toHaveLength(1);
+      expect(mutatePiManagedPackage).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        'pi managed package receipt steer rejected after mutation',
+        { message: 'receipt steer rejected' },
+      );
+    } finally {
+      captured.failSteer = false;
+      await handle.close();
     }
   });
 
