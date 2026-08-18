@@ -14,6 +14,7 @@ import {
   issuePiPackageMutationGrant,
   type PiPackageMutationGrant,
 } from './pi-package-mutation-grant.js';
+import { escapePiPackageNativeDialogText } from './pi-package-native-dialog.js';
 import { mutatePiPackage } from './pi-package-store.js';
 
 type ManagedMutationRequest = Pick<PiPackageMutationRequest, 'action' | 'source'>;
@@ -30,7 +31,7 @@ export interface PiManagedPackageMutationDeps {
 export async function confirmLocalPiManagedPackageMutation(
   request: ManagedMutationRequest,
 ): Promise<boolean> {
-  const source = request.source.trim();
+  const source = escapePiPackageNativeDialogText(request.source);
   const copy = request.action === 'remove'
     ? {
         title: t('settings.piPackages.uninstallTitle'),

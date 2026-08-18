@@ -23,7 +23,11 @@ vi.mock('../pi-package-mutation-grant.js', () => ({
 }));
 
 vi.mock('../../i18n.js', () => ({
-  t: (key: string) => key,
+  t: (key: string) => ({
+    'settings.piPackages.uninstallDescription': 'remove {{name}}',
+    'settings.piPackages.updateConfirmDescription': 'update {{source}}',
+    'settings.piPackages.confirmDescription': 'install {{source}}',
+  }[key] ?? key),
 }));
 
 import { PiManagedPackageMutationCancelledError } from '@cindy/maker-core';
@@ -86,6 +90,22 @@ describe('Pi managed package Main authorization', () => {
     expect(deps.mutate).not.toHaveBeenCalled();
   });
 
+  it('keeps the original source bound to the grant and mutation after display-only escaping', async () => {
+    const { deps, grant } = buildDeps();
+    const source = 'npm:trusted\tname\u001b\u202Etxt';
+    const request = {
+      action: 'install' as const,
+      source,
+      authorization: 'local-desktop-command' as const,
+    };
+
+    await mutateAuthorizedPiManagedPackage(request, deps);
+
+    expect(deps.confirmLocalMutation).toHaveBeenCalledWith({ action: 'install', source });
+    expect(deps.issueGrant).toHaveBeenCalledWith({ action: 'install', source });
+    expect(deps.mutate).toHaveBeenCalledWith({ action: 'install', source }, grant);
+  });
+
   it.each(['authenticated-im-command', 'confirmed-tool-call'] as const)(
     'accepts host-trusted %s without a second Desktop dialog',
     async (authorization) => {
@@ -138,5 +158,29 @@ describe('Pi managed package Main authorization', () => {
         cancelId: 1,
       }),
     );
+  });
+
+  it.each([
+    ['install', 'install'] as const,
+    ['update', 'update'] as const,
+    ['remove', 'remove'] as const,
+  ])('escapes untrusted controls in the %s dialog without changing the mutation source', async (
+    action,
+    verb,
+  ) => {
+    const source = 'C:\\safe\\pkg\tname\u001b\u202Etxt\u2066\u2028end';
+    electron.showMessageBox.mockResolvedValue({ response: 0 });
+
+    await expect(confirmLocalPiManagedPackageMutation({ action, source })).resolves.toBe(true);
+
+    const options = electron.showMessageBox.mock.calls[0]?.at(-1) as { detail: string };
+    expect(options.detail).toBe(
+      `${verb} C:\\\\safe\\\\pkg\\u{0009}name\\u{001B}\\u{202E}txt\\u{2066}\\u{2028}end`,
+    );
+    expect(options.detail).not.toContain('\t');
+    expect(options.detail).not.toContain('\u001b');
+    expect(options.detail).not.toContain('\u202E');
+    expect(options.detail).not.toContain('\u2066');
+    expect(options.detail).not.toContain('\u2028');
   });
 });

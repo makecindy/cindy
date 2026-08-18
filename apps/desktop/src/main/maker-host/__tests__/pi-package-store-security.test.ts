@@ -518,8 +518,8 @@ describe('Pi package executable-code boundary', () => {
   it('builds a bounded Main-inspected enable identity without exposing local paths', async () => {
     const { root, source } = await createPackage();
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
-      name: `trusted\n${'名'.repeat(400)}/../../private`,
-      version: `1.2.3\r${'v'.repeat(400)}`,
+      name: `trusted\n\u202E${'名'.repeat(400)}/../../private`,
+      version: `1.2.3\r\u2066${'v'.repeat(400)}`,
       pi: { extensions: ['./extensions'], prompts: ['./prompts'] },
     }));
     const store = await import('../pi-package-store.js');
@@ -527,8 +527,10 @@ describe('Pi package executable-code boundary', () => {
     const before = await store.capturePiPackageEnableIdentity(source);
     expect(before.displayLabel).not.toContain(root);
     expect(before.displayLabel).not.toContain('\r');
+    expect(before.displayLabel).not.toContain('\u202E');
+    expect(before.displayLabel).not.toContain('\u2066');
     expect(before.displayLabel.split('\n')).toHaveLength(2);
-    expect(before.displayLabel).toContain('1.2.3');
+    expect(before.displayLabel.split('\n')[0]).toContain(path.basename(root).slice(0, 24));
     expect(before.expectedPackageFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(before.displayLabel).toContain(
       `SHA-256: ${before.expectedPackageFingerprint}`,

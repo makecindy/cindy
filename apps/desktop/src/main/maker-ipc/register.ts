@@ -531,6 +531,7 @@ import {
   issuePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
 } from '../maker-host/pi-package-mutation-grant.js';
+import { escapePiPackageNativeDialogText } from '../maker-host/pi-package-native-dialog.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   triggerClaudeSubscriptionUsageRefresh,
@@ -6320,7 +6321,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
         : undefined;
 
-      const source = request.source.trim();
+      const source = escapePiPackageNativeDialogText(request.source);
       const copy =
         request.action === 'set-enabled'
           ? {

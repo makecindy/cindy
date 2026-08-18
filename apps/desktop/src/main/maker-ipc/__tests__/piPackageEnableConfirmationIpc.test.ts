@@ -41,4 +41,19 @@ describe('Pi package enable confirmation IPC contract', () => {
     expect(handler).not.toContain('payload.name');
     expect(handler).not.toContain('payload.version');
   });
+
+  it('uses one Main-owned display escape for every Renderer-provided mutation source', () => {
+    const handler = mutationHandlerSource();
+    const displayEscape = handler.indexOf(
+      'const source = escapePiPackageNativeDialogText(request.source);',
+    );
+    const nativeDialog = handler.indexOf('dialog.showMessageBox');
+    const grantIssue = handler.indexOf('issuePiPackageMutationGrant(request, grantBinding)');
+
+    expect(displayEscape).toBeGreaterThanOrEqual(0);
+    expect(displayEscape).toBeLessThan(nativeDialog);
+    expect(grantIssue).toBeGreaterThan(nativeDialog);
+    expect(handler).not.toContain('request.source.trim()');
+    expect(handler).toContain('mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding))');
+  });
 });

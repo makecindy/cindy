@@ -39,6 +39,7 @@ import {
   type PiPackageMutationGrant,
   type PiPackageMutationGrantBinding,
 } from './pi-package-mutation-grant.js';
+import { escapePiPackageNativeDialogText } from './pi-package-native-dialog.js';
 import { killProcessTree } from '../scheduler-host/proc-util.js';
 
 const log = createLogger('pi-package-store');
@@ -1403,7 +1404,7 @@ export interface PiPackageEnableIdentity {
 
 function nativeConfirmationField(value: string, maxBytes: number): string {
   return truncateDisplayField(
-    value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/\s+/g, ' '),
+    escapePiPackageNativeDialogText(value).replace(/\s+/g, ' '),
     maxBytes,
   );
 }
