@@ -155,6 +155,23 @@ async function createPackage(options?: {
   return { root, source };
 }
 
+async function createSkillOnlyPackage(source: string): Promise<{ root: string; source: string }> {
+  const pkg = await createPackage({ source });
+  await fs.rm(path.join(pkg.root, 'extensions'), { recursive: true, force: true });
+  await fs.rm(path.join(pkg.root, 'prompts'), { recursive: true, force: true });
+  await fs.mkdir(path.join(pkg.root, 'skills', 'managed-skill'), { recursive: true });
+  await fs.writeFile(path.join(pkg.root, 'package.json'), JSON.stringify({
+    name: source.slice(4),
+    version: '1.0.0',
+    pi: { skills: ['./skills'] },
+  }));
+  await fs.writeFile(
+    path.join(pkg.root, 'skills', 'managed-skill', 'SKILL.md'),
+    '# Managed skill\n',
+  );
+  return pkg;
+}
+
 beforeEach(async () => {
   runtime.userData = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-security-home-'));
   roots.push(runtime.userData);
@@ -1450,6 +1467,108 @@ describe('Pi package executable-code boundary', () => {
     expect(installSpawn?.env.npm_config_ignore_scripts).toBe('true');
     expect(installSpawn?.env.NPM_CONFIG_IGNORE_SCRIPTS).toBe('true');
     expect(installSpawn?.args).toContain('--no-approve');
+  });
+
+  it.each([
+    ['transient I/O', 'EIO'],
+    ['permission', 'EACCES'],
+  ])('fails closed without replacing disabled state after a %s read failure', async (_label, code) => {
+    const { source } = await createSkillOnlyPackage('npm:disabled-skill-package');
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const persistedState = `${JSON.stringify({
+      version: 3,
+      disabledSources: [source],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }, null, 2)}\n`;
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, persistedState);
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, 'readFile').mockImplementation((async (
+      target: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1],
+    ) => {
+      if (path.resolve(String(target)) === path.resolve(stateFile)) {
+        throw Object.assign(new Error(`simulated ${code}`), { code });
+      }
+      return originalReadFile(target, options as never);
+    }) as typeof fs.readFile);
+    try {
+      const store = await import('../pi-package-store.js');
+      await expect(store.listPiPackages()).resolves.toMatchObject({
+        packages: [{
+          source,
+          enabled: false,
+          canToggle: false,
+          warning: 'inspection-failed',
+          resources: [expect.objectContaining({ kind: 'skill' })],
+        }],
+      });
+      await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+      });
+      await expect(store.mutatePiPackage({
+        action: 'set-enabled',
+        source,
+        enabled: false,
+      })).rejects.toThrow('Pi extension state is unavailable');
+    } finally {
+      readSpy.mockRestore();
+    }
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(persistedState);
+  });
+
+  it('fails closed and preserves a corrupt state file instead of treating it as empty', async () => {
+    const { source } = await createSkillOnlyPackage('npm:corrupt-state-skill-package');
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    const stateFile = path.join(stateDir, 'cindy-package-state.json');
+    const corruptState = '{"version":3,"disabledSources":[';
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(stateFile, corruptState);
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{
+        source,
+        enabled: false,
+        canToggle: false,
+        warning: 'inspection-failed',
+      }],
+    });
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'corrupt-state-snapshot'),
+    })).resolves.toEqual({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    });
+    await expect(store.mutatePiPackage({
+      action: 'set-enabled',
+      source,
+      enabled: false,
+    })).rejects.toThrow('Pi extension state is unavailable');
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toBe(corruptState);
+  });
+
+  it('keeps a valid disabled Skill package disabled with its state readable', async () => {
+    const { source } = await createSkillOnlyPackage('npm:valid-disabled-skill-package');
+    const stateDir = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'cindy-package-state.json'), JSON.stringify({
+      version: 3,
+      disabledSources: [source],
+      approvedExtensionSources: [],
+      approvedExtensionFingerprints: {},
+      snapshotUnavailableRoots: {},
+    }));
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false }],
+    });
+    await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    });
   });
 
   it('normalizes a bare registry package name to Pi npm source syntax', async () => {

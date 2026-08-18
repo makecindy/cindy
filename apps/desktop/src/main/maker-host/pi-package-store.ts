@@ -179,6 +179,17 @@ interface PiPackageState {
   snapshotUnavailableRoots: Record<string, SnapshotUnavailableWarning>;
 }
 
+type PiPackageStateReadResult =
+  | { ok: true; state: PiPackageState }
+  | { ok: false; error: unknown };
+
+class PiPackageStateUnavailableError extends Error {
+  constructor() {
+    super('Pi extension state is unavailable');
+    this.name = 'PiPackageStateUnavailableError';
+  }
+}
+
 interface ListedPackage {
   source: string;
   installedPath?: string;
@@ -358,13 +369,23 @@ function applySharedSnapshotUnavailableRoots(
   }
 }
 
-async function readState(): Promise<PiPackageState> {
+function emptyState(): PiPackageState {
+  return {
+    version: STATE_VERSION,
+    disabledSources: [],
+    approvedExtensionSources: [],
+    approvedExtensionFingerprints: {},
+    snapshotUnavailableRoots: {},
+  };
+}
+
+async function readState(): Promise<PiPackageStateReadResult> {
   try {
     const parsed = JSON.parse(await fs.readFile(statePath(), 'utf8')) as Record<string, unknown>;
     const fingerprints = parseApprovedExtensionFingerprints(
       parsed.approvedExtensionFingerprints,
     );
-    const unavailableRoots = parseSnapshotUnavailableRoots(parsed.snapshotUnavailableRoots) ?? {};
+    const unavailableRoots = parseSnapshotUnavailableRoots(parsed.snapshotUnavailableRoots);
     if (
       parsed.version === STATE_VERSION
       && Array.isArray(parsed.disabledSources)
@@ -372,17 +393,21 @@ async function readState(): Promise<PiPackageState> {
       && Array.isArray(parsed.approvedExtensionSources)
       && parsed.approvedExtensionSources.every((source) => typeof source === 'string')
       && fingerprints
+      && unavailableRoots
     ) {
       const approvedExtensionSources = [...new Set(parsed.approvedExtensionSources)]
         .filter((source) => Object.hasOwn(fingerprints, source));
       return {
-        version: STATE_VERSION,
-        disabledSources: [...new Set(parsed.disabledSources)],
-        approvedExtensionSources,
-        approvedExtensionFingerprints: Object.fromEntries(
-          approvedExtensionSources.map((source) => [source, fingerprints[source]!]),
-        ),
-        snapshotUnavailableRoots: unavailableRoots,
+        ok: true,
+        state: {
+          version: STATE_VERSION,
+          disabledSources: [...new Set(parsed.disabledSources)],
+          approvedExtensionSources,
+          approvedExtensionFingerprints: Object.fromEntries(
+            approvedExtensionSources.map((source) => [source, fingerprints[source]!]),
+          ),
+          snapshotUnavailableRoots: unavailableRoots,
+        },
       };
     }
     if (
@@ -393,24 +418,35 @@ async function readState(): Promise<PiPackageState> {
       // Preserve explicit disables. Older approvals had no byte identity, so
       // they cannot authorize executable code under the v3 content boundary.
       return {
-        version: STATE_VERSION,
-        disabledSources: [...new Set(parsed.disabledSources)],
-        approvedExtensionSources: [],
-        approvedExtensionFingerprints: {},
-        snapshotUnavailableRoots: {},
+        ok: true,
+        state: {
+          version: STATE_VERSION,
+          disabledSources: [...new Set(parsed.disabledSources)],
+          approvedExtensionSources: [],
+          approvedExtensionFingerprints: {},
+          snapshotUnavailableRoots: {},
+        },
       };
     }
-  } catch {
-    // Missing/corrupt state is safe for data-only packages; extension-bearing
-    // packages are still held disabled after inspection until approved.
+    throw new Error('Pi extension state has an invalid structure');
+  } catch (error) {
+    // A missing file is the expected initial state before Cindy has persisted
+    // any package preference. Every other read/parse failure is distinct: an
+    // empty fallback there could silently re-enable a package the user disabled.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { ok: true, state: emptyState() };
+    }
+    log.warn('failed to read Pi extension state', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false, error };
   }
-  return {
-    version: STATE_VERSION,
-    disabledSources: [],
-    approvedExtensionSources: [],
-    approvedExtensionFingerprints: {},
-    snapshotUnavailableRoots: {},
-  };
+}
+
+async function requireState(): Promise<PiPackageState> {
+  const result = await readState();
+  if (!result.ok) throw new PiPackageStateUnavailableError();
+  return result.state;
 }
 
 async function writeState(state: PiPackageState): Promise<void> {
@@ -1320,7 +1356,7 @@ async function inspectPackage(
 }
 
 async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
-  const [{ stdout }, state] = await Promise.all([
+  const [{ stdout }, stateResult] = await Promise.all([
     runPiPackageCommand(
       ['list', '--no-approve'],
       COMMAND_TIMEOUT_MS,
@@ -1332,7 +1368,10 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
   // Main process. Every fresh inspection replaces the local projection with
   // the atomically persisted view so packaged/dev peers agree after the
   // existing change-token invalidation.
-  applySharedSnapshotUnavailableRoots(state.snapshotUnavailableRoots);
+  const state = stateResult.ok ? stateResult.state : emptyState();
+  if (stateResult.ok) {
+    applySharedSnapshotUnavailableRoots(state.snapshotUnavailableRoots);
+  }
   const listed = parsePiPackageListOutput(stdout);
   const startedAt = Date.now();
   const inspected: InspectedPackage[] = [];
@@ -1356,12 +1395,33 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
       });
       continue;
     }
-    inspected.push(await inspectPackage(
+    const inspectedPackage = await inspectPackage(
       pkg,
       state,
       fingerprintCache,
       aggregateFingerprintBudget,
-    ));
+    );
+    if (stateResult.ok) {
+      inspected.push(inspectedPackage);
+    } else {
+      inspected.push({
+        rawSource: inspectedPackage.rawSource,
+        view: {
+          ...inspectedPackage.view,
+          enabled: false,
+          canToggle: false,
+          warning: 'inspection-failed',
+        },
+        launch: { extensions: [], skills: [], promptTemplates: [], packageRoots: [] },
+        promptCommands: [],
+        ...(inspectedPackage.installedRoot
+          ? { installedRoot: inspectedPackage.installedRoot }
+          : {}),
+        ...(inspectedPackage.contentFingerprint
+          ? { contentFingerprint: inspectedPackage.contentFingerprint }
+          : {}),
+      });
+    }
     // Package inspection includes synchronous parser work in Electron's main
     // process. Yield between packages so a long roster cannot monopolize it.
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1470,6 +1530,7 @@ function piPackageEnableDisplayLabel(
 export async function capturePiPackageEnableIdentity(source: string): Promise<PiPackageEnableIdentity> {
   const normalizedSource = requireSource(source);
   return enqueueMutation(async () => {
+    await requireState();
     const inspected = await inspectAllPackagesFreshUnderMutationLock();
     const target = await findAffectedInspectedPackage(inspected, normalizedSource);
     if (!target) throw new Error('Pi package is not installed');
@@ -1489,7 +1550,7 @@ export async function capturePiPackageEnableIdentity(source: string): Promise<Pi
 async function persistSnapshotUnavailableProjection(
   unavailableRoots: Iterable<readonly [string, SnapshotUnavailableWarning]>,
 ): Promise<boolean> {
-  const state = await readState();
+  const state = await requireState();
   const next: Record<string, SnapshotUnavailableWarning> = {};
   for (const [root, warning] of unavailableRoots) {
     next[path.resolve(root)] = warning;
@@ -2194,7 +2255,7 @@ export async function stageManagedPackageSnapshot(
 async function revokeExtensionApproval(sources: Iterable<string>): Promise<void> {
   const targets = new Set(sources);
   if (targets.size === 0) return;
-  const state = await readState();
+  const state = await requireState();
   const approvedExtensionSources = state.approvedExtensionSources
     .filter((source) => !targets.has(source));
   const approvedExtensionFingerprints = Object.fromEntries(
@@ -2245,6 +2306,10 @@ export async function mutatePiPackage(
   }
   let mutationMayHaveChangedState = false;
   return enqueueMutation(async () => {
+    // Never mutate the package tree or replace the durable preference file if
+    // the existing state cannot be read. Otherwise a transient read failure
+    // could erase explicit disables after a successful package command.
+    await requireState();
     // Every mutation starts from one fresh projection acquired after the
     // shared cross-process lock. A packaged/dev/--passive peer may have
     // installed, removed, updated, or changed approval state since this
@@ -2279,7 +2344,7 @@ export async function mutatePiPackage(
         mutationCommandSource(source, previous),
         '--no-approve',
       ]);
-      const state = await readState();
+      const state = await requireState();
       const removedSources = new Set([
         ...sourceAliases(source),
         ...(previous ? sourceAliases(previous.rawSource) : []),
@@ -2321,7 +2386,7 @@ export async function mutatePiPackage(
       const target = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       if (!target) throw new Error('Pi package is not installed');
       affectedSource = target.rawSource;
-      const state = await readState();
+      const state = await requireState();
       const disabled = new Set(state.disabledSources);
       const approved = new Set(state.approvedExtensionSources);
       const approvedFingerprints = { ...state.approvedExtensionFingerprints };
