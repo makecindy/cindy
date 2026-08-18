@@ -201,9 +201,7 @@ export function UserMessageEditBox({
         ? [...slashCommandRanges]
         : submitTokenIsRuntimeAlias && originalHadConfirmedRange && rebuiltSlashRange
           ? [rebuiltSlashRange]
-          : slashCommandRanges !== undefined
-            ? []
-            : undefined;
+          : undefined;
       if (onCommitOverride) {
         // 被拦消息:普通重发(不 rewind)。失败抛错落入下方 catch 保留编辑态。
         await onCommitOverride({

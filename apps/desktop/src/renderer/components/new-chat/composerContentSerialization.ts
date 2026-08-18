@@ -27,12 +27,7 @@ import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 
 import type { MentionChipAttrs } from './MentionChipNode';
 import type { PastedTextChipAttrs } from './PastedTextChipNode';
-import { projectKnownRuntimeSlashCommands } from '@cindy/maker-shared/composer-palette';
-import {
-  getDecoratedSlashCommandMatches,
-  getSlashCommandRoster,
-  type SlashCommandMatch,
-} from './SlashCommandDecoration';
+import { getDecoratedSlashCommandMatches, type SlashCommandMatch } from './SlashCommandDecoration';
 import { serializeSessionChipText } from './sessionLinkPaste';
 import { serializeProjectChipText } from './pastePipeline';
 
@@ -621,14 +616,8 @@ export function serializeEditorSlice(editor: Editor | null, slice: Slice): strin
         }
       }
     }
-    return projectKnownRuntimeSlashCommands(
-      serializeComposerDocument(replaced, []).text,
-      getSlashCommandRoster(editor.state),
-    );
+    return serializeComposerDocument(replaced, []).text;
   } catch {
-    return projectKnownRuntimeSlashCommands(
-      slice.content.textBetween(0, slice.content.size, '\n'),
-      getSlashCommandRoster(editor.state),
-    );
+    return slice.content.textBetween(0, slice.content.size, '\n');
   }
 }

@@ -64,6 +64,23 @@ export function rewriteAgentSkillInvocationForDispatch(
   return `/${command.runtimeCommandName}${match[2]}`;
 }
 
+/** Rewrite `/git` → `/skill:git` even when the skill is still `discovered`. */
+export function rewritePiSkillAliasFromCommand(
+  message: string,
+  command: UnifiedCommand | undefined,
+): string {
+  const token = message.match(/^\/(\S+)/)?.[1];
+  if (
+    !token
+    || command?.kind !== 'agent-skill'
+    || !command.runtimeCommandName
+    || token.toLowerCase() !== command.name.toLowerCase()
+  ) {
+    return rewriteAgentSkillInvocationForDispatch(message, command);
+  }
+  return `/${command.runtimeCommandName}${message.slice(token.length + 1)}`;
+}
+
 /** First-message / worktree send paths that skip SessionView dispatch. */
 export async function rewritePiSkillMessageForSend(params: {
   agentKind: AgentKind;
@@ -78,7 +95,7 @@ export async function rewritePiSkillMessageForSend(params: {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
   const hit = commands.find((command) => command.name.toLowerCase() === token.toLowerCase());
-  return rewriteAgentSkillInvocationForDispatch(params.message, hit);
+  return rewritePiSkillAliasFromCommand(params.message, hit);
 }
 
 /**

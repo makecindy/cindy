@@ -12,6 +12,7 @@ import {
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
+  rewritePiSkillAliasFromCommand,
   rewritePiSkillMessageForSend,
   slashCommandInvocationName,
   type UnifiedCommand,
@@ -79,6 +80,17 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
       agentKind: 'codex',
       message: '/git please',
     })).resolves.toBe('/git please');
+  });
+
+  it('rewrites a discovered Pi project skill that already has a runtime alias', () => {
+    const discovered = skill({
+      name: 'git',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+      runtimeCommandName: 'skill:git',
+    });
+    expect(rewriteAgentSkillInvocationForDispatch('/git please', discovered)).toBe('/git please');
+    expect(rewritePiSkillAliasFromCommand('/git please', discovered)).toBe('/skill:git please');
   });
 });
 
