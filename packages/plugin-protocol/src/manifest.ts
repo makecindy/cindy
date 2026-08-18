@@ -1327,10 +1327,19 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     return { ok: false, reason: '必须声明 slots(非空数组,能力白名单)' };
   }
   const slots: GhostSlot[] = [];
+  // 字符串形态的未知卡槽可能是新版 Cindy 才认识的能力(应提示升级宿主);非字符串
+  // (数字/null 等)是形状畸形,立即判包无效。字符串未知项先记下并跳过,让其余字段
+  // 继续校验——只有除此之外清单完全合法时才在收尾处报"宿主不支持",避免 tools
+  // 等其它字段也有错误时被升级提示掩盖(包本身坏了,不该让用户去升级 Cindy)。
+  let unknownStringSlot: string | null = null;
   for (const s of raw.slots) {
     // 旧名兼容:'model' 静默归一化为 'cindy'(2026-07-11 更名,已装老包不消失)。
     const name = s === 'model' ? 'cindy' : s;
     if (typeof name !== 'string' || !(GHOST_SLOTS as readonly string[]).includes(name)) {
+      if (typeof s === 'string' && s !== 'model') {
+        unknownStringSlot ??= s;
+        continue;
+      }
       return {
         ok: false,
         reason: `slots 含未知卡槽 ${JSON.stringify(s)}(可用:${GHOST_SLOTS.join(' / ')})`,
@@ -3081,6 +3090,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       seen.add(fold);
       keywords.push(word);
     }
+  }
+
+  // 走到这里说明除字符串未知卡槽外的所有字段都合法:此时才报告"宿主不支持",
+  // 给桌面端升级指引。若其它字段也有错误,上面早已返回具体的包无效原因。
+  if (unknownStringSlot !== null) {
+    return {
+      ok: false,
+      reason: `slots 含未知卡槽 ${JSON.stringify(unknownStringSlot)}(可用:${GHOST_SLOTS.join(' / ')})`,
+    };
   }
 
   return {

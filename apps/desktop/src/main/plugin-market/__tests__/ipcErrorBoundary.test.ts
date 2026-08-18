@@ -160,12 +160,24 @@ describe('Plugin Market IPC error boundary', () => {
       manifestIncompatible: true,
     },
     {
-      label: 'an unknown string slot',
+      label: 'an unknown string slot in an otherwise valid manifest',
       response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
         slots: ['future-capability'],
+        // 声明了未知卡槽时不再声明 tool 槽相关字段,保证除此之外清单结构合法。
+        tools: undefined,
       }),
       hostUnsupported: true,
       manifestIncompatible: false,
+    },
+    {
+      label: 'an unknown string slot alongside another malformed field',
+      // slots 的未知字符串项本可提示升级,但 tools 字段也畸形——包本身有问题,
+      // 必须报文件无效而非让用户升级 Cindy(其余字段先校验,错误不被升级提示掩盖)。
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: ['future-capability'],
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
     },
     {
       label: 'a numeric slot',

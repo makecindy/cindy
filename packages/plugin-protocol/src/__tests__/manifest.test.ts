@@ -812,6 +812,32 @@ describe('Ghost manifest contract', () => {
     });
   });
 
+  it('defers the unknown-string-slot error until other fields pass validation', () => {
+    // 字符串形态的未知卡槽本可提示"宿主不支持、请升级",但 tools 字段畸形时必须先报
+    // 包本身的问题,不能让用户去升级 Cindy。
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        slots: ['future-capability'],
+        tools: 'not an array',
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('tools 必须是 1–16 项的数组'),
+    });
+    // 除未知字符串卡槽外完全合法时,才在收尾处报告未知卡槽(供桌面端映射为升级提示)。
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        slots: ['future-capability'],
+        tools: undefined,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('未知卡槽 "future-capability"'),
+    });
+  });
+
   it('enforces node slot / detail pairing and entry discipline', () => {
     const base = {
       ...validManifest,
