@@ -181,6 +181,8 @@ export function AgentTabs({ value, onChange, disabled }: { value: AgentKind; onC
       // 此处使用 Radix Popover，让嵌套焦点与 outside-interaction 语义正确组合。
       useMorphPopover={false}
       overlayContentClassName="z-[10010]"
+      // Scheduler 的 Kimi 派发(Phase 3)尚未接入,表单选项先隐藏,避免配置出运行时不存在的任务。
+      hiddenVendors={['kimi']}
       onChange={(vendor) => {
         onChange(vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : vendor === 'kimi' ? 'kimi-code' : 'codex');
       }}

@@ -105,7 +105,7 @@ export function getModelById(modelId: string, deviceId?: string): ModelDefinitio
 
 /** vendor → capabilities 缓存的 agent 键(pi 有自己的能力清单)。 */
 function agentKindForVendor(vendorKey: 'cc' | 'codex' | 'pi' | 'kimi'): 'claude-code' | 'codex' | 'pi' | 'kimi-code' {
-  return vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : 'claude-code';
+  return vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : vendorKey === 'kimi' ? 'kimi-code' : 'claude-code';
 }
 
 export function getModelsForVendor(

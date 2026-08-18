@@ -118,13 +118,14 @@ export function CreateWorkerPopover({
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
   const piCaps = useAgentCapabilities('pi', deviceId);
+  const kimiCaps = useAgentCapabilities('kimi-code', deviceId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : localProviders.providers;
   const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
   const providersError = deviceId ? remoteProviders.error : null;
   const visibilityVersion = useModelVisibilityVersion();
-  const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
+  const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : agent === 'kimi-code' ? kimiCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
   const supportsWorkerPermissionModeSelection =
     !deviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
@@ -802,7 +803,7 @@ export function CreateWorkerPopover({
             {noAvailableLocalModels ? (
               <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
                 {t('orca.createWorker.noAvailableModels', {
-                  agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
+                  agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : agent === 'kimi-code' ? 'Kimi Code' : 'Claude Code',
                 })}
               </p>
             ) : null}

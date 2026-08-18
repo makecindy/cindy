@@ -259,7 +259,7 @@ export interface XdtshareManifest {
 }
 
 const FIDELITIES: ReadonlySet<string> = new Set(['full', 'partial', 'db-only']);
-const AGENT_KINDS: ReadonlySet<string> = new Set(['cc', 'codex', 'pi']);
+const AGENT_KINDS: ReadonlySet<string> = new Set(['cc', 'codex', 'pi', 'kimi']);
 const WORKSPACE_KINDS: ReadonlySet<string> = new Set(['project', 'dialogue']);
 const ORCA_TEAM_STATUSES: ReadonlySet<string> = new Set([
   'active',

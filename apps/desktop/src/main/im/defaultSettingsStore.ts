@@ -352,7 +352,7 @@ function settingsOverrides(
     overrides.groupPermissionMode = value.groupPermissionMode;
   }
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
-  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
+  for (const agentKind of ['claude-code', 'codex', 'pi', 'kimi-code'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       agents[agentKind] = value.agents[agentKind];
     }
@@ -368,7 +368,7 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     keys.push('groupPermissionMode');
   }
-  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
+  for (const agentKind of ['claude-code', 'codex', 'pi', 'kimi-code'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
     }
