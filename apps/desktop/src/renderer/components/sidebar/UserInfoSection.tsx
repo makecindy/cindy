@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
+import { Tip } from '@/components/ui/tooltip';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { MobileDownloadDialog } from './MobileDownloadDialog';
@@ -38,6 +39,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   // 让新地址有机会渲染,而不是永远停在首字母兜底。
   const isLocal = mode === 'local';
   const displayName = user?.name ?? (isLocal ? t('settings.userProfile.local.name') : '');
+  const settingsLinkLabel = t('sidebar.user.settingsLink', { name: displayName });
   const avatarUrl = user?.avatar ?? null;
   useEffect(() => {
     setAvatarError(false);
@@ -88,73 +90,74 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   };
 
   const mobileDownloadEntry = (
-    <button
-      ref={mobileDownloadButtonRef}
-      type="button"
-      onClick={() => setMobileDownloadOpen(true)}
-      aria-label={t('sidebar.user.downloadMobile')}
-      className={cn(
-        'mobile-download-btn',
-        'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
-        !isCollapsed && 'mr-1',
-        'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
-        'text-[var(--sidebar-user-card-text)] transition-colors hover:bg-sidebar-item-hover',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-      )}
-    >
-      <Smartphone className="h-3 w-3" aria-hidden="true" />
-    </button>
+    <Tip text={t('sidebar.user.downloadMobile')} side="right">
+      <button
+        ref={mobileDownloadButtonRef}
+        type="button"
+        onClick={() => setMobileDownloadOpen(true)}
+        aria-label={t('sidebar.user.downloadMobile')}
+        className={cn(
+          'mobile-download-btn',
+          'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
+          !isCollapsed && 'mr-1',
+          'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
+          'text-[var(--sidebar-user-card-text)] transition-colors hover:bg-sidebar-item-hover',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        )}
+      >
+        <Smartphone className="h-3 w-3" aria-hidden="true" />
+      </button>
+    </Tip>
   );
 
   if (isCollapsed) {
     return (
       <>
         <div className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3">
-          <button
-            onClick={handleClick}
-            role="link"
-            aria-label={t('sidebar.user.settingsLink', { name: displayName })}
-            className="flex min-w-0 items-center justify-center text-left"
-          >
-            <div
-              className="relative h-9 w-9 shrink-0"
-              title={isCanary ? t('sidebar.user.canaryBadge') : undefined}
+          <Tip text={settingsLinkLabel} side="right">
+            <button
+              onClick={handleClick}
+              role="link"
+              aria-label={settingsLinkLabel}
+              className="flex min-w-0 items-center justify-center text-left"
             >
-              {user?.avatar && !avatarError ? (
-                <img
-                  src={user.avatar}
-                  alt={displayName}
-                  className="h-9 w-9 rounded-full object-cover"
-                  onError={() => setAvatarError(true)}
-                />
-              ) : (
-                <div
-                  className={cn(
-                    'flex h-9 w-9 items-center justify-center rounded-full',
-                    'border border-sidebar-border bg-sidebar-item-hover text-base font-medium text-foreground',
-                  )}
-                >
-                  {showNotSignedInGlyph ? (
-                    <UserRound aria-hidden="true" size={18} strokeWidth={1.75} />
-                  ) : (
-                    initial
-                  )}
-                </div>
-              )}
-              {isCanary && (
-                <span
-                  aria-label={t('sidebar.user.canaryBadge')}
-                  className={cn(
-                    'absolute -bottom-0.5 -right-0.5',
-                    'flex h-3 w-3 items-center justify-center rounded-full',
-                    'bg-foreground text-background ring-2 ring-sidebar',
-                  )}
-                >
-                  <Shield size={8} strokeWidth={2.5} />
-                </span>
-              )}
-            </div>
-          </button>
+              <div className="relative h-9 w-9 shrink-0">
+                {user?.avatar && !avatarError ? (
+                  <img
+                    src={user.avatar}
+                    alt={displayName}
+                    className="h-9 w-9 rounded-full object-cover"
+                    onError={() => setAvatarError(true)}
+                  />
+                ) : (
+                  <div
+                    className={cn(
+                      'flex h-9 w-9 items-center justify-center rounded-full',
+                      'border border-sidebar-border bg-sidebar-item-hover text-base font-medium text-foreground',
+                    )}
+                  >
+                    {showNotSignedInGlyph ? (
+                      <UserRound aria-hidden="true" size={18} strokeWidth={1.75} />
+                    ) : (
+                      initial
+                    )}
+                  </div>
+                )}
+                {isCanary && (
+                  <span
+                    aria-label={t('sidebar.user.canaryBadge')}
+                    className={cn(
+                      'absolute -bottom-0.5 -right-0.5',
+                      'flex h-3 w-3 items-center justify-center rounded-full',
+                      'bg-foreground text-background ring-2 ring-sidebar',
+                    )}
+                  >
+                    <Shield size={8} strokeWidth={2.5} />
+                  </span>
+                )}
+              </div>
+            </button>
+          </Tip>
           {mobileDownloadEntry}
         </div>
         <MobileDownloadDialog
@@ -184,7 +187,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         <button
           onClick={handleClick}
           role="link"
-          aria-label={t('sidebar.user.settingsLink', { name: displayName })}
+          aria-label={settingsLinkLabel}
           className={cn('flex min-w-0 flex-1 items-center gap-[10px]', 'text-left')}
         >
           {/* Avatar — admin 用户加 1.5px 反色描边 + 右下角盾牌角标 */}
@@ -257,38 +260,47 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           update 时切换为「唤回 banner」入口,视觉涂黑(fill 实心 + foreground 主色)
           告诉用户还有更新等待确认。 */}
         {(onOpenUpdateNotice || isFlameReopen) && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              if (isFlameReopen) {
-                restore();
-              } else {
-                onOpenUpdateNotice?.();
-              }
-            }}
-            aria-label={
+          <Tip
+            text={
               isFlameReopen
                 ? t('sidebar.user.reopenUpdateBanner')
                 : t('sidebar.user.viewReleaseNotes')
             }
-            className={cn(
-              'flame-btn',
-              'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
-              'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
-              'transition-colors hover:bg-sidebar-item-hover',
-              'transition-opacity duration-200 ease-in-out',
-              'opacity-100',
-            )}
+            side="right"
           >
-            <Flame
-              className={cn(
-                'h-3 w-3',
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isFlameReopen) {
+                  restore();
+                } else {
+                  onOpenUpdateNotice?.();
+                }
+              }}
+              aria-label={
                 isFlameReopen
-                  ? 'fill-current text-[var(--sidebar-user-card-text)]'
-                  : 'text-[var(--sidebar-user-card-text)]',
+                  ? t('sidebar.user.reopenUpdateBanner')
+                  : t('sidebar.user.viewReleaseNotes')
+              }
+              className={cn(
+                'flame-btn',
+                'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
+                'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
+                'transition-colors hover:bg-sidebar-item-hover',
+                'transition-opacity duration-200 ease-in-out',
+                'opacity-100',
               )}
-            />
-          </button>
+            >
+              <Flame
+                className={cn(
+                  'h-3 w-3',
+                  isFlameReopen
+                    ? 'fill-current text-[var(--sidebar-user-card-text)]'
+                    : 'text-[var(--sidebar-user-card-text)]',
+                )}
+              />
+            </button>
+          </Tip>
         )}
       </div>
 

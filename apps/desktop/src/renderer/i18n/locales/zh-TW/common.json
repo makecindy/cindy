@@ -2390,13 +2390,13 @@
     },
     "compaction": {
       "title": "上下文壓縮",
-      "description": "控制 Claude Code 何時自動壓縮上下文。",
+      "description": "控制 Claude Code 和 Pi 何時自動壓縮上下文。此設定不影響 Codex；Codex 單獨管理上下文壓縮。",
       "card": {
         "label": "壓縮觸發閾值",
-        "badge": "僅 Claude Code",
+        "badge": "Claude Code 與 Pi",
         "description": "上下文佔用達到該百分比時自動壓縮。調低會更早壓縮、保留更多餘量；調高會更晚壓縮、單輪上下文更滿。",
-        "hint": "上下文佔用達到該比例時自動壓縮(等價於自動執行 /compact)。修改即時生效，下一輪對話結束時按新比例判斷。",
-        "sliderAria": "調整 Claude Code 自動壓縮觸發閾值"
+        "hint": "上下文佔用達到該比例時自動壓縮。修改即時生效；下一輪結束或切換到更小視窗時按新比例判斷。",
+        "sliderAria": "調整自動壓縮觸發閾值"
       }
     },
     "terminalShell": {
@@ -4855,7 +4855,7 @@
   "titleBar": {
     "menu": "選單",
     "minimize": "最小化",
-    "maximize": "最大化",
+    "maximizeOrRestore": "最大化或還原視窗",
     "close": "關閉",
     "menuItems": {
       "settings": "設定",
@@ -4884,6 +4884,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "切換側邊欄",
+    "collapseSidebar": "收起側邊欄",
+    "expandSidebar": "展開側邊欄",
     "collapsePanel": "收起",
     "expandPanel": "展開"
   },
@@ -5098,6 +5100,8 @@
       "rotateDevice": "旋转裝置",
       "lockScreen": "鎖定螢幕",
       "unlockScreen": "解鎖螢幕",
+      "controlsUnavailable": "模擬器控制暫時不可用",
+      "enterTextBeforeSending": "請先輸入要傳送的文字",
       "agentBusyTitle": "Agent 正在使用此裝置",
       "agentBusyDescription": "當前 Agent 操作結束前，手动輸入已暫停。",
       "takeControl": "接管裝置",
@@ -5174,19 +5178,24 @@
       "urlPlaceholder": "輸入網址或搜尋關鍵詞",
       "goBack": "後退",
       "goForward": "前進",
+      "goBackUnavailable": "沒有可後退的頁面",
+      "goForwardUnavailable": "沒有可前進的頁面",
       "reload": "重新整理",
       "stop": "停止載入",
       "screenshot": "截圖",
       "screenshotCopied": "已複製截圖到剪貼簿",
       "screenshotFailed": "截圖失敗",
       "comment": "頁面評論",
+      "exitCommentMode": "退出評論模式",
       "commentModeHint": "點選元素或 Shift 拖拽框選區域 · Cmd/Ctrl+點選直接新增 · Esc 退出",
       "commentPlaceholder": "描述這裡需要怎麼改…",
       "commentSubmit": "新增評論",
       "commentCancel": "取消",
       "commentAdded": "評論已新增到輸入框",
       "commentFailed": "評論新增失敗",
-      "styleTweaks": "樣式調整",
+      "styleTweaksExpand": "展開樣式調整",
+      "styleTweaksCollapse": "收起樣式調整",
+      "styleTweaksSubmitting": "正在提交評論…",
       "styleReset": "重置",
       "styleTextLabel": "文字",
       "moreTools": "更多",
@@ -5582,6 +5591,7 @@
       "completed": "已完成",
       "empty": "本任務暫無後臺作業",
       "stop": "停止",
+      "stopping": "正在停止…",
       "back": "返回",
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
@@ -7434,6 +7444,7 @@
       "scopeLocalSessions": "本機任務",
       "dialogues": "對話",
       "newDialogue": "新任務",
+      "creationInProgress": "正在建立，請稍候",
       "dialoguesToggleExpand": "展開對話",
       "dialoguesToggleCollapse": "收起對話",
       "loadingDialogues": "載入中…",
@@ -7553,6 +7564,8 @@
         "hiddenCount": "{{count}} 已收起",
         "stopped": "已停止",
         "aria": "{{title}} 自動化生成的任務，{{count}} 次執行，{{attention}} 個待處理",
+        "expand": "展開 {{title}} 的執行記錄",
+        "collapse": "收起 {{title}} 的執行記錄",
         "menu": {
           "runNow": "立即執行",
           "more": "更多操作",
@@ -7622,6 +7635,7 @@
         "delete": "刪除所選任務",
         "clear": "清除選擇",
         "archiveNone": "所選任務沒有可歸檔項",
+        "actionInProgress": "正在處理另一項操作",
         "skipRunning": "{{count}} 個執行中",
         "skipAttached": "{{count}} 個遠端接管中",
         "skipNotActive": "{{count}} 個非活躍狀態",

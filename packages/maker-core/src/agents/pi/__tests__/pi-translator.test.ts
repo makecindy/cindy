@@ -466,6 +466,19 @@ describe('pi translator', () => {
     expect(ctx.contextTokens).toBe(32000);
   });
 
+  it('labels host-triggered compact RPC as auto even when Pi reports reason=manual', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.hostAutoCompactInFlight = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 160000, estimatedTokensAfter: 20000 } }),
+      queue,
+      ctx,
+    );
+    const data = events.find((e) => e.type === 'compact_boundary')!.data as { trigger: string };
+    expect(data.trigger).toBe('auto');
+  });
+
   it('maps manual compaction trigger through to compact_boundary', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -526,6 +539,37 @@ describe('pi translator', () => {
       ctx2,
     );
     expect(ev2.filter((e) => e.type === 'status')).toHaveLength(0);
+  });
+
+  it('does not emit compact_boundary for aborted or failed compaction_end', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    translatePiEvent(
+      ev({ type: 'compaction_end', reason: 'threshold', result: null, aborted: true }),
+      queue,
+      ctx,
+    );
+    expect(events.some((e) => e.type === 'compact_boundary')).toBe(false);
+
+    const ctx2 = createPiTranslateContext(noopLogger);
+    const { queue: q2, events: ev2 } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'manual',
+        result: null,
+        aborted: false,
+        errorMessage: 'quota exceeded',
+      }),
+      q2,
+      ctx2,
+    );
+    expect(ev2.some((e) => e.type === 'compact_boundary')).toBe(false);
+    const endStatus = ev2.find(
+      (e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false,
+    );
+    expect(endStatus).toBeDefined();
   });
 
   it('accumulates turn usage and attaches it to the done event on agent_settled', () => {

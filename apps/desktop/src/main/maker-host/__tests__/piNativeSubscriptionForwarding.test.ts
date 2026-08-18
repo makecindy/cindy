@@ -320,6 +320,86 @@ describe('PI native subscription forwarding', () => {
     },
   );
 
+  it('sanitizes native xAI Responses input before forwarding', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-model-input', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = {
+      model: 'grok-4.5',
+      input: [
+        { type: 'message', role: 'user', content: 'go' },
+        { type: 'agent_message', author: '/root', content: 'done' },
+        { type: 'reasoning', id: 'rs_1', content: null, encrypted_content: 'BLOB' },
+      ],
+    };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 8,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request.input).toEqual([
+      { type: 'message', role: 'user', content: 'go' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[collab /root]\ndone' }],
+      },
+      { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+    ]);
+    expect(request.tools).toEqual([{ type: 'x_search' }]);
+  });
+
+  it.each(['grok-code-fast', 'grok-build-0.1'])(
+    'drops reasoning items on native non-reasoning model %s',
+    async (model) => {
+      const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      const handler = getPiNativeSubscriptionHandler('xai', `session-reason-${model}`, deps({
+        fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      }));
+      const parsedBody = {
+        model,
+        input: [
+          { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+          { type: 'message', role: 'user', content: 'hi' },
+        ],
+      };
+
+      await handler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx: {
+          reqId: 9,
+          method: 'POST',
+          url: '/v1/responses',
+          headers: { 'content-type': 'application/json' },
+        },
+        res: responseRecorder(),
+      } as never);
+
+      const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+      expect(request.input).toEqual([
+        { type: 'message', role: 'user', content: 'hi' },
+      ]);
+      expect(request.tools).toBeUndefined();
+    },
+  );
+
   it('forwards xAI Chat Completions natively and invalidates the failed host token', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('{"error":"expired"}', {
       status: 401,

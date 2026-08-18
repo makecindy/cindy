@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import {
   MIN_SPLIT_CHILD_FRACTION,
   transferSplitFraction,
+  transferSplitFractionRelay,
   type Layout,
   type LayoutNode,
   type PaneNode,
@@ -381,6 +382,8 @@ interface RootDividerProps extends RootDividerPropsExtra {
   splitId: string;
   left: SplitChildEntry;
   right: SplitChildEntry;
+  /** 同一分割的全部在场子项(含缝两侧):压缩 chat 的接力出账要按实测宽找出折叠兄弟。 */
+  visibleSiblings: SplitChildEntry[];
   avail: number;
   /** 拖动中的瞬时**在场份额**覆盖(paneId → share);null = 结束。 */
   onLive: (live: Record<string, number> | null) => void;
@@ -388,14 +391,37 @@ interface RootDividerProps extends RootDividerPropsExtra {
   onCommitted: (layout: Layout) => void;
 }
 
+/** 压缩 chat 提交的接力计划(见 RootDivider.chatShrinkPlan)。 */
+interface RelayPlan {
+  /** 出账下标序:chat 在前,折叠兄弟按树序在后;各自保 0.05 下限。 */
+  sources: number[];
+  /** 进账方(缝的另一侧)。 */
+  receiver: number;
+}
+
+function isChatPane(node: LayoutNode): boolean {
+  return node.type === 'pane' && node.panelKind === 'chat-main';
+}
+
 /** 起拖时实测某布局节点的宽；split 量自己的 grid 列壳，pane 量标准拖拽根。 */
 function measuredPanePx(node: LayoutNode): number | null {
+  const width = rawPanePx(node);
+  return width !== null && width > 0 ? width : null;
+}
+
+/**
+ * 同上,但**元素缺失(返回 null)与实测为 0(返回 0)分开**:折叠成 0 宽的面板
+ * 实测恰为 0 —— 接力出账要认出它们;元素根本不在 DOM(未挂载)才是 null。
+ */
+function rawPanePx(node: LayoutNode): number | null {
   const selector =
     node.type === 'pane'
       ? `[data-panel-drag-root="${node.panelKind}"]`
       : `[data-layout-node-id="${node.id}"]`;
-  const width = document.querySelector(selector)?.getBoundingClientRect().width;
-  return typeof width === 'number' && width > 0 ? width : null;
+  const el = document.querySelector(selector);
+  if (!el) return null;
+  const width = el.getBoundingClientRect().width;
+  return typeof width === 'number' && width >= 0 ? width : null;
 }
 
 /**
@@ -407,6 +433,7 @@ function RootDivider({
   splitId,
   left,
   right,
+  visibleSiblings,
   avail,
   chatRenderedPx,
   shareScale,
@@ -417,13 +444,24 @@ function RootDivider({
   const draggingRef = useRef(false);
 
   /** amountToLeft:**在场份额**增量(> 0 = 左侧变宽);写树前乘 shareScale 换成树份额。 */
-  const commit = (amountToLeft: number) => {
+  const commit = (amountToLeft: number, relay: RelayPlan | null) => {
     const treeAmount = amountToLeft * shareScale;
     if (treeAmount === 0) return;
+    // 压缩 chat 的提交走接力:chat 先扣到 0.05 下限,差额由折叠兄弟出账 ——
+    // 拖动夹取已保证按同一来源序必可表达,不会整单被拒回弹(见 chatShrinkPlan)。
+    const compressingChat =
+      relay !== null && (relay.receiver === right.treeIndex ? treeAmount < 0 : treeAmount > 0);
     try {
       const current = window.electronAPI.layout.getStateSync().layout;
-      const op =
-        treeAmount > 0
+      const op = compressingChat
+        ? transferSplitFractionRelay(
+            current,
+            splitId,
+            relay!.sources,
+            relay!.receiver,
+            Math.abs(treeAmount),
+          )
+        : treeAmount > 0
           ? transferSplitFraction(current, splitId, right.treeIndex, left.treeIndex, treeAmount)
           : transferSplitFraction(current, splitId, left.treeIndex, right.treeIndex, -treeAmount);
       if (!op.applied) return;
@@ -461,6 +499,44 @@ function RootDivider({
     return Math.max(0, Math.min(pxRoom / avail, floorRoom));
   };
 
+  /**
+   * 压缩 chat 方向的行程与接力计划:仅缝一侧是 chat 且**量得到可信实测宽**时启用
+   * (实测 < 400 视为量不到 —— chat 在场恒 ≥ 400px,jsdom 无布局引擎恒为 0)。
+   * - 像素口径:实测宽 − 400 是唯一产品硬限(2026-07-09 定案:只有 chat 有硬下限);
+   * - 账本口径不再被 chat 自己的 0.05 地板直接封顶,而是"可表达总额" = chat 地板
+   *   余量 + 各折叠兄弟(实测宽 ≈ 0 却占着账)的地板余量;松手按同一来源序经
+   *   transferSplitFractionRelay 接力写树,夹取值必可表达,不会整单被拒回弹。
+   *   画面上 chat 吸收的折叠空间本就记在这些兄弟账上 —— 由它们出账,账本随拖动
+   *   与画面重新对齐(2026-08-17 实测:chat 份额被拖到 0.05 顶死后,缝因两方转移
+   *   够不着账本地板而彻底冻住,压不到 400px)。
+   * 返回 null = 量不到可信实测,调用方回落旧口径 sideRoomShare(行为不变)。
+   */
+  const chatShrinkPlan = (
+    chatEntry: SplitChildEntry,
+    otherSide: SplitChildEntry,
+  ): { room: number; relay: RelayPlan } | null => {
+    if (!(avail > 0)) return null;
+    const measured = rawPanePx(chatEntry.node);
+    if (measured === null || measured < CHAT_MIN_PX) return null;
+    const floorRoom = (entry: SplitChildEntry): number =>
+      shareScale > 0 ? Math.max(0, (entry.fraction - MIN_SPLIT_CHILD_FRACTION) / shareScale) : 0;
+    let sourcesRoom = floorRoom(chatEntry);
+    const idleSources: number[] = [];
+    for (const sibling of visibleSiblings) {
+      if (sibling === chatEntry || sibling === otherSide) continue;
+      const width = rawPanePx(sibling.node);
+      if (width !== null && width < 1) {
+        sourcesRoom += floorRoom(sibling);
+        idleSources.push(sibling.treeIndex);
+      }
+    }
+    const pxRoom = Math.max(0, measured - CHAT_MIN_PX) / avail;
+    return {
+      room: Math.min(pxRoom, sourcesRoom),
+      relay: { sources: [chatEntry.treeIndex, ...idleSources], receiver: otherSide.treeIndex },
+    };
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || draggingRef.current) return;
     e.preventDefault();
@@ -468,10 +544,16 @@ function RootDivider({
     const startX = e.clientX;
     const startL = left.share;
     const startR = right.share;
-    const isChat = (node: LayoutNode) => node.type === 'pane' && node.panelKind === 'chat-main';
     // 起拖只量一次(拖动期间界面静止,没有失效场景);chat 量不到时回落账本估值。
-    const dMin = -sideRoomShare(left, isChat(left.node) ? chatRenderedPx : null);
-    const dMax = sideRoomShare(right, isChat(right.node) ? chatRenderedPx : null);
+    const chatEntry = isChatPane(left.node) ? left : isChatPane(right.node) ? right : null;
+    const shrinkPlan = chatEntry
+      ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left)
+      : null;
+    let dMin = -sideRoomShare(left, isChatPane(left.node) ? chatRenderedPx : null);
+    let dMax = sideRoomShare(right, isChatPane(right.node) ? chatRenderedPx : null);
+    if (shrinkPlan && chatEntry === left) dMin = -shrinkPlan.room;
+    if (shrinkPlan && chatEntry === right) dMax = shrinkPlan.room;
+    const relay: RelayPlan | null = shrinkPlan?.relay ?? null;
     let lastD = 0;
 
     document.body.classList.add('resizing-pane');
@@ -493,7 +575,7 @@ function RootDivider({
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onCancel);
-      if (commitIt && lastD !== 0) commit(lastD);
+      if (commitIt && lastD !== 0) commit(lastD, relay);
       onLive(null);
     };
     const onUp = () => finish(true);
@@ -505,9 +587,20 @@ function RootDivider({
 
   // 双击:两侧份额均分(把差值的一半转给少的一侧)—— 右栏旧"双击复位 50/50"
   // 在两块布局下的语义等价推广。在场份额口径:均分的是**画面上**这两块的宽度。
+  // 压缩 chat 的方向同样走接力(计划即时按当前实测现算),且不得越过 chat 400px 下限。
   const onDoubleClick = () => {
     const total = left.share + right.share;
-    commit(total / 2 - left.share);
+    const chatEntry = isChatPane(left.node) ? left : isChatPane(right.node) ? right : null;
+    const plan = chatEntry ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left) : null;
+    let d = total / 2 - left.share;
+    if (plan) {
+      // 均分 delta 压缩 chat 侧时,夹取到接力计划的可压余量,防止越过 400px 下限。
+      const compressingChat = chatEntry === left ? d < 0 : d > 0;
+      if (compressingChat) {
+        d = chatEntry === left ? Math.max(d, -plan.room) : Math.min(d, plan.room);
+      }
+    }
+    commit(d, plan?.relay ?? null);
   };
 
   return (
@@ -824,6 +917,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
               splitId={content.id}
               left={prev}
               right={entry}
+              visibleSiblings={visible}
               avail={avail}
               chatRenderedPx={chatRenderedPx}
               shareScale={ledger.scale}
