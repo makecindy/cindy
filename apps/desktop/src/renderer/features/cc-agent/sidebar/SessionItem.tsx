@@ -1016,7 +1016,7 @@ export const SessionItem = memo(function SessionItem({
           {boundSchedules.length > 0 ? (
             <ScheduleBindingBadge schedules={boundSchedules} activeForeground={isActive} />
           ) : isAutomationGenerated ? (
-            <Tip text={t('ccAgent.sidebar.automationGenerated')}>
+            <Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}>
               <button
                 type="button"
                 className="inline-flex shrink-0 cursor-pointer focus:outline-none"

@@ -298,6 +298,10 @@ describe('icon-only button tooltip coverage', () => {
     expect(cardActionStart).toBeGreaterThanOrEqual(0);
     expect(sessionItem.slice(actionStart)).toContain('<Tip text={label}');
     expect(sessionCard.slice(cardActionStart)).toContain('<Tip text={label}');
+    expect(sessionItem).toContain("<Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}");
+    expect(sessionCard).toContain("<Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}");
+    expect(sessionItem).not.toContain("<Tip text={t('ccAgent.sidebar.automationGenerated')}");
+    expect(sessionCard).not.toContain("<Tip text={t('ccAgent.sidebar.automationGenerated')}");
     expect(sessionItem).not.toContain('故意不挂 Tip 浮层');
   });
 
