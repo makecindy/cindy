@@ -592,6 +592,16 @@ function withNativeXaiServerSideTools(
   }
   let next = toolsChanged ? { ...body, tools } : body;
 
+  if (
+    isPlainRecord(body.tool_choice) &&
+    body.tool_choice.type === XAI_LIVE_SEARCH_TOOL_TYPE
+  ) {
+    return {
+      ...next,
+      tool_choice: { type: XAI_X_SEARCH_TOOL_TYPE },
+    };
+  }
+
   if (body.tool_choice === 'required') {
     const functionToolNames = tools.flatMap((tool) => {
       if (!isPlainRecord(tool) || tool.type !== 'function') return [];

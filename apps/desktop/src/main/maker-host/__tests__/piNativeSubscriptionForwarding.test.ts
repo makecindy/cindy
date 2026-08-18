@@ -310,6 +310,69 @@ describe('PI native subscription forwarding', () => {
     expect(request.tools).toEqual(expectedTools);
   });
 
+  it.each([
+    [
+      'normalizes a legacy search choice with its declaration',
+      [{ type: 'live_search', sources: [{ type: 'x' }] }],
+      { type: 'live_search' },
+      [{ type: 'x_search' }],
+      { type: 'x_search' },
+    ],
+    [
+      'keeps an absent choice absent while preferring a native declaration',
+      [
+        { type: 'live_search', sources: [{ type: 'x' }] },
+        { type: 'x_search', from_date: '2026-08-01' },
+      ],
+      undefined,
+      [{ type: 'x_search', from_date: '2026-08-01' }],
+      undefined,
+    ],
+    [
+      'preserves a function choice across duplicate search spellings',
+      [
+        { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        { type: 'live_search', sources: [{ type: 'x' }] },
+        { type: 'x_search', from_date: '2026-08-01' },
+      ],
+      { type: 'function', name: 'read_file' },
+      [
+        { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        { type: 'x_search', from_date: '2026-08-01' },
+      ],
+      { type: 'function', name: 'read_file' },
+    ],
+  ])('%s', async (_name, tools, toolChoice, expectedTools, expectedToolChoice) => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-x-search-choice', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = {
+      model: 'grok-4.5',
+      tools,
+      ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
+    };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 13,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request.tools).toEqual(expectedTools);
+    expect(request.tool_choice).toEqual(expectedToolChoice);
+  });
+
   it('preserves an existing native x_search declaration without duplicating it', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,
