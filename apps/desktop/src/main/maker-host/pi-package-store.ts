@@ -2060,13 +2060,15 @@ export async function stageManagedPackageSnapshot(
         mappings.push({ source, target: path.join(snapshotRoot, relativeTarget), directory });
       } catch (error) {
         if (!(error instanceof PiPackageSnapshotLimitError)) throw error;
-        if (error.scope !== 'aggregate') throw error;
         skippedPackageRoots.push(source ?? path.resolve(rawRoot));
         await fs.rm(path.join(temporaryRoot, String(index)), {
           recursive: true,
           force: true,
         }).catch(() => undefined);
-        aggregateLimitReached = true;
+        // A package-scoped failure quarantines only this root. Existing
+        // mappings remain valid; only the shared aggregate limit stops later
+        // packages from being attempted.
+        if (error.scope === 'aggregate') aggregateLimitReached = true;
       }
     }
     // Windows temp paths can use an 8.3/user-profile spelling while realpath

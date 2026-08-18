@@ -745,7 +745,7 @@ describe('Pi package executable-code boundary', () => {
     { name: 'entry', limits: { maxEntries: 1, maxBytes: 1024 * 1024, maxDurationMs: 10_000 } },
     { name: 'byte', limits: { maxEntries: 100, maxBytes: 1, maxDurationMs: 10_000 } },
     { name: 'time', limits: { maxEntries: 100, maxBytes: 1024 * 1024, maxDurationMs: 0 } },
-  ])('rejects and cleans up snapshots that exceed the $name budget', async ({ limits }) => {
+  ])('skips and cleans up package roots that exceed the $name budget', async ({ limits }) => {
     const { root } = await createPackage();
     const store = await import('../pi-package-store.js');
     const snapshotRoot = path.join(
@@ -762,8 +762,13 @@ describe('Pi package executable-code boundary', () => {
       },
       snapshotRoot,
       limits,
-    )).rejects.toThrow(/safe resource limit/);
-    await expect(fs.stat(snapshotRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    )).resolves.toEqual({
+      extensions: [],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [],
+    });
+    await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
     const leftovers = (await fs.readdir(runtime.userData)).filter((entry) => (
       entry.startsWith(`${path.basename(snapshotRoot)}.tmp-`)
     ));
@@ -865,6 +870,87 @@ describe('Pi package executable-code boundary', () => {
     await expect(Promise.all(snapshot.skills.map((skill) => fs.readFile(skill.path, 'utf8'))))
       .resolves.toEqual(['# First\n']);
     await expect(fs.stat(path.join(snapshotRoot, '1'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps earlier packages available when a later package exceeds its copy duration', async () => {
+    const sources = ['npm:fast-skill', 'npm:slow-skill'];
+    const packageRoots = await Promise.all(sources.map(async (source, index) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), `cindy-pi-package-duration-${index}-`));
+      roots.push(root);
+      const skillRoot = path.join(root, 'skills', `skill-${index}`);
+      await fs.mkdir(skillRoot, { recursive: true });
+      await fs.writeFile(path.join(skillRoot, 'SKILL.md'), [
+        '---',
+        `name: skill-${index}`,
+        `description: package ${index}`,
+        '---',
+        'body',
+        '',
+      ].join('\n'));
+      await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+        name: source.slice(4),
+        pi: { skills: ['./skills'] },
+      }));
+      return root;
+    }));
+    runtime.listOutput = [
+      'User packages:',
+      ...sources.flatMap((source, index) => [`  ${source}`, `    ${packageRoots[index]}`]),
+      '',
+    ].join('\n');
+
+    const store = await import('../pi-package-store.js');
+    const snapshotRoot = path.join(runtime.userData, 'package-duration-isolation');
+    const originalMkdir = fs.mkdir.bind(fs);
+    let now = Date.now();
+    let delayedSecondPackage = false;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const mkdirSpy = vi.spyOn(fs, 'mkdir').mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (
+        !delayedSecondPackage
+        && target.startsWith(`${snapshotRoot}.tmp-`)
+        && path.basename(target) === '1'
+      ) {
+        delayedSecondPackage = true;
+        now += 20_000;
+      }
+      return originalMkdir(...args);
+    });
+
+    let snapshot;
+    try {
+      snapshot = await store.resolveManagedPiPackageResources({
+        snapshotRoot,
+        snapshotLimits: {
+          maxEntries: 100,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 10_000,
+        },
+      });
+    } finally {
+      mkdirSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+
+    expect(delayedSecondPackage).toBe(true);
+    expect(snapshot).toEqual({
+      extensions: [],
+      skills: [{
+        path: path.join(snapshotRoot, '0', 'skills', 'skill-0', 'SKILL.md'),
+        name: 'skill-0',
+        description: 'package 0',
+      }],
+      promptTemplates: [],
+      packageRoots: [path.join(snapshotRoot, '0')],
+    });
+    await expect(fs.stat(path.join(snapshotRoot, '1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [
+        { source: sources[0], enabled: true },
+        { source: sources[1], enabled: false, warning: 'inspection-limit' },
+      ],
+    });
   });
 
   it('omits resources owned by a skipped descendant instead of mapping them through a copied ancestor', async () => {
