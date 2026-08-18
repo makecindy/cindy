@@ -2379,13 +2379,13 @@
     },
     "compaction": {
       "title": "上下文压缩",
-      "description": "控制 Claude Code 何时自动压缩上下文。",
+      "description": "控制 Claude Code 和 Pi 何时自动压缩上下文。此设置不影响 Codex；Codex 单独管理上下文压缩。",
       "card": {
         "label": "压缩触发阈值",
-        "badge": "仅 Claude Code",
+        "badge": "Claude Code 与 Pi",
         "description": "上下文占用达到该百分比时自动压缩。调低会更早压缩、保留更多余量；调高会更晚压缩、单轮上下文更满。",
-        "hint": "上下文占用达到该比例时自动压缩(等价于自动执行 /compact)。修改即时生效，下一轮对话结束时按新比例判断。",
-        "sliderAria": "调整 Claude Code 自动压缩触发阈值"
+        "hint": "上下文占用达到该比例时自动压缩。修改即时生效；下一轮结束或切换到更小窗口时按新比例判断。",
+        "sliderAria": "调整自动压缩触发阈值"
       }
     },
     "terminalShell": {

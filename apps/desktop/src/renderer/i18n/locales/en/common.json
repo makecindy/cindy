@@ -2380,13 +2380,13 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code automatically compacts context.",
+      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code only",
+        "badge": "Claude Code and Pi",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
-        "hint": "Automatically compacts when context usage reaches this percentage, equivalent to running /compact automatically. Changes take effect immediately and are checked after the next chat turn ends.",
-        "sliderAria": "Adjust Claude Code auto-compaction trigger threshold"
+        "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
+        "sliderAria": "Adjust auto-compaction trigger threshold"
       }
     },
     "personalization": {

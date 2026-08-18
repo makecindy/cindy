@@ -111,6 +111,7 @@ import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../typ
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
 import { scanPiCustomizations } from './customization-scanner.js';
+import { AutoCompactController } from '../shared/auto-compact-controller.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
@@ -1947,6 +1948,70 @@ export class PiAgent extends BaseAgent {
     // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
     // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
     let proc: PiRpcProcess;
+    const getAutoCompactThresholdPct = (): number | undefined =>
+      this.deps.runtimeConfig.autoCompactThresholdPct;
+    const autoCompactController =
+      getAutoCompactThresholdPct() === undefined
+        ? null
+        : new AutoCompactController({
+            logger: this.deps.logger.child('auto-compact'),
+            workdir: opts.workingDir,
+            agentKind: 'pi',
+            getThresholdPct: getAutoCompactThresholdPct,
+          });
+    // Host / 手动 compact 共用一条串行链：摘要进行中 send / setModel / setEffort
+    // 不得再发控制 RPC。Pi 的 compaction_start 是异步到达的，UI 可能已空闲。
+    let compactChain: Promise<void> = Promise.resolve();
+    const waitForCompactIdle = async (): Promise<void> => {
+      await compactChain.catch(() => undefined);
+    };
+    const requestPiCompact = async (instructions?: string): Promise<ManualCompactResult> => {
+      const command: Record<string, unknown> = { type: 'compact' };
+      if (instructions && instructions.trim().length > 0) {
+        command.customInstructions = instructions.trim();
+      }
+      const resp = await proc.request(command, { timeoutMs: PI_COMPACT_TIMEOUT_MS });
+      if (!resp.success) {
+        const err = (resp.error ?? '').toLowerCase();
+        if (err.includes('nothing to compact') || err.includes('too small')) {
+          return { noop: true };
+        }
+        throw new Error(`pi compact failed: ${resp.error ?? 'unknown'}`);
+      }
+      const data = (resp.data ?? {}) as { tokensBefore?: number; estimatedTokensAfter?: number };
+      const result: ManualCompactResult = {};
+      if (typeof data.tokensBefore === 'number') result.tokensBefore = data.tokensBefore;
+      if (typeof data.estimatedTokensAfter === 'number') result.estimatedTokensAfter = data.estimatedTokensAfter;
+      return result;
+    };
+    const runPiCompact = (instructions?: string): Promise<ManualCompactResult> => {
+      const run = compactChain.then(() => requestPiCompact(instructions));
+      compactChain = run.then(() => undefined, () => undefined);
+      return run;
+    };
+    const maybeHostAutoCompact = (): void => {
+      if (closed || ctx.isStreaming) return;
+      if (!autoCompactController?.shouldCompactNow()) return;
+      const snapshot = autoCompactController.getLatestSnapshot();
+      this.deps.logger.info('pi host auto-compact triggered', {
+        threshold: autoCompactController.getCurrentThresholdPct(),
+        ratio: snapshot ? Number(snapshot.ratio.toFixed(3)) : undefined,
+        contextTokens: snapshot?.contextTokens,
+        contextWindow: snapshot?.contextWindow,
+      });
+      void runPiCompact()
+        .then((result) => {
+          if (result.noop) {
+            autoCompactController.onCompactCanceled('host_auto_compact_noop');
+          }
+        })
+        .catch((err) => {
+          autoCompactController.onCompactCanceled('host_auto_compact_failed');
+          this.deps.logger.warn('pi host auto-compact failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        });
+    };
     let sessionTransport: PiTransport | undefined;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
@@ -2173,6 +2238,23 @@ export class PiAgent extends BaseAgent {
             clearActiveTurnPermissionPolicy('turn_terminal', { dismissPending: true });
           }
           translatePiEvent(event, queue, ctx);
+          if (autoCompactController) {
+            if (event.type === 'compaction_end') {
+              // Pi v0.83: 失败/取消也发 compaction_end；aborted 或 result=null 不是成功边界。
+              const aborted = event.aborted === true;
+              const failed = event.result == null && !aborted;
+              if (aborted || failed) {
+                autoCompactController.onCompactCanceled(
+                  aborted ? 'compaction_aborted' : 'compaction_failed',
+                );
+              } else {
+                autoCompactController.onCompactBoundary();
+              }
+            } else if (event.type === 'message_end' || event.type === 'agent_settled') {
+              autoCompactController.onUsageUpdate(ctx.contextTokens, ctx.contextWindow);
+            }
+            if (event.type === 'agent_settled') maybeHostAutoCompact();
+          }
         },
         onExit: ({ code, signal }) => {
           disposePiTranslateContext(ctx);
@@ -2781,6 +2863,8 @@ export class PiAgent extends BaseAgent {
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
+        autoCompactController?.onContextWindowChanged(data.contextWindow);
+        maybeHostAutoCompact();
       }
     };
 
@@ -2818,6 +2902,8 @@ export class PiAgent extends BaseAgent {
       },
 
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
+        rejectIfCancelled(sendOpts, 'send');
+        await waitForCompactIdle();
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
@@ -2983,7 +3069,10 @@ export class PiAgent extends BaseAgent {
         // 并发或连点切换(本地 + 远程控制端同时切)若交错,A 写 pending、B 写 pending、A 落定 B 的
         // 内容,盘上就会出现没人确认过的组合。串行化之后每次切换都看到确定的前一状态,
         // `previousSnapshot` 才是真正可回滚的那一份(review)。
-        const run = setModelChain.then(() => switchModel(model, setOpts));
+        const run = setModelChain.then(async () => {
+          await waitForCompactIdle();
+          return switchModel(model, setOpts);
+        });
         // 链永不停在 rejected 上:一次失败之后的切换仍要能排进来。
         setModelChain = run.then(() => {}, () => {});
         return run;
@@ -2993,6 +3082,7 @@ export class PiAgent extends BaseAgent {
         if (reviewMode) return;
         assertStartupEffortAllowed(activeEffortSnapshot, effort);
         if (activeEffortSnapshot?.length === 0) return;
+        await waitForCompactIdle();
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(effort),
@@ -3121,25 +3211,8 @@ export class PiAgent extends BaseAgent {
       },
 
       async compactSession(instructions?: string): Promise<ManualCompactResult> {
-        // pi 原生 compact:调 LLM 生成摘要(耗时数秒起),压缩边界经
-        // compaction_start/end 事件流上报,translator 映射成 compact_boundary。
-        // 压缩请求本身可能远超 RPC 默认 30s 超时(大上下文 + 网关排队),放宽到 10 分钟。
-        const command: Record<string, unknown> = { type: 'compact' };
-        if (instructions && instructions.trim().length > 0) command.customInstructions = instructions.trim();
-        const resp = await proc.request(command, { timeoutMs: PI_COMPACT_TIMEOUT_MS });
-        if (!resp.success) {
-          // 良性拒绝:上下文太小 / 无内容可压缩 —— 不是错误,返回 noop 让 UI 给信息性提示。
-          const err = (resp.error ?? '').toLowerCase();
-          if (err.includes('nothing to compact') || err.includes('too small')) {
-            return { noop: true };
-          }
-          throw new Error(`pi compact failed: ${resp.error ?? 'unknown'}`);
-        }
-        const data = (resp.data ?? {}) as { tokensBefore?: number; estimatedTokensAfter?: number };
-        const result: ManualCompactResult = {};
-        if (typeof data.tokensBefore === 'number') result.tokensBefore = data.tokensBefore;
-        if (typeof data.estimatedTokensAfter === 'number') result.estimatedTokensAfter = data.estimatedTokensAfter;
-        return result;
+        // 与 host 百分比闸共用 runPiCompact，避免手动/自动双发。
+        return runPiCompact(instructions);
       },
 
       async previewRewindFiles(): Promise<RewindFilesResult> {
