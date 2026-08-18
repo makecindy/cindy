@@ -1,10 +1,76 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+const RENDERER_ROOT = resolve(__dirname, '..');
+const GUARDED_TOOLTIP_ROOTS = [
+  'components/layout',
+  'components/sidebar',
+  'components/title-bar',
+  'features/cc-agent/sidebar',
+  'features/right-sidebar',
+] as const;
+
 function rendererSource(path: string): string {
-  return readFileSync(resolve(__dirname, '..', path), 'utf8');
+  return readFileSync(resolve(RENDERER_ROOT, path), 'utf8');
+}
+
+function rendererComponentFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true })
+    .flatMap((entry) => {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) return rendererComponentFiles(path);
+      return /\.[jt]sx$/.test(entry.name) ? [path] : [];
+    })
+    .sort();
+}
+
+function nativeButtonTitleViolations(): string[] {
+  const violations: string[] = [];
+
+  for (const root of GUARDED_TOOLTIP_ROOTS) {
+    for (const file of rendererComponentFiles(resolve(RENDERER_ROOT, root))) {
+      const source = readFileSync(file, 'utf8');
+      const sourceFile = ts.createSourceFile(
+        file,
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+        file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.JSX,
+      );
+
+      function visit(node: ts.Node): void {
+        if (
+          (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+          node.tagName.getText(sourceFile) === 'button'
+        ) {
+          const attributes = node.attributes.properties.filter(ts.isJsxAttribute);
+          const nativeTitle = attributes.find(
+            (attribute) => attribute.name.getText(sourceFile) === 'title',
+          );
+          const nativeTitleMarker = attributes.find(
+            (attribute) => attribute.name.getText(sourceFile) === 'data-native-title',
+          );
+          const isTruncatedTextException =
+            nativeTitleMarker?.initializer &&
+            ts.isStringLiteral(nativeTitleMarker.initializer) &&
+            nativeTitleMarker.initializer.text === 'truncated-text';
+
+          if (nativeTitle && !isTruncatedTextException) {
+            const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+            violations.push(`${relative(RENDERER_ROOT, file)}:${line + 1}`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      }
+
+      visit(sourceFile);
+    }
+  }
+
+  return violations;
 }
 
 describe('icon-only button tooltip coverage', () => {
@@ -14,15 +80,17 @@ describe('icon-only button tooltip coverage', () => {
 
     expect(chromeButton).toContain("import { Tip, type TipProps } from '@/components/ui/tooltip';");
     expect(chromeButton).toContain('<Tip text={tooltipText}');
-    expect(chromeButton).toContain(
-      'rest.disabled ? <span className="inline-flex">{button}</span> : button',
-    );
+    expect(chromeButton).toContain('role="button"');
+    expect(chromeButton).toContain('aria-disabled="true"');
+    expect(chromeButton).toContain('tabIndex={0}');
+    expect(chromeButton).toContain('aria-hidden={rest.disabled ? true : undefined}');
     expect(chromeButton).not.toContain('<button type="button" title=');
     expect(sidebarButton).toContain("import { Tip } from '@/components/ui/tooltip';");
     expect(sidebarButton).toContain('<Tip text={title ?? label} side="right">');
-    expect(sidebarButton).toContain(
-      'disabled ? <span className="inline-flex">{button}</span> : button',
-    );
+    expect(sidebarButton).toContain('role="button"');
+    expect(sidebarButton).toContain('aria-disabled="true"');
+    expect(sidebarButton).toContain('tabIndex={0}');
+    expect(sidebarButton).toContain('aria-hidden={disabled ? true : undefined}');
     expect(sidebarButton).not.toContain('title={label}');
   });
 
@@ -80,13 +148,21 @@ describe('icon-only button tooltip coverage', () => {
     expect(tabBar).toContain('<Tip text={closeAriaLabel}>');
   });
 
-  it('keeps disabled icon actions hoverable and explains why they are unavailable', () => {
+  it('keeps disabled icon actions hoverable and keyboard discoverable', () => {
     const sidebar = rendererSource('features/cc-agent/CCAgentSidebarUpper.tsx');
 
     expect(sidebar).toContain("t('ccAgent.sidebar.bulkSelection.actionInProgress')");
     expect(sidebar).toContain("t('ccAgent.sidebar.bulkSelection.archiveNone')");
     expect(sidebar).toContain('<Tip text={bulkArchiveLabel} side="bottom">');
-    expect(sidebar).toContain('<span className="inline-flex">');
+    expect(sidebar).toContain("role={bulkArchiveDisabled ? 'button' : undefined}");
+    expect(sidebar).toContain('tabIndex={bulkArchiveDisabled ? 0 : undefined}');
+    expect(sidebar).toContain('aria-hidden={bulkArchiveDisabled ? true : undefined}');
+    expect(sidebar).toContain("role={disabled ? 'button' : undefined}");
+    expect(sidebar).toContain('tabIndex={disabled ? 0 : undefined}');
     expect(sidebar).toContain("t('ccAgent.sidebar.creationInProgress')");
+  });
+
+  it('discovers native button titles anywhere in the guarded migration roots', () => {
+    expect(nativeButtonTitleViolations()).toEqual([]);
   });
 });

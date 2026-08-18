@@ -422,9 +422,7 @@ describe('SessionCard visual cases', () => {
 
   it('uses the unified Timer for automation cases without a bound schedule', () => {
     renderCase('automation-timer');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBe(
-      '由自动化创建',
-    );
+    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBeNull();
     expect(
       screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer'),
     ).not.toBeNull();

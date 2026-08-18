@@ -53,6 +53,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 import { parseOmnibox } from './lib/parseOmnibox';
@@ -270,6 +271,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
             // 整个 pill 中部区域都可点 → 进编辑态。truncate 让长 URL 单行省略。
             className="min-w-0 flex-1 truncate text-left text-12 leading-none text-[var(--text-primary)]"
             title={url}
+            data-native-title="truncated-text"
           >
             {displayValue}
           </button>
@@ -297,18 +299,20 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
           走 data-[state=open])。菜单项在无有效链接(新标签空白态)时置灰。 */}
       <DropdownMenu onOpenChange={onOverlayOpenChange}>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            title={t('rightSidebar.browser.moreTools')}
-            aria-label={t('rightSidebar.browser.moreTools')}
-            className={cn(
-              'flex size-6 shrink-0 items-center justify-center rounded-md transition-colors',
-              'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
-              'data-[state=open]:bg-sidebar-item-active data-[state=open]:text-sidebar-item-active-foreground',
-            )}
-          >
-            <Ellipsis size={14} strokeWidth={2} />
-          </button>
+          <Tip text={t('rightSidebar.browser.moreTools')} side="bottom">
+            <button
+              type="button"
+              aria-label={t('rightSidebar.browser.moreTools')}
+              className={cn(
+                'flex size-6 shrink-0 items-center justify-center rounded-md transition-colors',
+                'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
+                'data-[state=open]:bg-sidebar-item-active data-[state=open]:text-sidebar-item-active-foreground',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              )}
+            >
+              <Ellipsis size={14} strokeWidth={2} />
+            </button>
+          </Tip>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[9rem]">
           <DropdownMenuItem
@@ -360,16 +364,17 @@ function ChromeIconButton({
   onClick: () => void;
   tooltip: string;
 }) {
-  return (
+  const button = (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
-      title={tooltip}
       aria-label={tooltip}
+      aria-hidden={disabled ? true : undefined}
       aria-busy={spinning || undefined}
       className={cn(
         'flex shrink-0 items-center justify-center rounded-md transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         inlinePill ? 'size-[18px]' : 'size-6',
         disabled
           ? 'text-[var(--text-tertiary)] opacity-40'
@@ -398,5 +403,23 @@ function ChromeIconButton({
         </span>
       )}
     </button>
+  );
+
+  return (
+    <Tip text={tooltip} side="bottom">
+      {disabled ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={tooltip}
+          tabIndex={0}
+          className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
+    </Tip>
   );
 }

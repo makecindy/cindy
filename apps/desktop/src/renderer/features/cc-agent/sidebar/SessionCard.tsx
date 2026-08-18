@@ -581,17 +581,18 @@ export function SessionCard({
         activeForeground={isActive}
       />
     ) : showAutomationTimer ? (
-      <button
-        type="button"
-        className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
-        aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-        title={t('ccAgent.sidebar.automationGenerated')}
-        onClick={(e) => void handleAutomationIconClick(e)}
-        onKeyDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-      >
-        <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
-      </button>
+      <Tip text={t('ccAgent.sidebar.automationGenerated')}>
+        <button
+          type="button"
+          className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
+          aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
+          onClick={(e) => void handleAutomationIconClick(e)}
+          onKeyDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
+        </button>
+      </Tip>
     ) : null;
 
   // list 变体标题前缀:状态图标 + 自动化徽章 + 间隔(保持 main 既有行为不变)。

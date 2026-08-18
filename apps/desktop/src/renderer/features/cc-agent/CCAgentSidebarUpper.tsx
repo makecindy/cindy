@@ -3193,6 +3193,8 @@ function ExpandedView({
     bulkActionPending !== null
       ? bulkActionInProgressLabel
       : t('ccAgent.sidebar.bulkSelection.clear');
+  const bulkArchiveDisabled = bulkActionPending !== null || selectedActiveSessionCount === 0;
+  const bulkActionDisabled = bulkActionPending !== null;
 
   return (
     <>
@@ -3211,12 +3213,19 @@ function ExpandedView({
               {t('ccAgent.sidebar.bulkSelection.selected', { count: selectedSessionIds.size })}
             </span>
             <Tip text={bulkArchiveLabel} side="bottom">
-              <span className="inline-flex">
+              <span
+                role={bulkArchiveDisabled ? 'button' : undefined}
+                aria-disabled={bulkArchiveDisabled ? true : undefined}
+                aria-label={bulkArchiveDisabled ? bulkArchiveLabel : undefined}
+                tabIndex={bulkArchiveDisabled ? 0 : undefined}
+                className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+              >
                 <button
                   type="button"
                   onClick={() => void handleBulkArchive()}
-                  disabled={bulkActionPending !== null || selectedActiveSessionCount === 0}
+                  disabled={bulkArchiveDisabled}
                   aria-label={bulkArchiveLabel}
+                  aria-hidden={bulkArchiveDisabled ? true : undefined}
                   className={cn(
                     'flex size-6 shrink-0 items-center justify-center rounded-full',
                     'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -3229,12 +3238,19 @@ function ExpandedView({
               </span>
             </Tip>
             <Tip text={bulkDeleteLabel} side="bottom">
-              <span className="inline-flex">
+              <span
+                role={bulkActionDisabled ? 'button' : undefined}
+                aria-disabled={bulkActionDisabled ? true : undefined}
+                aria-label={bulkActionDisabled ? bulkDeleteLabel : undefined}
+                tabIndex={bulkActionDisabled ? 0 : undefined}
+                className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+              >
                 <button
                   type="button"
                   onClick={() => void handleBulkDelete()}
-                  disabled={bulkActionPending !== null}
+                  disabled={bulkActionDisabled}
                   aria-label={bulkDeleteLabel}
+                  aria-hidden={bulkActionDisabled ? true : undefined}
                   className={cn(
                     'flex size-6 shrink-0 items-center justify-center rounded-full',
                     'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -3247,12 +3263,19 @@ function ExpandedView({
               </span>
             </Tip>
             <Tip text={bulkClearLabel} side="bottom">
-              <span className="inline-flex">
+              <span
+                role={bulkActionDisabled ? 'button' : undefined}
+                aria-disabled={bulkActionDisabled ? true : undefined}
+                aria-label={bulkActionDisabled ? bulkClearLabel : undefined}
+                tabIndex={bulkActionDisabled ? 0 : undefined}
+                className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+              >
                 <button
                   type="button"
                   onClick={handleClearSelection}
-                  disabled={bulkActionPending !== null}
+                  disabled={bulkActionDisabled}
                   aria-label={bulkClearLabel}
+                  aria-hidden={bulkActionDisabled ? true : undefined}
                   className={cn(
                     'flex size-6 shrink-0 items-center justify-center rounded-full',
                     'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
@@ -4211,10 +4234,17 @@ function RailPanels({
    *  同语义置灰,不收面板不丢上下文,codex review)。 */
   const panelHeadCreateButton = (label: string, onCreate: () => void, disabled = false) => (
     <Tip text={label} side="bottom">
-      <span className="inline-flex self-center">
+      <span
+        role={disabled ? 'button' : undefined}
+        aria-disabled={disabled ? true : undefined}
+        aria-label={disabled ? label : undefined}
+        tabIndex={disabled ? 0 : undefined}
+        className="inline-flex self-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+      >
         <button
           type="button"
           aria-label={label}
+          aria-hidden={disabled ? true : undefined}
           disabled={disabled}
           onClick={() => {
             railPanelStore.closeAll();

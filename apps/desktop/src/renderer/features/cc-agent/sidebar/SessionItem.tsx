@@ -1016,19 +1016,20 @@ export const SessionItem = memo(function SessionItem({
           {boundSchedules.length > 0 ? (
             <ScheduleBindingBadge schedules={boundSchedules} activeForeground={isActive} />
           ) : isAutomationGenerated ? (
-            <button
-              type="button"
-              className="inline-flex shrink-0 cursor-pointer focus:outline-none"
-              aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-              title={t('ccAgent.sidebar.automationGenerated')}
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleAutomationIconClick();
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              <AutomationTimerIcon size={10} activeForeground={isActive} />
-            </button>
+            <Tip text={t('ccAgent.sidebar.automationGenerated')}>
+              <button
+                type="button"
+                className="inline-flex shrink-0 cursor-pointer focus:outline-none"
+                aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleAutomationIconClick();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <AutomationTimerIcon size={10} activeForeground={isActive} />
+              </button>
+            </Tip>
           ) : null}
           <SidebarTitleMarquee
             title={displayTitle}

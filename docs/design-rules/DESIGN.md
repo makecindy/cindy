@@ -1015,10 +1015,10 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 
 ### 14.6 Icon-only Controls and Tooltips
 
-- **Every icon-only interactive control has two labels:** a localized accessible name
-  (`aria-label`) and a visible `Tip`. Familiar glyphs, dense lists, and actions that only
-  appear on hover are not exemptions: if the control has no persistent text label, users
-  must not have to guess what it does.
+- **Delivery contract for new and modified icon-only controls:** every icon-only interactive
+  control has two labels: a localized accessible name (`aria-label`) and a visible `Tip`.
+  Familiar glyphs, dense lists, and actions that only appear on hover are not exemptions: if
+  the control has no persistent text label, users must not have to guess what it does.
 - **Describe the action that will happen next.** Stateful controls say `Expand Sidebar` or
   `Collapse Sidebar`, not the vague `Toggle Sidebar`; their tooltip and accessible name
   change together. A disabled icon-only control explains why it is unavailable.
@@ -1029,8 +1029,13 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
   permission requests, and other information needed before acting must remain visible in
   the interface or confirmation flow.
 - **Desktop action controls use the shared Radix `Tip`, not native `title`.** Native `title`
-  remains acceptable for non-interactive truncated text. Shared icon-button primitives own
-  this behavior wherever possible, with regression tests guarding the contract.
+  remains acceptable for truncated persistent text, marked explicitly where the element is
+  interactive. Shared icon-button primitives own this behavior wherever possible.
+- **Migration is incremental and guarded by surface.** Recursive regression coverage currently
+  enforces this contract for app chrome, the title bar, the left sidebar and session list, and
+  the right sidebar (`components/layout`, `components/sidebar`, `components/title-bar`,
+  `features/cc-agent/sidebar`, and `features/right-sidebar`). Legacy feature-local controls
+  outside those roots migrate when touched; their existence is not an exemption for new work.
 
 ## 15. CINDY Skin Family(品牌化可选 family)
 

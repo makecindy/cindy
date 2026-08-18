@@ -88,6 +88,7 @@ export function SidebarIconButton({
         className,
       )}
       {...rest}
+      aria-hidden={disabled ? true : undefined}
     >
       <Icon size={18} />
       {showDot && <AttentionDot size={6} tone={dotTone} className="absolute right-1.5 top-1.5" />}
@@ -96,7 +97,22 @@ export function SidebarIconButton({
 
   return (
     <Tip text={title ?? label} side="right">
-      {disabled ? <span className="inline-flex">{button}</span> : button}
+      {disabled ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={title ?? label}
+          tabIndex={0}
+          className={cn(
+            'inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            variant === 'grid' ? 'rounded-[6px]' : 'rounded-full',
+          )}
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
     </Tip>
   );
 }

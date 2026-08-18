@@ -33,11 +33,18 @@ export function ChromeIconButton({
   const accessibleLabel = rest['aria-label'];
   const tooltipText =
     tooltip ?? title ?? (typeof accessibleLabel === 'string' ? accessibleLabel : undefined);
+  const disabledLabel =
+    typeof tooltipText === 'string'
+      ? tooltipText
+      : typeof accessibleLabel === 'string'
+        ? accessibleLabel
+        : undefined;
   const button = (
     <button
       type="button"
       className={[CHROME_ICON_BUTTON_CLASS, className].filter(Boolean).join(' ')}
       {...rest}
+      aria-hidden={rest.disabled ? true : undefined}
     >
       {children}
     </button>
@@ -45,7 +52,19 @@ export function ChromeIconButton({
 
   return (
     <Tip text={tooltipText} side={tooltipSide} delay={tooltipDelay}>
-      {rest.disabled ? <span className="inline-flex">{button}</span> : button}
+      {rest.disabled ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={disabledLabel}
+          tabIndex={0}
+          className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
     </Tip>
   );
 }
