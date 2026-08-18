@@ -157,6 +157,7 @@
     "attachmentCount": "{{n}} 个附件",
     "attachmentMessage": "附件消息",
     "steeringLabel": "插话发送中：{{text}}",
+    "queuedStatus": "已排队",
     "queuedMessageLabel": "排队消息 {{index}}:{{text}}",
     "editingInComposer": "正在下方输入框编辑…",
     "cancel": "取消",

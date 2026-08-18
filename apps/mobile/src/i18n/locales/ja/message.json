@@ -157,6 +157,7 @@
     "attachmentCount": "添付ファイル {{n}} 件",
     "attachmentMessage": "添付ファイルのメッセージ",
     "steeringLabel": "割り込み送信中:{{text}}",
+    "queuedStatus": "キュー内",
     "queuedMessageLabel": "キュー内メッセージ {{index}}:{{text}}",
     "editingInComposer": "下の入力欄で編集中…",
     "cancel": "キャンセル",
