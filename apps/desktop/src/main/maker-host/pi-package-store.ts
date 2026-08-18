@@ -1895,7 +1895,9 @@ async function copySnapshotEntryBounded(
     const directory = await fs.opendir(canonicalSource);
     const copiedEntries: string[] = [];
     try {
-      await fs.mkdir(targetPath, { mode: sourceMode });
+      // Keep the in-progress directory host-writable even when the source is
+      // read-only; restore the source mode only after all children are copied.
+      await fs.mkdir(targetPath, { mode: 0o700 });
       for await (const entry of directory) {
         copiedEntries.push(entry.name);
         await copySnapshotEntryBounded(

@@ -451,6 +451,40 @@ describe('Pi package executable-code boundary', () => {
     ])).resolves.toEqual(frozenResources);
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'stages a read-only package directory before restoring its source mode',
+    async () => {
+      const { root } = await createPackage();
+      const snapshotRoot = path.join(runtime.userData, 'read-only-package-snapshot');
+      const stagedRoot = path.join(snapshotRoot, '0');
+      await fs.chmod(root, 0o555);
+      try {
+        const store = await import('../pi-package-store.js');
+        const snapshot = await store.stageManagedPackageSnapshot({
+          extensions: [path.join(root, 'extensions', 'index.ts')],
+          skills: [],
+          promptTemplates: [path.join(root, 'prompts', 'hello.md')],
+          packageRoots: [root],
+        }, snapshotRoot);
+
+        expect(snapshot).toMatchObject({
+          extensions: [path.join(stagedRoot, 'extensions', 'index.ts')],
+          promptTemplates: [path.join(stagedRoot, 'prompts', 'hello.md')],
+          packageRoots: [stagedRoot],
+        });
+        await expect(fs.readFile(snapshot.extensions[0]!, 'utf8'))
+          .resolves.toContain('managed-test');
+        expect((await fs.stat(stagedRoot)).mode & 0o777).toBe(0o555);
+        expect((await fs.readdir(runtime.userData)).some((entry) => (
+          entry.startsWith(`${path.basename(snapshotRoot)}.tmp-`)
+        ))).toBe(false);
+      } finally {
+        await fs.chmod(root, 0o755).catch(() => undefined);
+        await fs.chmod(stagedRoot, 0o755).catch(() => undefined);
+      }
+    },
+  );
+
   it('builds a bounded Main-inspected enable identity without exposing local paths', async () => {
     const { root, source } = await createPackage();
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
