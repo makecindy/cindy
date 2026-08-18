@@ -83,7 +83,7 @@ export function AutomationSessionGroupItem({
 }: AutomationSessionGroupItemProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  // 轴 1:文件夹开/关,持久化、记忆上次(默认展开),像项目分组一样。
+  // 轴 1:文件夹开/关,持久化、记忆上次展开(默认收起)。
   const [collapsed, toggleCollapsed] = useAutomationGroupCollapsed(group.id);
   // 轴 2:展开后运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
   const [showAll, setShowAll] = useState(false);

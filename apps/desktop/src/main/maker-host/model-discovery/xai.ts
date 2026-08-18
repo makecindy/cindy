@@ -295,13 +295,23 @@ async function fetchJson(
   }
 }
 
-function baseHeaders(accessToken: string): Record<string, string> {
+/** SuperGrok cli-chat-proxy 共用请求头。用量查询与模型发现走同一套。 */
+export function buildXaiCliProxyHeaders(
+  accessToken: string,
+  extras?: { userId?: string },
+): Record<string, string> {
   return {
     Authorization: `Bearer ${accessToken}`,
+    Accept: 'application/json',
     'X-XAI-Token-Auth': 'xai-grok-cli',
     'x-grok-client-version': XAI_GROK_CLIENT_VERSION,
     'x-grok-client-mode': 'interactive',
+    ...(extras?.userId ? { 'x-userid': extras.userId } : {}),
   };
+}
+
+function baseHeaders(accessToken: string): Record<string, string> {
+  return buildXaiCliProxyHeaders(accessToken);
 }
 
 function parseUserIdentity(payload: unknown): XaiUserIdentity {

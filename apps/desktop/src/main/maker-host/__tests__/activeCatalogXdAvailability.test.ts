@@ -15,6 +15,7 @@ import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
 
 import {
   getActiveCatalog,
+  getXdGatewayModels,
   resolveXdPiGatewayWireProtocol,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
@@ -190,6 +191,37 @@ describe('XD 网关权威模型清单重建', () => {
 
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex').map((model) => model.id)).toEqual(['codex-native-only']);
+  });
+
+  it('媒体 mode 条目不进入聊天目录，并保留在原始 Gateway 快照', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'image-without-guide',
+        mode: 'image_generation',
+        agents: [],
+        name: 'Image Without Guide',
+      },
+      {
+        id: 'video-model',
+        mode: 'video_generation',
+        agents: [],
+        name: 'Video Model',
+      },
+      {
+        id: 'chat-model',
+        mode: 'chat',
+        agents: ['codex'],
+      },
+    ]);
+
+    expect(getXdGatewayModels().map((model) => model.id)).toEqual([
+      'image-without-guide',
+      'video-model',
+      'chat-model',
+    ]);
+    expect(xdModels('claude-code')).toEqual([]);
+    expect(xdModels('codex').map((model) => model.id)).toEqual(['chat-model']);
   });
 
   it('perAgent 覆盖块按 tab 应用(cc 无 Fast + 1M 窗口;codex 保持基线)', () => {

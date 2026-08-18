@@ -493,7 +493,8 @@ import {
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
-  isSubscriptionDirectModel,
+  isExclusiveXaiModelId,
+  isSubscriptionDirectRoute,
 } from '../../shared/subscriptionModels.js';
 import {
   addRegionalMoney,
@@ -502,7 +503,11 @@ import {
 } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
-import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
+import {
+  triggerClaudeSubscriptionUsageRefresh,
+  triggerCodexAccountUsageRefresh,
+  triggerXaiSubscriptionUsageRefresh,
+} from './usage.js';
 import {
   rebroadcastCodexTodayUsage,
   rebroadcastTodaySpend,
@@ -693,6 +698,7 @@ import {
 import { readOrcaWorkerProviderRoutingContext } from './orcaProviderRoutingContext.js';
 import {
   getSessionProvider,
+  hasSessionProvider,
   hydrateSessionProvider,
   normalizeSessionProviderId,
   setSessionProvider,
@@ -756,7 +762,14 @@ import {
 } from '../maker-host/model-disable-store.js';
 import { readProviderOrder, setProviderOrder } from '../maker-host/provider-order-store.js';
 import {
+  resolveCurrentSetModelProviderId,
+  resolveExclusiveSetModelReroute,
+  resolveSetModelGuardProviderId,
+} from '../maker-host/model-route-guard.js';
+import {
+  pinExclusiveSessionProvider,
   resolveLenientSessionRoute,
+  shouldApplyExclusiveProviderRerouteLive,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
 import { setClaudeProxySessionIdResolver } from '../maker-host/anthropic-compat-proxy-host.js';
@@ -1511,6 +1524,7 @@ interface OrcaCollabService {
     role: string;
     agent: AgentKind;
     model?: string;
+    providerId?: string;
     effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     fast?: boolean;
     workerPermissionMode?: OrcaWorkerPermissionMode;
@@ -1669,9 +1683,24 @@ interface OrcaCollabService {
   listAvailableModels: (params: { agent?: AgentKind }) => Promise<
     | {
         ok: true;
-        codex?: Array<{ id: string; label: string }>;
-        claude_code?: Array<{ id: string; label: string }>;
-        pi?: Array<{ id: string; label: string }>;
+        codex?: Array<{
+          id: string;
+          label: string;
+          providers?: Array<{ id: string; name: string }>;
+          defaultProviderId?: string | null;
+        }>;
+        claude_code?: Array<{
+          id: string;
+          label: string;
+          providers?: Array<{ id: string; name: string }>;
+          defaultProviderId?: string | null;
+        }>;
+        pi?: Array<{
+          id: string;
+          label: string;
+          providers?: Array<{ id: string; name: string }>;
+          defaultProviderId?: string | null;
+        }>;
       }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -4424,7 +4453,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               const isClaudeSubscriptionValueRow =
                 isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model);
               const isBridgeSubscriptionRow =
-                m.source === 'subscription' && isSubscriptionDirectModel(m.model);
+                m.source === 'subscription' && isSubscriptionDirectRoute(m.model);
               if (isClaudeSubscriptionValueRow || isBridgeSubscriptionRow)
                 hasSubscriptionValueRow = true;
               modelUsageWrites.push(
@@ -4588,7 +4617,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
             // 避免把订阅 SDK 自报 cost 误记进计费)。但显式 provider-api 是权威路由:
             // 自定义 API 供应商可能供应带订阅前缀的模型 id,不能按前缀把真实费用判掉。
-            if (route !== 'provider-api' && isSubscriptionDirectModel(resolvedModel)) {
+            if (route !== 'provider-api' && isSubscriptionDirectRoute(resolvedModel)) {
               await recordUsageOnly();
               return;
             }
@@ -4620,6 +4649,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         void modelPromise
           .then((m) => {
             if (m && m.startsWith(CHATGPT_MODEL_PREFIX)) triggerCodexAccountUsageRefresh();
+            if (m && isExclusiveXaiModelId(m)) triggerXaiSubscriptionUsageRefresh();
           })
           .catch(() => {
             /* 模型解析失败: 跳过, 非致命 */
@@ -4681,7 +4711,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               pricingModel.startsWith('codex/');
             const isCodexXaiProviderRoute =
               (sessionProvider == null || sessionProvider === 'xai') &&
-              pricingModel.startsWith(XAI_MODEL_PREFIX);
+              isExclusiveXaiModelId(pricingModel);
             const isCodexOpenAiProviderRoute =
               sessionProvider == null || sessionProvider === 'openai';
             const hasGatewayKey = Boolean(readClaudeApiKey());
@@ -4831,10 +4861,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         void modelPromise
           .then((model) => {
             const hasGatewayKey = Boolean(readClaudeApiKey());
+            if (!isRemoteCodexSession && isExclusiveXaiModelId(model)) {
+              triggerXaiSubscriptionUsageRefresh();
+              return;
+            }
             if (
               !isRemoteCodexSession &&
               !isCustomProviderRoute &&
-              !model.startsWith(XAI_MODEL_PREFIX) &&
+              !isExclusiveXaiModelId(model) &&
               (codexAuthInjection === 'env-key' ||
                 model.startsWith('codex/') ||
                 (sessionProvider === 'xd' && hasGatewayKey))
@@ -4882,6 +4916,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               // 模型读取失败仍持久化 token/cache，模型显示为 unknown。
             }
             const pricingModel = normalizeModelIdForPricing(turnModel);
+            const isCustomProviderRoute = isUserProviderSession(session.id);
             const effectiveProvider =
               sessionProvider ??
               (pricingModel.startsWith(CHATGPT_MODEL_PREFIX)
@@ -4893,7 +4928,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               effectiveProvider === 'openai' ||
               effectiveProvider === 'anthropic' ||
               effectiveProvider === 'xai' ||
-              isSubscriptionDirectModel(pricingModel);
+              (!isCustomProviderRoute && isSubscriptionDirectRoute(pricingModel));
             const turnUsageDetails = buildTurnUsageDetails({
               ...tokens,
               model: turnModel,
@@ -4926,20 +4961,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               // 自定义(source:'user')provider——本地 Ollama / 用户自付费兼容端点——即便
               // 模型 id 与 XD 目录重名,也不能套用 XD 网关定价当作 Cindy 消费入账;只记 token
               // (上方已入库),不写 money(codex review)。仅 xd / 默认网关与订阅路由计费。
-              const isCustomProviderRoute = isUserProviderSession(session.id);
               const pricing =
                 isSubscriptionValue || isCustomProviderRoute
                   ? null
                   : await getGatewayModelPricingForModel();
               const price =
-                effectiveProvider === 'openai' ||
-                effectiveProvider === 'anthropic' ||
-                effectiveProvider === 'xai'
-                  ? getModelPriceQuote(null, effectiveProvider, pricingModel)
-                  : isSubscriptionDirectModel(pricingModel)
-                    ? getSubscriptionDirectValuePrice(pricingModel)
-                    : isCustomProviderRoute
-                      ? null
+                isCustomProviderRoute
+                  ? null
+                  : effectiveProvider === 'openai' ||
+                      effectiveProvider === 'anthropic' ||
+                      effectiveProvider === 'xai'
+                    ? getModelPriceQuote(null, effectiveProvider, pricingModel)
+                    : isSubscriptionDirectRoute(pricingModel)
+                      ? getSubscriptionDirectValuePrice(pricingModel)
                       : getModelPriceQuote(pricing, 'xd', pricingModel);
               const money = computePriceQuoteTurnMoney(
                 tokens,
@@ -4992,11 +5026,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               triggerCodexAccountUsageRefresh();
             } else if (effectiveProvider === 'anthropic') {
               triggerClaudeSubscriptionUsageRefresh();
+            } else if (effectiveProvider === 'xai') {
+              triggerXaiSubscriptionUsageRefresh();
             } else if (effectiveProvider === 'xd' || effectiveProvider == null) {
               void triggerClaudeAccountUsageRefresh();
             }
-            // xAI 没有独立订阅窗口端点；Responses bridge 从响应 headers 实时更新
-            // useXaiRateLimit 消费的快照，无需额外网络请求。
           })();
         }
       }
@@ -6423,7 +6457,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? `model "${model}" is not an agent chat model`
             : verdict.reason === 'model-retired'
               ? `model "${model}" has been retired from the catalog`
-              : `model "${model}" is disabled in settings`,
+              : verdict.reason === 'exclusive-source-unavailable'
+                ? `model "${model}" requires SuperGrok (xAI) and cannot use the default gateway`
+                : `model "${model}" is disabled in settings`,
       );
     }
     return verdict.kind === 'reroute' ? verdict.providerId : undefined;
@@ -6472,7 +6508,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (!verifiedResume) {
         const reroute = await assertModelRouteUsable(o.agentKind, o.model, o.providerId ?? null);
-        if (reroute && !o.providerId) o.providerId = reroute;
+        if (reroute && shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
+          o.providerId = reroute;
+        }
+      } else if (shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
+        const pin = await pinExclusiveSessionProvider(
+          o.agentKind,
+          o.model,
+          o.providerId ?? null,
+        );
+        if (pin) o.providerId = pin;
       }
     }
     const session = await maker.createSession(o);
@@ -9979,12 +10024,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listAvailableModels: async ({ agent }) => {
       try {
         const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
-        const result: Record<string, Array<{ id: string; label: string }>> = {};
+        const providerRouting = await getProviderRoutingContext();
+        const result: Record<string, Array<{
+          id: string;
+          label: string;
+          providers: Array<{ id: string; name: string }>;
+          defaultProviderId: string | null;
+        }>> = {};
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
           // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
           const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code';
-          result[key] = caps.availableModels.map((m) => ({ id: m.id, label: m.displayName }));
+          const providers = providerRouting.availability[a] ?? [];
+          result[key] = caps.availableModels.map((m) => ({
+            id: m.id,
+            label: m.displayName,
+            providers: providers
+              .filter((provider) => provider.models.includes(m.id))
+              .map((provider) => ({ id: provider.id, name: provider.name })),
+            defaultProviderId: providerRouting.resolveDefaultProviderIdForModel(a, m.id),
+          }));
         }
         return { ok: true, ...result };
       } catch (err) {
@@ -12805,16 +12864,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 拦「切过去」;隐式来源的原生默认落点被停用而有启用替代拷贝时,以显式来源
         // 落地(与 bootstrapSession 同语义)。agentKind 读不到(会话行缺失等)时不拦。
         // DB 存的是 'cc' | 'codex'(messages.agent_kind 口径),目录侧是 AgentKind。
-        let effectiveProviderId = providerId;
+        const requestedProviderId = normalizeSessionProviderId(
+          typeof providerId === 'string' || providerId === null ? providerId : undefined,
+        );
+        let persistedProviderId: string | null = null;
+        let persistedProviderKnown = true;
+        if (requestedProviderId === undefined && !hasSessionProvider(sessionId)) {
+          try {
+            const db = getDbClient().drizzle;
+            const [row] = await db
+              .select({ providerId: sessions.providerId })
+              .from(sessions)
+              .where(eq(sessions.id, sessionId))
+              .limit(1);
+            persistedProviderId = row?.providerId?.trim() || null;
+            hydrateSessionProvider(sessionId, persistedProviderId);
+          } catch (err) {
+            persistedProviderKnown = false;
+            log.debug('set-model persisted provider lookup failed (non-fatal)', {
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const currentProviderId = resolveCurrentSetModelProviderId(
+          hasSessionProvider(sessionId),
+          getSessionProvider(sessionId),
+          persistedProviderId,
+        );
+        const guardProviderId = resolveSetModelGuardProviderId(
+          requestedProviderId,
+          currentProviderId,
+        );
+        let effectiveProviderId = requestedProviderId;
         {
           const dbAgentKind = getSessionDbAgentKind(sessionId);
           if (dbAgentKind) {
-            const reroute = await assertModelRouteUsable(
-              dbToMakerAgentKind(dbAgentKind),
-              model,
-              typeof providerId === 'string' ? providerId : null,
+            const reroute = persistedProviderKnown
+              ? await assertModelRouteUsable(
+                  dbToMakerAgentKind(dbAgentKind),
+                  model,
+                  guardProviderId,
+                )
+              : undefined;
+            effectiveProviderId = resolveExclusiveSetModelReroute(
+              requestedProviderId,
+              currentProviderId,
+              reroute,
+              persistedProviderKnown,
+              getActiveCatalog().providers,
             );
-            if (reroute && typeof providerId !== 'string') effectiveProviderId = reroute;
           }
         }
         try {
@@ -13595,8 +13694,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerIOSSimulatorHandlers(
     createElectronIpcHandlerRegistry(),
     {
-      isPluginAvailable: (workingDir) =>
-        getIOSSimulatorPluginAccessDecision(workingDir).allowed,
+      getPluginAccess: getIOSSimulatorPluginAccessDecision,
       getSessionContext: async (sessionId) => {
         const liveSession = maker.getSession(sessionId);
         if (liveSession) return { workingDir: liveSession.workDir };

@@ -16,4 +16,10 @@ describe('composer placeholder CSS', () => {
       "[data-voice-draft-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {",
     );
   });
+
+  it('keeps the native placeholder hidden while a recommendation overlay is active (is-empty fallback included)', () => {
+    expect(globalsSource).toContain(
+      "[data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {",
+    );
+  });
 });

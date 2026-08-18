@@ -8,4 +8,10 @@ describe('Settings tab order', () => {
 
     expect(TAB_IDS.slice(providersIndex, providersIndex + 2)).toEqual(['providers', 'billing']);
   });
+
+  it('places Plugins immediately before builtin tools', () => {
+    const toolsIndex = TAB_IDS.indexOf('builtin-tools');
+
+    expect(TAB_IDS.slice(toolsIndex - 1, toolsIndex + 1)).toEqual(['ghosts', 'builtin-tools']);
+  });
 });

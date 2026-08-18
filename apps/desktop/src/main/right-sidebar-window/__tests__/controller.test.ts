@@ -108,6 +108,8 @@ function makeHarness(initial: Partial<RsbWindowSettings> = {}) {
   const broadcasts: Array<{ detached: boolean; open: boolean }> = [];
   const sends: Array<{ channel: string; payload: unknown }> = [];
   const sendTargets: number[] = [];
+  const windowWillShowTargets: number[] = [];
+  const windowHiddenTargets: number[] = [];
 
   const deps: RsbWindowControllerDeps = {
     settings: {
@@ -126,6 +128,16 @@ function makeHarness(initial: Partial<RsbWindowSettings> = {}) {
       sends.push({ channel, payload });
       sendTargets.push((win.webContents as unknown as FakeWindow['webContents']).id);
     },
+    onWindowWillShow: (win) => {
+      windowWillShowTargets.push(
+        (win.webContents as unknown as FakeWindow['webContents']).id,
+      );
+    },
+    onWindowHidden: (win) => {
+      windowHiddenTargets.push(
+        (win.webContents as unknown as FakeWindow['webContents']).id,
+      );
+    },
     contextChannel: 'ctx-channel',
     commandChannel: 'cmd-channel',
     tabHandoffChannel: 'handoff-channel',
@@ -141,6 +153,8 @@ function makeHarness(initial: Partial<RsbWindowSettings> = {}) {
     broadcasts,
     sends,
     sendTargets,
+    windowWillShowTargets,
+    windowHiddenTargets,
     getSettings: () => settings,
     setQuitting: (v: boolean) => { quitting = v; },
   };
@@ -300,10 +314,12 @@ describe('open / close (hide-reuse)', () => {
     win.emitWindowEvent('minimize');
     expect(h.controller.getState()).toEqual({ detached: true, lastOpen: true, open: false });
     expect(h.broadcasts.at(-1)).toEqual({ detached: true, open: false });
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
 
     win.show.mockClear();
     win.focus.mockClear();
     h.controller.open();
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
     expect(h.windows).toHaveLength(1);
     expect(win.restore).toHaveBeenCalledOnce();
     expect(win.show).toHaveBeenCalledOnce();
@@ -318,8 +334,10 @@ describe('open / close (hide-reuse)', () => {
     markReady(h.controller, win);
     h.controller.open();
     win.emitWindowEvent('minimize');
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
 
     win.emitWindowEvent('restore');
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
     expect(h.broadcasts.at(-1)).toEqual({ detached: true, open: true });
     expect(h.controller.getState().open).toBe(true);
   });
@@ -419,10 +437,12 @@ describe('renderer navigation lifecycle', () => {
       true,
     );
     expect(win.hide).toHaveBeenCalledOnce();
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
     expect(win.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
     expect(h.controller.getState().open).toBe(true);
 
     markReady(h.controller, win);
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
     expect(win.webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
     expect(win.show).toHaveBeenCalledTimes(2);
     expect(h.controller.getState().open).toBe(true);
@@ -805,6 +825,23 @@ describe('getVisibleSidebarWebContents', () => {
 
     h.controller.close();
     expect(h.controller.getVisibleSidebarWebContents()).toBeNull();
+  });
+
+  it('runs the Host show hook whenever a cached hidden window is reused', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+
+    h.controller.open({ userInitiated: false });
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id]);
+    expect(h.controller.getVisibleSidebarWebContents()).toBe(win.webContents);
+
+    h.controller.close();
+    expect(h.windowHiddenTargets).toEqual([win.webContents.id]);
+    h.controller.open({ userInitiated: false });
+    expect(h.windowWillShowTargets).toEqual([win.webContents.id, win.webContents.id]);
+    expect(h.windows).toHaveLength(1);
   });
 });
 

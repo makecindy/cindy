@@ -218,7 +218,7 @@ export function Sidebar({
               rail（收窄）态放不下,隐藏——rail 自身承担入口;展开后回归。
               完全隐藏态 w-0 自然裁掉。 */}
             {/* 任务列表页把「新建」以外的行搬进自己的列表滚动区(向上滚一起滚走,
-              对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染五行。 */}
+              对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染常驻行。 */}
             {!isRail && <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />}
 
             {/* Upper: feature-injected content slot.

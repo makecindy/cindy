@@ -19,6 +19,7 @@ describe('session focus retry wiring', () => {
     const body = mainSource.slice(start, end);
 
     expect(body).toContain('if (previous !== sessionId)');
+    expect(body).toContain('syncIOSSimulatorRendererAccessForSessionChange(sender, sessionId);');
     expect(body).toContain('noteGhostSessionFocused(sessionId);');
     expect(body).not.toContain('if (previous === sessionId) return;');
   });

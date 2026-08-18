@@ -251,6 +251,8 @@ if (devFlags.needsIsolatedDeviceId) {
     isolationIntent: devFlags.isolated,
     profileKind: devFlags.profileKind,
   });
+  // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
+  process.once('exit', cleanupDevInstance);
   app.once('will-quit', cleanupDevInstance);
 }
 

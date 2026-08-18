@@ -93,4 +93,16 @@ describe('MarketPluginDetailView', () => {
     renderDetail({ description: null });
     expect(screen.getByText('google-calendar')).toBeTruthy();
   });
+
+  it('hides the install action when the host does not provide one', () => {
+    render(
+      <MarketPluginDetailView
+        detail={detail}
+        busy={false}
+        onBack={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /settings\.ghosts\.market\.install/ })).toBeNull();
+  });
 });

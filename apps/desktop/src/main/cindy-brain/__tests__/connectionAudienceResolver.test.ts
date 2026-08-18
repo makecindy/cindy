@@ -85,6 +85,11 @@ describe('installed Plugin Connection audience resolver', () => {
       resolverOptions(manifest, { ...marketInstallation, source: 'local-market' }),
     );
     expect(resolver.resolve('plugin-a', identity)).toBeNull();
+    expect(
+      loadConnectionAudienceResolver(
+        resolverOptions(manifest, { ...marketInstallation, source: 'legacy-adopted' }),
+      ).resolve('plugin-a', identity),
+    ).toBeNull();
 
     expect(
       loadConnectionAudienceResolver(

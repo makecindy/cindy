@@ -1,7 +1,8 @@
 /**
  * ConversationSearchContext —— 展开侧栏「内联会话搜索」的共享状态。
  * ---------------------------------------------------------------------------
- * 搜索输入行现在是 SidebarTopNav 顶部导航列表的第 4 行(新建 / 自动任务 / 技能 / 搜索),
+ * 搜索输入行位于 SidebarTopNav 顶部导航列表末尾(新建 / 自动任务 / 插件 /
+ * 按需恢复入口 / 搜索),
  * 结果由下方功能槽(CCAgentSidebarUpper.ExpandedView)替换列表渲染——两者
  * 是 Sidebar 外壳下的兄弟子树,不在同一组件内。这里用一个 Provider 在两者的共同祖先
  * (Sidebar 外壳)处**只实例化一次** useConversationSearch,经 context 同时供:

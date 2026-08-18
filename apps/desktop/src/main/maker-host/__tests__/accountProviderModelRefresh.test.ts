@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { refreshProviderModelsAfterAccountReady } from '../account-provider-model-refresh.js';
+import {
+  discoverAccountProviderModels,
+  refreshProviderModelsAfterAccountReady,
+  resetAccountProviderRuntimes,
+} from '../account-provider-model-refresh.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -9,6 +13,61 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+describe('resetAccountProviderRuntimes', () => {
+  it('stops before later destructive steps when the scope changes', async () => {
+    const shutdownCodexEnvironment = vi.fn(async () => {});
+    let allow = true;
+    await resetAccountProviderRuntimes(
+      {
+        restartCodex: async () => {
+          allow = false;
+        },
+        shutdownCodexEnvironment,
+        log: { warn: vi.fn() },
+      },
+      () => allow,
+    );
+    expect(shutdownCodexEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('still shuts down Codex when only a transient boundary flips during restart', async () => {
+    const shutdownCodexEnvironment = vi.fn(async () => {});
+    let handleLive = true;
+    let boundaryPending = false;
+    await resetAccountProviderRuntimes(
+      {
+        restartCodex: async () => {
+          boundaryPending = true;
+        },
+        shutdownCodexEnvironment,
+        log: { warn: vi.fn() },
+      },
+      () => handleLive,
+    );
+    expect(boundaryPending).toBe(true);
+    expect(shutdownCodexEnvironment).toHaveBeenCalledOnce();
+  });
+});
+
+describe('discoverAccountProviderModels', () => {
+  it('does not start provider refresh after shouldContinue flips', async () => {
+    const refreshProviderModels = vi.fn(async () => {});
+    let allow = true;
+    await discoverAccountProviderModels(
+      {
+        loadXaiLkg: async () => {
+          allow = false;
+          return true;
+        },
+        refreshProviderModels,
+        log: { warn: vi.fn() },
+      },
+      () => allow,
+    );
+    expect(refreshProviderModels).not.toHaveBeenCalled();
+  });
+});
 
 describe('refreshProviderModelsAfterAccountReady', () => {
   it('keeps all account-scoped provider refreshes inside readiness', async () => {

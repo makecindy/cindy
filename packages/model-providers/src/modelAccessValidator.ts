@@ -2,6 +2,7 @@ import {
   MODEL_ACCESS_AGENTS,
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   MODEL_ACCESS_CURRENCIES,
   MODEL_ACCESS_EFFORTS,
@@ -413,6 +414,7 @@ function modelEntryError(
   schemaVersion:
     | typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION
     | typeof MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION
+    | typeof MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION
     | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
@@ -435,15 +437,17 @@ function modelEntryError(
     return `${path}.currency must be CNY or USD when present`;
   }
   if (
-    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    (schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
+      schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) &&
     !Array.isArray(value.agents)
   ) {
-    return `${path}.agents must be an array in schema version 3`;
+    return `${path}.agents must be an array in schema version 3 or 4`;
   }
   if (
     value.agents !== undefined &&
     (!Array.isArray(value.agents) ||
       value.agents.some((agent) =>
+        schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
         schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
           ? !isModelAgent(agent)
           : !isV2ModelAgent(agent),
@@ -460,6 +464,20 @@ function modelEntryError(
     );
     if (defaultError) return defaultError;
   }
+  const isV4MediaModel =
+    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    (value.mode === 'image_generation' || value.mode === 'video_generation');
+  if (isV4MediaModel && supportedAgents.length > 0) {
+    return `${path}.agents must be empty for a v4 Gateway media mode`;
+  }
+  if (
+    (schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
+      schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) &&
+    supportedAgents.length === 0 &&
+    !isV4MediaModel
+  ) {
+    return `${path}.agents may be empty only for a v4 Gateway media mode`;
+  }
 
   for (const [key, max] of [
     ['name', 256],
@@ -470,10 +488,11 @@ function modelEntryError(
     if (error) return error;
   }
   if (
-    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    (schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
+      schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) &&
     (typeof value.name !== 'string' || value.name.trim().length === 0)
   ) {
-    return `${path}.name must be a non-empty string in schema version 3`;
+    return `${path}.name must be a non-empty string in schema version 3 or 4`;
   }
   if (
     value.icon !== undefined &&
@@ -486,10 +505,11 @@ function modelEntryError(
     if (error) return error;
   }
   if (
-    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    (schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
+      (schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION && !isV4MediaModel)) &&
     value.contextWindow === undefined
   ) {
-    return `${path}.contextWindow is required in schema version 3`;
+    return `${path}.contextWindow is required for schema version 3 and v4 chat models`;
   }
   error = modelModalitiesError(value.modalities, `${path}.modalities`);
   if (error) return error;
@@ -534,6 +554,7 @@ function modelEntryError(
     if (!isPlainObject(value.perAgent)) return `${path}.perAgent must be an object when present`;
     for (const [agent, override] of Object.entries(value.perAgent)) {
       const supportedAgent =
+        schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
         schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
           ? isModelAgent(agent)
           : isV2ModelAgent(agent);
@@ -545,7 +566,8 @@ function modelEntryError(
         override,
         `${path}.perAgent.${agent}`,
         efforts,
-        schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+        schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
+          schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
           ? MODEL_AGENT_OVERRIDE_V3_FIELDS
           : MODEL_AGENT_OVERRIDE_FIELDS,
         true,
@@ -563,7 +585,10 @@ function modelEntryError(
       }
     }
   }
-  if (schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) {
+  if (
+    schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
+    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+  ) {
     for (const agent of supportedAgents) {
       const override = isPlainObject(value.perAgent) ? value.perAgent[agent] : undefined;
       if (!isPlainObject(override) || !isModelAccessWireProtocol(override.wireProtocol)) {
@@ -577,10 +602,12 @@ function modelEntryError(
 type ModelCatalogSchemaVersion =
   | typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION
   | typeof MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION
+  | typeof MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION
   | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
 
 function isKnownAgentForVersion(agent: string, schemaVersion: ModelCatalogSchemaVersion): boolean {
-  return schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+  return schemaVersion === MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION ||
+    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
     ? isModelAgent(agent)
     : isV2ModelAgent(agent);
 }
@@ -642,10 +669,11 @@ export function parseListModelsResponse(
   if (
     value.schemaVersion !== MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION
   ) {
     return fail(
-      `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION}, or ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
+      `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION}, or ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
     );
   }
   const schemaVersion = value.schemaVersion as ModelCatalogSchemaVersion;

@@ -55,9 +55,9 @@ interface FeatureSidebarSlotContextValue {
   sidebarEnabled: boolean;
   /**
    * 当前 Feature 是否自行在其滚动区里渲染顶部导航的「可滚动段」(自动任务 / 插件 /
-   * 搜索 / 远程机器)。true 时 Shell 顶部只保留固定的「新建」行,其余交给 Feature
+   * 按需恢复入口 / 搜索)。true 时 Shell 顶部只保留固定的「新建」行,其余交给 Feature
    * ——任务列表页据此让这些行随列表一起滚走(2026-08-12 用户裁决,对齐 Codex)。
-   * 默认 false:没有长列表的视图(插件页等)仍由 Shell 整块渲染五行。
+   * 默认 false:没有长列表的视图(插件页等)仍由 Shell 整块渲染常驻行。
    */
   ownsTopNavScrollableRows: boolean;
   /** 内部 setter,Feature 经 useOwnTopNavScrollableRows 声明。 */
