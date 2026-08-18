@@ -508,7 +508,7 @@ import {
   type PiPackageMutationRequest,
 } from '../../shared/piPackages.js';
 import {
-  capturePiPackageEnableFingerprint,
+  capturePiPackageEnableIdentity,
   listManagedPiPromptCommands,
   listPiPackages,
   mutatePiPackage,
@@ -6195,8 +6195,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return runPiPackageMutationIpcBoundary(async () => {
       if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
 
-      const grantBinding = request.action === 'set-enabled' && request.enabled === true
-        ? { expectedPackageFingerprint: await capturePiPackageEnableFingerprint(request.source) }
+      const enableIdentity = request.action === 'set-enabled' && request.enabled === true
+        ? await capturePiPackageEnableIdentity(request.source)
+        : undefined;
+      const grantBinding = enableIdentity
+        ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
         : undefined;
 
       const source = request.source.trim();
@@ -6204,19 +6207,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         request.action === 'set-enabled'
           ? {
               title: t('settings.piPackages.extensionApprovalTitle'),
-              message: t('settings.piPackages.extensionApprovalDescription'),
+              message: enableIdentity?.displayLabel ?? '',
+              detail: t('settings.piPackages.extensionApprovalDescription'),
               confirm: t('settings.piPackages.approveAndEnable'),
             }
           : request.action === 'remove'
             ? {
                 title: t('settings.piPackages.uninstallTitle'),
-                message: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
+                message: t('settings.piPackages.uninstallTitle'),
+                detail: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
                 confirm: t('settings.piPackages.confirmUninstall'),
               }
             : request.action === 'update'
               ? {
                   title: t('settings.piPackages.updateConfirmTitle'),
-                  message: t('settings.piPackages.updateConfirmDescription').replace(
+                  message: t('settings.piPackages.updateConfirmTitle'),
+                  detail: t('settings.piPackages.updateConfirmDescription').replace(
                     '{{source}}',
                     source,
                   ),
@@ -6224,15 +6230,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 }
               : {
                   title: t('settings.piPackages.confirmTitle'),
-                  message: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
+                  message: t('settings.piPackages.confirmTitle'),
+                  detail: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
                   confirm: t('settings.piPackages.confirmInstall'),
                 };
       const owner = BrowserWindow.fromWebContents(event.sender);
       const options = {
         type: 'warning' as const,
         title: copy.title,
-        message: copy.title,
-        detail: copy.message,
+        message: copy.message,
+        detail: copy.detail,
         buttons: [copy.confirm, t('settings.piPackages.cancel')],
         defaultId: 1,
         cancelId: 1,

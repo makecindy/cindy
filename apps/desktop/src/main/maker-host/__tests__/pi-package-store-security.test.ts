@@ -185,8 +185,11 @@ async function mutateAuthorized(
   request: import('../../../shared/piPackages.js').PiPackageMutationRequest,
 ) {
   const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
-  const binding = request.action === 'set-enabled' && request.enabled === true
-    ? { expectedPackageFingerprint: await store.capturePiPackageEnableFingerprint(request.source) }
+  const identity = request.action === 'set-enabled' && request.enabled === true
+    ? await store.capturePiPackageEnableIdentity(request.source)
+    : undefined;
+  const binding = identity
+    ? { expectedPackageFingerprint: identity.expectedPackageFingerprint }
     : undefined;
   return store.mutatePiPackage(request, issuePiPackageMutationGrant(request, binding));
 }
@@ -430,10 +433,27 @@ describe('Pi package executable-code boundary', () => {
     ])).resolves.toEqual(frozenResources);
   });
 
+  it('builds a bounded Main-inspected enable identity without exposing local paths', async () => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: `trusted\n${'名'.repeat(400)}/../../private`,
+      version: `1.2.3\r${'v'.repeat(400)}`,
+      pi: { extensions: ['./extensions'], prompts: ['./prompts'] },
+    }));
+    const store = await import('../pi-package-store.js');
+
+    const identity = await store.capturePiPackageEnableIdentity(source);
+    expect(identity.displayLabel).not.toContain(root);
+    expect(identity.displayLabel).not.toMatch(/[\r\n]/);
+    expect(identity.displayLabel).toContain('1.2.3');
+    expect(Buffer.byteLength(identity.displayLabel, 'utf8')).toBeLessThanOrEqual(390);
+    expect(identity.expectedPackageFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it('rejects an enable grant when another instance replaces package bytes after confirmation', async () => {
     const { root, source } = await createPackage();
     const firstStore = await import('../pi-package-store.js');
-    const expectedPackageFingerprint = await firstStore.capturePiPackageEnableFingerprint(source);
+    const { expectedPackageFingerprint } = await firstStore.capturePiPackageEnableIdentity(source);
     const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
     const request = { action: 'set-enabled' as const, source, enabled: true };
     const grant = issuePiPackageMutationGrant(request, { expectedPackageFingerprint });
@@ -1137,6 +1157,104 @@ describe('Pi package executable-code boundary', () => {
     ).rejects.toThrow(/credentials/);
     expect(runtime.spawns).toEqual([]);
   });
+
+  it('quarantines oversized data-only and mixed package roots without dropping valid packages', async () => {
+    const createLaunchPackage = async (
+      source: string,
+      kind: 'skill' | 'mixed',
+      oversized: boolean,
+    ): Promise<string> => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-launch-limit-'));
+      roots.push(root);
+      const skillRoot = path.join(root, 'skills', 'sample');
+      const promptsRoot = path.join(root, 'prompts');
+      await fs.mkdir(skillRoot, { recursive: true });
+      await fs.mkdir(promptsRoot, { recursive: true });
+      await fs.writeFile(path.join(skillRoot, 'SKILL.md'), [
+        '---',
+        `name: ${source.slice(4)}`,
+        'description: bounded skill',
+        '---',
+        'body',
+        '',
+      ].join('\n'));
+      await fs.writeFile(path.join(promptsRoot, 'hello.md'), '---\ndescription: hello\n---\nHello\n');
+      if (kind === 'mixed') {
+        await fs.mkdir(path.join(root, 'extensions'));
+        await fs.writeFile(
+          path.join(root, 'extensions', 'index.js'),
+          'module.exports = function setup() {};\n',
+        );
+      }
+      await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+        name: source.slice(4),
+        version: '1.0.0',
+        pi: {
+          extensions: kind === 'mixed' ? ['./extensions/index.js'] : [],
+          skills: ['./skills'],
+          prompts: ['./prompts'],
+        },
+      }));
+      if (oversized) {
+        const paddingRoot = path.join(root, 'unused-padding');
+        await fs.mkdir(paddingRoot);
+        for (let index = 0; index < 10_000; index += 1) {
+          await fs.writeFile(path.join(paddingRoot, `${index}.txt`), 'x');
+        }
+      }
+      return root;
+    };
+
+    const validSource = 'npm:valid-data-package';
+    const oversizedDataSource = 'npm:oversized-data-package';
+    const oversizedMixedSource = 'npm:oversized-mixed-package';
+    const [validRoot, oversizedDataRoot, oversizedMixedRoot] = await Promise.all([
+      createLaunchPackage(validSource, 'skill', false),
+      createLaunchPackage(oversizedDataSource, 'skill', true),
+      createLaunchPackage(oversizedMixedSource, 'mixed', true),
+    ]);
+    runtime.listOutput = [
+      'User packages:',
+      `  ${validSource}`,
+      `    ${validRoot}`,
+      `  ${oversizedDataSource}`,
+      `    ${oversizedDataRoot}`,
+      `  ${oversizedMixedSource}`,
+      `    ${oversizedMixedRoot}`,
+      '',
+    ].join('\n');
+
+    const store = await import('../pi-package-store.js');
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [
+        { source: validSource, enabled: true },
+        {
+          source: oversizedDataSource,
+          enabled: false,
+          warning: 'inspection-limit',
+          resources: [],
+        },
+        {
+          source: oversizedMixedSource,
+          enabled: false,
+          warning: 'inspection-limit',
+          resources: [],
+        },
+      ],
+    });
+
+    const snapshotRoot = path.join(runtime.userData, 'isolated-launch-limits', 'managed-packages');
+    const snapshot = await store.resolveManagedPiPackageResources({ snapshotRoot });
+    expect(snapshot.skills).toEqual([
+      expect.objectContaining({
+        name: validSource.slice(4),
+        path: path.join(snapshotRoot, '0', 'skills', 'sample', 'SKILL.md'),
+      }),
+    ]);
+    expect(snapshot.extensions).toEqual([]);
+    expect(snapshot.packageRoots).toEqual([path.join(snapshotRoot, '0')]);
+    expect(snapshot.skills.some((skill) => skill.path.includes('oversized'))).toBe(false);
+  }, 30_000);
 
   it('supports Pi local single-file extensions and convention-only directories', async () => {
     const directFileRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-direct-file-'));

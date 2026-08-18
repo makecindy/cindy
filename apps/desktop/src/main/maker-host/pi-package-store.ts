@@ -1167,7 +1167,12 @@ async function inspectPackage(
       ...themes.map((file) => resourceView('theme', file)),
     ];
     const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
-    const contentFingerprint = extensions.length > 0
+    const hasLaunchResources = extensions.length > 0 || skills.length > 0 || prompts.length > 0;
+    // Every enabled directory package is copied as one launch root, including
+    // Skills/Prompts-only packages. Apply the exact snapshot tree limits here
+    // so one oversized package is quarantined during inspection instead of
+    // aborting the combined task snapshot and hiding otherwise valid packages.
+    const contentFingerprint = hasLaunchResources
       ? await fingerprintPackageTreeCached(launchRoot, fingerprintCache)
       : undefined;
     const requiresExtensionApproval = extensions.length > 0 && !(
@@ -1200,7 +1205,7 @@ async function inspectPackage(
         ...(runtimeRequirements.length > 0 ? { runtimeRequirements } : {}),
         ...(warning ? { warning } : {}),
       },
-      launch: enabled
+      launch: enabled && hasLaunchResources
         ? { extensions, skills, promptTemplates: prompts, packageRoots: [launchRoot] }
         : empty,
       promptCommands,
@@ -1311,17 +1316,60 @@ export async function listPiPackages(): Promise<PiPackageListResult> {
   return listPiPackagesNow();
 }
 
+export interface PiPackageEnableIdentity {
+  displayLabel: string;
+  expectedPackageFingerprint: string | null;
+}
+
+function nativeConfirmationField(value: string, maxBytes: number): string {
+  return truncateDisplayField(
+    value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/\s+/g, ' '),
+    maxBytes,
+  );
+}
+
+function piPackageEnableDisplayLabel(target: InspectedPackage): string {
+  let name = nativeConfirmationField(target.view.name, MAX_DISPLAY_NAME_BYTES);
+  if (
+    !name
+    || path.isAbsolute(name)
+    || path.win32.isAbsolute(name)
+    || name.includes('/')
+    || name.includes('\\')
+  ) {
+    name = nativeConfirmationField(
+      target.installedRoot ? path.basename(target.installedRoot) : 'Pi extension',
+      MAX_DISPLAY_NAME_BYTES,
+    ) || 'Pi extension';
+  }
+  const rawVersion = target.view.version
+    ? nativeConfirmationField(target.view.version, MAX_DISPLAY_VERSION_BYTES)
+    : '';
+  const version = rawVersion
+    && !path.isAbsolute(rawVersion)
+    && !path.win32.isAbsolute(rawVersion)
+    && !rawVersion.includes('/')
+    && !rawVersion.includes('\\')
+    ? rawVersion
+    : '';
+  return version ? `${name} (${version})` : name;
+}
+
 /**
- * Captures the package identity presented before Main asks the user to enable
- * it. The later mutation must match this value again under the shared lock.
+ * Captures the Main-inspected package identity shown before enabling it. The
+ * later mutation must match the same content fingerprint again under the
+ * shared lock; Renderer-provided display fields never enter this object.
  */
-export async function capturePiPackageEnableFingerprint(source: string): Promise<string | null> {
+export async function capturePiPackageEnableIdentity(source: string): Promise<PiPackageEnableIdentity> {
   const normalizedSource = requireSource(source);
   return enqueueMutation(async () => {
     const inspected = await inspectAllPackagesFreshUnderMutationLock();
     const target = await findAffectedInspectedPackage(inspected, normalizedSource);
     if (!target) throw new Error('Pi package is not installed');
-    return target.contentFingerprint ?? null;
+    return {
+      displayLabel: piPackageEnableDisplayLabel(target),
+      expectedPackageFingerprint: target.contentFingerprint ?? null,
+    };
   });
 }
 
