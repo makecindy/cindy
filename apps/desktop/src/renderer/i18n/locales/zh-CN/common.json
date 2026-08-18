@@ -6600,11 +6600,11 @@
       "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "modelSwitchContextGuard": {
-        "title": "目标模型的上下文窗口较小",
-        "warnToast": "当前任务已使用 {{used}} 上下文，切换后约占目标模型窗口（{{total}}）的 {{pct}}%",
-        "overflowDescription": "当前任务已使用 {{used}} 上下文，超出目标模型窗口（{{total}}，约 {{pct}}%）。切换后会整理上下文再继续，而不是用新模型压缩整段历史。仍要切换吗？",
-        "confirmSwitch": "仍然切换模型",
-        "cancelSwitch": "取消切换"
+        "title": "这个模型装不下当前对话",
+        "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
+        "overflowDescription": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。换过去后，Cindy 会先整理一份摘要再继续；聊天记录还在，只是不会整段原样带给新模型。",
+        "confirmSwitch": "切换并继续",
+        "cancelSwitch": "先不换"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切换，但新引擎启动失败；发送消息时会自动重试",

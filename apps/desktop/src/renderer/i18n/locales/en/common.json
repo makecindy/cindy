@@ -6602,11 +6602,11 @@
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "modelSwitchContextGuard": {
-        "title": "Target model has a smaller context window",
-        "warnToast": "This session uses {{used}} of context — about {{pct}}% of the target model's {{total}} window after switching",
-        "overflowDescription": "This task already uses {{used}} of context, more than the target model's {{total}} window (about {{pct}}%). After switching, Cindy will reorganize the context and continue instead of compacting the full history. Switch anyway?",
-        "confirmSwitch": "Switch model anyway",
-        "cancelSwitch": "Cancel switch"
+        "title": "This model can't fit the current conversation",
+        "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
+        "overflowDescription": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
+        "confirmSwitch": "Switch and continue",
+        "cancelSwitch": "Keep this model"
       },
       "agentSwitch": {
         "engineNotReady": "Engine switched, but the new engine failed to start; it will retry when you send a message",

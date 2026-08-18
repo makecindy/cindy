@@ -6600,11 +6600,11 @@
       "effortRuntimeDirty": "추론 강도를 업데이트하고 있습니다. 잠시 후 다시 전송해 주세요.",
       "credentialSwitchApplied": "모델 제공자 전환이 적용되었습니다.",
       "modelSwitchContextGuard": {
-        "title": "대상 모델의 컨텍스트 창이 더 작습니다",
-        "warnToast": "이 세션은 {{used}}의 컨텍스트를 사용 중입니다. 전환 후 대상 모델 창({{total}})의 약 {{pct}}%를 차지합니다",
-        "overflowDescription": "이 작업은 {{used}}의 컨텍스트를 사용 중이며, 대상 모델 창({{total}}, 약 {{pct}}%)을 초과합니다. 전환 후에는 전체 압축 대신 컨텍스트를 정리한 뒤 계속합니다. 그래도 전환하시겠습니까?",
-        "confirmSwitch": "모델 전환 진행",
-        "cancelSwitch": "전환 취소"
+        "title": "이 모델에는 지금 대화를 다 넣을 수 없습니다",
+        "warnToast": "이 대화는 이미 {{used}}를 사용 중입니다. 바꾸면 새 모델 용량({{total}})의 약 {{pct}}%가 됩니다",
+        "overflowDescription": "이 대화는 이미 {{used}}를 사용 중이며, 새 모델이 담을 수 있는 {{total}}(약 {{pct}}%)를 넘습니다. 바꾸면 Cindy가 요약을 만든 뒤 이어서 진행합니다. 채팅 기록은 그대로 있고, 전체를 그대로 넘기지는 않습니다.",
+        "confirmSwitch": "바꾸고 계속하기",
+        "cancelSwitch": "지금은 바꾸지 않기"
       },
       "agentSwitch": {
         "engineNotReady": "엔진이 전환되었지만 새 엔진 시작에 실패했습니다. 메시지를 보낼 때 자동으로 재시도됩니다",
