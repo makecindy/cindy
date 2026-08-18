@@ -52,10 +52,12 @@ function WorkerModelLine({
   const effortLabel = workerEffortLabel(t, effort);
   // 列表选中行是浅色 chip 底,不能套深色药丸上的 --surface-on-card,
   // 日间会糊成看不清。副行一律走次级字色。
+  // 菜单有 overflow-x-hidden,整行 nowrap 会把后加的档位裁掉;
+  // 模型名可截,档位词短、必须留在可见区。右侧给 archive / ERR 留空。
   return (
-    <div className="mt-0.5 ml-[26px] whitespace-nowrap text-12 leading-snug text-[var(--text-secondary)]">
-      {simplifyModelName(model)}
-      {effortLabel ? ` · ${effortLabel}` : null}
+    <div className="mt-0.5 mr-7 ml-[26px] flex min-w-0 items-baseline gap-1.5 text-12 leading-snug text-[var(--text-secondary)]">
+      <span className="min-w-0 truncate">{simplifyModelName(model)}</span>
+      {effortLabel ? <span className="shrink-0">· {effortLabel}</span> : null}
     </div>
   );
 }

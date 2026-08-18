@@ -67,9 +67,13 @@ describe('RolePillDropdown worker effort label', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /developer/ }));
 
-    const modelLine = screen.getByText('gpt-5.6-sol · effortLevels.xhigh');
-    expect(modelLine.classList.contains('text-12')).toBe(true);
-    expect(modelLine.classList.contains('text-[var(--text-secondary)]')).toBe(true);
+    const modelName = screen.getByText('gpt-5.6-sol');
+    const effort = screen.getByText('· effortLevels.xhigh');
+    expect(modelName.classList.contains('truncate')).toBe(true);
+    expect(effort.classList.contains('shrink-0')).toBe(true);
+    expect(modelName.parentElement?.classList.contains('text-12')).toBe(true);
+    expect(modelName.parentElement?.classList.contains('text-[var(--text-secondary)]')).toBe(true);
+    expect(modelName.parentElement?.classList.contains('mr-7')).toBe(true);
     expect(screen.queryByLabelText(/^effort /)).toBeNull();
   });
 
@@ -91,7 +95,8 @@ describe('RolePillDropdown worker effort label', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.layoutMenuLabel' }));
-    expect(screen.getByText('gpt-5.6-sol · effortLevels.xhigh')).toBeTruthy();
+    expect(screen.getByText('gpt-5.6-sol')).toBeTruthy();
+    expect(screen.getByText('· effortLevels.xhigh')).toBeTruthy();
     expect(screen.queryByLabelText(/^effort /)).toBeNull();
 
     expect(source.match(/<WorkerModelLine\b/g)).toHaveLength(3);
@@ -136,9 +141,31 @@ describe('RolePillDropdown worker effort label', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /developer/ }));
 
-    const modelLine = screen.getByText('gpt-5.6-sol · effortLevels.xhigh');
-    expect(modelLine.classList.contains('text-12')).toBe(true);
-    expect(modelLine.classList.contains('text-[var(--text-secondary)]')).toBe(true);
-    expect(modelLine.classList.contains('opacity-80')).toBe(false);
+    const modelName = screen.getByText('gpt-5.6-sol');
+    expect(modelName.parentElement?.classList.contains('text-12')).toBe(true);
+    expect(modelName.parentElement?.classList.contains('text-[var(--text-secondary)]')).toBe(true);
+    expect(modelName.parentElement?.classList.contains('opacity-80')).toBe(false);
+    expect(screen.getByText('· effortLevels.xhigh').classList.contains('shrink-0')).toBe(true);
+  });
+
+  it('keeps a long model name truncatable so the effort suffix stays visible', () => {
+    const current = worker({
+      model: 'custom-provider/an-unreasonably-long-model-identifier-that-would-overflow',
+    });
+    render(
+      createElement(RolePillDropdown, {
+        worker: current,
+        workers: [current],
+        selectedWorkerId: current.workerId,
+        activeWorkerCount: 1,
+        onSwitchFocus: vi.fn(),
+        onArchiveWorker: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /developer/ }));
+
+    expect(screen.getByText('an-unreasonably-long-model-identifier-that-would-overflow').classList.contains('truncate')).toBe(true);
+    expect(screen.getByText('· effortLevels.xhigh').classList.contains('shrink-0')).toBe(true);
   });
 });
