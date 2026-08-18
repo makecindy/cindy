@@ -20,6 +20,10 @@ import {
   createImageGenerationIdRecoveryRule,
   createInstructionsInjectionTransform,
   createInstructionsRegistry,
+  createXaiModelInputRecoveryRule,
+  createXaiModelInputSanitizeTransform,
+  sanitizeXaiModelInputBody,
+  sanitizeXaiModelInputFromBody,
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
@@ -76,7 +80,11 @@ import {
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { createXaiProxyAuthInvalidationObserver } from './xai-auth-invalidation-host.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
-import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
+import {
+  encryptedStripController,
+  imageGenerationStripController,
+  xaiModelInputStripController,
+} from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { outboundFetch } from './outbound-fetch.js';
@@ -118,9 +126,13 @@ const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
   onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
 });
+const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
+  onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
+});
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
   imageGenerationIdRecoveryRule,
+  xaiModelInputRecoveryRule,
 ] as const;
 
 /**
@@ -1255,7 +1267,7 @@ function moveInstructionsIntoInput(body: Record<string, unknown>): Record<string
 
 function xaiRealModelId(model: unknown): string | null {
   if (typeof model !== 'string' || model.length === 0) return null;
-  return model.startsWith('xai/') ? model.slice('xai/'.length) : model;
+  return model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
 }
 
 function supportsXaiReasoning(model: string | null): boolean {
@@ -1276,287 +1288,6 @@ function stripUnsupportedXaiReasoning(body: Record<string, unknown>): Record<str
     changed = true;
   }
   return changed ? next : null;
-}
-
-function isXaiUnsupportedInputItem(item: unknown, opts: { supportsReasoning: boolean }): boolean {
-  if (!isPlainObject(item) || typeof item.type !== 'string') return false;
-  if (item.type === 'reasoning') {
-    return !opts.supportsReasoning || typeof item.encrypted_content !== 'string' || item.encrypted_content.length === 0;
-  }
-  return item.type.startsWith('image_generation') ||
-    item.type.startsWith('imageGeneration');
-}
-
-/**
- * Codex code-mode / app-server 历史里会回放 `custom_tool_call*` / `agent_message` 等
- * 非 Responses 标准 item，且 tool output 常是 `[{type:"input_text",text}]` 数组。
- * xAI Responses 的 untagged `ModelInput` 只认 message / function_call /
- * function_call_output / reasoning 等标准变体；原样转发会 422:
- * "data did not match any variant of untagged enum ModelInput"。
- * 仅在 xAI 路由里把这些历史 item 归一成 xAI 可反序列化的形态；未知 type 直接丢掉，
- * 避免跨源 resume（如 OpenAI collab → Grok）整轮卡死。
- */
-/** xAI ModelInput 可反序列化的 input item type（归一化后的白名单）。 */
-const XAI_MODEL_INPUT_TYPES = new Set([
-  'message',
-  'function_call',
-  'function_call_output',
-  'reasoning',
-]);
-
-function textFromResponsesContent(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (value == null) return '';
-  if (Array.isArray(value)) {
-    return value
-      .map((part) => {
-        if (typeof part === 'string') return part;
-        if (!isPlainObject(part)) return '';
-        if (typeof part.text === 'string') return part.text;
-        if (typeof part.input_text === 'string') return part.input_text;
-        if (typeof part.output_text === 'string') return part.output_text;
-        return '';
-      })
-      .filter((part) => part.length > 0)
-      .join('\n');
-  }
-  if (isPlainObject(value)) {
-    if (typeof value.text === 'string') return value.text;
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  }
-  return String(value);
-}
-
-function argumentsFromCustomToolInput(value: unknown): string {
-  if (value == null) return '{}';
-
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value);
-      return JSON.stringify(isPlainObject(parsed) ? parsed : { input: parsed });
-    } catch {
-      return JSON.stringify({ input: value });
-    }
-  }
-
-  try {
-    return JSON.stringify(isPlainObject(value) ? value : { input: value });
-  } catch {
-    return JSON.stringify({ input: String(value) });
-  }
-}
-
-function normalizeXaiInputItem(item: unknown): { item: unknown; changed: boolean } {
-  if (!isPlainObject(item)) {
-    return { item, changed: false };
-  }
-
-  // EasyInput 兼容:只有 role/content、缺 type 的 message 先补 type。
-  const base: Record<string, unknown> = (!('type' in item) && typeof item.role === 'string' && 'content' in item)
-    ? { type: 'message', ...item }
-    : item;
-  const typedFromEasy = base !== item;
-  const type = typeof base.type === 'string' ? base.type : undefined;
-
-  if (type === 'custom_tool_call') {
-    const name = typeof base.name === 'string' ? base.name : '';
-    const callId = typeof base.call_id === 'string'
-      ? base.call_id
-      : (typeof base.id === 'string' ? base.id : '');
-    const next: Record<string, unknown> = {
-      type: 'function_call',
-      name,
-      arguments: argumentsFromCustomToolInput(base.input),
-      call_id: callId,
-    };
-    if (typeof base.id === 'string') next.id = base.id;
-    return { item: next, changed: true };
-  }
-
-  if (type === 'custom_tool_call_output') {
-    return {
-      item: {
-        type: 'function_call_output',
-        call_id: typeof base.call_id === 'string' ? base.call_id : '',
-        output: textFromResponsesContent(base.output),
-      },
-      changed: true,
-    };
-  }
-
-  // Codex multi-agent collab 历史项。OpenAI 会话里的 agent_message 带着 author/
-  // recipient 和 content 里的 encrypted_content part；xAI ModelInput 不认这个 type，
-  // 跨源 resume 到 grok 时整轮 422。降级成 assistant message，只保留可读文本
-  // （collab 密文 part 解不开，丢掉）。
-  if (type === 'agent_message') {
-    const bodyText = textFromResponsesContent(base.content).trim();
-    const author = typeof base.author === 'string' && base.author.length > 0
-      ? base.author
-      : 'agent';
-    const text = bodyText.length > 0
-      ? `[collab ${author}]\n${bodyText}`
-      : `[collab message from ${author}; encrypted payload omitted]`;
-    return {
-      item: {
-        type: 'message',
-        role: 'assistant',
-        content: [{ type: 'output_text', text }],
-      },
-      changed: true,
-    };
-  }
-
-  if (type === 'function_call') {
-    const normalizedArguments = argumentsFromCustomToolInput(base.arguments);
-    const next: Record<string, unknown> = {
-      type: 'function_call',
-      name: typeof base.name === 'string' ? base.name : '',
-      arguments: normalizedArguments,
-      call_id: typeof base.call_id === 'string'
-        ? base.call_id
-        : (typeof base.id === 'string' ? base.id : ''),
-    };
-    if (typeof base.id === 'string') next.id = base.id;
-    const changed = typedFromEasy
-      || normalizedArguments !== base.arguments
-      || typeof base.call_id !== 'string'
-      || typeof base.name !== 'string'
-      || 'status' in base
-      || Object.keys(base).some((key) => !['type', 'name', 'arguments', 'call_id', 'id'].includes(key));
-    return changed ? { item: next, changed: true } : { item: base, changed: false };
-  }
-
-  if (type === 'function_call_output') {
-    const next: Record<string, unknown> = {
-      type: 'function_call_output',
-      call_id: typeof base.call_id === 'string' ? base.call_id : '',
-      output: typeof base.output === 'string' ? base.output : textFromResponsesContent(base.output),
-    };
-    const changed = typedFromEasy
-      || typeof base.output !== 'string'
-      || typeof base.call_id !== 'string'
-      || Object.keys(base).some((key) => !['type', 'call_id', 'output'].includes(key));
-    return changed ? { item: next, changed: true } : { item: base, changed: false };
-  }
-
-  // 回放的 reasoning 项必须逐字回到上游签发时的形状 —— xAI 校验不过就整轮 400
-  // "Could not decode the compaction blob. Ensure it is unmodified from the compact response."
-  // codex 的结构体会把自己没用上的 `Option` 字段一并序列化(实测 `content: null`),
-  // 那是 xAI 从没发过的键;带着它回放等于「被改过」。这里收敛成 Responses 契约里
-  // reasoning 该有的四个键 —— 与 anthropic-responses-bridge 回放的形状同口径
-  // (那条路上的 grok-4.5 一直是通的)。
-  // encrypted_content / summary / id 原样搬,一个字节都不改写。
-  if (type === 'reasoning') {
-    const next: Record<string, unknown> = { type: 'reasoning' };
-    if (typeof base.id === 'string' && base.id.length > 0) next.id = base.id;
-    next.summary = Array.isArray(base.summary) ? base.summary : [];
-    if (typeof base.encrypted_content === 'string') next.encrypted_content = base.encrypted_content;
-    // changed 必须覆盖「键在允许列表里、但值被上面丢掉了」的情况(如 id 是空串
-    // 或非 string):只数键名会让这些项拿着原值原样发出去 —— 等于算出了规范形状
-    // 又扔掉。逐字段比对 next 与 base,判定和构造才是同一套口径。
-    const changed =
-      typedFromEasy ||
-      !Array.isArray(base.summary) ||
-      ('id' in base && next.id !== base.id) ||
-      ('encrypted_content' in base && next.encrypted_content !== base.encrypted_content) ||
-      Object.keys(base).some((key) => !['type', 'id', 'summary', 'encrypted_content'].includes(key));
-    return changed ? { item: next, changed: true } : { item: base, changed: false };
-  }
-
-  if (type === 'message') {
-    let changed = typedFromEasy;
-    const next: Record<string, unknown> = { type: 'message' };
-    const role = base.role === 'developer' ? 'system' : base.role;
-    if (role !== base.role) changed = true;
-    if (typeof role === 'string') next.role = role;
-    if ('content' in base) next.content = base.content;
-    if (typeof base.id === 'string') next.id = base.id;
-    for (const key of Object.keys(base)) {
-      if (key === 'type' || key === 'role' || key === 'content' || key === 'id') continue;
-      // phase / internal_* / 其它扩展键一律丢掉。
-      changed = true;
-    }
-    // content part 只保留 text 类;缺 type 的纯文本 part 补 input_text。
-    if (Array.isArray(next.content)) {
-      const parts: unknown[] = [];
-      for (const part of next.content) {
-        if (typeof part === 'string') {
-          parts.push({ type: 'input_text', text: part });
-          changed = true;
-          continue;
-        }
-        if (!isPlainObject(part)) {
-          changed = true;
-          continue;
-        }
-        const partType = typeof part.type === 'string' ? part.type : undefined;
-        if (partType === 'text') {
-          parts.push({ type: role === 'assistant' ? 'output_text' : 'input_text', text: typeof part.text === 'string' ? part.text : '' });
-          changed = true;
-          continue;
-        }
-        if (partType === 'input_text' || partType === 'output_text') {
-          parts.push({ type: partType, text: typeof part.text === 'string' ? part.text : '' });
-          if (Object.keys(part).some((k) => k !== 'type' && k !== 'text')) changed = true;
-          continue;
-        }
-        if (partType === 'input_image') {
-          const imageUrl = typeof part.image_url === 'string' ? part.image_url : undefined;
-          if (imageUrl) parts.push({ type: 'input_image', image_url: imageUrl });
-          else changed = true;
-          if (Object.keys(part).some((k) => k !== 'type' && k !== 'image_url')) changed = true;
-          continue;
-        }
-        changed = true;
-      }
-      next.content = parts;
-    } else if (typeof next.content !== 'string') {
-      // 非法 content → 降级空字符串,避免整个 ModelInput 反序列化失败。
-      next.content = textFromResponsesContent(next.content);
-      changed = true;
-    }
-    return changed ? { item: next, changed: true } : { item: base, changed: false };
-  }
-
-  // 未知 type 不透传：xAI untagged ModelInput 任一 item 对不上就整包 422。
-  // 调用方按 changed=true + 非白名单 type 丢弃（见 normalizeXaiInputItems）。
-  return { item: base, changed: typedFromEasy || (typeof type === 'string' && !XAI_MODEL_INPUT_TYPES.has(type)) };
-}
-
-function normalizeXaiInputItems(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (!Array.isArray(body.input)) return null;
-
-  // xAI supports encrypted reasoning replay, but not Codex/OpenAI image replay items in `input[]`.
-  // Codex custom_tool_call* / agent_message 等必须在 ModelInput deserialize 前洗掉或改写。
-  const supportsReasoning = supportsXaiReasoning(xaiRealModelId(body.model));
-  let changed = false;
-  const input: unknown[] = [];
-  for (const raw of body.input) {
-    if (isXaiUnsupportedInputItem(raw, { supportsReasoning })) {
-      changed = true;
-      continue;
-    }
-    const normalized = normalizeXaiInputItem(raw);
-    if (normalized.changed) changed = true;
-    // 归一化后仍不在白名单（或未知 type 原样返回）→ 丢掉，别把 422 留给上游。
-    if (
-      !isPlainObject(normalized.item)
-      || typeof normalized.item.type !== 'string'
-      || !XAI_MODEL_INPUT_TYPES.has(normalized.item.type)
-    ) {
-      changed = true;
-      continue;
-    }
-    input.push(normalized.item);
-  }
-  if (!changed) return null;
-
-  return { ...body, input };
 }
 
 const XAI_SUPPORTED_TOOL_TYPES = new Set([
@@ -1993,7 +1724,9 @@ function createXaiResponsesCompatTransform(): RequestTransform {
       changed = true;
     }
 
-    const withNormalizedInputItems = normalizeXaiInputItems(current);
+    const withNormalizedInputItems = sanitizeXaiModelInputBody(current, {
+      supportsReasoning: supportsXaiReasoning(xaiRealModelId(current.model)),
+    });
     if (withNormalizedInputItems) {
       current = withNormalizedInputItems;
       changed = true;
@@ -2561,6 +2294,7 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
+
     // Guardian uses an isolated child thread. Resolve its parent business
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.
@@ -2574,7 +2308,17 @@ function createTransformRequestChain(
     // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
     // 后续针对具体供应商的 input 归一化才能稳定处理。
     createCrossProviderCompactionCompatTransform(),
+    // 必须在 compaction 降级之后:自定义 LiteLLM 别名首次 422 会激活本 strip,
+    // 若先于降级跑,会把 compaction 当未知 type 丢掉,明文「早期上下文不可用」提示就没了。
+    createActiveStripTransform({
+      controller: xaiModelInputStripController,
+      enabled: () => true,
+      strip: sanitizeXaiModelInputFromBody,
+    }),
     createStrictGatewayHistoryCompatTransform(),
+    // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
+    // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
+    createXaiModelInputSanitizeTransform(),
     createXaiResponsesCompatTransform(),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),

@@ -2391,13 +2391,13 @@
     },
     "compaction": {
       "title": "コンテキスト圧縮",
-      "description": "Claude Code がいつ自動的にコンテキストを圧縮するかを制御します。",
+      "description": "Claude Code と Pi がいつ自動的にコンテキストを圧縮するかを制御します。この設定は Codex に影響しません。Codex は独自にコンテキスト圧縮を管理します。",
       "card": {
         "label": "圧縮トリガーしきい値",
-        "badge": "Claude Code のみ",
+        "badge": "Claude Code と Pi",
         "description": "コンテキスト使用量がこの割合に達したときに自動圧縮します。低くすると早めに圧縮して余裕を多く残し、高くすると遅めに圧縮して 1 ターンのコンテキストをより多く使います。",
-        "hint": "コンテキスト使用量がこの割合に達すると自動圧縮します（/compact を自動実行するのと同等）。変更は即時反映され、次のチャットターン終了時に新しい割合で判定します。",
-        "sliderAria": "Claude Code の自動圧縮トリガーしきい値を調整"
+        "hint": "コンテキスト使用量がこの割合に達すると自動圧縮します。変更は即時反映され、次のターン終了時またはより小さいウィンドウへ切り替えたあとに新しい割合で判定します。",
+        "sliderAria": "自動圧縮トリガーしきい値を調整"
       }
     },
     "personalization": {
@@ -4962,7 +4962,7 @@
   "titleBar": {
     "menu": "メニュー",
     "minimize": "最小化",
-    "maximize": "最大化",
+    "maximizeOrRestore": "ウィンドウを最大化または元のサイズに戻す",
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
@@ -4991,6 +4991,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "サイドバーを切り替え",
+    "collapseSidebar": "サイドバーを折りたたむ",
+    "expandSidebar": "サイドバーを展開",
     "collapsePanel": "折りたたみ",
     "expandPanel": "展開"
   },
@@ -5205,6 +5207,8 @@
       "rotateDevice": "デバイスを回転",
       "lockScreen": "画面をロック",
       "unlockScreen": "画面をロック解除",
+      "controlsUnavailable": "シミュレータの操作は一時的に使用できません",
+      "enterTextBeforeSending": "送信するテキストを入力してください",
       "agentBusyTitle": "Agent がこのデバイスを使用中",
       "agentBusyDescription": "現在の Agent 操作が終わるまで手動入力は一時停止されます。",
       "takeControl": "操作を引き継ぐ",
@@ -5281,19 +5285,24 @@
       "urlPlaceholder": "URL を入力または検索",
       "goBack": "戻る",
       "goForward": "進む",
+      "goBackUnavailable": "前のページはありません",
+      "goForwardUnavailable": "次のページはありません",
       "reload": "再読み込み",
       "stop": "読み込み停止",
       "screenshot": "スクリーンショット",
       "screenshotCopied": "スクリーンショットをクリップボードにコピーしました",
       "screenshotFailed": "スクリーンショットに失敗しました",
       "comment": "ページにコメント",
+      "exitCommentMode": "コメントモードを終了",
       "commentModeHint": "要素をクリック / Shift ドラッグで範囲選択 · Cmd/Ctrl+クリックで即追加 · Esc で終了",
       "commentPlaceholder": "ここをどう変えたいか記述してください…",
       "commentSubmit": "コメントを追加",
       "commentCancel": "キャンセル",
       "commentAdded": "コメントを入力欄に追加しました",
       "commentFailed": "コメントの追加に失敗しました",
-      "styleTweaks": "スタイル調整",
+      "styleTweaksExpand": "スタイル調整を表示",
+      "styleTweaksCollapse": "スタイル調整を隠す",
+      "styleTweaksSubmitting": "コメントを送信中…",
       "styleReset": "リセット",
       "styleTextLabel": "テキスト",
       "moreTools": "その他",
@@ -5689,6 +5698,7 @@
       "completed": "完了",
       "empty": "このセッションにバックグラウンドタスクはまだありません",
       "stop": "停止",
+      "stopping": "停止中…",
       "back": "戻る",
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
@@ -7541,6 +7551,7 @@
       "scopeLocalSessions": "このデバイスのセッション",
       "dialogues": "会話",
       "newDialogue": "新規セッション",
+      "creationInProgress": "作成処理が進行中です",
       "dialoguesToggleExpand": "会話を展開",
       "dialoguesToggleCollapse": "会話を折りたたむ",
       "loadingDialogues": "読み込み中…",
@@ -7660,6 +7671,8 @@
         "hiddenCount": "{{count}} 件折りたたみ",
         "stopped": "停止中",
         "aria": "{{title}} の自動化セッション、{{count}} 回実行、{{attention}} 件対応待ち",
+        "expand": "{{title}} の実行履歴を展開",
+        "collapse": "{{title}} の実行履歴を折りたたむ",
         "menu": {
           "runNow": "今すぐ実行",
           "more": "その他の操作",
@@ -7729,6 +7742,7 @@
         "delete": "選択したセッションを削除",
         "clear": "選択を解除",
         "archiveNone": "選択中のセッションにアーカイブ可能な項目がありません",
+        "actionInProgress": "別の操作を処理中です",
         "skipRunning": "{{count}} 件は実行中",
         "skipAttached": "{{count}} 件は遠隔操作中",
         "skipNotActive": "{{count}} 件はアクティブではありません",

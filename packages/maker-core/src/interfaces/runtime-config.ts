@@ -89,12 +89,14 @@ export interface AgentRuntimeConfig {
   ) => string | undefined;
 
   /**
-   * Claude Code 自动上下文压缩阈值百分比。
+   * Host 管的自动上下文压缩阈值百分比。Claude Code 与 Pi 共用同一份设置；Codex 仍由上游自己压。
    *
    * - undefined: host 不接管自动压缩 (保持 agent 默认行为)
-   * - 50-95: 每个 turn 结束时, maker-core 基于最新 usage 快照判断是否静默注入 `/compact`
+   * - 50-95: 每个 turn 结束时, maker-core 基于最新 usage 快照判断。
+   *   Claude Code 静默注入 `/compact`；Pi 调已有 compact RPC。
+   *   Pi 原生 `window - reserveTokens` 仍作顶满抢救。
    *
-   * Host 可以用 getter 注入, Claude agent 会在每次判断时读取最新值。
+   * Host 可以用 getter 注入, agent 会在每次判断时读取最新值。
    */
   autoCompactThresholdPct?: number;
 

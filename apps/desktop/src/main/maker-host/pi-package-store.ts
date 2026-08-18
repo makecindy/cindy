@@ -248,6 +248,8 @@ let mutationTail: Promise<void> = Promise.resolve();
 let inspectionPromise: Promise<InspectedPackage[]> | undefined;
 let inspectionCache: { expiresAt: number; value: InspectedPackage[] } | undefined;
 let inspectionGeneration = 0;
+type SnapshotUnavailableWarning = 'inspection-failed' | 'inspection-limit';
+const snapshotUnavailableRoots = new Map<string, SnapshotUnavailableWarning>();
 
 function packageHome(): string {
   return path.join(app.getPath('userData'), 'pi-package-home');
@@ -1329,7 +1331,13 @@ async function inspectAllPackagesFreshUnderMutationLock(): Promise<InspectedPack
 async function listPiPackagesNow(): Promise<PiPackageListResult> {
   if (!getReadyBinaryPath('pi')) return { available: false, packages: [] };
   const inspected = await inspectAllPackages();
-  return { available: true, packages: inspected.map((pkg) => pkg.view) };
+  return {
+    available: true,
+    packages: inspected.map((pkg) => {
+      const warning = snapshotUnavailableWarningForPackage(pkg);
+      return warning ? { ...pkg.view, enabled: false, warning } : pkg.view;
+    }),
+  };
 }
 
 export async function listPiPackages(): Promise<PiPackageListResult> {
@@ -1394,22 +1402,38 @@ export async function capturePiPackageEnableIdentity(source: string): Promise<Pi
   });
 }
 
-function projectSnapshotUnavailablePackages(
-  inspected: InspectedPackage[],
+function updateSnapshotUnavailableRoots(
   packageRoots: Iterable<string>,
-  warning: 'inspection-failed' | 'inspection-limit',
+  warning: SnapshotUnavailableWarning,
 ): boolean {
-  const unavailableRoots = new Set([...packageRoots].map((root) => path.resolve(root)));
-  if (unavailableRoots.size === 0) return false;
   let changed = false;
-  for (const pkg of inspected) {
-    if (!pkg.launch.packageRoots.some((root) => unavailableRoots.has(path.resolve(root)))) continue;
-    pkg.view = { ...pkg.view, enabled: false, warning };
-    pkg.launch = { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
-    pkg.promptCommands = [];
+  for (const root of packageRoots) {
+    const resolved = path.resolve(root);
+    if (snapshotUnavailableRoots.get(resolved) === warning) continue;
+    snapshotUnavailableRoots.set(resolved, warning);
     changed = true;
   }
   return changed;
+}
+
+function clearSnapshotUnavailableRoots(packageRoots: Iterable<string>): boolean {
+  let changed = false;
+  for (const root of packageRoots) {
+    changed = snapshotUnavailableRoots.delete(path.resolve(root)) || changed;
+  }
+  return changed;
+}
+
+function snapshotUnavailableWarningForPackage(
+  pkg: InspectedPackage,
+): SnapshotUnavailableWarning | undefined {
+  let warning: SnapshotUnavailableWarning | undefined;
+  for (const root of pkg.launch.packageRoots) {
+    const candidate = snapshotUnavailableRoots.get(path.resolve(root));
+    if (candidate === 'inspection-failed') return candidate;
+    if (candidate) warning = candidate;
+  }
+  return warning;
 }
 
 export async function resolveManagedPiPackageResources(
@@ -1457,18 +1481,15 @@ export async function resolveManagedPiPackageResources(
           snapshotLimits,
         );
         const stageMetadata = snapshotStageMetadata.get(staged);
-        if (
-          stageMetadata?.skippedPackageRoots.length
-          && projectSnapshotUnavailablePackages(
-            inspected,
-            stageMetadata.skippedPackageRoots,
-            'inspection-limit',
-          )
-        ) {
-          await publishPiPackagesChanged({ invalidateCache: false });
-        }
         const changedSources = new Set<string>();
         const copiedSourceRoots = stageMetadata?.sourcePackageRoots ?? resources.packageRoots;
+        let snapshotProjectionChanged = clearSnapshotUnavailableRoots(copiedSourceRoots);
+        if (stageMetadata?.skippedPackageRoots.length) {
+          snapshotProjectionChanged = updateSnapshotUnavailableRoots(
+            stageMetadata.skippedPackageRoots,
+            'inspection-limit',
+          ) || snapshotProjectionChanged;
+        }
         const verificationBudget = createSnapshotBudgetCounters(snapshotLimits);
         for (const [index, sourceRoot] of copiedSourceRoots.entries()) {
           const approvals = approvalsByRoot.get(sourceRoot);
@@ -1490,11 +1511,13 @@ export async function resolveManagedPiPackageResources(
           await publishPiPackagesChanged();
           return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
         }
+        if (snapshotProjectionChanged) {
+          await publishPiPackagesChanged({ invalidateCache: false });
+        }
         return staged;
       } catch (error) {
         await fs.rm(options.snapshotRoot, { recursive: true, force: true }).catch(() => undefined);
-        if (projectSnapshotUnavailablePackages(
-          inspected,
+        if (updateSnapshotUnavailableRoots(
           resources.packageRoots,
           error instanceof PiPackageSnapshotLimitError
             ? 'inspection-limit'
@@ -1520,7 +1543,9 @@ export async function listManagedPiPromptCommands(): Promise<Array<{ name: strin
   await mutationTail;
   try {
     const inspected = await inspectAllPackages();
-    return inspected.flatMap((pkg) => pkg.promptCommands);
+    return inspected.flatMap((pkg) => (
+      snapshotUnavailableWarningForPackage(pkg) ? [] : pkg.promptCommands
+    ));
   } catch {
     return [];
   }

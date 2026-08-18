@@ -307,17 +307,22 @@ describe('RightSidebarShell empty state', () => {
   });
 
   it('mounts only the active body first, then idle-mounts and keeps the rest alive', async () => {
-    const idleCallbacks: IdleRequestCallback[] = [];
+    const idleCallbacks: Array<{ id: number; callback: IdleRequestCallback }> = [];
+    let nextIdleCallbackId = 0;
     Object.defineProperty(window, 'requestIdleCallback', {
       configurable: true,
       value: vi.fn((callback: IdleRequestCallback) => {
-        idleCallbacks.push(callback);
-        return idleCallbacks.length;
+        const id = ++nextIdleCallbackId;
+        idleCallbacks.push({ id, callback });
+        return id;
       }),
     });
     Object.defineProperty(window, 'cancelIdleCallback', {
       configurable: true,
-      value: vi.fn(),
+      value: vi.fn((id: number) => {
+        const index = idleCallbacks.findIndex((entry) => entry.id === id);
+        if (index >= 0) idleCallbacks.splice(index, 1);
+      }),
     });
     const mountA = vi.fn();
     const unmountA = vi.fn();
@@ -388,7 +393,7 @@ describe('RightSidebarShell empty state', () => {
       expect(idleCallbacks).toHaveLength(1);
 
       act(() => {
-        idleCallbacks.shift()?.({
+        idleCallbacks.shift()?.callback({
           didTimeout: false,
           timeRemaining: () => 50,
         });

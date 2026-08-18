@@ -998,12 +998,19 @@ function forward(
           const appliedRules: RecoveryRule[] = [rule];
           // 透明重试只有一次。若同一历史里同时存在多类已知坏 payload,在这一次 retry
           // 前把其它安全 strip 也顺手应用掉,避免第一类 400 恢复后立刻撞第二类 400。
-          for (const [extraIndex, extraRule] of activeRules.entries()) {
-            if (extraIndex === matchedIndex) continue;
-            const extraStripped = extraRule.strip(retryBody);
-            if (!extraStripped) continue;
-            retryBody = extraStripped;
-            appliedRules.push(extraRule);
+          // applyOnUnmatchedRetry === false 的规则只在自己 matches 时跑,不能叠到
+          // 别人的 400 上(xAI ModelInput 清洗会改写 OpenAI collab 历史)。
+          // allowExtraRules === false 的主匹配禁止整轮叠洗(ModelInput 422 叠
+          // encrypted-content 会删掉 xAI 本可回放的 reasoning blob)。
+          if (rule.allowExtraRules !== false) {
+            for (const [extraIndex, extraRule] of activeRules.entries()) {
+              if (extraIndex === matchedIndex) continue;
+              if (extraRule.applyOnUnmatchedRetry === false) continue;
+              const extraStripped = extraRule.strip(retryBody);
+              if (!extraStripped) continue;
+              retryBody = extraStripped;
+              appliedRules.push(extraRule);
+            }
           }
           logger.info?.(`◀ upstream ${status} [${rule.id}] → 透明重试 (strip + 重发)`, {
             reqId,

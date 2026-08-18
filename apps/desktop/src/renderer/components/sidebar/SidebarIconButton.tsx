@@ -22,6 +22,7 @@
 import type { ButtonHTMLAttributes } from 'react';
 import type { LucideIcon } from 'lucide-react';
 
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { AttentionDot, type DotTone } from './AttentionDot';
 
@@ -53,7 +54,7 @@ export const SIDEBAR_RAIL_ICON_BUTTON_CLASS = cn(
 export interface SidebarIconButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon: LucideIcon;
-  /** aria-label 与原生 title(可被传入的 title 覆盖)。 */
+  /** aria-label 与可见 tooltip 文案。 */
   label: string;
   variant?: 'grid' | 'rail';
   active?: boolean;
@@ -71,13 +72,15 @@ export function SidebarIconButton({
   showDot = false,
   dotTone = 'done',
   className,
+  disabled,
+  title,
   ...rest
 }: SidebarIconButtonProps) {
-  return (
+  const button = (
     <button
       type="button"
       aria-label={label}
-      title={label}
+      disabled={disabled}
       className={cn(
         BTN_BASE,
         variant === 'grid' ? GRID_GEOMETRY : RAIL_GEOMETRY,
@@ -85,9 +88,31 @@ export function SidebarIconButton({
         className,
       )}
       {...rest}
+      aria-hidden={disabled ? true : undefined}
     >
       <Icon size={18} />
       {showDot && <AttentionDot size={6} tone={dotTone} className="absolute right-1.5 top-1.5" />}
     </button>
+  );
+
+  return (
+    <Tip text={title ?? label} side="right">
+      {disabled ? (
+        <span
+          role="button"
+          aria-disabled="true"
+          aria-label={title ?? label}
+          tabIndex={0}
+          className={cn(
+            'inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            variant === 'grid' ? 'rounded-[6px]' : 'rounded-full',
+          )}
+        >
+          {button}
+        </span>
+      ) : (
+        button
+      )}
+    </Tip>
   );
 }

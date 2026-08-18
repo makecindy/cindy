@@ -24,7 +24,10 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { zstdCompress, zstdDecompress } from 'node:zlib';
 
-import type { LocalRequestHandler } from '@cindy/anthropic-compat-proxy';
+import {
+  sanitizeXaiModelInputBody,
+  type LocalRequestHandler,
+} from '@cindy/anthropic-compat-proxy';
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 
 import { createMakerLogger } from './logger-adapter.js';
@@ -450,6 +453,15 @@ async function rewriteOpenaiContextProfileRequest(
   }
 }
 
+function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(rawBody.toString('utf8'));
+    return isPlainRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * PI already emits xAI-native payloads, so this path bypasses the Messages →
  * Responses bridge that normally supplies xAI's model-gated server tools.
@@ -570,9 +582,14 @@ export function getPiNativeSubscriptionHandler(
           contentEncoding = rewritten.contentEncoding;
         }
       } else if (providerId === 'xai') {
-        const withServerTools = withNativeXaiServerSideTools(parsedBody);
-        if (withServerTools) {
-          outboundBody = Buffer.from(JSON.stringify(withServerTools));
+        const parsed = isPlainRecord(parsedBody)
+          ? parsedBody
+          : parseJsonRecord(rawBody);
+        const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
+        const current = sanitized ?? parsed;
+        const withServerTools = current ? withNativeXaiServerSideTools(current) : null;
+        if (sanitized || withServerTools) {
+          outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
           // The proxy parsed a plain JSON request. After reserializing it the
           // original content encoding, if any, no longer describes the bytes.
           contentEncoding = undefined;

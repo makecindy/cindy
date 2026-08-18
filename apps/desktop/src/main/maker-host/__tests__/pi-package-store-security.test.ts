@@ -1009,6 +1009,78 @@ describe('Pi package executable-code boundary', () => {
     expect(state.disabledSources).toEqual([]);
   });
 
+  it('keeps a snapshot timeout disabled across cache expiry until staging succeeds', async () => {
+    const { root, source } = await createPackage();
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const store = await import('../pi-package-store.js');
+      await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+      const listener = vi.fn();
+      const unsubscribe = store.onPiPackagesChanged(listener);
+      try {
+        await expect(store.resolveManagedPiPackageResources({
+          snapshotRoot: path.join(runtime.userData, 'timed-out-package-snapshot'),
+          snapshotLimits: {
+            maxEntries: 100,
+            maxBytes: 1024 * 1024,
+            maxDurationMs: 0,
+          },
+        })).resolves.toEqual({
+          extensions: [],
+          skills: [],
+          promptTemplates: [],
+          packageRoots: [],
+        });
+        expect(listener).toHaveBeenCalledTimes(1);
+
+        // The failed staging started from a fresh inspection whose one-second
+        // cache is now stale. A Renderer refresh must still see the projected
+        // failure instead of rebuilding an enabled view from raw inspection.
+        nowSpy.mockReturnValue(now + 2_000);
+        await expect(store.listPiPackages()).resolves.toMatchObject({
+          packages: [{ source, enabled: false, warning: 'inspection-limit' }],
+        });
+        await expect(store.listManagedPiPromptCommands()).resolves.toEqual([]);
+
+        const recoveredSnapshotRoot = path.join(runtime.userData, 'recovered-package-snapshot');
+        await expect(store.resolveManagedPiPackageResources({
+          snapshotRoot: recoveredSnapshotRoot,
+          snapshotLimits: {
+            maxEntries: 100,
+            maxBytes: 1024 * 1024,
+            maxDurationMs: 10_000,
+          },
+        })).resolves.toMatchObject({
+          extensions: [path.join(recoveredSnapshotRoot, '0', 'extensions', 'index.ts')],
+          packageRoots: [path.join(recoveredSnapshotRoot, '0')],
+        });
+        expect(listener).toHaveBeenCalledTimes(2);
+
+        nowSpy.mockReturnValue(now + 4_000);
+        const recoveredList = await store.listPiPackages();
+        expect(recoveredList).toMatchObject({
+          packages: [{ source, enabled: true }],
+        });
+        expect(recoveredList.packages[0]?.warning).toBeUndefined();
+        await expect(store.listManagedPiPromptCommands()).resolves.not.toEqual([]);
+        const state = JSON.parse(await fs.readFile(
+          path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+          'utf8',
+        )) as { disabledSources: string[] };
+        expect(state.disabledSources).toEqual([]);
+        await expect(fs.readFile(
+          path.join(root, 'extensions', 'index.ts'),
+          'utf8',
+        )).resolves.toContain('managed-test');
+      } finally {
+        unsubscribe();
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it.runIf(process.platform !== 'win32').each([
     { layout: 'local' as const, source: 'local' },
     { layout: 'npm' as const, source: 'npm:mode-preserving-extension' },
