@@ -253,4 +253,27 @@ describe('PiAgent host auto-compact', () => {
     expect(setModelAt).toBeGreaterThan(compactAt);
     await handle.close();
   });
+
+  it('holds prompt until the in-flight compact RPC finishes', async () => {
+    let release!: () => void;
+    knobs.compactHold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const handle = await start(75);
+    settleWithUsage(160_000);
+    await vi.waitFor(() => expect(knobs.compactCalls).toHaveLength(1));
+    const sendDone = handle.send({
+      role: 'user',
+      content: [{ type: 'text', text: 'hi' }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(knobs.rpcTypes.includes('prompt')).toBe(false);
+    release();
+    await sendDone;
+    const compactAt = knobs.rpcTypes.lastIndexOf('compact');
+    const promptAt = knobs.rpcTypes.lastIndexOf('prompt');
+    expect(promptAt).toBeGreaterThan(compactAt);
+    await handle.close();
+  });
 });

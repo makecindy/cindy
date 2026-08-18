@@ -528,6 +528,37 @@ describe('pi translator', () => {
     expect(ev2.filter((e) => e.type === 'status')).toHaveLength(0);
   });
 
+  it('does not emit compact_boundary for aborted or failed compaction_end', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    translatePiEvent(
+      ev({ type: 'compaction_end', reason: 'threshold', result: null, aborted: true }),
+      queue,
+      ctx,
+    );
+    expect(events.some((e) => e.type === 'compact_boundary')).toBe(false);
+
+    const ctx2 = createPiTranslateContext(noopLogger);
+    const { queue: q2, events: ev2 } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'manual',
+        result: null,
+        aborted: false,
+        errorMessage: 'quota exceeded',
+      }),
+      q2,
+      ctx2,
+    );
+    expect(ev2.some((e) => e.type === 'compact_boundary')).toBe(false);
+    const endStatus = ev2.find(
+      (e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false,
+    );
+    expect(endStatus).toBeDefined();
+  });
+
   it('accumulates turn usage and attaches it to the done event on agent_settled', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

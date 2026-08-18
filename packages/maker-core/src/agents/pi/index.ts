@@ -133,6 +133,7 @@ import {
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
+  isFailedOrAbortedPiCompaction,
   translatePiEvent,
   usageSnapshotOf,
   type PiTranslateContext,
@@ -1959,11 +1960,16 @@ export class PiAgent extends BaseAgent {
             agentKind: 'pi',
             getThresholdPct: getAutoCompactThresholdPct,
           });
-    // Host / 手动 compact 共用一条串行链：摘要进行中 send / setModel / setEffort
-    // 不得再发控制 RPC。Pi 的 compaction_start 是异步到达的，UI 可能已空闲。
-    let compactChain: Promise<void> = Promise.resolve();
-    const waitForCompactIdle = async (): Promise<void> => {
-      await compactChain.catch(() => undefined);
+    // compact / prompt / set_model / set_thinking_level 共用一条双向串行链。
+    // 只等 compact 再发控制 RPC 是单向的：send 越过 wait 后 compact 仍能插队。
+    let sessionRpcChain: Promise<void> = Promise.resolve();
+    const waitForSessionRpcIdle = async (): Promise<void> => {
+      await sessionRpcChain.catch(() => undefined);
+    };
+    const runExclusivePiRpc = <T>(fn: () => Promise<T>): Promise<T> => {
+      const run = sessionRpcChain.then(fn);
+      sessionRpcChain = run.then(() => undefined, () => undefined);
+      return run;
     };
     const requestPiCompact = async (instructions?: string): Promise<ManualCompactResult> => {
       const command: Record<string, unknown> = { type: 'compact' };
@@ -1984,11 +1990,8 @@ export class PiAgent extends BaseAgent {
       if (typeof data.estimatedTokensAfter === 'number') result.estimatedTokensAfter = data.estimatedTokensAfter;
       return result;
     };
-    const runPiCompact = (instructions?: string): Promise<ManualCompactResult> => {
-      const run = compactChain.then(() => requestPiCompact(instructions));
-      compactChain = run.then(() => undefined, () => undefined);
-      return run;
-    };
+    const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
+      runExclusivePiRpc(() => requestPiCompact(instructions));
     const maybeHostAutoCompact = (): void => {
       if (closed || ctx.isStreaming) return;
       if (!autoCompactController?.shouldCompactNow()) return;
@@ -2240,12 +2243,9 @@ export class PiAgent extends BaseAgent {
           translatePiEvent(event, queue, ctx);
           if (autoCompactController) {
             if (event.type === 'compaction_end') {
-              // Pi v0.83: 失败/取消也发 compaction_end；aborted 或 result=null 不是成功边界。
-              const aborted = event.aborted === true;
-              const failed = event.result == null && !aborted;
-              if (aborted || failed) {
+              if (isFailedOrAbortedPiCompaction(event)) {
                 autoCompactController.onCompactCanceled(
-                  aborted ? 'compaction_aborted' : 'compaction_failed',
+                  event.aborted === true ? 'compaction_aborted' : 'compaction_failed',
                 );
               } else {
                 autoCompactController.onCompactBoundary();
@@ -2903,7 +2903,7 @@ export class PiAgent extends BaseAgent {
 
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
-        await waitForCompactIdle();
+        await waitForSessionRpcIdle();
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
@@ -2937,14 +2937,14 @@ export class PiAgent extends BaseAgent {
             : null;
           rejectIfCancelled(sendOpts, 'send');
           promptRequestStarted = true;
-          const resp = await proc.request(command, {
+          const resp = await runExclusivePiRpc(() => proc.request(command, {
             timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
             // Prompt acceptance may legitimately span multiple compaction
             // retries. Bound each silent interval, not the whole progressing
             // preflight, so a healthy long compaction is not killed at 10m.
             refreshTimeoutOnEvent: (event) =>
               PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
-          });
+          }));
           if (!resp.success) {
             if (resp.command !== command.type) {
               throw new Error('pi prompt rejection response missing matching command');
@@ -3069,10 +3069,7 @@ export class PiAgent extends BaseAgent {
         // 并发或连点切换(本地 + 远程控制端同时切)若交错,A 写 pending、B 写 pending、A 落定 B 的
         // 内容,盘上就会出现没人确认过的组合。串行化之后每次切换都看到确定的前一状态,
         // `previousSnapshot` 才是真正可回滚的那一份(review)。
-        const run = setModelChain.then(async () => {
-          await waitForCompactIdle();
-          return switchModel(model, setOpts);
-        });
+        const run = setModelChain.then(() => runExclusivePiRpc(() => switchModel(model, setOpts)));
         // 链永不停在 rejected 上:一次失败之后的切换仍要能排进来。
         setModelChain = run.then(() => {}, () => {});
         return run;
@@ -3082,11 +3079,10 @@ export class PiAgent extends BaseAgent {
         if (reviewMode) return;
         assertStartupEffortAllowed(activeEffortSnapshot, effort);
         if (activeEffortSnapshot?.length === 0) return;
-        await waitForCompactIdle();
-        const resp = await proc.request({
+        const resp = await runExclusivePiRpc(() => proc.request({
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(effort),
-        });
+        }));
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
       },
 

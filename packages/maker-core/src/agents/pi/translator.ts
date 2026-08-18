@@ -350,6 +350,16 @@ function isRedactedThinkingDelta(delta: Record<string, unknown>, contentIndex: n
 }
 
 /** 主入口:一帧 pi RPC 事件 → 0..n 个 AgentEvent。 */
+/** Pi v0.83: 取消/失败的 compaction_end 也发，但 result 为 null。不得当成压缩成功。 */
+export function isFailedOrAbortedPiCompaction(event: Pick<PiRpcEvent, 'type'> & {
+  aborted?: unknown;
+  result?: unknown;
+}): boolean {
+  if (event.type !== 'compaction_end') return false;
+  if (event.aborted === true) return true;
+  return event.result == null;
+}
+
 export function translatePiEvent(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
@@ -672,6 +682,13 @@ export function translatePiEvent(
     }
 
     case 'compaction_end': {
+      if (isFailedOrAbortedPiCompaction(event)) {
+        // 失败/取消不是压缩边界。手动压缩仍要收口 Compacting 状态，避免圆环卡 running。
+        if (event.reason === 'manual' && !ctx.isStreaming) {
+          pushStatus(queue, ctx, 'Done', false);
+        }
+        return;
+      }
       const result = event.result as { tokensBefore?: number; estimatedTokensAfter?: number } | null;
       queue.push({
         type: 'compact_boundary',
