@@ -246,6 +246,7 @@ export interface ContextOverflowRolloverDeps {
     providerId?: string | null;
   } | null>;
   resolveVerifiedWindow?(modelId: string, providerId: string | null): number | null;
+  getAutoCompactThresholdPct?(): number | undefined;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
   findLatestRebuildMeta(
     sessionId: string,
@@ -348,6 +349,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   };
 
   const runPrepare = async (sessionId: string): Promise<boolean> => {
+    await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     if (sessionRow.remoteHostId || sessionRow.agentKind !== 'pi') return false;
@@ -367,7 +369,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       verified,
     );
     const tokens = typeof sessionRow.contextTokens === 'number' ? sessionRow.contextTokens : 0;
-    const pressure = shouldRebuildForContextPressure(tokens, window);
+    const pressure = shouldRebuildForContextPressure(
+      tokens,
+      window,
+      deps.getAutoCompactThresholdPct?.(),
+    );
     if (!lastError && !pressure) return false;
     let lastUser: OverflowSourceMessage | undefined;
     for (let i = source.length - 1; i >= 0; i -= 1) {

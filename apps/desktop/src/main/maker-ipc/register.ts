@@ -744,6 +744,7 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { readCompactionPct } from '../maker-host/compaction-settings-store.js';
 import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descriptors.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
@@ -10860,6 +10861,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .limit(1);
       return row ?? null;
     },
+    getAutoCompactThresholdPct: () => readCompactionPct(),
     resolveVerifiedWindow: (modelId, providerId) => {
       const catalog = getActiveCatalog();
       return (

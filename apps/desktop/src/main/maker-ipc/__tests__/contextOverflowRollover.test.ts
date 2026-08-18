@@ -67,6 +67,7 @@ describe('shouldRebuildPiNativeSession', () => {
       true,
     );
     expect(shouldRebuildForContextPressure(400_000, 500_000)).toBe(false);
+    expect(shouldRebuildForContextPressure(400_000, 500_000, 75)).toBe(true);
     expect(shouldRebuildForContextPressure(450_000, 500_000)).toBe(true);
   });
 
@@ -161,6 +162,7 @@ describe('createContextOverflowRollover', () => {
       findLatestRebuildMeta: vi.fn(async () => null),
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
       closeSession: vi.fn(async () => undefined),
+      getAutoCompactThresholdPct: undefined as (() => number | undefined) | undefined,
       drainPersistQueue: vi.fn(async () => undefined),
       commitRebuild: vi.fn(async () => undefined),
       setPendingHandoff: vi.fn(),
@@ -230,6 +232,50 @@ describe('createContextOverflowRollover', () => {
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
     expect(deps.commitRebuild).toHaveBeenCalled();
+  });
+
+  it('uses the host compact threshold when deciding pre-send pressure rebuild', async () => {
+    const deps = makeDeps([
+      msg('user', '继续', 'u1'),
+      msg('assistant', '好', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'pi',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead.jsonl',
+      contextTokens: 400_000,
+      contextWindow: 500_000,
+      model: 'x-ai/grok-4.6',
+    });
+    deps.getAutoCompactThresholdPct = vi.fn(() => 75);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+  });
+
+  it('drains persist queue before reading messages on prepare', async () => {
+    const order: string[] = [];
+    const deps = makeDeps([
+      msg('user', '还有建议吗', 'u1'),
+      msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1'),
+    ]);
+    deps.drainPersistQueue.mockImplementation(async () => {
+      order.push('drain');
+    });
+    deps.listMessages.mockImplementation(async () => {
+      order.push('list');
+      return [
+        msg('user', '还有建议吗', 'u1'),
+        msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1'),
+      ];
+    });
+    const rollover = createContextOverflowRollover(deps);
+    await rollover.prepareUnhealthySession('s1');
+    expect(order[0]).toBe('drain');
+    expect(order).toContain('list');
+    expect(order.indexOf('drain')).toBeLessThan(order.indexOf('list'));
   });
 
   it('rebuilds a timed-out PI session before send without replaying', async () => {
