@@ -49,7 +49,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
   it('SidebarTopNav 不再渲染 MachineSwitcherMenu(2026-08-13 并入段头标题)', () => {
     expect(topNavSource).not.toContain("from '@/features/cc-agent/sidebar/MachineSwitcherMenu'");
     expect(topNavSource).not.toContain('<MachineSwitcherMenu />');
-    // 搜索行仍在(顶部导航收敛为 新建 / 自动任务 / 插件 / 搜索 四行)。
+    // 搜索行仍在；最小化面板存在且选用侧栏模式时，恢复入口插在插件与搜索之间。
     expect(topNavSource).toContain('<SidebarInlineSearch');
   });
 
@@ -67,7 +67,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(topNavSource).toContain("const showPinned = section !== 'scrollable'");
     expect(topNavSource).toContain("const showScrollable = section !== 'pinned'");
 
-    // Shell:接管时只画固定段,否则整块五行(插件页等无长列表的视图)。
+    // Shell:接管时只画固定段,否则整块常驻行(插件页等无长列表的视图)。
     expect(sidebarShellSource).toContain(
       "<SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />",
     );
@@ -113,6 +113,25 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     // 声明语义与 useRegisterSidebarUpper 一致:卸载不复位,避免切到 /settings 时闪变。
     expect(featureContextSource).toContain('export function useOwnTopNavScrollableRows');
     expect(featureContextSource).toContain('export function useOwnsTopNavScrollableRows');
+  });
+
+  it('插件面板恢复入口在展开态和 rail 态都位于插件与搜索之间', () => {
+    const expandedPluginsIdx = topNavSource.indexOf('{pluginsRow}');
+    const expandedRestoreIdx = topNavSource.indexOf('{restoreRow}', expandedPluginsIdx);
+    const expandedSearchIdx = topNavSource.indexOf('{searchRow}', expandedRestoreIdx);
+    expect(expandedPluginsIdx).toBeGreaterThanOrEqual(0);
+    expect(expandedRestoreIdx).toBeGreaterThan(expandedPluginsIdx);
+    expect(expandedSearchIdx).toBeGreaterThan(expandedRestoreIdx);
+
+    const railPluginsIdx = sidebarUpperSource.indexOf("label={t('sidebar.tabs.plugins')}");
+    const railRestoreIdx = sidebarUpperSource.indexOf(
+      '<GhostPanelRestoreEntry',
+      railPluginsIdx,
+    );
+    const railSearchIdx = sidebarUpperSource.indexOf('<ConversationSearchBox', railRestoreIdx);
+    expect(railPluginsIdx).toBeGreaterThanOrEqual(0);
+    expect(railRestoreIdx).toBeGreaterThan(railPluginsIdx);
+    expect(railSearchIdx).toBeGreaterThan(railRestoreIdx);
   });
 
   // 2026-08-12 用户反馈:滚动后首行紧贴固定的「新建」被硬切、露出半截字。

@@ -77,6 +77,30 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('model-only 且未 hydrate 时不把 providerId:null 传进 runtime', async () => {
+    const sessionId = rememberSession('runtime-set-model-unhydrated-model-only');
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'claude-code',
+        remoteHostId: null,
+        model: 'grok-4.6',
+        setModel,
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'grok-4.6',
+    });
+
+    expect(setModel).toHaveBeenCalledWith('grok-4.6', {});
+    expect(getSessionProvider(sessionId)).toBeNull();
+  });
+
   it('forwards the atomic effort to live setModel for preflight validation', async () => {
     const sessionId = rememberSession('runtime-set-model-effort-preflight');
     setSessionProvider(sessionId, 'native-a');

@@ -10,6 +10,9 @@ vi.mock('@cindy/model-providers', () => ({
   connectedProvidersForAgent: vi.fn(() => []),
   effectiveSourceIdForModel: h.effectiveSourceIdForModel,
   getModel: vi.fn(() => null),
+  isExclusiveXaiModelId: (model: string | null | undefined) =>
+    typeof model === 'string'
+    && (model.startsWith('grok') || model.startsWith('xai/grok')),
   isModelDisabled: vi.fn(() => false),
   isModelSelectableForNewRoute: vi.fn(() => true),
   isProviderDisabled: vi.fn(() => false),
@@ -35,7 +38,10 @@ vi.mock('../model-plane/modelPlanePolicy.js', () => ({
   MODEL_PLANE_POLICIES: new Map(),
 }));
 
-import { resolveDefaultScheduleRoute } from '../model-route-guard-live.js';
+import {
+  resolveDefaultScheduleRoute,
+  resolveLenientSessionRoute,
+} from '../model-route-guard-live.js';
 
 describe('resolveDefaultScheduleRoute', () => {
   beforeEach(() => {
@@ -112,5 +118,16 @@ describe('resolveDefaultScheduleRoute', () => {
     await expect(
       resolveDefaultScheduleRoute('claude-code', null, 'claude-first-fire'),
     ).resolves.toBeNull();
+  });
+});
+
+describe('resolveLenientSessionRoute provider-list outage', () => {
+  it('拒绝把裸 Grok 原样放行成 providerId=null', async () => {
+    h.listProviders.mockRejectedValueOnce(new Error('provider list unavailable'));
+    await expect(resolveLenientSessionRoute('claude-code', 'grok-4.6', null)).resolves.toEqual({
+      model: undefined,
+      providerId: null,
+      degraded: true,
+    });
   });
 });

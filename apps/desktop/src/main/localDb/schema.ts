@@ -1559,6 +1559,36 @@ export const mediaRefs = sqliteTable(
 );
 
 /**
+ * Cindy Core 媒体模型调用记录。
+ *
+ * guideJson 固化 prepare 时取得的服务端调用说明，保证后续 request / poll
+ * 不会因目录刷新而切换协议；submitting 是付费 POST 的单次消费闸门，进程
+ * 中断后恢复为 unknown，禁止自动重提。
+ */
+export const mediaInvocations = sqliteTable(
+  'media_invocations',
+  {
+    id: text('id').primaryKey(),
+    owner: text('owner').notNull(),
+    modelId: text('model_id').notNull(),
+    capability: text('capability').notNull(),
+    guideRevision: text('guide_revision').notNull(),
+    guideJson: text('guide_json').notNull(),
+    state: text('state', {
+      enum: ['prepared', 'submitting', 'pending', 'complete', 'failed', 'unknown'],
+    }).notNull(),
+    taskId: text('task_id'),
+    responseJson: text('response_json'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    byOwnerCreatedAt: index('media_invocations_owner_created_at_idx').on(t.owner, t.createdAt),
+    byOwnerState: index('media_invocations_owner_state_idx').on(t.owner, t.state),
+  }),
+);
+
+/**
  * 意识聊天卡片(卡槽③海报模式)。
  *
  * 一行 = 一次 ghost_call 的最新卡片版本(upsert by callId,过程版被终版

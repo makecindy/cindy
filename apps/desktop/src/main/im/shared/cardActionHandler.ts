@@ -347,13 +347,13 @@ export function createCardActionHandler(
         }
       };
       const rollbackRuntimeChange = async (reason: string): Promise<void> => {
-        if (providerId !== undefined) {
-          setSessionProvider(sessionId, previousProviderId);
-        }
+        setSessionProvider(sessionId, previousProviderId);
         const liveForRollback = turnRunner.getMakerSessionById(sessionId);
         if (!liveForRollback || !previousRoute) return;
         try {
-          await liveForRollback.setModel(previousRoute.model);
+          await liveForRollback.setModel(previousRoute.model, {
+            providerId: previousRoute.providerId,
+          });
           if (effort) {
             await liveForRollback.setEffort(previousRoute.effort);
           }
