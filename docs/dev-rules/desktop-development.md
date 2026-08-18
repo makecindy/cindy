@@ -96,6 +96,12 @@ agent 子进程继承后禁用自动隔离（agent 在 worktree 跑裸 `dev:remo
 裸 dev 路径上的 `--preserve-running` **不豁免**自动隔离：Electron 侧不认该参数
 （只有 restart 会翻译成 `XDT_SCHEDULER_PASSIVE=1`），豁免会导致共享 userData 却
 正常调度 + 正常单实例锁（定时任务重复 / 无法再开预览）。
+`XDT_SCHEDULER_PASSIVE=1` **单独出现也不豁免**自动隔离：该标记会沿 Electron →
+agent 子进程继承（Codex / Claude / PI 的 spawn env 复制 process.env），若凭它豁免，
+agent 在 worktree 跑裸 `dev:remote` 会重新共享 profile/deviceId 互踢。restart 链路
+的 `--passive` / `--preserve-running` 由 `XDT_RESTART_MANAGED`（one-hop）识别，不依赖
+这个可长期继承的 passive 标记；人类裸跑 `pnpm dev:remote -- --passive` 走 argv 豁免
+（Electron 侧认识并收敛为被动模式）。
 
 配套护栏与工具：
 

@@ -285,15 +285,17 @@ test("worktree dev launch honors explicit isolation/sharing intent and never ove
     }),
     null,
   );
-  // restart --passive / --preserve-running 只透传 XDT_SCHEDULER_PASSIVE=1（argv 侧
-  // 没有 --passive / --preserve-running）——共享意图必须被识别，防止误隔离
-  assert.equal(
+  // XDT_SCHEDULER_PASSIVE 单独出现**不豁免**：它会沿 Electron → agent 子进程继承，
+  // agent 在 worktree 跑裸 dev:remote 时若凭它豁免会重新共享 profile/deviceId 互踢。
+  // restart 链路由 XDT_RESTART_MANAGED 识别，不依赖这个可长期继承的 passive 标记
+  // （review-pr P1，PR #2640）。
+  assert.deepEqual(
     resolveWorktreeIsolationFromCwd({
       cwd: worktreeCwd("epic-thompson"),
       argv: [],
       env: { XDT_SCHEDULER_PASSIVE: "1" },
     }),
-    null,
+    { worktreeName: "epic-thompson" },
   );
   // restart 链路显式表态：参数契约由 restart 自己负责（无参=共库+正常调度），
   // 自动隔离兜底不得静默覆盖（review-pr P1，PR #2640）
@@ -302,6 +304,15 @@ test("worktree dev launch honors explicit isolation/sharing intent and never ove
       cwd: worktreeCwd("epic-thompson"),
       argv: [],
       env: { XDT_RESTART_MANAGED: "1" },
+    }),
+    null,
+  );
+  // restart --passive：XDT_RESTART_MANAGED + XDT_SCHEDULER_PASSIVE 都在 → 不干预
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
     }),
     null,
   );
@@ -382,12 +393,21 @@ test("bare dev:remote with --preserve-running in a worktree is isolated (no sile
     }),
     { worktreeName: "epic-thompson" },
   );
-  // 但 restart 链路的 --preserve-running 经 XDT_SCHEDULER_PASSIVE=1 表达共享意图
-  assert.equal(
+  // 继承的 XDT_SCHEDULER_PASSIVE 单独出现不豁免（agent 子进程场景，防绕过隔离）
+  assert.deepEqual(
     resolveWorktreeIsolationFromCwd({
       cwd: worktreeCwd("epic-thompson"),
       argv: [],
       env: { XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  // 但 restart 链路的 --preserve-running 经 XDT_RESTART_MANAGED 表达共享意图
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
     }),
     null,
   );
