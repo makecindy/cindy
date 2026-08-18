@@ -119,11 +119,14 @@ describe('buildCodexSubagentSpawnArgs', () => {
     ]);
   });
 
-  it('injects discounted-route model ids verbatim (no prefix stripping)', () => {
-    // codex/ 前缀由 loopback proxy 在 HTTP 边界分流,剥前缀会把折扣路由静默改道。
+  it('strips the discounted-route prefix for the Multi-Agent V2 model catalog', () => {
+    // V2 目录只接受原生 slug；loopback proxy 会在子 thread 的 HTTP 边界恢复路由前缀。
     expect(
       withoutDelegationArgs(buildCodexSubagentSpawnArgs(settings({ codex: 'codex/gpt-5.5' }))),
-    ).toEqual(['-c', 'agents.default_subagent_model="codex/gpt-5.5"']);
+    ).toEqual(['-c', 'agents.default_subagent_model="gpt-5.5"']);
+    expect(
+      withoutDelegationArgs(buildCodexSubagentSpawnArgs(settings({ codex: 'codex/gpt-5.6-sol' }))),
+    ).toEqual(['-c', 'agents.default_subagent_model="gpt-5.6-sol"']);
   });
 
   it('maps the nested-subagents switch to agents.max_depth=2', () => {

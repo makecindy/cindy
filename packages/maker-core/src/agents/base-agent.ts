@@ -926,6 +926,21 @@ export interface AgentDeps {
   }) => void;
 
   /**
+   * Codex 专用：把父 thread 当前实际模型登记给 host 的 proxy 路由表。
+   *
+   * Codex Multi-Agent V2 的子代理目录使用原生模型 slug，而 Cindy Gateway 的折扣
+   * 路由使用 `codex/` 前缀。host 需要父会话的模型来源，才能在子 thread 首个
+   * collab_spawn HTTP 请求上恢复该前缀。模型或 provider 运行时切换后必须重登。
+   *
+   * 约束：同步、纯内存、不可做 IO / 网络；缺省时保留上游原始行为。
+   */
+  registerCodexThreadRouteContext?: (args: {
+    sessionId: string;
+    threadId: string;
+    model: string;
+  }) => void;
+
+  /**
    * Codex 专用：WS turn 命中仅 HTTP proxy 能处理的请求体恢复错误时，通知宿主把
    * 该 thread 的后续 WS upgrade 导回 HTTP。
    *

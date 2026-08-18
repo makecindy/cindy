@@ -16,9 +16,9 @@
  *   不改变上游何时委托的调度策略。
  * - `agents.max_depth` 仅旧版多代理(V1)生效,V2 忽略(UI hint 已注明)。
  * - `agents.default_subagent_model` 是兜底默认,模型仍可在 spawn 参数里显式覆盖。
- *   注入 Cindy 存储的 model id 原文:codex vendor 候选只有原生 slug 与 `codex/`
- *   折扣路由 id,`codex/` 前缀由 loopback proxy 在 HTTP 边界分流(decideCodexRoute),
- *   剥前缀反而会把折扣路由静默改道。
+ *   Multi-Agent V2 目录只接受原生 slug,因此 Cindy 存储的 `codex/` 折扣路由前缀
+ *   必须在这里剥掉；子 thread 发出首个 HTTP 请求时，loopback proxy 再根据父会话
+ *   的真实模型来源恢复前缀。这样目录校验与 Gateway 路由各自在自己的边界生效。
  *
  * TOML 值形态与 mcp-integrations/codexEnvironment.ts 一致:字符串带双引号,
  * 数字/布尔裸写。
@@ -53,6 +53,10 @@ function tomlString(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+function codexSubagentCatalogModelId(value: string): string {
+  return value.startsWith('codex/') ? value.slice('codex/'.length) : value;
+}
+
 export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): string[] {
   const args: string[] = [];
   if (!settings.codexSubagentsEnabled) {
@@ -70,7 +74,10 @@ export function buildCodexSubagentSpawnArgs(settings: SubagentModelSettings): st
   }
   args.push('-c', 'features.multi_agent_v2.expose_spawn_agent_model_overrides=true');
   if (settings.codex) {
-    args.push('-c', `agents.default_subagent_model=${tomlString(settings.codex)}`);
+    args.push(
+      '-c',
+      `agents.default_subagent_model=${tomlString(codexSubagentCatalogModelId(settings.codex))}`,
+    );
   }
   if (settings.codexEffort) {
     args.push('-c', `agents.default_subagent_reasoning_effort=${tomlString(settings.codexEffort)}`);

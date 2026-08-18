@@ -3571,6 +3571,39 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await proxyHandle.close();
   });
 
+  it('registers and refreshes the parent thread model used by spawned agent routing', async () => {
+    const registerCodexThreadRouteContext = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      {
+        registerCodexSystemPromptForThread: vi.fn(),
+        registerCodexThreadRouteContext,
+      },
+    ));
+    installFakeHost(agent, undefined, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-route',
+      model: 'codex/gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+
+    expect(registerCodexThreadRouteContext).toHaveBeenCalledWith({
+      sessionId: 'session-subagent-route',
+      threadId: 'start-thread-id',
+      model: 'codex/gpt-5.6-sol',
+    });
+
+    if (!handle.setModel) throw new Error('expected setModel');
+    await handle.setModel('codex/gpt-5.6-terra');
+
+    expect(registerCodexThreadRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-subagent-route',
+      threadId: 'start-thread-id',
+      model: 'codex/gpt-5.6-terra',
+    });
+    await handle.close();
+  });
+
   it('reports Codex child and descendant threads to the host-owned proxy route registry', async () => {
     const registerCodexChildThreadForParent = vi.fn();
     const registerCodexMcpThreadContext = vi.fn();

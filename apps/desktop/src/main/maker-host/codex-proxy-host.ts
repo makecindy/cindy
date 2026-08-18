@@ -432,6 +432,44 @@ function createProviderAwareGuardianReviewerTransform(
 }
 
 /**
+ * Multi-Agent V2 validates child model overrides against the native Codex catalog, so a
+ * discounted Cindy model reaches the child request as a bare slug. Restore the routing
+ * namespace only at the HTTP boundary, and only when the parent business session is
+ * already registered on the discounted `codex/` route. The child keeps its own explicit
+ * Sol/Terra choice; only the route namespace is inherited.
+ */
+function createDiscountedCollabSpawnModelTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!isCollabSpawnRequest(ctx.headers) || !isPlainObject(body)) return null;
+    if (typeof body.model !== 'string' || !body.model || body.model.includes('/')) return null;
+    const parentThreadId = headerValue(ctx.headers, 'x-codex-parent-thread-id');
+    const sessionId = parentThreadId ? threadToSession.get(parentThreadId) : undefined;
+    const parentModel = sessionId ? reviewerModelBySession.get(sessionId) : undefined;
+    if (!sessionId || !parentModel?.startsWith('codex/')) return null;
+
+    const model = `codex/${body.model}`;
+    log.info('restored discounted route for spawned Codex agent model', {
+      sessionId,
+      parentThreadId,
+      fromModel: body.model,
+      toModel: model,
+    });
+    return { ...body, model };
+  };
+}
+
+function discountedCollabSpawnModel(
+  model: string,
+  headers: Readonly<Record<string, string>>,
+): string {
+  if (!model || model.includes('/') || !isCollabSpawnRequest(headers)) return model;
+  const parentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
+  const sessionId = parentThreadId ? threadToSession.get(parentThreadId) : undefined;
+  const parentModel = sessionId ? reviewerModelBySession.get(sessionId) : undefined;
+  return parentModel?.startsWith('codex/') ? `codex/${model}` : model;
+}
+
+/**
  * Codex Code Mode 对部分 GPT-5.6 网关模型不会发出 Responses 原生搜索声明：
  * 目录里的 `supports_search_tool` / `webSearch` 能力虽为 true，但 Gateway 只看最终
  * 请求的 `tools`。插件搜索是增强项，不能作为该基础能力的前置条件，因此在明确走
@@ -734,7 +772,9 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
   }
   const historySafe = isChatGptUpstreamBase(opts.upstreamBase)
     ? null
-    : rewriteCrossProviderHistoryItems(body);
+    : rewriteCrossProviderHistoryItems(body, {
+      stripAgentMessageEncrypted: !isCindyGatewayUpstreamBase(opts.upstreamBase),
+    });
   if (historySafe) {
     log.info('rewrote incompatible Codex history for local bridge upstream', {
       bridge: opts.bridge,
@@ -1841,19 +1881,33 @@ function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
   }
 }
 
+function isCindyGatewayUpstreamBase(upstreamBase: string | undefined): boolean {
+  if (!upstreamBase) return false;
+  try {
+    return new URL(upstreamBase).hostname === new URL(buildCodexGatewayBaseUrl()).hostname;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 把 body.input 里无法跨供应商重放的 Codex 历史降级成目标上游可接受的形态。
  * 返回 null = 无需改写。透明转发路径(transform 链)与 localHandler 路径共用。
  *
  * - 加密 compaction 仍替换成明文上下文缺失提示。
- * - 多 Agent 历史会在 agent_message.content 里夹带仅原供应商可解的 encrypted_content；
- *   非 ChatGPT 上游会直接拒绝整次请求。只删除这些嵌套密文，保留可读正文与路由元数据；
- *   若消息只剩密文则整条丢弃。
+ * - 多 Agent 历史会在 agent_message.content 里夹带 encrypted_content。对 xAI / 自定义
+ *   等无法解密文的上游，删除这些嵌套密文并保留可读正文；若消息只剩密文则整条丢弃。
+ *   Cindy Gateway 走同一套 Codex Responses 协议，NEW_TASK 的任务正文就在这块密文里，
+ *   剥掉会让子代理只看到空 Payload（#2921）。网关路径因此保持原样。
  * - reasoning.encrypted_content 不属于本故障；继续交给后续供应商兼容层判断，
  *   不在这里扩大删除面。
  */
-function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown> | null {
+function rewriteCrossProviderHistoryItems(
+  body: unknown,
+  opts: { stripAgentMessageEncrypted?: boolean } = {},
+): Record<string, unknown> | null {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
+  const stripAgentMessageEncrypted = opts.stripAgentMessageEncrypted !== false;
   let changed = false;
   const input: unknown[] = [];
   for (const item of body.input) {
@@ -1871,7 +1925,12 @@ function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown
       });
       continue;
     }
-    if (isPlainObject(item) && item.type === 'agent_message' && Array.isArray(item.content)) {
+    if (
+      stripAgentMessageEncrypted
+      && isPlainObject(item)
+      && item.type === 'agent_message'
+      && Array.isArray(item.content)
+    ) {
       const content = item.content.filter(
         (part) => !(isPlainObject(part) && part.type === 'encrypted_content'),
       );
@@ -1891,7 +1950,9 @@ export function createCrossProviderCompactionCompatTransform(): RequestTransform
     // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
     // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
     if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
-    const replaced = rewriteCrossProviderHistoryItems(body);
+    const replaced = rewriteCrossProviderHistoryItems(body, {
+      stripAgentMessageEncrypted: !isCindyGatewayUpstreamBase(ctx.upstreamBase),
+    });
     if (!replaced) return null;
     log.info('rewrote incompatible Codex history for non-ChatGPT upstream', {
       reqId: ctx.reqId,
@@ -2186,7 +2247,7 @@ export function createModelRoutingTransform(
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const model =
       providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ??
-      requestModel;
+      discountedCollabSpawnModel(requestModel, ctx.headers);
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
     if (!sessionId && isCollabSpawnRequest(ctx.headers)) {
@@ -2319,6 +2380,7 @@ function createTransformRequestChain(
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.
     createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
+    createDiscountedCollabSpawnModelTransform(),
     createGatewayNativeWebSearchTransform(),
     // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
     // 后续针对具体供应商的 input 归一化才能稳定处理。
