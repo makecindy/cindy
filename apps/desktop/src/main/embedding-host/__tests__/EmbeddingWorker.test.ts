@@ -57,15 +57,17 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
     });
   });
 
-  it('keeps ordinary invalid-model 4xx failures retryable for later batches', async () => {
+  it('keeps ordinary 4xx input/routing errors retryable for later batches', async () => {
     const batches = [[job(1, 'first')], [job(2, 'second')]];
     const query = vi.fn(async () => batches.shift() ?? []);
     const tx = vi.fn(async (_name: string, args: FailureArgs) => ({
       failCount: args.jobs.length,
     }));
+    // 400 without model_not_found body maps to BAD_REQUEST, not INVALID_MODEL;
+    // 404 routing error maps to TRANSIENT_ERROR. Neither triggers permanent circuit breaker.
     const embed = vi
       .fn()
-      .mockRejectedValueOnce(new EmbeddingError('gateway rejected the request', 'INVALID_MODEL', 400))
+      .mockRejectedValueOnce(new EmbeddingError('input too large', 'BAD_REQUEST', 400))
       .mockResolvedValueOnce({ embeddings: [[0.1]], tokensUsed: 0, cacheHits: 0 });
 
     registerProvider({

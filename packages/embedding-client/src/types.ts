@@ -157,13 +157,17 @@ export interface EmbedDocumentsResponse {
  * embedding 操作的错误类型, 统一 code 便于 Worker 按 code 决定重试策略。
  *
  * code 语义:
- *   - AUTH_FAILED   : 没拿到 api key, 或 XD Gateway 返 401/403。不重试。
- *   - RATE_LIMITED  : 429。Worker 走 backoff 重试。
- *   - INVALID_MODEL : 调方传了 catalog 里没有的 model id (本地校验), 或 XD Gateway 返 400。不重试。
- *   - NETWORK_ERROR : fetch 抛错 (DNS/socket reset)。Worker 走 backoff 重试。
- *   - SERVER_ERROR  : 5xx。Worker 走 backoff 重试。
- *   - TIMEOUT       : 调方给的 timeoutMs 预算耗尽 (在途请求已 abort)。**不重试** ——
- *                     预算是整条链的, 已经过期, 再试一次只会立刻又超时。
+ *   - AUTH_FAILED     : 没拿到 api key, 或 XD Gateway 返 401/403。不重试。
+ *   - RATE_LIMITED    : 429。Worker 走 backoff 重试。
+ *   - INVALID_MODEL   : 调方传了 catalog 里没有的 model id (本地校验), 维度不被该型号支持,
+ *                       或 XD Gateway 错误体明确标识 model_not_found。**永久熔断**, 不重试。
+ *   - BAD_REQUEST     : 400/422 输入类错误 (超大文本、格式错误等)。可重试 —— 可能是瞬时
+ *                       网关校验故障或上游短暂异常, 不应触发模型级永久熔断。
+ *   - TRANSIENT_ERROR : 404 路由/端点类错误 (端点暂时不可达而非模型不存在)。可重试。
+ *   - NETWORK_ERROR   : fetch 抛错 (DNS/socket reset)。Worker 走 backoff 重试。
+ *   - SERVER_ERROR    : 5xx。Worker 走 backoff 重试。
+ *   - TIMEOUT         : 调方给的 timeoutMs 预算耗尽 (在途请求已 abort)。**不重试** ——
+ *                       预算是整条链的, 已经过期, 再试一次只会立刻又超时。
  */
 export class EmbeddingError extends Error {
   constructor(
@@ -172,6 +176,8 @@ export class EmbeddingError extends Error {
       | 'AUTH_FAILED'
       | 'RATE_LIMITED'
       | 'INVALID_MODEL'
+      | 'BAD_REQUEST'
+      | 'TRANSIENT_ERROR'
       | 'NETWORK_ERROR'
       | 'SERVER_ERROR'
       | 'TIMEOUT',

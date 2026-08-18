@@ -617,8 +617,12 @@ export class EmbeddingClient {
 
   /**
    * 带重试的 POST /v1/embeddings。重试条件:
-   *   - 5xx / 429 / NETWORK_ERROR → 退避后重试 (最多 RETRY_DELAYS_MS.length 次)
-   *   - 401/403 (AUTH_FAILED) / 400 (INVALID_MODEL) / TIMEOUT → 立即抛
+   *   - 5xx / 429 / TRANSIENT_ERROR / NETWORK_ERROR → 退避后重试 (最多 RETRY_DELAYS_MS.length 次)
+   *   - 401/403 (AUTH_FAILED) / BAD_REQUEST / INVALID_MODEL / TIMEOUT → 立即抛
+   *
+   * BAD_REQUEST (400/422) 不在客户端重试:同样的输入不会因退避而变好, 由 Worker
+   * 侧的 job-level 退避重试处理 (网关瞬时校验故障恢复后自然成功)。
+   * TRANSIENT_ERROR (404 路由/端点暂时不可达) 在客户端重试:端点可能在退避后恢复。
    *
    * `opts.timeoutMs` 是**整条链**(含所有重试与退避睡眠)的预算, 不是单次 HTTP 的:
    * 每次尝试只拿剩余额度, 退避前先看剩余额度够不够, 不够就直接抛 TIMEOUT 而不是
@@ -663,7 +667,8 @@ export class EmbeddingClient {
         const retriable =
           lastErr.code === 'NETWORK_ERROR' ||
           lastErr.code === 'RATE_LIMITED' ||
-          lastErr.code === 'SERVER_ERROR';
+          lastErr.code === 'SERVER_ERROR' ||
+          lastErr.code === 'TRANSIENT_ERROR';
         if (!retriable || attempt >= maxAttempts - 1) {
           throw lastErr;
         }
@@ -772,7 +777,7 @@ export class EmbeddingClient {
         } catch {
           /* not JSON */
         }
-        const code = mapStatusToCode(res.status);
+        const code = mapStatusToCode(res.status, text, parsedMsg);
         throw new EmbeddingError(
           `XD Gateway /v1/embeddings ${res.status}: ${parsedMsg || text || res.statusText}`,
           code,
@@ -797,13 +802,47 @@ export class EmbeddingClient {
   }
 }
 
-function mapStatusToCode(status: number): EmbeddingError['code'] {
+/**
+ * 已知的"模型不存在"错误体模式 (2026-08 XD Gateway / LiteLLM)。
+ *
+ * 只在错误体明确匹配这些模式时才判 INVALID_MODEL (永久熔断)。
+ * 404 单独看不可靠 —— 可能是路由/端点暂时不可达, 也可能是模型不存在;
+ * 必须看错误体里有没有明确的 model_not_found / deployment_not_found 信号。
+ */
+const MODEL_NOT_FOUND_PATTERNS = [
+  /model[_\s-]?not[_\s-]?found/i,
+  /deployment[_\s-]?not[_\s-]?found/i,
+  /unknown[_\s-]?model/i,
+  /the model .* does not exist/i,
+];
+
+function looksLikeModelNotFound(rawBody: string, parsedMsg: string): boolean {
+  const haystack = `${parsedMsg}\n${rawBody}`;
+  return MODEL_NOT_FOUND_PATTERNS.some((pattern) => pattern.test(haystack));
+}
+
+function mapStatusToCode(
+  status: number,
+  rawBody: string,
+  parsedMsg: string,
+): EmbeddingError['code'] {
   if (status === 401 || status === 403) return 'AUTH_FAILED';
-  if (status === 400 || status === 404 || status === 422) return 'INVALID_MODEL';
   if (status === 429) return 'RATE_LIMITED';
   if (status >= 500) return 'SERVER_ERROR';
-  // 其它 4xx 视作 INVALID 不重试
-  return 'INVALID_MODEL';
+  // 400/404/422: 只有错误体明确包含 "model not found" 等确定性信号时才判
+  // INVALID_MODEL (永久熔断)。不同网关对 model-not-found 返回的状态码不一致
+  // (OpenAI/LiteLLM 通常 404, 某些代理返回 400), 必须看错误体而不能只看状态码。
+  if ((status === 400 || status === 404 || status === 422) && looksLikeModelNotFound(rawBody, parsedMsg)) {
+    return 'INVALID_MODEL';
+  }
+  // 400/422: 输入类错误 (超大文本、格式错误、不支持的参数等)。
+  // 不映射为 INVALID_MODEL —— 可能是瞬时网关校验故障或用户输入问题,
+  // 不应据此永久熔断整个模型队列。维度不匹配由 assertBatchDimensions 在响应侧判定。
+  if (status === 400 || status === 422) return 'BAD_REQUEST';
+  // 404: 端点/路由暂时不可达 (部署中、路由未就绪等), 可重试。
+  if (status === 404) return 'TRANSIENT_ERROR';
+  // 其它未列出的 4xx: 保守地按可重试错误处理, 不永久熔断。
+  return 'BAD_REQUEST';
 }
 
 /**

@@ -8,7 +8,8 @@
  *   4. 剩下有 text 的按 model_id 再分组, 同组一次 client.embed()
  *   5. 成功 → 一个事务内: INSERT INTO {vec_table}(rowid, embedding) + UPDATE jobs.status='done'
  *   6. 失败 → attempts++, last_error, scheduled_at += 退避; attempts >= MAX → status='failed'
- *      只有明确的 404 模型不存在才是确定性配置错误:首批直接 failed,本进程内同模型后续批次不再请求 API。
+ *      只有错误体明确包含 model_not_found 信号 (由 mapStatusToCode 归类为 INVALID_MODEL)
+ *      才是确定性配置错误:首批直接 failed,本进程内同模型后续批次不再请求 API。
  *
  * 重要约束 (better-sqlite3 同步事务 vs async embed):
  *   embed() 是 async, 不能在 db.transaction 内 await; 所以流程是
@@ -39,12 +40,15 @@ const TICK_INTERVAL_MS = 5_000;
 const BATCH_SIZE = 32;
 
 /**
- * INVALID_MODEL 也承载参数不兼容和未分类 4xx，不能据此永久失败整个模型队列。
- * 目前 XD Gateway 仅以 404 明确表示目标模型不存在；其它状态保留重试路径，给配置
- * 修复或瞬时网关故障恢复的机会。
+ * 只有 INVALID_MODEL 才触发永久熔断。
+ *
+ * mapStatusToCode 已收紧:仅在错误体明确包含 model_not_found / deployment_not_found
+ * 等确定性信号时才将 HTTP 错误归类为 INVALID_MODEL;400/422 输入错误映射为
+ * BAD_REQUEST,404 路由错误映射为 TRANSIENT_ERROR,均不触发熔断。维度不匹配等
+ * 客户端本地判定的 INVALID_MODEL 同样是确定性的模型/参数不兼容,不可自愈。
  */
 function isTerminalInvalidModelError(error: unknown): boolean {
-  return error instanceof EmbeddingError && error.code === 'INVALID_MODEL' && error.status === 404;
+  return error instanceof EmbeddingError && error.code === 'INVALID_MODEL';
 }
 
 interface JobRow {
@@ -85,9 +89,9 @@ export class EmbeddingWorker {
   private vecWarned = false;
   private suspendedWarned = false;
   /**
-   * 只有上游明确的 404 模型不存在不会自愈。按进程生命周期记住它:后续新 job 本地终止,
-   * 避免每 5 秒继续打同一个必败请求。普通 4xx 仍走退避重试,让网关或模型配置修复后
-   * 无需重启即可恢复。
+   * 只有 INVALID_MODEL (错误体明确包含 model_not_found) 不会自愈。按进程生命周期记住它:
+   * 后续新 job 本地终止, 避免每 5 秒继续打同一个必败请求。400/422 输入错误、404 路由
+   * 错误等均走退避重试, 让网关或模型配置修复后无需重启即可恢复。
    */
   private readonly blockedModels = new Map<string, string>();
   // 关闭 / 切账号时由 stop() 置 true。in-flight tick 在每个 await 点之后检查它,
@@ -299,6 +303,20 @@ export class EmbeddingWorker {
       // 4. 按 model_id 分组调 embed
       const byModel = groupBy(liveJobs, (j) => j.model_id);
       for (const [modelId, modelJobs] of byModel.entries()) {
+        // 逐模型停用(PR #744 review 第十九轮):该 embedding 模型被点名停用时本组
+        // 不下单,job 保持 pending,恢复启用后续跑。
+        // 必须在 blockedModels 熔断检查之前:模型被用户停用时新任务应保持 pending,
+        // 而不是被熔断标为 failed (PR #2288 review)。
+        if (this.opts.isRouteSuspended?.(modelId as string)) {
+          this.opts.log.warn(
+            JSON.stringify({
+              event: 'embeddingWorker.tick.skip.modelDisabled',
+              modelId,
+              count: modelJobs.length,
+            }),
+          );
+          continue;
+        }
         const blockedError = this.blockedModels.get(modelId);
         if (blockedError !== undefined) {
           const fc = await this.recordFailureBatch(modelJobs, blockedError, true);
@@ -306,18 +324,6 @@ export class EmbeddingWorker {
           this.opts.log.debug?.(
             JSON.stringify({
               event: 'embeddingWorker.batch.skip.invalidModel',
-              modelId,
-              count: modelJobs.length,
-            }),
-          );
-          continue;
-        }
-        // 逐模型停用(PR #744 review 第十九轮):该 embedding 模型被点名停用时本组
-        // 不下单,job 保持 pending,恢复启用后续跑。
-        if (this.opts.isRouteSuspended?.(modelId as string)) {
-          this.opts.log.warn(
-            JSON.stringify({
-              event: 'embeddingWorker.tick.skip.modelDisabled',
               modelId,
               count: modelJobs.length,
             }),
@@ -350,6 +356,9 @@ export class EmbeddingWorker {
             }),
           );
         } catch (err) {
+          // stop() 可能在 embed() 网络往返期间触发:此时不应记录熔断或写失败状态,
+          // 那批 job 保持 pending, 下次启动续跑 (PR #2288 review)。
+          if (this.aborted) return;
           // availability 可能在网络往返期间丢失;保留 pending,不要把它记成失败重试。
           if (isProviderSuspended(source)) break;
           const code = err instanceof EmbeddingError ? err.code : 'UNKNOWN';
