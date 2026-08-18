@@ -317,6 +317,7 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
           pinnedAt: typeof row.pinnedAt === 'number' ? row.pinnedAt : null,
           userSendAt: typeof row.userSendAt === 'number' ? row.userSendAt : null,
           ...(typeof row.sidebarOrder === 'number' ? { sidebarOrder: row.sidebarOrder } : {}),
+          ...(row.catalogEligible === false ? { catalogEligible: false } : {}),
         };
       });
       deps.publishTasks(tasks);

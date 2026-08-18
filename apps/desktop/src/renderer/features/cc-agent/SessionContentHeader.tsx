@@ -30,7 +30,6 @@ import type { Session } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import {
   prefetchDirtyWorktreeForRemoval,
   resolveWorktreeRemovalPreflight,
@@ -521,21 +520,6 @@ export function SessionContentHeader({
     showRemoteWriteBlockedToast,
     t,
   ]);
-
-  useEffect(() => {
-    return subscribeWorkLouderCodexAction((action) => {
-      if (action.type !== 'command') return false;
-      if (action.commandId === 'toggleTaskPin') {
-        void handleTogglePin();
-        return true;
-      }
-      if (action.commandId === 'archiveTask') {
-        void handleArchive();
-        return true;
-      }
-      return false;
-    });
-  }, [handleArchive, handleTogglePin]);
 
   const handleUnarchive = useCallback(async () => {
     if (remoteWritesBlocked) {

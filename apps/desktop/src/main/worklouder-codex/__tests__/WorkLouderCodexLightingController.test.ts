@@ -816,4 +816,34 @@ describe('WorkLouderCodexLightingController', () => {
       expect.objectContaining({ type: 'command', commandId: 'toggleSidebar' }),
     );
   });
+
+  it('clears a held stick during suspend so the next push after resume works', async () => {
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn(),
+      setJoystickInputHandler: vi.fn((handler: typeof joystickRef.current) => {
+        joystickRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    controller.start();
+    await controller.resumeTaskSlots();
+    joystickRef.current?.({ angle: 0.5, distance: 1 });
+    controller.suspendTaskSlots();
+    joystickRef.current?.({ angle: 0.5, distance: 0 });
+    dispatch.mockClear();
+    await controller.resumeTaskSlots();
+    joystickRef.current?.({ angle: 0.5, distance: 1 });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'command', commandId: 'toggleSidebar' }),
+    );
+  });
 });

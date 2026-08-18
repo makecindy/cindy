@@ -470,11 +470,11 @@ export class WorkLouderCodexLightingController {
     this.handleDeviceActivity();
     const direction = joystickDirection(event);
     this.emitStickPreview(event);
-    if (this.layoutPreviewActive || !this.inputActionsEnabled) return;
-    if (this.joystickNeedsCenter) {
-      if (direction) return;
+    if (this.joystickNeedsCenter && !direction) {
       this.joystickNeedsCenter = false;
     }
+    if (this.layoutPreviewActive || !this.inputActionsEnabled) return;
+    if (this.joystickNeedsCenter) return;
 
     // Scrolling follows the stick continuously — held means keep scrolling, and
     // pushing further means faster — so it cannot go through the one-shot path

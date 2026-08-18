@@ -72,6 +72,7 @@ export interface WorkLouderCodexTaskCatalogInput {
   pinnedAt: number | null;
   userSendAt: number | null;
   sidebarOrder?: number;
+  catalogEligible?: boolean;
 }
 
 /**
@@ -86,17 +87,16 @@ export function buildWorkLouderCodexTaskCatalog(
   rows: readonly WorkLouderCodexTaskCatalogInput[],
   options: { publishedVisibleOrder?: boolean } = {},
 ): WorkLouderCodexTaskCatalog {
-  const catalogRows: WorkLouderCodexTaskCatalogRow[] = rows
-    .slice(0, TASK_OPTION_LIMIT)
-    .map((row) => ({
-      id: row.id,
-      // An untitled task still gets a key; the UI supplies its own placeholder.
-      title: row.title ?? '',
-      pinned: row.pinnedAt !== null,
-      pinnedAt: row.pinnedAt,
-      userSendAt: row.userSendAt,
-    }));
-  const byId = new Map(catalogRows.map((row) => [row.id, row] as const));
+  const publishedRows: WorkLouderCodexTaskCatalogRow[] = rows.slice(0, TASK_OPTION_LIMIT).map((row) => ({
+    id: row.id,
+    // An untitled task still gets a key; the UI supplies its own placeholder.
+    title: row.title ?? '',
+    pinned: row.pinnedAt !== null,
+    pinnedAt: row.pinnedAt,
+    userSendAt: row.userSendAt,
+  }));
+  const catalogRows = publishedRows.filter((_, index) => rows[index]?.catalogEligible !== false);
+  const byPublishedId = new Map(publishedRows.map((row) => [row.id, row] as const));
   const visibleOrder = rows
     .filter((row) => row.sidebarOrder !== undefined)
     .toSorted((left, right) => (left.sidebarOrder ?? 0) - (right.sidebarOrder ?? 0));
@@ -104,7 +104,7 @@ export function buildWorkLouderCodexTaskCatalog(
   // even an empty visible list must stay empty, otherwise a machine filter
   // or sidebar search would light keys for tasks the user cannot see.
   const publishedVisibleRows = visibleOrder.flatMap((item) => {
-    const row = byId.get(item.id);
+    const row = byPublishedId.get(item.id);
     return row ? [row] : [];
   });
   const sidebarSource =

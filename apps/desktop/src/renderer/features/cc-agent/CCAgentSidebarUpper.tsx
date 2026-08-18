@@ -634,19 +634,21 @@ export function CCAgentSidebarUpper() {
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
     const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
-    const byId = new Map(
-      [...visibleSessionsWithRemote, ...catalogSessions].map((session) => [session.id, session]),
+    const visibleOnly = visibleSessionsWithRemote.filter(
+      (session) => !catalogSessions.some((active) => active.id === session.id),
     );
-    const tasks = [...byId.values()].slice(0, 100).map((session) => {
+    const tasks = [...catalogSessions, ...visibleOnly].slice(0, 100).map((session) => {
       const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
       const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
       const order = sidebarOrder.get(session.id);
+      const isActiveCatalog = session.status === 'active';
       return {
         id: session.id,
         title: session.title ?? null,
         pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
         userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
         ...(order === undefined ? {} : { sidebarOrder: order }),
+        ...(isActiveCatalog ? {} : { catalogEligible: false }),
       };
     });
     // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。

@@ -77,6 +77,12 @@ export interface InputDevicePublishedTask {
   userSendAt: number | null;
   /** 0-based order among currently visible sidebar rows. Absent when hidden. */
   sidebarOrder?: number;
+  /**
+   * False when this row is only a visible projection (for example an archived
+   * task in the current sidebar filter) and must not occupy last-sent /
+   * priority / custom catalogs.
+   */
+  catalogEligible?: boolean;
 }
 
 export function isInputDeviceCommandId(value: unknown): value is InputDeviceCommandId {

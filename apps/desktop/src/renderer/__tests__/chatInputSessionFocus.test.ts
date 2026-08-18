@@ -89,6 +89,11 @@ describe('ChatInput session switch focus contract', () => {
     expect(sessionViewSource).toContain(
       'ownsHardwareScrollActions={ownsHardwareTaskActions}',
     );
+    expect(sessionViewSource).toContain("navigationMode !== 'split-pane'");
+    expect(sessionViewSource).toContain("action.commandId === 'toggleTaskPin'");
+    expect(sessionViewSource).toContain("action.commandId === 'archiveTask'");
+    expect(sessionViewSource).toContain('void togglePin();');
+    expect(sessionViewSource).toContain('void archive();');
     expect(messageStreamSource).toContain('ownsHardwareScrollActions?: boolean;');
     expect(messageStreamSource).toContain('if (!ownsHardwareScrollActions) return false;');
     expect(mainLayoutSource).toContain("const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');");
@@ -102,6 +107,7 @@ describe('ChatInput session switch focus contract', () => {
     expect(sidebarUpperSource).toContain(
       "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
     );
+    expect(sidebarUpperSource).toContain('catalogEligible: false');
     expect(sidebarUpperSource).not.toContain(
       '[...visibleSessionsWithRemote, ...remoteProjectSessions]',
     );
