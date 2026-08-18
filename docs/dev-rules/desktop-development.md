@@ -17,8 +17,8 @@ pnpm restart:desktop:remote --region=cn -- --isolated=@worktree
 ```
 
 `--isolated=@worktree` 按 checkout 目录名派生稳定沙箱名（去掉前导 `cindy-`，
-例如 `cindy-local-ollama-models` → `local-ollama-models`）。同一 worktree 下次
-还用这个名字，登录态会留在这份沙箱里。
+再加路径短哈希，例如 `cindy-local-ollama-models` → `local-ollama-models-a1b2c3`）。
+同一 worktree 下次还用这个名字，登录态会留在这份沙箱里。
 
 只有用户明确说「共享登录 / 不要重新登录 / 用现有数据 / 不要关当前实例」时才加
 `--preserve-running`。不要把「用户没提模式」理解成共享。
@@ -35,8 +35,9 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
 
 启动包装会先停止**当前 checkout** 已有的 Desktop dev 进程；其他 worktree／命名沙箱的
 实例不受影响。必须尊重宿主提供的并行或保活工作流。脚本只在宿主是**当前 checkout**
-的 desktop dev 时拒绝重启（杀掉宿主会连这次启动一起收掉）；宿主是正式版或另一个
-worktree 时可以正常起隔离沙箱。若因当前 checkout 宿主拒绝、或目标 userData 被其他
+的 desktop dev 时拒绝重启（杀掉宿主会连这次启动一起收掉）。宿主是正式版或另一个
+worktree 时可以起隔离沙箱；从另一个 checkout 的 desktop dev 里起共享实例仍会拒绝，
+避免两份进程抢同一份正式 profile。若因当前 checkout 宿主拒绝、或目标 userData 被其他
 checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户。
 
 ## 可选启动参数

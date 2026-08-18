@@ -39,6 +39,7 @@ import {
 	formatDesktopDevVerdict,
 	inferDesktopDevFailureCode,
 	isolationNameFromWorktree,
+	isolatedRestartNextCommand,
 	resolveIsolatedArg,
 	shouldSuggestIsolatedNext,
 } from "../desktop-dev-verdict.mjs";
@@ -49,7 +50,9 @@ import {
 	parseWorktreeEntries,
 } from "../desktop-whoami.mjs";
 import {
+	assertDesktopRestartStepSucceeded,
 	buildDesktopRestartSteps,
+	DesktopRestartStepError,
 	runDesktopRestart,
 } from "../desktop-restart-runner.mjs";
 
@@ -255,13 +258,14 @@ test("env-only XDT_ISOLATED=1 derives the default sandbox, not the official prof
 
 test("isolated=@worktree derives the named sandbox from the checkout directory", () => {
 	const root = path.join("/repo", "cindy-local-ollama-models");
+	const name = isolationNameFromWorktree(root);
 	const target = resolveRestartTargetUserDataDir({
 		isolatedArg: "--isolated=@worktree",
 		selectedRegion: "global",
 		rootDir: root,
 	});
-	assert.equal(isolationNameFromWorktree(root), "local-ollama-models");
-	assert.equal(target, defaultIsolatedUserDataDir("local-ollama-models", "global"));
+	assert.match(name, /^local-ollama-models-[0-9a-f]{6}$/);
+	assert.equal(target, defaultIsolatedUserDataDir(name, "global"));
 });
 
 test("invalid env isolation name falls back to the default sandbox", () => {
@@ -774,44 +778,53 @@ test("formatDesktopDevVerdict flattens failed messages and keeps next", () => {
 	assert.match(text, /next=pnpm restart:desktop:remote -- --isolated=@worktree/);
 });
 
-test("isolationNameFromWorktree strips cindy- and stays within 32 chars", () => {
-	assert.equal(
-		isolationNameFromWorktree("/Users/dash/Code/Cindy/cindy-local-ollama-models"),
-		"local-ollama-models",
+test("isolationNameFromWorktree strips cindy-, adds a path digest, and stays within 32 chars", () => {
+	const named = isolationNameFromWorktree("/Users/dash/Code/Cindy/cindy-local-ollama-models");
+	assert.match(named, /^local-ollama-models-[0-9a-f]{6}$/);
+	assert.notEqual(
+		named,
+		isolationNameFromWorktree("/tmp/cindy-local-ollama-models"),
 	);
-	assert.equal(
+	assert.match(
 		isolationNameFromWorktree("/tmp/cindy-desktop-dev-startup-verdict"),
-		"desktop-dev-startup-verdict",
+		/^desktop-dev-startup-verdi-[0-9a-f]{6}$/,
 	);
-	assert.equal(isolationNameFromWorktree("/tmp/!!!"), "worktree");
+	assert.match(isolationNameFromWorktree("/tmp/!!!"), /^worktree-[0-9a-f]{6}$/);
 	assert.ok(isolationNameFromWorktree(`/tmp/cindy-${"a".repeat(80)}`).length <= 32);
 });
 
 test("resolveIsolatedArg expands @worktree to a named sandbox", () => {
-	assert.equal(
+	assert.match(
 		resolveIsolatedArg(WORKTREE_ISOLATED_ARG, "/repo/cindy-local-ollama-models"),
-		"--isolated=local-ollama-models",
+		/^--isolated=local-ollama-models-[0-9a-f]{6}$/,
 	);
 	assert.equal(resolveIsolatedArg("--isolated=feature-a", "/repo/x"), "--isolated=feature-a");
 	assert.equal(resolveIsolatedArg("--isolated", "/repo/x"), "--isolated");
 });
 
-test("shouldRefuseHostedRestart only blocks this checkout's host", () => {
+test("shouldRefuseHostedRestart blocks same-checkout hosts and other-checkout shared starts", () => {
 	const own = "/repo/cindy-feature";
 	const other = "/repo/cindy-other";
 	assert.equal(
 		shouldRefuseHostedRestart(
 			{ pid: 10, command: `electron-forge start ${own}` },
-			{ preserveRunning: false, ownRootDir: own },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
 		),
 		true,
 	);
 	assert.equal(
 		shouldRefuseHostedRestart(
 			{ pid: 10, command: `electron-forge start ${other}` },
-			{ preserveRunning: false, ownRootDir: own },
+			{ preserveRunning: false, ownRootDir: own, isolated: true },
 		),
 		false,
+	);
+	assert.equal(
+		shouldRefuseHostedRestart(
+			{ pid: 10, command: `electron-forge start ${other}` },
+			{ preserveRunning: false, ownRootDir: own, isolated: false },
+		),
+		true,
 	);
 	assert.equal(
 		shouldRefuseHostedRestart(
@@ -934,4 +947,40 @@ test("collectDesktopWhoamiReport can be built from injected process facts", () =
 	});
 	assert.equal(report.match, true);
 	assert.equal(buildDesktopDevVerdictFromWhoami(report).state, "ready");
+});
+
+test("isolatedRestartNextCommand keeps region and local mode", () => {
+	assert.equal(isolatedRestartNextCommand(), ISOLATED_RESTART_NEXT);
+	assert.equal(
+		isolatedRestartNextCommand({ region: "cn" }),
+		"pnpm restart:desktop:remote --region=cn -- --isolated=@worktree",
+	);
+	assert.equal(
+		isolatedRestartNextCommand({ local: true }),
+		"pnpm restart:desktop:local -- --isolated=@worktree",
+	);
+	const verdict = buildDesktopDevVerdictFromFailure(
+		new Error("Shared Cindy userData cannot run migration artifacts that are not canonical on origin/main."),
+		{ isolated: false, region: "cn" },
+	);
+	assert.equal(verdict.next, "pnpm restart:desktop:remote --region=cn -- --isolated=@worktree");
+});
+
+test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", () => {
+	assert.throws(
+		() => assertDesktopRestartStepSucceeded(
+			{ label: "verify desktop dependencies", args: ["ensure-deps.mjs"] },
+			{ status: 1 },
+		),
+		(error) => error instanceof DesktopRestartStepError
+			&& error.alreadyHasVerdict === false
+			&& error.exitCode === 1,
+	);
+	assert.throws(
+		() => assertDesktopRestartStepSucceeded(
+			{ label: "start desktop and wait for readiness", args: ["restart.mjs", "--wait-ready"] },
+			{ status: 2 },
+		),
+		(error) => error instanceof DesktopRestartStepError && error.alreadyHasVerdict === true,
+	);
 });

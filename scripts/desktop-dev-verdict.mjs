@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 export const DESKTOP_DEV_VERDICT_PREFIX = 'DESKTOP_DEV_VERDICT';
 export const WORKTREE_ISOLATED_ARG = '--isolated=@worktree';
-export const ISOLATED_RESTART_NEXT = 'pnpm restart:desktop:remote -- --isolated=@worktree';
+const WORKTREE_NAME_DIGEST_LEN = 6;
 
 const VERDICT_FIELDS = Object.freeze([
   'code',
@@ -25,6 +26,7 @@ const SHARED_FAILURE_CODES_WITH_ISOLATED_NEXT = new Set([
   'STARTUP_FAILED',
   'DEV_PROCESS_EXITED',
   'AUTH_INIT_FAILED',
+  'HOSTED_SHARED_REFUSED',
 ]);
 
 function normalizeRoot(value) {
@@ -36,12 +38,35 @@ function singleLine(value) {
 }
 
 export function isolationNameFromWorktree(rootDir) {
-  let name = path.basename(path.resolve(rootDir));
+  const resolved = path.resolve(rootDir);
+  let name = path.basename(resolved);
   name = name.replace(/^cindy-/i, '');
   name = name.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!name) name = 'worktree';
-  if (name.length <= 32) return name;
-  return name.slice(0, 32).replace(/-+$/g, '') || 'worktree';
+  const digest = createHash('sha256')
+    .update(normalizeRoot(resolved))
+    .digest('hex')
+    .slice(0, WORKTREE_NAME_DIGEST_LEN);
+  const maxBase = 32 - 1 - digest.length;
+  const base = name.slice(0, maxBase).replace(/-+$/g, '') || 'wt';
+  return `${base}-${digest}`;
+}
+
+export function isolatedRestartNextCommand({ local = false, region } = {}) {
+  const script = local ? 'restart:desktop:local' : 'restart:desktop:remote';
+  const regionArg = region && region !== 'global' ? ` --region=${region}` : '';
+  return `pnpm ${script}${regionArg} -- --isolated=@worktree`;
+}
+
+export const ISOLATED_RESTART_NEXT = isolatedRestartNextCommand();
+
+export function restartContextFromArgv(argv = []) {
+  const regionArg = argv.find((arg) => arg.startsWith('--region='));
+  return {
+    isolated: argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')),
+    local: argv.includes('--local'),
+    region: regionArg ? regionArg.slice('--region='.length) : undefined,
+  };
 }
 
 export function resolveIsolatedArg(isolatedArg, rootDir) {
@@ -61,6 +86,7 @@ export function inferDesktopDevFailureCode(message) {
   if (tagged) return tagged[1];
   if (/cannot run migration artifacts/i.test(text)) return 'MIGRATION_POLICY';
   if (/already in use by another checkout/i.test(text)) return 'USERDATA_IN_USE';
+  if (/cannot share official userData while hosted/i.test(text)) return 'HOSTED_SHARED_REFUSED';
   if (/Refusing to restart from within|running inside an Cindy desktop dev process tree/i.test(text)) {
     return 'HOSTED_RESTART_REFUSED';
   }
@@ -71,6 +97,7 @@ export function inferDesktopDevFailureCode(message) {
   if (/root\/commit\/ready did not match|Desktop dev process is not running/i.test(text)) {
     return 'WHOAMI_MISMATCH';
   }
+  if (/failed with exit/i.test(text)) return 'STARTUP_FAILED';
   return 'STARTUP_FAILED';
 }
 
@@ -87,6 +114,12 @@ export function formatDesktopDevVerdict(verdict) {
 
 export function printDesktopDevVerdict(verdict, writer = console.log) {
   writer(formatDesktopDevVerdict(verdict).trimEnd());
+}
+
+function isolatedNextIfNeeded(context, code) {
+  return shouldSuggestIsolatedNext({ isolated: context.isolated, code })
+    ? { next: isolatedRestartNextCommand(context) }
+    : {};
 }
 
 export function buildDesktopDevVerdictFromWhoami(report, context = {}) {
@@ -123,9 +156,7 @@ export function buildDesktopDevVerdictFromWhoami(report, context = {}) {
     ...(context.sandbox ? { sandbox: context.sandbox } : {}),
     root: expectedRoot,
     commit: expectedCommit,
-    ...(shouldSuggestIsolatedNext({ isolated: context.isolated, code })
-      ? { next: ISOLATED_RESTART_NEXT }
-      : {}),
+    ...isolatedNextIfNeeded(context, code),
   };
 }
 
@@ -144,8 +175,6 @@ export function buildDesktopDevVerdictFromFailure(error, context = {}) {
     mode: context.isolated ? 'isolated' : 'shared',
     ...(context.sandbox ? { sandbox: context.sandbox } : {}),
     ...(context.rootDir ? { root: context.rootDir } : {}),
-    ...(shouldSuggestIsolatedNext({ isolated: context.isolated, code })
-      ? { next: ISOLATED_RESTART_NEXT }
-      : {}),
+    ...isolatedNextIfNeeded(context, code),
   };
 }

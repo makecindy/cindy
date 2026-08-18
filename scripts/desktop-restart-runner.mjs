@@ -7,6 +7,7 @@ import { assertSharedDevMigrationPolicy } from './dev-migration-policy.mjs';
 import {
   buildDesktopDevVerdictFromFailure,
   printDesktopDevVerdict,
+  restartContextFromArgv,
 } from './desktop-dev-verdict.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -55,18 +56,38 @@ export function buildDesktopRestartSteps(argv, root = rootDir) {
   ];
 }
 
+export class DesktopRestartStepError extends Error {
+  constructor(message, { alreadyHasVerdict = false, exitCode = 1 } = {}) {
+    super(message);
+    this.name = 'DesktopRestartStepError';
+    this.alreadyHasVerdict = alreadyHasVerdict;
+    this.exitCode = exitCode;
+  }
+}
+
+export function assertDesktopRestartStepSucceeded(step, result) {
+  if (result?.error) throw result.error;
+  if (result?.signal) {
+    throw new DesktopRestartStepError(`${step.label} terminated by ${result.signal}`);
+  }
+  if ((result?.status ?? 0) !== 0) {
+    throw new DesktopRestartStepError(
+      `${step.label} failed with exit ${result.status ?? 1}`,
+      {
+        alreadyHasVerdict: Array.isArray(step.args) && step.args.includes('--wait-ready'),
+        exitCode: result.status ?? 1,
+      },
+    );
+  }
+}
+
 function runStep(step) {
   const result = spawnSync(step.command, step.args, {
     cwd: rootDir,
     env: process.env,
     stdio: 'inherit',
   });
-  if (result.error) throw result.error;
-  if (result.signal) {
-    process.kill(process.pid, result.signal);
-    return;
-  }
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  assertDesktopRestartStepSucceeded(step, result);
 }
 
 export function runDesktopRestart(argv, root = rootDir, stepRunner = runStep) {
@@ -79,12 +100,14 @@ function main() {
   try {
     runDesktopRestart(argv);
   } catch (error) {
-    printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, {
-      rootDir,
-      isolated: argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')),
-    }));
+    if (!error?.alreadyHasVerdict) {
+      printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, {
+        rootDir,
+        ...restartContextFromArgv(argv),
+      }));
+    }
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    process.exit(error?.exitCode ?? 1);
   }
 }
 

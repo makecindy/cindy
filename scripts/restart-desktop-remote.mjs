@@ -15,6 +15,7 @@ import {
   buildDesktopDevVerdictFromWhoami,
   printDesktopDevVerdict,
   resolveIsolatedArg,
+  restartContextFromArgv,
 } from './desktop-dev-verdict.mjs';
 import { collectDesktopWhoamiReport } from './desktop-whoami.mjs';
 
@@ -594,13 +595,30 @@ export function resolveRestartTargetUserDataDir({
 }
 
 /**
- * Only refuse when the host desktop-dev ancestor belongs to THIS checkout.
- * Another worktree's Cindy can start this checkout isolated without killing itself;
- * kill scope is already limited to ownRootDir.
+ * Refuse when restarting would suicide this checkout's host, or when a shared
+ * start is hosted by another checkout's desktop-dev (same official profile).
+ * Isolated start from another checkout is safe: kill scope is ownRootDir.
  */
-export function shouldRefuseHostedRestart(ancestor, { preserveRunning, ownRootDir }) {
+export function shouldRefuseHostedRestart(ancestor, {
+  preserveRunning,
+  ownRootDir,
+  isolated = false,
+}) {
   if (!ancestor || preserveRunning) return false;
-  return commandContainsPath(ancestor.command, ownRootDir);
+  if (commandContainsPath(ancestor.command, ownRootDir)) return true;
+  return isolated !== true;
+}
+
+export function hostedRestartRefusal(ancestor, { ownRootDir }) {
+  return commandContainsPath(ancestor.command, ownRootDir)
+    ? {
+      code: 'HOSTED_RESTART_REFUSED',
+      message: "Refusing to restart from within this checkout's desktop dev process tree.",
+    }
+    : {
+      code: 'HOSTED_SHARED_REFUSED',
+      message: 'Cannot share official userData while hosted by another checkout desktop dev.',
+    };
 }
 
 export function defaultIsolatedUserDataDir(isolationName, region = 'global') {
@@ -827,6 +845,8 @@ function startDesktopDev(mode) {
   });
 
   child.on('exit', (code, signal) => {
+    // --wait-ready owns the process exit so it can print DESKTOP_DEV_VERDICT.
+    if (process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE) return;
     if (signal) process.kill(process.pid, signal);
     process.exit(code ?? 0);
   });
@@ -949,6 +969,8 @@ async function main() {
     rootDir,
     isolated: Boolean(isolatedArg),
     sandbox: isolationName || undefined,
+    local: mode === 'local',
+    region: selectedRegion,
   };
   const exitWithFailure = (code, message, details = []) => {
     for (const line of details) console.error(line);
@@ -1063,24 +1085,27 @@ async function main() {
   if (startupConfig) ensureDesktopEnv();
 
   const devAncestor = findDevAncestor();
-  if (shouldRefuseHostedRestart(devAncestor, { preserveRunning, ownRootDir: rootDir })) {
+  if (shouldRefuseHostedRestart(devAncestor, {
+    preserveRunning,
+    ownRootDir: rootDir,
+    isolated: Boolean(isolatedArg),
+  })) {
+    const refusal = hostedRestartRefusal(devAncestor, { ownRootDir: rootDir });
     exitWithFailure(
-      'HOSTED_RESTART_REFUSED',
-      'Refusing to restart from within this checkout\'s desktop dev process tree.',
+      refusal.code,
+      refusal.message,
       [
-        '==> Detected this script is running inside this checkout\'s Cindy desktop dev process tree:',
+        `==> ${refusal.message}`,
         `    ancestor pid ${devAncestor.pid}: ${devAncestor.command.slice(0, 180)}`,
-        '==> Refusing to restart from within. Killing the ancestor would terminate this',
-        '    script mid-flight and leave ports / file locks held by the dying process,',
-        '    causing the new electron-forge to fail with ELIFECYCLE.',
-        '==> Ask the user to restart from the official Cindy app, another worktree, or the',
-        `    terminal where they originally launched \`pnpm ${devScriptForMode(mode)}\`.`,
+        refusal.code === 'HOSTED_RESTART_REFUSED'
+          ? '==> Ask the user to restart from the official Cindy app, another worktree, or an external terminal.'
+          : '==> Use --isolated=@worktree, or --preserve-running if you explicitly want shared login.',
       ],
     );
   }
-  if (devAncestor && !preserveRunning) {
+  if (devAncestor && !preserveRunning && isolatedArg) {
     console.log(
-      `==> Hosted by another checkout's desktop dev pid ${devAncestor.pid}; this restart will not stop that host.`,
+      `==> Hosted by another checkout's desktop dev pid ${devAncestor.pid}; this isolated restart will not stop that host.`,
     );
   }
   if (devAncestor && preserveRunning) {
@@ -1288,7 +1313,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   main().catch((error) => {
     printDesktopDevVerdict(buildDesktopDevVerdictFromFailure(error, {
       rootDir,
-      isolated: hasIsolationIntent(process.argv.slice(2), process.env),
+      ...restartContextFromArgv(process.argv.slice(2)),
     }));
     console.error(error);
     process.exit(1);
