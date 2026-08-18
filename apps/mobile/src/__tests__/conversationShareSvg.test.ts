@@ -138,6 +138,28 @@ describe("ConversationShareSvg", () => {
     expect(renderedText.join(" ")).not.toContain(secretUrl);
   });
 
+  it("preserves list markers and task state in the exported text", () => {
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["list"],
+      colors,
+      messages: [
+        {
+          body: "- [x] shipped\n- [ ] pending\n1. first\n* bullet",
+          clientId: "list",
+          kind: "assistant",
+        },
+      ],
+      width: 390,
+    });
+
+    expect(layout.bubbles[0]?.textBlocks[0]?.lines).toEqual([
+      "[x] shipped",
+      "[ ] pending",
+      "1. first",
+      "* bullet",
+    ]);
+  });
+
   it("waits for both footer assets before allowing export", async () => {
     const gate = createConversationShareFooterAssetGate();
     let ready = false;

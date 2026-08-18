@@ -197,8 +197,16 @@ function plainMarkdownBlockText(block: MobileMarkdownBlock): string {
     case "paragraph":
     case "heading":
     case "blockquote":
-    case "list_item":
       return plainMarkdownInlineText(block.inlines);
+    case "list_item": {
+      const marker =
+        typeof block.checked === "boolean"
+          ? block.checked
+            ? "[x]"
+            : "[ ]"
+          : block.marker;
+      return `${marker} ${plainMarkdownInlineText(block.inlines)}`;
+    }
     case "table": {
       const rows = [block.header, ...block.rows.map((row) => row.cells)];
       return rows
