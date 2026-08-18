@@ -4191,7 +4191,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
-      list: () => Promise<unknown[]>;
+      list: (body?: { lastReadAtByBotId?: Record<string, number> }) => Promise<unknown[]>;
       listChannelConnections: () => Promise<
         Array<import('../shared/botChannelRegistry').BotChannelConnection>
       >;

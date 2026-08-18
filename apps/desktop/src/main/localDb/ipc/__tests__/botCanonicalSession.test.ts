@@ -4627,6 +4627,222 @@ describe('Bots list conversation projection', () => {
     );
     expect(remote).not.toHaveProperty('lastMessagePreview');
   });
+
+  it('reports who sent the latest visible message', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Reply first',
+      createdAt: 1_000,
+    });
+    expect((await invoke('local-db:bots:get', 'bot-1')).lastMessageRole).toBe('assistant');
+
+    insertMessage(sessionId, {
+      id: 'm2',
+      role: 'user',
+      content: { text: 'Then the user' },
+      createdAt: 2_000,
+    });
+    expect((await invoke('local-db:bots:get', 'bot-1')).lastMessageRole).toBe('user');
+
+    await invoke('local-db:bots:create', { id: 'bot-empty', name: 'Empty Bot' });
+    expect((await invoke('local-db:bots:get', 'bot-empty')).lastMessageRole).toBeNull();
+  });
+});
+
+describe('Bots list unread projection', () => {
+  function insertMessage(
+    sessionId: string,
+    row: {
+      id: string;
+      role: 'user' | 'assistant' | 'tool_use';
+      content: unknown;
+      createdAt: number;
+      rewindAt?: number;
+      agentMeta?: unknown;
+    },
+  ): void {
+    h.sqlite!
+      .prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.id,
+        sessionId,
+        row.role,
+        JSON.stringify(row.content),
+        row.agentMeta === undefined ? null : JSON.stringify(row.agentMeta),
+        row.createdAt,
+        row.rewindAt ?? null,
+      );
+  }
+
+  async function canonicalFor(botId: string): Promise<string> {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId,
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    return created.canonicalSessionId as string;
+  }
+
+  async function unreadFor(
+    botId: string,
+    lastReadAtByBotId?: Record<string, number>,
+  ): Promise<number> {
+    const rows = (await invoke(
+      'local-db:bots:list',
+      lastReadAtByBotId ? { lastReadAtByBotId } : undefined,
+    )) as Array<{ id: string; unreadCount: number }>;
+    return rows.find((row) => row.id === botId)!.unreadCount;
+  }
+
+  it('counts only replies that landed after the read position', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Already seen',
+      createdAt: 1_000,
+    });
+    insertMessage(sessionId, {
+      id: 'm2',
+      role: 'assistant',
+      content: 'New one',
+      createdAt: 3_000,
+    });
+    insertMessage(sessionId, {
+      id: 'm3',
+      role: 'assistant',
+      content: 'New two',
+      createdAt: 4_000,
+    });
+
+    expect(await unreadFor('bot-1', { 'bot-1': 2_000 })).toBe(2);
+    // A read position exactly on a row means that row has been seen.
+    expect(await unreadFor('bot-1', { 'bot-1': 4_000 })).toBe(0);
+  });
+
+  it('reports zero when the caller has no read position for that Bot', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Backlog that must not light up the list',
+      createdAt: 1_000,
+    });
+
+    expect(await unreadFor('bot-1')).toBe(0);
+    expect(await unreadFor('bot-1', {})).toBe(0);
+    expect(await unreadFor('bot-1', { 'bot-1': Number.NaN as unknown as number })).toBe(0);
+    expect(await unreadFor('bot-1', { 'bot-1': -1 })).toBe(0);
+  });
+
+  it('never counts the user own sends, rewound rows, or hidden auto-resume prompts', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'user',
+      content: { text: 'My own message' },
+      createdAt: 2_000,
+    });
+    insertMessage(sessionId, {
+      id: 'm2',
+      role: 'assistant',
+      content: 'Rolled back by rewind',
+      createdAt: 3_000,
+      rewindAt: 3_500,
+    });
+    insertMessage(sessionId, {
+      id: 'm3',
+      role: 'assistant',
+      content: 'Auto resume noise',
+      createdAt: 4_000,
+      agentMeta: { autoResume: true },
+    });
+    insertMessage(sessionId, {
+      id: 'm4',
+      role: 'tool_use',
+      content: { name: 'Bash', input: {} },
+      createdAt: 5_000,
+    });
+
+    expect(await unreadFor('bot-1', { 'bot-1': 1_000 })).toBe(0);
+
+    insertMessage(sessionId, {
+      id: 'm5',
+      role: 'assistant',
+      content: 'The one real reply',
+      createdAt: 6_000,
+    });
+    expect(await unreadFor('bot-1', { 'bot-1': 1_000 })).toBe(1);
+  });
+
+  it('honours the /clear boundary even when the read position is older', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Before clear',
+      createdAt: 2_000,
+    });
+    h.sqlite!.prepare('UPDATE sessions SET cleared_at = 2500 WHERE id = ?').run(sessionId);
+
+    expect(await unreadFor('bot-1', { 'bot-1': 1_000 })).toBe(0);
+
+    insertMessage(sessionId, {
+      id: 'm2',
+      role: 'assistant',
+      content: 'After clear',
+      createdAt: 3_000,
+    });
+    expect(await unreadFor('bot-1', { 'bot-1': 1_000 })).toBe(1);
+  });
+
+  it('never leaks one Bot unread count into another Bot row', async () => {
+    await invoke('local-db:bots:create', { id: 'bot-2', name: 'Research Bot' });
+    const first = await canonicalFor('bot-1');
+    const second = await canonicalFor('bot-2');
+    insertMessage(first, { id: 'm1', role: 'assistant', content: 'One', createdAt: 2_000 });
+    insertMessage(second, { id: 'm2', role: 'assistant', content: 'Two', createdAt: 2_000 });
+    insertMessage(second, { id: 'm3', role: 'assistant', content: 'Three', createdAt: 3_000 });
+
+    const readState = { 'bot-1': 1_000, 'bot-2': 1_000 };
+    expect(await unreadFor('bot-1', readState)).toBe(1);
+    expect(await unreadFor('bot-2', readState)).toBe(2);
+    // A read position for one Bot must not silence the other.
+    expect(await unreadFor('bot-2', { 'bot-1': 9_000 })).toBe(0);
+  });
+
+  it('stops counting at the badge cap instead of scanning the whole task', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    for (let index = 0; index < 150; index += 1) {
+      insertMessage(sessionId, {
+        id: `m${index}`,
+        role: 'assistant',
+        content: `Reply ${index}`,
+        createdAt: 2_000 + index,
+      });
+    }
+
+    expect(await unreadFor('bot-1', { 'bot-1': 1_000 })).toBe(100);
+  });
+
+  it('keeps unread accounting out of the device-link projection', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'm1', role: 'assistant', content: 'Local', createdAt: 2_000 });
+
+    const remote = (await runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'mobile-1', channel: 'local-db:bots:list' },
+      () => h.handlers.get('local-db:bots:list')!({}, { lastReadAtByBotId: { 'bot-1': 1_000 } }),
+    )) as Array<Record<string, unknown>>;
+
+    expect(remote[0]).not.toHaveProperty('unreadCount');
+    expect(remote[0]).not.toHaveProperty('lastMessageRole');
+  });
 });
 
 describe('Bot avatar sentinel persistence', () => {

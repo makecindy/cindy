@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { botListSubtitle, formatBotListTimestamp } from '../botListDisplay';
+import {
+  botListSubtitle,
+  formatBotListTimestamp,
+  formatBotUnreadBadge,
+} from '../botListDisplay';
 
 describe('Bots list timestamp', () => {
   const now = new Date(2026, 7, 17, 14, 5, 0).getTime();
@@ -16,6 +20,14 @@ describe('Bots list timestamp', () => {
     expect(formatBotListTimestamp(null, now)).toBe('');
     expect(formatBotListTimestamp(undefined, now)).toBe('');
     expect(formatBotListTimestamp(0, now)).toBe('');
+  });
+});
+
+describe('Bots list unread badge', () => {
+  it('prints the exact count up to 99 and truncates above it', () => {
+    expect(formatBotUnreadBadge(1)).toBe('1');
+    expect(formatBotUnreadBadge(99)).toBe('99');
+    expect(formatBotUnreadBadge(100)).toBe('99+');
   });
 });
 

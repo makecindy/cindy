@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Spinner } from '@/components/ui/spinner';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
+import { markBotRead } from './botReadState';
 
 type BotSessionGate =
   | { kind: 'loading' }
@@ -108,6 +109,25 @@ export function BotSessionView() {
       cancelled = true;
     };
   }, [botId, reloadVersion, sessionId]);
+
+  // Opening the conversation is what marks it read, and staying in it keeps it
+  // read: while this view is mounted every row that lands in the task advances
+  // the read position, so a reply the user is watching arrive never turns into
+  // an unread badge behind their back.
+  useEffect(() => {
+    if (gate.kind !== 'ready' || !botId || !sessionId) return;
+    markBotRead(botId);
+    const subscribe = window.electronAPI?.localDb?.messages?.onCreated;
+    if (typeof subscribe !== 'function') return;
+    const unsubscribe = subscribe((payload: unknown) => {
+      const incoming = (payload as { sessionId?: unknown } | null)?.sessionId;
+      if (incoming !== sessionId) return;
+      markBotRead(botId);
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, [botId, gate.kind, sessionId]);
 
   if (gate.kind === 'loading') {
     return (

@@ -19,6 +19,15 @@ export function formatBotListTimestamp(at: number | null | undefined, now: numbe
   return `${stamp.getMonth() + 1}/${stamp.getDate()}`;
 }
 
+/**
+ * Unread badge label. Main counts at most 100 rows per Bot, so anything at or
+ * above the cap reads as `99+` — the exact number stops being useful long
+ * before then, and an unbounded count would stretch the row's trailing edge.
+ */
+export function formatBotUnreadBadge(count: number): string {
+  return count > 99 ? '99+' : String(count);
+}
+
 export type BotListSubtitleKind = 'message' | 'description' | 'placeholder';
 
 export interface BotListSubtitle {

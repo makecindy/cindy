@@ -5507,7 +5507,8 @@
       }
     },
     "list": {
-      "startChat": "Start the conversation"
+      "startChat": "Start the conversation",
+      "unread": "{{count}} unread messages"
     },
     "cancel": "Cancel",
     "save": "Save",

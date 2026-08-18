@@ -17,8 +17,18 @@ import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-co
 import type { BotHealthStatus } from '../../../shared/botLifecycle';
 import type { BotInboxItemView } from '../../../shared/botSessionEvents';
 import { BotAvatar } from './BotAvatar';
-import { botListSubtitle, formatBotListTimestamp } from './botListDisplay';
-import { getBotHealth, refreshBotProfiles, useBotProfiles } from './botStore';
+import {
+  botListSubtitle,
+  formatBotListTimestamp,
+  formatBotUnreadBadge,
+} from './botListDisplay';
+import { subscribeBotReadState } from './botReadState';
+import {
+  getBotHealth,
+  refreshBotProfiles,
+  useBotProfiles,
+  useBotUnreadCounts,
+} from './botStore';
 
 /** Debounce for message-driven refreshes: one turn writes many rows. */
 const MESSAGE_REFRESH_DEBOUNCE_MS = 800;
@@ -28,6 +38,7 @@ function BotsSidebarContent() {
   const navigate = useNavigate();
   const { botId } = useParams();
   const bots = useBotProfiles();
+  const unreadByBotId = useBotUnreadCounts();
   const activeBots = bots.filter((bot) => bot.status !== 'archived');
   const archivedBots = bots.filter((bot) => bot.status === 'archived');
   const collapsed = useSidebarCollapsedState();
@@ -116,6 +127,25 @@ function BotsSidebarContent() {
     };
   }, [bots]);
 
+  // Unread counts are computed main-side against the read positions this
+  // renderer owns, so a read position moving (the user opened a Bot chat, or
+  // kept watching one) has to re-ask for the list. Same debounce as the
+  // message feed: a streaming turn advances the position row by row.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeBotReadState(() => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        refreshBotProfiles();
+      }, MESSAGE_REFRESH_DEBOUNCE_MS);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
+  }, []);
+
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-2 px-2 pt-3">
@@ -190,10 +220,16 @@ function BotsSidebarContent() {
               const selected = bot.id === botId;
               const health = healthByBotId[bot.id];
               const attention = attentionByBotId[bot.id] ?? 0;
+              const unread = unreadByBotId[bot.id] ?? 0;
               const subtitle = botListSubtitle(bot);
               const subtitleText =
                 subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text;
               const timestamp = formatBotListTimestamp(bot.lastMessageAt, now);
+              // The selected pill is a light/dark gray fill, not an inverse one,
+              // so muted text on it would sit at a far lower contrast than on
+              // the sidebar background. Dim by opacity there, use the sidebar's
+              // tertiary token everywhere else.
+              const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
               return (
                 <div
                   key={bot.id}
@@ -207,31 +243,67 @@ function BotsSidebarContent() {
                   <button
                     type="button"
                     onClick={() => navigate(`/bots/${bot.id}`)}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-3 py-2 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-3 py-2 text-left"
                   >
                     <BotAvatar bot={bot} size="sm" />
-                    <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
-                        <span className="min-w-0 flex-1 truncate text-13 font-medium" title={bot.name}>
+                        <span
+                          className={cn(
+                            'min-w-0 flex-1 truncate text-13 leading-5',
+                            unread > 0 ? 'font-medium' : 'font-normal',
+                          )}
+                          title={bot.name}
+                        >
                           {bot.name}
                         </span>
                         {timestamp ? (
-                          <span className="shrink-0 text-10 opacity-60">{timestamp}</span>
+                          <span className={cn('shrink-0 text-10', mutedClass)}>
+                            {timestamp}
+                          </span>
                         ) : null}
                       </span>
-                      <span className="mt-0.5 block truncate text-11 opacity-70" title={subtitleText}>
-                        {subtitleText}
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            'min-w-0 flex-1 truncate text-11 leading-4',
+                            unread > 0 ? 'font-medium' : mutedClass,
+                          )}
+                          title={subtitleText}
+                        >
+                          {subtitleText}
+                        </span>
+                        {unread > 0 ? (
+                          <span
+                            className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium leading-none text-[var(--accent-pure-cta-fg)]"
+                            aria-label={t('bots.list.unread', { count: unread })}
+                          >
+                            {formatBotUnreadBadge(unread)}
+                          </span>
+                        ) : null}
                       </span>
                     </span>
                   </button>
                   <span className="flex shrink-0 items-center gap-1 pr-2">
+                    {/* Unread messages own the numeric badge (IM convention: the
+                        count answers "how much have I not seen"). A pending
+                        inbox todo is a second, weaker signal — when both are
+                        live it degrades to a dot so the row never shows two
+                        competing counts; its number stays in the label. */}
                     {attention > 0 ? (
-                      <span
-                        className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium text-[var(--accent-pure-cta-fg)]"
-                        aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
-                      >
-                        {attention > 99 ? '99+' : attention}
-                      </span>
+                      unread > 0 ? (
+                        <span
+                          className="h-1.5 w-1.5 rounded-full bg-[var(--accent-cta-bg)]"
+                          aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
+                        />
+                      ) : (
+                        <span
+                          className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium leading-none text-[var(--accent-pure-cta-fg)]"
+                          aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
+                        >
+                          {formatBotUnreadBadge(attention)}
+                        </span>
+                      )
                     ) : null}
                     {health === 'recovering' ? (
                       <LoaderCircle

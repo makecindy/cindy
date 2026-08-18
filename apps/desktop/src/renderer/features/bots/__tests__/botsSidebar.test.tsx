@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   profiles: [] as unknown[],
   health: new Map<string, string>(),
+  unread: {} as Record<string, number>,
   refreshBotProfiles: vi.fn(),
   registered: { node: null as ReactNode },
 }));
@@ -30,11 +31,14 @@ vi.mock('../../feature-context', () => ({
 }));
 vi.mock('../botStore', () => ({
   useBotProfiles: () => mocks.profiles,
+  useBotUnreadCounts: () => mocks.unread,
   getBotHealth: async (botId: string) => ({ status: mocks.health.get(botId) ?? 'healthy' }),
   refreshBotProfiles: mocks.refreshBotProfiles,
 }));
 
+import type { BotInboxItemView } from '../../../../shared/botSessionEvents';
 import { BotsSidebar } from '../BotsSidebar';
+import { markBotRead, resetBotReadStateForTests } from '../botReadState';
 
 interface BotFixture {
   id: string;
@@ -74,9 +78,12 @@ async function renderSidebar() {
 
 beforeEach(() => {
   messageListeners = [];
+  window.localStorage.clear();
+  resetBotReadStateForTests();
   mocks.navigate.mockReset();
   mocks.refreshBotProfiles.mockReset();
   mocks.health = new Map();
+  mocks.unread = {};
   mocks.profiles = [];
   mocks.registered.node = null;
   Object.defineProperty(window, 'electronAPI', {
@@ -171,6 +178,65 @@ describe('BotsSidebar rows', () => {
     mocks.navigate.mockClear();
     fireEvent.click(screen.getByText('PR steward'));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1');
+  });
+
+  it('shows an unread count only for Bots with unread replies, capped at 99+', async () => {
+    mocks.profiles = [
+      bot({ id: 'bot-read', name: 'Read', lastMessagePreview: 'Nothing new' }),
+      bot({ id: 'bot-unread', name: 'Unread', lastMessagePreview: 'Fresh reply' }),
+      bot({ id: 'bot-flooded', name: 'Flooded', lastMessagePreview: 'Many replies' }),
+    ];
+    mocks.unread = { 'bot-unread': 3, 'bot-flooded': 100 };
+
+    await renderSidebar();
+
+    expect(screen.getByLabelText('bots.list.unread:{"count":3}').textContent).toBe('3');
+    expect(screen.getByLabelText('bots.list.unread:{"count":100}').textContent).toBe('99+');
+    // A read Bot carries no badge at all — zero must never render as "0".
+    expect(screen.queryByLabelText('bots.list.unread:{"count":0}')).toBeNull();
+    expect(screen.getByText('Nothing new').className).not.toContain('font-medium');
+    expect(screen.getByText('Fresh reply').className).toContain('font-medium');
+    expect(screen.getByText('Read').className).not.toContain('font-medium');
+    expect(screen.getByText('Unread').className).toContain('font-medium');
+  });
+
+  it('gives the numeric slot to unread messages and degrades inbox attention to a dot', async () => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'Busy' })];
+    mocks.unread = { 'bot-1': 2 };
+    window.electronAPI.maker.botInbox.list = vi.fn(
+      async () =>
+        [
+          { id: 'i1', status: 'pending' },
+          { id: 'i2', status: 'failed' },
+        ] as unknown as BotInboxItemView[],
+    );
+
+    await renderSidebar();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('bots.inbox.sidebarAttention:{"count":2}')).toBeTruthy(),
+    );
+    // Attention keeps its meaning in the label but stops competing for the count.
+    expect(screen.getByLabelText('bots.inbox.sidebarAttention:{"count":2}').textContent).toBe('');
+    expect(screen.getByLabelText('bots.list.unread:{"count":2}').textContent).toBe('2');
+  });
+
+  it('re-reads the list when a Bot conversation is marked read', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+
+    render(<BotsSidebar />);
+    render(<>{mocks.registered.node}</>);
+    await vi.waitFor(() => expect(messageListeners.length).toBe(1));
+    mocks.refreshBotProfiles.mockClear();
+
+    act(() => {
+      markBotRead('bot-1', 1_000);
+      markBotRead('bot-1', 2_000);
+      vi.advanceTimersByTime(2000);
+    });
+    // Debounced the same way as the message feed: one refresh per burst.
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes the list when a message lands in a Bot task, and ignores other tasks', async () => {

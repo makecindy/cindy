@@ -4626,7 +4626,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     },
     bots: {
-      list: (): Promise<unknown[]> => ipcRenderer.invoke('local-db:bots:list'),
+      list: (body?: { lastReadAtByBotId?: Record<string, number> }): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:list', body),
       listChannelConnections: (): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:channel-connections'),
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),

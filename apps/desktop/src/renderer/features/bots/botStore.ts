@@ -1,5 +1,10 @@
 import { useSyncExternalStore } from 'react';
 import { getDraft } from '@/state/newMakerDraft';
+import {
+  getBotLastReadAtMap,
+  pruneBotReadState,
+  seedMissingBotReadState,
+} from './botReadState';
 import type { BotWorkspacePolicy } from '../../../shared/botWorkspace';
 import type { BotChannelConnection } from '../../../shared/botChannelRegistry';
 import type { BotImMigrationPlan, BotImMigrationRecord } from '../../../shared/botImMigration';
@@ -117,6 +122,8 @@ export interface BotProfile {
   lastMessagePreview?: string | null;
   /** Timestamp of that message (unix ms), null when there is none. */
   lastMessageAt?: number | null;
+  /** Who sent that message — lets the list read like a chat list, not a log. */
+  lastMessageRole?: 'user' | 'assistant' | null;
   createdAt: number;
   sessions: BotSessionProjection[];
   channels?: Array<{
@@ -402,6 +409,10 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
       typeof item.lastMessageAt === 'number' && Number.isFinite(item.lastMessageAt)
         ? item.lastMessageAt
         : null,
+    lastMessageRole:
+      item.lastMessageRole === 'user' || item.lastMessageRole === 'assistant'
+        ? item.lastMessageRole
+        : null,
     createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
     sessions: Array.isArray(item.sessions)
       ? item.sessions.filter((s): s is BotSessionProjection => !!s && typeof s.id === 'string')
@@ -419,12 +430,49 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
   };
 }
 
+/**
+ * Unread replies per Bot, as counted main-side against this renderer's read
+ * positions. Kept beside the profiles rather than inside them: single-Bot
+ * refreshes (`get` / `update` / route mutations) carry no read state, so a
+ * merged field would blink the badge off on every unrelated settings save.
+ */
+let unreadCounts: Record<string, number> = {};
+
+function sameCounts(a: Record<string, number>, b: Record<string, number>): boolean {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+function applyUnreadCounts(rows: unknown[]): void {
+  const next: Record<string, number> = {};
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const item = row as { id?: unknown; unreadCount?: unknown };
+    if (typeof item.id !== 'string') continue;
+    const count = item.unreadCount;
+    if (typeof count === 'number' && Number.isFinite(count) && count > 0) {
+      next[item.id] = Math.floor(count);
+    }
+  }
+  if (!sameCounts(unreadCounts, next)) unreadCounts = next;
+}
+
+export function getBotUnreadCounts(): Record<string, number> {
+  return unreadCounts;
+}
+
+/** Unread badge source for the Bots sidebar; shares the profile listener set. */
+export function useBotUnreadCounts(): Record<string, number> {
+  return useSyncExternalStore(subscribeBotProfiles, getBotUnreadCounts, getBotUnreadCounts);
+}
+
 async function hydrateFromDatabase(): Promise<void> {
   const api = botsApi();
   if (!api || hydrated) return;
   hydrated = true;
   try {
-    const rows = await api.list();
+    const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap() });
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     const migrationComplete = window.localStorage.getItem(SQLITE_MIGRATION_KEY) === '1';
     const migrationCandidates = migrationComplete ? [] : [...profiles];
@@ -449,7 +497,10 @@ async function hydrateFromDatabase(): Promise<void> {
         migrationPending = true;
       }
     }
-    const migratedRows = migrationCandidates.length > 0 ? await api.list() : rows;
+    const migratedRows =
+      migrationCandidates.length > 0
+        ? await api.list({ lastReadAtByBotId: getBotLastReadAtMap() })
+        : rows;
     const migratedProfiles = migratedRows
       .map(normalizeDbProfile)
       .filter((item): item is BotProfile => !!item);
@@ -457,6 +508,13 @@ async function hydrateFromDatabase(): Promise<void> {
     const pendingLegacy = profiles.filter((old) => !migratedIds.has(old.id));
     profiles = migrationPending ? [...migratedProfiles, ...pendingLegacy] : migratedProfiles;
     if (!migrationPending) window.localStorage.setItem(SQLITE_MIGRATION_KEY, '1');
+    applyUnreadCounts(migratedRows);
+    // A Bot we have never tracked starts read: shipping unread badges must not
+    // retroactively mark every existing conversation as unread. Pruning keeps
+    // the stored map from growing with deleted Bots.
+    const visibleIds = profiles.map((bot) => bot.id);
+    seedMissingBotReadState(visibleIds);
+    pruneBotReadState(visibleIds);
     emit();
     if (migrationPending) hydrated = false;
   } catch {

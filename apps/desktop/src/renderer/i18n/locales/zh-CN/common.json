@@ -5505,7 +5505,8 @@
       }
     },
     "list": {
-      "startChat": "开始对话"
+      "startChat": "开始对话",
+      "unread": "{{count}} 条未读消息"
     },
     "cancel": "取消",
     "save": "保存",

@@ -5505,7 +5505,8 @@
       }
     },
     "list": {
-      "startChat": "대화 시작하기"
+      "startChat": "대화 시작하기",
+      "unread": "읽지 않은 메시지 {{count}}개"
     },
     "cancel": "취소",
     "save": "저장",

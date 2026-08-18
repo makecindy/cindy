@@ -38,6 +38,7 @@ import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
+import { setBotReadStateOwner } from '@/features/bots/botReadState';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
@@ -183,6 +184,7 @@ export function AuthProvider({
       activeDataOwnerGenerationRef.current = state.ownerGeneration;
       setNewMakerDraftOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
+      setBotReadStateOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
       setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
@@ -374,6 +376,7 @@ export function AuthProvider({
     activeDataOwnerIdRef.current = state.dataOwnerId;
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
+    setBotReadStateOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -389,6 +392,7 @@ export function AuthProvider({
     activeDataOwnerIdRef.current = state.dataOwnerId;
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
+    setBotReadStateOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);

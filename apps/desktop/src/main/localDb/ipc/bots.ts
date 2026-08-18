@@ -75,6 +75,8 @@ import {
 type ChannelKind =
   'local' | 'telegram' | 'feishu' | 'slack' | 'discord' | 'wechat' | 'dingtalk' | 'wecom' | 'x';
 type BotRole = 'canonical' | 'route' | 'history';
+/** Sender of the latest visible message in a Bot's canonical chat. */
+type BotChatRole = 'user' | 'assistant';
 
 const CHANNELS = new Set<ChannelKind>([
   'local',
@@ -199,8 +201,8 @@ async function readCanonicalChatPreview(
   db: ReturnType<typeof getDbClient>['drizzle'],
   canonicalSessionId: string | null,
   clearedAt: number | null,
-): Promise<{ preview: string | null; createdAt: number | null }> {
-  if (!canonicalSessionId) return { preview: null, createdAt: null };
+): Promise<{ preview: string | null; createdAt: number | null; role: BotChatRole | null }> {
+  if (!canonicalSessionId) return { preview: null, createdAt: null, role: null };
   const rows = await db
     .select({
       role: messages.role,
@@ -221,12 +223,61 @@ async function readCanonicalChatPreview(
     .limit(CANONICAL_PREVIEW_SCAN);
   for (const row of rows) {
     const preview = extractMessagePreview(row.content, row.role);
-    if (preview) return { preview, createdAt: row.createdAt ?? null };
+    if (preview) {
+      return {
+        preview,
+        createdAt: row.createdAt ?? null,
+        role: row.role === 'user' ? 'user' : 'assistant',
+      };
+    }
   }
-  return { preview: null, createdAt: null };
+  return { preview: null, createdAt: null, role: null };
 }
 
-async function readProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId: string) {
+/** Anything above this is rendered as `99+`, so counting further is wasted work. */
+const CANONICAL_UNREAD_SCAN = 100;
+
+/**
+ * How many replies landed in a Bot's canonical chat after the user last read it.
+ *
+ * Read position is renderer state (see `features/bots/botReadState.ts`) and is
+ * passed in per request — main never persists it, so this stays a pure read.
+ * Only `assistant` rows count: the user's own sends are never "unread", and the
+ * visibility rules are exactly the preview's (no rewind-truncated rows, no
+ * hidden auto-resume prompts, nothing before the `/clear` boundary). One
+ * indexed range scan per Bot on `idx_messages_session_created`, capped at
+ * `CANONICAL_UNREAD_SCAN` rows.
+ */
+async function countCanonicalUnread(
+  db: ReturnType<typeof getDbClient>['drizzle'],
+  canonicalSessionId: string | null,
+  clearedAt: number | null,
+  lastReadAt: number | null,
+): Promise<number> {
+  if (!canonicalSessionId || lastReadAt === null) return 0;
+  const boundary = clearedAt !== null ? Math.max(clearedAt, lastReadAt) : lastReadAt;
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, canonicalSessionId),
+        eq(messages.role, 'assistant'),
+        isNull(messages.rewindAt),
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        gt(messages.createdAt, boundary),
+      ),
+    )
+    .limit(CANONICAL_UNREAD_SCAN);
+  return rows.length;
+}
+
+async function readProfile(
+  db: ReturnType<typeof getDbClient>['drizzle'],
+  botId: string,
+  /** Renderer-owned read position for this Bot; omitted ⇒ no unread accounting. */
+  lastReadAt: number | null = null,
+) {
   const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
   if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
   const channels = await db.select().from(botChannels).where(eq(botChannels.botId, botId));
@@ -288,10 +339,17 @@ async function readProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId:
     .from(botRoutes)
     .where(eq(botRoutes.botId, botId))
     .orderBy(desc(botRoutes.updatedAt));
+  const canonicalClearedAt = byId.get(profile.canonicalSessionId ?? '')?.clearedAt ?? null;
   const latestMessage = await readCanonicalChatPreview(
     db,
     profile.canonicalSessionId ?? null,
-    byId.get(profile.canonicalSessionId ?? '')?.clearedAt ?? null,
+    canonicalClearedAt,
+  );
+  const unreadCount = await countCanonicalUnread(
+    db,
+    profile.canonicalSessionId ?? null,
+    canonicalClearedAt,
+    lastReadAt,
   );
   const config = parseJson(version?.capabilitiesJson ?? '{}');
   return {
@@ -308,6 +366,8 @@ async function readProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId:
     canonicalSessionId: profile.canonicalSessionId ?? undefined,
     lastMessagePreview: latestMessage.preview,
     lastMessageAt: latestMessage.createdAt,
+    lastMessageRole: latestMessage.role,
+    unreadCount,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
     skills: Array.isArray(config.skills)
@@ -525,6 +585,29 @@ function normalizeAllowedPaths(
   });
 }
 
+/** Upper bound on how many Bot read positions one list call may carry. */
+const MAX_READ_STATE_ENTRIES = 500;
+
+/**
+ * Parse the optional `{ lastReadAtByBotId }` body of `local-db:bots:list`.
+ *
+ * Hostile or stale renderer input must never break the Bots list, so anything
+ * unparseable is dropped silently instead of failing the whole projection.
+ */
+function readLastReadAtMap(raw: unknown): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const value = (raw as { lastReadAtByBotId?: unknown }).lastReadAtByBotId;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  for (const [botId, at] of Object.entries(value as Record<string, unknown>)) {
+    if (out.size >= MAX_READ_STATE_ENTRIES) break;
+    if (!botId || botId.length > 128) continue;
+    if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) continue;
+    out.set(botId, Math.floor(at));
+  }
+  return out;
+}
+
 async function fileExists(candidate: string): Promise<boolean> {
   try {
     await fs.access(candidate);
@@ -535,18 +618,23 @@ async function fileExists(candidate: string): Promise<boolean> {
 }
 
 export function registerBotIpc(): void {
-  ipcMain.handle('local-db:bots:list', async (event) => {
+  ipcMain.handle('local-db:bots:list', async (event, raw: unknown) => {
     const remote = isDeviceLinkInvoke();
     if (!remote) assertTrustedAppRendererEvent(event);
     const client = tryGetDbClient();
     if (!client) return [];
     const db = client.drizzle;
+    // Unread accounting is opt-in: the read position lives in the renderer, so
+    // a caller that has none (device-link, first boot) simply gets zeros.
+    const lastReadAtByBotId = remote ? new Map<string, number>() : readLastReadAtMap(raw);
     const profiles = await db
       .select({ id: botProfiles.id })
       .from(botProfiles)
       .orderBy(desc(botProfiles.updatedAt));
     return Promise.all(
-      profiles.map(({ id }) => remote ? readRemoteBotProfile(db, id) : readProfile(db, id)),
+      profiles.map(({ id }) =>
+        remote ? readRemoteBotProfile(db, id) : readProfile(db, id, lastReadAtByBotId.get(id) ?? null),
+      ),
     );
   });
 
