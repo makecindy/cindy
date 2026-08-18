@@ -6522,7 +6522,14 @@ export function ChatInput({
   }, []);
 
   useEffect(() => {
+    if (!ownsHardwareComposerActions) {
+      workLouderVoiceGestureRef.current?.cancelHeldPress();
+    }
     return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'voice' && !ownsHardwareComposerActions) {
+        workLouderVoiceGestureRef.current?.cancelHeldPress();
+        return false;
+      }
       if (!ownsHardwareComposerActions) return false;
       if (action.type === 'skill') {
         if (!editor || editor.isDestroyed || composerMutationLocked) return false;

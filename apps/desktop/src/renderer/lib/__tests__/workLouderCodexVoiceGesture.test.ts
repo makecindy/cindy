@@ -199,4 +199,30 @@ describe('createWorkLouderCodexVoiceGesture', () => {
     expect(start).toHaveBeenCalledOnce();
     expect(stop).not.toHaveBeenCalled();
   });
+
+  it('stops a held long press when the owning composer loses focus', async () => {
+    let state: VoiceInputState = 'idle';
+    const start = vi.fn(async () => {
+      state = 'listening';
+    });
+    const stop = vi.fn(async () => {
+      state = 'done';
+    });
+    const gesture = createWorkLouderCodexVoiceGesture({
+      longPressMs: 450,
+      getState: () => state,
+      start,
+      stop,
+    });
+
+    gesture.handle(press);
+    await vi.advanceTimersByTimeAsync(450);
+    await settle();
+    gesture.cancelHeldPress();
+    await settle();
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state).toBe('done');
+  });
 });

@@ -750,6 +750,36 @@ describe('WorkLouderCodexLightingController', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it('releases a held microphone when the account suspends or the key is later released', () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+    controller.start();
+    hidRef.current?.({ key: 'ACT10', act: 1 });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'press' });
+
+    dispatch.mockClear();
+    controller.suspendTaskSlots();
+    expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
+
+    dispatch.mockClear();
+    hidRef.current?.({ key: 'ACT10', act: 0 });
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'voice', phase: 'press' });
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
+  });
+
   it('does not fire a held stick action after the account resumes', async () => {
     const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
       current: null,

@@ -109,6 +109,7 @@ export class WorkLouderCodexLightingController {
   private layoutPreviewActive = false;
   private inputActionsEnabled = true;
   private joystickNeedsCenter = false;
+  private voicePressed = false;
 
   constructor(
     private readonly sink: WorkLouderCodexLightingSink,
@@ -273,6 +274,7 @@ export class WorkLouderCodexLightingController {
     this.pendingAgentKeyTap = null;
     this.joystickDirection = null;
     this.joystickNeedsCenter = true;
+    this.releaseHeldVoice();
     this.clearAutoDimTimer();
     this.clearWindowRevealTimer();
     this.lightingDimmed = false;
@@ -286,6 +288,7 @@ export class WorkLouderCodexLightingController {
     this.clearAutoDimTimer();
     this.clearWindowRevealTimer();
     this.stopJoystickScroll();
+    this.releaseHeldVoice();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
     this.inputActionsEnabled = false;
@@ -312,7 +315,11 @@ export class WorkLouderCodexLightingController {
         event.act,
       );
     }
-    if (this.layoutPreviewActive || !this.inputActionsEnabled) return;
+    if (this.layoutPreviewActive) return;
+    if (!this.inputActionsEnabled) {
+      this.releaseHeldVoiceFromEvent(event);
+      return;
+    }
     const agentMatch = /^AG0([0-5])$/.exec(event.key);
     if (agentMatch) {
       if (event.act === 1) this.handleAgentKeyPress(Number(agentMatch[1]));
@@ -355,6 +362,7 @@ export class WorkLouderCodexLightingController {
     const assignment = this.settings.layout.slots[slot];
     if (isWorkLouderCodexMicrophoneKeycap(assignment.keycapId)) {
       if (event.act === 1 || event.act === 0) {
+        this.voicePressed = event.act === 1;
         this.dispatchRendererAction({
           type: 'voice',
           phase: event.act === 1 ? 'press' : 'release',
@@ -522,6 +530,20 @@ export class WorkLouderCodexLightingController {
       this.stopJoystickScroll();
     }, JOYSTICK_RELEASE_TIMEOUT_MS);
     this.joystickReleaseTimer.unref?.();
+  }
+
+  private releaseHeldVoiceFromEvent(event: WorkLouderCodexHidEvent): void {
+    if (event.act !== 0 || !/^ACT(?:0[6-9]|1[0-2])$/.test(event.key)) return;
+    const slot = this.commandSlotForKey(event.key);
+    if (!slot) return;
+    if (!isWorkLouderCodexMicrophoneKeycap(this.settings.layout.slots[slot].keycapId)) return;
+    this.releaseHeldVoice();
+  }
+
+  private releaseHeldVoice(): void {
+    if (!this.voicePressed) return;
+    this.voicePressed = false;
+    this.dispatchRendererAction({ type: 'voice', phase: 'release' });
   }
 
   private stopJoystickScroll(): void {

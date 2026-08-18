@@ -85,6 +85,7 @@ describe('ChatInput session switch focus contract', () => {
     expect(sessionViewSource).toContain(
       'ownsHardwareComposerActions={ownsHardwareTaskActions}',
     );
+    expect(chatInputSource).toContain('workLouderVoiceGestureRef.current?.cancelHeldPress();');
     expect(sessionViewSource).toContain(
       'ownsHardwareScrollActions={ownsHardwareTaskActions}',
     );

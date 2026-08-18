@@ -223,5 +223,15 @@
   "glob": "apps/desktop/native/agent-island/macos-agent-island-helper.swift",
   "reason": "原生 helper 注释里引用的角色素材固有色 hex(便于与设计素材对照);渲染值本身是 Color(red:green:blue:),不经过 renderer token 体系",
   "owner": "agent-island"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/components/settings/WorkLouderCodexKeyboardLayout.tsx",
+  "reason": "Codex Micro 设置页复刻实体键盘的固有色(透白任务帽/深灰命令帽/摇杆座),不是界面语义色;走 surface token 会在 dark mode 反相",
+  "owner": "worklouder-codex"
+ },
+ {
+  "glob": "apps/desktop/src/main/worklouder-codex/protocol.ts",
+  "reason": "Codex Micro 灯效协议注释对照品牌红(#DF0C27/#A61629);运行色走数字通道,不是 UI 硬编码",
+  "owner": "worklouder-codex"
  }
 ]

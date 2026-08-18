@@ -35,6 +35,7 @@ const isIdleLike = (state: VoiceInputState): boolean =>
  */
 export function createWorkLouderCodexVoiceGesture(options: WorkLouderCodexVoiceGestureOptions): {
   handle(action: WorkLouderPushToTalkAction): void;
+  cancelHeldPress(): void;
   dispose(): void;
 } {
   let press: Press | null = null;
@@ -133,11 +134,21 @@ export function createWorkLouderCodexVoiceGesture(options: WorkLouderCodexVoiceG
     if (current.stopOnRelease || current.longPress) requestStop();
   };
 
+  const cancelHeldPress = (): void => {
+    if (disposed || !press) return;
+    const current = press;
+    clearPressTimer(current);
+    press = null;
+    stopAfterStart = Boolean(startPromise);
+    if (current.stopOnRelease || current.longPress || startPromise) requestStop();
+  };
+
   return {
     handle(action) {
       if (action.phase === 'press') handlePress();
       else handleRelease();
     },
+    cancelHeldPress,
     dispose() {
       disposed = true;
       clearPressTimer();
