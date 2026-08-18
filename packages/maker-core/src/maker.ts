@@ -181,6 +181,9 @@ const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS =
 const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET =
   MAX_PI_PROJECT_SKILL_FINGERPRINT_ENTRIES * 2;
 const PI_SKILL_CATALOG_TIMEOUT = 'PI_SKILL_CATALOG_TIMEOUT';
+const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
+  'cindy.pi.runtime-user-skill-canonical-source',
+);
 
 function piSkillCatalogTimeoutError(): Error & { code: string } {
   return Object.assign(new Error('Pi skill catalog validation deadline expired'), {
@@ -257,6 +260,7 @@ async function mergePiRuntimeSkillStatuses(
   if (manifest?.status !== 'loaded') return result;
   const loadedExplicitSkills = new Map<string, string>();
   const loadedLegacyProjectSkills = new Map<string, string>();
+  const loadedUserSkills = new Map<string, string | null>();
   const changedProjectSkills = new Map<string, string>();
   const fingerprintBudget = {
     remainingEntries: PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET,
@@ -294,6 +298,25 @@ async function mergePiRuntimeSkillStatuses(
     const baseDir = command.sourceInfo.baseDir;
     if (command.source !== 'skill' || !command.name.startsWith('skill:')) continue;
     const skillName = command.name.slice('skill:'.length);
+    const frozenUserSource = Reflect.get(
+      command,
+      PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE,
+    );
+    if (
+      command.sourceInfo.scope === 'user'
+      && command.sourceInfo.source === 'auto'
+      && command.sourceInfo.path === undefined
+      && typeof frozenUserSource === 'string'
+      && path.isAbsolute(frozenUserSource)
+      && !frozenUserSource.includes('\0')
+    ) {
+      const canonicalSource = path.resolve(frozenUserSource);
+      loadedUserSkills.set(
+        canonicalSource,
+        loadedUserSkills.has(canonicalSource) ? null : command.name,
+      );
+      continue;
+    }
     if (command.sourceInfo.scope === 'project' && typeof baseDir === 'string') {
       loadedLegacyProjectSkills.set(
         [skillName, await canonicalPiRuntimePath(baseDir, deadlineAtMs)].join('\0'),
@@ -317,6 +340,7 @@ async function mergePiRuntimeSkillStatuses(
   if (
     loadedExplicitSkills.size === 0
     && loadedLegacyProjectSkills.size === 0
+    && loadedUserSkills.size === 0
     && changedProjectSkills.size === 0
   ) return result;
   const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
@@ -326,7 +350,10 @@ async function mergePiRuntimeSkillStatuses(
   const skills: ListAgentSkillsResult['skills'] = [];
   for (const skill of result.skills) {
     let runtimeCommandName: string | undefined;
-    if (skill.scope === 'repo' && skill.path) {
+    if (skill.scope === 'user' && skill.path) {
+      const canonicalSkillPath = await canonicalPiRuntimePath(skill.path, deadlineAtMs);
+      runtimeCommandName = loadedUserSkills.get(canonicalSkillPath) ?? undefined;
+    } else if (skill.scope === 'repo' && skill.path) {
       const canonicalSkillPath = await canonicalPiRuntimePath(skill.path, deadlineAtMs);
       if (!changedProjectSkills.has(canonicalSkillPath)) {
         runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath);

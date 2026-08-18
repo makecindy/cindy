@@ -33,15 +33,23 @@ describe('Pi runtime capability parsing', () => {
     expect(parsePiRuntimeCommands({ commands: [] })).toEqual({ ok: true, commands: [] });
   });
 
-  it('freezes pathless user Skill provenance at catalog capture without serializing it', async () => {
+  it('freezes a pathless user Skill by scanned directory when frontmatter name differs', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-runtime-user-skill-'));
     const baseDir = path.join(root, 'pi-home');
     const firstTarget = path.join(root, 'target-a');
     const secondTarget = path.join(root, 'target-b');
-    const linkedSource = path.join(baseDir, 'skills', 'demo');
+    const linkedSource = path.join(baseDir, 'skills', 'directory-name');
     try {
       fs.mkdirSync(firstTarget, { recursive: true });
       fs.mkdirSync(secondTarget, { recursive: true });
+      fs.writeFileSync(
+        path.join(firstTarget, 'SKILL.md'),
+        '---\nname: frontmatter-name\n---\n# First target\n',
+      );
+      fs.writeFileSync(
+        path.join(secondTarget, 'SKILL.md'),
+        '---\nname: frontmatter-name\n---\n# Second target\n',
+      );
       fs.mkdirSync(path.dirname(linkedSource), { recursive: true });
       fs.symlinkSync(
         firstTarget,
@@ -56,7 +64,7 @@ describe('Pi runtime capability parsing', () => {
             success: true,
             data: {
               commands: [{
-                name: 'skill:demo',
+                name: 'skill:frontmatter-name',
                 source: 'skill',
                 sourceInfo: { source: 'auto', scope: 'user', baseDir },
               }],

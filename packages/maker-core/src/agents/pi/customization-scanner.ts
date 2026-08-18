@@ -54,6 +54,13 @@ interface PiCustomizationScanBudget {
   readonly deadlineAtMs: number;
 }
 
+export interface PiRuntimeUserSkillSource {
+  readonly baseDir: string;
+  readonly sourcePath: string;
+  readonly canonicalSourcePath: string;
+  readonly runtimeCommandName: string;
+}
+
 function scanTimeoutError(): Error & { code: string } {
   return Object.assign(new Error('Pi customization scan deadline expired'), {
     code: PI_CUSTOMIZATION_SCAN_TIMEOUT,
@@ -516,6 +523,85 @@ async function scanOneSourceAsync(
     });
     return { items: [], errors };
   }
+}
+
+/**
+ * Resolve pathless Pi user commands back to the exact directory entries that
+ * supplied their frontmatter names. This is internal runtime provenance only;
+ * callers still need to revalidate the returned directory snapshot before use.
+ */
+export async function scanPiRuntimeUserSkillSources(
+  baseDirs: readonly string[],
+  deadlineAtMs: number,
+): Promise<PiRuntimeUserSkillSource[]> {
+  const dependencies = defaultScanDeps;
+  const budget: PiCustomizationScanBudget = {
+    remainingEntries: MAX_PI_CUSTOMIZATION_SCAN_ENTRIES,
+    deadlineAtMs,
+  };
+  const sources: PiRuntimeUserSkillSource[] = [];
+
+  for (const baseDir of baseDirs) {
+    const source: SourceDef = {
+      engine: 'pi',
+      kind: 'skill',
+      scope: 'user',
+      dir: path.join(baseDir, 'skills'),
+    };
+    try {
+      const entries = await readDirectoryEntries(source.dir, dependencies, budget);
+      for (const entry of entries) {
+        if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+        const folder = path.join(source.dir, entry.name);
+        const canonicalMd = path.join(folder, 'SKILL.md');
+        let actualMd = canonicalMd;
+        if (!await statFileIfPresent(canonicalMd, dependencies, budget)) {
+          const lowerMd = path.join(folder, 'skill.md');
+          if (!await statFileIfPresent(lowerMd, dependencies, budget)) continue;
+          actualMd = lowerMd;
+        }
+
+        const canonicalBefore = await awaitScanStep(
+          () => dependencies.realpath(folder),
+          budget,
+        );
+        const item = await readFolderSkillAsync(
+          source,
+          folder,
+          actualMd,
+          dependencies,
+          budget,
+        );
+        const canonicalAfter = await awaitScanStep(
+          () => dependencies.realpath(folder),
+          budget,
+        );
+        if (
+          item.parseError
+          || canonicalBefore !== canonicalAfter
+          || !path.isAbsolute(canonicalBefore)
+          || canonicalBefore.includes('\0')
+        ) continue;
+
+        const frontmatterName = item.frontmatter?.name;
+        const runtimeName = typeof frontmatterName === 'string' && frontmatterName.trim()
+          ? frontmatterName
+          : item.name;
+        const runtimeCommandName = `skill:${runtimeName}`;
+        if (!/^skill:[^\s/\\\0]+$/.test(runtimeCommandName)) continue;
+        sources.push({
+          baseDir,
+          sourcePath: item.absolutePath,
+          canonicalSourcePath: canonicalBefore,
+          runtimeCommandName,
+        });
+      }
+    } catch {
+      // Catalog discovery is diagnostic; missing or unstable proof fails closed per Skill.
+    }
+  }
+  return sources;
 }
 
 async function dedupePiItemsAsync(

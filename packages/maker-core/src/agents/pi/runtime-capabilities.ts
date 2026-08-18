@@ -1,6 +1,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
+import { scanPiRuntimeUserSkillSources } from './customization-scanner.js';
 import type { PiRpcResponse } from './rpc-client.js';
 import type {
   PiRuntimeCapabilityError,
@@ -60,11 +61,9 @@ async function awaitRuntimeCapabilityStep<T>(
 }
 
 async function stableCanonicalUserSkillSource(
-  baseDir: string,
-  entryName: string,
+  entryPath: string,
   deadlineAtMs: number,
 ): Promise<string | null> {
-  const entryPath = path.join(baseDir, 'skills', entryName);
   try {
     const [entryBefore, canonicalBefore] = await Promise.all([
       awaitRuntimeCapabilityStep(() => fsp.lstat(entryPath, { bigint: true }), deadlineAtMs),
@@ -99,6 +98,13 @@ async function capturePathlessUserSkillSources(
   deadlineAtMs: number,
 ): Promise<void> {
   if (!options.userSkillBaseDirs?.length) return;
+  const pathlessCommands = commands.filter((command) => (
+    command.source === 'skill'
+    && command.sourceInfo.scope === 'user'
+    && command.sourceInfo.source === 'auto'
+    && command.sourceInfo.path === undefined
+  ));
+  if (pathlessCommands.length === 0) return;
   const allowedBaseDirs = new Set<string>();
   for (const rawBaseDir of options.userSkillBaseDirs) {
     if (!path.isAbsolute(rawBaseDir) || rawBaseDir.includes('\0')) continue;
@@ -112,21 +118,24 @@ async function capturePathlessUserSkillSources(
     }
   }
 
-  for (const command of commands) {
-    if (
-      command.source !== 'skill'
-      || command.sourceInfo.scope !== 'user'
-      || command.sourceInfo.source !== 'auto'
-      || command.sourceInfo.path !== undefined
-    ) continue;
-    const match = /^skill:([^\s/\\\0]+)$/.exec(command.name);
-    const entryName = match?.[1];
+  const candidatesByCommand = new Map<string, Awaited<
+    ReturnType<typeof scanPiRuntimeUserSkillSources>
+  >>();
+  const candidates = await scanPiRuntimeUserSkillSources(
+    [...allowedBaseDirs],
+    deadlineAtMs,
+  );
+  for (const candidate of candidates) {
+    const key = [candidate.baseDir, candidate.runtimeCommandName].join('\0');
+    const matches = candidatesByCommand.get(key);
+    if (matches) matches.push(candidate);
+    else candidatesByCommand.set(key, [candidate]);
+  }
+
+  for (const command of pathlessCommands) {
     const rawBaseDir = command.sourceInfo.baseDir;
     if (
-      !entryName
-      || entryName === '.'
-      || entryName === '..'
-      || path.basename(entryName) !== entryName
+      !/^skill:[^\s/\\\0]+$/.test(command.name)
       || typeof rawBaseDir !== 'string'
       || !path.isAbsolute(rawBaseDir)
       || rawBaseDir.includes('\0')
@@ -137,12 +146,16 @@ async function capturePathlessUserSkillSources(
         deadlineAtMs,
       );
       if (!allowedBaseDirs.has(canonicalBaseDir)) continue;
+      const matches = candidatesByCommand.get(
+        [canonicalBaseDir, command.name].join('\0'),
+      );
+      if (matches?.length !== 1) continue;
+      const candidate = matches[0]!;
       const canonicalSource = await stableCanonicalUserSkillSource(
-        canonicalBaseDir,
-        entryName,
+        candidate.sourcePath,
         deadlineAtMs,
       );
-      if (!canonicalSource) continue;
+      if (!canonicalSource || canonicalSource !== candidate.canonicalSourcePath) continue;
       Object.defineProperty(command, PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE, {
         value: canonicalSource,
         enumerable: false,
