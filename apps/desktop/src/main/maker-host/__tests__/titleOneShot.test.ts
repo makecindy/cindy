@@ -837,6 +837,37 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
         model: 'deepseek/deepseek-v4-flash',
         max_tokens: 32,
         thinking: { type: 'disabled' },
+        reasoning_effort: 'low',
+      });
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('网关模型未下发 efforts 时仍写死 reasoning_effort=low', async () => {
+    setXdGatewayModels([
+      xdGatewayModel('codex/gpt-5.6-luna', 'chat', { efforts: [], defaultEffort: null }),
+    ]);
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: '下一步改超时' } }] },
+      }));
+      await generateTitleViaProvider(
+        { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'xd',
+          listConnectedProviders: async () => [providerStub('xd')],
+          readGatewayKey: () => 'gk-1',
+        },
+      );
+      const [, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { body: string },
+      ];
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'codex/gpt-5.6-luna',
+        thinking: { type: 'disabled' },
+        reasoning_effort: 'low',
       });
     } finally {
       setXdGatewayModels([]);

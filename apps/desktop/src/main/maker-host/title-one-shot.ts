@@ -68,6 +68,8 @@ const TITLE_MAX_TOKENS = 32;
  * 网关认 OpenAI 兼容的 thinking.type=disabled;官方 no_think / enable_thinking=false 无效。
  */
 const TITLE_GATEWAY_THINKING = { type: 'disabled' } as const;
+/** GPT / Codex 推理档 one-shot 固定用最低档，避免回落到模型默认 high。 */
+const TITLE_GATEWAY_REASONING_EFFORT = 'low' as const;
 /** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
 const TITLE_OUTPUT_MAX_CHARS = 256;
 /**
@@ -379,6 +381,9 @@ async function fetchGatewayTitle(
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
   messages.push({ role: 'user', content: prompt });
 
+  // thinking.type=disabled：Hy3 / DeepSeek 等网关思考模型。
+  // reasoning_effort 写死 low：GPT / Codex 推理档（如 gpt-5.6-luna）不认 thinking 字段，
+  // 且 XD /models 常不下发 efforts，依赖清单最低档会整段漏传、回落到默认 high。
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/chat/completions`, {
     method: 'POST',
     signal,
@@ -390,6 +395,7 @@ async function fetchGatewayTitle(
       model: modelId,
       max_tokens: maxTokens,
       thinking: TITLE_GATEWAY_THINKING,
+      reasoning_effort: TITLE_GATEWAY_REASONING_EFFORT,
       messages,
     }),
   });
