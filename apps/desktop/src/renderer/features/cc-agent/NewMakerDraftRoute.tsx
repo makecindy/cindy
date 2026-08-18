@@ -3731,10 +3731,13 @@ export function NewMakerDraftRoute() {
               toastCreateSessionFailed();
               return;
             }
-            // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭,
-            // 下一次 New Maker 不延续。
-            if (effectivePlanMode) patchActivePrefs({ planMode: false });
-
+            // 计划模式是一次性选择:随本次发送先消费,避免后台创建期间另开 New Maker
+            // 重复使用。若 Skill 交接最终无法证明,下方只在该快照仍未被用户改动时恢复。
+            let consumedPlanModePrefs: VendorPrefs | null = null;
+            if (effectivePlanMode) {
+              patchActivePrefs({ planMode: false });
+              consumedPlanModePrefs = getDraft().lastByVendor[persistedAgentKind];
+            }
             // 先把真实 session 收进项目列表，让用户可以切走、再开 New Maker。
             const sendAt = new Date();
             sessionsStore.patchLocal(newSession.id, {
@@ -3776,7 +3779,24 @@ export function NewMakerDraftRoute() {
               // 真实会话消息(删会话清不到)。初始值取原 files:rehome 自身抛错时
               // 走 catch 恢复原附件,行为与迁移前一致(fail-soft)。
               let rehomedFiles = files;
+              let piSkillHandoffProven = !(
+                persistedAgentKind === 'pi'
+                && (
+                  !!opts?.pendingProjectSkillName
+                  || opts?.pendingAgentSkillInvocation?.scope === 'user'
+                )
+              );
+              const restorePlanModeAfterUnprovenSkillHandoff = () => {
+                if (piSkillHandoffProven || !consumedPlanModePrefs) return;
+                const currentPlanModePrefs = getDraft().lastByVendor[persistedAgentKind];
+                if (
+                  currentPlanModePrefs !== consumedPlanModePrefs
+                  || currentPlanModePrefs.planMode !== false
+                ) return;
+                patchVendorPrefs(persistedAgentKind, { planMode: true });
+              };
               const restoreFirstMessageDraft = () => {
+                restorePlanModeAfterUnprovenSkillHandoff();
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
@@ -3915,6 +3935,7 @@ export function NewMakerDraftRoute() {
                   }
                   agentSkillInvocation = resolvedInvocation;
                 }
+                piSkillHandoffProven = true;
                 let deferredUiAssignment: DeferredUiAssignment | undefined;
                 if (shouldEnableCollab) {
                   try {

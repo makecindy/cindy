@@ -245,6 +245,44 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(worktreeBranch).toContain('agentSkillInvocation = resolvedInvocation;');
   });
 
+  it('restores only the unchanged plan-mode preference when worktree Skill proof fails', () => {
+    const worktreeBranch = source.slice(
+      source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)'),
+      source.indexOf('// 普通路径:', source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)')),
+    );
+    const consumePlanMode = worktreeBranch.indexOf('patchActivePrefs({ planMode: false })');
+    const capturedSnapshot = worktreeBranch.indexOf(
+      'consumedPlanModePrefs = getDraft().lastByVendor[persistedAgentKind]',
+      consumePlanMode,
+    );
+    const restoreHelper = worktreeBranch.indexOf(
+      'const restorePlanModeAfterUnprovenSkillHandoff = () => {',
+      capturedSnapshot,
+    );
+    const snapshotGuard = worktreeBranch.indexOf(
+      'currentPlanModePrefs !== consumedPlanModePrefs',
+      restoreHelper,
+    );
+    const restorePlanMode = worktreeBranch.indexOf(
+      'patchVendorPrefs(persistedAgentKind, { planMode: true })',
+      snapshotGuard,
+    );
+    const restoreDraft = worktreeBranch.indexOf('const restoreFirstMessageDraft = () => {');
+    const restoreBeforeDraft = worktreeBranch.indexOf(
+      'restorePlanModeAfterUnprovenSkillHandoff();',
+      restoreDraft,
+    );
+    const proofAccepted = worktreeBranch.indexOf('piSkillHandoffProven = true;', restoreDraft);
+
+    expect(consumePlanMode).toBeGreaterThan(-1);
+    expect(capturedSnapshot).toBeGreaterThan(consumePlanMode);
+    expect(restoreHelper).toBeGreaterThan(capturedSnapshot);
+    expect(snapshotGuard).toBeGreaterThan(restoreHelper);
+    expect(restorePlanMode).toBeGreaterThan(snapshotGuard);
+    expect(restoreBeforeDraft).toBeGreaterThan(restoreDraft);
+    expect(proofAccepted).toBeGreaterThan(restoreBeforeDraft);
+  });
+
   it('reconciles Pi Skill receipts after the user selects a working directory', () => {
     const workingDirHandler = sessionViewSource
       .slice(
