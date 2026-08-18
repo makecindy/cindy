@@ -98,10 +98,7 @@ function parseStoredModelRoute(
 ): ProviderRuntimeModelConfig['route'] | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const route = value as Record<string, unknown>;
-  if (
-    typeof route.baseUrl !== 'string' ||
-    !isAllowedWireProtocol(agent, route.wireProtocol)
-  ) {
+  if (typeof route.baseUrl !== 'string' || !isAllowedWireProtocol(agent, route.wireProtocol)) {
     return undefined;
   }
   try {
@@ -158,13 +155,9 @@ function allowedWireProtocols(agent: string): readonly ProviderWireProtocol[] {
     : ['openai-responses', 'openai-chat', 'anthropic-messages'];
 }
 
-function isAllowedWireProtocol(
-  agent: string,
-  value: unknown,
-): value is ProviderWireProtocol {
+function isAllowedWireProtocol(agent: string, value: unknown): value is ProviderWireProtocol {
   return (
-    typeof value === 'string' &&
-    allowedWireProtocols(agent).includes(value as ProviderWireProtocol)
+    typeof value === 'string' && allowedWireProtocols(agent).includes(value as ProviderWireProtocol)
   );
 }
 
@@ -241,9 +234,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       if (routeUrl.origin !== runtimeUrl.origin) {
         return invalid(`runtime '${agent}' model.route.baseUrl must use the runtime origin`);
       }
-      if (
-        !isAllowedWireProtocol(agent, route.wireProtocol)
-      ) {
+      if (!isAllowedWireProtocol(agent, route.wireProtocol)) {
         return invalid(`runtime '${agent}' model.route.wireProtocol invalid`);
       }
       if (route.requestPath !== undefined && !isProviderRequestPath(route.requestPath)) {
@@ -280,6 +271,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     } else if (mm.reasoningEfforts !== undefined || mm.reasoningDefaultEffort !== undefined) {
       return invalid(`runtime '${agent}' reasoning metadata requires reasoning=true`);
     }
+  }
+  if (agent === 'pi' && r.wireProtocol === undefined) {
+    return invalid("runtime 'pi' wireProtocol required");
   }
   if (r.wireProtocol !== undefined) {
     // Pi 是多协议 harness；Codex 也具备 Responses / Chat / Anthropic bridge。
@@ -501,9 +495,7 @@ function normalizeRuntime(
             route: {
               baseUrl: m.route.baseUrl.trim(),
               wireProtocol: m.route.wireProtocol,
-              ...(m.route.requestPath?.trim()
-                ? { requestPath: m.route.requestPath.trim() }
-                : {}),
+              ...(m.route.requestPath?.trim() ? { requestPath: m.route.requestPath.trim() } : {}),
             },
           }
         : {}),
@@ -714,6 +706,10 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
         r.wireProtocol === 'openai-chat')
     ) {
       entry.wireProtocol = r.wireProtocol;
+    } else if (agent === 'pi' && r.wireProtocol === undefined) {
+      // 旧版把 Pi 的缺省协议解释为 Chat。新写入口已要求显式 wireProtocol；仅在读取
+      // 历史持久化记录时把旧语义物化，避免运行时重新猜测或按供应商穷举兼容。
+      entry.wireProtocol = 'openai-chat';
     }
     if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;

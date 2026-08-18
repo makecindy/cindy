@@ -936,6 +936,7 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain("'data:'");
     // 错误脱敏：模型侧只看到泛化文案，不含本地路径 / key / URL。
     expect(source).toContain("'vision: vision backend request failed'");
+    expect(source).toContain("'vision: wire protocol is not configured'");
     expect(source).toContain("'vision HTTP '");
     expect(source).toContain("'vision: unable to read the image file'");
     // host 可关联日志：fallback 行为有结构化 stderr 输出（脱敏，仅 backendRole/model）。

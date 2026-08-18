@@ -182,6 +182,26 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     }
   });
 
+  it('requires a default protocol on newly saved Pi runtimes', () => {
+    expect(
+      validateCustomProviderConfig({
+        id: 'localpi',
+        name: 'Local pi',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'm', name: 'M', piApi: 'openai-responses' }],
+          },
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      code: 'INVALID_PARAMS',
+      message: "runtime 'pi' wireProtocol required",
+    });
+  });
+
   it('accepts a same-origin model route and rejects unsafe route variants', () => {
     const config = (route: unknown) => ({
       ...valid,
@@ -237,6 +257,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         runtimes: {
           pi: {
             baseUrl: 'https://example.com/v1',
+            wireProtocol: 'openai-chat',
             models: [{ id: 'm', name: 'M', piApi }],
           },
         },
@@ -248,6 +269,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       runtimes: {
         pi: {
           baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M', piApi: 'claude-v1' }],
         },
       },
@@ -271,6 +293,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       runtimes: {
         [agent]: {
           baseUrl: 'https://example.com/v1',
+          ...(agent === 'pi' ? { wireProtocol: 'openai-chat' } : {}),
           models: [{ id: 'reasoner', name: 'Reasoner', ...model }],
         },
       },
@@ -529,13 +552,14 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       },
     };
     expect((await updateCustomProvider('official-pi-edited', defaultProtocolRoundTrip))
-      ?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+      ?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+    await updateCustomProvider('official-pi-edited', original);
     expect((await updateCustomProvider('official-pi-edited', {
-      ...defaultProtocolRoundTrip,
+      ...original,
       runtimes: {
-        ...defaultProtocolRoundTrip.runtimes,
+        ...original.runtimes,
         pi: {
-          ...defaultProtocolRoundTrip.runtimes.pi!,
+          ...original.runtimes.pi!,
           wireProtocol: 'anthropic-messages',
         },
       },
@@ -781,6 +805,35 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     );
 
     expect((await getCustomProvider('legacy-loopback'))?.auth).toEqual({ method: 'none' });
+  });
+
+  it('materializes the historical Pi Chat default only when reading legacy records', async () => {
+    mountDb();
+    const storedRuntimes = JSON.stringify({
+      pi: {
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        models: [
+          { id: 'inherited', name: 'Inherited' },
+          { id: 'explicit', name: 'Explicit', piApi: 'openai-responses' },
+        ],
+      },
+    });
+    raw!.prepare(
+      `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 0, 1, 1)`,
+    ).run('legacy-pi', 'Legacy Pi', storedRuntimes);
+
+    const loaded = await getCustomProvider('legacy-pi');
+    expect(loaded?.runtimes.pi).toMatchObject({
+      wireProtocol: 'openai-chat',
+      models: [
+        { id: 'inherited', name: 'Inherited' },
+        { id: 'explicit', name: 'Explicit', piApi: 'openai-responses' },
+      ],
+    });
+    expect(raw!.prepare('SELECT runtimes FROM custom_providers WHERE id = ?').get('legacy-pi'))
+      .toEqual({ runtimes: storedRuntimes });
   });
 
   it('round-trips a validated exact inference request path', async () => {

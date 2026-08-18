@@ -63,6 +63,9 @@ if (!xaiRaw) {
   // 仓内目录文件被误删 xai 段属于构建期错误,越早炸越好(import 期即失败)。
   throw new Error('[model-providers] catalog/providers.json missing builtin provider "xai"');
 }
+if (!xaiRaw.routing.pi?.wireProtocol) {
+  throw new Error('[model-providers] catalog/providers.json missing explicit xai Pi protocol');
+}
 const xaiFromCatalog = withVerifiedStaticWindows(xaiRaw);
 const withoutPiApi = (model: CatalogModel): CatalogModel => {
   if (model.piApi === undefined) return model;
@@ -81,7 +84,7 @@ const XAI_PROVIDER: Provider = {
     : [...xaiFromCatalog.agents, 'pi'],
   routing: {
     ...xaiFromCatalog.routing,
-    pi: xaiFromCatalog.routing.pi ?? xaiFromCatalog.routing['claude-code'],
+    pi: xaiFromCatalog.routing.pi,
   },
   models: {
     ...xaiFromCatalog.models,
@@ -121,6 +124,7 @@ const ANTHROPIC_PROVIDER: Provider = {
     },
     pi: {
       upstream: 'https://api.anthropic.com',
+      wireProtocol: 'anthropic-messages',
       authStrategy: 'provider-oauth-header',
       headerOverride: {
         'anthropic-version': '2023-06-01',
@@ -158,6 +162,7 @@ const OPENAI_PROVIDER: Provider = {
     },
     pi: {
       upstream: 'https://chatgpt.com/backend-api/codex',
+      wireProtocol: 'anthropic-messages',
       authStrategy: 'oauth-passthrough',
       modelPrefixes: ['chatgpt/'],
     },

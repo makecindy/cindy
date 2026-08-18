@@ -1013,6 +1013,36 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 (不变量 A,含三种错误修法各自的反例)、
 `apps/desktop/src/renderer/__tests__/chatClickabilitySignal.test.ts`(源码级守卫)。
 
+### 14.6 Icon-only Controls and Tooltips
+
+- **Delivery contract for new and modified icon-only controls:** every icon-only interactive
+  control has two labels: a localized accessible name (`aria-label`) and a visible `Tip`.
+  Familiar glyphs, dense lists, and actions that only appear on hover are not exemptions: if
+  the control has no persistent text label, users must not have to guess what it does.
+- **Describe the action that will happen next.** Stateful controls say `Expand Sidebar` or
+  `Collapse Sidebar`, not the vague `Toggle Sidebar`; their tooltip and accessible name
+  change together. A disabled icon-only control explains why it is unavailable.
+- **Do not duplicate persistent labels.** A button that already contains a visible text
+  label normally does not need a tooltip. Decorative icons are silent and are not made
+  focusable.
+- **Tooltips supplement; they do not carry risk alone.** Destructive consequences,
+  permission requests, and other information needed before acting must remain visible in
+  the interface or confirmation flow.
+- **Desktop action controls use the shared Radix `Tip`, not native `title`.** Native `title`
+  remains acceptable for truncated persistent text, marked explicitly where the element is
+  interactive. Shared icon-button primitives own this behavior wherever possible.
+- **Windows system window controls are the narrow platform exception.** The shared
+  `WindowControls` minimize, maximize / restore, and close buttons follow familiar Windows window
+  chrome and do not require a visible `Tip`; they still expose localized accessible names. The
+  maximize toggle uses a state-independent name because the Renderer does not own the native
+  maximized state. This exception does not apply to Cindy-specific title-bar actions or panel
+  controls.
+- **Migration is incremental and guarded by surface.** Recursive regression coverage currently
+  enforces this contract for app chrome, the title bar, the left sidebar and session list, and
+  the right sidebar (`components/layout`, `components/sidebar`, `components/title-bar`,
+  `features/cc-agent/sidebar`, and `features/right-sidebar`). Legacy feature-local controls
+  outside those roots migrate when touched; their existence is not an exemption for new work.
+
 ## 15. CINDY Skin Family(品牌化可选 family)
 
 > This section records the CINDY skin family; it does **not** rewrite the §1–7 default-skin rules. Values were finalized from design-stage working files (`skin-docs/10-specs/` desktop, `skin-docs/30-mobile/` mobile errata — **not in this repo**, same status as the §16 login working files) plus the user's final sign-off of 2026-07-18. Zero discretion at implementation time: within the repo, the authoritative encodings are the theme files (`cindy-light.ts` / `cindy-dark.ts`), `cindyDecisionData.ts`, and the frozen tests — this section is their prose summary.

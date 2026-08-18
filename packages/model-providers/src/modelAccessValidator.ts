@@ -188,8 +188,10 @@ function isModelAccessWireProtocol(value: unknown): boolean {
   return typeof value === 'string' && MODEL_ACCESS_WIRE_PROTOCOLS.includes(value as never);
 }
 
-function expectedWireProtocol(agent: ModelAgent): (typeof MODEL_ACCESS_WIRE_PROTOCOLS)[number] {
-  return agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+function acceptsWireProtocol(agent: ModelAgent, protocol: unknown): boolean {
+  if (!isModelAccessWireProtocol(protocol)) return false;
+  if (agent === 'pi') return true;
+  return protocol === (agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses');
 }
 
 function isModelEffort(value: unknown): value is ModelEffort {
@@ -578,8 +580,8 @@ function modelEntryError(
         if (!isModelAccessWireProtocol(override.wireProtocol)) {
           return `${path}.perAgent.${agent}.wireProtocol must be a supported wire protocol`;
         }
-        const expected = expectedWireProtocol(agent as ModelAgent);
-        if (override.wireProtocol !== expected) {
+        if (!acceptsWireProtocol(agent as ModelAgent, override.wireProtocol)) {
+          const expected = agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
           return `${path}.perAgent.${agent}.wireProtocol must be ${expected}`;
         }
       }

@@ -209,6 +209,7 @@ export async function installCustomMarketPlugin(input: {
           ...(input.permissionBaselineManifest
             ? { permissionBaselineManifest: input.permissionBaselineManifest }
             : {}),
+          ...(input.expected ? { reviewedManifest: input.expected } : {}),
           ...(input.expectedInstalledApproval
             ? { expectedInstalledApproval: input.expectedInstalledApproval }
             : {}),

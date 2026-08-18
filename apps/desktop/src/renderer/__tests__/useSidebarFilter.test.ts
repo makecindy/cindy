@@ -45,6 +45,7 @@ import {
   nextProjectsAfterToggle,
   nextSortByAfterGroupByChange,
   includeProjectInFilter,
+  projectFilterIncludes,
   removeProjectsFromFilter,
   gcProjectsAgainstActive,
   normalizeManualProjectOrder,
@@ -470,6 +471,25 @@ describe('nextProjectsAfterToggle', () => {
     expect(prev).toEqual(snapshot);
   });
 
+  it('removes every equivalent Windows local key in one toggle', () => {
+    const prev: FilterProjects = [
+      'local:C:/Workspace/Cindy',
+      'local:c:/workspace/cindy',
+      'remote:host:C:/Workspace/Cindy',
+    ];
+
+    expect(nextProjectsAfterToggle(prev, 'local:c:/WORKSPACE/CINDY', 'win32')).toEqual([
+      'remote:host:C:/Workspace/Cindy',
+    ]);
+    expect(
+      nextProjectsAfterToggle(
+        ['local:C:/Workspace/Cindy', 'local:c:/workspace/cindy'],
+        'local:c:/WORKSPACE/CINDY',
+        'win32',
+      ),
+    ).toBe('all');
+  });
+
   it("toggles the dialogue sentinel without treating it as a project path", () => {
     expect(nextProjectsAfterToggle('all', DIALOGUE_FILTER_KEY)).toEqual([DIALOGUE_FILTER_KEY]);
     expect(nextProjectsAfterToggle([DIALOGUE_FILTER_KEY], 'local:/proj-a')).toEqual([
@@ -496,6 +516,34 @@ describe('includeProjectInFilter', () => {
   it('is idempotent when the project is already included', () => {
     const prev: FilterProjects = ['local:/a', 'local:/b'];
     expect(includeProjectInFilter(prev, '/a')).toBe(prev);
+  });
+
+  it('treats equivalent Windows local paths as the same filter entry', () => {
+    const prev: FilterProjects = ['local:C:/Workspace/Cindy'];
+    expect(includeProjectInFilter(prev, 'local:c:/workspace/cindy', 'win32')).toBe(prev);
+    expect(nextProjectsAfterToggle(prev, 'local:c:/workspace/cindy', 'win32')).toBe('all');
+  });
+
+  it('collapses stored Windows aliases when ensuring the project is included', () => {
+    const prev: FilterProjects = [
+      'local:C:/Workspace/Cindy',
+      'local:c:/workspace/cindy',
+      'remote:host:C:/Workspace/Cindy',
+    ];
+
+    expect(includeProjectInFilter(prev, 'local:c:/WORKSPACE/CINDY', 'win32')).toEqual([
+      'local:C:/Workspace/Cindy',
+      'remote:host:C:/Workspace/Cindy',
+    ]);
+  });
+});
+
+describe('projectFilterIncludes', () => {
+  it('matches Windows local project keys case-insensitively without folding remote keys', () => {
+    const projects = new Set(['local:C:/Workspace/Cindy', 'remote:host:C:/Workspace/Cindy']);
+
+    expect(projectFilterIncludes(projects, 'local:c:/workspace/cindy', 'win32')).toBe(true);
+    expect(projectFilterIncludes(projects, 'remote:host:c:/workspace/cindy', 'win32')).toBe(false);
   });
 });
 
@@ -611,6 +659,11 @@ describe('gcProjectsAgainstActive', () => {
 
   it('keeps dialogue-only filters even when no projects remain', () => {
     expect(gcProjectsAgainstActive([DIALOGUE_FILTER_KEY], [])).toEqual([DIALOGUE_FILTER_KEY]);
+  });
+
+  it('keeps Windows local projects when the active path only differs by case', () => {
+    const prev: FilterProjects = ['local:C:/Workspace/Cindy'];
+    expect(gcProjectsAgainstActive(prev, ['local:c:/workspace/cindy'], 'win32')).toBe(prev);
   });
 });
 

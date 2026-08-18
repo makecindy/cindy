@@ -1414,6 +1414,16 @@
           "piChatHelp": "Pi connects directly to the provider's OpenAI-compatible Chat Completions API.",
           "piAnthropicHelp": "Pi connects directly to the provider's Anthropic Messages API."
         },
+        "modelProtocol": {
+          "label": "Model protocol",
+          "inherit": "Inherit default",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "Inherit uses the provider protocol above. Override only when this model needs a different protocol.",
+          "ariaLabel": "Model protocol for {{model}}"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
@@ -1452,7 +1462,8 @@
           "button": "Test connection",
           "testing": "Testing…",
           "ok": "Connected ({{ms}} ms)",
-          "needFields": "Fill in the base URL and at least one model ID first"
+          "needFields": "Fill in the base URL and at least one model ID first",
+          "unsupportedProtocol": "This model protocol is not supported by connection testing"
         },
         "fetch": {
           "button": "Fetch model list",
@@ -2351,10 +2362,10 @@
     },
     "subagentModels": {
       "title": "Subagents",
-      "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
-      "unspecified": "Not specified (use default behavior)",
-      "hint": "Claude Code subagents only support choosing a model; reasoning effort follows Claude Code's native behavior. Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
-      "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
+      "description": "Choose the Subagent model for Claude Code and Codex.",
+      "unspecified": "Use default setting",
+      "hint": "Claude Code changes apply to new sessions. Codex changes apply automatically when it is idle.",
+      "codexV2ModelHint": "Claude Code uses the selected model as its default. All local Codex Subagents are locked to the selected model and reasoning effort.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {
         "title": "Codex subagent guardrails",
@@ -2380,13 +2391,13 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code automatically compacts context.",
+      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code only",
+        "badge": "Claude Code and Pi",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
-        "hint": "Automatically compacts when context usage reaches this percentage, equivalent to running /compact automatically. Changes take effect immediately and are checked after the next chat turn ends.",
-        "sliderAria": "Adjust Claude Code auto-compaction trigger threshold"
+        "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
+        "sliderAria": "Adjust auto-compaction trigger threshold"
       }
     },
     "personalization": {
@@ -3236,6 +3247,311 @@
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
       "editAria": "Change shortcut for {{name}}",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "Previous task",
+            "description": "Open the task above the current one in the sidebar"
+          },
+          "session.selectNext": {
+            "name": "Next task",
+            "description": "Open the task below the current one in the sidebar"
+          },
+          "toggleRightSidebar": {
+            "name": "Toggle right sidebar",
+            "description": "Show or hide the right sidebar"
+          },
+          "composer.toggleFastMode": {
+            "name": "Toggle Fast mode",
+            "description": "Turn Fast mode on or off in the current composer"
+          },
+          "approval.approve": {
+            "name": "Approve request",
+            "description": "Approve the active request"
+          },
+          "approval.decline": {
+            "name": "Decline request",
+            "description": "Decline the active request"
+          },
+          "forkTask": {
+            "name": "Continue in new task",
+            "description": "Create a new task from the current one"
+          },
+          "composer.submit": {
+            "name": "Send message",
+            "description": "Send the current composer message"
+          },
+          "feedback": {
+            "name": "Send feedback",
+            "description": "Send product feedback to the Cindy team"
+          },
+          "toggleTerminal": {
+            "name": "Open terminal",
+            "description": "Open the terminal panel"
+          },
+          "copyConversationMarkdown": {
+            "name": "Copy as Markdown",
+            "description": "Copy the current task as Markdown",
+            "copied": "Copied the task as Markdown",
+            "empty": "This task has nothing to copy yet",
+            "failed": "Could not copy the task"
+          },
+          "archiveTask": {
+            "name": "Archive task",
+            "description": "Archive the current task"
+          },
+          "newTask": {
+            "name": "New task",
+            "description": "Start a new task"
+          },
+          "openBrowserTab": {
+            "name": "Open browser tab",
+            "description": "Open a new browser tab"
+          },
+          "toggleTaskPin": {
+            "name": "Toggle pin",
+            "description": "Pin or unpin the current task"
+          },
+          "toggleReviewTab": {
+            "name": "Toggle review",
+            "description": "Show or hide review for the current task"
+          },
+          "composer.addPhotos": {
+            "name": "Add photos",
+            "description": "Add photos to the composer"
+          },
+          "settings": {
+            "name": "Settings",
+            "description": "Open Cindy settings"
+          },
+          "manageTasks": {
+            "name": "Manage scheduled tasks",
+            "description": "Create or manage scheduled tasks"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "Increase reasoning effort",
+            "description": "Raise the reasoning effort for the current composer"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "Decrease reasoning effort",
+            "description": "Lower the reasoning effort for the current composer"
+          },
+          "openFolder": {
+            "name": "Open folder",
+            "description": "Add a local project to Cindy"
+          },
+          "composer.addFiles": {
+            "name": "Attach files and folders",
+            "description": "Attach files and folders to the composer"
+          },
+          "openSkills": {
+            "name": "Go to skills",
+            "description": "Browse installed and recommended skills"
+          },
+          "composer.togglePlanMode": {
+            "name": "Toggle plan mode",
+            "description": "Turn plan mode on or off in the current composer"
+          },
+          "navigateForward": {
+            "name": "Forward",
+            "description": "Go forward in navigation history"
+          },
+          "toggleSidebar": {
+            "name": "Toggle sidebar",
+            "description": "Show or hide the sidebar"
+          },
+          "navigateBack": {
+            "name": "Back",
+            "description": "Go back in navigation history"
+          },
+          "composer.focus": {
+            "name": "Focus composer",
+            "description": "Move the cursor into the composer"
+          },
+          "conversation.scrollUp": {
+            "name": "Scroll up",
+            "description": "Scroll the conversation up"
+          },
+          "conversation.scrollDown": {
+            "name": "Scroll down",
+            "description": "Scroll the conversation down"
+          },
+          "conversation.scrollBottom": {
+            "name": "Jump to latest",
+            "description": "Scroll to the latest message"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
+        "openAria": "Open Work Louder Codex Micro settings",
+        "back": "Back to keyboard shortcuts",
+        "retry": "Try again",
+        "device": {
+          "title": "Device",
+          "firmware": "Firmware {{version}}",
+          "inputMonitoring": {
+            "label": "Input Monitoring",
+            "granted": "macOS allows Cindy to receive keyboard input.",
+            "denied": "macOS is blocking keyboard input. Allow Cindy in System Settings.",
+            "unknown": "Cindy has not checked the macOS Input Monitoring permission yet.",
+            "not-required": "Input Monitoring is not required on this platform.",
+            "open": "Open System Settings"
+          }
+        },
+        "errors": {
+          "load": "Failed to load Codex Micro settings",
+          "save": "Failed to save Codex Micro settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "error": "Connection problem",
+            "unavailable": "SDK unavailable"
+          },
+          "descriptions": {
+            "connecting": "Cindy is starting the Work Louder device service.",
+            "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+            "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
+            "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
+            "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+            "connection-timeout": "The Work Louder service did not respond in time. Cindy will retry automatically.",
+            "connection-failed": "The Work Louder service failed to start. Cindy will retry automatically.",
+            "permission-required": "macOS denied keyboard access. Allow Cindy in Input Monitoring, then try again.",
+            "sdk-unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy."
+          }
+        },
+        "lighting": {
+          "title": "Lighting",
+          "brightness": {
+            "label": "Brightness",
+            "description": "Adjust the overall brightness of the key, task, and ambient lighting.",
+            "aria": "Adjust Codex Micro lighting brightness"
+          },
+          "autoDim": {
+            "label": "Auto-dim",
+            "description": "Turn lighting off after inactivity and restore it when the keyboard is used or a task changes state.",
+            "aria": "Choose Codex Micro auto-dim delay",
+            "options": {
+              "off": "Off",
+              "30-seconds": "30 seconds",
+              "1-minute": "1 minute",
+              "3-minutes": "3 minutes",
+              "10-minutes": "10 minutes",
+              "30-minutes": "30 minutes",
+              "1-hour": "1 hour"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "What this agent key opens when the source is set to custom.",
+          "title": "Agent keys",
+          "source": {
+            "label": "Task order",
+            "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+            "descriptions": {
+              "sidebar": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+              "last-sent": "AG00–AG05 follow the six tasks you last sent a message in.",
+              "priority": "AG00–AG05 follow the first six priority tasks.",
+              "custom": "AG00–AG05 each open the task you assign."
+            },
+            "value": "Sidebar order",
+            "options": {
+              "sidebar": "Sidebar order",
+              "last-sent": "Recent tasks",
+              "priority": "Priority",
+              "custom": "Custom"
+            }
+          },
+          "singleTap": {
+            "label": "Focus Cindy with a single tap",
+            "description": "When enabled, one tap opens the task and brings Cindy forward. When disabled, one tap still switches tasks in the background; a second tap within 350 ms brings Cindy forward.",
+            "aria": "Focus Cindy with a single Agent-key tap"
+          },
+          "newTask": "New task",
+          "slot": "Recent {{position}}",
+          "slotAria": "AG{{slot}} opens recent task {{position}}"
+        },
+        "commandKeys": {
+          "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
+          "builtIn": "Use the keycap's built-in action",
+          "unmapped": "This keycap has no action"
+        },
+        "microphone": {
+          "title": "Microphone",
+          "separate": {
+            "label": "Use separate microphone keys",
+            "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
+          }
+        },
+        "analog": {
+          "title": "Joystick",
+          "description": "Choose the action for each joystick direction.",
+          "directions": {
+            "up": "Up",
+            "right": "Right",
+            "down": "Down",
+            "left": "Left"
+          }
+        },
+        "encoder": {
+          "title": "Encoder",
+          "mode": {
+            "label": "Encoder mode",
+            "description": "Choose what turning and pressing the encoder controls.",
+            "options": {
+              "session-switch": "Switch tasks",
+              "composer-navigation": "Navigate the composer",
+              "reasoning": "Reasoning effort",
+              "conversation-scroll": "Scroll the conversation",
+              "custom": "Custom"
+            }
+          },
+          "gestures": {
+            "left": "Turn left",
+            "right": "Turn right",
+            "click": "Press",
+            "longPress": "Long press"
+          },
+          "customDescription": "Choose the action for this encoder gesture."
+        },
+        "actions": {
+          "choose": "Choose an action",
+          "none": "No action",
+          "tasks": "Tasks",
+          "commands": "Commands",
+          "keycaps": "Keycaps",
+          "skills": "Skills"
+        },
+        "layout": {
+          "editor": {
+            "done": "Done",
+            "title": "Edit keycap",
+            "description": "Choose the keycap shown on this physical key.",
+            "searchPlaceholder": "Search keycaps",
+            "close": "Close keycap editor",
+            "cancel": "Cancel",
+            "save": "Save",
+            "assignedShortcut": "Assigned action",
+            "selectKeycap": "Select keycap {{keycap}}"
+          },
+          "keyboard": {
+            "indicator": "Status lights",
+            "title": "Layout",
+            "description": "Click a keycap to choose its label and built-in action.",
+            "analogStick": "Joystick",
+            "encoder": "Encoder"
+          },
+          "reset": {
+            "title": "Reset key layout",
+            "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",
+            "button": "Reset layout"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "Failed to save shortcut settings",
         "notBindable": "This key combination cannot be used",
@@ -4541,7 +4857,7 @@
   "titleBar": {
     "menu": "Menu",
     "minimize": "Minimize",
-    "maximize": "Maximize",
+    "maximizeOrRestore": "Maximize or Restore Window",
     "close": "Close",
     "menuItems": {
       "settings": "Settings",
@@ -4570,6 +4886,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "Toggle sidebar",
+    "collapseSidebar": "Collapse Sidebar",
+    "expandSidebar": "Expand Sidebar",
     "collapsePanel": "Collapse",
     "expandPanel": "Expand"
   },
@@ -4784,6 +5102,8 @@
       "rotateDevice": "Rotate Device",
       "lockScreen": "Lock Screen",
       "unlockScreen": "Unlock Screen",
+      "controlsUnavailable": "Simulator controls are temporarily unavailable",
+      "enterTextBeforeSending": "Enter text before sending",
       "agentBusyTitle": "Agent Using This Device",
       "agentBusyDescription": "Manual input is paused until the current Agent action finishes.",
       "takeControl": "Take Control",
@@ -4860,19 +5180,24 @@
       "urlPlaceholder": "Enter URL or search",
       "goBack": "Back",
       "goForward": "Forward",
+      "goBackUnavailable": "No previous page",
+      "goForwardUnavailable": "No next page",
       "reload": "Reload",
       "stop": "Stop loading",
       "screenshot": "Screenshot",
       "screenshotCopied": "Screenshot copied to clipboard",
       "screenshotFailed": "Screenshot failed",
       "comment": "Comment on the page",
+      "exitCommentMode": "Exit comment mode",
       "commentModeHint": "Click an element or Shift-drag an area · Cmd/Ctrl-click to add instantly · Esc to exit",
       "commentPlaceholder": "Describe the change you want here…",
       "commentSubmit": "Add comment",
       "commentCancel": "Cancel",
       "commentAdded": "Comment added to the chat input",
       "commentFailed": "Failed to add comment",
-      "styleTweaks": "Style tweaks",
+      "styleTweaksExpand": "Show style controls",
+      "styleTweaksCollapse": "Hide style controls",
+      "styleTweaksSubmitting": "Submitting comment…",
       "styleReset": "Reset",
       "styleTextLabel": "Text",
       "moreTools": "More",
@@ -5268,6 +5593,7 @@
       "completed": "Completed",
       "empty": "No background tasks in this session yet",
       "stop": "Stop",
+      "stopping": "Stopping…",
       "back": "Back",
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
@@ -5645,7 +5971,8 @@
         "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
-        "subscriptionEstimate": "Value estimate, not an actual bill"
+        "subscriptionEstimate": "Value estimate, not an actual bill",
+        "discountedVsStandard": "Discounted · {{percent}}% off standard"
       },
       "trigger": {
         "placeholder": "Select model",
@@ -5700,6 +6027,28 @@
       },
       "agentSwitch": {
         "hint": "Pick the model to use after switching to {{agent}}"
+      },
+      "unified": {
+        "railFavorites": "Favorites",
+        "railAll": "All",
+        "favoritesGroup": "Favorites",
+        "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
+        "layoutBadge": "Try style B",
+        "layoutClassic": "Back to style A",
+        "layoutTryUnified": "Try the new picker",
+        "layoutOriginal": "Back to old picker",
+        "addFavorite": "Save to favorites",
+        "removeFavorite": "Remove from favorites",
+        "favoriteConfig": "Saved setup",
+        "recommended": "Recommended",
+        "recommendedConfig": "Recommended setup",
+        "customized": "Customized",
+        "reset": "Reset to recommended",
+        "fastTip": "Fast · priority speed · uses more quota",
+        "effortEndFast": "Faster",
+        "effortEndSmart": "Smarter",
+        "railSameEngine": "{{agent}} only",
+        "crossEngineWarning": "Switching engines rebuilds context and may lose content"
       }
     },
     "permissionSelector": {
@@ -7107,6 +7456,7 @@
       "scopeLocalSessions": "This device’s sessions",
       "dialogues": "Chat",
       "newDialogue": "New session",
+      "creationInProgress": "Creation is already in progress",
       "dialoguesToggleExpand": "Expand Chat",
       "dialoguesToggleCollapse": "Collapse Chat",
       "loadingDialogues": "Loading…",
@@ -7226,6 +7576,8 @@
         "hiddenCount": "{{count}} hidden",
         "stopped": "Stopped",
         "aria": "{{title}} automation sessions, {{count}} runs, {{attention}} pending",
+        "expand": "Expand {{title}} runs",
+        "collapse": "Collapse {{title}} runs",
         "menu": {
           "runNow": "Run now",
           "more": "More actions",
@@ -7295,6 +7647,7 @@
         "delete": "Delete selected sessions",
         "clear": "Clear selection",
         "archiveNone": "No selected sessions can be archived",
+        "actionInProgress": "Another action is already in progress",
         "skipRunning": "{{count}} running",
         "skipAttached": "{{count}} remotely controlled",
         "skipNotActive": "{{count}} not active",
@@ -8117,6 +8470,12 @@
       }
     },
     "builtinTemplates": {
+      "schedule": {
+        "daily": "Daily at {{time}}",
+        "weekdays": "Weekdays at {{time}}",
+        "weekly": "{{weekday}} at {{time}}",
+        "monthly": "Monthly on day {{day}} at {{time}}"
+      },
       "categories": {
         "dev-automation": "Development automation",
         "info-radar": "Information radar",
