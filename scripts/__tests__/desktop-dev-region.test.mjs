@@ -339,28 +339,10 @@ test("worktree dev launch falls back to the default sandbox for invalid names", 
 
 // ── restart 一跳标记 / 裸 preserve-running（review-pr P1，PR #2640）─────────────
 
-test("restart marker is one-hop: stripped from the Electron env but honored during launch decision", () => {
-  // 判定在 dev-remote-env 剥离 XDT_RESTART_MANAGED 后用剥离后的 env 调用：
-  // - 剥离后无标记 → worktree 裸启动命中自动隔离（#2635 防护恢复）
-  // - restart --passive 仍透传 XDT_SCHEDULER_PASSIVE=1 → 共享意图被识别不干预
-  const stripped = {};
-  assert.deepEqual(
-    resolveWorktreeIsolationFromCwd({
-      cwd: worktreeCwd("epic-thompson"),
-      argv: [],
-      env: stripped,
-    }),
-    { worktreeName: "epic-thompson" },
-  );
-  assert.equal(
-    resolveWorktreeIsolationFromCwd({
-      cwd: worktreeCwd("epic-thompson"),
-      argv: [],
-      env: { ...stripped, XDT_SCHEDULER_PASSIVE: "1" },
-    }),
-    null,
-  );
-  // XDT_RESTART_MANAGED 存在时（透传进 Electron 前）判定仍识别 restart 链路
+test("restart marker is one-hop: honored during launch decision but stripped from the Electron env", () => {
+  // 判定必须用含 XDT_RESTART_MANAGED 的环境：restart 链路（无参）靠它识别「受 restart
+  // 管理」而免于自动隔离（无参=共库+正常调度契约，review-pr P2 指正）。标记的删除
+  // 发生在 dev-remote-env 判定之后、传给 Electron 的 env 上（防 agent 子进程继承）。
   assert.equal(
     resolveWorktreeIsolationFromCwd({
       cwd: worktreeCwd("epic-thompson"),
@@ -368,6 +350,24 @@ test("restart marker is one-hop: stripped from the Electron env but honored duri
       env: { XDT_RESTART_MANAGED: "1" },
     }),
     null,
+  );
+  // restart --passive 透传 XDT_SCHEDULER_PASSIVE=1 → 共享意图被识别不干预
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_RESTART_MANAGED: "1", XDT_SCHEDULER_PASSIVE: "1" },
+    }),
+    null,
+  );
+  // 无标记（agent 子进程场景）→ worktree 裸启动命中自动隔离（#2635 防护恢复）
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
   );
 });
 
