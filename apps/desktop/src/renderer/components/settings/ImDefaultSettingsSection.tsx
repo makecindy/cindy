@@ -353,6 +353,8 @@ export function ImDefaultSettingsSection({
             side="bottom"
             disabled={pending}
             ariaContext={t('settings.imBot.defaults.agentLabel')}
+            // kimi-code 运行时尚未注册(Phase 2),IM 渠道默认路由先隐藏;注册后移除此行。
+            hiddenVendors={['kimi']}
             onChange={(next) => changeAgent(agentKindOfVendor(next))}
           />
         </div>

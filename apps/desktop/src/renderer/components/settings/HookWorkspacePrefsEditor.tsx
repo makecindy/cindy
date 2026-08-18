@@ -578,6 +578,9 @@ export function WorkspacePrefsEditor({
           // 全部是同一个名字,行与行无法分辨(codex review)。
           ariaContext={`${t('settings.tina.prefs.agentLabel')} · ${alias}`}
           disabled={disabled}
+          // kimi-code 运行时尚未注册(Phase 2):编辑器 capsByAgent 无对应槽位,
+          // 先隐藏;注册后移除此行。
+          hiddenVendors={['kimi']}
           // 当前值可能是**继承值**(prefs.agentKind 为 null / 过期未知值时显示解析出的
           // 默认 agent),重选它 = 钉成显式偏好 —— 与模型字段的 reselectEmitsChange 同语义;
           // 显式同值由下方 nextAgent === prefs.agentKind 去重,不产生空写。

@@ -154,6 +154,8 @@ export function GhostErrandPrefs({
           dense
           width={200}
           ariaLabel={t('settings.ghosts.detail.errandPrefs.agent')}
+          // errand 配置为三值体系(cc/codex/pi),不含 kimi;隐藏避免误选后被归一吞成 cc。
+          hiddenVendors={['kimi']}
           onChange={(next) => {
             if (next === vendor && config.agentKind !== undefined) return;
             // 换 agent 连带清掉模型组(跨 agent 的模型 id 互不通用);点选即把该组
