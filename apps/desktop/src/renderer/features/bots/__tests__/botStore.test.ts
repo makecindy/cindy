@@ -28,6 +28,15 @@ describe('bot profile store', () => {
     expect(bot.canonicalSessionId).toBeUndefined();
   });
 
+  it('creates new Bots hands-on by default, and never with memory turned off', () => {
+    const bot = addBotProfile({ name: 'Fresh teammate', channel: 'local', description: '' });
+    createdIds.push(bot.id);
+
+    // 产品裁决 2026-08-18:默认放手做;记忆恒开。
+    expect(bot.capabilities.permissions).toBe('trusted');
+    expect(bot.capabilities.memory).toBe(true);
+  });
+
   it('replaces the optimistic Bot with the authoritative profile returned by main', async () => {
     const create = vi.fn(async (input: { id: string }) => ({
       id: input.id,
@@ -81,6 +90,9 @@ describe('bot profile store', () => {
       expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({
         identitySource: '# SOUL\nYou are the real Bot identity.',
       });
+      // 新建默认改成 trusted 之后,**读**到的 profile 仍以 main 的值为准:
+      // 已存在的伙伴不会因为默认值变了就被悄悄升成信任。
+      expect(bot.capabilities.permissions).toBe('ask');
       expect(create).toHaveBeenCalledWith(
         expect.objectContaining({
           identitySource: '# SOUL\nPersistent release steward.',

@@ -2,6 +2,7 @@ import type { BotAvatarHue } from './BotAvatar';
 // Imported from the leaf module, not from BotAvatar.tsx: this file is also loaded
 // by plain-Node tooling that cannot resolve the bundled portrait asset.
 import { CINDY_OFFICIAL_AVATAR } from './botAvatarIdentity';
+import { NEW_BOT_DEFAULT_PERMISSIONS } from './botCapabilityDefaults';
 import type { BotCapabilities } from './botStore';
 
 export type BotTemplateId = 'control' | 'pr-steward' | 'assistant';
@@ -42,7 +43,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
       harness: 'claude',
       automation: true,
       sessionControlMode: 'coordinate',
-      permissions: 'ask',
+      permissions: NEW_BOT_DEFAULT_PERMISSIONS,
     },
     autoSubscribeToTaskEvents: true,
   },
@@ -61,7 +62,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
       harness: 'claude',
       automation: true,
       sessionControlMode: 'coordinate',
-      permissions: 'ask',
+      permissions: NEW_BOT_DEFAULT_PERMISSIONS,
     },
     autoSubscribeToTaskEvents: true,
   },
@@ -81,7 +82,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
       harness: 'claude',
       automation: false,
       sessionControlMode: 'none',
-      permissions: 'ask',
+      permissions: NEW_BOT_DEFAULT_PERMISSIONS,
     },
     autoSubscribeToTaskEvents: false,
   },

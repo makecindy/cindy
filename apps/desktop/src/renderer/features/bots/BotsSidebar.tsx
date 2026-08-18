@@ -17,6 +17,8 @@ import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-co
 import type { BotHealthStatus } from '../../../shared/botLifecycle';
 import type { BotInboxItemView } from '../../../shared/botSessionEvents';
 import { BotAvatar } from './BotAvatar';
+import { BotTrustedBadge } from './BotTrustedBadge';
+import { isBotTrusted } from './botCapabilityDefaults';
 import {
   botListSubtitle,
   formatBotListTimestamp,
@@ -257,6 +259,11 @@ function BotsSidebarContent() {
                         >
                           {bot.name}
                         </span>
+                        {/* 放手做的伙伴带一个细小的 ⚠(icon-only,与既有状态徽标同一
+                            口径);这一行已经是按钮,所以这里只用不可点的标记形态。 */}
+                        {isBotTrusted(bot.capabilities) ? (
+                          <BotTrustedBadge className="self-center" />
+                        ) : null}
                         {timestamp ? (
                           <span className={cn('shrink-0 text-10', mutedClass)}>
                             {timestamp}

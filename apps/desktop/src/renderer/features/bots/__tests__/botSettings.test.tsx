@@ -260,7 +260,9 @@ describe('Bot settings nav grouping', () => {
     expect(screen.getByTestId('bot-route-settings')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.capabilities' }));
-    expect(screen.getByTestId('bot-capability-settings')).toBeTruthy();
+    // 能力 tab 现在是人话芯片墙,技术明细面已经搬去高级。
+    expect(screen.getByText('bots.capabilityChips.title')).toBeTruthy();
+    expect(screen.queryByTestId('bot-capability-settings')).toBeNull();
     expect(screen.queryByTestId('bot-route-settings')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.automation' }));
@@ -301,8 +303,19 @@ describe('Bot settings nav grouping', () => {
     expect(
       screen.getByRole('tab', { name: 'bots.settingsNav.capabilities' }).getAttribute('aria-selected'),
     ).toBe('true');
-    expect(screen.getByTestId('bot-capability-settings')).toBeTruthy();
+    expect(screen.getByText('bots.capabilityChips.title')).toBeTruthy();
+    // harness / model / 明细勾选是专家逃生口,不再出现在能力页。
+    expect(screen.queryByTestId('model-selector')).toBeNull();
+    expect(screen.queryByTestId('vendor-switcher')).toBeNull();
+  });
+
+  it('moves harness, model and the raw capability pickers into Advanced', () => {
+    renderSettings({}, 'settings=1&tab=advanced');
+
+    expect(screen.getByText('bots.advancedCapabilities.title')).toBeTruthy();
     expect(screen.getByTestId('model-selector')).toBeTruthy();
+    expect(screen.getByTestId('vendor-switcher')).toBeTruthy();
+    expect(screen.getByTestId('bot-capability-settings')).toBeTruthy();
   });
 
   it('falls back to identity for an unknown ?tab= value instead of a blank panel', () => {
@@ -319,6 +332,63 @@ describe('Bot settings nav grouping', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'bots.settingsNav.channels' }));
     // No throw: the scrollTo effect runs against the (jsdom, no-op) content ref.
     expect(screen.getByTestId('bot-route-settings')).toBeTruthy();
+  });
+});
+
+describe('Bot capability chip wall', () => {
+  it('shows plain-language chips and no long-term memory switch at all', () => {
+    renderSettings({}, 'settings=1&tab=capabilities');
+
+    expect(screen.getByRole('switch', { name: 'bots.capabilityChips.act.name' })).toBeTruthy();
+    expect(
+      screen.getByRole('switch', { name: 'bots.capabilityChips.automation.name' }),
+    ).toBeTruthy();
+    // 长期记忆是伙伴的底层能力,不再有任何关闭入口。
+    expect(screen.queryByText('bots.memoryLabel')).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'bots.memoryLabel' })).toBeNull();
+  });
+
+  it('greys out a channel with no connected account and says where to connect it', () => {
+    renderSettings({}, 'settings=1&tab=capabilities');
+
+    const feishu = screen.getByRole('switch', { name: 'Feishu' }) as HTMLButtonElement;
+    expect(feishu.disabled).toBe(true);
+    expect(screen.getByText('bots.capabilityChips.channel.connectHint:{"channel":"Feishu"}'))
+      .toBeTruthy();
+  });
+
+  it('writes the automation capability straight through the chip', async () => {
+    renderSettings({}, 'settings=1&tab=capabilities');
+
+    fireEvent.click(screen.getByRole('switch', { name: 'bots.capabilityChips.automation.name' }));
+
+    // instant 档的防抖是 0ms,但仍走一次 setTimeout。
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      capabilities: expect.objectContaining({ automation: true }),
+    });
+  });
+});
+
+describe('Hands-on ⚠ badge', () => {
+  it('stays hidden while the teammate still asks before acting', () => {
+    renderSettings();
+    expect(screen.queryByRole('button', { name: 'bots.trustedBadge.label' })).toBeNull();
+  });
+
+  it('marks a trusted teammate and jumps to the hands-on chip when clicked', () => {
+    renderSettings({ capabilities: capabilities({ permissions: 'trusted' }) });
+
+    const badge = screen.getByRole('button', { name: 'bots.trustedBadge.label' });
+    fireEvent.click(badge);
+
+    expect(new URLSearchParams(mocks.currentSearch).get('tab')).toBe('capabilities');
+    const chip = screen.getByRole('switch', { name: 'bots.capabilityChips.act.name' });
+    expect(chip.getAttribute('aria-checked')).toBe('true');
+    expect(document.activeElement).toBe(chip);
   });
 });
 
@@ -371,12 +441,10 @@ describe('Bot settings autosave', () => {
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({ name: 'PR crew' });
   });
 
-  it('saves a dropdown change without waiting out the text debounce', async () => {
+  it('saves a chip toggle without waiting out the text debounce', async () => {
     renderSettings({}, 'settings=1&tab=capabilities');
 
-    fireEvent.change(screen.getByDisplayValue('bots.permissionAsk'), {
-      target: { value: 'trusted' },
-    });
+    fireEvent.click(screen.getByRole('switch', { name: 'bots.capabilityChips.act.name' }));
     await advance(0);
 
     expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);

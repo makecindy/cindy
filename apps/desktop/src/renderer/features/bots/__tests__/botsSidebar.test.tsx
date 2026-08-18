@@ -149,6 +149,18 @@ describe('BotsSidebar rows', () => {
     expect(screen.getByText('bots.list.startChat')).toBeTruthy();
   });
 
+  it('marks only the hands-on teammates with the ⚠ badge', async () => {
+    mocks.profiles = [
+      bot({ id: 'bot-asks', name: 'Asks first' }),
+      { ...bot({ id: 'bot-trusted', name: 'Hands on' }), capabilities: { permissions: 'trusted' } },
+    ];
+
+    await renderSidebar();
+
+    // icon-only,没有文字标签(既有状态徽标裁决);一行一个,不是每行都挂。
+    expect(screen.getAllByLabelText('bots.trustedBadge.label')).toHaveLength(1);
+  });
+
   it('shows a health icon only for abnormal Bots', async () => {
     mocks.profiles = [
       bot({ id: 'bot-healthy', name: 'Healthy' }),

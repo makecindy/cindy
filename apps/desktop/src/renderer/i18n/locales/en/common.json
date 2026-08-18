@@ -5743,6 +5743,34 @@
     "userContextSourceDescription": "Hermes USER.md equivalent. It is versioned separately from teammate identity and writable teammate Memory, then frozen read-only for each runtime.",
     "chooseAvatar": "Choose avatar {{avatar}}",
     "chooseAvatarColor": "Choose avatar color {{color}}",
+    "capabilityChips": {
+      "title": "What this teammate can do",
+      "description": "Turn something on and it works right away — the wiring behind each one is handled for you.",
+      "act": {
+        "name": "Take action",
+        "effect": "It carries the work out itself instead of asking you to approve every step."
+      },
+      "automation": {
+        "name": "Work on a schedule",
+        "effect": "It wakes up at the times you set and does the job without being asked."
+      },
+      "channel": {
+        "effect": "It reads and replies to your {{channel}} messages.",
+        "connectHint": "Connect a {{channel}} account in Settings first."
+      }
+    },
+    "trustedBadge": {
+      "label": "Hands-on is on: it can run actions directly."
+    },
+    "advancedCapabilities": {
+      "title": "Technical details behind the capability chips",
+      "description": "Harness, model, tools, MCP servers, skills and other-task access. Nothing here is needed for everyday use."
+    },
+    "memoryRecovery": {
+      "title": "Long-term memory is off for this teammate",
+      "description": "Memory is now always on for new teammates. This one was turned off earlier, so here is the way back.",
+      "action": "Turn memory back on"
+    },
     "capabilitiesTitle": "Capabilities",
     "capabilitiesDescription": "Each teammate task loads these real capabilities from its pinned Profile version.",
     "capabilitiesDeferred": "Capability changes create a new Profile version. The current task stays pinned until you explicitly Renew it.",

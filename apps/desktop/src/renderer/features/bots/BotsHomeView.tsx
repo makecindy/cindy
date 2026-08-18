@@ -48,6 +48,9 @@ import {
 import { AddBotDialog } from './AddBotDialog';
 import { BotAvatar, BotAvatarPicker } from './BotAvatar';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
+import { BotCapabilityChips, type BotCapabilityChipId } from './BotCapabilityChips';
+import { BotTrustedBadge } from './BotTrustedBadge';
+import { isBotTrusted } from './botCapabilityDefaults';
 import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
 import { shouldDeferCanonicalBotSessionNavigation } from './botNavigation';
@@ -92,8 +95,12 @@ export function BotSettings({
   useEffect(() => {
     contentRef.current?.scrollTo({ top: 0 });
   }, [activeTab]);
+  // 能力芯片的深链焦点。⚠ 徽标点进来时指向「动手做事」芯片,换 tab 即失效——
+  // 高亮是一次性的指路,不是常驻状态。
+  const [focusChipId, setFocusChipId] = useState<BotCapabilityChipId | null>(null);
   const handleSelectTab = useCallback(
-    (tab: BotSettingsTabId) => {
+    (tab: BotSettingsTabId, chip: BotCapabilityChipId | null = null) => {
+      setFocusChipId(chip);
       setSettingsSearchParams(
         (current) => {
           current.set('tab', tab);
@@ -451,6 +458,16 @@ export function BotSettings({
             <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
               <h1 className="text-24 font-medium text-[var(--text-primary)]">{bot.name}</h1>
               {/*
+                放手做的伙伴在名字旁挂一个细小的 ⚠:风险不靠事前门槛表达,靠事后透明。
+                点它直接落到「动手做事」芯片,收紧的路径永远只有一步。
+              */}
+              {isBotTrusted(capabilities) ? (
+                <BotTrustedBadge
+                  className="self-center"
+                  onClick={() => handleSelectTab('capabilities', 'permissions')}
+                />
+              ) : null}
+              {/*
                 自动保存的可观测状态。空闲不显示 —— 常驻的「已保存」是噪音,不是信息。
                 失败才落到下一行,并自带重试入口。
               */}
@@ -694,230 +711,31 @@ export function BotSettings({
                     <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
                   ) : null}
                 </section>
-
-                <Dialog.Root
-                  open={migrationPlan !== null}
-                  onOpenChange={(open) => {
-                    if (!open && channelBusy === null) setMigrationPlan(null);
-                  }}
-                >
-                  <Dialog.Portal>
-                    <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-                    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
-                      <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
-                        {t('bots.migration.title')}
-                      </Dialog.Title>
-                      <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                        {t('bots.migration.description')}
-                      </Dialog.Description>
-                      {migrationPlan ? (
-                        <div className="mt-4 space-y-3">
-                          <div className="rounded-xl bg-[var(--surface-chip)] p-3 text-12 text-[var(--text-secondary)]">
-                            <p className="font-medium text-[var(--text-primary)]">
-                              {channelLabel(migrationPlan.connection.kind)} ·{' '}
-                              {migrationPlan.connection.accountName ||
-                                migrationPlan.connection.accountKey}
-                            </p>
-                            <p className="mt-1">
-                              {t('bots.migration.legacyTaskCount', {
-                                count: migrationPlan.candidates.length,
-                              })}
-                            </p>
-                          </div>
-                          {migrationPlan.conflicts.length > 0 ? (
-                            <div className="rounded-xl border border-[var(--text-danger)]/30 bg-[var(--surface-chip)] p-3">
-                              <p className="text-12 font-medium text-[var(--text-danger)]">
-                                {t('bots.migration.blocked')}
-                              </p>
-                              <ul className="mt-2 list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
-                                {migrationPlan.conflicts.map((conflict, index) => (
-                                  <li key={`${conflict.code}:${conflict.sessionId ?? index}`}>
-                                    {t(`bots.migration.conflicts.${conflict.code}`)}
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          ) : null}
-                          {migrationPlan.warnings.length > 0 ? (
-                            <ul className="list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
-                              {migrationPlan.warnings.map((warning) => (
-                                <li key={warning.code}>
-                                  {t(`bots.migration.warnings.${warning.code}`)}
-                                </li>
-                              ))}
-                            </ul>
-                          ) : null}
-                          <p className="text-11 leading-5 text-[var(--text-tertiary)]">
-                            {t('bots.migration.preserveData')}
-                          </p>
-                        </div>
-                      ) : null}
-                      <div className="mt-5 flex justify-end gap-2">
-                        <button
-                          type="button"
-                          disabled={channelBusy !== null}
-                          onClick={() => setMigrationPlan(null)}
-                          className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                        >
-                          {t('bots.cancel')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!migrationPlan?.canApply || channelBusy !== null}
-                          onClick={() => void confirmMigration()}
-                          className="h-8 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-11 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"
-                        >
-                          {channelBusy ? t('bots.migration.applying') : t('bots.migration.apply')}
-                        </button>
-                      </div>
-                    </Dialog.Content>
-                  </Dialog.Portal>
-                </Dialog.Root>
-
-                <Dialog.Root
-                  open={rollbackRecord !== null}
-                  onOpenChange={(open) => {
-                    if (!open && channelBusy === null) setRollbackRecord(null);
-                  }}
-                >
-                  <Dialog.Portal>
-                    <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-                    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
-                      <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
-                        {t('bots.migration.rollbackTitle')}
-                      </Dialog.Title>
-                      <Dialog.Description className="mt-2 text-12 leading-5 text-[var(--text-secondary)]">
-                        {t('bots.migration.rollbackDescription')}
-                      </Dialog.Description>
-                      <div className="mt-5 flex justify-end gap-2">
-                        <button
-                          type="button"
-                          disabled={channelBusy !== null}
-                          onClick={() => setRollbackRecord(null)}
-                          className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                        >
-                          {t('bots.cancel')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={channelBusy !== null}
-                          onClick={() => void confirmRollback()}
-                          className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                        >
-                          {channelBusy
-                            ? t('bots.migration.rollingBack')
-                            : t('bots.migration.rollback')}
-                        </button>
-                      </div>
-                    </Dialog.Content>
-                  </Dialog.Portal>
-                </Dialog.Root>
               </>
             ) : null}
 
             {activeTab === 'capabilities' ? (
-              <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-                    <Sparkles size={16} />
-                    {t('bots.capabilitiesTitle')}
-                  </div>
+              <BotCapabilityChips
+                capabilities={capabilities}
+                onCapabilitiesChange={applyCapabilities}
+                connections={visibleChannelConnections}
+                isChannelMounted={(connection) => Boolean(mountedChannelFor(connection))}
+                channelBusyId={channelBusy}
+                onToggleChannel={(connection) => void toggleChannel(connection)}
+                focusChipId={focusChipId}
+                headerAside={
                   <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 text-[var(--text-secondary)]">
                     {t(`bots.runtimeState.${runtimeState}`)}
                   </span>
-                </div>
-                <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                  {t('bots.capabilitiesDescription')}
-                </p>
-                <p className="mt-2 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
+                }
+              >
+                <p className="mt-4 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
                   {t('bots.capabilitiesDeferred')}
                 </p>
-                <div className="mt-4 grid min-w-0 gap-4 md:grid-cols-2">
-                  <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                    <span>{t('bots.harnessLabel')}</span>
-                    <VendorSegmentedSwitcher
-                      value={vendor}
-                      hiddenVendors={hiddenVendors}
-                      dense
-                      width={300}
-                      className="max-w-full"
-                      ariaLabel={t('bots.harnessLabel')}
-                      onChange={(next) => {
-                        if (next === 'orca') return;
-                        const prefs = getDraft().lastByVendor[next];
-                        setCapabilities((current) => ({
-                          ...current,
-                          harness: next === 'cc' ? 'claude' : next,
-                          model: prefs.model,
-                          providerId: prefs.providerId ?? null,
-                          effort: prefs.effort,
-                          fastMode: getDraft().fastModeByModel[prefs.model] === true,
-                          skillMode: 'inherit',
-                        }));
-                        autosave.onEdit('instant');
-                      }}
-                    />
-                  </div>
-                  <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                    <span>{t('bots.modelLabel')}</span>
-                    <ModelSelector
-                      modelId={capabilities.model}
-                      effort={capabilities.effort}
-                      vendorKey={vendor}
-                      currentProviderId={capabilities.providerId ?? null}
-                      triggerVariant="field"
-                      popoverSide="bottom"
-                      ariaContext={t('bots.modelLabel')}
-                      excludeSubscriptionDirect={sshRemote}
-                      excludeChatBridgedCodex={sshRemote}
-                      fastMode={vendor === 'cc' ? undefined : capabilities.fastMode}
-                      onFastModeChange={
-                        vendor === 'cc'
-                          ? undefined
-                          : (enabled) => updateCapability('fastMode', enabled)
-                      }
-                      onModelChange={(model) => updateCapability('model', model)}
-                      onEffortChange={(effort) => updateCapability('effort', effort)}
-                      onProviderChange={(providerId, model, effort) => {
-                        setCapabilities((current) => ({
-                          ...current,
-                          providerId,
-                          model: model ?? current.model,
-                          effort: effort || current.effort,
-                        }));
-                        autosave.onEdit('instant');
-                      }}
-                      onNavigateToProviders={() => navigate('/settings?tab=providers')}
-                      unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
-                    />
-                  </div>
-                </div>
-                <BotCapabilitySettings
-                  bot={bot}
-                  capabilities={capabilities}
-                  selectedSkills={selectedSkills}
-                  runtimeSnapshot={canonicalProjection?.runtimeSnapshot}
-                  remoteHostId={selectedProject?.remoteHostId}
-                  onCapabilitiesChange={applyCapabilities}
-                  onSelectedSkillsChange={applySelectedSkills}
-                />
-                <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-                  {t('bots.permissionsLabel')}
-                  <select
-                    value={capabilities.permissions}
-                    onChange={(event) =>
-                      updateCapability(
-                        'permissions',
-                        event.target.value as BotCapabilities['permissions'],
-                      )
-                    }
-                    className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                  >
-                    <option value="ask">{t('bots.permissionAsk')}</option>
-                    <option value="trusted">{t('bots.permissionTrusted')}</option>
-                  </select>
-                </label>
-              </section>
+                {channelError ? (
+                  <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
+                ) : null}
+              </BotCapabilityChips>
             ) : null}
 
             {activeTab === 'automation' ? (
@@ -935,6 +753,109 @@ export function BotSettings({
 
             {activeTab === 'advanced' ? (
               <>
+                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
+                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+                    <Sparkles size={16} />
+                    {t('bots.advancedCapabilities.title')}
+                  </div>
+                  <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                    {t('bots.advancedCapabilities.description')}
+                  </p>
+                  {/*
+                    历史数据里可能存在 memory=false 的伙伴。记忆开关已经从界面消失
+                    (恒开),所以必须给这些伙伴留一条自己开回来的路,否则它们永远
+                    停在关闭态而用户看不到任何入口。
+                  */}
+                  {capabilities.memory ? null : (
+                    <div className="mt-4 flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-3">
+                      <span className="min-w-0">
+                        <span className="block text-12 font-medium text-[var(--text-primary)]">
+                          {t('bots.memoryRecovery.title')}
+                        </span>
+                        <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
+                          {t('bots.memoryRecovery.description')}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => updateCapability('memory', true)}
+                        className="h-8 shrink-0 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                      >
+                        {t('bots.memoryRecovery.action')}
+                      </button>
+                    </div>
+                  )}
+                  <div className="mt-4 grid min-w-0 gap-4 md:grid-cols-2">
+                    <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                      <span>{t('bots.harnessLabel')}</span>
+                      <VendorSegmentedSwitcher
+                        value={vendor}
+                        hiddenVendors={hiddenVendors}
+                        dense
+                        width={300}
+                        className="max-w-full"
+                        ariaLabel={t('bots.harnessLabel')}
+                        onChange={(next) => {
+                          if (next === 'orca') return;
+                          const prefs = getDraft().lastByVendor[next];
+                          setCapabilities((current) => ({
+                            ...current,
+                            harness: next === 'cc' ? 'claude' : next,
+                            model: prefs.model,
+                            providerId: prefs.providerId ?? null,
+                            effort: prefs.effort,
+                            fastMode: getDraft().fastModeByModel[prefs.model] === true,
+                            skillMode: 'inherit',
+                          }));
+                          autosave.onEdit('instant');
+                        }}
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+                      <span>{t('bots.modelLabel')}</span>
+                      <ModelSelector
+                        modelId={capabilities.model}
+                        effort={capabilities.effort}
+                        vendorKey={vendor}
+                        currentProviderId={capabilities.providerId ?? null}
+                        triggerVariant="field"
+                        popoverSide="bottom"
+                        ariaContext={t('bots.modelLabel')}
+                        excludeSubscriptionDirect={sshRemote}
+                        excludeChatBridgedCodex={sshRemote}
+                        fastMode={vendor === 'cc' ? undefined : capabilities.fastMode}
+                        onFastModeChange={
+                          vendor === 'cc'
+                            ? undefined
+                            : (enabled) => updateCapability('fastMode', enabled)
+                        }
+                        onModelChange={(model) => updateCapability('model', model)}
+                        onEffortChange={(effort) => updateCapability('effort', effort)}
+                        onProviderChange={(providerId, model, effort) => {
+                          setCapabilities((current) => ({
+                            ...current,
+                            providerId,
+                            model: model ?? current.model,
+                            effort: effort || current.effort,
+                          }));
+                          autosave.onEdit('instant');
+                        }}
+                        onNavigateToProviders={() => navigate('/settings?tab=providers')}
+                        unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
+                      />
+                    </div>
+                  </div>
+                  <BotCapabilitySettings
+                    bot={bot}
+                    capabilities={capabilities}
+                    selectedSkills={selectedSkills}
+                    runtimeSnapshot={canonicalProjection?.runtimeSnapshot}
+                    remoteHostId={selectedProject?.remoteHostId}
+                    onCapabilitiesChange={applyCapabilities}
+                    onSelectedSkillsChange={applySelectedSkills}
+                  />
+                </section>
+
                 <section className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
                   <div>
                     <p className="text-13 font-medium text-[var(--text-primary)]">
@@ -992,14 +913,18 @@ export function BotSettings({
                           }
                         })
                         .catch((error: unknown) => {
-                          setPortabilityNotice(error instanceof Error ? error.message : String(error));
+                          setPortabilityNotice(
+                            error instanceof Error ? error.message : String(error),
+                          );
                         })
                         .finally(() => setPortabilityBusy(false));
                     }}
                     className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
                   >
                     <Download size={14} />
-                    {portabilityBusy ? t('bots.portability.exporting') : t('bots.portability.export')}
+                    {portabilityBusy
+                      ? t('bots.portability.exporting')
+                      : t('bots.portability.export')}
                   </button>
                 </section>
               </>
@@ -1007,6 +932,129 @@ export function BotSettings({
           </div>
         </div>
       </div>
+
+      {/*
+        挂载 / 卸载渠道现在同时来自「通道」tab 与能力芯片墙,所以迁移与回滚确认
+        必须挂在页面根上——留在 channels 分支里的话,从芯片墙点开的确认框会因为
+        当前 tab 不是 channels 而根本不渲染,用户会看到「点了没反应」。
+      */}
+      <Dialog.Root
+        open={migrationPlan !== null}
+        onOpenChange={(open) => {
+          if (!open && channelBusy === null) setMigrationPlan(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
+            <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
+              {t('bots.migration.title')}
+            </Dialog.Title>
+            <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+              {t('bots.migration.description')}
+            </Dialog.Description>
+            {migrationPlan ? (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl bg-[var(--surface-chip)] p-3 text-12 text-[var(--text-secondary)]">
+                  <p className="font-medium text-[var(--text-primary)]">
+                    {channelLabel(migrationPlan.connection.kind)} ·{' '}
+                    {migrationPlan.connection.accountName ||
+                      migrationPlan.connection.accountKey}
+                  </p>
+                  <p className="mt-1">
+                    {t('bots.migration.legacyTaskCount', {
+                      count: migrationPlan.candidates.length,
+                    })}
+                  </p>
+                </div>
+                {migrationPlan.conflicts.length > 0 ? (
+                  <div className="rounded-xl border border-[var(--text-danger)]/30 bg-[var(--surface-chip)] p-3">
+                    <p className="text-12 font-medium text-[var(--text-danger)]">
+                      {t('bots.migration.blocked')}
+                    </p>
+                    <ul className="mt-2 list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
+                      {migrationPlan.conflicts.map((conflict, index) => (
+                        <li key={`${conflict.code}:${conflict.sessionId ?? index}`}>
+                          {t(`bots.migration.conflicts.${conflict.code}`)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {migrationPlan.warnings.length > 0 ? (
+                  <ul className="list-disc space-y-1 pl-4 text-11 text-[var(--text-secondary)]">
+                    {migrationPlan.warnings.map((warning) => (
+                      <li key={warning.code}>
+                        {t(`bots.migration.warnings.${warning.code}`)}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <p className="text-11 leading-5 text-[var(--text-tertiary)]">
+                  {t('bots.migration.preserveData')}
+                </p>
+              </div>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={channelBusy !== null}
+                onClick={() => setMigrationPlan(null)}
+                className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+              >
+                {t('bots.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={!migrationPlan?.canApply || channelBusy !== null}
+                onClick={() => void confirmMigration()}
+                className="h-8 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-11 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"
+              >
+                {channelBusy ? t('bots.migration.applying') : t('bots.migration.apply')}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={rollbackRecord !== null}
+        onOpenChange={(open) => {
+          if (!open && channelBusy === null) setRollbackRecord(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
+            <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
+              {t('bots.migration.rollbackTitle')}
+            </Dialog.Title>
+            <Dialog.Description className="mt-2 text-12 leading-5 text-[var(--text-secondary)]">
+              {t('bots.migration.rollbackDescription')}
+            </Dialog.Description>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={channelBusy !== null}
+                onClick={() => setRollbackRecord(null)}
+                className="h-8 rounded-lg px-3 text-11 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+              >
+                {t('bots.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={channelBusy !== null}
+                onClick={() => void confirmRollback()}
+                className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+              >
+                {channelBusy
+                  ? t('bots.migration.rollingBack')
+                  : t('bots.migration.rollback')}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root
         open={profileApplyPrompt !== null}

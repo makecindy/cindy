@@ -5738,6 +5738,34 @@
     "userContextSourceDescription": "对应 Hermes 的 USER.md。它与伙伴身份和可写的伙伴 Memory 分开保存，并随 Profile 版本冻结为只读快照。",
     "chooseAvatar": "选择头像 {{avatar}}",
     "chooseAvatarColor": "选择头像颜色 {{color}}",
+    "capabilityChips": {
+      "title": "它会做什么",
+      "description": "打开就能用，背后要接的东西由我们替你接好。",
+      "act": {
+        "name": "动手做事",
+        "effect": "它直接把事做完，不用你一步一步点同意。"
+      },
+      "automation": {
+        "name": "定时干活",
+        "effect": "到点自己醒来干活，不用你开口。"
+      },
+      "channel": {
+        "effect": "它能收发你的 {{channel}} 消息。",
+        "connectHint": "先在设置里连接 {{channel}} 账号。"
+      }
+    },
+    "trustedBadge": {
+      "label": "放手做已开启：它可以直接执行操作。"
+    },
+    "advancedCapabilities": {
+      "title": "能力芯片背后的技术细节",
+      "description": "harness、模型、工具、MCP Server、Skill 与其它任务权限。日常使用不需要动这里。"
+    },
+    "memoryRecovery": {
+      "title": "这个伙伴的长期记忆当前是关的",
+      "description": "长期记忆现在对新伙伴恒开。这个伙伴是早先被关掉的，这里是重新打开的入口。",
+      "action": "重新开启记忆"
+    },
     "capabilitiesTitle": "能力配置",
     "capabilitiesDescription": "伙伴任务启动时会按当前 Profile 版本装配这些真实能力。",
     "capabilitiesDeferred": "能力更新会生成新的 Profile 版本；当前任务继续使用已固定的版本，显式 Renew 后才切换。",

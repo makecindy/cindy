@@ -14,6 +14,10 @@ import {
   normalizeBotSessionControlMode,
   type BotSessionControlMode,
 } from '../../../shared/botSessionControl';
+import {
+  NEW_BOT_DEFAULT_PERMISSIONS,
+  normalizeBotPermissions,
+} from './botCapabilityDefaults';
 import type { BotEventSubscriptionRule } from '../../../shared/botSessionEvents';
 
 export type BotChannel =
@@ -205,7 +209,10 @@ function defaultCapabilities(harness: BotCapabilities['harness'] = 'claude'): Bo
     mcpServers: [],
     memory: true,
     automation: false,
-    permissions: 'ask',
+    // 新建伙伴默认放手做(产品裁决 2026-08-18)。**只作用于「新建」**:读取既有
+    // profile 的两条路径都显式跑 normalizeBotPermissions,缺字段的历史数据仍落
+    // 'ask',与 main 侧投影一致,不会因为默认值变了就把老伙伴悄悄升成信任。
+    permissions: NEW_BOT_DEFAULT_PERMISSIONS,
     sessionControlMode: 'none',
   };
 }
@@ -283,6 +290,7 @@ function readProfiles(): BotProfile[] {
                 : defaults.effort,
             fastMode: capabilities.fastMode === true,
             sessionControlMode: normalizeBotSessionControlMode(capabilities.sessionControlMode),
+            permissions: normalizeBotPermissions(capabilities.permissions),
             skillMode: normalizeSkillMode(capabilities.skillMode, value.skills),
             model: normalizeBotModel(capabilities.model, harness),
             toolsetMode: normalizeCapabilityMode(capabilities.toolsetMode, toolsets),
@@ -392,6 +400,7 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
           : defaults.effort,
       fastMode: rawCapabilities?.fastMode === true,
       sessionControlMode: normalizeBotSessionControlMode(rawCapabilities?.sessionControlMode),
+      permissions: normalizeBotPermissions(rawCapabilities?.permissions),
       skillMode: normalizeSkillMode(item.capabilities?.skillMode, item.skills),
       model: normalizeBotModel(item.capabilities?.model, harness),
       toolsetMode: normalizeCapabilityMode(rawCapabilities?.toolsetMode, toolsets),

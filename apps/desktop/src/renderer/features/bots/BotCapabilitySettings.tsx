@@ -447,39 +447,11 @@ export function BotCapabilitySettings({
           ))}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <label className="flex items-start gap-2 rounded-xl border border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-secondary)]">
-          <input
-            type="checkbox"
-            checked={capabilities.memory}
-            onChange={(event) => updateCapability('memory', event.target.checked)}
-          />
-          <span>
-            <span className="block font-medium text-[var(--text-primary)]">
-              {t('bots.memoryLabel')}
-            </span>
-            <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
-              {t('bots.memoryDescription')}
-            </span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2 rounded-xl border border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-secondary)]">
-          <input
-            type="checkbox"
-            checked={capabilities.automation}
-            onChange={(event) => updateCapability('automation', event.target.checked)}
-          />
-          <span>
-            <span className="block font-medium text-[var(--text-primary)]">
-              {t('bots.automationLabel')}
-            </span>
-            <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
-              {t('bots.automationDescription')}
-            </span>
-          </span>
-        </label>
-      </div>
-
+      {/*
+        长期记忆开关与「定时干活」勾选框不在这里了:记忆是伙伴的底层能力(恒开,
+        只在高级 tab 为历史关闭态留一个恢复入口),自动化则由能力芯片墙承担。
+        本面板只保留真正需要专家逐项挑选的技术细节。
+      */}
       <label className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-secondary)]">
         <span>
           <span className="block font-medium text-[var(--text-primary)]">

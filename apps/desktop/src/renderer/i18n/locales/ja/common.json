@@ -5744,6 +5744,34 @@
     "userContextSourceDescription": "Hermes の USER.md に相当します。仲間のアイデンティティや書き込み可能な仲間 Memory と分けてバージョン管理し、実行ごとに読み取り専用で固定します。",
     "chooseAvatar": "アバター {{avatar}} を選択",
     "chooseAvatarColor": "アバターの色 {{color}} を選択",
+    "capabilityChips": {
+      "title": "この仲間ができること",
+      "description": "オンにすればすぐ使えます。裏側の接続はこちらで用意します。",
+      "act": {
+        "name": "自分で実行",
+        "effect": "一つずつ承認を求めずに、そのまま作業をやり切ります。"
+      },
+      "automation": {
+        "name": "決めた時間に作業",
+        "effect": "設定した時刻に自分で起きて、頼まなくても作業します。"
+      },
+      "channel": {
+        "effect": "あなたの {{channel}} のメッセージを読んで返信します。",
+        "connectHint": "先に設定で {{channel}} のアカウントを接続してください。"
+      }
+    },
+    "trustedBadge": {
+      "label": "自分で実行がオン：操作をそのまま実行できます。"
+    },
+    "advancedCapabilities": {
+      "title": "機能チップの裏側にある技術設定",
+      "description": "harness、モデル、ツール、MCP サーバー、Skill、他タスクへの権限。普段の利用では触る必要はありません。"
+    },
+    "memoryRecovery": {
+      "title": "この仲間の長期メモリは現在オフです",
+      "description": "長期メモリは新しい仲間では常にオンです。この仲間は以前オフにされたため、ここから戻せます。",
+      "action": "メモリをオンに戻す"
+    },
     "capabilitiesTitle": "機能",
     "capabilitiesDescription": "仲間タスクは固定された Profile バージョンからこれらの実機能を読み込みます。",
     "capabilitiesDeferred": "機能の更新は新しい Profile バージョンを作成します。現在のタスクは明示的に Renew するまで固定されたバージョンを使い続けます。",

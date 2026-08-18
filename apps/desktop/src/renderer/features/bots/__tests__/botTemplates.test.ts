@@ -5,6 +5,7 @@ import {
   CINDY_OFFICIAL_AVATAR,
   isCindyOfficialAvatar,
 } from '../BotAvatar';
+import { NEW_BOT_DEFAULT_PERMISSIONS } from '../botCapabilityDefaults';
 import { BOT_TEMPLATES, getBotTemplate } from '../botTemplates';
 
 describe('Bot product templates', () => {
@@ -19,7 +20,10 @@ describe('Bot product templates', () => {
       expect(template.identitySource).not.toMatch(
         /Telegram token|MCP server|workingDir|userContext/i,
       );
-      expect(template.capabilities.permissions).toBe('ask');
+      // 产品裁决 2026-08-18:新建伙伴默认放手做,风险由名字旁的 ⚠ 徽标事后表达。
+      // 三个模板必须走同一个常量,不许各自写死,否则改默认值会漏掉其中一个。
+      expect(template.capabilities.permissions).toBe(NEW_BOT_DEFAULT_PERMISSIONS);
+      expect(NEW_BOT_DEFAULT_PERMISSIONS).toBe('trusted');
     }
   });
 
