@@ -180,9 +180,12 @@ export function UserMessageEditBox({
       const originalVisibleText = quotesEncoded
         ? stripChatQuoteMarkerLines(initialSubmitText ?? initialText)
         : (initialSubmitText ?? initialText);
+      const originalHadConfirmedRange = Boolean(slashCommandRanges && slashCommandRanges.length > 0);
       const submitText = visibleTextUnchanged
         ? (initialSubmitText ?? text)
-        : restoreSlashCommandRuntimeAlias(originalVisibleText, text);
+        : originalHadConfirmedRange
+          ? restoreSlashCommandRuntimeAlias(originalVisibleText, text)
+          : text;
       const preserveQuoteMetadata = quotesEncoded && visibleTextUnchanged;
       const preservedAgentReferences =
         visibleTextUnchanged && agentReferences && agentReferences.length > 0
@@ -196,7 +199,6 @@ export function UserMessageEditBox({
       const submitTokenIsRuntimeAlias = rebuiltSlashRange
         ? submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end).toLowerCase().startsWith('/skill:')
         : false;
-      const originalHadConfirmedRange = Boolean(slashCommandRanges && slashCommandRanges.length > 0);
       const preservedSlashCommandRanges = visibleTextUnchanged && slashCommandRanges !== undefined
         ? [...slashCommandRanges]
         : submitTokenIsRuntimeAlias && originalHadConfirmedRange && rebuiltSlashRange

@@ -181,6 +181,18 @@ describe('UserMessageEditBox — idle 发送', () => {
     expect(commitMock.mock.calls[0][0].slashCommandRanges).toBeUndefined();
   });
 
+  it('未确认的 /skill: 散文被用户删掉前缀后不再静默改回 runtime 名', async () => {
+    const box = renderBox({
+      initialText: '/skill:unknown is prose',
+      slashCommandRanges: [],
+    });
+    fireEvent.change(box.textarea, { target: { value: '/unknown is prose' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('/unknown is prose');
+    expect(commitMock.mock.calls[0][0].slashCommandRanges).toBeUndefined();
+  });
+
   it('被拦消息覆盖重发在文本未修改时透传语义引用与 chip ranges', async () => {
     const override = vi.fn(async () => {});
     const agentReferences = [{
