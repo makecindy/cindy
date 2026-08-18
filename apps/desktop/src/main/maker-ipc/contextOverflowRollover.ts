@@ -11,6 +11,10 @@ import {
 } from '@cindy/maker-core';
 
 import {
+  assessModelSwitchContext,
+  shouldHandoffAfterContextAssessment,
+} from '../../shared/modelSwitchAssessment';
+import {
   buildHandoffText,
   extractPlainText,
   type HandoffSourceMessage,
@@ -58,8 +62,6 @@ export function shouldRebuildPiNativeSession(data: unknown): boolean {
 }
 
 const GROK_4_CONTEXT_CAP = 500_000;
-const CONTEXT_PRESSURE_RATIO = 0.8;
-const CONTEXT_PRESSURE_REMAINING = 32_000;
 
 export function effectivePiContextWindow(
   model: string | null | undefined,
@@ -91,11 +93,18 @@ export function lookupVerifiedContextWindow(
   return null;
 }
 
-export function shouldRebuildForContextPressure(tokens: number, window: number): boolean {
-  if (!(window > 0) || !Number.isFinite(tokens) || tokens < 0) return false;
-  if (tokens >= window) return true;
-  if (tokens / window >= CONTEXT_PRESSURE_RATIO) return true;
-  return window - tokens < CONTEXT_PRESSURE_REMAINING;
+export function shouldRebuildForContextPressure(
+  tokens: number,
+  window: number,
+  autoCompactThresholdPct?: number,
+): boolean {
+  return shouldHandoffAfterContextAssessment(
+    assessModelSwitchContext({
+      contextTokens: tokens,
+      targetContextWindow: window,
+      autoCompactThresholdPct,
+    }),
+  );
 }
 
 function isSyntheticUser(message: OverflowSourceMessage): boolean {

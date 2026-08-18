@@ -6602,7 +6602,7 @@
       "modelSwitchContextGuard": {
         "title": "目標模型的上下文視窗較小",
         "warnToast": "當前任務已使用 {{used}} 上下文，切換後約佔目標模型視窗（{{total}}）的 {{pct}}%",
-        "overflowDescription": "當前任務已使用 {{used}} 上下文，超出目標模型視窗（{{total}}，約 {{pct}}%）。切換後回覆和壓縮都可能失敗，建議先點選上下文圓環壓縮對話，或新建任務使用該模型。仍要切換嗎？",
+        "overflowDescription": "當前任務已使用 {{used}} 上下文，超出目標模型視窗（{{total}}，約 {{pct}}%）。切換後會整理上下文再繼續，而不是用新模型壓縮整段歷史。仍要切換嗎？",
         "confirmSwitch": "仍然切換模型",
         "cancelSwitch": "取消切換"
       },

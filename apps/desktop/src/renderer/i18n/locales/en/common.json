@@ -6604,7 +6604,7 @@
       "modelSwitchContextGuard": {
         "title": "Target model has a smaller context window",
         "warnToast": "This session uses {{used}} of context — about {{pct}}% of the target model's {{total}} window after switching",
-        "overflowDescription": "This session uses {{used}} of context, exceeding the target model's {{total}} window (about {{pct}}%). After switching, replies and even compaction may fail. Compact the session first (click the context ring) or start a new session for this model. Switch anyway?",
+        "overflowDescription": "This task already uses {{used}} of context, more than the target model's {{total}} window (about {{pct}}%). After switching, Cindy will reorganize the context and continue instead of compacting the full history. Switch anyway?",
         "confirmSwitch": "Switch model anyway",
         "cancelSwitch": "Cancel switch"
       },

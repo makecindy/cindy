@@ -6602,7 +6602,7 @@
       "modelSwitchContextGuard": {
         "title": "目标模型的上下文窗口较小",
         "warnToast": "当前任务已使用 {{used}} 上下文，切换后约占目标模型窗口（{{total}}）的 {{pct}}%",
-        "overflowDescription": "当前任务已使用 {{used}} 上下文，超出目标模型窗口（{{total}}，约 {{pct}}%）。切换后回复和压缩都可能失败，建议先点击上下文圆环压缩对话，或新建任务使用该模型。仍要切换吗？",
+        "overflowDescription": "当前任务已使用 {{used}} 上下文，超出目标模型窗口（{{total}}，约 {{pct}}%）。切换后会整理上下文再继续，而不是用新模型压缩整段历史。仍要切换吗？",
         "confirmSwitch": "仍然切换模型",
         "cancelSwitch": "取消切换"
       },

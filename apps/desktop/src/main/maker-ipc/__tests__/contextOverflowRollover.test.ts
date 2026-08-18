@@ -66,6 +66,8 @@ describe('shouldRebuildPiNativeSession', () => {
     expect(shouldRebuildForContextPressure(553_582, effectivePiContextWindow('x-ai/grok-4.6', 1_050_000))).toBe(
       true,
     );
+    expect(shouldRebuildForContextPressure(400_000, 500_000)).toBe(false);
+    expect(shouldRebuildForContextPressure(450_000, 500_000)).toBe(true);
   });
 
   it('does not rebuild on other PI RPC timeouts', () => {
