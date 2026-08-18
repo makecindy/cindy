@@ -515,6 +515,12 @@ export function sanitizeIsolationName(raw) {
   return ISOLATION_NAME_RE.test(name) ? name : '';
 }
 
+/** Named `--isolated=<name>` must not inherit another checkout's XDT_USER_DATA_DIR. */
+export function inheritedUserDataBlocksNamedIsolation(isolatedArg, envUserDataDir, derivedDir) {
+  if (!envUserDataDir || !isolatedArg || !isolatedArg.includes('=')) return false;
+  return canonicalizeUserDataDir(envUserDataDir) !== canonicalizeUserDataDir(derivedDir);
+}
+
 function volumeIsCaseInsensitive(existingDir) {
   let dir = existingDir;
   for (;;) {
@@ -975,6 +981,14 @@ async function main() {
   const mode = argv.includes('--local') ? 'local' : 'remote';
   const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
   const selectedRegion = startupConfig?.region ?? resolveDesktopDevRegion(argv, process.env);
+  if (isolatedArg && isolatedArg.includes('=')) {
+    const derivedDir = defaultIsolatedUserDataDir(parseIsolationName(isolatedArg), selectedRegion);
+    if (inheritedUserDataBlocksNamedIsolation(isolatedArg, process.env.XDT_USER_DATA_DIR, derivedDir)) {
+      delete process.env.XDT_USER_DATA_DIR;
+      delete process.env.XDT_USER_DATA_DIR_EPOCH;
+      console.log(`==> Ignoring inherited XDT_USER_DATA_DIR so --isolated=${parseIsolationName(isolatedArg)} can use its own sandbox.`);
+    }
+  }
   const isolationName = isolatedArg ? parseIsolationName(isolatedArg) : '';
   const verdictContext = {
     rootDir,

@@ -30,6 +30,7 @@ import {
 	waitForDesktopStartup,
 	shouldRefuseHostedRestart,
 	commandContainsPath,
+	inheritedUserDataBlocksNamedIsolation,
 } from "../restart-desktop-remote.mjs";
 import {
 	DESKTOP_DEV_VERDICT_PREFIX,
@@ -1019,6 +1020,26 @@ test("worktree sandbox hash follows the foldCase option from the volume", () => 
 	assert.notEqual(
 		isolationNameFromWorktree("/repo/Foo/cindy-feature", { foldCase: false }),
 		isolationNameFromWorktree("/repo/foo/cindy-feature", { foldCase: false }),
+	);
+});
+
+test("named isolated does not keep another checkout's inherited userData dir", () => {
+	const derived = defaultIsolatedUserDataDir("local-ollama-models-abc123", "global");
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation(
+			"--isolated=local-ollama-models-abc123",
+			defaultIsolatedUserDataDir("other-sandbox", "global"),
+			derived,
+		),
+		true,
+	);
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation("--isolated=local-ollama-models-abc123", derived, derived),
+		false,
+	);
+	assert.equal(
+		inheritedUserDataBlocksNamedIsolation("--isolated", defaultIsolatedUserDataDir("other-sandbox", "global"), derived),
+		false,
 	);
 });
 
