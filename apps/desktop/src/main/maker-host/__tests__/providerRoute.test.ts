@@ -1399,15 +1399,49 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     ]);
     setVisionGatewayKeyReader(() => KEY);
 
-    expect(
-      resolveVisionBackendRoute('xd', 'pi-only-vision', 'https://tenant.gateway.xd'),
-    ).toMatchObject({
-      upstream: 'https://tenant.gateway.xd',
+    const routed = resolveVisionBackendRoute(
+      'xd',
+      'pi-only-vision',
+      'https://tenant.gateway.xd/',
+    );
+    expect(routed).toMatchObject({
+      upstream: 'https://tenant.gateway.xd/v1',
       requestPath: '/responses',
       wireProtocol: 'openai-responses',
       model: 'pi-only-vision',
       authorization: `Bearer ${KEY}`,
     });
+    expect(`${routed?.upstream}${routed?.requestPath}`).toBe(
+      'https://tenant.gateway.xd/v1/responses',
+    );
+  });
+
+  it('XD Pi Messages 视觉模型仍使用裸网关 base 拼 /v1/messages', () => {
+    setXdGatewayModels([
+      {
+        id: 'pi-only-messages-vision',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
+        modalities: { input: ['text', 'image'], output: ['text'] },
+      },
+    ]);
+    setVisionGatewayKeyReader(() => KEY);
+
+    const routed = resolveVisionBackendRoute(
+      'xd',
+      'pi-only-messages-vision',
+      'https://tenant.gateway.xd/',
+    );
+    expect(routed).toMatchObject({
+      upstream: 'https://tenant.gateway.xd',
+      requestPath: '/v1/messages',
+      wireProtocol: 'anthropic-messages',
+      model: 'pi-only-messages-vision',
+      authorization: `Bearer ${KEY}`,
+    });
+    expect(`${routed?.upstream}${routed?.requestPath}`).toBe(
+      'https://tenant.gateway.xd/v1/messages',
+    );
   });
 
   it('modelIdRewrite.stripPrefix：视觉后端返回已剥前缀的 model', () => {

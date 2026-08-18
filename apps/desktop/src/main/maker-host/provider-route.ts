@@ -1064,10 +1064,11 @@ export function resolveVisionBackendRoute(
       if (!gatewayEndpoint) return null; // 网关不可用
       const key = gatewayKeyReader();
       if (!key) return null; // 无网关 key 可换
-      // codex 面网关上游含 /v1（对齐 buildCodexGatewayBaseUrl：`<endpoint>/v1` 拼 /responses
-      // 得 /v1/responses）；claude-code/pi 面不含（claudeUpstreamEndpoint 直接拼 /v1/messages）。
+      // 网关 base 由最终协议决定，而不是由承载它的 agent 决定：Responses 的标准路径
+      // 是 `<endpoint>/v1/responses`，Messages 则由裸 endpoint 拼 `/v1/messages`。Pi 可按模型
+      // 在两种协议间切换，因此若按 agent 判断会把 Pi Responses 错送到 `<endpoint>/responses`。
       upstream =
-        agent === 'codex'
+        wireProtocol === 'openai-responses'
           ? `${gatewayEndpoint.replace(/\/+$/, '')}/v1`
           : gatewayEndpoint.replace(/\/$/, '');
       authorization = `Bearer ${key}`;
