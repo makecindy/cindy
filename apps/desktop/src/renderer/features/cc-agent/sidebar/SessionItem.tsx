@@ -121,6 +121,14 @@ function loadScheduleSidebarIndexRunsCached(): Promise<ScheduleSidebarIndexRun[]
   return _scheduleIndexPromise;
 }
 
+const SESSION_ROW_INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"]';
+
+function isNestedSessionRowAction(target: EventTarget | null, row: Element): boolean {
+  if (!(target instanceof Element)) return false;
+  const interactive = target.closest(SESSION_ROW_INTERACTIVE_SELECTOR);
+  return interactive !== null && interactive !== row;
+}
+
 const log = createLogger('SessionItem');
 
 interface SidebarTitleMarqueeProps {
@@ -515,6 +523,7 @@ export const SessionItem = memo(function SessionItem({
   // 右键菜单弹出位置：null = 关闭；{x,y} = 在该屏幕坐标处弹出（fixed 定位的
   // 隐形 trigger 锚定到这里）。与 ProjectNode 同款 coordinate-anchored 模式。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [rowTooltipOpen, setRowTooltipOpen] = useState(false);
 
   // Codex 风行内 archive 确认：archivePending=true 时右侧图标按钮被一个红色
   // "Confirm" 胶囊替换；4s 不动 or 点别处 → 自动撤回。第二次点击 Confirm 才真正
@@ -887,6 +896,10 @@ export const SessionItem = memo(function SessionItem({
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerOver={(event) => {
+        setRowTooltipOpen(!isNestedSessionRowAction(event.target, event.currentTarget));
+      }}
+      onPointerLeave={() => setRowTooltipOpen(false)}
       onPointerDownCapture={(event) => {
         dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
       }}
@@ -1355,6 +1368,7 @@ export const SessionItem = memo(function SessionItem({
       sessionId={session.id}
       prRefs={prRefs}
       isAutomationSession={showAutomationTooltip}
+      controlledOpen={rowTooltipOpen}
     >
       {row}
     </SessionTooltip>

@@ -3179,20 +3179,23 @@ function ExpandedView({
     ],
   );
   const bulkActionInProgressLabel = t('ccAgent.sidebar.bulkSelection.actionInProgress');
+  const bulkArchiveActionLabel = t('ccAgent.sidebar.bulkSelection.archive');
+  const bulkDeleteActionLabel = t('ccAgent.sidebar.bulkSelection.delete');
+  const bulkClearActionLabel = t('ccAgent.sidebar.bulkSelection.clear');
   const bulkArchiveLabel =
     bulkActionPending !== null
-      ? bulkActionInProgressLabel
+      ? `${bulkArchiveActionLabel} — ${bulkActionInProgressLabel}`
       : selectedActiveSessionCount === 0
         ? t('ccAgent.sidebar.bulkSelection.archiveNone')
-        : t('ccAgent.sidebar.bulkSelection.archive');
+        : bulkArchiveActionLabel;
   const bulkDeleteLabel =
     bulkActionPending !== null
-      ? bulkActionInProgressLabel
-      : t('ccAgent.sidebar.bulkSelection.delete');
+      ? `${bulkDeleteActionLabel} — ${bulkActionInProgressLabel}`
+      : bulkDeleteActionLabel;
   const bulkClearLabel =
     bulkActionPending !== null
-      ? bulkActionInProgressLabel
-      : t('ccAgent.sidebar.bulkSelection.clear');
+      ? `${bulkClearActionLabel} — ${bulkActionInProgressLabel}`
+      : bulkClearActionLabel;
   const bulkArchiveDisabled = bulkActionPending !== null || selectedActiveSessionCount === 0;
   const bulkActionDisabled = bulkActionPending !== null;
 

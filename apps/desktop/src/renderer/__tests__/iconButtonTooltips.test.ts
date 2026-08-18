@@ -326,6 +326,7 @@ describe('icon-only button tooltip coverage', () => {
     const mobileDownload = rendererSource('components/sidebar/MobileDownloadDialog.tsx');
     const sessionExport = rendererSource('features/cc-agent/sidebar/SessionShareExportDialog.tsx');
     const automation = rendererSource('features/cc-agent/sidebar/AutomationSessionGroupItem.tsx');
+    const sessionItem = rendererSource('features/cc-agent/sidebar/SessionItem.tsx');
 
     expect(mobileDownload).toMatch(
       /text=\{t\('sidebar\.mobileDownload\.close'\)\}[\s\S]*?contentClassName="z-\[10001\]"/,
@@ -339,6 +340,12 @@ describe('icon-only button tooltip coverage', () => {
     expect(automation).toContain('onFocusCapture={(event) => {');
     expect(automation).toContain('onBlurCapture={(event) => {');
     expect(automation.match(/^\s+data-automation-group-inline-action="true"/gm)).toHaveLength(4);
+    expect(sessionItem).toContain('const [rowTooltipOpen, setRowTooltipOpen] = useState(false)');
+    expect(sessionItem).toContain(
+      'setRowTooltipOpen(!isNestedSessionRowAction(event.target, event.currentTarget))',
+    );
+    expect(sessionItem).toContain('onPointerLeave={() => setRowTooltipOpen(false)}');
+    expect(sessionItem).toContain('controlledOpen={rowTooltipOpen}');
   });
 
   it('keeps disabled icon actions hoverable and keyboard discoverable', () => {
@@ -346,6 +353,9 @@ describe('icon-only button tooltip coverage', () => {
 
     expect(sidebar).toContain("t('ccAgent.sidebar.bulkSelection.actionInProgress')");
     expect(sidebar).toContain("t('ccAgent.sidebar.bulkSelection.archiveNone')");
+    expect(sidebar).toContain('`${bulkArchiveActionLabel} — ${bulkActionInProgressLabel}`');
+    expect(sidebar).toContain('`${bulkDeleteActionLabel} — ${bulkActionInProgressLabel}`');
+    expect(sidebar).toContain('`${bulkClearActionLabel} — ${bulkActionInProgressLabel}`');
     expect(sidebar).toContain('<Tip text={bulkArchiveLabel} side="bottom">');
     expect(sidebar).toContain("role={bulkArchiveDisabled ? 'button' : undefined}");
     expect(sidebar).toContain('tabIndex={bulkArchiveDisabled ? 0 : undefined}');
@@ -353,6 +363,8 @@ describe('icon-only button tooltip coverage', () => {
     expect(sidebar).toContain("role={disabled ? 'button' : undefined}");
     expect(sidebar).toContain('tabIndex={disabled ? 0 : undefined}');
     expect(sidebar).toContain("t('ccAgent.sidebar.creationInProgress')");
+    const rail = rendererSource('features/cc-agent/sidebar/RailNav.tsx');
+    expect(rail).toContain('controlledOpen={panelState.openSection === key ? false : undefined}');
   });
 
   it('discovers native titles and icon controls without a managed Tip in guarded roots', () => {

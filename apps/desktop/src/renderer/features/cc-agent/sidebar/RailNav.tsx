@@ -399,7 +399,12 @@ export function RailNav({
           ['dialogues', <MessageCircle key="i" size={18} aria-hidden />, dialoguesAgg],
         ] as const
       ).map(([key, icon, agg]) => (
-        <Tip key={key} text={t(`ccAgent.sidebar.railNav.${key}`)} side="right">
+        <Tip
+          key={key}
+          text={t(`ccAgent.sidebar.railNav.${key}`)}
+          side="right"
+          controlledOpen={panelState.openSection === key ? false : undefined}
+        >
           <button
             data-rail-panel-trigger={key}
             aria-label={t(`ccAgent.sidebar.railNav.${key}`)}
