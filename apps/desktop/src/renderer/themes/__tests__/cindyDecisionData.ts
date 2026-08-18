@@ -324,7 +324,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'sidebar-muted': { light: '60.0 2.1% 52.4%', dark: '0 0% 43.5%' }, // 2026-08 §9 更新;沿革: E1D 侧栏层级 #9A9DA3/#6F6F6F
   'status-badge-fg': { light: '#1F1F1F', dark: '#121212' }, // 2026-08 §9 更新;沿革: §7 必炸点(lead 裁决)
   'surface-translucent-sidebar': {
-    light: 'rgba(238, 238, 233, 0.90)',
+    light: 'rgba(238, 238, 233, 0.85)',
     dark: 'rgba(5, 5, 5, 0.85)',
   }, // 用户调参 2026-07-20:双端 80%(light #F6F6F6 试色后退回纯白)
   'sidebar-search-input-bg': {

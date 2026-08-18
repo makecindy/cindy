@@ -649,8 +649,15 @@
     {
       "idx": 92,
       "version": "6",
-      "when": 1786869036747,
-      "tag": "0092_ghost_usage_daily",
+      "when": 1786696564943,
+      "tag": "0092_fixed_zeigeist",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "6",
+      "when": 1787050276684,
+      "tag": "0093_ghost_usage_daily",
       "breakpoints": true
     }
   ]

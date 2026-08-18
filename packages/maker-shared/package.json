@@ -62,6 +62,7 @@
     "./thinking-text": "./src/thinkingText.ts",
     "./turn-continuation": "./src/turnContinuation.ts",
     "./tool-use-descriptor": "./src/toolUseDescriptor.ts",
+    "./update-channel": "./src/updateChannel.ts",
     "./usage-format": "./src/usageFormat.ts",
     "./work-activity-projection": "./src/workActivityProjection.ts",
     "./worktree-paths": "./src/worktreePaths.ts",

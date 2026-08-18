@@ -18,6 +18,7 @@ import { createLogger } from '../logger.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import {
   GoalControllerInputError,
+  GoalSessionRestoreError,
   GoalUpdateSupersededError,
 } from '../goal-host/controller.js';
 import { getGoalController } from '../goal-host/index.js';
@@ -28,6 +29,30 @@ import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 const log = createLogger('maker-ipc:goal');
 
 type GoalLimitPatchKey = 'maxTurns' | 'budgetTokens' | 'noProgressLimit';
+
+function throwGoalControllerIpcError(error: unknown): never {
+  if (error instanceof GoalControllerInputError) {
+    throwIpcError('INVALID_PARAMS', error.message);
+  }
+  if (
+    error instanceof GoalSessionRestoreError ||
+    error instanceof GoalUpdateSupersededError
+  ) {
+    throwIpcError('PRECONDITION_FAILED', error.message);
+  }
+  throw error;
+}
+
+async function readGoalStatusForIpc(
+  controller: NonNullable<ReturnType<typeof getGoalController>>,
+  sessionId: string,
+) {
+  try {
+    return await controller.getStatus(sessionId);
+  } catch {
+    throwIpcError('INTERNAL', 'failed to read goal status');
+  }
+}
 
 function readOptionalLimit(value: unknown, name: GoalLimitPatchKey, patch: GoalUpdatePatch): void {
   if (value === undefined) return;
@@ -82,10 +107,7 @@ export function registerGoalHandlers(): void {
     try {
       await controller.setGoal({ sessionId, objective, ...(limits ? { limits } : {}) });
     } catch (err) {
-      if (err instanceof GoalControllerInputError) {
-        throwIpcError('INVALID_PARAMS', err.message);
-      }
-      throw err;
+      throwGoalControllerIpcError(err);
     }
     return { ok: true };
   });
@@ -101,12 +123,27 @@ export function registerGoalHandlers(): void {
   ipcMain.handle(MAKER_INVOKE.GOAL_GET_STATUS, async (_e, sessionId: unknown) => {
     const id = requireString(sessionId, 'sessionId');
     const controller = getGoalController();
-    const status = (await controller?.getStatus(id)) ?? null;
-    // resume-on-open:打开会话时若有 dormant 的 active 目标(重启后未活化、无 listener),
-    // 顺带把它续上(controller.resumeOnOpen 内部自守卫:已在管 / 非 active / 活化失败均 no-op)。
-    // fire-and-forget,不阻塞 status 返回;只针对当前打开的这个会话,不会批量 spawn。
+    if (!controller) throwIpcError('INTERNAL', 'goal controller not started');
+    let status = await readGoalStatusForIpc(controller, id);
+    // Dormant recovery may synchronously converge an apparently active Goal to
+    // blocked. Wait for storage/session recovery and re-read so this invoke
+    // response cannot overwrite the newer status push with a stale active
+    // snapshot. Actual turn dispatch stays detached: PI prompt acceptance may
+    // legitimately wait through long compaction and must not hold a read query.
     if (status?.status === 'active') {
-      void controller?.resumeOnOpen(id).catch(() => {});
+      try {
+        await controller.resumeOnOpen(id, { waitForDispatch: false });
+      } catch (error) {
+        if (
+          error instanceof GoalControllerInputError ||
+          error instanceof GoalSessionRestoreError ||
+          error instanceof GoalUpdateSupersededError
+        ) {
+          throwGoalControllerIpcError(error);
+        }
+        throwIpcError('INTERNAL', 'failed to restore goal status');
+      }
+      status = await readGoalStatusForIpc(controller, id);
     }
     return status;
   });
@@ -122,7 +159,11 @@ export function registerGoalHandlers(): void {
   // 保留计数继续;终态/active 是 no-op。
   ipcMain.handle(MAKER_INVOKE.GOAL_RESUME, async (_e, sessionId: unknown) => {
     const id = requireString(sessionId, 'sessionId');
-    await getGoalController()?.resumeGoal(id);
+    try {
+      await getGoalController()?.resumeGoal(id);
+    } catch (error) {
+      throwGoalControllerIpcError(error);
+    }
     return { ok: true };
   });
 
@@ -144,13 +185,7 @@ export function registerGoalHandlers(): void {
       if (!updated) throwIpcError('GOAL_NOT_FOUND', 'goal not found');
       return { ok: true };
     } catch (err) {
-      if (err instanceof GoalControllerInputError) {
-        throwIpcError('INVALID_PARAMS', err.message);
-      }
-      if (err instanceof GoalUpdateSupersededError) {
-        throwIpcError('PRECONDITION_FAILED', err.message);
-      }
-      throw err;
+      throwGoalControllerIpcError(err);
     }
   });
 

@@ -15,7 +15,7 @@
  * 所有消费方统一读 `getActiveCatalog()`,而非各自 import `BUNDLED_CATALOG`:
  *   - maker availableModels 派生(maker-host/index.ts)
  *   - 统一路由器(provider-route.ts)
- *   - 会话标题模型(title-one-shot.ts)
+ *   - 会话标题模型(provider-one-shot.ts)
  *   - 供应商注册表(provider-service.ts,经 createDesktopProviderService 注入)
  *
  * 「启动 await 一次、之后全同步读」是关键:`getActiveCatalog()` 同步返回,消费方(含路由
@@ -672,8 +672,8 @@ function projectXaiPiModel(provider: Provider, model: CatalogModel): CatalogMode
       ? { contextWindowVerified: model.contextWindowVerified }
       : {}),
     ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
-    efforts: model.efforts,
-    defaultEffort: model.defaultEffort,
+    // Official Pi effort maps stay authoritative, including explicit empty lists.
+    // CC/Codex root efforts must not leak into the Pi projection.
     status: model.status,
     defaultEnabled: model.defaultEnabled,
   };
@@ -1249,6 +1249,11 @@ export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
   xdGatewayModels = [...models];
   xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
+}
+
+/** 同步读取最近一次完整 `/models` 快照，供 sendSync 配置面只读投影。 */
+export function getXdGatewayModels(): readonly XdGatewayModelInfo[] {
+  return xdGatewayModels;
 }
 
 /** 返回当前 active catalog 的单调递增修订号。 */

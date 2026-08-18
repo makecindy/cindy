@@ -501,6 +501,70 @@ describe('createResponsesChatHandler', () => {
     expect(res.chunks.join('')).toContain('event: response.failed');
   });
 
+  it('cancels the upstream reader after a terminal provider error on a held-open stream (#2839)', async () => {
+    // provider 发出流内终态错误后保持连接不关:桥必须停止读取、取消上游
+    // reader 并及时结束下游响应,而不是继续等 EOF。
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          'data: {"error":{"message":"provider failed","status":502}}\n\n'
+          // 同一 chunk 里错误帧之后的剩余帧不再解析。
+          + 'data: {"id":"chat_after","choices":[{"delta":{"content":"stale"}}]}\n\n',
+        ));
+        // 故意不 close。
+      },
+      cancel: cancelled,
+    });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, {
+      fetchImpl: vi.fn(async () => new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })) as typeof fetch,
+    });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
+    const wire = res.chunks.join('');
+    expect(wire).toContain('event: response.failed');
+    expect(wire).not.toContain('stale');
+    expect(res.ended).toBe(true);
+    expect(cancelled).toHaveBeenCalled();
+  });
+
+  it('finishes the downstream response even when upstream cancellation never settles (#2839)', async () => {
+    // 注入的 fetchImpl 可能给出取消长期 pending 的流:挂起的 reader.cancel()
+    // 不能阻塞下游收口。
+    const cancelled = vi.fn(() => new Promise<never>(() => {
+      // 故意永不 settle。
+    }));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          'data: {"error":{"message":"provider failed","status":502}}\n\n',
+        ));
+        // 故意不 close。
+      },
+      cancel: cancelled,
+    });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, {
+      fetchImpl: vi.fn(async () => new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })) as typeof fetch,
+    });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'm', input: 'hi' }, res: res as never });
+    expect(res.chunks.join('')).toContain('event: response.failed');
+    expect(res.ended).toBe(true);
+    expect(cancelled).toHaveBeenCalled();
+  });
+
   it('fails a malformed SSE frame instead of silently completing', async () => {
     const handler = createResponsesChatHandler({
       upstreamBase: 'https://provider.example/v1',

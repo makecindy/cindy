@@ -9,6 +9,7 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "该供应商不支持 SSH 远程会话，请更换来源",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目标设备长时间无响应，请检查远程设备后重试",
+    "INTERNAL": "操作失败，请稍后重试。",
     "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "远程项目路径不是文件夹，请重新选择项目目录。",
@@ -472,6 +473,13 @@
         "label": "任务列表显示方式",
         "hint": "侧边栏主列表（置顶以外）的显示形态：文字为紧凑单行，列表为带预览的两行。",
         "aria": "切换任务列表显示方式"
+      },
+      "ghostPanelRestore": {
+        "label": "插件面板恢复入口",
+        "hint": "选择最小化插件面板后从哪里恢复。",
+        "aria": "选择插件面板恢复入口",
+        "bubble": "浮动气泡",
+        "sidebar": "侧边栏"
       },
       "layout": {
         "label": "面板布局",
@@ -1306,7 +1314,14 @@
         "title": "xAI",
         "subtitle": "Grok 模型 · SuperGrok 订阅直连",
         "modelLabel": "Grok 模型",
-        "billingLabel": "SuperGrok 订阅直连"
+        "billingLabel": "SuperGrok 订阅直连",
+        "asset": {
+          "weeklyTitle": "每周限额",
+          "weeklyUsed": "{{percent}}% 已使用",
+          "resetsAt": "{{at}} 重置",
+          "productLine": "{{product}} {{percent}}%",
+          "openUsage": "打开 Grok 用量页面"
+        }
       },
       "xd": {
         "title": "Cindy AI",
@@ -1567,6 +1582,7 @@
         "enableModel": "启用此模型",
         "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
         "accessWriteFailed": "停用设置未能保存，请重试",
+        "visibilityWriteFailed": "模型显示设置未能保存，请重试；如果仍然失败，请重启 Cindy。",
         "disabledGroup": "已停用",
         "enableAllModels": "全部启用",
         "priceOverride": {
@@ -1757,6 +1773,21 @@
         "enabled": "LSP 已开启，新建 Agent 会话后生效",
         "disabled": "LSP 已关闭，新建 Agent 会话后生效",
         "toggleFailed": "切换 LSP 开关失败"
+      }
+    },
+    "betaChannel": {
+      "title": "Beta 测试渠道",
+      "description": "加入 Beta 测试渠道，提前接收即将发布的客户端更新。开启后需重启客户端生效。",
+      "toggleAria": "Beta 测试渠道开关",
+      "restartTitle": "重启客户端",
+      "restartDescription": "Beta 测试渠道需要重启客户端后才能生效，是否立即重启？",
+      "restartNow": "立即重启",
+      "restartLater": "稍后",
+      "restartBusyDescription": "当前有任务正在进行中，重启会打断它们。确定要立即重启吗？",
+      "unavailable": "Beta 测试渠道暂不可用，无法连接到 Beta 更新服务器。",
+      "toast": {
+        "disabled": "Beta 测试渠道已关闭，重启后生效",
+        "toggleFailed": "切换 Beta 测试渠道失败"
       }
     },
     "gitSafety": {
@@ -2481,6 +2512,11 @@
         "description": "在对话正文左侧显示一列提问刻度：悬停预览提问和回答开头，点击跳回那一轮。仅在提问较多且窗口足够宽时出现。"
       },
       "toggleAria": "切换提问导航条"
+    },
+    "promptRecommendation": {
+      "label": "输入框推荐提示词",
+      "description": "AI 回复结束后，输入框会显示预测的后续提示词，按 Tab 键可快速填入。",
+      "toggleAria": "切换输入框推荐提示词"
     },
     "collaboration": {
       "loading": "正在加载协同设置…",
@@ -3479,7 +3515,10 @@
             "copied": "指南已复制到剪贴板。",
             "copyFailed": "复制失败，请重试。"
           }
-        }
+        },
+        "conflict": "暂不可用",
+        "conflictAria": "{{name}} 存在插件标识冲突",
+        "conflictDescription": "插件标识已被占用，当前无法安装"
       },
       "reapproval": {
         "badge": "需要重新确认权限",
@@ -4348,11 +4387,19 @@
       "second": "秒"
     },
     "openProxyUsage": "打开浏览器查看完整用量看板",
-    "openXaiUsage": "打开 xAI 账户页面",
+    "openXaiUsage": "打开 Grok 用量页面",
     "xai": {
       "requestsLine": "限流(请求)：剩余 {{remaining}}/{{limit}}",
       "tokensLine": "限流(token)：剩余 {{remaining}}/{{limit}}",
-      "noQuotaDetail": "xAI 未提供订阅配额明细，此处仅显示价值估算"
+      "noQuotaDetail": "暂未获取到 SuperGrok 周用量，此处仅显示价值估算",
+      "weeklyLabel": "周限",
+      "windowSegment": "{{label}} 剩余 {{remaining}}",
+      "windowLine": "{{label}} 剩余 {{remaining}}(已用 {{used}})",
+      "planLine": "套餐 {{plan}}",
+      "resetAt": "{{at}} 重置",
+      "productLine": "{{product}} {{percent}}",
+      "extraCreditsLine": "额外点数 {{amount}}",
+      "accountWeeklyHint": "账号周用量，不是本任务配额"
     },
     "dailyLimitLabel": "今日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "本周期 {{spend}}/{{limit}}",
@@ -4528,7 +4575,7 @@
     "maximizeAria": "撑满内容区",
     "restoreAria": "还原面板大小",
     "detachAria": "在独立窗口中打开",
-    "minimizeAria": "最小化为浮动气泡",
+    "minimizeAria": "最小化面板",
     "closeAria": "关闭面板并停用插件"
   },
   "ghostPanel": {
@@ -4546,6 +4593,11 @@
     "restoreAria": "恢复 {{name}} 面板",
     "stackExpandAria": "已收起 {{count}} 个插件面板，点击展开",
     "stackCollapseAria": "收拢插件面板列表"
+  },
+  "ghostPanelRestore": {
+    "single": "恢复 {{name}}",
+    "multiple": "已收起的插件面板",
+    "multipleAria": "已收起 {{count}} 个插件面板，点击选择要恢复的面板"
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
@@ -4645,19 +4697,25 @@
       },
       "refresh": "刷新",
       "checking": "正在检查",
-      "accessRequiredTitle": "授权当前任务",
-      "accessRequiredDescription": "此面板尚未获得当前任务的模拟器访问权限。请先在系统弹窗中确认。",
-      "allowTaskAccess": "允许当前任务访问",
+      "accessRequiredTitle": "允许当前任务控制",
+      "accessRequiredDescription": "查看状态可能仍然可用，但点击、输入和其他控制仅在当前任务获得授权后开放。请在系统弹窗中确认。",
+      "allowTaskAccess": "允许任务控制",
       "requestingAccess": "正在请求访问…",
       "accessDialogTitle": "允许控制 iOS 模拟器？",
       "accessDialogMessage": "允许当前 Cindy 窗口为任务“{{task}}”查看和控制 iOS 模拟器吗？",
-      "accessDialogDetail": "此权限仅对该任务生效；切换任务后会自动撤销。",
+      "accessDialogDetail": "此权限仅对该任务生效。切换到其他任务后会保留查看授权，但控制会暂停；返回后请再次允许控制。",
       "accessDialogAllow": "允许模拟器控制",
       "accessDialogCancel": "取消",
       "accessDialogUntitledTask": "未命名任务",
       "readyTitle": "模拟器环境已就绪",
       "unavailableTitle": "模拟器不可用",
-      "connectionError": "Cindy 无法检查本机模拟器环境，请重试。",
+      "connectionError": "Cindy 无法连接 iOS 模拟器 Host，请重试。",
+      "pluginNotInstalled": "当前 Cindy 实例尚未安装 iOS 模拟器插件。请前往插件市场安装并启用后重试。",
+      "pluginDisabled": "当前 Cindy 实例已安装 iOS 模拟器插件，但插件未启用。请在插件页启用后重试。",
+      "pluginDisabledForProject": "iOS 模拟器插件已对此工作目录禁用。请在项目插件设置中启用后重试。",
+      "pluginSessionUnavailable": "插件已安装并启用，但当前 Cindy 实例暂时无法使用共享插件能力。另一个 Cindy 实例或账号切换可能正在占用该能力；请稍后刷新。",
+      "pluginStateChanging": "Cindy 正在切换账号或插件状态，请稍后刷新。",
+      "statusInternalError": "Cindy 在读取 iOS 模拟器状态时发生内部错误，请重试。",
       "remoteUnsupported": "iOS 模拟器仅支持本地 macOS 任务，不支持 SSH 或远程任务。",
       "sessionUnavailable": "当前 Cindy 任务已不可用。",
       "setupTitle": "配置清单",
@@ -4755,6 +4813,13 @@
           "reconnecting": "正在重连…",
           "unavailable": "不可用"
         }
+      },
+      "nativeRecovery": {
+        "available": "Native 加速当前不可用。重试期间，WDA 画面和控制会保持可用。",
+        "action": "尝试恢复 Native",
+        "recovering": "正在恢复 Native 加速，当前 WDA 画面和控制会保持可用。",
+        "recoveringAction": "正在恢复 Native…",
+        "failed": "暂未恢复 Native 加速，WDA 仍可正常使用。请稍后重试。"
       },
       "stream": {
         "idle": "待连接",
@@ -6189,6 +6254,10 @@
       "retry": "重试",
       "continueAfterReset": "恢复后继续",
       "continueAfterResetTitle": "创建一次性自动化，在用量恢复后继续当前任务",
+      "codexOrganizationUsageLimitWithReset": "当前连接的是企业 Codex 账号，已达到用量上限，预计于 {{resetAt}} 恢复。",
+      "codexOrganizationUsageLimit": "当前连接的是企业 Codex 账号，已达到用量上限。请等待用量上限重置，或切换其他可用账号后再重试。",
+      "codexUsageLimitWithReset": "当前连接的 Codex 账号已达到用量上限，预计于 {{resetAt}} 恢复。",
+      "codexUsageLimit": "当前连接的 Codex 账号已达到用量上限。请等待用量上限重置，或切换其他可用账号后再重试。",
       "gatewayQuotaExhausted": "Cindy AI 余额不足，请充值后继续",
       "viewBalance": "查看余额",
       "viewBalanceTitle": "打开「用量和计费」查看余额并充值",
@@ -8314,7 +8383,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想给 {{appName}} 提交一条反馈。请协助我整理成一个高质量、信息完整的 GitHub issue：先确认反馈类型(bug 还是功能建议)，只针对缺失或含糊的信息追问；Bug 尽量补齐现象、复现步骤、期望与实际行为、复现频率、已尝试的方法，并在用户同意后纳入经过脱敏的诊断摘要，禁止提交密码、令牌、邮箱、个人路径或无关文件内容；功能建议补齐使用场景、当前痛点和期望结果。信息足够后用 cindy_helper 的 call_tool 调用 submit_github_issue 工具提交(category=feedback，可先 list_tools 查看参数要求；提交前系统会弹确认卡片给我看)。这不需要安装或配置 GitHub 插件：默认由 Cindy 官方 Bot 提交；若当前有可用的 GitHub 账号，确认卡会额外提供本人账号选项。创建成功后告诉我 issue 编号和链接，并说明 Cindy 是开源软件，询问我是否希望通过源码一起复现、修复 Bug、开发功能或准备 PR。如果提交失败，如实告诉我原因。{{details}}",
+      "instruction": "我想给 {{appName}} 提交一条反馈。请协助我整理成一个高质量、信息完整的 GitHub issue：先确认反馈类型(bug 还是功能建议)，只针对缺失或含糊的信息追问；整理时默认概括或泛化用户提供的原话和示例，不要直接复制可识别个人、对话或业务的信息；Bug 尽量补齐现象、复现步骤、期望与实际行为、复现频率、已尝试的方法，并在用户同意后纳入经过脱敏的诊断摘要，禁止提交密码、令牌、邮箱、个人路径或无关文件内容；功能建议补齐使用场景、当前痛点和期望结果。信息足够后用 cindy_helper 的 call_tool 调用 submit_github_issue 工具提交(category=feedback，可先 list_tools 查看参数要求；提交前系统会弹确认卡片给我看)。这不需要安装或配置 GitHub 插件：默认由 Cindy 官方 Bot 提交；若当前有可用的 GitHub 账号，确认卡会额外提供本人账号选项。创建成功后告诉我 issue 编号和链接，并说明 Cindy 是开源软件，询问我是否希望通过源码一起复现、修复 Bug、开发功能或准备 PR。如果提交失败，如实告诉我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -8323,7 +8392,8 @@
       "typeFeature": "功能建议",
       "titleLabel": "标题",
       "bodyLabel": "正文(Markdown)",
-      "privacyHint": "系统会尽量隐藏常见密钥、个人路径和邮箱；提交前请确认公开内容不包含其他隐私。",
+      "privacyHint": "Issue 的标题和正文将公开显示，并可能被搜索或缓存。系统只能隐藏部分常见敏感信息，无法识别所有语义隐私。",
+      "privacyConfirm": "我已检查以上公开内容，不包含不应公开的个人、对话或业务信息",
       "submissionMethodLabel": "提交身份",
       "identityGithubUser": "我的 GitHub 账号 @{{login}}",
       "identityGithubUserHint": "你将成为该 Issue 的 GitHub 作者，可以在 GitHub 编辑或关闭",
@@ -9086,9 +9156,11 @@
       "title": "创建新 Worker",
       "submit": "创建 Worker",
       "closeAria": "关闭创建 Worker 弹窗",
-      "roleLabel": "角色",
-      "customRolePlaceholder": "+ 自定义角色（可选）",
-      "customRolePredefinedError": "自定义角色不能使用预设角色名",
+      "roleLabel": "角色名",
+      "roleHint": "只是一个名字，方便多个协作者时分辨角色，不改变能力",
+      "roleHintAria": "角色名说明",
+      "customRolePlaceholder": "+ 自定义角色名（可选）",
+      "customRolePredefinedError": "自定义角色名不能使用预设角色名",
       "agentLabel": "Agent",
       "modelLabel": "模型",
       "permissionLabel": "权限模式",

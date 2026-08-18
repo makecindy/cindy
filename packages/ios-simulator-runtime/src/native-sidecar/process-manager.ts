@@ -106,6 +106,12 @@ export interface IOSSimulatorNativeSidecarDiagnostics {
   crashCount: number;
   probe: IOSSimulatorNativeSidecarProbe | null;
   lastFailure: string | null;
+  /**
+   * True only after an admitted sidecar reached the process launch boundary.
+   * Missing artifacts, denied admission, and unsupported sandbox preflight
+   * remain false so the Host can fail closed when offering manual recovery.
+   */
+  recoveryEligible?: boolean;
   lastTermination: IOSSimulatorNativeSidecarTerminationDiagnostics | null;
   admission: IOSSimulatorNativeCapabilityAdmissionDecision | null;
   sandbox?: IOSSimulatorNativeSidecarSandboxDiagnostics;
@@ -580,6 +586,7 @@ export class IOSSimulatorNativeSidecarProcessManager {
     IOSSimulatorNativeSidecarProbe | null
   >();
   readonly #lastFailure = new Map<string, string>();
+  readonly #recoveryEligible = new Map<string, boolean>();
   readonly #lastTermination = new Map<
     string,
     IOSSimulatorNativeSidecarTerminationDiagnostics
@@ -656,6 +663,7 @@ export class IOSSimulatorNativeSidecarProcessManager {
         (running && running.channel.state !== "running"
           ? (lastTermination?.message ?? null)
           : null),
+      recoveryEligible: this.#recoveryEligible.get(instanceId) === true,
       lastTermination,
       admission,
       sandbox:
@@ -731,6 +739,7 @@ export class IOSSimulatorNativeSidecarProcessManager {
     operation: PendingSidecarOperation,
   ): Promise<IOSSimulatorNativeSidecarRunningInstance> {
     this.#lastFailure.delete(input.instanceId);
+    this.#recoveryEligible.delete(input.instanceId);
     this.#lastTermination.delete(input.instanceId);
     const policy = this.#resolveAdmissionPolicy(input);
     operation.policy = policy;
@@ -748,23 +757,48 @@ export class IOSSimulatorNativeSidecarProcessManager {
       this.#lastFailure.set(input.instanceId, error.message);
       throw error;
     }
-    await this.#verifyBinaryIntegrity(input.instanceId);
-    if (!this.#options.createChannel) {
-      try {
-        await access(this.#options.binaryPath, constants.X_OK);
-      } catch {
-        throw new IOSSimulatorNativeSidecarProcessManagerError(
-          "BINARY_UNAVAILABLE",
-          "Native sidecar executable is unavailable",
-        );
+    let sandbox: IOSSimulatorNativeSidecarSandboxLaunchState | null = null;
+    let channel: IOSSimulatorNativeSidecarManagedChannel | null = null;
+    try {
+      await this.#verifyBinaryIntegrity(input.instanceId);
+      if (!this.#options.createChannel) {
+        try {
+          await access(this.#options.binaryPath, constants.X_OK);
+        } catch {
+          throw new IOSSimulatorNativeSidecarProcessManagerError(
+            "BINARY_UNAVAILABLE",
+            "Native sidecar executable is unavailable",
+          );
+        }
       }
-    }
-    const sandbox = await this.#prepareSandbox(input, operation);
-    const channel =
-      this.#options.createChannel?.(input) ??
-      new IOSSimulatorNativeSidecarChannel(
-        this.#createChannelOptions(input, preflight, sandbox),
+      sandbox = await this.#prepareSandbox(input, operation);
+      channel =
+        this.#options.createChannel?.(input) ??
+        new IOSSimulatorNativeSidecarChannel(
+          this.#createChannelOptions(input, preflight, sandbox),
+        );
+    } catch (error) {
+      const failure = safeProcessManagerFailure(
+        error,
+        "Native sidecar process failed to start.",
       );
+      this.#lastAdmission.set(
+        input.instanceId,
+        evaluateIOSSimulatorNativeCapabilityAdmission({
+          policy,
+          processState: operation.stopRequested ? "stopped" : "failed",
+          now: this.#options.now,
+        }),
+      );
+      if (operation.stopRequested) {
+        this.#lastFailure.delete(input.instanceId);
+      } else {
+        this.#lastFailure.set(input.instanceId, failure.message);
+      }
+      if (sandbox) await this.#disposeSandbox(sandbox);
+      throw failure;
+    }
+    this.#recoveryEligible.set(input.instanceId, true);
     operation.channel = channel;
     this.#liveChannels.add(channel);
     try {
@@ -922,6 +956,7 @@ export class IOSSimulatorNativeSidecarProcessManager {
     operation: PendingSidecarOperation,
   ): Promise<IOSSimulatorNativeSidecarRunningInstance> {
     this.#lastFailure.delete(input.instanceId);
+    this.#recoveryEligible.set(input.instanceId, true);
     let policy = running.policy;
     try {
       policy = this.#resolveAdmissionPolicy(input);
@@ -1350,6 +1385,7 @@ export class IOSSimulatorNativeSidecarProcessManager {
         }),
       );
       this.#lastFailure.delete(instanceId);
+      this.#recoveryEligible.delete(instanceId);
     }
   }
 

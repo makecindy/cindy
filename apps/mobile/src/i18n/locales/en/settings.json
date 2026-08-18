@@ -37,6 +37,14 @@
     "checkFailedDetail": "Update check failed: {{detail}}",
     "checkFailed": "Update check failed. Try again later."
   },
+  "betaChannel": {
+    "title": "Beta channel",
+    "description": "Join the beta channel to receive upcoming client updates early.",
+    "restartHint": "The beta channel takes effect after restarting the app. Please restart to apply.",
+    "ok": "Got it",
+    "saveFailed": "Failed to save beta channel setting",
+    "unavailable": "The beta channel is unavailable — could not reach the beta update server."
+  },
   "notifications": {
     "sectionTitle": "Notifications",
     "taskDone": "Task Completion Notifications",

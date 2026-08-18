@@ -1472,16 +1472,23 @@ function groupMessageWorkRuns<
 ): MessageRenderItem<TMessage>[] {
   const out: MessageRenderItem<TMessage>[] = [];
   let currentTurn: MessageRenderItem<TMessage>[] = [];
+  // turn 开场边界（用户消息）的时间戳；窗口截断没见到用户消息时为 null，
+  // 各分组路径退回段内锚点。
+  let turnStartMs: number | null = null;
 
   const flushTurn = (activeTail: boolean) => {
     if (currentTurn.length === 0) return;
     if (activeTail && isSessionStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn));
+      out.push(...groupActiveWorkRuns(currentTurn, turnStartMs));
       currentTurn = [];
       return;
     }
-    const grouped = groupAnsweredTurnItems(currentTurn);
-    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn)));
+    const grouped = groupAnsweredTurnItems(currentTurn, turnStartMs);
+    out.push(
+      ...(grouped.handled
+        ? grouped.items
+        : groupLegacyWorkRuns(currentTurn, turnStartMs)),
+    );
     currentTurn = [];
   };
 
@@ -1501,6 +1508,7 @@ function groupMessageWorkRuns<
       flushTurn(false);
       out.push(item);
       noteEnd(item);
+      turnStartMs = itemTimestamp(item);
       continue;
     }
     // 窗口空洞:user 行是唯一的 turn 边界,窗口里缺了它,两段不相干的历史就会被折进同一个
@@ -1513,6 +1521,9 @@ function groupMessageWorkRuns<
       && startMs - prevEndMs > HISTORY_GAP_SPLIT_MS
     ) {
       flushTurn(false);
+      // 空洞切开的新段没有已知 turn 开场边界：旧 user 行在空洞另一侧（或未加载）。
+      // 清空后与窗口截断同义，各路径会退回首个活动时间，避免把空洞计入时长。
+      turnStartMs = null;
     }
     currentTurn.push(item);
     noteEnd(item);
@@ -1523,7 +1534,10 @@ function groupMessageWorkRuns<
 
 function groupAnsweredTurnItems<
   TMessage extends MessageRenderNormalizedMessage,
->(items: readonly MessageRenderItem<TMessage>[]): {
+>(
+  items: readonly MessageRenderItem<TMessage>[],
+  turnStartMs: number | null = null,
+): {
   items: MessageRenderItem<TMessage>[];
   handled: boolean;
 } {
@@ -1597,9 +1611,10 @@ function groupAnsweredTurnItems<
 
   const out: MessageRenderItem<TMessage>[] = [];
   let run: MessageRenderWorkChildItem<TMessage>[] = [];
+  let previousBoundaryMs = turnStartMs;
   const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
     if (run.length === 0) return;
-    out.push(createCompletedWorkGroup(run, nextItem));
+    out.push(createCompletedWorkGroup(run, nextItem, previousBoundaryMs));
     run = [];
   };
 
@@ -1615,6 +1630,7 @@ function groupAnsweredTurnItems<
     } else {
       flushRun(item);
       out.push(item);
+      previousBoundaryMs = boundaryTimestamp(item);
     }
   }
   flushRun();
@@ -1623,12 +1639,14 @@ function groupAnsweredTurnItems<
 
 function groupLegacyWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
   items: readonly MessageRenderItem<TMessage>[],
+  turnStartMs: number | null = null,
 ): MessageRenderItem<TMessage>[] {
   const out: MessageRenderItem<TMessage>[] = [];
   let run: MessageRenderWorkChildItem<TMessage>[] = [];
+  let previousBoundaryMs = turnStartMs;
   const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
     if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem));
+    out.push(createWorkGroup(run, nextItem, false, previousBoundaryMs));
     run = [];
   };
   for (const item of items) {
@@ -1636,6 +1654,7 @@ function groupLegacyWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
     else {
       flushRun(item);
       out.push(item);
+      previousBoundaryMs = boundaryTimestamp(item);
     }
   }
   flushRun();
@@ -1645,6 +1664,7 @@ function groupLegacyWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
 /** Active turn: assistant text and compact cards close the previous activity run. */
 function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
   items: readonly MessageRenderItem<TMessage>[],
+  turnStartMs: number | null = null,
 ): MessageRenderItem<TMessage>[] {
   let lastCompletedBoundaryIndex = -1;
   for (let index = 0; index < items.length; index++) {
@@ -1656,9 +1676,17 @@ function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
   const out: MessageRenderItem<TMessage>[] = [];
   let run: MessageRenderWorkChildItem<TMessage>[] = [];
   let runLastIndex = -1;
+  let previousBoundaryMs = turnStartMs;
   const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
     if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem, runLastIndex > lastCompletedBoundaryIndex));
+    out.push(
+      createWorkGroup(
+        run,
+        nextItem,
+        runLastIndex > lastCompletedBoundaryIndex,
+        previousBoundaryMs,
+      ),
+    );
     run = [];
   };
   for (let index = 0; index < items.length; index++) {
@@ -1671,6 +1699,7 @@ function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
       out.push(item.type === 'todo'
         ? { ...item, isStreaming: index > lastCompletedBoundaryIndex }
         : item);
+      previousBoundaryMs = boundaryTimestamp(item);
     }
   }
   flushRun();
@@ -1803,16 +1832,33 @@ function isWorkActivityItem<TMessage extends MessageRenderNormalizedMessage>(
     && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task');
 }
 
+/** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界。 */
+function boundaryTimestamp<TMessage extends MessageRenderNormalizedMessage>(
+  item: MessageRenderItem<TMessage> | undefined,
+): number | null {
+  return item?.type === 'message' ? itemTimestamp(item) : null;
+}
+
 function createWorkGroup<
   TMessage extends MessageRenderNormalizedMessage,
 >(
   children: MessageRenderWorkChildItem<TMessage>[],
   nextItem?: MessageRenderItem<TMessage>,
   isStreaming = false,
+  previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const firstActivity = children.find((item) => item.type !== 'message' || item.message.kind === 'thinking');
-  const start = itemTimestamp(firstActivity ?? children[0]);
-  const end = nextItem ? itemTimestamp(nextItem) : workRunFallbackEnd(children);
+  const anchor = itemTimestamp(firstActivity ?? children[0]);
+  // 段起点优先锚上一个边界（用户消息 / 上一句正文），与桌面活表口径一致。
+  // 边界缺失（窗口截断）或时序异常时退回段内首个活动。
+  const start =
+    previousBoundaryMs !== null && (anchor === null || previousBoundaryMs <= anchor)
+      ? previousBoundaryMs
+      : anchor;
+  const end =
+    nextItem?.type === 'message'
+      ? itemTimestamp(nextItem)
+      : workRunFallbackEnd(children);
   const durationMs = start !== null && end !== null && end >= start ? end - start : undefined;
   return {
     type: 'work_group',
@@ -1827,17 +1873,21 @@ function createWorkGroup<
 function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessage>(
   run: MessageRenderWorkChildItem<TMessage>[],
   nextItem?: MessageRenderItem<TMessage>,
+  previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const hasAssistantText = run.some(
     (item) => item.type === 'message' && item.message.kind === 'assistant',
   );
-  if (!hasAssistantText) return createWorkGroup(run, nextItem);
+  if (!hasAssistantText) return createWorkGroup(run, nextItem, false, previousBoundaryMs);
 
   const children: MessageRenderWorkChildItem<TMessage>[] = [];
   let activityRun: MessageRenderWorkChildItem<TMessage>[] = [];
+  let innerPreviousBoundaryMs = previousBoundaryMs;
   const flushActivityRun = (activityNextItem?: MessageRenderItem<TMessage>) => {
     if (activityRun.length === 0) return;
-    children.push(createWorkGroup(activityRun, activityNextItem));
+    children.push(
+      createWorkGroup(activityRun, activityNextItem, false, innerPreviousBoundaryMs),
+    );
     activityRun = [];
   };
   for (const item of run) {
@@ -1846,10 +1896,11 @@ function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessag
     } else {
       flushActivityRun(item);
       children.push(item);
+      innerPreviousBoundaryMs = boundaryTimestamp(item);
     }
   }
   flushActivityRun(nextItem);
-  const outer = createWorkGroup(run, nextItem);
+  const outer = createWorkGroup(run, nextItem, false, previousBoundaryMs);
   const firstActivity = run.find((item) => item.type !== 'message' || item.message.kind === 'thinking');
   return {
     ...outer,

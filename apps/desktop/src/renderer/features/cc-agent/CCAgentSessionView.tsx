@@ -4214,6 +4214,7 @@ export function CCAgentSessionView({
                 onContinueAfterUsageReset={
                   usageLimitRecovery && !remoteDeviceId ? handleContinueAfterUsageReset : undefined
                 }
+                usageLimitRecovery={usageLimitRecovery}
                 onCancel={handleDismissError}
                 agentKind={session?.agentKind}
                 remoteHostId={session?.remoteHostId ?? undefined}
@@ -4402,7 +4403,7 @@ export function CCAgentSessionView({
                   sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
-                  deviceLinkDeviceId={remoteDeviceId}
+                  deviceLinkDeviceId={rightSidebarDeviceLinkDeviceId}
                   modelMemoryOverride={remoteModelMemoryOverride}
                   initialModel={session?.model}
                   initialProviderId={session?.providerId ?? null}

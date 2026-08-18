@@ -105,7 +105,11 @@ describe('SessionItem activity time', () => {
 
   it('keeps the archive shortcut in the same right-side slot instead of crowding the time', () => {
     expect(sessionItemSource).toContain(
-      'relative ml-auto flex h-6 shrink-0 items-center justify-end min-w-14',
+      'relative ml-auto flex h-6 shrink-0 items-center justify-end',
+    );
+    // 文字模式信息槽按内容收缩:「任务信息 = 无」或短时间都不能再预留 56px 空位挤标题。
+    expect(sessionItemSource).not.toMatch(
+      /group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end min-w-14/,
     );
     expect(sessionItemSource).toContain('<WorktreeBadge sessionId={session.id}');
     expect(sessionItemSource).toContain('canQuickArchive && archivePending &&');
@@ -114,8 +118,12 @@ describe('SessionItem activity time', () => {
     );
     expect(sessionItemSource).toContain('group/slot relative ml-auto');
     expect(sessionItemSource).toContain(
-      'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+      'grid h-6 grid-cols-[max-content] items-center justify-items-end',
     );
     expect(sessionItemSource).toContain('absolute right-0 top-0 flex h-6 items-center gap-0.5');
+    expect(sessionItemSource).toContain(
+      'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+    );
+    expect(sessionItemSource).toContain("'hidden group-hover:flex group-focus-within/slot:flex'");
   });
 });

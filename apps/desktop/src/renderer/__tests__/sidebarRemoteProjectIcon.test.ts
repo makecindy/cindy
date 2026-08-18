@@ -60,7 +60,7 @@ describe('sidebar remote project icon', () => {
     );
     // C 期起右侧时间槽由 SessionInfoMeta 承担(任务信息复选),仍在同一让位容器内。
     expect(sessionItemSource).toMatch(
-      /<div className="group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end min-w-14">[\s\S]*?<WorktreeBadge[\s\S]*?<SessionInfoMeta/,
+      /<div className="group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">[\s\S]*?<WorktreeBadge[\s\S]*?<SessionInfoMeta/,
     );
     expect(sessionCardSource).toContain('function TimeActionsSlot');
     expect(sessionCardSource).not.toMatch(/function TimeActionsSlot[\s\S]*?remoteIconKind/);
@@ -89,6 +89,16 @@ describe('sidebar remote project icon', () => {
     expect(projectsSectionSource).toContain(
       '<span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">',
     );
+  });
+
+  // 2026-08-17 用户裁决:绿点容易被误认成未读标记。在线是设备段的常态,不额外画点;
+  // 离线仍保留灰点 + 文字,异常状态不能静默。
+  it('shows a status dot only for offline device group headers', () => {
+    expect(projectsSectionSource).not.toContain('bg-[var(--card-status-done)]');
+    expect(projectsSectionSource).toMatch(
+      /\{!online && \([\s\S]*?bg-\[var\(--text-tertiary\)\][\s\S]*?\)\}/,
+    );
+    expect(projectsSectionSource).toContain("t('ccAgent.sidebar.deviceGroup.offline')");
   });
 
   // 2026-08-12 用户裁决:按设备分组时列表已按设备切段、段头写着设备名,项目行不再

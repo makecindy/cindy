@@ -7,6 +7,10 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { resolveUpdateChannel, type UpdateChannel } from '@cindy/maker-shared/update-channel';
+
+import { isBetaChannel } from './betaChannelStore';
+
 export const CANARY_UPDATE_HEADER = 'x-cindy-update-channel';
 const STORAGE_KEY = 'cindy.mobile.update.canary';
 
@@ -103,8 +107,17 @@ export function clearCanaryChannel(): Promise<void> {
   return enqueueMutation(() => AsyncStorage.removeItem(STORAGE_KEY));
 }
 
-export function updateChannelRequestHeaders(isCanary: boolean): Record<string, string> {
-  return isCanary ? { [CANARY_UPDATE_HEADER]: 'canary' } : {};
+export function updateChannelRequestHeaders(channel: UpdateChannel): Record<string, string> {
+  return channel === 'release' ? {} : { [CANARY_UPDATE_HEADER]: channel };
+}
+
+/**
+ * 设备级发布通道收敛:账号 canary 快照 + 设备 beta 开关。
+ * 优先级 canary > beta > release(canary 命中时忽略 beta)。
+ * 未 hydrate 时两个 store 都返回 stable,结果即 release(与启动 gate 一致)。
+ */
+export function resolveUpdateChannelForDevice(): UpdateChannel {
+  return resolveUpdateChannel(isCanaryChannel(), isBetaChannel());
 }
 
 export const __testing = {

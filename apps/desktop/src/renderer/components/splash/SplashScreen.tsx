@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -8,8 +8,10 @@ import {
   useSplash,
   type SplashPhase,
 } from '@/hooks/useSplash';
+import { useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { useEnvCheck } from '@/contexts/EnvCheckContext';
 import { useLoginHandoff } from '@/contexts/LoginHandoffContext';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { desktopScale } from '@/components/login/loginScale';
 import { useViewportSize } from '@/components/login/LoginStage';
@@ -91,14 +93,24 @@ export function SplashScreen() {
   const { t } = useTranslation();
   const splash = useSplash();
   const { step, totalSteps } = useEnvCheck();
+  const { coverHeld } = useAppShellCover();
+  const reducedMotion = useReducedMotion();
   const handoff = useLoginHandoff();
+  const [shellCoverFading, setShellCoverFading] = useState(false);
+  const prevCoverHeldRef = useRef(coverHeld);
   const { width, height } = useViewportSize();
   const { scale } = desktopScale(width, height);
 
   // dev fixture 只改显示 phase(附录 A splash 行;PROD 恒 null)。
   const fixture = readSplashPhaseFixture();
-  const displayPhase: SplashPhase = fixture ? splashPhaseForFixture(fixture) : splash.phase;
   const realPhase = splash.phase;
+  const holdAfterDone =
+    coverHeld && (realPhase === 'splash_done' || realPhase === 'splash_skipped');
+  const displayPhase: SplashPhase = fixture
+    ? splashPhaseForFixture(fixture)
+    : holdAfterDone || shellCoverFading
+      ? 'splash_passed'
+      : realPhase;
 
   const {
     isDownloading: realIsDownloading,
@@ -123,13 +135,33 @@ export function SplashScreen() {
     prevResetRef.current = resetSignal;
   });
 
+  const splashLifecycleActive =
+    realPhase !== 'fading_out' &&
+    realPhase !== 'splash_done' &&
+    realPhase !== 'splash_skipped';
+
+  useEffect(() => {
+    if (prevCoverHeldRef.current && !coverHeld && (realPhase === 'splash_done' || realPhase === 'splash_skipped')) {
+      // reduced-motion 把 --splash-fade-duration 置 0ms。再留 500ms 透明全屏层
+      // 会吞掉主界面刚露出时的点击(层未 pointer-events:none)。
+      if (reducedMotion) {
+        prevCoverHeldRef.current = coverHeld;
+        return;
+      }
+      setShellCoverFading(true);
+      const timer = window.setTimeout(() => setShellCoverFading(false), 500);
+      prevCoverHeldRef.current = coverHeld;
+      return () => window.clearTimeout(timer);
+    }
+    if (holdAfterDone) setShellCoverFading(false);
+    prevCoverHeldRef.current = coverHeld;
+  }, [coverHeld, holdAfterDone, realPhase, reducedMotion]);
+
+  const shellCoverVisible = holdAfterDone || shellCoverFading;
+
   useEffect(() => {
     const root = document.documentElement;
-    if (
-      realPhase !== 'fading_out' &&
-      realPhase !== 'splash_done' &&
-      realPhase !== 'splash_skipped'
-    ) {
+    if (splashLifecycleActive || shellCoverVisible) {
       root.setAttribute('data-splash-active', '1');
     } else {
       root.removeAttribute('data-splash-active');
@@ -137,7 +169,7 @@ export function SplashScreen() {
     return () => {
       root.removeAttribute('data-splash-active');
     };
-  }, [realPhase]);
+  }, [shellCoverVisible, splashLifecycleActive]);
 
   // handoff 推进锚之一:Splash 开始退场(fading_out/done/skipped)即上报。
   const splashExitReportedRef = useRef(false);
@@ -155,7 +187,9 @@ export function SplashScreen() {
 
   // dev fixture 激活时冻结停留:真实生命周期跑完也不退场,供状态遍历/视觉走查
   // (readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
-  if (!fixture && (realPhase === 'splash_done' || realPhase === 'splash_skipped')) return null;
+  if (!fixture && (realPhase === 'splash_done' || realPhase === 'splash_skipped') && !shellCoverVisible) {
+    return null;
+  }
 
   const isMac = window.electronAPI?.platform === 'darwin';
 
@@ -194,7 +228,9 @@ export function SplashScreen() {
     <div
       className={cn(
         'fixed inset-0 z-[9999] overflow-hidden',
-        realPhase === 'fading_out' && !fixture ? 'opacity-0' : 'opacity-100',
+        (realPhase === 'fading_out' || shellCoverFading) && !fixture
+          ? 'pointer-events-none opacity-0'
+          : 'opacity-100',
       )}
       style={
         {

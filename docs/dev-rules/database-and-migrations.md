@@ -90,6 +90,10 @@ companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typ
 
 - 未进入 `main` 的 migration 禁止连接共享 Cindy userData 运行；否则分支换号或回退后会让
   本地 `schema_version` 与真实结构永久分叉。
+- **已合入 `main`、但安装包还没带上的 migration 同样不得写进正式 profile。** unpackaged
+  writer 在 Cindy / CindyGlobal / CindyDev 上发现 pending 就 fail closed（2026-08-16：
+  checkout 带着 0091 把 0.1.50 的共享库升到 91，安装版打不开）。要验证新 schema 必须
+  `--isolated[=<名字>]`；等正式版发布后再用共享目录。
 - 需要启动验证时，按照 `desktop-development.md` 的参数说明使用显式
   `--isolated[=<名字>]` 沙箱。migration replay 自身使用临时数据库，不污染用户数据。
 - 不得为了测试 migration 临时改写、降级或删除用户数据库；需要历史状态时新增最小 fixture。

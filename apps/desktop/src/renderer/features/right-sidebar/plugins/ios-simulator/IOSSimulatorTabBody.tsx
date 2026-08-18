@@ -62,6 +62,46 @@ type StandardStreamProfileName = 'low' | 'balanced' | 'high';
 type StreamProfileName = StandardStreamProfileName | 'experimental60';
 type StreamProfile = { framesPerSecond: number; jpegQuality: number; scalingPercent: number };
 type NativeStreamProfile = { framesPerSecond: number; scalingPercent: number };
+type StatusErrorKey =
+  | 'rightSidebar.iosSimulator.connectionError'
+  | 'rightSidebar.iosSimulator.pluginNotInstalled'
+  | 'rightSidebar.iosSimulator.pluginDisabled'
+  | 'rightSidebar.iosSimulator.pluginDisabledForProject'
+  | 'rightSidebar.iosSimulator.pluginSessionUnavailable'
+  | 'rightSidebar.iosSimulator.pluginStateChanging'
+  | 'rightSidebar.iosSimulator.statusInternalError';
+
+function statusErrorI18nKey(error: unknown): StatusErrorKey {
+  switch (extractIpcError(error)?.code) {
+    case 'IOS_SIMULATOR_PLUGIN_REQUIRED':
+      return 'rightSidebar.iosSimulator.pluginNotInstalled';
+    case 'IOS_SIMULATOR_PLUGIN_DISABLED':
+      return 'rightSidebar.iosSimulator.pluginDisabled';
+    case 'IOS_SIMULATOR_DISABLED':
+      return 'rightSidebar.iosSimulator.pluginDisabledForProject';
+    case 'IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE':
+      return 'rightSidebar.iosSimulator.pluginSessionUnavailable';
+    case 'PRECONDITION_FAILED':
+      return 'rightSidebar.iosSimulator.pluginStateChanging';
+    case 'INTERNAL':
+      return 'rightSidebar.iosSimulator.statusInternalError';
+    default:
+      return 'rightSidebar.iosSimulator.connectionError';
+  }
+}
+
+function statusErrorInvalidatesSimulatorAccess(error: unknown): boolean {
+  switch (extractIpcError(error)?.code) {
+    case 'IOS_SIMULATOR_PLUGIN_REQUIRED':
+    case 'IOS_SIMULATOR_PLUGIN_DISABLED':
+    case 'IOS_SIMULATOR_DISABLED':
+    case 'IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE':
+    case 'PRECONDITION_FAILED':
+      return true;
+    default:
+      return false;
+  }
+}
 
 function actionErrorI18nKey(errorCode: string): string {
   switch (errorCode) {
@@ -140,12 +180,7 @@ function nativeRecoveryBackoff(attemptCount: number): number {
 }
 
 function isRecoverableNativeFallback(status: IOSSimulatorPublicRouteStatus | null): boolean {
-  if (!status) return false;
-  return (
-    status.stream.reasonCode === 'native-stream-disconnected' ||
-    status.stream.reasonCode === 'native-sidecar-unavailable' ||
-    status.input.reasonCode === 'native-sidecar-unavailable'
-  );
+  return status?.nativeRecoveryAvailable === true;
 }
 
 /** Translate stable discovery codes instead of leaking host-side English guidance into the UI. */
@@ -212,6 +247,11 @@ function resultMutation(result: IOSSimulatorToolResponse): IOSSimulatorMutationS
   if (!result.ok || !result.data || typeof result.data !== 'object') return null;
   const mutation = (result.data as { mutation?: unknown }).mutation;
   return mutation && typeof mutation === 'object' ? (mutation as IOSSimulatorMutationState) : null;
+}
+
+function resultNativeRecovered(result: IOSSimulatorToolResponse): boolean {
+  if (!result.ok || !result.data || typeof result.data !== 'object') return false;
+  return (result.data as { nativeRecovered?: unknown }).nativeRecovered === true;
 }
 
 function mergeRouteStatus(
@@ -283,7 +323,7 @@ export function IOSSimulatorTabBody({
   const [routeStatuses, setRouteStatuses] = useState<Record<string, IOSSimulatorPublicRouteStatus>>(
     {},
   );
-  const [transportError, setTransportError] = useState(false);
+  const [statusErrorKey, setStatusErrorKey] = useState<StatusErrorKey | null>(null);
   const [accessRequired, setAccessRequired] = useState(false);
   const [requestingAccess, setRequestingAccess] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -302,7 +342,10 @@ export function IOSSimulatorTabBody({
   const [textInput, setTextInput] = useState('');
   const [streamProfile, setStreamProfile] = useState<StreamProfileName>('balanced');
   const [viewerReadyToken, setViewerReadyToken] = useState<string | null>(null);
+  const [nativeRecoveryPending, setNativeRecoveryPending] = useState(false);
+  const [nativeRecoveryFailed, setNativeRecoveryFailed] = useState(false);
   const requestVersionRef = useRef(0);
+  const nativeRecoveryRequestRef = useRef(0);
   const frameSequenceRef = useRef(0);
   const frameEncodingRef = useRef<'jpeg' | 'h264' | null>(null);
   const fpsWindowRef = useRef({ startedAt: 0, frames: 0 });
@@ -393,13 +436,13 @@ export function IOSSimulatorTabBody({
   const refresh = useCallback(async () => {
     const requestVersion = ++requestVersionRef.current;
     setRefreshing(true);
-    setTransportError(false);
+    setStatusErrorKey(null);
     try {
       const next = await window.electronAPI.maker.iosSimulator.status({
         sessionId: ctx.sessionId,
       });
       if (requestVersion === requestVersionRef.current) {
-        setAccessRequired(false);
+        setAccessRequired(next.ok && next.controlAccess === 'paused');
         setStatus(next);
       }
       return next;
@@ -410,7 +453,12 @@ export function IOSSimulatorTabBody({
           setStatus(null);
           setRouteStatuses({});
         } else {
-          setTransportError(true);
+          setAccessRequired(false);
+          if (statusErrorInvalidatesSimulatorAccess(error)) {
+            setStatus(null);
+            setRouteStatuses({});
+          }
+          setStatusErrorKey(statusErrorI18nKey(error));
         }
       }
       return null;
@@ -421,7 +469,7 @@ export function IOSSimulatorTabBody({
 
   const requestAccess = useCallback(async () => {
     setRequestingAccess(true);
-    setTransportError(false);
+    setStatusErrorKey(null);
     try {
       const result = await window.electronAPI.maker.iosSimulator.requestAccess({
         sessionId: ctx.sessionId,
@@ -430,8 +478,13 @@ export function IOSSimulatorTabBody({
         setAccessRequired(false);
         await refresh();
       }
-    } catch {
-      setTransportError(true);
+    } catch (error) {
+      if (extractIpcError(error)?.code === 'PERMISSION_DENIED') {
+        setAccessRequired(true);
+      } else {
+        setAccessRequired(false);
+        setStatusErrorKey(statusErrorI18nKey(error));
+      }
     } finally {
       setRequestingAccess(false);
     }
@@ -517,7 +570,8 @@ export function IOSSimulatorTabBody({
   const agentBusy = Boolean(
     mutation?.activeSource === 'agent' || (mutation?.queuedAgentMutations ?? 0) > 0,
   );
-  const busy = operation !== null || interactionBusy || agentBusy;
+  const controlPaused = Boolean(status?.ok && status.controlAccess === 'paused');
+  const busy = operation !== null || interactionBusy || agentBusy || controlPaused;
   const viewerVisible = Boolean(
     active && shellVisible && attachedInstance?.lifecycleState === 'ready',
   );
@@ -573,6 +627,12 @@ export function IOSSimulatorTabBody({
     routeStatus?.stream.state,
     viewerRouteKey,
   ]);
+
+  useEffect(() => {
+    nativeRecoveryRequestRef.current += 1;
+    setNativeRecoveryPending(false);
+    setNativeRecoveryFailed(false);
+  }, [viewerRouteKey]);
 
   useEffect(() => {
     const nextId = attachedInstance?.instanceId ?? null;
@@ -1117,6 +1177,50 @@ export function IOSSimulatorTabBody({
     [attachedInstance, formatActionError, nativeH264Active, sendStreamProfile, streamProfile, t],
   );
 
+  const retryNativeRoute = useCallback(async () => {
+    if (
+      !attachedInstance ||
+      attachedInstance.lifecycleState !== 'ready' ||
+      !viewerRouteKey ||
+      nativeRecoveryPending
+    ) {
+      return;
+    }
+    const viewerIdentity = viewerIdentityRef.current;
+    if (!viewerIdentity || viewerIdentity.routeKey !== viewerRouteKey) return;
+    const requestId = ++nativeRecoveryRequestRef.current;
+    const requestIsCurrent = () => {
+      const current = viewerIdentityRef.current;
+      return (
+        nativeRecoveryRequestRef.current === requestId &&
+        current?.routeKey === viewerIdentity.routeKey &&
+        current.viewerToken === viewerIdentity.viewerToken
+      );
+    };
+    setNativeRecoveryPending(true);
+    setNativeRecoveryFailed(false);
+    try {
+      if (!(await viewerIdentity.ready)) {
+        if (requestIsCurrent()) setNativeRecoveryFailed(true);
+        return;
+      }
+      if (!requestIsCurrent()) return;
+      const result = await window.electronAPI.maker.iosSimulator.retryNativeRoute({
+        sessionId: ctx.sessionId,
+        ...routeFor(attachedInstance),
+        viewerToken: viewerIdentity.viewerToken,
+      });
+      if (!requestIsCurrent()) return;
+      const nativeRecovered = resultNativeRecovered(result);
+      if (nativeRecovered || resultInstance(result)) await refresh();
+      if (requestIsCurrent() && !nativeRecovered) setNativeRecoveryFailed(true);
+    } catch {
+      if (requestIsCurrent()) setNativeRecoveryFailed(true);
+    } finally {
+      if (requestIsCurrent()) setNativeRecoveryPending(false);
+    }
+  }, [attachedInstance, ctx.sessionId, nativeRecoveryPending, refresh, viewerRouteKey]);
+
   useEffect(() => {
     setStreamProfile('balanced');
     streamProfileRef.current = 'balanced';
@@ -1621,7 +1725,7 @@ export function IOSSimulatorTabBody({
           />
         </header>
 
-        {!status && !transportError && !accessRequired && (
+        {!status && !statusErrorKey && !accessRequired && (
           <StatusCard icon={RefreshCw} title={t('rightSidebar.iosSimulator.checking')} />
         )}
 
@@ -1656,11 +1760,11 @@ export function IOSSimulatorTabBody({
           </div>
         )}
 
-        {transportError && (
+        {statusErrorKey && (
           <StatusCard
             icon={AlertTriangle}
             title={t('rightSidebar.iosSimulator.unavailableTitle')}
-            description={t('rightSidebar.iosSimulator.connectionError')}
+            description={t(statusErrorKey)}
           />
         )}
 
@@ -1823,7 +1927,7 @@ export function IOSSimulatorTabBody({
                             : 'rightSidebar.iosSimulator.takeControl',
                         )}
                         icon={mutation?.agentPaused ? Play : ShieldCheck}
-                        disabled={operation !== null || mutation?.takeoverPending}
+                        disabled={operation !== null || mutation?.takeoverPending || controlPaused}
                         onClick={() => void setMutationControl()}
                       />
                     </div>
@@ -1889,6 +1993,35 @@ export function IOSSimulatorTabBody({
                             </span>
                           </>
                         )}
+                      {isRecoverableNativeFallback(routeStatus) && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            role={nativeRecoveryFailed ? 'alert' : undefined}
+                            aria-live={nativeRecoveryFailed ? 'assertive' : 'polite'}
+                            className="text-pretty leading-relaxed"
+                          >
+                            {t(
+                              nativeRecoveryPending
+                                ? 'rightSidebar.iosSimulator.nativeRecovery.recovering'
+                                : nativeRecoveryFailed
+                                  ? 'rightSidebar.iosSimulator.nativeRecovery.failed'
+                                  : 'rightSidebar.iosSimulator.nativeRecovery.available',
+                            )}
+                          </span>
+                          <ActionButton
+                            label={t(
+                              nativeRecoveryPending
+                                ? 'rightSidebar.iosSimulator.nativeRecovery.recoveringAction'
+                                : 'rightSidebar.iosSimulator.nativeRecovery.action',
+                            )}
+                            icon={nativeRecoveryPending ? Loader2 : RefreshCw}
+                            spinning={nativeRecoveryPending}
+                            disabled={nativeRecoveryPending || !viewerReadyToken || controlPaused}
+                            onClick={() => void retryNativeRoute()}
+                          />
+                        </>
+                      )}
                     </div>
                     <div className="mt-3 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface)]">
                       <div className="relative flex min-h-48 items-center justify-center p-2">
@@ -1900,7 +2033,7 @@ export function IOSSimulatorTabBody({
                             })}
                             title={t('rightSidebar.iosSimulator.gestureHint')}
                             className={cn(
-                              'max-h-[520px] max-w-full touch-none select-none object-contain',
+                              'block h-auto w-full touch-none select-none object-contain',
                               framePresentation === 'jpeg' ? null : 'hidden',
                               busy
                                 ? 'cursor-wait opacity-80'
@@ -1925,7 +2058,7 @@ export function IOSSimulatorTabBody({
                           aria-hidden={!(presentationMatchesRoute && framePresentation === 'h264')}
                           title={t('rightSidebar.iosSimulator.gestureHint')}
                           className={cn(
-                            'max-h-[520px] max-w-full touch-none select-none object-contain',
+                            'block h-auto w-full touch-none select-none object-contain',
                             presentationMatchesRoute && framePresentation === 'h264'
                               ? null
                               : 'hidden',

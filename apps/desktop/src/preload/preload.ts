@@ -160,6 +160,7 @@ import type {
   IOSSimulatorRouteStatusPush,
   IOSSimulatorLiveTouchRequest,
   IOSSimulatorMutationControlRequest,
+  IOSSimulatorRetryNativeRouteRequest,
   IOSSimulatorStatusRequest,
   IOSSimulatorToolRequest,
   IOSSimulatorToolResponse,
@@ -385,6 +386,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutUpdateChannelSettings = createIpcFanOut('update-channel-settings');
 const fanOutOrcaWorkerChanged = createIpcFanOut('maker:orca:worker-changed');
 // 右侧栏独立子窗口(RSB window)状态 / 上下文 / 命令推送
 const fanOutRsbWindowStateChanged = createIpcFanOut('maker:rsb-window:state-changed');
@@ -640,6 +642,7 @@ const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-chan
 const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
 const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
 const fanOutMakerUsageClaudeSubscription = createIpcFanOut('usage:claude-subscription-changed'); // Claude 订阅余量
+const fanOutMakerUsageXaiSubscription = createIpcFanOut('usage:xai-subscription-changed'); // SuperGrok 周用量
 // 跨 Agent 工作区互转 — 转换进度 push (per step)
 const fanOutCrossAgentStep = createIpcFanOut('maker:cross-agent:step');
 // Scheduler (Phase 4) — 4 个 SchedulerEvent 类型 ('fired'|'completed'|'failed'|'changed')
@@ -1058,7 +1061,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      imageEdit: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
       video: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
+      videoEdit: {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
@@ -2238,6 +2249,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-reset'),
+  // beta 测试渠道(设备级)开关
+  getUpdateChannelSettings: (): Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }> => ipcRenderer.invoke('update-channel-settings-get'),
+  setUpdateChannelSettings: (settings: {
+    enableBeta: boolean;
+  }): Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }> => ipcRenderer.invoke('update-channel-settings-set', settings),
+  resetUpdateChannelSettings: (): Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }> => ipcRenderer.invoke('update-channel-settings-reset'),
+  relaunchForChannelChange: (): Promise<void> =>
+    ipcRenderer.invoke('update-channel-relaunch'),
+  probeBetaChannel: (): Promise<{ available: boolean }> =>
+    ipcRenderer.invoke('update-channel-probe-beta'),
   setUpdateRelaunchTheme: (theme: 'light' | 'dark'): void => {
     ipcRenderer.send('update-set-relaunch-theme', theme);
   },
@@ -3706,6 +3736,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── App Update (F2/F4) ──
 
   onUpdateStatus: fanOutUpdateStatus,
+  onUpdateChannelSettings: fanOutUpdateChannelSettings,
 
   checkForUpdate: (): Promise<{
     result:
@@ -5122,6 +5153,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         : {
             dataOwnerId: null,
             ownerGeneration: 0,
+            canWriteOwnerScoped: false,
             claimed: false,
             claimedByOtherOwner: false,
             canInitialize: false,
@@ -6156,6 +6188,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),
+    /** 输入框推荐提示词:turn 结束后预测用户下一步输入(turn 完成 → 调 IPC → 返回预测文本)。 */
+    predictNextPrompt: (request: {
+      sessionId: string;
+      agentKind: 'claude-code' | 'codex' | 'pi';
+      messages: Array<{ role: string; content: string }>;
+      workingDir?: string;
+      turnGen: number;
+    }): Promise<{ prompt: string | null }> =>
+      ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>
@@ -6256,6 +6297,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Claude 订阅账号余量 (5h/周/分模型窗口, cached-first, main 侧按需后台刷新)。 */
       getClaudeSubscription: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:claude-subscription'),
+      getXaiSubscription: (): Promise<unknown | null> =>
+        ipcRenderer.invoke('maker:usage:xai-subscription'),
       /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:model-pricing-v2'),
@@ -6279,6 +6322,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onXaiRateLimitChanged: fanOutMakerUsageXaiRateLimit,
       /** Claude 订阅余量推送 (端点后台刷新 / proxy 旁路 headers 更新时推送)。 */
       onClaudeSubscriptionChanged: fanOutMakerUsageClaudeSubscription,
+      onXaiSubscriptionChanged: fanOutMakerUsageXaiSubscription,
     },
 
     // ── Scheduler (Phase 4) ────────────────────────────────────────────────
@@ -6503,6 +6547,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         request: IOSSimulatorViewerVisibilityRequest,
       ): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
+      retryNativeRoute: (
+        request: IOSSimulatorRetryNativeRouteRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
       latestFrame: (request: IOSSimulatorViewerRouteRequest): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
       setStreamProfile: (

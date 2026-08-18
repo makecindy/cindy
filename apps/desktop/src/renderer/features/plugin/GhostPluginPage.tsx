@@ -1,7 +1,8 @@
 /**
  * Plugin catalog and detail coordinator backed by the latest Ghost host APIs.
  *
- * Inputs: installed Ghost snapshots and user actions.
+ * Inputs: installed Ghost snapshots and user actions. `embedded` mounts the same
+ * catalog inside Settings; `onSelectCatalogTab` keeps Plugins / Skills in-panel.
  * Outputs: the Plugin list/detail UI, focus-stable installed queue, and Plugin action flows.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -126,6 +127,7 @@ import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker'
 import {
   // 受体模型的两条纯推导:reapprove 路由判定 + 「市场复核目标是否命中已装」。
   // main 的卡片改版不再走 catalogItems 交织,orderPluginCatalogItems 已无引用故不引入。
+  canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
   pluginPresentationOrigin,
@@ -299,7 +301,13 @@ function readIgnoredRound(storageKey: string): string {
  * real Ghost runtime. The page deliberately keeps the previous list/detail
  * interaction shape, while every displayed field comes from InstalledGhost.
  */
-export function GhostPluginPage() {
+export function GhostPluginPage({
+  embedded = false,
+  onSelectCatalogTab,
+}: {
+  embedded?: boolean;
+  onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
+} = {}) {
   const { i18n, t } = useTranslation();
   const marketLocale = resolveSystemLocale(i18n.resolvedLanguage ?? i18n.language);
   const navigate = useNavigate();
@@ -812,10 +820,7 @@ export function GhostPluginPage() {
       pluginId: string;
       options: PluginMarketInstallOptions;
     }): Promise<InstalledGhost | null> => {
-      const result = await window.electronAPI.pluginMarket.install(
-        input.pluginId,
-        input.options,
-      );
+      const result = await window.electronAPI.pluginMarket.install(input.pluginId, input.options);
       return result.ghost ?? null;
     },
     [],
@@ -1081,7 +1086,7 @@ export function GhostPluginPage() {
     [confirm, ghosts, navigate, openGhostConfiguration, t],
   );
 
-  /** 卡片/详情主动作分发:面板型开页面内面板,指令/Host 能力型起对话,工具型进管理。 */
+  /** 卡片胶囊/详情主动作分发:面板型开页面内面板,指令/Host 能力型起对话,工具型进管理。整卡点击不走这里。 */
   const handlePrimaryAction = useCallback(
     (item: Pick<GhostPluginListItem, 'id' | 'name' | 'tabPanel' | 'canUse' | 'hostCapability'>) => {
       const action = ghostPrimaryAction(item);
@@ -1278,9 +1283,7 @@ export function GhostPluginPage() {
           ...(isUpdate && installedGhost
             ? { expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval) }
             : {}),
-          ...(isUpdate &&
-            (diff!.added.length > 0 ||
-              installedGhost?.approval.state !== 'approved')
+          ...(isUpdate && (diff!.added.length > 0 || installedGhost?.approval.state !== 'approved')
             ? {
                 allowPermissionExpansion: true,
                 ...(installedGhost
@@ -1380,7 +1383,11 @@ export function GhostPluginPage() {
               marketDetailRequestRef.current += 1;
               setMarketDetail(null);
             }}
-            onInstall={() => void handleInstallFromMarket()}
+            onInstall={
+              canOfferMarketInstall(mode, marketDetail.ghostId)
+                ? () => void handleInstallFromMarket()
+                : undefined
+            }
             onIconLoadError={handleMarketIconLoadError}
           />
         </div>
@@ -1438,6 +1445,8 @@ export function GhostPluginPage() {
       onQueryChange={setQuery}
       searchPlaceholder={t('settings.ghosts.page.search')}
       clearSearchLabel={t('settings.ghosts.page.clearSearch')}
+      embedded={embedded}
+      onSelectTab={onSelectCatalogTab}
       headerActions={
         <GhostPluginActions
           onInstall={() => void handleInstall()}
@@ -1447,7 +1456,12 @@ export function GhostPluginPage() {
       }
     >
       <div className="flex min-h-0 flex-1">
-        <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+        <main
+          className={cn(
+            'min-h-0 w-full min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]',
+            embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
+          )}
+        >
           <PluginManagementPage>
             <header className="plugin-motion-page-header pb-2">
               <div className="min-w-0">
@@ -1714,7 +1728,11 @@ export function GhostPluginPage() {
                                 item={item}
                                 busy={marketBusyId !== null}
                                 onSelect={() => void handleSelectMarket(item.pluginId)}
-                                onInstall={() => void handleInstallMarketItem(item.pluginId)}
+                                onInstall={
+                                  canOfferMarketInstall(mode, item.ghostId)
+                                    ? () => void handleInstallMarketItem(item.pluginId)
+                                    : undefined
+                                }
                                 onIconLoadError={handleMarketIconLoadError}
                               />
                             ))}
@@ -1730,7 +1748,11 @@ export function GhostPluginPage() {
                           item={item}
                           busy={marketBusyId !== null}
                           onSelect={() => void handleSelectMarket(item.pluginId)}
-                          onInstall={() => void handleInstallMarketItem(item.pluginId)}
+                          onInstall={
+                            canOfferMarketInstall(mode, item.ghostId)
+                              ? () => void handleInstallMarketItem(item.pluginId)
+                              : undefined
+                          }
                           onIconLoadError={handleMarketIconLoadError}
                         />
                       ))}
@@ -1835,9 +1857,7 @@ export function MarketPluginCard({
   const unavailable = busy;
   const replacementDescriptionId = useId();
   const replacementDescription =
-    item.installState === 'conflict'
-      ? t('settings.ghosts.market.replaceDescription')
-      : undefined;
+    item.installState === 'conflict' ? t('settings.ghosts.market.replaceDescription') : undefined;
   return (
     <article
       className={cn(
@@ -1852,9 +1872,7 @@ export function MarketPluginCard({
         onClick={onSelect}
         disabled={unavailable}
         aria-label={item.name}
-        aria-describedby={
-          replacementDescription ? replacementDescriptionId : undefined
-        }
+        aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
         className={cn(
           'flex min-w-0 flex-1 items-start gap-4 self-stretch text-left',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -1908,9 +1926,7 @@ export function MarketPluginCard({
           onClick={onSelect}
           disabled={unavailable}
           aria-label={t('settings.ghosts.market.detailsAria', { name: item.name })}
-          aria-describedby={
-            replacementDescription ? replacementDescriptionId : undefined
-          }
+          aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
           className={cn(
             'group/market-details absolute inset-0 flex items-start justify-end rounded-xl text-[var(--text-tertiary)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
@@ -1938,9 +1954,7 @@ export function MarketPluginCard({
                 ? t('settings.ghosts.market.replaceAria', { name: item.name })
                 : t('settings.ghosts.page.installAria', { name: item.name })
             }
-            aria-describedby={
-              replacementDescription ? replacementDescriptionId : undefined
-            }
+            aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
             className={cn(
               'relative z-[1] inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
               'transition-[background-color,border-color,transform,opacity] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
@@ -2048,7 +2062,8 @@ function GhostPluginActions({
 
 /**
  * 已安装插件卡片(设计定稿):
- * - 整卡可点 = 主动作(面板「使用」/ 指令「对话」/ 工具型与停用态进管理);
+ * - 整卡可点 = 进详情(与滑杆管理入口同目标);
+ * - 主动作留在右下角胶囊(面板「使用」/ 指令或能力「对话」/ 工具型无按钮);
  * - 无启用开关(收进详情页);滑杆图标 = 管理入口;
  * - 更新 = 文字胶囊「更新到 vX」,无任何小圆点(绿点专职未读语义,PR-B 接入)。
  */
@@ -2081,12 +2096,11 @@ export function GhostPluginCard({
   const unread = useGhostUnread(item.id);
   const unreadSummary = useGhostUnreadSummary(item.id);
   const primary = ghostPrimaryAction(item);
-  const cardAction = enabled && primary !== 'manage' ? onPrimary : onManage;
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    cardAction();
+    onManage();
   };
   let primaryControl: ReactNode;
   if (!enabled) {
@@ -2122,7 +2136,7 @@ export function GhostPluginCard({
     <article
       role="button"
       tabIndex={0}
-      onClick={cardAction}
+      onClick={onManage}
       onKeyDown={handleCardKeyDown}
       aria-label={item.name}
       className={cn(
@@ -2177,17 +2191,13 @@ export function GhostPluginCard({
           {unreadSummary || item.description || item.id}
         </span>
       </span>
-      {/* 右列控制区:自行消费点击,不冒泡到整卡主动作(纯冒泡拦截层,无独立语义)。 */}
-      <span
-        className="flex shrink-0 flex-col items-end justify-between gap-2 self-stretch"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-      >
+      {/* 右列只在真实控件上拦截冒泡;空白与「由 Agent 调用」提示仍走整卡进详情。 */}
+      <span className="flex shrink-0 flex-col items-end justify-between gap-2 self-stretch">
         <span className="flex items-center gap-1.5">
           {updateVersion && onUpdate ? (
             <button
               type="button"
-              onClick={onUpdate}
+              onClick={stopAnd(onUpdate)}
               disabled={updateBusy}
               aria-label={t('settings.ghosts.page.updateAria', {
                 name: item.name,
@@ -2206,7 +2216,7 @@ export function GhostPluginCard({
           ) : null}
           <button
             type="button"
-            onClick={onManage}
+            onClick={stopAnd(onManage)}
             aria-label={t('settings.ghosts.page.manageAria', { name: item.name })}
             title={t('settings.ghosts.page.manageAction')}
             className="grid size-7 place-items-center rounded-full text-[var(--text-tertiary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
@@ -2218,6 +2228,13 @@ export function GhostPluginCard({
       </span>
     </article>
   );
+}
+
+function stopAnd(handler: () => void) {
+  return (event: { stopPropagation: () => void }) => {
+    event.stopPropagation();
+    handler();
+  };
 }
 
 function CardPillButton({
@@ -2234,7 +2251,7 @@ function CardPillButton({
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={stopAnd(onClick)}
       aria-label={ariaLabel ?? label}
       className={cn(
         'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-3.5 text-12 font-medium text-[var(--text-primary)]',

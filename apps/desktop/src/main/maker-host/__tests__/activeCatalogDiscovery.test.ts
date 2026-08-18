@@ -135,6 +135,18 @@ describe('active-catalog discovered augment', () => {
       'grok-build-0.1',
     ]);
     expect(xai?.models.pi).not.toEqual(xai?.models['claude-code']);
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      efforts: [],
+      defaultEffort: null,
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.3')).toMatchObject({
+      efforts: [],
+      defaultEffort: null,
+    });
   });
 
   it('xAI account snapshot is authoritative and projects canonical ids per harness', () => {
@@ -150,6 +162,12 @@ describe('active-catalog discovered augment', () => {
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
       contextWindow: 500_000,
       supportsImageInput: true,
+      efforts: [],
+      defaultEffort: null,
+    });
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
     });
   });
 

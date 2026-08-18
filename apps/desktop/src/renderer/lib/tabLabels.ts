@@ -2,6 +2,9 @@
  * Shared Settings tab definitions — single source of truth for tab IDs and their i18n keys.
  *
  * Used by SettingsView (sidebar labels) and HelpThreadView ("Open X tab" button label).
+ *
+ * `ghosts` is a real Settings tab that embeds the same plugin catalog as `/plugins`.
+ * Legacy `api-keys` / `connections` ids stay on the type for old deep links.
  */
 
 export type SettingsTab =
@@ -17,6 +20,7 @@ export type SettingsTab =
   | 'connections'
   | 'remote-control'
   | 'tina'
+  | 'ghosts'
   | 'builtin-tools'
   | 'computer-use'
   | 'im-bot'
@@ -30,7 +34,7 @@ export const TAB_IDS: ReadonlyArray<SettingsTab> = [
   'billing',
   // 「工具密钥」(api-keys)已于 2026-07-13 下架:面板里最后一把 mivo key 随
   // XD Mivo 意识化改由意识设置页收单(官方别名映射同一存储键)。id 仍留在
-  // SettingsTab 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件页。
+  // SettingsTab 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件分区。
   'voice-input',
   // IM 机器人紧随语音输入(Lizi 2026-07-15 拍板)。
   'im-bot',
@@ -39,8 +43,9 @@ export const TAB_IDS: ReadonlyArray<SettingsTab> = [
   'import',
   // 「第三方平台」(connections)已于 2026-07-15 下架:Slack 官方 MCP 随 cindy-slack
   // 意识化收尾(Google/Jira/GitHub/GitLab 此前已迁意识)。id 仍留在 SettingsTab
-  // 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件页。
+  // 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件分区。
   'remote-control',
+  'ghosts',
   'builtin-tools',
   'computer-use',
   'help',
@@ -60,6 +65,7 @@ export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   providers: 'settings.tabs.providers',
   'remote-control': 'settings.tabs.remoteControl',
   tina: 'settings.tabs.tina',
+  ghosts: 'settings.tabs.ghosts',
   'builtin-tools': 'settings.tabs.builtinTools',
   'computer-use': 'settings.tabs.computerUse',
   'im-bot': 'settings.tabs.imBot',

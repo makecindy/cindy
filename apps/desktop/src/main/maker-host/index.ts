@@ -135,7 +135,7 @@ import {
   AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   createAutoReviewModelRouter,
 } from './auto-review-model-router.js';
-import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
+import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   armCodexHttpRecovery,
@@ -1941,14 +1941,8 @@ export function getMaker(): Maker {
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
         prepareStartOptions: async (sessionId, opts) => {
-          const providerScopeKey = activeOwnerScopeKey();
-          const providerReady =
-            await accountProviderReadinessBarrier.waitForScope(providerScopeKey);
-          if (
-            !providerReady ||
-            activeOwnerScopeKey() !== providerScopeKey ||
-            isAppSessionBoundaryPending()
-          ) {
+          const providerReady = await ensureCurrentAccountProviderReadiness();
+          if (!providerReady) {
             throw new Error('Account provider models are not ready for this app session; retry.');
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
