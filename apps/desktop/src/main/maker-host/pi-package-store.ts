@@ -1024,6 +1024,14 @@ function hasApprovedExtensionFingerprint(
     && state.approvedExtensionFingerprints[source] === fingerprint;
 }
 
+function hasToggleableResources(resources: PiPackageResourceView[]): boolean {
+  return resources.some((resource) => (
+    resource.kind === 'extension'
+    || resource.kind === 'skill'
+    || resource.kind === 'prompt'
+  ));
+}
+
 async function inspectPackage(
   pkg: ListedPackage,
   state: PiPackageState,
@@ -1057,6 +1065,7 @@ async function inspectPackage(
         source: displaySource,
         name: displaySource,
         enabled: false,
+        canToggle: false,
         resources: [],
         warning: 'inspection-failed',
       },
@@ -1076,6 +1085,7 @@ async function inspectPackage(
           source: displaySource,
           name: displaySource,
           enabled: false,
+          canToggle: false,
           resources: [],
           warning: 'unsupported-filter',
         },
@@ -1103,13 +1113,14 @@ async function inspectPackage(
       const staleApproval = isExtension
         && state.approvedExtensionSources.includes(pkg.source)
         && requiresExtensionApproval;
-      const enabled = !explicitlyDisabled && !requiresExtensionApproval;
+      const enabled = isExtension && !explicitlyDisabled && !requiresExtensionApproval;
       return {
         rawSource: pkg.source,
         view: {
           source: displaySource,
           name: truncateDisplayField(path.basename(root), MAX_DISPLAY_NAME_BYTES),
           enabled,
+          ...(!isExtension ? { canToggle: false as const } : {}),
           ...(requiresExtensionApproval ? { requiresExtensionApproval: true } : {}),
           resources,
           ...(resources.length === 0 ? { warning: 'no-resources' as const } : {}),
@@ -1216,6 +1227,7 @@ async function inspectPackage(
           ? { version: truncateDisplayField(manifest.version, MAX_DISPLAY_VERSION_BYTES) }
           : {}),
         enabled,
+        ...(!hasLaunchResources ? { canToggle: false as const } : {}),
         ...(requiresExtensionApproval ? { requiresExtensionApproval: true } : {}),
         resources,
         ...(runtimeRequirements.length > 0 ? { runtimeRequirements } : {}),
@@ -1240,6 +1252,7 @@ async function inspectPackage(
         source: displaySource,
         name: displaySource,
         enabled: false,
+        canToggle: false,
         resources: [],
         warning: error instanceof PiPackageInspectionLimitError
           || error instanceof PiPackageSnapshotLimitError
@@ -1272,7 +1285,7 @@ async function inspectAllPackagesUncached(): Promise<InspectedPackage[]> {
           source: displaySource,
           name: displaySource,
           enabled: false,
-          ...(unsafe ? { manageable: false as const } : {}),
+          ...(unsafe ? { manageable: false as const } : { canToggle: false as const }),
           resources: [],
           warning: unsafe ? 'unsafe-source' : 'inspection-limit',
         },
@@ -1334,7 +1347,7 @@ async function listPiPackagesNow(): Promise<PiPackageListResult> {
     available: true,
     packages: inspected.map((pkg) => {
       const warning = snapshotUnavailableWarningForPackage(pkg);
-      return warning ? { ...pkg.view, enabled: false, warning } : pkg.view;
+      return warning ? { ...pkg.view, enabled: false, canToggle: false, warning } : pkg.view;
     }),
   };
 }
@@ -1394,6 +1407,9 @@ export async function capturePiPackageEnableIdentity(source: string): Promise<Pi
     const inspected = await inspectAllPackagesFreshUnderMutationLock();
     const target = await findAffectedInspectedPackage(inspected, normalizedSource);
     if (!target) throw new Error('Pi package is not installed');
+    if (!hasToggleableResources(target.view.resources)) {
+      throw new Error('Pi package has no launchable resources');
+    }
     return {
       displayLabel: piPackageEnableDisplayLabel(target),
       expectedPackageFingerprint: target.contentFingerprint ?? null,
@@ -2239,6 +2255,9 @@ export async function mutatePiPackage(
       const approved = new Set(state.approvedExtensionSources);
       const approvedFingerprints = { ...state.approvedExtensionFingerprints };
       if (request.enabled) {
+        if (!hasToggleableResources(target.view.resources)) {
+          throw new Error('Pi package has no launchable resources');
+        }
         if (
           !Object.hasOwn(grantBinding, 'expectedPackageFingerprint')
           || grantBinding.expectedPackageFingerprint !== (target.contentFingerprint ?? null)

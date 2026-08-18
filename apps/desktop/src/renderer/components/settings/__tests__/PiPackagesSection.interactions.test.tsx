@@ -291,6 +291,62 @@ describe('PiPackagesSection interaction state machine', () => {
     );
   });
 
+  it('disables only the enable switch for packages without launchable resources', async () => {
+    const noResources: PiPackageView = {
+      source: 'npm:no-resources',
+      name: 'no-resources',
+      enabled: false,
+      canToggle: false,
+      resources: [],
+      warning: 'no-resources',
+    };
+    const themeOnly: PiPackageView = {
+      source: 'npm:theme-only',
+      name: 'theme-only',
+      enabled: false,
+      canToggle: false,
+      resources: [{ kind: 'theme', name: 'night.json', compatibility: 'unsupported' }],
+    };
+    const inspectionFailed: PiPackageView = {
+      source: 'npm:inspection-failed',
+      name: 'inspection-failed',
+      enabled: false,
+      canToggle: false,
+      resources: [],
+      warning: 'inspection-failed',
+    };
+    const promptOnly: PiPackageView = {
+      source: 'npm:prompt-only',
+      name: 'prompt-only',
+      enabled: true,
+      resources: [{ kind: 'prompt', name: 'hello.md', compatibility: 'supported' }],
+    };
+    const skillOnly: PiPackageView = {
+      source: 'npm:skill-only',
+      name: 'skill-only',
+      enabled: true,
+      resources: [{ kind: 'skill', name: 'hello', compatibility: 'supported' }],
+    };
+    const { mutatePiPackage } = installElectronApi({
+      listPiPackages: vi.fn(async () => ({
+        available: true,
+        packages: [noResources, themeOnly, inspectionFailed, promptOnly, skillOnly, packageView(1)],
+      })),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-1');
+
+    const switches = screen.getAllByRole('switch') as HTMLButtonElement[];
+    expect(switches.slice(0, 3).every((control) => control.disabled)).toBe(true);
+    expect(switches.slice(3).every((control) => !control.disabled)).toBe(true);
+    expect(
+      screen.getAllByRole('button', { name: 'settings.piPackages.updateAria' })
+        .every((control) => !(control as HTMLButtonElement).disabled),
+    ).toBe(true);
+    fireEvent.click(switches[0]!);
+    expect(mutatePiPackage).not.toHaveBeenCalled();
+  });
+
   it('accepts only the latest refresh result and ignores a late callback after unmount', async () => {
     const firstLoad = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const lateLoad = deferred<{ available: boolean; packages: PiPackageView[] }>();

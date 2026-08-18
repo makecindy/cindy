@@ -75,6 +75,8 @@ export interface PiPackageView {
   enabled: boolean;
   /** False when Cindy must not send this persisted source back to Pi. */
   manageable?: false;
+  /** False when this package has no verified Extension, Skill, or Prompt to enable. */
+  canToggle?: false;
   /** Extension code stays disabled until the user explicitly accepts full Pi-process access. */
   requiresExtensionApproval?: boolean;
   resources: PiPackageResourceView[];

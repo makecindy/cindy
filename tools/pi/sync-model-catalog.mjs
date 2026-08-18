@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { applyKnownXaiCorrections, preferredDefaultEffort } from './xai-catalog-corrections.mjs';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CATALOG_PATH = path.join(ROOT, 'packages/model-providers/catalog/providers.json');
 const SNAPSHOT_PATH = path.join(ROOT, 'packages/model-providers/catalog/pi-model-catalog.json');
@@ -126,7 +128,7 @@ function xaiCatalogModel(model, index) {
     contextWindow: model.contextWindow,
     ...(Number.isFinite(model.maxTokens) && model.maxTokens > 0 ? { maxOutput: model.maxTokens } : {}),
     efforts,
-    defaultEffort: defaultEffort(efforts) ?? null,
+    defaultEffort: preferredDefaultEffort(model.id, efforts, defaultEffort) ?? null,
     status: 'active',
     ...(Array.isArray(model.input) && model.input.includes('image') ? { supportsImageInput: true } : {}),
     ...(model.cost ? { cost: model.cost } : {}),
@@ -157,6 +159,7 @@ async function main() {
       providers[providerId] = catalogEntries(providerId, await response.json());
     }
   }
+  if (providers.xai) providers.xai = applyKnownXaiCorrections(providers.xai);
 
   const catalog = JSON.parse(await fs.readFile(CATALOG_PATH, 'utf8'));
   for (const preset of catalog.presets ?? []) {

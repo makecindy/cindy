@@ -1780,6 +1780,35 @@ describe('Pi package executable-code boundary', () => {
     ]);
   });
 
+  it('keeps non-extension single files disabled and rejects enable attempts', async () => {
+    const directFileRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-data-file-'));
+    roots.push(directFileRoot);
+    const directFile = path.join(directFileRoot, 'README.md');
+    const source = '../README.md';
+    await fs.writeFile(directFile, 'not a Pi extension');
+    runtime.listOutput = `User packages:\n  ${source}\n    ${directFile}\n`;
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{
+        source,
+        enabled: false,
+        canToggle: false,
+        resources: [],
+        warning: 'no-resources',
+      }],
+    });
+    await expect(store.capturePiPackageEnableIdentity(source)).rejects.toThrow(
+      /no launchable resources/i,
+    );
+    const request = { action: 'set-enabled' as const, source, enabled: true };
+    const { issuePiPackageMutationGrant } = await import('../pi-package-mutation-grant.js');
+    await expect(store.mutatePiPackage(
+      request,
+      issuePiPackageMutationGrant(request, { expectedPackageFingerprint: null }),
+    )).rejects.toThrow(/no launchable resources/i);
+  });
+
   it('does not project convention resources that resolve outside the package root', async () => {
     const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-confined-'));
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-outside-'));
@@ -1873,17 +1902,20 @@ describe('Pi package executable-code boundary', () => {
         {
           source: 'npm:empty-package',
           enabled: false,
+          canToggle: false,
           resources: [],
           warning: 'no-resources',
         },
         {
           source: 'npm:theme-package',
           enabled: false,
+          canToggle: false,
           resources: [{ kind: 'theme', compatibility: 'unsupported' }],
         },
         {
           source: 'npm:filtered-package',
           enabled: false,
+          canToggle: false,
           resources: [],
           warning: 'no-resources',
         },
@@ -1925,6 +1957,7 @@ describe('Pi package executable-code boundary', () => {
       packages: [{
         source,
         enabled: false,
+        canToggle: false,
         resources: [{
           kind: 'theme',
           name: 'night.json',
@@ -1932,6 +1965,8 @@ describe('Pi package executable-code boundary', () => {
         }],
       }],
     });
+    const listed = await store.listPiPackages();
+    expect(listed.packages[0]).not.toHaveProperty('manageable', false);
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'theme-only-snapshot'),
     })).resolves.toEqual({
@@ -1988,7 +2023,13 @@ describe('Pi package executable-code boundary', () => {
     const { source } = await createPackage({ oversizedManifest: true });
     const store = await import('../pi-package-store.js');
     await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, warning: 'inspection-limit', resources: [] }],
+      packages: [{
+        source,
+        enabled: false,
+        canToggle: false,
+        warning: 'inspection-limit',
+        resources: [],
+      }],
     });
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'oversized-snapshot'),
@@ -2011,6 +2052,7 @@ describe('Pi package executable-code boundary', () => {
     expect(result.packages[128]).toMatchObject({
       source: 'npm:package-128',
       enabled: false,
+      canToggle: false,
       warning: 'inspection-limit',
     });
     expect(result.packages[129]?.warning).toBe('inspection-limit');

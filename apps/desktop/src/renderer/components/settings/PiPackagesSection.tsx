@@ -353,6 +353,7 @@ export function PiPackagesSection() {
           {packages.map((pkg) => {
             const packageBusy = busy?.source === pkg.source;
             const packageManageable = pkg.manageable !== false;
+            const packageCanToggle = packageManageable && pkg.canToggle !== false;
             const expanded = expandedSources.has(pkg.source);
             const noticeCount = packageCompatibilityNoticeCount(pkg);
             return (
@@ -413,7 +414,7 @@ export function PiPackagesSection() {
                   )}
                   <Switch
                     checked={pkg.enabled}
-                    disabled={Boolean(busy) || !packageManageable}
+                    disabled={Boolean(busy) || !packageCanToggle}
                     onCheckedChange={(enabled) => {
                       void runMutation('set-enabled', pkg.source, { enabled });
                     }}

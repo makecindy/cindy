@@ -320,8 +320,8 @@
             "sortOrder": 51,
             "contextWindow": 500000,
             "maxOutput": 500000,
-            "efforts": [],
-            "defaultEffort": null,
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "defaultEffort": "high",
             "status": "active",
             "supportsImageInput": true,
             "cost": {
