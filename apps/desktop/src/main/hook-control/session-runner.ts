@@ -961,26 +961,50 @@ export function createMakerHookSessionRunner(deps: {
       // 见 outbound.ts 的常量注释)。
       const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}`;
       let replacementHandoff: string | null = null;
-      if (req.isNew && req.replacementOfSessionId) {
+      if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {
           const previousMessages = await enqueueDurableWrite(
             `hook-replacement-handoff:${req.replacementOfSessionId}`,
             () => listMessagesForAgentHandoff(req.replacementOfSessionId!, 400),
           );
-          const handoffMessages =
-            previousMessages.length > 0
-              ? previousMessages
-              : req.replacementPrompt
-                ? [
-                    {
-                      clientId: 'hook-replacement-memory',
-                      role: 'user',
-                      content: req.replacementPrompt,
-                      createdAt: startedAt,
-                      agentMeta: null,
-                    },
-                  ]
-                : [];
+          let handoffMessages: typeof previousMessages;
+          if (previousMessages.length > 0) {
+            const hasFirstUserMessage = previousMessages.some(
+              (m, i) => i === 0 && m.role === 'user',
+            );
+            if (!hasFirstUserMessage && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: previousMessages[0].createdAt - 1,
+                  agentMeta: null,
+                },
+                ...previousMessages,
+              ];
+            } else {
+              handoffMessages = previousMessages;
+            }
+          } else {
+            const sessionRow = await getSessionRowSnapshotStrict(
+              req.replacementOfSessionId,
+            );
+            const sessionPersistedAndCleared = sessionRow !== null;
+            if (!sessionPersistedAndCleared && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: startedAt,
+                  agentMeta: null,
+                },
+              ];
+            } else {
+              handoffMessages = [];
+            }
+          }
           if (handoffMessages.length > 0) {
             replacementHandoff = buildHandoffText(handoffMessages, {
               fromLabel: 'Cindy',

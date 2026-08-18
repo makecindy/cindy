@@ -2106,6 +2106,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 新建会话跑在别名目录(或对话根)里, 是否还能复用每次现场按映射判定
     bindings.set(connectionId, payload.externalKey, sessionId);
     if (forceNew && payload.sessionId !== null) {
+      // Security: staleSessionId is only used for routing repeated dispatches to
+      // the same replacement session (reusesTrackedReplacement path). It never
+      // grants read access — replacementOfSessionId (which enables history read)
+      // is always gated by canRecoverFromRequestedSession above.
       staleTakeoverReplacements.set(laneKey, {
         staleSessionId: previousTrackedStaleSessionId ?? payload.sessionId,
         replacementSessionId: sessionId,

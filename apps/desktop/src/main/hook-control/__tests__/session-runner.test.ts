@@ -746,7 +746,11 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     ]);
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
-      baseReq({ replacementOfSessionId: 'sess-old', prompt: '再试试' }),
+      baseReq({
+        replacementOfSessionId: 'sess-old',
+        prompt: '再试试',
+        source: { im: 'slack', channelName: '#general' },
+      }),
     );
 
     expect(outcome.status).toBe('ok');
@@ -771,6 +775,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
         replacementOfSessionId: 'sess-old',
         replacementPrompt: '生成发布说明并提交 PR',
         prompt: '再试试',
+        source: { im: 'slack', channelName: '#general' },
       }),
     );
 
@@ -787,7 +792,11 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   it('旧任务没有可读历史或进程内 prompt 时仍按当前 dispatch 正常执行', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
-      baseReq({ replacementOfSessionId: 'sess-old', prompt: '再试试' }),
+      baseReq({
+        replacementOfSessionId: 'sess-old',
+        prompt: '再试试',
+        source: { im: 'slack', channelName: '#general' },
+      }),
     );
 
     expect(outcome.status).toBe('ok');
@@ -795,6 +804,82 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(session.send.mock.calls[0][0]).toMatchObject({
       content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}`,
     });
+  });
+
+  it('被 /clear 清除过的旧任务不恢复已丢弃的上下文', async () => {
+    h.listMessagesForAgentHandoff.mockResolvedValueOnce([]);
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status: 'active',
+    } as never);
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({
+        replacementOfSessionId: 'sess-old',
+        replacementPrompt: '原始需求',
+        prompt: '再试试',
+        source: { im: 'slack', channelName: '#general' },
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const sent = session.send.mock.calls[0][0].content as string;
+    expect(sent).not.toContain('原始需求');
+    expect(sent).toContain('再试试');
+  });
+
+  it('截断历史缺少首条用户消息时补入缓存的 replacementPrompt', async () => {
+    h.listMessagesForAgentHandoff.mockResolvedValueOnce([
+      {
+        clientId: 'mid-assistant',
+        role: 'assistant',
+        content: '正在处理...',
+        createdAt: 100,
+        agentMeta: null,
+      },
+      {
+        clientId: 'mid-user',
+        role: 'user',
+        content: '继续',
+        createdAt: 200,
+        agentMeta: null,
+      },
+    ]);
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({
+        replacementOfSessionId: 'sess-old',
+        replacementPrompt: '检查支付回调失败的问题并修复',
+        prompt: '再试试',
+        source: { im: 'slack', channelName: '#general' },
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const sent = session.send.mock.calls[0][0].content as string;
+    expect(sent).toContain('检查支付回调失败的问题并修复');
+    expect(sent).toContain('继续');
+    expect(sent.indexOf('检查支付回调失败的问题并修复')).toBeLessThan(sent.indexOf('继续'));
+  });
+
+  it('非 Slack 渠道的 replacement 不注入旧任务历史', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({
+        replacementOfSessionId: 'sess-old',
+        replacementPrompt: '原始需求',
+        prompt: '再试试',
+        source: { im: 'telegram', channelName: 'Release topic', userText: '再试试' },
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(h.listMessagesForAgentHandoff).not.toHaveBeenCalledWith('sess-old', 400);
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const sent = session.send.mock.calls[0][0].content as string;
+    expect(sent).not.toContain('原始需求');
   });
 
   it('pending handoff 只注入 agent wire 内容, accepted 后消费', async () => {
