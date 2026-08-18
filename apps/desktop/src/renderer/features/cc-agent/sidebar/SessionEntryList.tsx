@@ -166,6 +166,8 @@ export function SessionEntryRows({
             onAction={onAction}
             onRename={onRename}
             onTogglePin={onTogglePin}
+            onMoveSession={onMoveSession}
+            projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
             collapsed={automationGroupCollapsed?.(entry.group.id)}
             onCollapsedChange={
@@ -174,6 +176,7 @@ export function SessionEntryRows({
                 : undefined
             }
             indented={indented}
+            matchMap={matchMap}
             sourceLabelMap={sourceLabelMap}
             sessionVariant={sessionVariant}
           />

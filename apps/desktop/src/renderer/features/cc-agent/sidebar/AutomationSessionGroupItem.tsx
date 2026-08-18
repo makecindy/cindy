@@ -34,6 +34,8 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
+import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
+import type { SessionMoveTarget } from './sessionMoveTarget';
 
 export interface AutomationSessionGroupItemProps {
   group: AutomationSessionGroup;
@@ -46,6 +48,8 @@ export interface AutomationSessionGroupItemProps {
   onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
+  onMoveSession?: (id: string, target: SessionMoveTarget) => void;
+  projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
   /** 平铺列表由段头批量折叠状态机控制时传入；其它场景继续使用组件自身持久化状态。 */
   collapsed?: boolean;
@@ -57,6 +61,8 @@ export interface AutomationSessionGroupItemProps {
    * 传给子行,自动化 group 里的子会话也能显示来源。
    */
   sourceLabelMap?: ReadonlyMap<string, string>;
+  /** 搜索命中字符下标；分组后的子行仍沿用普通会话行高亮。 */
+  matchMap?: ReadonlyMap<string, readonly number[]>;
   /** 项目置顶列表模式下，展开的自动化运行也使用同一套列表行。 */
   sessionVariant?: 'text' | 'list';
 }
@@ -79,11 +85,14 @@ export function AutomationSessionGroupItem({
   onAction,
   onRename,
   onTogglePin,
+  onMoveSession,
+  projectOptions,
   onScheduleAction,
   collapsed: controlledCollapsed,
   onCollapsedChange,
   indented = false,
   sourceLabelMap,
+  matchMap,
   sessionVariant = 'text',
 }: AutomationSessionGroupItemProps) {
   const { t } = useTranslation();
@@ -651,7 +660,10 @@ export function AutomationSessionGroupItem({
               onAction,
               onRename,
               onTogglePin,
+              onMoveSession,
+              projectOptions,
               indented,
+              matchIndices: matchMap?.get(session.id),
               sourceLabel: sourceLabelMap?.get(session.id),
             };
 
