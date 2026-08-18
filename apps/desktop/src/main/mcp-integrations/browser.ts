@@ -293,11 +293,22 @@ export function getBrowserMcpDeps(): {
     // Sandboxed local HTML preview: tokenized loopback origin, fail-closed.
     // Only available on the managed browser backend; RSB webview does not support it.
     // Evaluated lazily at call time so a backend switch is reflected immediately.
-    createLocalPreviewUrl: (input) => {
+    createLocalPreviewUrl: async (input) => {
       if (backendController.kind !== 'external') {
         throw new Error('本地预览仅在托管浏览器后端可用（当前为侧栏后端）');
       }
-      return localPreviewServer.createPreviewUrl(input);
+      const result = await localPreviewServer.createPreviewUrl(input);
+      // Re-check after the await. Issuing a preview spans filesystem
+      // validation and a listener bind, and the backend can be switched in
+      // between; the server refuses to re-grant an origin across a dispose on
+      // its own, but the switch can also land after it has legitimately
+      // finished. Either way a preview must not be handed out for a backend
+      // that does not support it.
+      if (backendController.kind !== 'external') {
+        localPreviewServer.dispose();
+        throw new Error('本地预览仅在托管浏览器后端可用（当前为侧栏后端）');
+      }
+      return result;
     },
   };
 }

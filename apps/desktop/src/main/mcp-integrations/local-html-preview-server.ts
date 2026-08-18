@@ -245,9 +245,21 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   const tokenTtlMs = deps.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
   let server: Server | null = null;
   let origin: string | null = null;
-  let starting: Promise<string> | null = null;
-  let failed = false;
-  let disposed = false;
+  /** In-flight startup, tagged with the generation that began it. */
+  let starting: { generation: number; promise: Promise<string> } | null = null;
+  /**
+   * Incremented by every dispose(). Anything that spans an `await` pins the
+   * generation it began in and refuses to act once the value has moved on, so a
+   * request that was already in flight when the backend switched can never
+   * resurrect the listener or re-grant the SSRF origin behind it. A request
+   * that starts AFTER a dispose reads the new value and proceeds normally —
+   * dispose → new start stays a supported reuse, which is why this is a counter
+   * rather than a sticky "disposed"/"failed" flag. A sticky flag also turned a
+   * single transient listener error into a preview channel that stayed dead
+   * until the app was restarted, and an unusable channel is exactly what pushes
+   * callers back to launching a raw browser.
+   */
+  let generation = 0;
   const tokens = new Map<string, PreviewEntry>();
 
   /** Drop the SSRF grant for this server's origin (idempotent). */
@@ -259,16 +271,19 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     }
   }
 
-  async function ensureStarted(): Promise<string> {
+  async function ensureStarted(round: number): Promise<string> {
+    if (round !== generation) {
+      throw new LocalPreviewError('UNAVAILABLE', '预览服务在本次请求处理期间已停用');
+    }
     if (origin) return origin;
-    if (failed) throw new LocalPreviewError('UNAVAILABLE', '预览服务已不可用');
-    if (starting) return starting;
-    // A fresh start round resets the dispose flag captured by a still-running
-    // previous round (dispose → new start is the documented reuse contract);
-    // only a dispose DURING startup must fail that round — and `starting`
-    // still being set above keeps the flag intact for that case.
-    disposed = false;
-    starting = (async () => {
+    if (starting) {
+      if (starting.generation === generation) return starting.promise;
+      // A startup belonging to a superseded generation is still settling. It
+      // will fail its own generation check and clean up after itself; this
+      // caller must not join it, and must not be blocked by it either.
+      starting = null;
+    }
+    const promise = (async () => {
       // Wrap the async handler: an unhandled rejection would leave the request
       // hanging (no response), so any internal error degrades to a 500.
       const srv = createServer((req, res) => {
@@ -290,8 +305,12 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       // after a successful bind; before that no grant exists to revoke.
       let roundOrigin: string | null = null;
       srv.on('error', (err) => {
+        // Fatal to THIS round only. Dropping the grant is the whole cleanup:
+        // the next call sees `origin === null` and starts a fresh listener.
+        // Latching a process-level failure here would mean one transient bind
+        // error leaves previews permanently unavailable until restart
+        // (greptile P1).
         logger?.error?.(`[local-preview] listener error: ${String(err)}`);
-        failed = true;
         if (roundOrigin && origin === roundOrigin) revokeOrigin();
       });
       srv.on('close', () => {
@@ -308,21 +327,16 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
           resolve();
         });
       });
-      // Round 17 (Copilot P1): dispose() may have run while we were
-      // starting — it nulls `starting` and, before the listener was
-      // assigned to `server`, could NOT close the just-bound listener. A
-      // disposed server must never grant its origin to the SSRF policy;
-      // close the listener and fail closed.
-      if (disposed) {
+      // dispose() may have run while we were binding: it could not close a
+      // listener it had never seen. A superseded round must never hand its
+      // origin to the SSRF policy (Copilot P1).
+      if (round !== generation) {
         srv.close();
-        // NOTE: do NOT set `failed` here — dispose → new start is the
-        // documented reuse contract; only THIS start round must fail
-        // (Copilot P1).
-        throw new LocalPreviewError('UNAVAILABLE', '预览服务已销毁');
+        throw new LocalPreviewError('UNAVAILABLE', '预览服务在启动期间已停用');
       }
       const addr = srv.address();
       if (!addr || typeof addr === 'string') {
-        failed = true;
+        srv.close();
         throw new LocalPreviewError('UNAVAILABLE', '无法确定预览监听地址');
       }
       server = srv;
@@ -333,17 +347,16 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       applyPreviewOrigins([origin]);
       return origin;
     })();
+    starting = { generation: round, promise };
     try {
-      const result = await starting;
-      // Clear on success too (Copilot P1 companion): with dispose()
-      // no longer nulling `starting`, a RESOLVED promise left in place would
-      // make the next ensureStarted() return the stale origin instead of
-      // starting a fresh listener after dispose → new start (the reuse
-      // contract asserted by the "grants ... revokes on dispose" test).
-      starting = null;
+      const result = await promise;
+      // Clear on settle either way, but only if this round still owns the
+      // slot: a newer round may have replaced it while we were awaiting, and
+      // dropping that one would make the next caller start a third listener.
+      if (starting?.promise === promise) starting = null;
       return result;
     } catch (err) {
-      starting = null;
+      if (starting?.promise === promise) starting = null;
       throw err;
     }
   }
@@ -524,16 +537,30 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   }
 
   async function createPreviewUrl(input: CreatePreviewInput): Promise<{ url: string }> {
+    // Pin the generation before the first await. Entry validation touches the
+    // filesystem, and the backend can be switched away from the managed browser
+    // while it runs; without this the request would sail past the caller's
+    // up-front backend check and re-grant an origin the host had already
+    // revoked (codex-connector P1).
+    const round = generation;
     // Validate the entry FIRST: an invalid request (out-of-workspace, missing,
     // non-HTML) must never start the listener or grant an origin
     // (Copilot review).
     const entryAbs = await resolveEntryPath(input);
-    const base = await ensureStarted();
+    if (round !== generation) {
+      throw new LocalPreviewError('UNAVAILABLE', '预览服务在入口校验期间已停用');
+    }
+    const base = await ensureStarted(round);
     // Serving root = the entry's directory: relative resources work, but the
     // page can never reach sibling workspace content outside that directory.
     // `entryAbs` is already the REAL path (resolved + re-asserted above).
     const root = nodePath.dirname(entryAbs);
     const token = crypto.randomBytes(32).toString('hex'); // 256-bit, unguessable
+    // Last checkpoint before the token becomes usable: a dispose that landed
+    // while the listener was starting must not leave a live capability behind.
+    if (round !== generation) {
+      throw new LocalPreviewError('UNAVAILABLE', '预览服务在发放期间已停用');
+    }
     if (tokens.size >= MAX_PREVIEWS) {
       const oldest = tokens.keys().next().value;
       if (oldest) tokens.delete(oldest);
@@ -545,23 +572,21 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   }
 
   function dispose(): void {
+    // Bump FIRST. Every in-flight request pinned the previous value and checks
+    // it again at each checkpoint, so moving the counter before any teardown
+    // guarantees none of them can complete against a server we are tearing
+    // down — including one whose listener has not finished binding yet and
+    // which we therefore cannot close here.
+    generation += 1;
     tokens.clear();
-    disposed = true;
     // Revoke synchronously — never rely on the async 'close' event for the
     // quit path (the process may exit before it fires). The event handler
     // stays as an idempotent safety net for listener crashes.
     revokeOrigin();
-    // NOTE (Copilot P1): do NOT null `starting` here. If dispose
-    // runs while ensureStarted() is mid-startup, keeping the in-flight
-    // promise visible means a concurrent second ensureStarted() call sees
-    // `starting` still set, returns the SAME promise and does NOT reset
-    // `disposed` — so the first startup, when its listen() resolves, still
-    // observes `disposed` and fail-closes (no applyPreviewOrigins grant for
-    // a dead listener). Nulling it here would let the second call start a
-    // fresh round, reset disposed=false, and the first round would then
-    // authorize the SSRF origin it no longer owns. The in-flight promise
-    // clears itself in ensureStarted()'s catch after it settles, so the
-    // dispose → new start reuse contract is preserved.
+    // `starting` is deliberately left alone: an in-flight round now belongs to
+    // a superseded generation and will fail its own check and close its own
+    // listener. Clearing it here would only make a concurrent caller start a
+    // second listener while the first is still binding.
     if (server) {
       server.close();
       server = null;
