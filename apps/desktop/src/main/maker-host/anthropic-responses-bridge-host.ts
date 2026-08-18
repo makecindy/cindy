@@ -36,7 +36,7 @@ import {
 } from './chatgpt-bridge-auth-invalidation.js';
 import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
-import { xaiServerSideTools } from './xai-server-side-tools.js';
+import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 
 const log = createMakerLogger('cc-bridge');
@@ -48,6 +48,7 @@ const OPENAI_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const REFRESH_MARGIN_SEC = 120;
 // token 刷新 fetch 超时 —— 刷新在 _refreshChain mutex 内串行,不设超时会拖住所有排队请求。
 const REFRESH_FETCH_TIMEOUT_MS = 15_000;
+const XAI_LIVE_SEARCH_TOOL_TYPE = 'live_search';
 
 let _handler: ResponsesBridgeHandler | null = null;
 let _initialized = false;
@@ -327,6 +328,12 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
 }
 
 type PiNativeSubscriptionProvider = 'openai' | 'xai';
+type PiNativeWireProtocol = 'openai-responses' | 'openai-chat';
+
+interface PiNativeUpstream {
+  url: string;
+  wireProtocol: PiNativeWireProtocol;
+}
 
 export interface PiNativeSubscriptionHandlerDeps {
   fetch: typeof outboundFetch;
@@ -346,10 +353,10 @@ const defaultPiNativeSubscriptionHandlerDeps: PiNativeSubscriptionHandlerDeps = 
   recordXaiRateLimit: recordXaiRateLimitSnapshot,
 };
 
-function piNativeUpstreamUrl(
+function piNativeUpstream(
   providerId: PiNativeSubscriptionProvider,
   requestUrl: string,
-): string | null {
+): PiNativeUpstream | null {
   let pathname: string;
   try {
     pathname = new URL(requestUrl, 'http://127.0.0.1').pathname;
@@ -358,13 +365,20 @@ function piNativeUpstreamUrl(
   }
   if (providerId === 'openai') {
     return pathname === '/codex/responses'
-      ? 'https://chatgpt.com/backend-api/codex/responses'
+      ? {
+          url: 'https://chatgpt.com/backend-api/codex/responses',
+          wireProtocol: 'openai-responses',
+        }
       : null;
   }
   const normalized = pathname.startsWith('/v1/') ? pathname : `/v1${pathname}`;
-  return normalized === '/v1/responses' || normalized === '/v1/chat/completions'
-    ? `https://api.x.ai${normalized}`
-    : null;
+  if (normalized === '/v1/responses') {
+    return { url: `https://api.x.ai${normalized}`, wireProtocol: 'openai-responses' };
+  }
+  if (normalized === '/v1/chat/completions') {
+    return { url: `https://api.x.ai${normalized}`, wireProtocol: 'openai-chat' };
+  }
+  return null;
 }
 
 function nativeResponseHeaders(response: Response): Record<string, string> {
@@ -414,11 +428,16 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 /**
  * PI already emits xAI-native payloads, so this path bypasses the Messages →
  * Responses bridge that normally supplies xAI's model-gated server tools.
- * Restore the same stable contract here: append missing tools after PI's own
- * tools, preserve an existing declaration verbatim, and keep a forced single
- * function call from being satisfied by x_search instead.
+ * Restore the same stable contract here while respecting the native endpoint:
+ * Responses accepts `x_search`, while Chat Completions accepts `live_search`.
+ * Preserve PI function tools structurally, normalize any stale search-tool
+ * spelling, append one missing search declaration, and keep the Responses-only
+ * forced-function narrowing from being satisfied by x_search instead.
  */
-function withNativeXaiServerSideTools(body: unknown): Record<string, unknown> | null {
+function withNativeXaiServerSideTools(
+  body: unknown,
+  wireProtocol: PiNativeWireProtocol,
+): Record<string, unknown> | null {
   if (!isPlainRecord(body) || typeof body.model !== 'string') return null;
   const model = body.model.startsWith(XAI_MODEL_PREFIX)
     ? body.model.slice(XAI_MODEL_PREFIX.length)
@@ -427,28 +446,65 @@ function withNativeXaiServerSideTools(body: unknown): Record<string, unknown> | 
   if (serverTools.length === 0) return null;
 
   const existing = Array.isArray(body.tools) ? body.tools : [];
+  const searchToolType =
+    wireProtocol === 'openai-chat' ? XAI_LIVE_SEARCH_TOOL_TYPE : XAI_X_SEARCH_TOOL_TYPE;
+  const expectedServerTools = serverTools.map((tool) => (
+    tool.type === XAI_X_SEARCH_TOOL_TYPE ? { ...tool, type: searchToolType } : tool
+  ));
+  let searchToolDeclared = false;
+  let toolsChanged = false;
+  const tools = existing.flatMap((tool) => {
+    if (
+      !isPlainRecord(tool) ||
+      (tool.type !== XAI_X_SEARCH_TOOL_TYPE && tool.type !== XAI_LIVE_SEARCH_TOOL_TYPE)
+    ) {
+      return [tool];
+    }
+    if (searchToolDeclared) {
+      toolsChanged = true;
+      return [];
+    }
+    searchToolDeclared = true;
+    if (tool.type === searchToolType) return [tool];
+    toolsChanged = true;
+    // Cross-protocol search options are not interchangeable. Keep only the
+    // endpoint-native declaration instead of forwarding stale option fields.
+    return [{ type: searchToolType }];
+  });
   const declaredTypes = new Set(
-    existing.map((tool) => (
+    tools.map((tool) => (
       isPlainRecord(tool) && typeof tool.type === 'string' ? tool.type : ''
     )),
   );
-  const missing = serverTools.filter((tool) => !declaredTypes.has(tool.type));
-  const tools = missing.length > 0 ? [...existing, ...missing] : existing;
-  let next = missing.length > 0 ? { ...body, tools } : body;
+  const missing = expectedServerTools.filter((tool) => !declaredTypes.has(tool.type));
+  if (missing.length > 0) {
+    tools.push(...missing);
+    toolsChanged = true;
+  }
+  let next = toolsChanged ? { ...body, tools } : body;
 
   if (body.tool_choice === 'required') {
-    const functionTools = tools.filter(
-      (tool) => isPlainRecord(tool) && tool.type === 'function' && typeof tool.name === 'string',
-    );
-    if (functionTools.length === 1) {
+    const functionToolNames = tools.flatMap((tool) => {
+      if (!isPlainRecord(tool) || tool.type !== 'function') return [];
+      if (wireProtocol === 'openai-chat') {
+        return isPlainRecord(tool.function) && typeof tool.function.name === 'string'
+          ? [tool.function.name]
+          : [];
+      }
+      return typeof tool.name === 'string' ? [tool.name] : [];
+    });
+    if (functionToolNames.length === 1) {
+      const name = functionToolNames[0]!;
       next = {
         ...next,
-        tool_choice: { type: 'function', name: functionTools[0]!.name },
+        tool_choice: wireProtocol === 'openai-chat'
+          ? { type: 'function', function: { name } }
+          : { type: 'function', name },
       };
       return next;
     }
   }
-  return missing.length > 0 ? next : null;
+  return toolsChanged ? next : null;
 }
 
 async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res']): Promise<void> {
@@ -492,8 +548,8 @@ export function getPiNativeSubscriptionHandler(
   deps: PiNativeSubscriptionHandlerDeps = defaultPiNativeSubscriptionHandlerDeps,
 ): LocalRequestHandler {
   return async ({ rawBody, parsedBody, ctx, res }) => {
-    const upstreamUrl = piNativeUpstreamUrl(providerId, ctx.url);
-    if (ctx.method !== 'POST' || !upstreamUrl) {
+    const upstream = piNativeUpstream(providerId, ctx.url);
+    if (ctx.method !== 'POST' || !upstream) {
       res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: { message: 'Unsupported PI subscription endpoint.' } }));
       return;
@@ -521,7 +577,7 @@ export function getPiNativeSubscriptionHandler(
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
       if (providerId === 'xai') {
-        const withServerTools = withNativeXaiServerSideTools(parsedBody);
+        const withServerTools = withNativeXaiServerSideTools(parsedBody, upstream.wireProtocol);
         if (withServerTools) {
           outboundBody = Buffer.from(JSON.stringify(withServerTools));
           // The proxy parsed a plain JSON request. After reserializing it the
@@ -531,7 +587,7 @@ export function getPiNativeSubscriptionHandler(
       }
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
 
-      const response = await deps.fetch(upstreamUrl, {
+      const response = await deps.fetch(upstream.url, {
         method: 'POST',
         headers,
         body: new Uint8Array(outboundBody),

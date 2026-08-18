@@ -223,6 +223,81 @@ describe('PI native subscription forwarding', () => {
     ]);
   });
 
+  it('uses live_search for native Grok Chat Completions without changing PI function tools', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-live-search', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const functionTool = {
+      type: 'function',
+      function: {
+        name: 'read_file',
+        description: 'Read one file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    };
+    const parsedBody = {
+      model: 'grok-4.6',
+      tools: [functionTool],
+      tool_choice: 'required',
+    };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 8,
+        method: 'POST',
+        url: '/v1/chat/completions',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.x.ai/v1/chat/completions',
+      expect.any(Object),
+    );
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request).toEqual({
+      model: 'grok-4.6',
+      tools: [functionTool, { type: 'live_search' }],
+      tool_choice: { type: 'function', function: { name: 'read_file' } },
+    });
+  });
+
+  it('normalizes stale x_search to one live_search on native Grok Chat Completions', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-live-search-existing', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = {
+      model: 'grok-4.6',
+      tools: [{ type: 'x_search', from_date: '2026-08-01' }, { type: 'live_search' }],
+    };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 9,
+        method: 'POST',
+        url: '/v1/chat/completions',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request.tools).toEqual([{ type: 'live_search' }]);
+  });
+
   it.each(['grok-code-fast', 'grok-build-0.1'])(
     'does not add x_search to native coding model %s',
     async (model) => {
