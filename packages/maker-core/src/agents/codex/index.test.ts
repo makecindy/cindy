@@ -6,6 +6,7 @@ import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 
 import { CodexAgent } from './index.js';
 import { Method } from './app-server/protocol.js';
+import { AppServerRpcError } from './app-server/client.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
   CodexResumePreparationBlockedError,
@@ -2938,10 +2939,16 @@ describe('CodexAgent reference directories', () => {
   it('reapplies roots and the profile when a stale daemon requires resume + retry', async () => {
     const agent = new CodexAgent(createDeps());
     let turnStartCount = 0;
+    const rejectionSettlement = vi.fn(async () => {});
+    const retryableRejection = new AppServerRpcError(Method.TurnStart, {
+      code: -32000,
+      message: 'thread not found',
+    });
+    retryableRejection.deferVendorDispatchRejectionSettlement(rejectionSettlement);
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
         turnStartCount += 1;
-        if (turnStartCount === 1) throw new Error('thread not found');
+        if (turnStartCount === 1) throw retryableRejection;
         return { turn: { id: 'turn-retry' } };
       }
       return undefined;
@@ -2952,8 +2959,12 @@ describe('CodexAgent reference directories', () => {
       workingDir: '/repo',
       extraDirs: ['/shared-retry'],
     });
+    const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
 
-    await handle.send({ type: 'user', content: 'retry after restart' });
+    await handle.send(
+      { type: 'user', content: 'retry after restart' },
+      { acquireVendorDispatchLease },
+    );
 
     const resumeCalls = host.request.mock.calls.filter(
       ([method]) => method === Method.ThreadResume,
@@ -2973,6 +2984,54 @@ describe('CodexAgent reference directories', () => {
       expect('permissions' in params).toBe(false);
       expect('sandboxPolicy' in params).toBe(false);
     }
+    const initialLease = (turnCalls[0] as unknown[])[2] as {
+      acquireSubmissionLease?: () => Promise<unknown>;
+      deferCorrelatedRejectionSettlement?: boolean;
+    };
+    const retryLease = (turnCalls[1] as unknown[])[2] as {
+      acquireSubmissionLease?: () => Promise<unknown>;
+      deferCorrelatedRejectionSettlement?: boolean;
+    };
+    expect(initialLease.acquireSubmissionLease).toBe(acquireVendorDispatchLease);
+    expect(initialLease.deferCorrelatedRejectionSettlement).toBe(true);
+    expect(retryLease.acquireSubmissionLease).not.toBe(acquireVendorDispatchLease);
+    expect(retryLease.deferCorrelatedRejectionSettlement).toBe(true);
+    await retryLease.acquireSubmissionLease?.();
+    expect(acquireVendorDispatchLease).toHaveBeenCalledWith(
+      'retry-after-confirmed-rejection',
+    );
+    expect(rejectionSettlement).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('settles a deferred correlated rejection when no replacement retry is selected', async () => {
+    const agent = new CodexAgent(createDeps());
+    const rejectionSettlement = vi.fn(async () => {});
+    const terminalRejection = new AppServerRpcError(Method.TurnStart, {
+      code: -32602,
+      message: 'invalid model',
+    });
+    terminalRejection.deferVendorDispatchRejectionSettlement(rejectionSettlement);
+    installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) throw terminalRejection;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-terminal-correlated-rejection',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await expect(
+      handle.send(
+        { type: 'user', content: 'do not retry this rejection' },
+        {
+          acquireVendorDispatchLease: async () => vi.fn(),
+          throwOnStartFailure: true,
+        },
+      ),
+    ).rejects.toThrow('turn/start failed');
+    expect(rejectionSettlement).toHaveBeenCalledOnce();
     await handle.close();
   });
 
@@ -7124,7 +7183,11 @@ describe('CodexAgent MCP thread context hooks', () => {
           model: 'gpt-5.4',
           workingDir: '/repo',
         });
-        await handle.send({ type: 'user', content: 'hello' });
+        const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
+        await handle.send(
+          { type: 'user', content: 'hello' },
+          { acquireVendorDispatchLease },
+        );
         expect(turnStartCount(host)).toBe(1);
 
         const handlers = host.getThreadHandlers();
@@ -7156,6 +7219,22 @@ describe('CodexAgent MCP thread context hooks', () => {
         // 退避（首档 2s ±25%）后重投同一份 turnParams。
         await vi.advanceTimersByTimeAsync(3_000);
         expect(turnStartCount(host)).toBe(2);
+        const turnStartOptions = host.request.mock.calls
+          .filter(([method]) => method === Method.TurnStart)
+          .map((call) => (call as unknown[])[2] as {
+            acquireSubmissionLease?: unknown;
+          });
+        expect(turnStartOptions).toHaveLength(2);
+        expect(turnStartOptions[0]?.acquireSubmissionLease).toBe(acquireVendorDispatchLease);
+        expect(turnStartOptions[1]?.acquireSubmissionLease).not.toBe(
+          acquireVendorDispatchLease,
+        );
+        await (turnStartOptions[1]?.acquireSubmissionLease as
+          | (() => Promise<unknown>)
+          | undefined)?.();
+        expect(acquireVendorDispatchLease).toHaveBeenCalledWith(
+          'retry-after-confirmed-rejection',
+        );
 
         await handle.close();
       } finally {

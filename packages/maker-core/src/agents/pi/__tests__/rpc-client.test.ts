@@ -58,6 +58,47 @@ function makeProc(overrides: Partial<PiRpcSpawnOptions> = {}) {
 }
 
 describe('PiRpcProcess response envelope validation', () => {
+  it('exposes transport submission separately from the later Pi response', async () => {
+    const { transport, emitLine, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+
+    const pending = proc.requestWithSubmission({ type: 'prompt', message: 'hello' });
+    const responseSettled = vi.fn();
+    void pending.response.then(responseSettled, responseSettled);
+    expect(responseSettled).not.toHaveBeenCalled();
+
+    drain();
+    await expect(pending.submitted).resolves.toBeUndefined();
+    expect(responseSettled).not.toHaveBeenCalled();
+
+    const sentFrame = JSON.parse(transport.writeLine.mock.calls[0][0] as string) as { id: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'prompt', success: true, data: {},
+    }));
+    await expect(pending.response).resolves.toMatchObject({ success: true });
+  });
+
+  it('keeps submission pending when the RPC timeout beats a stalled transport write', async () => {
+    const { transport, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.requestWithSubmission(
+      { type: 'prompt', message: 'blocked' },
+      { timeoutMs: 5 },
+    );
+    const submissionSettled = vi.fn();
+    void pending.submitted.then(submissionSettled, submissionSettled);
+    const responseTimedOut = expect(pending.response).rejects.toThrow(
+      'pi rpc timeout after 5ms: prompt',
+    );
+
+    await responseTimedOut;
+    expect(submissionSettled).not.toHaveBeenCalled();
+
+    drain();
+    await expect(pending.submitted).resolves.toBeUndefined();
+    expect(submissionSettled).toHaveBeenCalledOnce();
+  });
+
   it('resolves a well-formed response (success boolean + matching command)', async () => {
     const { transport, emitLine } = makeFakeTransport();
     const { proc } = makeProc({ transport });
@@ -164,6 +205,39 @@ describe('PiRpcProcess response envelope validation', () => {
       }));
 
       await expect(pending).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps submission pending when a refreshed response timeout beats a stalled write', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, emitLine, drain } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+      const pending = proc.requestWithSubmission(
+        { type: 'prompt', message: 'blocked during compaction' },
+        {
+          timeoutMs: 100,
+          submissionTimeoutMs: null,
+          refreshTimeoutOnEvent: (event) => event.type === 'compaction_start',
+        },
+      );
+      const submissionSettled = vi.fn();
+      void pending.submitted.then(submissionSettled, submissionSettled);
+      const responseTimedOut = expect(pending.response).rejects.toThrow(
+        'pi rpc timeout after 100ms: prompt',
+      );
+
+      await vi.advanceTimersByTimeAsync(90);
+      emitLine(JSON.stringify({ type: 'compaction_start', reason: 'threshold' }));
+      await vi.advanceTimersByTimeAsync(100);
+      await responseTimedOut;
+      expect(submissionSettled).not.toHaveBeenCalled();
+
+      drain();
+      await expect(pending.submitted).resolves.toBeUndefined();
+      expect(submissionSettled).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

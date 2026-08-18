@@ -94,7 +94,11 @@ export interface OrcaLifecycleDeps {
       context: string;
     };
   }): Promise<DispatchWorkerTaskResult>;
-  markTeamEnded(teamId: string, status: 'completed' | 'cancelled' | 'failed'): Promise<void>;
+  markTeamEndedWithCleanup(params: {
+    teamId: string;
+    status: 'completed' | 'cancelled' | 'failed';
+    sessionIds: string[];
+  }): Promise<void>;
   setSessionOrcaRole(sessionId: string, role: 'lead' | null): Promise<void>;
   clearKnownNonOrcaSession(sessionId: string): void;
   setLeadVendorOptions(params: {
@@ -269,13 +273,20 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     err?: unknown;
     failure?: Extract<OrcaEnableTeamResult, { ok: false }>;
   }): Promise<Extract<OrcaEnableTeamResult, { ok: false }>> {
+    await deps.markTeamEndedWithCleanup({
+      teamId: params.teamId,
+      status: 'failed',
+      sessionIds: [
+        params.leadSessionId,
+        ...(params.workerSessionId ? [params.workerSessionId] : []),
+      ],
+    }).catch(() => undefined);
     if (params.workerId && params.workerSessionId) {
       await deps.rollbackCreatedWorker({
         workerId: params.workerId,
         workerSessionId: params.workerSessionId,
       }).catch(() => undefined);
     }
-    await deps.markTeamEnded(params.teamId, 'failed').catch(() => undefined);
     await deps.setSessionOrcaRole(params.leadSessionId, null).catch(() => undefined);
     if (params.clearLeadVendorOptions) {
       await deps.clearLeadVendorOptions(params.leadSessionId).catch(() => undefined);
@@ -288,7 +299,11 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     leadSessionId: string;
     err: unknown;
   }): Promise<Extract<OrcaStartTeamResult, { ok: false }>> {
-    await deps.markTeamEnded(params.teamId, 'failed').catch(() => undefined);
+    await deps.markTeamEndedWithCleanup({
+      teamId: params.teamId,
+      status: 'failed',
+      sessionIds: [params.leadSessionId],
+    }).catch(() => undefined);
     await deps.setSessionOrcaRole(params.leadSessionId, null).catch(() => undefined);
     return internalFailure(params.err);
   }

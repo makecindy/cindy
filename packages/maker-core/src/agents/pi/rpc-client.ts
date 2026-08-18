@@ -31,6 +31,13 @@ export interface PiRpcResponse {
   error?: string;
 }
 
+export interface PiRpcPendingRequest {
+  /** Resolves once the JSONL command has crossed the local/SSH transport write boundary. */
+  submitted: Promise<void>;
+  /** Resolves later when Pi returns the correlated RPC response. */
+  response: Promise<PiRpcResponse>;
+}
+
 /** pi RPC 事件帧(response 之外的一切;具体形状 translator 侧收窄)。 */
 export interface PiRpcEvent {
   type: string;
@@ -91,6 +98,8 @@ export class PiRpcProcess {
   private pending = new Map<string, {
     resolve: (resp: PiRpcResponse) => void;
     reject: (err: Error) => void;
+    resolveSubmitted: () => void;
+    rejectSubmitted: (err: Error) => void;
     timer: NodeJS.Timeout;
     timeoutMs: number;
     refreshTimeoutOnEvent?: (event: PiRpcEvent) => boolean;
@@ -144,33 +153,118 @@ export class PiRpcProcess {
       refreshTimeoutOnEvent?: (event: PiRpcEvent) => boolean;
     } = {},
   ): Promise<PiRpcResponse> {
-    if (this.isClosed) throw new Error('pi process already exited');
-    const id = `c${this.nextRequestId++}`;
-    const payload = JSON.stringify({ ...command, id });
+    const pending = this.requestWithSubmission(command, {
+      timeoutMs,
+      refreshTimeoutOnEvent,
+      // request() does not expose the transport boundary. Its response timer
+      // remains the single timeout contract and also settles submitted.
+      submissionTimeoutMs: null,
+    });
+    // Most callers only care about the response, which already rejects on a
+    // write failure. Consume the auxiliary submission rejection as well.
+    void pending.submitted.catch(() => undefined);
+    return pending.response;
+  }
 
-    return new Promise<PiRpcResponse>((resolve, reject) => {
+  requestWithSubmission(
+    command: Record<string, unknown>,
+    {
+      timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+      refreshTimeoutOnEvent,
+      submissionTimeoutMs = Math.min(timeoutMs, DEFAULT_REQUEST_TIMEOUT_MS),
+    }: {
+      timeoutMs?: number;
+      refreshTimeoutOnEvent?: (event: PiRpcEvent) => boolean;
+      /** null disables the separate transport-write timer for request(). */
+      submissionTimeoutMs?: number | null;
+    } = {},
+  ): PiRpcPendingRequest {
+    if (this.isClosed) {
+      const failed = Promise.reject(new Error('pi process already exited'));
+      return { submitted: failed, response: failed };
+    }
+    const id = `c${this.nextRequestId++}`;
+    let payload: string;
+    try {
+      payload = JSON.stringify({ ...command, id });
+    } catch (error) {
+      const failed = Promise.reject(error);
+      return { submitted: failed, response: failed };
+    }
+
+    let resolveSubmitted!: () => void;
+    let rejectSubmitted!: (error: Error) => void;
+    let submissionTimer: NodeJS.Timeout | null = null;
+    const submitted = new Promise<void>((resolve, reject) => {
+      resolveSubmitted = () => {
+        if (submissionTimer) clearTimeout(submissionTimer);
+        submissionTimer = null;
+        resolve();
+      };
+      rejectSubmitted = (error) => {
+        if (submissionTimer) clearTimeout(submissionTimer);
+        submissionTimer = null;
+        reject(error);
+      };
+    });
+    const response = new Promise<PiRpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
         this.pending.delete(id);
-        const commandType = typeof command.type === 'string' ? command.type : '';
-        reject(new PiRpcRequestTimeoutError(commandType, timeoutMs));
+        if (submissionTimer) clearTimeout(submissionTimer);
+        submissionTimer = null;
+        const error = new PiRpcRequestTimeoutError(entry.commandType, entry.timeoutMs);
+        // A response timeout cannot cancel an in-flight transport write.
+        // submitted remains owned by transportSubmission so dispatch leases
+        // stay held until the raw write actually succeeds or fails.
+        entry.reject(error);
       }, timeoutMs);
       this.pending.set(id, {
         resolve,
         reject,
+        resolveSubmitted,
+        rejectSubmitted,
         timer,
         timeoutMs,
         refreshTimeoutOnEvent,
         commandType: typeof command.type === 'string' ? command.type : '',
       });
-      this.transport.writeLine(payload).catch((err) => {
-        const entry = this.pending.get(id);
-        if (entry) {
-          clearTimeout(entry.timer);
+      // Prompt response acceptance can legitimately run for ten minutes and
+      // refresh on compaction progress. This shorter timer bounds the caller's
+      // response wait, but cannot settle submitted because it does not cancel
+      // the underlying local/SSH write.
+      if (submissionTimeoutMs !== null) {
+        submissionTimer = setTimeout(() => {
+          const entry = this.pending.get(id);
+          if (!entry) return;
           this.pending.delete(id);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
+          clearTimeout(entry.timer);
+          const error = new PiRpcRequestTimeoutError(entry.commandType, submissionTimeoutMs);
+          entry.reject(error);
+        }, submissionTimeoutMs);
+      }
+      let transportSubmission: Promise<void>;
+      try {
+        transportSubmission = this.transport.writeLine(payload);
+      } catch (error) {
+        transportSubmission = Promise.reject(error);
+      }
+      void transportSubmission.then(
+        () => resolveSubmitted(),
+        (err: unknown) => {
+          const error = err instanceof Error ? err : new Error(String(err));
+          rejectSubmitted(error);
+          const entry = this.pending.get(id);
+          if (entry) {
+            clearTimeout(entry.timer);
+            this.pending.delete(id);
+            reject(error);
+          }
+        },
+      );
     });
+    return { submitted, response };
   }
 
   /** fire-and-forget 写入(extension_ui_response 等不产生 response 的帧)。 */
@@ -253,6 +347,9 @@ export class PiRpcProcess {
       const id = typeof resp.id === 'string' ? resp.id : undefined;
       const entry = id ? this.pending.get(id) : undefined;
       if (id && entry) {
+        // A response proves Pi received the command even if a custom transport
+        // has not settled its local write callback yet.
+        entry.resolveSubmitted();
         // 轮 40-w4-t4 CRITICAL:response envelope 集中校验 —— success 必须是
         // boolean;command 若存在必须匹配该 pending request 的 command.type。
         // 否则畸形/语义失败的响应会被调用方当成成功(如 get_state 失败被
@@ -298,7 +395,12 @@ export class PiRpcProcess {
       entry.timer = setTimeout(() => {
         if (this.pending.get(id) !== entry) return;
         this.pending.delete(id);
-        entry.reject(new PiRpcRequestTimeoutError(entry.commandType, entry.timeoutMs));
+        const error = new PiRpcRequestTimeoutError(entry.commandType, entry.timeoutMs);
+        // Refreshing the response idle window does not transfer ownership of
+        // the local transport boundary. A timeout still cannot cancel a
+        // backpressured write, so submitted must remain pending until the raw
+        // transport promise settles (or a correlated response proves receipt).
+        entry.reject(error);
       }, entry.timeoutMs);
     }
     this.opts.onEvent(event);
@@ -307,6 +409,7 @@ export class PiRpcProcess {
   private failAllPending(err: Error): void {
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
+      entry.rejectSubmitted(err);
       entry.reject(err);
     }
     this.pending.clear();

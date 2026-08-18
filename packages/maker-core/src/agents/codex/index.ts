@@ -155,7 +155,7 @@ import {
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
-import { AppServerRequestTimeoutError } from './app-server/client.js';
+import { AppServerRequestTimeoutError, AppServerRpcError } from './app-server/client.js';
 import {
   isTerminalRateLimitRetryExhaustion,
   TERMINAL_RATE_LIMIT_RETRY_MAX_ATTEMPTS,
@@ -2819,6 +2819,26 @@ export class CodexAgent extends BaseAgent {
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
+    const settleDeferredVendorDispatchRejection = async (
+      error: unknown,
+      reason: string,
+    ): Promise<boolean> => {
+      if (!(error instanceof AppServerRpcError)) return false;
+      try {
+        return await error.settleVendorDispatchRejection();
+      } catch (settlementError) {
+        // Keep the original RPC rejection as the user-facing failure while
+        // retaining diagnostics for a best-effort terminal row settlement.
+        log.warn('deferred vendor dispatch rejection settlement failed', {
+          reason,
+          error:
+            settlementError instanceof Error
+              ? settlementError.message
+              : String(settlementError),
+        });
+        return true;
+      }
+    };
     const reviewMode = opts.reviewMode === true;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
@@ -7746,7 +7766,11 @@ export class CodexAgent extends BaseAgent {
         reason,
       });
 
-      void state.retry().catch((retryError) => {
+      void state.retry().catch(async (retryError) => {
+        await settleDeferredVendorDispatchRejection(
+          retryError,
+          'HTTP recovery retry declined',
+        );
         if (closed || overloadRetry !== state || state.isCancelled()) {
           log.info('codex HTTP recovery retry rejected after cancellation — not surfacing', {
             threadId,
@@ -8690,7 +8714,11 @@ export class CodexAgent extends BaseAgent {
       state.timer = setTimeout(() => {
         state.timer = null;
         if (closed || overloadRetry !== state) return;
-        void state.retry().catch((error) => {
+        void state.retry().catch(async (error) => {
+          await settleDeferredVendorDispatchRejection(
+            error,
+            'overload retry declined',
+          );
           // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
           // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
           // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
@@ -10091,6 +10119,18 @@ export class CodexAgent extends BaseAgent {
           ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
+        // Both stale-daemon recovery and the bounded overload retry are entered
+        // only after Codex has authoritatively rejected the previous turn/start.
+        // Tell the host-owned lease that this is an intentional replacement of
+        // the same logical prompt, rather than an unrelated replay of an
+        // ambiguous submitted row.
+        const acquireConfirmedRetrySubmissionLease =
+          sendOpts?.acquireVendorDispatchLease
+            ? () =>
+                sendOpts.acquireVendorDispatchLease?.(
+                  'retry-after-confirmed-rejection',
+                )
+            : undefined;
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
         activeTurnModel = mutableCatalogModel;
@@ -10334,6 +10374,9 @@ export class CodexAgent extends BaseAgent {
               // 且无人可解（review #844 codex P1）。与正常 turn/start 同款边界。
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+                acquireSubmissionLease: acquireConfirmedRetrySubmissionLease,
+                deferCorrelatedRejectionSettlement:
+                  acquireConfirmedRetrySubmissionLease !== undefined,
               });
               // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
               // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为
@@ -10434,6 +10477,9 @@ export class CodexAgent extends BaseAgent {
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
             timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+            acquireSubmissionLease: sendOpts?.acquireVendorDispatchLease,
+            deferCorrelatedRejectionSettlement:
+              sendOpts?.acquireVendorDispatchLease !== undefined,
           });
           markTurnConfigAccepted();
           adoptUnidentifiedDeadTurn(resp, initialStartSeq);
@@ -10526,6 +10572,9 @@ export class CodexAgent extends BaseAgent {
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
               const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+                acquireSubmissionLease: acquireConfirmedRetrySubmissionLease,
+                deferCorrelatedRejectionSettlement:
+                  acquireConfirmedRetrySubmissionLease !== undefined,
               });
               markTurnConfigAccepted();
               adoptUnidentifiedDeadTurn(resp, initialStartSeq);
@@ -10537,6 +10586,16 @@ export class CodexAgent extends BaseAgent {
               initialStartSettledOk = true;
             } catch (retryErr) {
               if (isLocalAcceptBoundaryError(retryErr)) throw retryErr;
+              const retrySettlementOwned = await settleDeferredVendorDispatchRejection(
+                retryErr,
+                'thread resume replacement declined',
+              );
+              if (!retrySettlementOwned) {
+                await settleDeferredVendorDispatchRejection(
+                  e,
+                  'thread resume failed before replacement acquired the row',
+                );
+              }
               log.error('thread/resume + retry turn/start failed', {
                 originalError: String(e),
                 retryError: String(retryErr),
@@ -10544,6 +10603,10 @@ export class CodexAgent extends BaseAgent {
               finalErr = retryErr;
             }
           } else {
+            await settleDeferredVendorDispatchRejection(
+              e,
+              'initial turn/start rejection not retried',
+            );
             finalErr = e;
           }
         } finally {

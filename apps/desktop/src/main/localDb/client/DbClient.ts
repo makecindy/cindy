@@ -49,6 +49,11 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
     return createInprocDbClient(opts);
   }
 
+  return createWorkerDbClient(opts);
+}
+
+/** Always create an isolated transport, even when the app-wide in-proc rollback is enabled. */
+export async function createWorkerDbClient(opts: CreateDbClientOptions = {}): Promise<DbClient> {
   const kind = resolveTransportKind(opts.transport);
   let transport = createTransport(kind, opts);
   const boundary = new DbErrorBoundary();

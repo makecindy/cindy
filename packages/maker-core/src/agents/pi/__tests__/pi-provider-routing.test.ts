@@ -16,6 +16,7 @@ const captured = vi.hoisted(() => ({
     refreshTimeoutOnEvent?: (event: { type: string }) => boolean;
   } | undefined>,
   closes: 0,
+  submissionHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<void>),
   requestHandler: undefined as undefined | ((command: Record<string, unknown>) => Promise<{
     success: boolean;
     command?: unknown;
@@ -77,6 +78,17 @@ vi.mock('../rpc-client.js', () => {
         }
         return { success: true, data: {} };
       }
+      requestWithSubmission(
+        command: Record<string, unknown>,
+        options?: {
+          timeoutMs?: number;
+          refreshTimeoutOnEvent?: (event: { type: string }) => boolean;
+        },
+      ) {
+        const response = this.request(command, options);
+        const submitted = captured.submissionHandler?.(command) ?? Promise.resolve();
+        return { submitted, response };
+      }
       send(): void {}
       async close(): Promise<void> { this.isClosed = true; captured.closes += 1; }
     },
@@ -93,6 +105,16 @@ const noopLogger: Logger = {
   trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, fatal: () => {},
   child: () => noopLogger,
 };
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('Pi provider-aware model routing', () => {
   let agentHome = '';
@@ -115,6 +137,7 @@ describe('Pi provider-aware model routing', () => {
     captured.requestOptions = [];
     captured.closes = 0;
     captured.requestHandler = undefined;
+    captured.submissionHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-provider-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-provider-cwd-'));
   });
@@ -1806,12 +1829,57 @@ describe('Pi provider-aware model routing', () => {
       workingDir: cwd,
       model: 'local-model',
     });
+    const leaseOutcomes: string[] = [];
 
-    await expect(handle.send({ type: 'user', content: 'continue the goal' })).rejects.toMatchObject({
+    await expect(handle.send(
+      { type: 'user', content: 'continue the goal' },
+      {
+        acquireVendorDispatchLease: async () => (outcome) => {
+          leaseOutcomes.push(String(outcome));
+        },
+      },
+    )).rejects.toMatchObject({
+        name: 'TurnDispatchRejectedError',
+        code: 'TURN_DISPATCH_REJECTED',
+        message: 'pi prompt rejected before acceptance: prompt rejected before acceptance',
+      });
+    expect(leaseOutcomes).toEqual(['submitted', 'confirmed-undispatched']);
+    await handle.close();
+  });
+
+  it('preserves a Pi rejection while exposing failed durable cleanup as its cause', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'prompt') {
+        return { command: 'prompt', success: false, error: 'policy rejected prompt' };
+      }
+      return { success: true, data: {} };
+    };
+    const cleanupFailure = new Error('cleanup database unavailable');
+    const leaseOutcomes: string[] = [];
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'prompt-rejection-cleanup-failure',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+
+    await expect(handle.send(
+      { type: 'user', content: 'continue the goal' },
+      {
+        acquireVendorDispatchLease: async () => async (outcome) => {
+          leaseOutcomes.push(String(outcome));
+          if (outcome === 'confirmed-undispatched') throw cleanupFailure;
+        },
+      },
+    )).rejects.toMatchObject({
       name: 'TurnDispatchRejectedError',
       code: 'TURN_DISPATCH_REJECTED',
-      message: 'pi prompt rejected before acceptance: prompt rejected before acceptance',
+      cause: cleanupFailure,
     });
+    expect(leaseOutcomes).toEqual(['submitted', 'confirmed-undispatched']);
     await handle.close();
   });
 
@@ -1962,11 +2030,16 @@ describe('Pi provider-aware model routing', () => {
 
   it('reports the stable Pi user entry id after prompt acceptance', async () => {
     let promptAccepted = false;
+    const promptResponse = deferred<void>();
+    const promptSubmitted = deferred<void>();
+    const acceptanceOrder: string[] = [];
     captured.requestHandler = async (command) => {
       if (command.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
       }
       if (command.type === 'prompt') {
+        acceptanceOrder.push('rpc');
+        await promptResponse.promise;
         promptAccepted = true;
         return { success: true, data: {} };
       }
@@ -1985,19 +2058,79 @@ describe('Pi provider-aware model routing', () => {
       }
       return { success: true, data: {} };
     };
+    captured.submissionHandler = async (command) => {
+      if (command.type === 'prompt') await promptSubmitted.promise;
+    };
     const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
     const handle = await agent.startSession({
       sessionId: 'entry-link',
       workingDir: cwd,
       model: 'local-model',
     });
-    const onTranscriptUserEntry = vi.fn();
-    await handle.send(
+    const onTranscriptUserEntry = vi.fn(() => {
+      acceptanceOrder.push('transcript');
+    });
+    const sending = handle.send(
       { type: 'user', content: 'new' },
-      { onTranscriptUserEntry },
+      {
+        acquireVendorDispatchLease: async () => {
+          acceptanceOrder.push('acquire');
+          return (outcome) => {
+            acceptanceOrder.push(`release:${outcome}`);
+          };
+        },
+        onTranscriptUserEntry,
+      },
     );
+    await vi.waitFor(() => expect(acceptanceOrder).toEqual(['acquire', 'rpc']));
+    promptSubmitted.resolve(undefined);
+    await vi.waitFor(() =>
+      expect(acceptanceOrder).toEqual(['acquire', 'rpc', 'release:submitted']),
+    );
+    promptResponse.resolve(undefined);
+    await sending;
     expect(onTranscriptUserEntry).toHaveBeenCalledOnce();
     expect(onTranscriptUserEntry).toHaveBeenCalledWith('new-user');
+    expect(acceptanceOrder).toEqual([
+      'acquire',
+      'rpc',
+      'release:submitted',
+      'release:accepted',
+      'transcript',
+    ]);
+    await handle.close();
+  });
+
+  it('releases the dispatch lease when Pi transport submission rejects', async () => {
+    captured.submissionHandler = async (command) => {
+      if (command.type === 'prompt') throw new Error('pi rpc timeout after 5ms: prompt');
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({
+      sessionId: 'submission-timeout-lease',
+      workingDir: cwd,
+      model: 'local-model',
+    });
+    const order: string[] = [];
+
+    await expect(
+      handle.send(
+        { type: 'user', content: 'blocked' },
+        {
+          acquireVendorDispatchLease: async () => {
+            order.push('acquire');
+            return (outcome) => {
+              order.push(`release:${outcome}`);
+            };
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: 'TurnDispatchUnconfirmedError',
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      cause: expect.objectContaining({ message: 'pi rpc timeout after 5ms: prompt' }),
+    });
+    expect(order).toEqual(['acquire', 'release:confirmed-undispatched']);
     await handle.close();
   });
 

@@ -51,6 +51,40 @@ export class AppServerRequestTimeoutError extends Error {
   }
 }
 
+/** A correlated JSON-RPC error response from app-server. */
+export class AppServerRpcError extends Error {
+  readonly code: number;
+  readonly data?: unknown;
+  private vendorDispatchRejectionSettlement: (() => Promise<void>) | null = null;
+
+  constructor(
+    public readonly method: string,
+    public readonly rpcError: JsonRpcErrorObject,
+  ) {
+    super(`codex app-server ${method} error ${rpcError.code}: ${rpcError.message}`);
+    this.name = 'AppServerRpcError';
+    this.code = rpcError.code;
+    this.data = rpcError.data;
+  }
+
+  /**
+   * Keep an authoritative rejection recoverable while the Codex adapter decides
+   * whether it will replace the rejected request. The callback is single-use so
+   * a final error path and a late cleanup path cannot tombstone the same row twice.
+   */
+  deferVendorDispatchRejectionSettlement(settle: () => Promise<void>): void {
+    this.vendorDispatchRejectionSettlement = settle;
+  }
+
+  async settleVendorDispatchRejection(): Promise<boolean> {
+    const settle = this.vendorDispatchRejectionSettlement;
+    if (!settle) return false;
+    this.vendorDispatchRejectionSettlement = null;
+    await settle();
+    return true;
+  }
+}
+
 /**
  * Keep a small bounded correlation window for writes that rejected after the
  * transport may already have handed bytes to the OS / websocket buffer.
@@ -204,6 +238,13 @@ interface PendingRequest {
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
+export interface SubmittedAppServerRequest<R> {
+  /** Resolves when the transport has buffered the JSON-RPC line locally. */
+  submitted: Promise<void>;
+  /** Resolves or rejects with the correlated JSON-RPC response. */
+  response: Promise<R>;
+}
+
 /**
  * 单 session 单实例 (plan D5)。oneShot 也单独 spawn 一个。
  */
@@ -337,11 +378,27 @@ export class AppServerClient {
     params?: unknown,
     opts?: { timeoutMs?: number },
   ): Promise<R> {
+    const pending = this.requestWithSubmission<R>(method, params, opts);
+    // The response carries the same write failure. Ordinary callers only need
+    // that promise; consume the auxiliary submission rejection here.
+    void pending.submitted.catch(() => undefined);
+    return pending.response;
+  }
+
+  requestWithSubmission<R = unknown>(
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number },
+  ): SubmittedAppServerRequest<R> {
     if (this.closed) {
-      return Promise.reject(new Error(`AppServerClient.request(${method}) after close()`));
+      const failed = Promise.reject(new Error(`AppServerClient.request(${method}) after close()`));
+      return { submitted: failed, response: failed };
     }
     if (!this.transport) {
-      return Promise.reject(new Error(`AppServerClient.request(${method}): not started`));
+      const failed = Promise.reject(
+        new Error(`AppServerClient.request(${method}): not started`),
+      );
+      return { submitted: failed, response: failed };
     }
     const transport = this.transport;
     const id = this.nextId++;
@@ -351,11 +408,13 @@ export class AppServerClient {
       timeoutMs !== undefined &&
       (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
     ) {
-      return Promise.reject(
+      const failed = Promise.reject(
         new Error(`AppServerClient.request(${method}): timeoutMs must be a positive finite number`),
       );
+      return { submitted: failed, response: failed };
     }
-    return new Promise<R>((resolve, reject) => {
+    let submitted!: Promise<void>;
+    const response = new Promise<R>((resolve, reject) => {
       const pending: PendingRequest = {
         resolve: resolve as (v: unknown) => void,
         reject,
@@ -371,7 +430,10 @@ export class AppServerClient {
         }, timeoutMs);
         pending.timeoutId.unref?.();
       }
-      transport.writeLine(payload).then(undefined, (err: Error) => {
+      // Normalize a transport that throws synchronously into the same promise
+      // rejection path as an asynchronous write failure.
+      submitted = Promise.resolve().then(() => transport.writeLine(payload));
+      submitted.then(undefined, (err: Error) => {
         // transport 拒绝就立刻 reject 这一 request, 不要让它在 pending 里等到 close。
         // 只有 response 尚未先到时才留 tombstone；否则迟到的 write callback 不应
         // 重新关联已经完成的 id。
@@ -382,6 +444,7 @@ export class AppServerClient {
         reject(err);
       });
     });
+    return { submitted, response };
   }
 
   onNotification(method: string, handler: NotificationHandler): void {
@@ -488,10 +551,7 @@ export class AppServerClient {
     if (pending.timeoutId) clearTimeout(pending.timeoutId);
     if (error) {
       this.notifyAuthInvalidated(error, pending.method);
-      const err = new Error(`codex app-server ${pending.method} error ${error.code}: ${error.message}`);
-      // 把 code/data 挂上, 上层想区分 OVERLOADED 等可以判 (err as any).code。
-      Object.assign(err, { code: error.code, data: error.data });
-      pending.reject(err);
+      pending.reject(new AppServerRpcError(pending.method, error));
       return;
     }
     pending.resolve(result);

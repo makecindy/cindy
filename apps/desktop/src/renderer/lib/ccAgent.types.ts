@@ -187,6 +187,9 @@ export interface CcMeta {
     exitCode: number | null;
     durationMs: number;
   };
+
+  /** Durable host-only settlement marker for an Orca user row crossing provider submission. */
+  orcaPreVendorCleanup?: { teamId: string; phase?: 'pre-vendor' | 'submitted' };
 }
 
 /**

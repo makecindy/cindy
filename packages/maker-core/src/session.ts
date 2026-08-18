@@ -457,7 +457,13 @@ export class Session {
   }
 
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
-    const { afterTurnReserved, beforeProviderStart, onAccepted, onDispatching, ...handleOpts } = opts ?? {};
+    const {
+      afterTurnReserved,
+      beforeProviderStart,
+      onAccepted,
+      onDispatching,
+      ...handleOpts
+    } = opts ?? {};
     const cancelledBeforeReservation = (): SessionSendResult | null =>
       handleOpts.signal?.aborted === true
         ? { accepted: false, reason: 'cancelled-before-dispatch' }

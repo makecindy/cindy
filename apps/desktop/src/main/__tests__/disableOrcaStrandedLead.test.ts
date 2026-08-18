@@ -10,6 +10,10 @@ import { describe, expect, it } from 'vitest';
 // orcaStrandedLeadReconcile.test.ts; here we lock down that disableOrcaInternal's
 // "no active team" branch is no longer an unconditional no-op.
 const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'register.ts'), 'utf8');
+const orcaQueueItemSource = readFileSync(
+  resolve(__dirname, '..', 'maker-ipc', 'orcaQueueItem.ts'),
+  'utf8',
+);
 
 describe('disableOrcaInternal stranded-lead recovery', () => {
   it('extracts a shared clearLeadOrcaRoleState helper', () => {
@@ -82,5 +86,111 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
   it('reuses clearLeadOrcaRoleState on BOTH the normal-close and stranded-recovery paths', () => {
     const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('waits for ingress settlement and durable marker cleanup before terminal commit', () => {
+    const helperAt = registerSource.indexOf(
+      'async function prepareOrcaTeamTerminalCommit',
+    );
+    const waitedAt = registerSource.indexOf(
+      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId)',
+      helperAt,
+    );
+    const helperPreparedAt = registerSource.indexOf(
+      'await prepareOrcaTeamCleanupIntents(input)',
+      helperAt,
+    );
+    const durableSweepAt = registerSource.indexOf(
+      'await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds)',
+      helperAt,
+    );
+    const terminalHelperAt = registerSource.indexOf(
+      'async function markOrcaTeamEndedWithCleanup',
+    );
+    const endedAt = registerSource.indexOf(
+      'await markTeamEnded(input.teamId, input.status, {',
+      terminalHelperAt,
+    );
+    const preparedAt = registerSource.indexOf(
+      'beforeTerminalCommit: () => prepareOrcaTeamTerminalCommit(cleanupScope)',
+      endedAt,
+    );
+    const rollbackAt = registerSource.indexOf(
+      'onTerminalCommitFailed: () => settleOrcaTeamQueuedInputs(cleanupScope)',
+      endedAt,
+    );
+    const atomicSweepAt = registerSource.indexOf(
+      'terminalCleanupSessionIds: cleanupScope.sessionIds',
+      endedAt,
+    );
+    const finalizedAt = registerSource.indexOf(
+      'await finalizeRewoundOrcaPreVendorCleanupRows(atomicallyRewoundRows)',
+      endedAt,
+    );
+    const settledAt = registerSource.indexOf(
+      'await settleOrcaTeamQueuedInputs(cleanupScope)',
+      endedAt,
+    );
+    const clearedAt = registerSource.indexOf('await clearLeadOrcaRoleState(leadSessionId)', endedAt);
+    const lifecycleCleanupAt = registerSource.indexOf(
+      'markTeamEndedWithCleanup: markOrcaTeamEndedWithCleanup',
+      endedAt,
+    );
+    const disableCleanupAt = registerSource.indexOf(
+      'await markOrcaTeamEndedWithCleanup({',
+      endedAt,
+    );
+
+    expect(helperAt).toBeGreaterThan(-1);
+    expect(waitedAt).toBeGreaterThan(helperAt);
+    expect(durableSweepAt).toBeGreaterThan(waitedAt);
+    expect(helperPreparedAt).toBeGreaterThan(durableSweepAt);
+    expect(endedAt).toBeGreaterThan(-1);
+    expect(preparedAt).toBeGreaterThan(endedAt);
+    expect(atomicSweepAt).toBeGreaterThan(preparedAt);
+    expect(rollbackAt).toBeGreaterThan(atomicSweepAt);
+    expect(finalizedAt).toBeGreaterThan(rollbackAt);
+    expect(settledAt).toBeGreaterThan(finalizedAt);
+    expect(disableCleanupAt).toBeGreaterThan(settledAt);
+    expect(lifecycleCleanupAt).toBeGreaterThan(disableCleanupAt);
+    expect(clearedAt).toBeGreaterThan(settledAt);
+  });
+
+  it('uses the legacy workflow id fallback for both end-team invalidation and snapshot restore', () => {
+    expect(orcaQueueItemSource).toContain(
+      'function resolveOrcaQueueItemTeamId(item: AgentInputQueuedMessage)',
+    );
+    expect(orcaQueueItemSource).toContain(
+      'const legacyTeamId = item.createOpts.vendorOptions?.orcaWorkflowId;',
+    );
+    expect(registerSource).toContain(
+      '(item) => resolveOrcaQueueItemTeamId(item) === input.teamId',
+    );
+    expect(registerSource).toContain('const teamId = resolveOrcaQueueItemTeamId(item);');
+    const resolverCalls = registerSource.match(/resolveOrcaQueueItemTeamId\(item\)/g) ?? [];
+    expect(resolverCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('serializes Lead start/end independently from the input-send lock', () => {
+    expect(registerSource).toContain('function withOrcaLeadLifecycleLock<T>(');
+    expect(registerSource).toContain(
+      'const orcaLeadLifecycleLocks = new Map<string, Promise<void>>();',
+    );
+    const lockStart = registerSource.indexOf('function withOrcaLeadLifecycleLock<T>(');
+    const lockEnd = registerSource.indexOf(
+      'function assertOrcaQueueOriginActive',
+      lockStart,
+    );
+    const lockSource = registerSource.slice(lockStart, lockEnd);
+    expect(lockSource).toContain('const previous = orcaLeadLifecycleLocks.get(leadSessionId)');
+    expect(lockSource).not.toContain('withSendToSessionLock');
+    expect(registerSource).toContain('enableOrca: enableOrcaWithLeadLifecycleLock');
+    expect(registerSource).toContain('disableOrca: disableOrcaWithLeadLifecycleLock');
+    expect(registerSource).toMatch(
+      /startTeam: \(params\) =>\s+withOrcaLeadLifecycleLock\(params\.leadSessionId, \(\) =>\s+orcaLifecycleService\.startTeam\(params\)/,
+    );
+    const lockedDisableCalls =
+      registerSource.match(/disableOrcaWithLeadLifecycleLock\(leadSessionId\)/g) ?? [];
+    expect(lockedDisableCalls.length).toBeGreaterThanOrEqual(3);
   });
 });

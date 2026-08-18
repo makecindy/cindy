@@ -3,11 +3,13 @@ import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
+import type { OrcaPreVendorCleanupRow } from './client/tx/types.js';
 import { orcaWorkers, orcaTeams, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from './agentIslandSessionPatch.js';
+import { orcaTeamTerminalFence } from '../orcaTeamTerminalFence.js';
 
 const log = createLogger('orca-team-store');
 
@@ -32,6 +34,113 @@ export interface OrcaTeamRecord {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface OrcaDuplicateTeamReconciliation {
+  leadSessionId: string;
+  /** Present for duplicate-team repair; null when replaying an ended team with no active successor. */
+  keptTeamId: string | null;
+  staleTeamIds: string[];
+  staleWorkerSessionIds: string[];
+}
+
+type OrcaDuplicateTeamReconciliationHandler = (
+  reconciliation: OrcaDuplicateTeamReconciliation,
+  phase: 'prepare' | 'cleanup' | 'rollback',
+) => void | Promise<void>;
+
+let duplicateTeamReconciliationHandler: OrcaDuplicateTeamReconciliationHandler | null = null;
+const reconciledTerminalTeamIdsByClient = new WeakMap<object, Set<string>>();
+const terminalTeamReconciliationByClient = new WeakMap<
+  object,
+  Map<string, Promise<void>>
+>();
+
+/**
+ * Inject the process-local queue cleanup owned by maker-ipc.  The store emits
+ * lifecycle facts only; it must not import the AgentInputCoordinator back into
+ * localDb and invert the dependency boundary.
+ */
+export function setOrcaDuplicateTeamReconciliationHandler(
+  handler: OrcaDuplicateTeamReconciliationHandler | null,
+): void {
+  duplicateTeamReconciliationHandler = handler;
+}
+
+/**
+ * A committed terminal team is also the durable retry marker for queue cleanup.
+ * The process may have crashed after markTeamEnded/cancelStaleTeams but before
+ * invalidating a pre-vendor active turn, so a later read must reconstruct the
+ * complete worker-session scope from SQLite even when no active team remains.
+ */
+async function reconcilePersistedTerminalTeamsForLead(
+  leadSessionId: string,
+  keptTeamId: string | null,
+): Promise<void> {
+  const handler = duplicateTeamReconciliationHandler;
+  if (!handler) return;
+
+  const client = getDbClient();
+  let inFlightByLead = terminalTeamReconciliationByClient.get(client);
+  if (!inFlightByLead) {
+    inFlightByLead = new Map();
+    terminalTeamReconciliationByClient.set(client, inFlightByLead);
+  }
+  const existing = inFlightByLead.get(leadSessionId);
+  if (existing) return existing;
+
+  const run = (async () => {
+    let reconciledTeamIds = reconciledTerminalTeamIdsByClient.get(client);
+    if (!reconciledTeamIds) {
+      reconciledTeamIds = new Set();
+      reconciledTerminalTeamIdsByClient.set(client, reconciledTeamIds);
+    }
+    const terminalRows = await client.drizzle
+      .select({ id: orcaTeams.id })
+      .from(orcaTeams)
+      .where(
+        and(
+          eq(orcaTeams.leadSessionId, leadSessionId),
+          ne(orcaTeams.status, 'active'),
+        ),
+      )
+      .orderBy(desc(orcaTeams.updatedAt), desc(orcaTeams.createdAt));
+    const staleTeamIds = terminalRows
+      .map((team) => team.id)
+      .filter((teamId) => !reconciledTeamIds.has(teamId));
+    if (staleTeamIds.length === 0) return;
+
+    const staleWorkerRows = await client.drizzle
+      .select({ sessionId: orcaWorkers.sessionId })
+      .from(orcaWorkers)
+      .where(inArray(orcaWorkers.teamId, staleTeamIds));
+    const staleWorkerSessionIds = [
+      ...new Set(staleWorkerRows.map((worker) => worker.sessionId)),
+    ];
+    await handler(
+      {
+        leadSessionId,
+        keptTeamId,
+        staleTeamIds,
+        staleWorkerSessionIds,
+      },
+      'cleanup',
+    );
+    for (const teamId of staleTeamIds) reconciledTeamIds.add(teamId);
+    log.warn('reconciled persisted terminal orca teams', {
+      leadSessionId,
+      keptTeamId,
+      staleTeamIds,
+      staleWorkerSessionIds,
+    });
+  })();
+  const tracked = run.finally(() => {
+    if (inFlightByLead?.get(leadSessionId) === tracked) {
+      inFlightByLead.delete(leadSessionId);
+    }
+  });
+  inFlightByLead.set(leadSessionId, tracked);
+  return tracked;
 }
 
 export interface OrcaWorkerRecord {
@@ -165,7 +274,8 @@ export async function getTeamByLeadSession(
 export async function getActiveTeamByLead(
   leadSessionId: string,
 ): Promise<OrcaTeamRecord | null> {
-  const db = getDbClient().drizzle;
+  const client = getDbClient();
+  const db = client.drizzle;
   const rows = await db
     .select()
     .from(orcaTeams)
@@ -174,24 +284,81 @@ export async function getActiveTeamByLead(
     )
     .orderBy(desc(orcaTeams.updatedAt), desc(orcaTeams.createdAt));
 
-  const latest = rows[0];
+  const latest = rows[0] ?? null;
+
+  // Retry any terminal write whose process-local cleanup did not finish. This
+  // deliberately runs before the no-active return so a post-markTeamEnded crash
+  // can still rewind persisted pre-vendor rows on the next lifecycle read.
+  await reconcilePersistedTerminalTeamsForLead(leadSessionId, latest?.id ?? null);
   if (!latest) return null;
 
   // 罕见: 同一 lead 出现多个 active team(partial unique 约束缺失 / drift 时)。
   // 高频路径(0 或 1 个 team)走上面的纯 async select, 不付 worker 事务开销;
-  // 只有真出现重复时才走原子的 cancelStaleTeams 兜底, 取消除 latest 外的全部。
+  // 只有真出现重复时才走原子的 cancelStaleTeams 兜底, 仅取消本次预读并 fenced
+  // 的 stale IDs。事务不能使用更宽的 `id != latest` 谓词，否则预读后并发插入
+  // 的新 team 会被取消，却没有对应 terminal fence 与 reconciliation scope。
   // (DbClient.drizzle 是 worker-thread 异步代理, 不支持同步 db.transaction —
   //  需要原子性的多语句写必须走命名事务, 见 client/tx/types.ts。)
   if (rows.length > 1) {
-    await getDbClient().tx('orca.cancelStaleTeams', {
+    const staleTeamIds = rows.slice(1).map((team) => team.id);
+    // Fail before the irreversible terminal write when the durable cleanup
+    // scope cannot even be read. The rows are queried again after commit so a
+    // later retry can reconstruct them; this preflight is an integrity gate,
+    // not a second in-memory source of truth.
+    const staleWorkerRows = await db
+      .select({ sessionId: orcaWorkers.sessionId })
+      .from(orcaWorkers)
+      .where(inArray(orcaWorkers.teamId, staleTeamIds));
+    const reconciliation: OrcaDuplicateTeamReconciliation = {
       leadSessionId,
-      keepTeamId: latest.id,
-      now: Date.now(),
-    });
+      keptTeamId: latest.id,
+      staleTeamIds,
+      staleWorkerSessionIds: [
+        ...new Set(staleWorkerRows.map((worker) => worker.sessionId)),
+      ],
+    };
+    const reconciliationHandler = duplicateTeamReconciliationHandler;
+    const terminalTransitions = staleTeamIds.map((teamId) =>
+      orcaTeamTerminalFence.begin(teamId),
+    );
+    try {
+      await reconciliationHandler?.(reconciliation, 'prepare');
+      await client.tx('orca.cancelStaleTeams', {
+        leadSessionId,
+        staleTeamIds,
+        now: Date.now(),
+      });
+    } catch (err) {
+      try {
+        await reconciliationHandler?.(reconciliation, 'rollback');
+      } catch (rollbackErr) {
+        log.warn('duplicate-team cleanup rollback failed', {
+          leadSessionId,
+          staleTeamIds,
+          error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        });
+      }
+      for (const transition of terminalTransitions) {
+        orcaTeamTerminalFence.rollback(transition);
+      }
+      throw err;
+    }
+    for (const transition of terminalTransitions) {
+      orcaTeamTerminalFence.commit(transition);
+    }
+    if (reconciliationHandler) {
+      await reconciliationHandler(reconciliation, 'cleanup');
+      let reconciledTeamIds = reconciledTerminalTeamIdsByClient.get(client);
+      if (!reconciledTeamIds) {
+        reconciledTeamIds = new Set();
+        reconciledTerminalTeamIdsByClient.set(client, reconciledTeamIds);
+      }
+      for (const teamId of staleTeamIds) reconciledTeamIds.add(teamId);
+    }
     log.warn('cancelled stale duplicate active orca teams', {
       leadSessionId,
       keptTeamId: latest.id,
-      staleTeamIds: rows.slice(1).map((team) => team.id),
+      staleTeamIds,
     });
   }
 
@@ -231,13 +398,38 @@ export async function createActiveTeam(input: {
 export async function markTeamEnded(
   teamId: string,
   status: 'completed' | 'cancelled' | 'failed',
-): Promise<void> {
-  const db = getDbClient().drizzle;
+  hooks?: {
+    beforeTerminalCommit?: () => void | Promise<void>;
+    terminalCleanupSessionIds?: string[];
+    onTerminalCommitFailed?: () => void | Promise<void>;
+  },
+): Promise<OrcaPreVendorCleanupRow[]> {
+  const client = getDbClient();
   const now = Date.now();
-  await db
-    .update(orcaTeams)
-    .set({ status, completedAt: now, updatedAt: now })
-    .where(eq(orcaTeams.id, teamId));
+  const terminalTransition = orcaTeamTerminalFence.begin(teamId);
+  let rewoundRows: OrcaPreVendorCleanupRow[] = [];
+  try {
+    await hooks?.beforeTerminalCommit?.();
+    rewoundRows = await client.tx('orca.endTeam', {
+      teamId,
+      status,
+      cleanupSessionIds: hooks?.terminalCleanupSessionIds ?? [],
+      now,
+    });
+  } catch (err) {
+    try {
+      await hooks?.onTerminalCommitFailed?.();
+    } catch (cleanupErr) {
+      log.warn('terminal transition cleanup rollback failed', {
+        teamId,
+        error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+      });
+    }
+    orcaTeamTerminalFence.rollback(terminalTransition);
+    throw err;
+  }
+  orcaTeamTerminalFence.commit(terminalTransition);
+  return rewoundRows;
 }
 
 /**
@@ -527,6 +719,17 @@ export async function setSessionOrcaRole(
   const db = getDbClient().drizzle;
   await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
   broadcastSessionPatch(sessionId, { orcaRole: role });
+}
+
+/** Durable lifecycle truth used by Orca queue ingress and crash recovery. */
+export async function isOrcaTeamActive(teamId: string): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({ id: orcaTeams.id })
+    .from(orcaTeams)
+    .where(and(eq(orcaTeams.id, teamId), eq(orcaTeams.status, 'active')))
+    .limit(1);
+  return Boolean(row);
 }
 
 async function getTeamById(id: string): Promise<OrcaTeamRecord | null> {

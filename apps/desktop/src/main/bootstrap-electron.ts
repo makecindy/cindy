@@ -111,6 +111,24 @@ async function shutdownMaker(): Promise<void> {
   WorktreePool.parkAll();
 }
 
+// Quit's async phase is concurrent and bounded. Keep one shared shutdown
+// promise so later ordered cleanup can wait for the exact provider teardown
+// started by the async phase without invoking maker.shutdown() twice.
+let shutdownMakerPromise: Promise<void> | null = null;
+function shutdownMakerOnce(): Promise<void> {
+  shutdownMakerPromise ??= shutdownMaker();
+  return shutdownMakerPromise;
+}
+
+async function disposeOrcaTeamDispatchLeaseAfterMakerShutdown(): Promise<void> {
+  // A submitted marker means the provider may already be executing the prompt.
+  // Do not abort its persistence retry / release the cross-process writer lease
+  // until every provider session has stopped. If provider shutdown exceeds the
+  // quit budget, this await intentionally prevents the abort from running.
+  await shutdownMakerOnce();
+  await disposeOrcaTeamDispatchLeaseCoordinator();
+}
+
 function readGitText(args: string[]): string | null {
   try {
     const value = execFileSync('git', args, {
@@ -285,6 +303,7 @@ import {
   getCurrentDbPath as localDbGetCurrentDbPath,
 } from './localDb/index';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
+import { disposeOrcaTeamDispatchLeaseCoordinator } from './orcaTeamDispatchLease';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
 import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from './localDb/client/current';
 import {
@@ -1379,6 +1398,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
         err,
       );
     }
+    await disposeOrcaTeamDispatchLeaseCoordinator();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     releaseEndedSuppression();
@@ -1395,6 +1415,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     );
   }
   try {
+    await disposeOrcaTeamDispatchLeaseCoordinator();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     try {
@@ -7545,7 +7566,12 @@ onQuit(
 //                           codex 子进程之后, 这里并发跑最坏是 log noise。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
-onQuit('shutdown-maker', shutdownMaker, 'async');
+onQuit('shutdown-maker', shutdownMakerOnce, 'async');
+onQuit(
+  'orca-team-dispatch-lease',
+  disposeOrcaTeamDispatchLeaseAfterMakerShutdown,
+  'post-async',
+);
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');

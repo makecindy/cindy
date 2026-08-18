@@ -341,6 +341,12 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
     });
   });
 
+  it('剥掉 wire 伪造的 Orca team lifecycle fence', () => {
+    expect(stripMainOnlySendOpts({ messageUuid: 'u', orcaTeamId: 'team-forged' })).toEqual({
+      messageUuid: 'u',
+    });
+  });
+
   it('其它字段原样保留', () => {
     const opts = { messageUuid: 'u', userName: 'n', origin: { kind: 'scheduler' } };
     expect(stripMainOnlySendOpts(opts)).toEqual(opts);

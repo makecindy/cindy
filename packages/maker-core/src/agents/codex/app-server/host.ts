@@ -26,7 +26,15 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
-import { AppServerClient } from './client.js';
+import type {
+  VendorDispatchLeaseOutcome,
+  VendorDispatchLeaseRelease,
+} from '../../base-agent.js';
+import {
+  AppServerClient,
+  AppServerRpcError,
+  type SubmittedAppServerRequest,
+} from './client.js';
 import type { Transport } from './transport.js';
 import {
   Method,
@@ -694,7 +702,14 @@ export class AppServerHost {
   async request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: {
+      timeoutMs?: number;
+      acquireSubmissionLease?: () =>
+        | void
+        | VendorDispatchLeaseRelease
+        | Promise<VendorDispatchLeaseRelease>;
+      deferCorrelatedRejectionSettlement?: boolean;
+    },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
@@ -728,12 +743,108 @@ export class AppServerHost {
       if (remaining <= 0) {
         throw new Error(`app-server startup (for ${method}) consumed the entire ${opts.timeoutMs}ms timeout budget`);
       }
-      if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-      return this.client.request<R>(method, params, { ...opts, timeoutMs: remaining });
+      return this.requestAfterStarted<R>(
+        method,
+        params,
+        remaining,
+        opts.acquireSubmissionLease,
+        opts.deferCorrelatedRejectionSettlement === true,
+      );
     }
     await started;
-    if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-    return this.client.request<R>(method, params, opts);
+    return this.requestAfterStarted<R>(
+      method,
+      params,
+      undefined,
+      opts?.acquireSubmissionLease,
+      opts?.deferCorrelatedRejectionSettlement === true,
+    );
+  }
+
+  private async requestAfterStarted<R>(
+    method: string,
+    params: unknown,
+    timeoutMs: number | undefined,
+    acquireSubmissionLease:
+      | (() =>
+          | void
+          | VendorDispatchLeaseRelease
+          | Promise<VendorDispatchLeaseRelease>)
+      | undefined,
+    deferCorrelatedRejectionSettlement: boolean,
+  ): Promise<R> {
+    const client = this.client;
+    if (!client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+
+    const acquired = await acquireSubmissionLease?.();
+    const release = typeof acquired === 'function' ? acquired : undefined;
+    let pending: SubmittedAppServerRequest<R> | undefined;
+    try {
+      pending = client.requestWithSubmission<R>(
+        method,
+        params,
+        timeoutMs === undefined ? undefined : { timeoutMs },
+      );
+    } catch (error) {
+      await release?.('confirmed-undispatched');
+      throw error;
+    }
+
+    // A successful response or correlated RPC rejection is stronger evidence
+    // than the local write callback. Ambiguous rejection (notably timeout/close)
+    // proves nothing about a still-pending backpressured write, so keep the lease
+    // until that write settles before allowing another DB owner to commit end_team.
+    const submissionBoundary = Promise.race([
+      pending.submitted,
+      pending.response.then(
+        () => undefined,
+        (error) => error instanceof AppServerRpcError ? undefined : pending.submitted,
+      ),
+    ]);
+    const releaseAfterSubmission = (async () => {
+      let outcome: VendorDispatchLeaseOutcome = 'submitted';
+      try {
+        await submissionBoundary;
+      } catch {
+        // A transport write failure is also carried by response. Lease release
+        // must still run, while the caller observes the original response error.
+        outcome = 'confirmed-undispatched';
+      }
+      await release?.(outcome);
+    })();
+    void releaseAfterSubmission.catch((error) => {
+      this.logger.warn('app-server submission lease release failed', {
+        method,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+    let result: R;
+    try {
+      result = await pending.response;
+    } catch (error) {
+      if (error instanceof AppServerRpcError) {
+        // A correlated JSON-RPC error proves app-server rejected the turn.
+        // Serialize any terminal settlement after the local submitted marker.
+        // Retry-capable callers can retain the submitted row until they decide
+        // whether to acquire a replacement lease for the same logical prompt.
+        await releaseAfterSubmission.catch(() => undefined);
+        if (deferCorrelatedRejectionSettlement && release) {
+          error.deferVendorDispatchRejectionSettlement(() =>
+            Promise.resolve(release('confirmed-undispatched')),
+          );
+        } else {
+          await release?.('confirmed-undispatched');
+        }
+      }
+      throw error;
+    }
+    // On success the response itself resolves submissionBoundary; still await
+    // release so request() does not return before an async releaser settles.
+    // Timeout/server failure returns from the await promptly while the background
+    // task keeps owning the lease until local submission settles.
+    await releaseAfterSubmission;
+    return result;
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */

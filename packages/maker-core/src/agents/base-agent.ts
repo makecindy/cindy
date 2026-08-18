@@ -1318,6 +1318,17 @@ export interface StartSessionOptions {
  * Session.send / handle.send 的可选附加项。
  * 缺省 / 不识别字段必须安全忽略。
  */
+export type VendorDispatchLeaseOutcome =
+  | 'submitted'
+  | 'accepted'
+  | 'confirmed-undispatched';
+export type VendorDispatchLeaseIntent =
+  | 'initial'
+  | 'retry-after-confirmed-rejection';
+export type VendorDispatchLeaseRelease = (
+  outcome?: VendorDispatchLeaseOutcome,
+) => void | Promise<void>;
+
 export interface SendOptions {
   /**
    * 当前 session 的展示 title (renderer / IPC 层在调 send 前查到的最新值)。
@@ -1342,6 +1353,15 @@ export interface SendOptions {
    * 回调失败不得改变已经接受的 provider dispatch 结果。
    */
   onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
+  /**
+   * Acquire a host-owned lease for the provider's local submission boundary.
+   * Providers acquire only after preparation/startup, then release as soon as
+   * the request is queued into their local SDK/process transport.
+   */
+  acquireVendorDispatchLease?: (intent?: VendorDispatchLeaseIntent) =>
+    | void
+    | VendorDispatchLeaseRelease
+    | Promise<VendorDispatchLeaseRelease>;
   /**
    * 当前用户的展示名 (host / renderer 在调 send 时提供)。仅用于 turn-start 时
    * push status event 的文案 — agent 拼成 "<userName> Just Wait ..." 让 UI 个人化;

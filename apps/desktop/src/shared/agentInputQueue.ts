@@ -222,6 +222,11 @@ export interface AgentInputQueuedMessage {
   origin?:
     | {
         kind: 'orca';
+        /**
+         * Durable lifecycle scope for automatic Worker/Lead traffic. Historical
+         * crash snapshots may omit it; new Orca queue writes must always stamp it.
+         */
+        teamId?: string;
         senderLabel: string;
         displayText?: string;
       }

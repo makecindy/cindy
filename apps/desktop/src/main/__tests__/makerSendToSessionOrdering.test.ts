@@ -194,12 +194,18 @@ describe('sendToSession ordering', () => {
     expect(dispatchBlock).toContain('let acceptedDidRun = false;');
     expect(dispatchBlock).toContain('const runAccepted = async (): Promise<void> => {');
     expect(dispatchBlock).toContain('acceptedDidRun = true;');
-    expect(dispatchBlock).toContain('const failureResult = async (dispatchOutcome: CollabDispatchFailureOutcome): Promise<DispatchOrcaInterAgentMessageResult> => {');
+    expect(dispatchBlock).toContain('const failureResult = async (');
+    expect(dispatchBlock).toContain('retryAfterTerminalTransition = false,');
+    expect(dispatchBlock).toContain('Promise<DispatchOrcaInterAgentMessageAttemptResult>');
     expect(dispatchBlock).toContain('await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);');
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
-    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
+    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome, result.terminalTransitionPending === true);');
     expectOrder(dispatchBlock, 'const runAccepted = async (): Promise<void> => {', 'sendPersistedUserMessageToSession(deps, {');
-    expectOrder(dispatchBlock, 'onAccepted: runAccepted,', 'return failureResult(result.dispatchOutcome);');
+    expectOrder(
+      dispatchBlock,
+      'onAccepted: runAccepted,',
+      'return failureResult(result.dispatchOutcome, result.terminalTransitionPending === true);',
+    );
 
     expect(serviceDispatchBlock).toContain('let acceptedSnapshot: {');
     expect(serviceDispatchBlock).toContain('if (!acceptedSnapshot) return;');
@@ -240,6 +246,100 @@ describe('sendToSession ordering', () => {
     expect(orcaInterAgentDispatcherSource).toContain('return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
     expect(coordinatorBlock).toContain('orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);');
     expectOrder(orcaInterAgentDispatcherSource, 'callback.didRun = true;', 'return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
+  });
+
+  it('rechecks the Orca terminal fence immediately before the synchronous fallback enqueue', () => {
+    const enqueueBlock = extractBetween(
+      source,
+      'async function enqueueSendToSessionMessage',
+      'const orcaInterAgentDispatcher:',
+    );
+
+    expectOrder(
+      enqueueBlock,
+      'await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);',
+      'assertOrcaQueueOriginActive(params.origin);',
+    );
+    expectOrder(
+      enqueueBlock,
+      'assertOrcaQueueOriginActive(params.origin);',
+      'orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(',
+    );
+    expectOrder(
+      enqueueBlock,
+      'orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(',
+      'inputCoordinator.enqueue(params.targetSessionId, queued);',
+    );
+  });
+
+  it('preserves persisted Orca queue recovery while a terminal transition is still pending', () => {
+    const durableGuard =
+      '!isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId))';
+
+    expect(source).toContain(
+      "return orcaTeamTerminalFence.getState(teamId) === 'terminal';",
+    );
+    expect(source.split(durableGuard)).toHaveLength(4);
+    expect(source).toContain(
+      '    isOrcaTeamActive,\n    reserveOrcaTeamPreVendorDispatch,',
+    );
+    expect(source).not.toContain(
+      '!orcaTeamTerminalFence.has(teamId) && (await isOrcaTeamActive(teamId))',
+    );
+  });
+
+  it('registers team settlement before a dormant worker can resume', () => {
+    const serviceDispatchBlock = extractOrcaTeamServiceDispatchWorkerTaskSource();
+
+    expectOrder(
+      serviceDispatchBlock,
+      'deps.reserveTeamDispatchSettlement(link.teamId)',
+      'await deps.resumeWorkerSession(target, link);',
+    );
+    expect(serviceDispatchBlock).toContain('releaseTeamDispatch();');
+    expect(source).toContain(
+      'orcaInterAgentDispatcher.reserveTeamDispatchSettlement(teamId)',
+    );
+  });
+
+  it('selectively invalidates reconciled duplicate-team recovery before returning control', () => {
+    const reconciliationBlock = extractBetween(
+      source,
+      'setOrcaDuplicateTeamReconciliationHandler(async (reconciliation, phase) => {',
+      '  getAgentIslandService()?.setCompletionDeferResolver',
+    );
+
+    expect(reconciliationBlock).toContain('reconciliation.leadSessionId,');
+    expect(reconciliationBlock).toContain('...reconciliation.staleWorkerSessionIds,');
+    expect(reconciliationBlock).toContain(
+      'for (const teamId of reconciliation.staleTeamIds) {',
+    );
+    expect(reconciliationBlock).toContain("if (phase === 'prepare') {");
+    expect(reconciliationBlock).toContain(
+      'await prepareOrcaTeamTerminalCommit({ teamId, sessionIds });',
+    );
+    expect(reconciliationBlock).toContain(
+      'await settleOrcaTeamQueuedInputs({ teamId, sessionIds });',
+    );
+    expectOrder(
+      reconciliationBlock,
+      "if (phase === 'prepare') {",
+      'await settleOrcaTeamQueuedInputs({ teamId, sessionIds });',
+    );
+    expect(source).toContain('const results = await Promise.allSettled(');
+    expect(source).toContain(
+      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(input.teamId);',
+    );
+    expect(source).toContain(
+      'await rewindOrcaPreVendorCleanupRows(input.teamId, input.sessionIds);',
+    );
+    expect(source).toContain(
+      'terminalCleanupSessionIds: cleanupScope.sessionIds,',
+    );
+    expect(source).toContain(
+      'await finalizeRewoundOrcaPreVendorCleanupRows(atomicallyRewoundRows);',
+    );
+    expect(source).toContain('const remainingDirectItems = persistedOrcaPreVendorInputsForTeam(');
   });
 
   it('keeps queued Orca lead/worker items structured-cloneable', () => {
@@ -285,31 +385,138 @@ describe('sendToSession ordering', () => {
       'const createOpts = buildCreateOptsWithStderr({\n          id: targetSessionId,',
       'const tracked = run.finally(() => {',
     );
+    const persistBlock = extractBetween(
+      block,
+      'const persistUserMessage = async (): Promise<void> => {',
+      'const rewindPersistedUserMessageAfterFailedDispatch',
+    );
+    const rewindBlock = extractBetween(
+      block,
+      'const rewindPersistedUserMessageAfterFailedDispatch',
+      'let live = maker.getSession(targetSessionId);',
+    );
+    const awaitedGitBaselineBlock = extractBetween(
+      source,
+      'async function sendUserMessageWithAwaitedGitBaseline',
+      'async function sendToSessionInternal',
+    );
 
     expect(source).toContain('assertDesktopSendDispatched');
     expect(orcaInterAgentDispatcherSource).toContain('resolveCollabDispatchResult');
-    expect(helperBlock).toContain('Promise<CollabDirectDispatchResult>');
+    expect(helperBlock).toContain(
+      'Promise<CollabDirectDispatchResult & { terminalTransitionPending?: true }>',
+    );
     expect(helperBlock).toContain('const result = await resolveCollabDispatchResult(');
     expect(helperBlock).toContain('() => session.send(agentMessage, {');
     expect(helperBlock).toContain('planMode: false,');
     expect(helperBlock).toContain('throwOnStartFailure: true,');
+    expect(helperBlock).toContain('terminalTransitionPending = isPendingOrcaTeamTransitionError(err);');
     expect(helperBlock).not.toContain('await session.send(agentMessage, {');
     expect(helperBlock).not.toContain('assertDesktopSendDispatched(sendResult');
     expect(createBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {');
     expect(createBranch).toContain('planMode: false,');
+    expect(createBranch).toContain('acquireVendorDispatchLease: acquireOriginVendorDispatchLease,');
+    expect(createBranch).toContain('assertOrcaQueueOriginActive(origin);');
     expect(createBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session create');");
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
     expectOrder(liveBranch, 'message,', 'clientId,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(liveBranch).toContain(
+      'acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,',
+    );
+    expect(liveBranch).toContain('onDispatching: () => {');
+    expect(liveBranch).toContain('assertOrcaQueueOriginActive(origin);');
+    expect(liveBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
     expect(liveBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session live');");
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expectOrder(resumedBranch, 'message,', 'clientId,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(resumedBranch).toContain(
+      'acquireVendorDispatchLease: acquireTrackedOriginVendorDispatchLease,',
+    );
+    expect(resumedBranch).toContain('onDispatching: () => {');
+    expect(resumedBranch).toContain('assertOrcaQueueOriginActive(origin);');
+    expect(resumedBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
+    expect(block).toContain('let userMessagePersisted = false;');
+    expect(block).toContain(
+      'let orcaCleanupRecoveryItem: AgentInputQueuedMessage | null = null;',
+    );
+    expect(block).toContain("origin?.kind === 'orca' && typeof origin.teamId === 'string'");
+    expect(block).toContain(
+      "? (intent?: 'initial' | 'retry-after-confirmed-rejection') =>",
+    );
+    expect(block).toContain('originVendorDispatchCleanupTarget,\n            intent,');
+    expect(block).toContain('orcaPreVendorCleanup: { teamId: orcaOriginTeamId }');
+    expect(block).toContain('{ expectedOrcaTeamId: orcaOriginTeamId }');
+    expect(persistBlock).toContain(
+      'orcaCleanupRecoveryItem = await buildSendToSessionQueuedMessage({',
+    );
+    expectOrder(
+      persistBlock,
+      'orcaCleanupRecoveryItem = await buildSendToSessionQueuedMessage({',
+      'await createDbMessage(targetSessionId, {',
+    );
+    expectOrder(
+      block,
+      'await createDbMessage(targetSessionId, {',
+      'userMessagePersisted = true;',
+    );
+    expect(rewindBlock).toContain(
+      'await inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+    );
+    expectOrder(
+      rewindBlock,
+      'await enqueueDurableWrite(',
+      'await inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+    );
+    expectOrder(
+      rewindBlock,
+      'await inputCoordinator.retainPersistedOrcaCleanupRecovery(',
+      'throw error;',
+    );
+    expect(liveBranch).toContain(
+      'const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);',
+    );
+    expect(liveBranch).toContain('if (!dispatchUnconfirmed) {');
+    expect(liveBranch).toContain(
+      'await rewindPersistedUserMessageAfterFailedDispatch();',
+    );
+    expectOrder(
+      liveBranch,
+      'if (!dispatchUnconfirmed) {',
+      'await rewindPersistedUserMessageAfterFailedDispatch();',
+    );
+    expect(liveBranch).toContain('commitAgentIslandUserPrompt(targetSessionId, clientId);');
+    expect(liveBranch).toContain('dispatchUnconfirmed: true as const');
+    expect(resumedBranch).toContain(
+      'const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);',
+    );
+    expect(resumedBranch).toContain('if (!dispatchUnconfirmed) {');
+    expect(resumedBranch).toContain('commitAgentIslandUserPrompt(targetSessionId, clientId);');
+    expect(resumedBranch).toContain('dispatchUnconfirmed: true as const');
+    expectOrder(
+      resumedBranch,
+      'if (!dispatchUnconfirmed) {',
+      'await rewindPersistedUserMessageAfterFailedDispatch();',
+    );
+    expectOrder(
+      resumedBranch,
+      'await rewindPersistedUserMessageAfterFailedDispatch();',
+      'if (isSessionRunningError(err))',
+    );
+    expect(awaitedGitBaselineBlock).toContain(
+      'const dispatchUnconfirmed = isTurnDispatchUnconfirmedSendError(err);',
+    );
+    expect(awaitedGitBaselineBlock).toContain(
+      'if (turnChangeSetStarted && !dispatchUnconfirmed)',
+    );
+    expect(awaitedGitBaselineBlock).toContain('if (baselineStarted && !dispatchUnconfirmed)');
+    expect(awaitedGitBaselineBlock).toContain(
+      'if (dispatchUnconfirmed && pendingHandoff && turnChangeSetStarted)',
+    );
   });
 
   it('awaits Git baseline capture after send_to_session user row persistence and before dispatch', () => {
@@ -396,10 +603,10 @@ describe('sendToSession ordering', () => {
     const acceptedBlock = extractBetween(
       createBranch,
       'onAccepted: async () => {',
-      '          },\n          onDispatching:',
+      '          },\n          acquireVendorDispatchLease:',
     );
     const sendCallEndNeedle =
-      '          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),\n        });';
+      "assertDesktopSendDispatched(sendResult, 'send_to_session create');";
     const afterSendResolves = createBranch.slice(
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );
@@ -580,7 +787,9 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(liveBranch).toContain('onDispatching: () => {');
+    expect(liveBranch).toContain('assertOrcaQueueOriginActive(origin);');
+    expect(liveBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
     expect(liveBranch).not.toContain('await persistUserMessage();');
     expect(liveBranch).toContain('if (isSessionRunningError(err))');
     expect(liveBranch).toContain('await enqueueSendToSessionMessage({');
@@ -598,7 +807,9 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(resumedBranch).toContain('onDispatching: () => {');
+    expect(resumedBranch).toContain('assertOrcaQueueOriginActive(origin);');
+    expect(resumedBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
     expect(resumedBranch).not.toContain('await persistUserMessage();');
     expect(resumedBranch).toContain('if (isSessionRunningError(err))');
     expect(resumedBranch).toContain('await enqueueSendToSessionMessage({');
@@ -606,6 +817,11 @@ describe('sendToSession ordering', () => {
   });
 
   it('preserves stored permission and extraDirs when sendToWorker resumes a worker', () => {
+    const resumeLifecycleRead = extractBetween(
+      source,
+      'async function readActiveOrcaWorkerSessionForResume',
+      'function inactiveOrcaWorkerResumeError',
+    );
     const resumeBranch = extractBetween(
       source,
       'async function resumeOrcaWorkerSessionIfMissing',
@@ -627,13 +843,19 @@ describe('sendToSession ordering', () => {
       'idleWorker: async ({ callerLeadSessionId, workerId, expectedStatus }) => {',
     );
 
+    expect(resumeLifecycleRead).toContain('.innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))');
+    expect(resumeLifecycleRead).toContain('.innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))');
+    expect(resumeLifecycleRead).toContain("eq(orcaTeams.status, 'active')");
+    expect(resumeLifecycleRead).toContain("eq(sessions.status, 'active')");
     expect(resumeBranch).toContain('const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);');
+    expect(resumeBranch).toContain('const row = await readActiveOrcaWorkerSessionForResume(target);');
+    expect(resumeBranch).toContain('if (!row) throw inactiveOrcaWorkerResumeError(target);');
+    expect(resumeBranch).toContain('if (!await readActiveOrcaWorkerSessionForResume(target)) {');
     expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
     expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
     expectOrder(resumeBranch, 'const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);', 'const opts = buildCreateOptsWithStderr({');
     expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
-    expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
-    expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain('resumeWorkerSession: (target) => resumeOrcaWorkerSessionIfMissing(target),');
     expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
     expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
   });
@@ -871,7 +1093,7 @@ describe('sendToSession ordering', () => {
     const fallbackBlock = extractBetween(
       block,
       'if (result.ok) {',
-      '      }\n      return failureResult({',
+      '      }\n      return failureResult(',
     );
 
     expect(block).toContain('const dispatchReceipt = {');
@@ -930,7 +1152,7 @@ function extractOrcaTeamServiceHandleWorkerTerminalTurnSource(): string {
 
 function extractDispatchOrEnqueueOrcaInterAgentMessageSource(): string {
   const block = orcaInterAgentDispatcherSource.match(
-    /const dispatchOrEnqueueOrcaInterAgentMessage = async \([\s\S]*?return \{\n {4}dispatchOrEnqueueOrcaInterAgentMessage,/,
+    /const dispatchOrEnqueueOrcaInterAgentMessage = async \([\s\S]*?return \{\n {4}dispatchOrEnqueueOrcaInterAgentMessage: dispatchOrEnqueueOrcaInterAgentMessageWithSettlement,/,
   )?.[0];
   expect(block).toBeTruthy();
   if (!block) throw new Error('dispatchOrEnqueueOrcaInterAgentMessage source block not found');

@@ -59,6 +59,8 @@ import {
   type OneShotOptions,
   type SendOptions,
   type TurnPermissionPolicy,
+  type VendorDispatchLeaseOutcome,
+  type VendorDispatchLeaseRelease,
 } from '../base-agent.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
@@ -1427,6 +1429,132 @@ export class ClaudeCodeAgent extends BaseAgent {
       parent_tool_use_id: null;
       uuid?: string;
     };
+    type VendorDispatchLeaseAcquire = NonNullable<SendOptions['acquireVendorDispatchLease']>;
+    const vendorDispatchLeaseAcquireByInput = new WeakMap<
+      SdkUserInput,
+      VendorDispatchLeaseAcquire
+    >();
+    const vendorDispatchLeaseByInput = new WeakMap<SdkUserInput, VendorDispatchLeaseRelease>();
+    const queuedVendorDispatchLeaseInputs = new Set<SdkUserInput>();
+
+    const retainVendorDispatchLease = (
+      input: SdkUserInput,
+      release: VendorDispatchLeaseRelease,
+    ): void => {
+      let phase: 'held' | 'submitted' | 'terminal' = 'held';
+      let settlementTail: Promise<void> = Promise.resolve();
+      const releaseTracked = (
+        outcome: VendorDispatchLeaseOutcome = 'submitted',
+      ): Promise<void> => {
+        const settlement = settlementTail.then(async () => {
+          if (phase === 'terminal') return;
+          if (outcome === 'submitted') {
+            if (phase === 'submitted') return;
+            await release('submitted');
+            phase = 'submitted';
+            queuedVendorDispatchLeaseInputs.delete(input);
+            return;
+          }
+          await release(outcome);
+          phase = 'terminal';
+          vendorDispatchLeaseByInput.delete(input);
+          queuedVendorDispatchLeaseInputs.delete(input);
+        });
+        settlementTail = settlement.catch(() => undefined);
+        return settlement;
+      };
+      vendorDispatchLeaseByInput.set(input, releaseTracked);
+    };
+
+    const releaseVendorDispatchLeaseForInput = async (
+      input: SdkUserInput,
+      outcome: VendorDispatchLeaseOutcome,
+    ): Promise<void> => {
+      const release = vendorDispatchLeaseByInput.get(input);
+      if (release) await release(outcome);
+    };
+
+    const releaseVendorDispatchLeaseAfterLocalHandoff = (input: SdkUserInput): void => {
+      if (!vendorDispatchLeaseByInput.has(input)) return;
+      // Async-generator yield resolves the SDK consumer in the current
+      // microtask checkpoint. A timer releases the writer lease only after
+      // that handoff, without retaining it for the provider response.
+      setTimeout(() => {
+        void releaseVendorDispatchLeaseForInput(input, 'submitted').catch((error: unknown) => {
+          log.warn('Claude vendor dispatch lease release after local handoff failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }, 0);
+    };
+
+    const releaseQueuedVendorDispatchLeases = (reason: string): void => {
+      const inputs = [...queuedVendorDispatchLeaseInputs];
+      if (inputs.length > 0) {
+        log.debug('releasing queued Claude vendor dispatch leases', {
+          reason,
+          count: inputs.length,
+        });
+      }
+      for (const input of inputs) {
+        void releaseVendorDispatchLeaseForInput(input, 'confirmed-undispatched').catch((error: unknown) => {
+          log.warn('Claude vendor dispatch lease release failed', {
+            reason,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    };
+
+    const createInputQueue = (): AsyncQueue<SdkUserInput> => {
+      const queue = createAsyncQueue<SdkUserInput>();
+      const iterate = async function* (): AsyncGenerator<SdkUserInput> {
+        for await (const item of queue) {
+          queuedVendorDispatchLeaseInputs.delete(item);
+          yield item;
+        }
+      };
+      return {
+        push: (item) => {
+          const accepted = queue.push(item);
+          if (accepted && vendorDispatchLeaseByInput.has(item)) {
+            queuedVendorDispatchLeaseInputs.add(item);
+          }
+          return accepted;
+        },
+        clear: () => {
+          queue.clear();
+          releaseQueuedVendorDispatchLeases('input_queue_cleared');
+        },
+        end: () => {
+          queue.clear();
+          queue.end();
+          releaseQueuedVendorDispatchLeases('input_queue_ended');
+        },
+        get pending() {
+          return queue.pending;
+        },
+        [Symbol.asyncIterator]: () => iterate(),
+      };
+    };
+
+    const localSdkInputStream = (
+      queue: AsyncQueue<SdkUserInput>,
+    ): AsyncGenerator<SdkUserInput> & { readonly pending: number } => {
+      const stream = (async function* (): AsyncGenerator<SdkUserInput> {
+        for await (const input of queue) {
+          // The SDK asking for the next item is the local transport handoff.
+          // Resolve its iterator request before releasing the SQLite writer.
+          releaseVendorDispatchLeaseAfterLocalHandoff(input);
+          yield input;
+        }
+      })();
+      return Object.defineProperty(stream, 'pending', {
+        configurable: false,
+        enumerable: false,
+        get: () => queue.pending,
+      }) as AsyncGenerator<SdkUserInput> & { readonly pending: number };
+    };
     // mutable 引用 — rewind 重启时整个换一份新的:
     //   - 老 abortController 在 q.close() 时被 SDK 标记为 aborted (虽然我们没显式调
     //     .abort(), 但 close() 内部会让信号变 aborted 状态), 复用它启动新 sdkQuery 会
@@ -1435,7 +1563,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     //     新 sdkQuery 跟老 generator 抢 push 进来的消息 (createAsyncQueue 是
     //     单消费者设计, 多 generator 会分摊事件)。
     // handle.send / abort / close 都通过 closure 引用最新的实例。
-    let inputQueue = createAsyncQueue<SdkUserInput>();
+    let inputQueue = createInputQueue();
     let abortController = new AbortController();
     let interactionResolver: InteractionResolver | null = null;
     // Keep the policy across Claude task_notification auto-continue turns,
@@ -3154,22 +3282,65 @@ export class ClaudeCodeAgent extends BaseAgent {
         // inputQueue msg 又调死掉的 send 触发同款 warn。
         (async (): Promise<void> => {
           for await (const msg of inputQueue) {
+            let providerAccepted = false;
+            // Before local submission, any failure is definitively pre-vendor.
+            // After submission, only a correlated manager response may prove
+            // rejection; timeout/close must preserve the submitted row.
+            let confirmedUndispatched = true;
             try {
-              await (remoteQuery as unknown as {
+              const remoteTransport = remoteQuery as unknown as {
                 send: (m: unknown) => Promise<void>;
-              }).send(msg);
+                sendWithSubmission?: (m: unknown) => {
+                  submitted: Promise<void>;
+                  response: Promise<void>;
+                };
+                isAuthoritativeResponseError?: (error: unknown) => boolean;
+              };
+              const pending = remoteTransport.sendWithSubmission?.(msg);
+              if (pending) {
+                // The response can reject before a backpressured write settles.
+                // Observe it immediately, then release the SQLite writer after
+                // local transport submission and keep response handling intact.
+                void pending.response.catch(() => undefined);
+                await pending.submitted;
+                confirmedUndispatched = false;
+                await releaseVendorDispatchLeaseForInput(msg, 'submitted');
+                try {
+                  await pending.response;
+                } catch (error) {
+                  confirmedUndispatched =
+                    remoteTransport.isAuthoritativeResponseError?.(error) === true;
+                  throw error;
+                }
+              } else {
+                // Compatibility fallback for injected legacy test/host queries.
+                await remoteTransport.send(msg);
+              }
+              providerAccepted = true;
+              await releaseVendorDispatchLeaseForInput(msg, 'accepted');
             } catch (e) {
-              log.warn('cc remote: forwarding inputQueue → remoteQuery.send failed; closing remote query to surface aborted-turn', {
-                error: String((e as Error)?.message ?? e),
-              });
-              if (activeRemoteQuery) {
-                void activeRemoteQuery.close().catch((err) => {
-                  log.warn('cc remote: remoteQuery.close after send failure threw (best-effort)', {
-                    error: String((err as Error)?.message ?? err),
-                  });
+              if (providerAccepted) {
+                log.warn('cc remote: accepted input cleanup settlement failed', {
+                  error: String((e as Error)?.message ?? e),
                 });
+                continue;
+              } else {
+                log.warn('cc remote: forwarding inputQueue → remoteQuery.send failed; closing remote query to surface aborted-turn', {
+                  error: String((e as Error)?.message ?? e),
+                });
+                if (activeRemoteQuery) {
+                  void activeRemoteQuery.close().catch((err) => {
+                    log.warn('cc remote: remoteQuery.close after send failure threw (best-effort)', {
+                      error: String((err as Error)?.message ?? err),
+                    });
+                  });
+                }
               }
               break;
+            } finally {
+              if (!providerAccepted && confirmedUndispatched) {
+                await releaseVendorDispatchLeaseForInput(msg, 'confirmed-undispatched');
+              }
             }
           }
         })().catch(() => undefined);
@@ -3258,7 +3429,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
       const query = sdkQuery({
-        prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
+        prompt: localSdkInputStream(inputQueue) as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
           abortController,
           cwd: opts.workingDir,
@@ -4700,7 +4871,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         log.debug('invalid resume recovery aborted: handle closed while old query was closing');
         return true;
       }
-      inputQueue = createAsyncQueue<SdkUserInput>();
+      inputQueue = createInputQueue();
       abortController = new AbortController();
       runtimeState.lastResultUsageAggregate = null;
       // 快照 rebuild 起点档位 — 与 rewind rebuild 同款:await buildQuery 期间到达的
@@ -4740,7 +4911,27 @@ export class ClaudeCodeAgent extends BaseAgent {
         await replayRuntimeDrift(runtimeSnapshot, 'invalid resume rebuild');
         releaseGate();
         if (replayInput) {
-          if (!inputQueue.push(replayInput)) throw new Error('fresh retry input queue rejected replay');
+          // The original lease covered only the first provider submission. It may
+          // still be awaiting its local-handoff release when invalid-resume recovery
+          // starts, so settle it before acquiring a fresh lease for the replay.
+          await releaseVendorDispatchLeaseForInput(replayInput, 'submitted');
+          const reacquireVendorDispatchLease =
+            vendorDispatchLeaseAcquireByInput.get(replayInput);
+          const releaseVendorDispatchLease =
+            await reacquireVendorDispatchLease?.(
+              'retry-after-confirmed-rejection',
+            );
+          if (typeof releaseVendorDispatchLease === 'function') {
+            retainVendorDispatchLease(replayInput, releaseVendorDispatchLease);
+          }
+          try {
+            if (!inputQueue.push(replayInput)) {
+              throw new Error('fresh retry input queue rejected replay');
+            }
+          } catch (error) {
+            await releaseVendorDispatchLeaseForInput(replayInput, 'confirmed-undispatched');
+            throw error;
+          }
           armUpstreamResponseIdle();
         }
         return true;
@@ -4913,7 +5104,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         };
         acceptingRebuiltSend = true;
         inputQueue.end();
-        inputQueue = createAsyncQueue<SdkUserInput>();
+        inputQueue = createInputQueue();
         abortController = new AbortController();
         runtimeState.lastResultUsageAggregate = null;
         rewindTransitionQueries.add(staleQuery);
@@ -5170,7 +5361,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 新 sdkQuery 立刻报 aborted 或抢不到新 push 的消息。先 end 老 queue 让老
           // generator 退出, 再整体换新。
           inputQueue.end();
-          inputQueue = createAsyncQueue<SdkUserInput>();
+          inputQueue = createInputQueue();
           abortController = new AbortController();
           // QueryEngine 的 result.usage 是单个 SDK query 内的累计值。rewind 会重建
           // query 并从 0 重新累计, 因此必须清掉旧 query 的 aggregate 基线。
@@ -5326,13 +5517,29 @@ export class ClaudeCodeAgent extends BaseAgent {
             parent_tool_use_id: null,
             ...(sendOpts?.messageUuid ? { uuid: sendOpts.messageUuid } : {}),
           };
-          const accepted = inputQueue.push(sdkInput);
-          if (!accepted) {
-            // close() can win while content conversion is still preparing files or
-            // images. Renderer now treats send resolve as "agent accepted"; so a
-            // closed input queue must reject just like steer, otherwise queue rows
-            // get persisted and removed even though Claude never received them.
-            throw new Error('Claude input queue is closed');
+          const releaseVendorDispatchLease =
+            await sendOpts?.acquireVendorDispatchLease?.();
+          if (sendOpts?.acquireVendorDispatchLease) {
+            vendorDispatchLeaseAcquireByInput.set(
+              sdkInput,
+              sendOpts.acquireVendorDispatchLease,
+            );
+          }
+          if (typeof releaseVendorDispatchLease === 'function') {
+            retainVendorDispatchLease(sdkInput, releaseVendorDispatchLease);
+          }
+          try {
+            const accepted = inputQueue.push(sdkInput);
+            if (!accepted) {
+              // close() can win while content conversion is still preparing files or
+              // images. Renderer now treats send resolve as "agent accepted"; so a
+              // closed input queue must reject just like steer, otherwise queue rows
+              // get persisted and removed even though Claude never received them.
+              throw new Error('Claude input queue is closed');
+            }
+          } catch (error) {
+            await releaseVendorDispatchLeaseForInput(sdkInput, 'confirmed-undispatched');
+            throw error;
           }
           userInputAccepted = true;
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);

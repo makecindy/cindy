@@ -94,6 +94,12 @@ vi.mock('../rpc-client.js', () => ({
       }
       return { success: true, data: { entries: [] } };
     }
+    requestWithSubmission(cmd: Record<string, unknown> & { type: string }) {
+      return {
+        submitted: Promise.resolve(),
+        response: this.request(cmd),
+      };
+    }
     send(msg: Record<string, unknown>): void {
       captured.sent.push(msg);
     }

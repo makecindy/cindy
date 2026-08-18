@@ -2820,8 +2820,10 @@ export class PiAgent extends BaseAgent {
             ? await readPiUserEntryIds()
             : null;
           rejectIfCancelled(sendOpts, 'send');
+          const releaseVendorDispatchLease =
+            await sendOpts?.acquireVendorDispatchLease?.();
           promptRequestStarted = true;
-          const resp = await proc.request(command, {
+          const pendingRequest = proc.requestWithSubmission(command, {
             timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
             // Prompt acceptance may legitimately span multiple compaction
             // retries. Bound each silent interval, not the whole progressing
@@ -2829,15 +2831,51 @@ export class PiAgent extends BaseAgent {
             refreshTimeoutOnEvent: (event) =>
               PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS.has(event.type),
           });
+          // A submission failure also rejects response. Attach the response
+          // observer before awaiting submitted so release errors or early
+          // exits cannot leave an unhandled rejection behind.
+          void pendingRequest.response.catch(() => undefined);
+          try {
+            await pendingRequest.submitted;
+          } catch (error) {
+            if (typeof releaseVendorDispatchLease === 'function') {
+              await releaseVendorDispatchLease('confirmed-undispatched');
+            }
+            throw error;
+          }
+          if (typeof releaseVendorDispatchLease === 'function') {
+            await releaseVendorDispatchLease('submitted');
+          }
+          const resp = await pendingRequest.response;
           if (!resp.success) {
             if (resp.command !== command.type) {
               throw new Error('pi prompt rejection response missing matching command');
             }
+            let cleanupSettlementError: unknown;
+            if (typeof releaseVendorDispatchLease === 'function') {
+              try {
+                await releaseVendorDispatchLease('confirmed-undispatched');
+              } catch (error) {
+                cleanupSettlementError = error;
+              }
+            }
             throw new TurnDispatchRejectedError(
               `pi prompt rejected before acceptance: ${resp.error ?? 'unknown'}`,
+              cleanupSettlementError === undefined
+                ? undefined
+                : { cause: cleanupSettlementError },
             );
           }
           providerAccepted = true;
+          if (typeof releaseVendorDispatchLease === 'function') {
+            try {
+              await releaseVendorDispatchLease('accepted');
+            } catch (error) {
+              deps.logger.warn('Pi accepted dispatch cleanup settlement failed', {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
           await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
         } catch (err) {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表

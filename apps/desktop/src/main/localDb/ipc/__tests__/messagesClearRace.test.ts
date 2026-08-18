@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   client: null as any,
   broadcast: vi.fn(),
   raceOnInsert: false,
+  endOrcaTeamOnInsert: false,
 }));
 
 vi.mock('electron', () => ({
@@ -55,7 +56,11 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => h.client,
 }));
 
-import { createMessage, rewindPersistedUserMessageAfterClear } from '../messages';
+import {
+  createMessage,
+  rewindOrcaPreVendorCleanupRows,
+  rewindPersistedUserMessageAfterClear,
+} from '../messages';
 
 function createDb(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -77,6 +82,7 @@ function createDb(): Database.Database {
       created_at INTEGER NOT NULL,
       rewind_at INTEGER
     );
+    CREATE TABLE orca_teams (id TEXT PRIMARY KEY, status TEXT NOT NULL);
     CREATE UNIQUE INDEX uniq_messages_session_client ON messages(session_id, client_id);
   `);
   sqlite.prepare('INSERT INTO sessions (id, cleared_at, status) VALUES (?, NULL, ?)').run('s1', 'active');
@@ -91,8 +97,15 @@ function createDb(): Database.Database {
       if (h.raceOnInsert && sql.startsWith('INSERT INTO messages')) {
         sqlite.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(200, 's1');
       }
+      if (h.endOrcaTeamOnInsert && sql.startsWith('INSERT INTO messages')) {
+        sqlite.prepare("UPDATE orca_teams SET status = 'completed' WHERE id = ?").run('team-1');
+      }
       return sqlite.prepare(sql).run(...params);
     }),
+    query: vi.fn(async (sql: string, params: unknown[] = []) =>
+      sqlite.prepare(sql).all(...params)),
+    queryOne: vi.fn(async (sql: string, params: unknown[] = []) =>
+      sqlite.prepare(sql).get(...params)),
   };
   return sqlite;
 }
@@ -103,7 +116,78 @@ describe('message persistence clear boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.raceOnInsert = false;
+    h.endOrcaTeamOnInsert = false;
     sqlite = createDb();
+  });
+
+  it('atomically rejects an Orca row when another instance ends the team', async () => {
+    sqlite.prepare("INSERT INTO orca_teams (id, status) VALUES (?, 'active')").run('team-1');
+    await expect(createMessage('s1', {
+      clientId: 'orca-ok', role: 'user', content: 'first',
+      agentMeta: { orcaPreVendorCleanup: { teamId: 'team-1' } },
+    }, { expectedOrcaTeamId: 'team-1' })).resolves.toMatchObject({ clientId: 'orca-ok' });
+
+    h.endOrcaTeamOnInsert = true;
+    await expect(createMessage('s1', {
+      clientId: 'orca-raced', role: 'user', content: 'late',
+      agentMeta: { orcaPreVendorCleanup: { teamId: 'team-1' } },
+    }, { expectedOrcaTeamId: 'team-1' })).rejects.toThrow('ORCA_TEAM_INACTIVE');
+    expect(sqlite.prepare(
+      'SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?',
+    ).get('s1', 'orca-raced')).toBeUndefined();
+  });
+
+  it('rewinds only rows that still carry the matching pre-vendor marker', async () => {
+    const insert = sqlite.prepare(
+      `INSERT INTO messages
+        (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at)
+       VALUES (?, ?, 's1', 'user', ?, ?, 100, NULL)`,
+    );
+    insert.run('pending-row', 'pending-client', 'pending', JSON.stringify({
+      orcaPreVendorCleanup: { teamId: 'team-1' },
+    }));
+    insert.run('submitted-row', 'submitted-client', 'submitted', JSON.stringify({
+      orcaPreVendorCleanup: { teamId: 'team-1', phase: 'submitted' },
+    }));
+
+    await expect(rewindOrcaPreVendorCleanupRows('team-1', ['s1'])).resolves.toEqual([
+      { sessionId: 's1', clientId: 'pending-client' },
+    ]);
+    expect(sqlite.prepare(
+      'SELECT client_id AS clientId, rewind_at AS rewindAt FROM messages ORDER BY client_id',
+    ).all()).toEqual([
+      { clientId: 'pending-client', rewindAt: expect.any(Number) },
+      { clientId: 'submitted-client', rewindAt: null },
+    ]);
+  });
+
+  it('does not redispatch an idempotent Orca row already marked submitted', async () => {
+    sqlite.prepare("INSERT INTO orca_teams (id, status) VALUES (?, 'active')").run('team-1');
+    sqlite.prepare(
+      `INSERT INTO messages
+        (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at)
+       VALUES (?, ?, 's1', 'user', ?, ?, 100, NULL)`,
+    ).run(
+      'submitted-row',
+      'submitted-client',
+      'submitted',
+      JSON.stringify({
+        orcaPreVendorCleanup: { teamId: 'team-1', phase: 'submitted' },
+      }),
+    );
+
+    await expect(createMessage('s1', {
+      clientId: 'submitted-client',
+      role: 'user',
+      content: 'retry',
+      agentMeta: { orcaPreVendorCleanup: { teamId: 'team-1' } },
+    }, { expectedOrcaTeamId: 'team-1' })).rejects.toMatchObject({
+      code: 'TURN_DISPATCH_UNCONFIRMED',
+      message: expect.stringContaining('ORCA_MESSAGE_ALREADY_SUBMITTED'),
+    });
+    expect(sqlite.prepare(
+      'SELECT rewind_at AS rewindAt FROM messages WHERE id = ?',
+    ).get('submitted-row')).toEqual({ rewindAt: null });
   });
 
   it('uses an atomic clear-token guard for optimistic inserts', async () => {
@@ -154,6 +238,38 @@ describe('message persistence clear boundary', () => {
     h.broadcast.mockClear();
     await rewindPersistedUserMessageAfterClear('s1', 'client-1');
     expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it('atomically preserves a submitted Orca row during selective invalidation', async () => {
+    const insert = sqlite.prepare(
+      `INSERT INTO messages
+        (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at)
+       VALUES (?, ?, 's1', 'user', ?, ?, 100, NULL)`,
+    );
+    insert.run('pending-row', 'pending-client', 'pending', JSON.stringify({
+      orcaPreVendorCleanup: { teamId: 'team-1' },
+    }));
+    insert.run('submitted-row', 'submitted-client', 'submitted', JSON.stringify({
+      orcaPreVendorCleanup: { teamId: 'team-1', phase: 'submitted' },
+    }));
+
+    await expect(
+      rewindPersistedUserMessageAfterClear('s1', 'pending-client', {
+        preserveSubmittedOrca: true,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      rewindPersistedUserMessageAfterClear('s1', 'submitted-client', {
+        preserveSubmittedOrca: true,
+      }),
+    ).resolves.toBe(false);
+
+    expect(sqlite.prepare(
+      'SELECT client_id AS clientId, rewind_at AS rewindAt FROM messages ORDER BY client_id',
+    ).all()).toEqual([
+      { clientId: 'pending-client', rewindAt: expect.any(Number) },
+      { clientId: 'submitted-client', rewindAt: null },
+    ]);
   });
 
   it('reconciles session attachment refs for a rewound user row', async () => {

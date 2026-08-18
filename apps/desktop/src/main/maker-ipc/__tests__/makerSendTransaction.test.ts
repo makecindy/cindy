@@ -79,6 +79,52 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it('rejects an inactive queued Orca team before session rehydrate has side effects', async () => {
+    const isOrcaTeamInputActive = vi.fn(async () => false);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      isOrcaTeamInputActive,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'lead-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      vendorOptions: {
+        orcaRole: 'lead',
+        orcaWorkflowId: 'team-old',
+        orcaLeadSessionId: 'lead-session',
+      },
+    };
+
+    await expect(
+      transaction.sendToAgentAccepted('lead-session', 'old worker report', createOpts, {
+        persistUserMessage: {
+          clientId: 'orca-old',
+          content: 'old worker report',
+          origin: {
+            kind: 'orca',
+            teamId: 'team-old',
+            senderLabel: 'Reviewer',
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+      outcome: {
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      },
+    });
+
+    expect(isOrcaTeamInputActive).toHaveBeenCalledWith('lead-session', 'team-old');
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(deps.ensureRemoteReadyForSessionStart).not.toHaveBeenCalled();
+    expect(deps.synthesizeOrcaVendorOptionsFromDb).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid sessionId before touching transaction dependencies', async () => {
     const { deps } = createDeps();
     const transaction = createMakerSendTransaction(deps);
@@ -162,6 +208,75 @@ describe('maker SEND transaction', () => {
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
   });
 
+  it('forwards the caller dispatch marker after the final fence and prompt preview', async () => {
+    const events: string[] = [];
+    const session = createSession({
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        const release = await opts?.acquireVendorDispatchLease?.();
+        try {
+          opts?.onDispatching?.();
+          events.push('vendor-send');
+        } finally {
+          await release?.();
+        }
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      acquireVendorDispatchLease: vi.fn(async () => {
+        events.push('lease-acquire');
+        return () => {
+          events.push('lease-release');
+        };
+      }),
+      assertBeforeVendorDispatch: vi.fn(() => events.push('final-fence')),
+      dispatchUserPromptPreview: vi.fn(() => events.push('prompt-preview')),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', 'hello', undefined, {
+        persistUserMessage: {
+          clientId: 'client-dispatch-marker',
+          content: 'hello',
+          origin: {
+            kind: 'orca',
+            teamId: 'team-1',
+            senderLabel: 'Reviewer',
+          },
+        },
+        onDispatching: () => events.push('caller-marker'),
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(events).toEqual([
+      'lease-acquire',
+      'final-fence',
+      'prompt-preview',
+      'caller-marker',
+      'vendor-send',
+      'lease-release',
+    ]);
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        clientId: 'client-dispatch-marker',
+        agentMeta: expect.objectContaining({
+          orcaPreVendorCleanup: { teamId: 'team-1' },
+        }),
+      }),
+      expect.objectContaining({ expectedOrcaTeamId: 'team-1' }),
+    );
+    expect(deps.acquireVendorDispatchLease).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ orcaTeamId: 'team-1' }),
+      { sessionId: 'session-1', clientId: 'client-dispatch-marker' },
+      undefined,
+    );
+  });
+
   it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {
     const { deps, session } = createDeps();
     session.agentKind = 'pi';
@@ -238,6 +353,51 @@ describe('maker SEND transaction', () => {
       }),
       undefined,
     );
+  });
+
+  it('does not lease ordinary or scheduler inputs from ambient Orca vendor options', async () => {
+    const acquireVendorDispatchLease = vi.fn(async () => vi.fn());
+    const session = createSession({
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        const release = await opts?.acquireVendorDispatchLease?.();
+        try {
+          opts?.onDispatching?.();
+        } finally {
+          await release?.();
+        }
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      acquireVendorDispatchLease,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      vendorOptions: {
+        orcaRole: 'lead',
+        orcaWorkflowId: 'team-old',
+        orcaLeadSessionId: 'session-1',
+      },
+    };
+
+    await transaction.sendToAgentAccepted('session-1', 'ordinary prompt', createOpts, {
+      persistUserMessage: { clientId: 'ordinary', content: 'ordinary prompt' },
+    });
+    await transaction.sendToAgentAccepted('session-1', 'scheduler prompt', createOpts, {
+      origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'heartbeat' },
+      persistUserMessage: { clientId: 'scheduler', content: 'scheduler prompt' },
+    });
+
+    expect(acquireVendorDispatchLease).not.toHaveBeenCalled();
+    for (const [, opts] of vi.mocked(session.send).mock.calls) {
+      expect(opts?.acquireVendorDispatchLease).toBeUndefined();
+    }
   });
 
   it('persists Orca queue origin without sending the unsupported origin to maker-core', async () => {
@@ -1566,7 +1726,7 @@ describe('session-agent-switch handoff injection', () => {
 
   it('计划对账覆盖仅附件轮次(正文空,带图片/文件)', async () => {
     const peekPlanReconcileNote = vi.fn(async () => ({ note: 'RECONCILE-NOTE' }));
-    const { deps, session } = createDeps({ peekPlanReconcileNote });
+    const { deps } = createDeps({ peekPlanReconcileNote });
     const transaction = createMakerSendTransaction(deps);
 
     await transaction.sendToAgentAccepted(

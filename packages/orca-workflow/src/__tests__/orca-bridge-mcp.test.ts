@@ -454,7 +454,10 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(readLeadHistory).toHaveBeenCalledTimes(1);
   });
 
-  function makeWorkerBridgeLeadHarness(lead: FakeSession) {
+  function makeWorkerBridgeLeadHarness(
+    lead: FakeSession,
+    dispatchInterAgentMessage?: OrcaBridgeMcpDeps['dispatchInterAgentMessage'],
+  ) {
     const logger = makeLogger();
     const workerLink: OrcaWorkerLink = {
       workerId: 'worker-1',
@@ -480,6 +483,7 @@ describe('orca_worker_bridge MCP helpers', () => {
         base.persisted.push({ sessionId, content: message.content });
       },
       wireSession: () => undefined,
+      dispatchInterAgentMessage,
       orcaTeamStore: {
         async getWorkerLink() {
           return workerLink;
@@ -1160,6 +1164,94 @@ describe('orca_worker_bridge MCP helpers', () => {
       sessionId: 'lead-1',
       action: 'dispatch-to-lead',
       reason: 'cancelled-before-dispatch',
+    });
+    expectNoSensitiveLogContent(logger.entries);
+  });
+
+  it('send_to_lead host dispatch failure keeps dispatch_outcome in tool error payload', async () => {
+    const lead = makeSession('lead-1');
+    const logger = makeLogger();
+    const expectedDispatchOutcome = {
+      kind: 'session-dispatch',
+      source: 'orca',
+      dispatched: false,
+      reason: 'cancelled-before-dispatch',
+      context: 'ORCA_TEAM_INACTIVE/lead-1',
+      message: 'team has ended',
+    };
+    const workerLink: OrcaWorkerLink = {
+      workerId: 'worker-1',
+      workflowId: 'workflow-1',
+      workerSessionId: 'worker-session-1',
+      leadSessionId: 'lead-1',
+      leadSession: {
+        sessionId: 'lead-1',
+        agentKind: 'claude-code',
+        workingDir: '/repo',
+        model: 'claude-opus-4-7',
+      },
+    };
+    const { maker, persisted, statusUpdates } = makeProvider({
+      activeSessions: { 'lead-1': lead },
+      logger,
+      workerLink,
+      dispatchInterAgentMessage: async () => ({
+        ok: false,
+        dispatchOutcome: expectedDispatchOutcome,
+      }),
+    });
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker,
+      logger: logger as never,
+      persistUserMessage: async (sessionId, message) => {
+        persisted.push({ sessionId, content: message.content });
+      },
+      wireSession: () => undefined,
+      dispatchInterAgentMessage: async () => ({
+        ok: false,
+        dispatchOutcome: expectedDispatchOutcome,
+      }),
+      orcaTeamStore: {
+        async getWorkerLink() {
+          return workerLink;
+        },
+        async updateWorkerStatus(workerId, status) {
+          statusUpdates.push({ workerId, status });
+        },
+      },
+    });
+    const server = getServer(provider, {
+      agentKind: 'claude-code',
+      workingDir: '/repo',
+      vendorOptions: {
+        orcaRole: 'worker',
+        orcaWorkerId: 'worker-1',
+        orcaWorkerSessionId: 'worker-session-1',
+      },
+    });
+
+    const result = await server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: 'hello host dispatch',
+    });
+    const json = expectToolError(result);
+
+    expect(json).toMatchObject({
+      error: 'session send failed',
+      dispatched: false,
+      reason: 'send-rejected',
+      worker_id: 'worker-1',
+      lead_session_id: 'lead-1',
+      dispatch_outcome: expectedDispatchOutcome,
+    });
+    expect(persisted).toEqual([]);
+    expect(statusUpdates).toEqual([]);
+    expectStructuredSendWarning(logger.entries, {
+      source: 'mcp-tool',
+      entrypoint: 'orca_worker_bridge.send_to_lead',
+      sessionId: 'lead-1',
+      action: 'dispatch-to-lead',
+      reason: 'send-rejected',
     });
     expectNoSensitiveLogContent(logger.entries);
   });

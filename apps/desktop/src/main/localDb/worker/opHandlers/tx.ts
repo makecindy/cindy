@@ -65,6 +65,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return orcaSetWorkerFocus(db, txArgs);
     case 'orca.removeWorker':
       return orcaRemoveWorker(db, txArgs);
+    case 'orca.endTeam':
+      return orcaEndTeam(db, txArgs);
     case 'orca.cancelStaleTeams':
       return orcaCancelStaleTeams(db, txArgs);
     case 'orca.archiveWorkersByTeam':
@@ -1508,14 +1510,66 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   return transaction() as string | null;
 }
 
+function orcaEndTeam(
+  db: Database.Database,
+  args: unknown,
+): Array<{ sessionId: string; clientId: string }> {
+  const payload = asRecord(args, 'orca.endTeam args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const status = expectString(payload.status, 'status');
+  if (status !== 'completed' && status !== 'cancelled' && status !== 'failed') {
+    throw invalidArgs('status must be completed, cancelled, or failed');
+  }
+  const cleanupSessionIds = [
+    ...new Set(
+      expectArray(payload.cleanupSessionIds, 'cleanupSessionIds').map((sessionId) =>
+        expectString(sessionId, 'cleanupSessionIds[]'),
+      ),
+    ),
+  ];
+  const now = expectNumber(payload.now, 'now');
+  const endTeam = db.prepare(
+    'UPDATE orca_teams SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?',
+  );
+  const transaction = db.transaction((): Array<{ sessionId: string; clientId: string }> => {
+    let rewoundRows: Array<{ sessionId: string; clientId: string }> = [];
+    if (cleanupSessionIds.length > 0) {
+      const placeholders = cleanupSessionIds.map(() => '?').join(', ');
+      rewoundRows = db.prepare(
+        `UPDATE messages
+            SET rewind_at = ?
+          WHERE role = 'user'
+            AND rewind_at IS NULL
+            AND session_id IN (${placeholders})
+            AND json_extract(agent_meta, '$.orcaPreVendorCleanup.teamId') = ?
+            AND COALESCE(
+                  json_extract(agent_meta, '$.orcaPreVendorCleanup.phase'),
+                  'pre-vendor'
+                ) = 'pre-vendor'
+          RETURNING session_id AS sessionId, client_id AS clientId`,
+      ).all(now, ...cleanupSessionIds, teamId) as Array<{
+        sessionId: string;
+        clientId: string;
+      }>;
+    }
+    endTeam.run(status, now, now, teamId);
+    return rewoundRows;
+  });
+  return transaction();
+}
+
 function orcaCancelStaleTeams(db: Database.Database, args: unknown): void {
   const payload = asRecord(args, 'orca.cancelStaleTeams args');
   const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
-  const keepTeamId = expectString(payload.keepTeamId, 'keepTeamId');
+  const staleTeamIds = expectArray(payload.staleTeamIds, 'staleTeamIds').map((teamId) =>
+    expectString(teamId, 'staleTeamIds[]'),
+  );
   const now = expectNumber(payload.now, 'now');
-  const cancel = db.prepare("UPDATE orca_teams SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE lead_session_id = ? AND status = 'active' AND id != ?");
+  const cancel = db.prepare("UPDATE orca_teams SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE lead_session_id = ? AND status = 'active' AND id = ?");
   db.transaction(() => {
-    cancel.run(now, now, leadSessionId, keepTeamId);
+    for (const teamId of staleTeamIds) {
+      cancel.run(now, now, leadSessionId, teamId);
+    }
   })();
 }
 

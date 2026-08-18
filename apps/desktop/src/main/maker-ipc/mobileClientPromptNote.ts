@@ -84,7 +84,8 @@ export function stampMobileClientOrigin<T extends { fromMobileClient?: boolean }
   fromMobileClient: boolean,
 ): T {
   if (fromMobileClient) return { ...item, fromMobileClient: true };
-  const { fromMobileClient: _ignored, ...rest } = item;
+  const rest = { ...item };
+  delete rest.fromMobileClient;
   return rest as T;
 }
 
@@ -144,17 +145,17 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   if (
     !('fromMobileClient' in opts) &&
     !('expectedInputGeneration' in opts) &&
+    !('orcaTeamId' in opts) &&
     !('inputAbortSignal' in opts) &&
     !('signal' in opts)
   ) {
     return sendOpts;
   }
-  const {
-    fromMobileClient: _ignoredMobile,
-    expectedInputGeneration: _ignoredGeneration,
-    inputAbortSignal: _ignoredAbortSignal,
-    signal: _ignoredSignal,
-    ...rest
-  } = opts;
+  const rest = { ...opts };
+  delete rest.fromMobileClient;
+  delete rest.expectedInputGeneration;
+  delete rest.orcaTeamId;
+  delete rest.inputAbortSignal;
+  delete rest.signal;
   return rest;
 }

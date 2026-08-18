@@ -14,6 +14,7 @@ export type DbTxName =
   | 'orca.upsertWorker'
   | 'orca.setWorkerFocus'
   | 'orca.removeWorker'
+  | 'orca.endTeam'
   | 'orca.cancelStaleTeams'
   | 'orca.archiveWorkersByTeam'
   | 'orca.reconcileInactiveTeamWorkersForLead'
@@ -246,14 +247,23 @@ export interface OrcaRemoveWorkerArgs {
   now: number;
 }
 
-/**
- * F-COLLAB: 取消同一 lead 下除 keepTeamId 外的所有 active team(partial unique 约束
- * 缺失时的 read-time dedup 兜底)。用 `id != keepTeamId` 而非显式 staleIds,避免
- * read(main 侧 async select) 与 cancel(本事务) 之间的 TOCTOU 窗口误伤新写入。
- */
+export interface OrcaPreVendorCleanupRow {
+  sessionId: string;
+  clientId: string;
+}
+
+/** End one team while atomically rewinding the last cross-instance pre-vendor markers. */
+export interface OrcaEndTeamArgs {
+  teamId: string;
+  status: 'completed' | 'cancelled' | 'failed';
+  cleanupSessionIds: string[];
+  now: number;
+}
+
+/** F-COLLAB: 取消同一 lead 下预读、已 fenced 的 duplicate active teams。 */
 export interface OrcaCancelStaleTeamsArgs {
   leadSessionId: string;
-  keepTeamId: string;
+  staleTeamIds: string[];
   now: number;
 }
 
@@ -752,6 +762,7 @@ export type DbTxArgsByName = {
   'orca.upsertWorker': OrcaUpsertWorkerArgs;
   'orca.setWorkerFocus': OrcaSetWorkerFocusArgs;
   'orca.removeWorker': OrcaRemoveWorkerArgs;
+  'orca.endTeam': OrcaEndTeamArgs;
   'orca.cancelStaleTeams': OrcaCancelStaleTeamsArgs;
   'orca.archiveWorkersByTeam': OrcaArchiveWorkersByTeamArgs;
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
@@ -797,6 +808,7 @@ export type DbTxResultByName = {
   'orca.upsertWorker': undefined;
   'orca.setWorkerFocus': undefined;
   'orca.removeWorker': string | null;
+  'orca.endTeam': OrcaPreVendorCleanupRow[];
   'orca.cancelStaleTeams': undefined;
   'orca.archiveWorkersByTeam': string[];
   'orca.reconcileInactiveTeamWorkersForLead': string[];
