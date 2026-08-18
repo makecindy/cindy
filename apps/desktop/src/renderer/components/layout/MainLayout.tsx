@@ -1429,7 +1429,7 @@ export function MainLayout() {
             右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
-            className="absolute right-0 top-0 z-50 flex h-[46px] items-center"
+            className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <WindowControls />

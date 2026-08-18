@@ -231,7 +231,6 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-  slashCommandInvocationName,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -4656,14 +4655,13 @@ export function ChatInput({
             // 识别并追加机器指令,序列化零特判。
             tr.replaceWith(from, runEnd, editor.schema.text(`$${cmd.name} `));
           } else {
-            // Slash 也保持纯文本;SlashCommandDecoration 只负责视觉确认,
-            // Backspace / 光标移动因此与普通文字完全一致。
+            // 展示层写入人类名(`/git`);Pi 线路名(`/skill:git`)只在发送期改写。
             replaceSlashCommandRunWithText(
               tr,
               editor.schema,
               from,
               runEnd,
-              slashCommandInvocationName(cmd),
+              cmd.name,
             );
           }
           return true;

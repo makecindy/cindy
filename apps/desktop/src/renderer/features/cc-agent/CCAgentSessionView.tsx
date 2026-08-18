@@ -144,6 +144,7 @@ import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import {
   loadAllCommands,
   dispatchCommand,
+  leadingSlashInvocation,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
@@ -2498,9 +2499,13 @@ export function CCAgentSessionView({
       },
     ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
-      if (!slashMatch) return { handled: false, accepted: false, message };
-      const cmdName = slashMatch[1].toLowerCase();
-      const args = slashMatch[2] ?? '';
+      const agentKind = dbToMakerAgentKind(session?.agentKind);
+      const leading = !slashMatch && agentKind === 'pi'
+        ? leadingSlashInvocation(message)
+        : undefined;
+      if (!slashMatch && !leading) return { handled: false, accepted: false, message };
+      const cmdName = (slashMatch?.[1] ?? leading!.name).toLowerCase();
+      const args = slashMatch?.[2] ?? '';
       const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
       const workingDir = options?.workingDirOverride ?? session?.workingDir;
       const cached = allCommandsRef.current;
@@ -2511,7 +2516,6 @@ export function CCAgentSessionView({
         : cached.length > 0
           ? cached
           : await getHelpCommandsSnapshot();
-      const agentKind = dbToMakerAgentKind(session?.agentKind);
       const reconcileParams = {
         agentKind,
         sessionId: session?.id,
@@ -2549,6 +2553,8 @@ export function CCAgentSessionView({
             agentKind === 'pi' ? rewriteAgentSkillInvocationForDispatch(message, hit) : message,
         };
       }
+      // Desktop commands stay `^/` only. A whitespace-prefixed `/help` is not a dispatch.
+      if (!slashMatch) return { handled: false, accepted: false, message };
       if (!allowDesktopDispatch) return { handled: false, accepted: false, message };
       // Review is handed to Main immediately with this invocation's serialized
       // attachments. It must not depend on this React view remaining mounted,

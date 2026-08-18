@@ -1349,6 +1349,38 @@ describe('Pi package executable-code boundary', () => {
     });
   });
 
+  it('keeps theme-only packages disabled because Cindy does not load Pi TUI themes', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-theme-only-'));
+    roots.push(root);
+    const source = 'npm:theme-only';
+    await fs.mkdir(path.join(root, 'themes'));
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'theme-only',
+      version: '1.0.0',
+      pi: { themes: ['./themes'] },
+    }));
+    await fs.writeFile(path.join(root, 'themes', 'night.json'), '{}');
+    runtime.listOutput = `User packages:\n  ${source}\n    ${root}\n`;
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{
+        source,
+        enabled: false,
+        resources: [{
+          kind: 'theme',
+          name: 'night.json',
+          compatibility: 'unsupported',
+        }],
+      }],
+    });
+    await expect(store.resolveManagedPiPackageResources({
+      snapshotRoot: path.join(runtime.userData, 'theme-only-snapshot'),
+    })).resolves.toEqual({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    });
+  });
+
   it('keeps disabled lifecycle scripts visible as a compatibility warning', async () => {
     const { source } = await createPackage({ lifecycleScript: true });
     const store = await import('../pi-package-store.js');

@@ -1,17 +1,36 @@
-/**
- * cronToHuman — 透传 Phase 1 引擎的英文输出
- * ---------------------------------------------------------------------------
- * Phase 1 `@cindy/maker-scheduler/engine/cron.ts:cronToHuman` 已是英文 + 纯函数。
- * Scheduler UI 已统一英文（Phase 8），这里直接透传，不再做 zh i18n 包装。
- *
- * 仍保留这个 wrapper 文件而不是直接 import 引擎是为了：
- * (a) 限定从 ./cron 子路径 import — 顶层 `@cindy/maker-scheduler` re-export 的
- *     `./engine/scheduler.js` 用 EventEmitter，浏览器加载即崩。
- * (b) 给将来再做 i18n 留单一改点。
- */
+/** Localized schedule labels for the template gallery. */
 
 import { cronToHuman as cronToHumanEN } from '@cindy/maker-scheduler/cron';
+import { cronToConfig } from './cronCodexPreset';
 
-export function cronToHuman(expr: string): string {
-  return cronToHumanEN(expr);
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+export function cronToHuman(expr: string, t: Translate, locale: string): string {
+  const config = cronToConfig(expr);
+  const time = `${pad(config.hour)}:${pad(config.minute)}`;
+
+  switch (config.mode) {
+    case 'daily':
+      return t('scheduler.builtinTemplates.schedule.daily', { time });
+    case 'weekdays':
+      return t('scheduler.builtinTemplates.schedule.weekdays', { time });
+    case 'weekly':
+      return t('scheduler.builtinTemplates.schedule.weekly', {
+        time,
+        weekday: formatWeekday(config.weekday, locale),
+      });
+    case 'monthly':
+      return t('scheduler.builtinTemplates.schedule.monthly', { time, day: config.monthDay });
+    default:
+      return cronToHumanEN(expr);
+  }
+}
+
+function formatWeekday(weekday: number, locale: string): string {
+  const sunday = new Date(Date.UTC(2024, 0, 7 + weekday));
+  return new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(sunday);
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
 }

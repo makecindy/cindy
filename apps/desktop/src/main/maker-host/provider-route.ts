@@ -540,6 +540,21 @@ export function getSessionRoutingDescriptor(
   return routing;
 }
 
+/** Resolve routing metadata directly from a provider id without consulting session state. */
+export function getProviderRoutingDescriptor(
+  providerId: string | null | undefined,
+  agent: AgentKind,
+  wireModel?: string,
+): RoutingDescriptor | null {
+  const id = providerId?.trim();
+  if (!id || isProviderRouteMutationInProgress(id)) return null;
+  if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === id);
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  if (!routing || !routingServesWireModel(routing, wireModel)) return null;
+  return routing;
+}
+
 export interface ResolvedSessionRoute {
   providerId: string;
   providerSource: 'builtin' | 'user';
@@ -548,7 +563,7 @@ export interface ResolvedSessionRoute {
   oauthToken: string | null;
 }
 
-async function resolveProviderRouteById(
+export async function resolveProviderRouteById(
   providerId: string,
   agent: AgentKind,
   wireModel?: string,
@@ -673,19 +688,23 @@ export async function resolveProviderRouteDecision(
   providerId: string | null | undefined,
   agent: AgentKind,
   gatewayKey: string | null,
+  wireModel?: string,
 ): Promise<ResolvedProviderRouteDecision | null> {
   const id = providerId?.trim() || null;
   if (!id) return null;
   if (isProviderRouteMutationInProgress(id)) return null;
   if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === id);
-  const routing = provider?.routing[agent];
-  if (!provider || !routing) return null;
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
   const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
   return {
     providerId: id,
     routing,
-    decision: buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken),
+    decision: decision && wireModel && routing.requestPath
+      ? { ...decision, pathOverride: routing.requestPath }
+      : decision,
   };
 }
 
@@ -884,6 +903,16 @@ function rewriteModelIdForProvider(
   const rewritten = model.slice(stripPrefix.length);
   if (!rewritten) return null;
   return { ...body, model: rewritten };
+}
+
+/** Apply a provider's model rewrite to a request body without session lookup. */
+export function rewriteProviderModelIdInBody(
+  providerId: string | null | undefined,
+  agent: AgentKind,
+  body: unknown,
+): Record<string, unknown> | null {
+  if (!isPlainObject(body)) return null;
+  return rewriteModelIdForProvider(providerId?.trim() || null, agent, body);
 }
 
 /**

@@ -17,7 +17,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -2530,7 +2530,7 @@ export function ModelPickerOverlay({
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-5 pb-1 pt-4">
+          <div className="flex items-center px-5 pb-1 pt-4">
             <div className="flex min-w-0 flex-col gap-0.5">
               <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
                 {t('settings.providers.custom.fetch.pickerTitle', {
@@ -2547,14 +2547,6 @@ export function ModelPickerOverlay({
                 })}
               </Dialog.Description>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label={t('settings.providers.custom.cancel')}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            >
-              <X size={16} />
-            </button>
           </div>
           {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
           <div className="flex flex-col gap-2 px-5 pt-2">

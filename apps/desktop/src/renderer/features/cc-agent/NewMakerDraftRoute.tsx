@@ -125,6 +125,10 @@ import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
 import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  rebaseInlineRangesAfterSlashCommandRewrite,
+  rewritePiSkillMessageForSend,
+} from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
@@ -3806,9 +3810,21 @@ export function NewMakerDraftRoute() {
                   }
                 }
 
+                const dispatchedMessage = await rewritePiSkillMessageForSend({
+                  agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
+                  message,
+                  workingDir: newDir,
+                  sessionId: newSession.id,
+                });
+                const rebaseRanges = <T extends { start: number; end: number }>(
+                  ranges: readonly T[] | undefined,
+                ): T[] | undefined => {
+                  if (!ranges) return undefined;
+                  return rebaseInlineRangesAfterSlashCommandRewrite(ranges, message, dispatchedMessage);
+                };
                 const accepted = await makerChatStore.sendMessage(
                   newSession.id,
-                  message,
+                  dispatchedMessage,
                   model,
                   effort,
                   permissionMode,
@@ -3818,13 +3834,13 @@ export function NewMakerDraftRoute() {
                   {
                     ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
                     ...(opts?.agentReferences?.length
-                      ? { agentReferences: opts.agentReferences }
+                      ? { agentReferences: rebaseRanges(opts.agentReferences) }
                       : {}),
                     ...(opts?.pastedTextRanges?.length
-                      ? { pastedTextRanges: opts.pastedTextRanges }
+                      ? { pastedTextRanges: rebaseRanges(opts.pastedTextRanges) }
                       : {}),
                     ...(opts?.slashCommandRanges !== undefined
-                      ? { slashCommandRanges: opts.slashCommandRanges }
+                      ? { slashCommandRanges: rebaseRanges(opts.slashCommandRanges) }
                       : {}),
                   },
                 );
