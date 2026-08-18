@@ -4539,7 +4539,7 @@
   "titleBar": {
     "menu": "菜单",
     "minimize": "最小化",
-    "maximize": "最大化",
+    "maximizeOrRestore": "最大化或还原窗口",
     "close": "关闭",
     "menuItems": {
       "settings": "设置",

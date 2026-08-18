@@ -4541,7 +4541,7 @@
   "titleBar": {
     "menu": "Menu",
     "minimize": "Minimize",
-    "maximize": "Maximize",
+    "maximizeOrRestore": "Maximize or Restore Window",
     "close": "Close",
     "menuItems": {
       "settings": "Settings",

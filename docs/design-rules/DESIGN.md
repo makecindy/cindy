@@ -1031,6 +1031,12 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 - **Desktop action controls use the shared Radix `Tip`, not native `title`.** Native `title`
   remains acceptable for truncated persistent text, marked explicitly where the element is
   interactive. Shared icon-button primitives own this behavior wherever possible.
+- **Windows system window controls are the narrow platform exception.** The shared
+  `WindowControls` minimize, maximize / restore, and close buttons follow familiar Windows window
+  chrome and do not require a visible `Tip`; they still expose localized accessible names. The
+  maximize toggle uses a state-independent name because the Renderer does not own the native
+  maximized state. This exception does not apply to Cindy-specific title-bar actions or panel
+  controls.
 - **Migration is incremental and guarded by surface.** Recursive regression coverage currently
   enforces this contract for app chrome, the title bar, the left sidebar and session list, and
   the right sidebar (`components/layout`, `components/sidebar`, `components/title-bar`,

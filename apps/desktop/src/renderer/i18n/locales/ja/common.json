@@ -4539,7 +4539,7 @@
   "titleBar": {
     "menu": "メニュー",
     "minimize": "最小化",
-    "maximize": "最大化",
+    "maximizeOrRestore": "ウィンドウを最大化または元のサイズに戻す",
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",

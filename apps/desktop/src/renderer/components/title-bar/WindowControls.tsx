@@ -6,7 +6,6 @@ import { Minus, Square, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Tip } from '@/components/ui/tooltip';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
@@ -183,52 +182,50 @@ export function WindowControls({
     <>
       <div className="flex gap-0.5">
         {showMinimize && (
-          <Tip text={t('titleBar.minimize')} side="bottom">
-            <button
-              className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
-              onClick={handleMinimizeClick}
-              aria-label={t('titleBar.minimize')}
-            >
-              <Minus size={14} />
-            </button>
-          </Tip>
-        )}
-        <Tip text={t('titleBar.maximize')} side="bottom">
           <button
             className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
-            onClick={() => window.electronAPI.windowMaximize()}
-            aria-label={t('titleBar.maximize')}
+            onClick={handleMinimizeClick}
+            aria-label={t('titleBar.minimize')}
+            data-tooltip-exempt="windows-system-control"
           >
-            <Square size={14} />
+            <Minus size={14} />
           </button>
-        </Tip>
-        <Tip text={closing ? t('titleBar.closing.title') : t('titleBar.close')} side="bottom">
-          {closing ? (
-            <span
-              role="button"
-              aria-disabled="true"
-              aria-label={t('titleBar.closing.title')}
-              tabIndex={0}
-              className="inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            >
-              <button
-                className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
-                aria-hidden="true"
-                disabled
-              >
-                <X size={14} />
-              </button>
-            </span>
-          ) : (
+        )}
+        <button
+          className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
+          onClick={() => window.electronAPI.windowMaximize()}
+          aria-label={t('titleBar.maximizeOrRestore')}
+          data-tooltip-exempt="windows-system-control"
+        >
+          <Square size={14} />
+        </button>
+        {closing ? (
+          <span
+            role="button"
+            aria-disabled="true"
+            aria-label={t('titleBar.closing.title')}
+            tabIndex={0}
+            data-tooltip-exempt="windows-system-control"
+            className="inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
             <button
               className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
-              onClick={() => void handleCloseClick()}
-              aria-label={t('titleBar.close')}
+              aria-hidden="true"
+              disabled
             >
               <X size={14} />
             </button>
-          )}
-        </Tip>
+          </span>
+        ) : (
+          <button
+            className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+            onClick={() => void handleCloseClick()}
+            aria-label={t('titleBar.close')}
+            data-tooltip-exempt="windows-system-control"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
       <ConfirmDialog
         open={showWindowsCloseBehaviorDialog}

@@ -12,6 +12,8 @@ const GUARDED_TOOLTIP_ROOTS = [
   'features/cc-agent/sidebar',
   'features/right-sidebar',
 ] as const;
+const WINDOWS_SYSTEM_CONTROL_PATH = 'components/title-bar/WindowControls.tsx';
+const WINDOWS_SYSTEM_CONTROL_TOOLTIP_EXEMPTION = 'windows-system-control';
 
 function rendererSource(path: string): string {
   return readFileSync(resolve(RENDERER_ROOT, path), 'utf8');
@@ -204,6 +206,7 @@ function tooltipContractViolations(): string[] {
   for (const root of GUARDED_TOOLTIP_ROOTS) {
     for (const file of rendererComponentFiles(resolve(RENDERER_ROOT, root))) {
       const source = readFileSync(file, 'utf8');
+      const rendererRelativePath = relative(RENDERER_ROOT, file);
       const sourceFile = ts.createSourceFile(
         file,
         source,
@@ -220,6 +223,11 @@ function tooltipContractViolations(): string[] {
             staticAttributeValue(nativeTitleMarker) === 'truncated-text';
           const ariaHidden = jsxAttribute(node, 'aria-hidden', sourceFile);
           const isHiddenFromAccessibilityTree = staticAttributeValue(ariaHidden) === 'true';
+          const tooltipExemption = jsxAttribute(node, 'data-tooltip-exempt', sourceFile);
+          const isWindowsSystemControlException =
+            rendererRelativePath === WINDOWS_SYSTEM_CONTROL_PATH &&
+            staticAttributeValue(tooltipExemption) ===
+              WINDOWS_SYSTEM_CONTROL_TOOLTIP_EXEMPTION;
           const isIconControl =
             isInteractiveControl(node, sourceFile) &&
             !isHiddenFromAccessibilityTree &&
@@ -227,7 +235,9 @@ function tooltipContractViolations(): string[] {
 
           if (
             (nativeTitle && isInteractiveControl(node, sourceFile) && !isTruncatedTextException) ||
-            (isIconControl && !hasManagedTip(node, sourceFile))
+            (isIconControl &&
+              !isWindowsSystemControlException &&
+              !hasManagedTip(node, sourceFile))
           ) {
             const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
             violations.push(`${relative(RENDERER_ROOT, file)}:${line + 1}`);
@@ -275,6 +285,20 @@ describe('icon-only button tooltip coverage', () => {
     expect(chromeActions).toContain('aria-label={sidebarToggleLabel}');
     expect(menuButton).toContain("import { Tip } from '@/components/ui/tooltip';");
     expect(menuButton).toContain("text={t('titleBar.menu')}");
+  });
+
+  it('keeps Windows system window controls accessible without visible tips', () => {
+    const windowControls = rendererSource(WINDOWS_SYSTEM_CONTROL_PATH);
+
+    expect(windowControls).not.toContain("import { Tip } from '@/components/ui/tooltip';");
+    expect(windowControls).not.toContain('<Tip');
+    expect(
+      windowControls.match(/data-tooltip-exempt="windows-system-control"/g),
+    ).toHaveLength(4);
+    expect(windowControls).toContain("aria-label={t('titleBar.minimize')}");
+    expect(windowControls).toContain("aria-label={t('titleBar.maximizeOrRestore')}");
+    expect(windowControls).toContain("aria-label={t('titleBar.close')}");
+    expect(windowControls).toContain("aria-label={t('titleBar.closing.title')}");
   });
 
   it('gives both sidebar footer icon actions visible, state-aware tips', () => {

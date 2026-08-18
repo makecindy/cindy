@@ -4539,7 +4539,7 @@
   "titleBar": {
     "menu": "메뉴",
     "minimize": "최소화",
-    "maximize": "최대화",
+    "maximizeOrRestore": "창 최대화 또는 복원",
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
