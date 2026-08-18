@@ -4583,6 +4583,12 @@
       "title": "\"{{name}}\" 플러그인을 비활성화할까요?",
       "body": "이 패널을 닫으면 플러그인이 비활성화되고 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
       "confirm": "비활성화"
+    },
+    "externalLinkConfirm": {
+      "title": "Cindy에서 외부 웹사이트를 열까요?",
+      "message": "Cindy에서 외부 웹사이트를 열까요?",
+      "open": "웹사이트 열기",
+      "cancel": "취소"
     }
   },
   "ghostPanelWindow": {

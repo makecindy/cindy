@@ -4583,6 +4583,12 @@
       "title": "停用「{{name}}」？",
       "body": "关闭这个面板会停用插件并暂停其能力。你可以随时在侧边栏「插件」中重新启用。",
       "confirm": "停用"
+    },
+    "externalLinkConfirm": {
+      "title": "是否要 Cindy 打开外部网站",
+      "message": "是否要 Cindy 打开外部网站",
+      "open": "打开网站",
+      "cancel": "取消"
     }
   },
   "ghostPanelWindow": {
