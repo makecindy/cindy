@@ -2641,6 +2641,139 @@ export class PiAgent extends BaseAgent {
      * setModel 的临界区正文。经 `setModelChain` 串行化后调用 —— 不要直接调它,
      * 并发进入会让 pending / 落定两次写交错。
      */
+    const nativeOffersModel = (providerId: string, modelId: string): boolean => {
+      const native = nativeProviderById.get(providerId);
+      if (!native) return false;
+      const nativeModel = resolveNativeModelId(providerId, modelId);
+      // inheritModels 里没有 api/catalogAddition 的行是 Pi 自带目录,不是缺失模型。
+      return native.models.some((candidate) => candidate.id === nativeModel);
+    };
+    const sameRecord = (
+      left?: Record<string, string>,
+      right?: Record<string, string>,
+    ): boolean => {
+      const a = left ?? {};
+      const b = right ?? {};
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      for (const key of keys) {
+        if (a[key] !== b[key]) return false;
+      }
+      return true;
+    };
+    const terminateUnconfirmedCatalogReload = async (cause?: unknown): Promise<never> => {
+      this.deps.logger.error(
+        'pi: catalog state unconfirmed; terminating session',
+        { message: cause instanceof Error ? cause.message : cause != null ? String(cause) : undefined },
+      );
+      try {
+        await proc.close();
+      } catch (closeErr) {
+        this.deps.logger.warn(
+          'pi: session termination after unconfirmed catalog reload also failed',
+          { message: closeErr instanceof Error ? closeErr.message : String(closeErr) },
+        );
+      }
+      throw new Error(
+        '[PI_CATALOG_RELOAD_UNCONFIRMED] 模型目录重载未确认，已终止本任务。请重新打开任务后再切换模型。',
+      );
+    };
+    const restoreNativeCatalog = async (
+      previousProviders: PiNativeProviderSpec[],
+    ): Promise<void> => {
+      // 先写盘再改内存：写失败时磁盘仍是新目录，内存也保持新目录，避免分叉后再抛。
+      const written = await this.writeModelsJson(
+        configHome,
+        previousProviders,
+        retainedRuntimeModel,
+        authProviderId,
+        { remote, fileOps },
+      );
+      nativeProviders = previousProviders;
+      nativeProviderById.clear();
+      nativeProviderBySourceId.clear();
+      for (const spec of previousProviders) {
+        if (spec.id === PI_PROVIDER_ID) continue;
+        nativeProviderById.set(spec.id, spec);
+        nativeProviderBySourceId.set(spec.sourceProviderId ?? spec.id, spec);
+      }
+      gatewayApiByModel.clear();
+      for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
+      gatewayImageInputByModel.clear();
+      for (const [key, value] of written.gatewayImageInputByModel) {
+        gatewayImageInputByModel.set(key, value);
+      }
+    };
+    const restoreNativeCatalogOrTerminate = async (
+      previousProviders: PiNativeProviderSpec[],
+    ): Promise<void> => {
+      try {
+        await restoreNativeCatalog(previousProviders);
+      } catch (err) {
+        await terminateUnconfirmedCatalogReload(err);
+      }
+    };
+    const refreshLiveXaiCatalog = async (
+      modelId: string,
+      providerId?: string | null,
+    ): Promise<boolean> => {
+      if (!this.deps.resolvePiNativeProviders) return false;
+      try {
+        const live = await this.deps.resolvePiNativeProviders({
+          workingDir: opts.workingDir,
+          remoteHostId: opts.remoteHostId,
+          providerId,
+          model: modelId,
+          resumeSessionId: sdkSessionId || opts.resumeSessionId,
+        });
+        const liveXai = live?.providers.find(
+          (provider) => (provider.sourceProviderId ?? provider.id) === 'xai',
+        );
+        if (!live || !liveXai) return false;
+        // 远端 hostProxyForward 依赖启动时注入的 session token / 代理登记。
+        // 登录后才出现的 xAI 块带上隧道,请求会因没有 CINDY_PI_SESSION_TOKEN 失败。
+        if (liveXai.hostProxyForward && !proxySessionToken) return false;
+        const currentXai = nativeProviderForSource('xai');
+        if (currentXai) {
+          if (currentXai.baseUrl !== liveXai.baseUrl) return false;
+          if (!sameRecord(currentXai.headers, liveXai.headers)) return false;
+          if (liveXai.hostProxyForward && !currentXai.hostProxyForward) return false;
+        }
+        const envKey = liveXai.apiKeyEnvVar;
+        if (envKey) {
+          if (!(envKey in nativeEnv)) return false;
+          if (live.env[envKey] !== undefined && live.env[envKey] !== nativeEnv[envKey]) {
+            return false;
+          }
+        }
+        nativeProviderById.set(liveXai.id, liveXai);
+        nativeProviderBySourceId.set(liveXai.sourceProviderId ?? liveXai.id, liveXai);
+        nativeProviders = [
+          ...nativeProviders.filter(
+            (provider) => (provider.sourceProviderId ?? provider.id) !== 'xai',
+          ),
+          liveXai,
+        ];
+        const written = await this.writeModelsJson(
+          configHome,
+          nativeProviders,
+          retainedRuntimeModel,
+          authProviderId,
+          { remote, fileOps },
+        );
+        gatewayApiByModel.clear();
+        for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
+        gatewayImageInputByModel.clear();
+        for (const [key, value] of written.gatewayImageInputByModel) {
+          gatewayImageInputByModel.set(key, value);
+        }
+        return nativeOffersModel(liveXai.id, modelId);
+      } catch (err) {
+        this.deps.logger.warn('pi live xAI catalog refresh failed', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+    };
     const switchModel = async (
       model: string,
       setOpts?: { providerId?: string | null; effort?: Effort },
@@ -2699,12 +2832,12 @@ export class PiAgent extends BaseAgent {
         // 同路由不打 set_model，但仍要重试子代理快照：初始写失败或确认写失败
         // 留下 pending 时，心跳复用活进程必须能把文件重建/清 pending，
         // 否则扩展会一直 fail-closed。不带 pending，路由已确认。
-        const provider = resolveProviderForModel(model, requestedProviderId);
-        const wireModel = resolveWireModel(provider, model);
-        if (!(await writeSubagentRuntimeFile({ model: wireModel, provider }))) {
+        const sameRouteProvider = resolveProviderForModel(model, requestedProviderId);
+        const sameRouteWire = resolveWireModel(sameRouteProvider, model);
+        if (!(await writeSubagentRuntimeFile({ model: sameRouteWire, provider: sameRouteProvider }))) {
           deps.logger.warn('pi: same-route setModel could not refresh subagent snapshot', {
             model,
-            provider,
+            provider: sameRouteProvider,
           });
         }
         deps.logger.debug('pi: setModel no-op; already on requested route', {
@@ -2712,6 +2845,41 @@ export class PiAgent extends BaseAgent {
           providerId: requestedProviderId,
         });
         return;
+      }
+      // null = 钉回网关,绝不按模型名推断 xAI。只有 undefined(旧会话未持久化来源)
+      // 才允许 xai/ 前缀回退。`??` 会把 null 也吃掉,误进 live catalog 刷新。
+      const sourceHint = requestedProviderId === undefined
+        ? (model.startsWith('xai/') ? 'xai' : undefined)
+        : (requestedProviderId ?? undefined);
+      const liveProviderHint = sourceHint ? nativeProviderForSource(sourceHint) : undefined;
+      const needsXaiCatalogReload = sourceHint === 'xai'
+        && (!liveProviderHint || !nativeOffersModel(liveProviderHint.id, model));
+      if (needsXaiCatalogReload) {
+        const previousProviders = nativeProviders.slice();
+        const refreshed = await refreshLiveXaiCatalog(model, requestedProviderId);
+        if (refreshed && sdkSessionId) {
+          // Claude 热切先 applyFlagSettings 扩白名单;Pi 的 set_model 不重读 models.json,
+          // 但 switch_session 会 createRuntime → ModelConfig.load,等于无重启扩名单。
+          // success:false = 确定没重载,回滚安全。reject/超时 = 不知道 Pi 侧有没有吃到新
+          // models.json,回滚和放行都可能分叉,按未确认 set_model 一样终止会话。
+          let reloaded;
+          try {
+            reloaded = await proc.request({
+              type: 'switch_session',
+              sessionPath: sdkSessionId,
+            });
+          } catch (err) {
+            return await terminateUnconfirmedCatalogReload(err);
+          }
+          if (!reloaded.success) {
+            await restoreNativeCatalogOrTerminate(previousProviders);
+            throw new Error(
+              `pi: failed to reload models after catalog update: ${reloaded.error ?? 'unknown'}`,
+            );
+          }
+        } else if (!refreshed) {
+          await restoreNativeCatalogOrTerminate(previousProviders);
+        }
       }
       // 显式选一个启动快照 nativeProviderById 里“无法服务该 model”的 BYOM provider 时 fail
       // closed:要么该 provider 是会话启动后才新增的(不在快照),要么它虽在、但用户编辑
@@ -2727,6 +2895,17 @@ export class PiAgent extends BaseAgent {
       }
       const provider = resolveProviderForModel(model, requestedProviderId);
       const wireModel = resolveWireModel(provider, model);
+      if (
+        requestedProviderId
+        && requestedProviderId !== PI_PROVIDER_ID
+        && requestedProviderId !== 'xd'
+        && provider === PI_PROVIDER_ID
+      ) {
+        throw new Error(
+          `pi: provider '${requestedProviderId}' cannot serve model '${model}' even after reloading the live catalog; ` +
+            'restart the Pi session if the provider was added after this task started.',
+        );
+      }
       assertGatewayProtocolForModel(model, requestedProviderId);
       // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
       // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。

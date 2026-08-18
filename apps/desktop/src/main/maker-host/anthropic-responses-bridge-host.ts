@@ -476,6 +476,57 @@ function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
   }
 }
 
+function isXaiSearchToolType(value: unknown): boolean {
+  return value === XAI_X_SEARCH_TOOL_TYPE || value === XAI_LIVE_SEARCH_TOOL_TYPE;
+}
+
+function chatFunctionToolName(tool: unknown): string | null {
+  if (!isPlainRecord(tool) || tool.type !== 'function' || !isPlainRecord(tool.function)) {
+    return null;
+  }
+  return typeof tool.function.name === 'string' ? tool.function.name : null;
+}
+
+function selectsRemovedXaiSearchTool(toolChoice: unknown): boolean {
+  if (isXaiSearchToolType(toolChoice)) return true;
+  return isPlainRecord(toolChoice) && isXaiSearchToolType(toolChoice.type);
+}
+
+function withoutNativeXaiChatSearchTools(
+  body: Record<string, unknown>,
+  existing: unknown[],
+): Record<string, unknown> | null {
+  const tools = existing.filter((tool) => (
+    !isPlainRecord(tool) || !isXaiSearchToolType(tool.type)
+  ));
+  if (tools.length === existing.length) return null;
+
+  const next = { ...body };
+  if (tools.length === 0) {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+    return next;
+  }
+
+  next.tools = tools;
+  if (selectsRemovedXaiSearchTool(next.tool_choice)) {
+    const functionToolNames = tools.flatMap((tool) => {
+      const name = chatFunctionToolName(tool);
+      return name === null ? [] : [name];
+    });
+    if (functionToolNames.length === 1) {
+      next.tool_choice = {
+        type: 'function',
+        function: { name: functionToolNames[0] },
+      };
+    } else {
+      next.tool_choice = functionToolNames.length > 1 ? 'required' : 'auto';
+    }
+  }
+  return next;
+}
+
 /**
  * PI already emits xAI-native payloads, so this path bypasses the Messages →
  * Responses bridge that normally supplies xAI's model-gated server tools.
@@ -493,11 +544,7 @@ function withNativeXaiServerSideTools(
   if (!isPlainRecord(body) || typeof body.model !== 'string') return null;
   const existing = Array.isArray(body.tools) ? body.tools : [];
   if (wireProtocol === 'openai-chat') {
-    const tools = existing.filter((tool) => (
-      !isPlainRecord(tool) ||
-      (tool.type !== XAI_X_SEARCH_TOOL_TYPE && tool.type !== XAI_LIVE_SEARCH_TOOL_TYPE)
-    ));
-    return tools.length === existing.length ? null : { ...body, tools };
+    return withoutNativeXaiChatSearchTools(body, existing);
   }
 
   const model = body.model.startsWith(XAI_MODEL_PREFIX)

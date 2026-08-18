@@ -345,6 +345,102 @@ describe('PI native subscription forwarding', () => {
     });
   });
 
+  it.each([
+    ['auto', 'auto'],
+    ['required', 'required'],
+    [
+      { type: 'function', function: { name: 'read_file' } },
+      { type: 'function', function: { name: 'read_file' } },
+    ],
+    [
+      { type: 'x_search' },
+      { type: 'function', function: { name: 'read_file' } },
+    ],
+    [
+      { type: 'live_search' },
+      { type: 'function', function: { name: 'read_file' } },
+    ],
+  ])(
+    'keeps Chat Completions tool controls consistent after removing search choice %j',
+    async (toolChoice, expectedToolChoice) => {
+      const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      const handler = getPiNativeSubscriptionHandler('xai', 'session-chat-choice-filter', deps({
+        fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      }));
+      const functionTool = {
+        type: 'function',
+        function: { name: 'read_file', parameters: { type: 'object' } },
+      };
+      const parsedBody = {
+        model: 'grok-4.6',
+        tools: [{ type: 'x_search' }, functionTool],
+        tool_choice: toolChoice,
+        parallel_tool_calls: true,
+      };
+
+      await handler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx: {
+          reqId: 10,
+          method: 'POST',
+          url: '/v1/chat/completions',
+          headers: { 'content-type': 'application/json' },
+        },
+        res: responseRecorder(),
+      } as never);
+
+      const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+      expect(request).toEqual({
+        model: 'grok-4.6',
+        tools: [functionTool],
+        tool_choice: expectedToolChoice,
+        parallel_tool_calls: true,
+      });
+    },
+  );
+
+  it.each([
+    'required',
+    { type: 'x_search' },
+    { type: 'live_search' },
+  ])(
+    'removes dangling Chat Completions controls when search-only choice %j leaves no tools',
+    async (toolChoice) => {
+      const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      const handler = getPiNativeSubscriptionHandler('xai', 'session-chat-empty-tools', deps({
+        fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      }));
+      const parsedBody = {
+        model: 'grok-4.6',
+        tools: [{ type: 'x_search' }, { type: 'live_search', sources: [{ type: 'x' }] }],
+        tool_choice: toolChoice,
+        parallel_tool_calls: true,
+      };
+
+      await handler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx: {
+          reqId: 11,
+          method: 'POST',
+          url: '/v1/chat/completions',
+          headers: { 'content-type': 'application/json' },
+        },
+        res: responseRecorder(),
+      } as never);
+
+      const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+      expect(request).toEqual({ model: 'grok-4.6' });
+    },
+  );
+
   it('does not add a search tool to native Grok Chat Completions', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
       status: 200,
