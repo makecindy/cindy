@@ -13,6 +13,7 @@ import type { Maker } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { getActiveAppSession } from '../appSessionState.js';
 import { getCurrentUserId } from '../localDb/index.js';
 import {
   readClaudeAccountUsageSnapshot,
@@ -216,6 +217,16 @@ function fingerprintGlmKey(key: string): string {
 }
 
 /**
+ * GLM 素材读取的完整 owner 键(#2768 十一轮 review):`(userId, appSession.generation)`
+ * ——同账号重登/本地档案恢复会让世代前进,只比 userId 的旧键挡不住重登前排队的
+ * 配置读取拼出跨世代素材。对齐 appSessionState 的世代语义。
+ */
+function readGlmOwnerScopeKey(): string {
+  const session = getActiveAppSession();
+  return `${session.dataOwnerId ?? 'none'}:${session.generation}`;
+}
+
+/**
  * 解析一个自定义 provider 的用量查询素材:配置带 usage 能力标记 + 至少一个 runtime
  * 有 key 才可查询(runtime 优先序 claude-code > codex > pi,取第一个有 key 的)。
  * 已知限制(v1):per-runtime key 理论上可不同,快照按"实际用于查询的那把 key"的
@@ -246,8 +257,10 @@ async function readGlmCodingPlanSource(
 }
 
 const glmCodingPlanUsageReader = createGlmCodingPlanUsageReader({
-  // owner 全出口复核(审计 B):提前 return 的 null 也在切账号时转 stale-owner。
-  readSource: createOwnerGuardedReadSource(getCurrentUserId, readGlmCodingPlanSource),
+  // owner 全出口复核(审计 B + 十一轮):(userId, appSession.generation) 双维键,
+  // 同账号重登世代前进也让素材判 stale——提前 return 的 null 也在切账号/重登时
+  // 转 stale-owner。
+  readSource: createOwnerGuardedReadSource(readGlmOwnerScopeKey, readGlmCodingPlanSource),
   fetchSnapshot: (source) =>
     fetchGlmCodingPlanUsageSnapshot({
       runtimeBaseUrl: source.runtimeBaseUrl,

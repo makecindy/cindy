@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => {
     queryOne: shared.queryOne,
     exec: shared.exec,
     getCurrentUserId: vi.fn(() => 'user-1'),
+    /** 同 id 重登的世代值(十一轮 P1;userId 切换时默认联动 1→2,重登场景可覆盖)。 */
+    glmAppGeneration: 1 as number,
     /** 逐次派发的 client 队列(八轮 PTB/Paw 用;空时回落共享 mock,旧用例零影响)。 */
     clientQueue,
     takeClient: () => clientQueue.shift()
@@ -45,11 +47,17 @@ vi.mock('../localDb/client/current', () => ({
 vi.mock('../localDb/index', () => ({
   getCurrentUserId: mocks.getCurrentUserId,
 }));
-// 广播出口的完整 owner 戳(appSessionState)与 getCurrentUserId 同源,十轮 P1-b。
+// 广播出口的完整 owner 戳(appSessionState)与 getCurrentUserId 同源,十轮 P1-b;
+// 十一轮起 owner 维度升级为 (id, generation) 双维,generation 随 userId 切换前进。
 vi.mock('../appSessionState', () => ({
   getActiveDataOwnerPushStamp: () => ({
     dataOwnerId: mocks.getCurrentUserId(),
     ownerGeneration: 7,
+  }),
+  getActiveAppSession: () => ({
+    dataOwnerId: mocks.getCurrentUserId(),
+    generation: mocks.glmAppGeneration,
+    mode: 'app',
   }),
 }));
 
@@ -70,6 +78,9 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
     mocks.clientQueue.length = 0;
+    // 世代独立覆盖:切号用例把 userId 换为 user-2 时把世代同步到 2;
+    // 重登用例只改世代(十一轮)。
+    mocks.glmAppGeneration = 1;
   });
 
   it('does not drop the very first snapshot after main start', async () => {
@@ -146,6 +157,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     }));
     const readPromise = broadcaster.readGlmCodingPlanUsageSnapshot('p1');
     mocks.getCurrentUserId.mockReturnValue('user-2'); // 挂起期间切号(无人 reset)
+    mocks.glmAppGeneration = 2;
     resolveRead({ snapshot: JSON.stringify(snapshotOf(77)) }); // A 的行迟到
     await expect(readPromise).resolves.toBeNull();
 
@@ -180,6 +192,7 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     await vi.waitFor(() => expect(capturedExec).toHaveBeenCalledTimes(1));
     // INSERT 挂起期间切号;beginWrite 只做同步 reset(推进 ownerEpoch),不碰 DB。
     mocks.getCurrentUserId.mockReturnValue('user-2');
+    mocks.glmAppGeneration = 2;
     broadcaster.beginGlmCodingPlanUsageWrite('p1');
     resolveInsert();
     await rec;
@@ -279,6 +292,18 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     mocks.queryOne.mockResolvedValue(null);
     const token = broadcaster.beginGlmCodingPlanUsageWrite('p1');
     mocks.getCurrentUserId.mockReturnValue('user-2'); // owner 切换
+    mocks.glmAppGeneration = 2;
+    await broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(50), token);
+    await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toBeNull();
+  });
+
+  it('十一轮: rejects a tokened write across a same-id generation advance (re-login)', async () => {
+    // 同 id 重登:getCurrentUserId 不变、appSession.generation 前进 —— 只比 id 的
+    // 旧维度会放行重登前排队的写。
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    const token = broadcaster.beginGlmCodingPlanUsageWrite('p1');
+    mocks.glmAppGeneration = 2; // 同 id 重登
     await broadcaster.recordGlmCodingPlanUsageSnapshot('p1', snapshotOf(50), token);
     await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toBeNull();
   });

@@ -113,13 +113,14 @@ export interface GlmCodingPlanUsageReader {
 }
 
 /**
- * owner 全出口复核(审计 B):包一层 readSource,入口捕获 owner、**每个返回路径**
- * 出口复核——包括「无 usage 能力」「无 key」这类提前 return。此前哨兵只在找到 key
- * 之后复核,提前 return 的 null 会在切账号瞬间误删新账号同名 provider 的快照。
- * 纯函数,owner 读取器由装配层注入(usage.ts 注 getCurrentUserId)。
+ * owner 全出口复核(审计 B + 十一轮 review):包一层 readSource,入口捕获 owner、
+ * **每个返回路径**出口复核——包括「无 usage 能力」「无 key」这类提前 return。
+ * readOwner 返回的键由装配层决定(usage.ts 注 `(id, appSession.generation)`):
+ * 同账号重登世代前进同样判 stale(#2768 十一轮;此前只比 id)。纯函数,owner
+ * 读取器由装配层注入。
  */
 export function createOwnerGuardedReadSource(
-  readOwner: () => string | null,
+  readOwner: () => string,
   readSource: (providerId: string) => Promise<GlmCodingPlanReadSourceResult>,
 ): (providerId: string) => Promise<GlmCodingPlanReadSourceResult> {
   return async (providerId) => {

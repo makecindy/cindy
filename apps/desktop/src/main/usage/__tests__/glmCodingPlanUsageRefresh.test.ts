@@ -103,15 +103,15 @@ function makeHarness(opts: HarnessOptions = {}) {
       if (opts.fetchError) throw opts.fetchError;
       return opts.fetchResult ?? snapshotOf();
     }),
-    beginWrite: vi.fn((providerId: string) => ({ providerId, generation, ownerEpoch })),
+    beginWrite: vi.fn((providerId: string) => ({ providerId, generation, ownerEpoch, ownerGeneration: 0 })),
     invalidateWrites: vi.fn(() => { generation += 1; }),
-    recordSnapshot: vi.fn(async (_id: string, snapshot: GlmCodingPlanUsageSnapshot, token?: { generation: number; ownerEpoch: number }) => {
+    recordSnapshot: vi.fn(async (_id: string, snapshot: GlmCodingPlanUsageSnapshot, token?: { generation: number; ownerEpoch: number; ownerGeneration: number }) => {
       calls.recordAttempts += 1;
       if (token && (token.generation !== generation || token.ownerEpoch !== ownerEpoch)) return;
       calls.record.push(snapshot);
       cached = snapshot;
     }),
-    clearSnapshot: vi.fn(async (_id: string, token?: { generation: number; ownerEpoch: number }) => {
+    clearSnapshot: vi.fn(async (_id: string, token?: { generation: number; ownerEpoch: number; ownerGeneration: number }) => {
       if (token && (token.generation !== generation || token.ownerEpoch !== ownerEpoch)) return;
       calls.clear += 1;
       cached = null;
@@ -391,6 +391,19 @@ describe('T4 — owner 在 readSource await 期间切换(全出口复核)', () =
       async () => null,
     );
     await expect(guarded('p1')).resolves.toBeNull();
+  });
+
+  it('十一轮: treats a same-id generation bump as stale (readOwner key upgraded)', async () => {
+    // usage.ts 装配层注入的 owner 键是 `(id, appSession.generation)`——同账号重登
+    // id 不变、世代前进,守卫必须判 stale(只比 id 的旧键会放行)。
+    let ownerKey = 'account-a:1';
+    const guarded = createOwnerGuardedReadSource(
+      () => ownerKey,
+      async () => null,
+    );
+    const pending = guarded('zhipu-coding-plan');
+    ownerKey = 'account-a:2'; // 同 id 重登
+    await expect(pending).resolves.toBe('stale-owner');
   });
 });
 

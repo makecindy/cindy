@@ -31,7 +31,7 @@ import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 import { incrementDailyModelUsage, type DailyModelUsageDelta } from './localDb/dailyModelUsage';
 import { getDbClient } from './localDb/client/current';
 import { getCurrentUserId } from './localDb/index';
-import { getActiveDataOwnerPushStamp } from './appSessionState';
+import { getActiveAppSession, getActiveDataOwnerPushStamp } from './appSessionState';
 import type { DataOwnerPushStamp } from '../shared/dataOwnerPush';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
@@ -932,6 +932,7 @@ const glmCodingPlanUsageLoadPromises = new Map<string, Promise<void>>();
 const glmCodingPlanUsageGenerations = new Map<string, number>();
 let glmCodingPlanUsageOwnerEpoch = 0;
 let glmCodingPlanUsageOwner: string | null = null;
+let glmCodingPlanUsageOwnerGenerationValue = 0;
 let glmCodingPlanUsageOwnerInitialized = false;
 
 function glmGenerationOf(providerId: string): number {
@@ -939,16 +940,21 @@ function glmGenerationOf(providerId: string): number {
 }
 
 /**
- * GLM 用量条件提交令牌(#2768 七轮根因修复):调用方在**发起 fetch 之前**
- * 领取,fetch 完成后随 record/clear 带回;期间任何 clear(世代 bump)或 owner 切换
- * (epoch 前进)都会令令牌失效,store 直接拒绝提交。它取代「写完再验 + 补偿」形态
- * ——补偿自身仍是跨 await 的先检查后动作,窗口永远关不干净(#2768 四~七轮实证)。
- * 令牌失效判定不依赖身份字段可区分:两账号身份完全相同时 ownerEpoch 仍不同。
+ * GLM 用量条件提交令牌(#2768 七轮根因修复,十轮升级为完整世代):调用方在
+ * **发起 fetch 之前**领取,fetch 完成后随 record/clear 带回;期间任何
+ * clear(世代 bump)或 owner 边界推进(完整世代,含同 id 重登——id 相同、
+ * appSession.generation 前进)都会令令牌失效,store 直接拒绝提交。它取代
+ * 「写完再验 + 补偿」形态——补偿自身仍是跨 await 的先检查后动作,窗口永远
+ * 关不干净(#2768 四~七轮实证)。owner 维度从 userId 升级为房子的
+ * (userId, appSession.generation) 双维(#2768 十一轮 review):同账号重登
+ * 前排队的写同样被拒。
  */
 export interface GlmUsageWriteToken {
   readonly providerId: string;
   readonly generation: number;
   readonly ownerEpoch: number;
+  /** 主进程侧完整 owner 世代(appSession.generation,含同 id 重登)。 */
+  readonly ownerGeneration: number;
 }
 
 /** 领取条件提交令牌(在发起 fetch 之前调用;token 捕获点 = fetch 前,非提交时)。 */
@@ -958,6 +964,7 @@ export function beginGlmCodingPlanUsageWrite(providerId: string): GlmUsageWriteT
     providerId,
     generation: glmGenerationOf(providerId),
     ownerEpoch: glmCodingPlanUsageOwnerEpoch,
+    ownerGeneration: getActiveAppSession().generation,
   };
 }
 
@@ -973,20 +980,30 @@ export function invalidateGlmCodingPlanUsageWrites(providerId: string): void {
   glmCodingPlanUsageGenerations.set(providerId, glmGenerationOf(providerId) + 1);
 }
 
-/** 令牌是否仍然有效(世代与 owner epoch 都未前进;providerId 属调用方自查)。 */
+/** 令牌是否仍然有效(世代、owner epoch 与完整 owner 世代都未前进;providerId 属调用方自查)。 */
 function isGlmUsageWriteTokenCurrent(token: GlmUsageWriteToken): boolean {
   return (
-    token.ownerEpoch === glmCodingPlanUsageOwnerEpoch
+    token.ownerGeneration === getActiveAppSession().generation
+    && token.ownerEpoch === glmCodingPlanUsageOwnerEpoch
     && token.generation === glmGenerationOf(token.providerId)
   );
 }
 
 function resetGlmCodingPlanUsageCacheIfOwnerChanged(): void {
-  const owner = currentAccountUsageOwner();
-  if (glmCodingPlanUsageOwnerInitialized && owner === glmCodingPlanUsageOwner) return;
+  // 完整 owner 世代(#2768 十一轮 review):同 id 重登(appSession.generation 前进)
+  // 也算 owner 变化——缓存/世代全部作废,上一会话的观察不跨会话沿用。
+  const session = getActiveAppSession();
+  const owner = session.dataOwnerId;
+  const generation = session.generation;
+  if (
+    glmCodingPlanUsageOwnerInitialized
+    && owner === glmCodingPlanUsageOwner
+    && generation === glmCodingPlanUsageOwnerGenerationValue
+  ) return;
   const isFirstInit = !glmCodingPlanUsageOwnerInitialized;
   glmCodingPlanUsageOwnerInitialized = true;
   glmCodingPlanUsageOwner = owner;
+  glmCodingPlanUsageOwnerGenerationValue = generation;
   if (isFirstInit) return;
   glmCodingPlanUsageSnapshots.clear();
   glmCodingPlanUsageHydrated.clear();
@@ -1002,7 +1019,11 @@ function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
   if (!load) {
     const generation = glmGenerationOf(providerId);
     const ownerEpoch = glmCodingPlanUsageOwnerEpoch;
-    const ownerAtStart = currentAccountUsageOwner();
+    // 完整 owner 世代(id+generation)捕获:同 id 重登(appSession.generation 前进)
+    // 也要让本 hydration 作废(#2768 十一轮 review;此前只比 userId)。
+    const sessionAtStart = getActiveAppSession();
+    const ownerAtStart = sessionAtStart.dataOwnerId;
+    const ownerGenerationAtStart = sessionAtStart.generation;
     load = (async () => {
       try {
         if (!ownerAtStart) return;
@@ -1012,9 +1033,13 @@ function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
         );
         // owner 直接复核:ownerEpoch 是懒检测——await 期间没有任何 GLM 入口触发
         // reset 的话它不前进,单靠世代比对发现不了切号。A 账号的 hydration 结果
-        // 不得落进 B 账号的内存(#2768 七轮 Codex P1);丢弃后下一次入口的 reset
-        // 会按新 owner 重新水合,自愈无残留。
-        if (currentAccountUsageOwner() !== ownerAtStart) return;
+        // 不得落进 B 账号的内存(#2768 七轮 Codex P1);同 id 重登同样作废(十一轮)。
+        // 丢弃后下一次入口的 reset 会按新 owner 重新水合,自愈无残留。
+        const sessionNow = getActiveAppSession();
+        if (
+          sessionNow.dataOwnerId !== ownerAtStart
+          || sessionNow.generation !== ownerGenerationAtStart
+        ) return;
         // 本 provider 被 clear / owner 变化抢先 → 本次读结果作废。
         if (
           ownerEpoch !== glmCodingPlanUsageOwnerEpoch
@@ -1056,14 +1081,18 @@ export async function recordGlmCodingPlanUsageSnapshot(
 ): Promise<void> {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
   // 令牌在 fetch 前领取:CRUD 落在 fetch 期间(而非 record 自己的 await 里)时,
-  // 世代/epoch 已在领取后前进 → 此处直接拒绝。无令牌 = 老调用路径,沿用入口
-  // 捕获(仍防 record 自身 await 窗口内的 clear)。
+  // 世代/epoch/完整 owner 世代已在领取后前进 → 此处直接拒绝。无令牌 = 老调用
+  // 路径,沿用入口捕获(仍防 record 自身 await 窗口内的 clear)。
   const generation = token ? token.generation : glmGenerationOf(providerId);
   const ownerEpoch = token ? token.ownerEpoch : glmCodingPlanUsageOwnerEpoch;
+  const ownerGeneration = token
+    ? token.ownerGeneration
+    : getActiveAppSession().generation;
   if (token && token.providerId !== providerId) return;
   await ensureGlmCodingPlanUsageLoaded(providerId);
   if (
-    ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+    ownerGeneration !== getActiveAppSession().generation
+    || ownerEpoch !== glmCodingPlanUsageOwnerEpoch
     || generation !== glmGenerationOf(providerId)
   ) return;
 
@@ -1353,9 +1382,10 @@ function broadcastGlmCodingPlanUsage(
     ownerId: ownerStamp.dataOwnerId,
   };
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_GLM_CODING_PLAN_CHANGED, stamped);
-    }
+    // 与 xAI 订阅广播同款过滤(#2768 十一轮 review):账号用量数据只发给可信的
+    // 应用窗口,装载了不可信内容的辅助窗口/已导航走的窗口不收。
+    if (!isTrustedAppRendererWindow(win)) continue;
+    win.webContents.send(USAGE_GLM_CODING_PLAN_CHANGED, stamped);
   }
 }
 
