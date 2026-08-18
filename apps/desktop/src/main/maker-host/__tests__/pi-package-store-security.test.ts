@@ -1196,11 +1196,13 @@ describe('Pi package executable-code boundary', () => {
         },
       }));
       if (oversized) {
-        const paddingRoot = path.join(root, 'unused-padding');
-        await fs.mkdir(paddingRoot);
-        for (let index = 0; index < 10_000; index += 1) {
-          await fs.writeFile(path.join(paddingRoot, `${index}.txt`), 'x');
-        }
+        // A sparse file crosses the production snapshot byte budget without
+        // creating 10,000 directory entries. The previous entry-limit fixture
+        // timed out on Windows due to filesystem setup rather than the code
+        // under test, while this still exercises the same inspection quarantine.
+        const paddingFile = path.join(root, 'unused-padding.bin');
+        await fs.writeFile(paddingFile, '');
+        await fs.truncate(paddingFile, 128 * 1024 * 1024 + 1);
       }
       return root;
     };
