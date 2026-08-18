@@ -1257,6 +1257,11 @@ export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
   markChanged();
 }
 
+/** 同步读取最近一次完整 `/models` 快照，供 sendSync 配置面只读投影。 */
+export function getXdGatewayModels(): readonly XdGatewayModelInfo[] {
+  return xdGatewayModels;
+}
+
 /** 返回当前 active catalog 的单调递增修订号。 */
 export function getActiveCatalogRevision(): number {
   return revision;

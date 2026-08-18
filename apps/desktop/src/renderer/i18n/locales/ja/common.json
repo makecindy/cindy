@@ -12,7 +12,8 @@
     "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。"
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。",
+    "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -1585,6 +1586,7 @@
         "enableModel": "このモデルを有効にする",
         "capabilityGroupHint": "チャットのモデル選択には表示されず、画像生成などの機能でのみ使用されます。",
         "accessWriteFailed": "変更を保存できませんでした。もう一度お試しください。",
+        "visibilityWriteFailed": "モデルの表示設定を保存できませんでした。もう一度お試しください。問題が解決しない場合は、Cindy を再起動してください。",
         "disabledGroup": "無効",
         "enableAllModels": "すべて有効にする",
         "priceOverride": {
@@ -4694,19 +4696,25 @@
       },
       "refresh": "更新",
       "checking": "確認中",
-      "accessRequiredTitle": "このセッションを承認",
-      "accessRequiredDescription": "このパネルには、このセッションのシミュレータへアクセスする権限がありません。システムダイアログで確認してください。",
-      "allowTaskAccess": "セッションのアクセスを許可",
+      "accessRequiredTitle": "このセッションの操作を許可",
+      "accessRequiredDescription": "状態の表示は引き続き利用できる場合がありますが、タップ、入力、その他の操作にはこのセッションの許可が必要です。システムダイアログで確認してください。",
+      "allowTaskAccess": "セッションの操作を許可",
       "requestingAccess": "アクセスをリクエスト中…",
       "accessDialogTitle": "iOS シミュレータの操作を許可しますか？",
       "accessDialogMessage": "Cindy のこのウインドウに「{{task}}」の iOS シミュレータの表示と操作を許可しますか？",
-      "accessDialogDetail": "この権限はこのセッションにのみ適用され、別のセッションへ切り替えると取り消されます。",
+      "accessDialogDetail": "この権限はこのセッションにのみ適用されます。別のセッションへ切り替えても表示権限は保持されますが、操作は一時停止します。戻った後にもう一度操作を許可してください。",
       "accessDialogAllow": "シミュレータの操作を許可",
       "accessDialogCancel": "キャンセル",
       "accessDialogUntitledTask": "名称未設定のセッション",
       "readyTitle": "シミュレータ環境の準備が完了しました",
       "unavailableTitle": "シミュレータを使用できません",
-      "connectionError": "ローカルのシミュレータ環境を確認できませんでした。もう一度お試しください。",
+      "connectionError": "iOS シミュレータ Host に接続できませんでした。もう一度お試しください。",
+      "pluginNotInstalled": "この Cindy インスタンスには iOS シミュレータプラグインがインストールされていません。プラグインマーケットプレイスでインストールして有効にしてから、もう一度お試しください。",
+      "pluginDisabled": "この Cindy インスタンスには iOS シミュレータプラグインがインストールされていますが、無効になっています。プラグインページで有効にしてから、もう一度お試しください。",
+      "pluginDisabledForProject": "この作業ディレクトリでは iOS シミュレータプラグインが無効になっています。プロジェクトのプラグイン設定で有効にしてから、もう一度お試しください。",
+      "pluginSessionUnavailable": "プラグインはインストール済みで有効ですが、この Cindy インスタンスでは共有プラグイン機能を一時的に使用できません。別の Cindy インスタンスまたはアカウント切り替えが使用している可能性があります。しばらくしてから更新してください。",
+      "pluginStateChanging": "Cindy がアカウントまたはプラグインの状態を切り替えています。しばらくしてから更新してください。",
+      "statusInternalError": "iOS シミュレータの状態を読み取る際に Cindy で内部エラーが発生しました。もう一度お試しください。",
       "remoteUnsupported": "iOS シミュレータはローカルの macOS セッション専用で、SSH またはリモートセッションでは使用できません。",
       "sessionUnavailable": "この Cindy セッションは使用できなくなりました。",
       "setupTitle": "セットアップ項目",
@@ -4804,6 +4812,13 @@
           "reconnecting": "再接続中…",
           "unavailable": "利用不可"
         }
+      },
+      "nativeRecovery": {
+        "available": "Native アクセラレーションは現在利用できません。再試行中も WDA の画面と操作は利用できます。",
+        "action": "Native を復旧",
+        "recovering": "Native アクセラレーションを復旧しています。現在の WDA の画面と操作は引き続き利用できます。",
+        "recoveringAction": "Native を復旧中…",
+        "failed": "Native アクセラレーションを復旧できませんでした。WDA は引き続き利用できます。しばらくしてから再試行してください。"
       },
       "stream": {
         "idle": "待機中",

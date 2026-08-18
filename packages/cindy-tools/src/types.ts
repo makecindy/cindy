@@ -147,7 +147,7 @@ export type CindyGhostCallErrorCode =
   | 'TIMEOUT' // 执行超时(host 掐掉)
   | 'SETUP_REQUIRED' // 配置仍未就绪（无交互面或恢复前又变化）；可带脱敏 assessment，未派发插件
   | 'SETUP_CANCELLED' // 用户取消插件配置；原调用未派发，不要自动重试
-  | 'ATTACHMENT_INVALID' // attachments 里的图片地址无法过户(格式/找不到/超数)
+  | 'ATTACHMENT_INVALID' // attachments 里的媒体地址无法过户(格式/找不到/超数)
   | 'DIR_INVALID' // dir 目录无法过户(不存在/不在会话 workdir 内/超限额)
   | 'INTERNAL'; // 其它 host 侧错误
 
@@ -267,8 +267,24 @@ export type CindyForgeScaffoldResult =
       message: string;
     };
 
+/** Cindy Core 原生媒体能力；模型目录与调用说明均由 Model Access 动态下发。 */
+export type CindyMediaCapability =
+  | 'image.generate'
+  | 'image.edit'
+  | 'video.generate'
+  | 'video.image_to_video';
+
+/** 当前 Agent 专用的永久 media 工具与 Host 之间的稳定请求面。插件运行时代码不调用。 */
+export type CindyMediaToolRequest =
+  | { action: 'list_models'; capability?: CindyMediaCapability }
+  | { action: 'prepare'; modelId: string; capability: CindyMediaCapability }
+  | { action: 'request'; invocationId: string; body: Record<string, unknown> }
+  | { action: 'poll'; invocationId: string };
+
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
+  /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
+  callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
    * 现查"已装且唤醒"的意识清单(总机不缓存——装/卸/唤醒/沉睡即时反映,
    * 这正是网关模式让老会话立即生效的机制)。
@@ -295,11 +311,12 @@ export interface CindyGhostsMcpDeps {
     tool: string;
     args: Record<string, unknown>;
     /**
-     * 用户图片过户(可选):会话里用户图片的地址(xdt-image:// /
-     * cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。
+     * 媒体过户(可选):会话里用户媒体或当前 Agent / Core 工具生成结果的
+     * 地址(xdt-image:// / cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。
      * host 把每张图落媒体总仓、给目标意识记可读引用(人工确认的引渡才形成
      * 按张永久授权；工作目录/Full Access 等 Host 代办交接不冒充用户授权),
-     * 再以指纹数组注入 args.attachments 交给意识——
+     * 再以指纹数组注入 args.attachments 交给意识。工具生成结果也必须由
+     * Agent 显式传入，不会由 Host 自动回调插件——
      * 意识拿到的仍只是字符串指纹,摸不到路径与字节。
      */
     attachments?: string[];
@@ -309,7 +326,7 @@ export interface CindyGhostsMcpDeps {
      * 每次用一个 workdir 外文件时,先把整批文件一次性过户——非 Full Access
      * 下用户只见一张列出全部文件的确认卡；Full Access 下自动交接、不弹卡，
      * 且不会形成降档后仍生效的人工永久授权。
-     * 普通调用 attachments 上限 4 张,grant_only 放宽(上限由 host 定)。
+     * 普通调用 attachments 上限 4 项,grant_only 放宽(上限由 host 定)。
      */
     grantOnly?: boolean;
     /**

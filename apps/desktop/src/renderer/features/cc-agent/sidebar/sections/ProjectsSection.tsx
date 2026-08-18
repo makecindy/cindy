@@ -809,7 +809,7 @@ export function ProjectsSection({
               const sectionCollapsed = collapsedDevices.has(key);
               return (
                 <div key={key} className="flex flex-col gap-1">
-                  {/* 设备分组头:可折叠,在线状态点(绿/灰)+ 名称 + 条数。 */}
+                  {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
                   <button
                     type="button"
                     onClick={() => toggleDeviceSection(key)}
@@ -831,13 +831,12 @@ export function ProjectsSection({
                     )}
                     <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
                     <span className="min-w-0 truncate text-xs font-medium">{name}</span>
-                    <span
-                      aria-hidden
-                      className={cn(
-                        'size-1.5 shrink-0 rounded-full',
-                        online ? 'bg-[var(--card-status-done)]' : 'bg-[var(--text-tertiary)]',
-                      )}
-                    />
+                    {!online && (
+                      <span
+                        aria-hidden
+                        className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                      />
+                    )}
                     {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
                           (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
                           段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}

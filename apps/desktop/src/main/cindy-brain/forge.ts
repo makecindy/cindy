@@ -1364,7 +1364,8 @@ ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 - **联网与凭证**:要不要 network 槽白名单联网(§4.7);要用户填 key 就需要 setup
   就绪声明与 settingsHtml 设置区(§4.7、§4.8)。
 - **运行形态**:纯沙箱 main.js 够用,还是要随包 Node 进程装依赖跑重活(node 槽,§4.12)。
-- **媒体代办**:要不要让主机代生成/改图/视频(cindy 槽,§2、§4.0.1)。
+- **媒体能力**:要不要基于 Cindy Core 的图片/视频模型封装上层能力；插件负责场景、
+  配置和结果呈现，生成请求由当前 Agent 调用 Core media 工具(§2、§4.0.4)。
 
 问完后把选择复述成一份简短设计小结(要解决的问题/目标用户/交互流程/所选形态/
 权限边界/验收标准),并顺带说明源码会放在工作目录的哪个文件夹——位置不需要用户选
@@ -1626,8 +1627,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 }
 \`\`\`
 
-**cindy 能力详单**:声明"这个意识被允许点主机代办菜单上的哪些菜"——只有类目和
-动作,**没有任何具体模型/供应商信息**(选型权在主机与用户,意识只表达意图)。
+**cindy 能力详单**:声明插件要基于哪些 Cindy Core 能力提供上层能力--只有类目和
+动作,**没有任何具体模型/供应商信息**。image / video 声明同时决定该插件能否在
+自己的设置页或面板读取对应类型的模型目录；生成请求仍由当前 Agent 发起。
 类目与动作:\`image\`(\`generate\`=出图 / \`edit\`=改图)、\`video\`(\`generate\`=
 文生视频 / \`edit\`=图生视频,参考图怎么用由 \`refMode\` 决定:首尾帧 1–2 张,
 或多张参考图,详见 §4 的 cindy-request 视频段)、\`media\`(\`deposit\`=把手里的
@@ -1857,9 +1859,9 @@ Cindy 先发布，确认首个支持它的**正式版本号**后，再把 \`minC
 cindy.onHostMessage(function (msg) {
   if (msg.type !== 'tool-call') return;
   // msg.tool = 工具名, msg.args = AI 填的参数, msg.callId = 卷号
-  // msg.args.attachments(可能出现):用户随消息发给你的图,已由主机过户
-  // 到你名下的**指纹数组**——与你自己生成的媒体同等待遇(可当改图源图、
-  // 可经 cindy-ghost://<id>/media/<指纹> 上墙)。工具要吃用户图就读它。
+  // msg.args.attachments(可能出现):用户交出的媒体,或当前 Agent / Core 工具
+  // 生成后显式交给你的媒体,已由主机过户到你名下的**指纹数组**——
+  // 可当源媒体,也可经 cindy-ghost://<id>/media/<指纹> 上墙。
 });
 
 // 交卷(默认 330 秒内,超时作废;够覆盖一单大文件上传/取件。长任务可续命,
@@ -1915,7 +1917,10 @@ cindy.send({
 // - 预计超过 30 分钟天花板的超长任务,不要吊着一次 tool-call 等:视频代办用
 //   mode:'submit' 异步提交(见下),自己的外部任务拆成"提交 + 查询"两个工具。
 
-// Cindy 代办(需声明 cindy 槽 + 能力详单;主机出图、落仓、记账,你只拿到指纹字符串):
+// 以下 gen_image / edit_image / gen_video / edit_video 是存量插件兼容接口。
+// 新插件不要从沙箱或面板直接发媒体生成请求；按 §4.0.4 让当前 Agent 使用
+// Cindy Core media 工具。非媒体的 cindy-request 能力继续按各自章节使用。
+// 存量 Cindy 代办(需声明 cindy 槽 + 能力详单;主机出图、落仓、记账):
 // 由 tool-call 触发的代办**务必带上收到的 callId**(归因号:让用户在日志/账单里
 // 对上"哪次调用花的钱");面板交互等自发代办可不带。
 const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '一只猫', callId: msg.callId });
@@ -2217,6 +2222,87 @@ const r = await cindy.send({
   不会让你的 \`await\` 永久悬着;
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;装入确认框会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
+
+## 4.0.4 媒体模型配置与调用边界
+
+媒体上层能力由插件定义，Cindy Core 只提供两项低级能力：
+
+1. 插件设置页 / panel 按类型读取当前可用模型，用来保存插件自己的模型选择；
+2. 当前 Agent 执行插件能力时，使用永久注册的 Cindy Core \`media\` 工具发起调用。
+
+设置页 / panel 没有 preload 桥，直接走同源只读端点。插件必须声明 \`cindy\` 槽，
+并在 \`cindy.image\` 或 \`cindy.video\` 中声明至少一个动作：
+
+\`\`\`js
+const result = await (await fetch('/media-models?type=image')).json();
+// → {
+//   ok:true,
+//   type:'image',
+//   models:[{
+//     id,
+//     name,
+//     modalities:{ input:['text','image'], output:['image'] }
+//   }],
+//   defaultModelId:string|null
+// }
+\`\`\`
+
+\`type\` 只接受 \`image\` / \`video\`。Host 按 Gateway \`mode\` 切大类，并结合插件在
+\`cindy.image/video\` 声明的动作、Gateway \`modalities\`、Guide operation 与当前客户端
+协议支持度，只返回当前真正可执行的模型。单个模型的 Guide 缺失、损坏或版本过新只隔离
+该模型，不拖垮整个目录。
+
+响应仍只把 Gateway \`architecture\` 已归一化后的 \`modalities.input/output\` 原样交给插件，
+不下发 Guide、endpoint、凭证或 Host 内部兼容判定。插件可把用户选择的模型 id 存进自己的
+\`/kv\`，再通过工具结果或插件说明交给当前 Agent；付费请求前 Core 会再次校验。
+
+插件与 Agent 不需要新的媒体协议，继续使用现有工具调用链：
+
+1. Agent 用 \`ghost_call\` 调用插件的业务工具；
+2. 插件通过普通 \`tool-result\` JSON 返回业务参数、面板里保存的模型选择或其它上下文；
+3. 同一个 Agent 读取结果后，自行调用 Cindy Core \`media\` 工具；
+4. 如果插件需要最终媒体，Agent 再调用插件的普通接收工具，并通过顶层
+   \`ghost_call.attachments\` 显式交接；Host 复用通用 attachments 授权链，把授权后的
+   指纹注入 \`args.attachments\`，避免把本地绝对路径暴露给插件。插件自行保存业务状态
+   与更新 UI。
+
+第 2 步的字段完全由插件定义，Host 不识别 \`mediaIntent\`、\`nextTool\` 等保留字段，也不
+自动把插件结果转成媒体请求。下面只是普通结果示例，字段名不是平台契约：
+
+\`\`\`js
+const prefs = await (await fetch('/kv')).json();
+await cindy.send({
+  type: 'tool-result',
+  callId: msg.callId,
+  ok: true,
+  result: {
+    prompt: msg.args.prompt,
+    selectedModel: prefs.imageModelId,
+    sceneOptions: { aspectRatio: msg.args.aspectRatio }
+  }
+});
+\`\`\`
+
+媒体生成硬规则：插件沙箱和 panel 不直接提交生成请求，不持有 endpoint、凭证、
+轮询或下载逻辑。当前 Agent 自己决定如何把插件的普通结果转换为 \`media\` 调用，并根据
+Guide 组装请求；Core 负责鉴权、Guide、安全边界、任务状态与结果入库。插件可以提供
+业务参数、参数规范化、模型偏好和可选 UI，但不负责执行底层请求。
+
+插件获取结果不需要专用回调协议：
+
+\`\`\`js
+// Agent 侧：Core media 成功后通过通用附件参数交给插件
+ghost_call({
+  ghost_id: 'cindy-art',
+  tool: 'receive_media',
+  args: { caption: prompt },
+  attachments: [resultUrl]
+});
+
+// 插件侧：msg.args.attachments 是已授权指纹；插件自行写 /kv 并广播面板
+\`\`\`
+
+Host 不理解“画廊”或其它插件业务，也不会因为一次 \`media\` 成功自动唤醒、回调任意插件。
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 

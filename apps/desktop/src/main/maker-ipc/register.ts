@@ -13604,8 +13604,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerIOSSimulatorHandlers(
     createElectronIpcHandlerRegistry(),
     {
-      isPluginAvailable: (workingDir) =>
-        getIOSSimulatorPluginAccessDecision(workingDir).allowed,
+      getPluginAccess: getIOSSimulatorPluginAccessDecision,
       getSessionContext: async (sessionId) => {
         const liveSession = maker.getSession(sessionId);
         if (liveSession) return { workingDir: liveSession.workDir };

@@ -12,7 +12,8 @@
     "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again."
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
+    "INTERNAL": "Operation failed. Please try again later."
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -1586,6 +1587,7 @@
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
+        "visibilityWriteFailed": "Couldn't save the model visibility setting. Try again, or restart Cindy if the problem continues.",
         "disabledGroup": "Disabled",
         "enableAllModels": "Enable All",
         "priceOverride": {
@@ -4696,19 +4698,25 @@
       },
       "refresh": "Refresh",
       "checking": "Checking",
-      "accessRequiredTitle": "Authorize This Session",
-      "accessRequiredDescription": "This panel is not authorized to access the simulator for this session. Confirm access in the system dialog.",
-      "allowTaskAccess": "Allow Session Access",
+      "accessRequiredTitle": "Allow Session Control",
+      "accessRequiredDescription": "Status viewing may remain available, but tapping, typing, and other controls require authorization for this session. Confirm in the system dialog.",
+      "allowTaskAccess": "Allow Session Control",
       "requestingAccess": "Requesting Access…",
       "accessDialogTitle": "Allow iOS Simulator Control?",
       "accessDialogMessage": "Allow this Cindy window to view and control the iOS Simulator for “{{task}}”?",
-      "accessDialogDetail": "This permission applies only to this session and is revoked when you switch sessions.",
+      "accessDialogDetail": "This permission applies only to this session. Switching away retains viewing access but pauses control; allow control again after you return.",
       "accessDialogAllow": "Allow Simulator Control",
       "accessDialogCancel": "Cancel",
       "accessDialogUntitledTask": "Untitled Session",
       "readyTitle": "Simulator environment ready",
       "unavailableTitle": "Simulator unavailable",
-      "connectionError": "Cindy could not inspect the local simulator environment. Try again.",
+      "connectionError": "Cindy could not connect to the iOS Simulator Host. Try again.",
+      "pluginNotInstalled": "The iOS Simulator plugin is not installed in this Cindy instance. Install and enable it from the Plugin Marketplace, then try again.",
+      "pluginDisabled": "The iOS Simulator plugin is installed in this Cindy instance but disabled. Enable it on the Plugins page, then try again.",
+      "pluginDisabledForProject": "The iOS Simulator plugin is disabled for this working directory. Enable it in the project plugin settings, then try again.",
+      "pluginSessionUnavailable": "The plugin is installed and enabled, but this Cindy instance temporarily cannot use the shared plugin capability. Another Cindy instance or an account switch may be using it; refresh shortly.",
+      "pluginStateChanging": "Cindy is switching account or plugin state. Refresh shortly.",
+      "statusInternalError": "Cindy encountered an internal error while reading iOS Simulator status. Try again.",
       "remoteUnsupported": "iOS Simulator is available only to local macOS sessions, not SSH or remote sessions.",
       "sessionUnavailable": "This Cindy session is no longer available.",
       "setupTitle": "Setup checklist",
@@ -4806,6 +4814,13 @@
           "reconnecting": "Reconnecting…",
           "unavailable": "Unavailable"
         }
+      },
+      "nativeRecovery": {
+        "available": "Native acceleration is unavailable. WDA stays active while you try again.",
+        "action": "Restore Native",
+        "recovering": "Restoring Native acceleration. The current WDA view and controls stay active.",
+        "recoveringAction": "Restoring Native…",
+        "failed": "Native acceleration could not be restored. WDA is still active; try again later."
       },
       "stream": {
         "idle": "Idle",

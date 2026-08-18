@@ -327,6 +327,7 @@ import {
   configureIOSSimulatorRendererAccessConfirmation,
   configureIOSSimulatorRendererTargets,
   inheritIOSSimulatorRendererSessionAccess,
+  syncIOSSimulatorRendererAccessForSessionChange,
 } from './mcp-integrations/ios-simulator-renderer-access';
 import {
   parseIOSSimulatorReleaseGateArgs,
@@ -1456,6 +1457,9 @@ const rsbWindowController = new RsbWindowController({
         : null;
     if (mainTarget) {
       inheritIOSSimulatorRendererSessionAccess(mainTarget, window.webContents);
+      // This renderer is still hidden for prewarm. Keep its Viewer buckets,
+      // but pause the inherited active mutation grant until it is shown.
+      syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
     }
     return window;
   },
@@ -1476,6 +1480,23 @@ const rsbWindowController = new RsbWindowController({
     } catch {
       // window torn down mid-send — ignore
     }
+  },
+  onWindowWillShow: (window) => {
+    const mainTarget =
+      mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
+        ? mainWindowRef.webContents
+        : null;
+    const inherited = mainTarget
+      ? inheritIOSSimulatorRendererSessionAccess(mainTarget, window.webContents)
+      : false;
+    if (!inherited) {
+      // No authoritative Main snapshot is available. Never leave a cached
+      // sidebar's previous active mutation grant usable when it becomes visible.
+      syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
+    }
+  },
+  onWindowHidden: (window) => {
+    syncIOSSimulatorRendererAccessForSessionChange(window.webContents, null);
   },
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,

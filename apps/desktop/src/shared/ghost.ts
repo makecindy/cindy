@@ -5449,13 +5449,20 @@ export const GHOST_PIPE_CALL_MAX_TOTAL_MS = 30 * 60_000;
 export type GhostAppRegion = 'cn' | 'global';
 
 /**
- * 上行:读取宿主公开上下文。`cindy.request({kind:'app-context'})` 是 preload
- * 提供的语法糖,底层仍走同一根 ghost-pipe 与主机白名单。
+ * 上行:读取宿主只读信息。`cindy.request(...)` 是 preload 提供的语法糖,
+ * 底层仍走同一根 ghost-pipe 与主机白名单。
  */
-export interface GhostPipeHostRequest {
-  type: 'host-request';
-  kind: 'app-context';
-}
+export type GhostPipeHostRequest =
+  | {
+      type: 'host-request';
+      kind: 'app-context';
+    }
+  | {
+      type: 'host-request';
+      kind: 'cindy-preference';
+      /** 只能读取本插件已声明的媒体能力配置。 */
+      capability: GhostMediaCapability;
+    };
 
 /** 插件请求 Agent 新回合时可选的会话处理方式。 */
 export const GHOST_AGENT_RUN_MODES = ['continue', 'fork', 'new'] as const;
@@ -6031,6 +6038,51 @@ export interface GhostAppContextResult {
     locale: GhostLocale;
   };
 }
+
+/** 插件设置页 / 面板可读取的 Cindy Core 媒体模型类型。 */
+export const GHOST_MEDIA_MODEL_TYPES = ['image', 'video'] as const;
+export type GhostMediaModelType = (typeof GHOST_MEDIA_MODEL_TYPES)[number];
+
+/** Host「Cindy 能力」区域现有的四项媒体模型配置键。 */
+export const GHOST_MEDIA_CAPABILITIES = [
+  'image.generate',
+  'image.edit',
+  'video.generate',
+  'video.edit',
+] as const;
+export type GhostMediaCapability = (typeof GHOST_MEDIA_CAPABILITIES)[number];
+
+/** 插件读取自身某项 Cindy 媒体能力当前实际选型的只读结果。 */
+export type GhostCindyPreferenceResult =
+  | { ok: true; capability: GhostMediaCapability; modelId: string }
+  | {
+      ok: false;
+      errorCode: 'INVALID_REQUEST' | 'PERMISSION_DENIED' | 'NOT_AVAILABLE';
+      message: string;
+    };
+
+/**
+ * 插件配置界面使用的只读可执行媒体模型目录。Host 根据插件声明、Gateway modalities、
+ * Guide operation 与当前客户端协议支持度过滤模型；响应只保留归一化 modalities，
+ * 不向插件暴露 Guide 或内部兼容判定。
+ */
+export type GhostMediaModelsResult =
+  | {
+      ok: true;
+      type: GhostMediaModelType;
+      models: Array<{
+        id: string;
+        name: string;
+        /** Gateway architecture 的归一化投影；缺省表示上游未声明，插件不得猜测。 */
+        modalities?: { input: string[]; output: string[] };
+      }>;
+      defaultModelId: string | null;
+    }
+  | {
+      ok: false;
+      errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE';
+      message: string;
+    };
 
 /**
  * 上行:聊天卡片供片(卡槽③海报模式)。意识为自己的一次 tool-call

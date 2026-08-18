@@ -11,6 +11,7 @@ import type {
   IOSSimulatorH264FramePush,
   IOSSimulatorLiveTouchRequest,
   IOSSimulatorPublicInstance,
+  IOSSimulatorRetryNativeRouteRequest,
   IOSSimulatorRouteStatusPush,
   IOSSimulatorSessionStatus,
   IOSSimulatorToolResponse,
@@ -217,6 +218,12 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
       };
     },
   );
+  const retryNativeRoute = vi.fn(
+    async (request: IOSSimulatorRetryNativeRouteRequest): Promise<IOSSimulatorToolResponse> => {
+      void request;
+      return { ok: true, data: { nativeRecovered: true } };
+    },
+  );
   const setStreamProfile = vi.fn(async () => ({ ok: true as const, data: {} }));
   let h264FrameListener: ((payload: IOSSimulatorH264FramePush) => void) | null = null;
   let routeStatusListener: ((payload: IOSSimulatorRouteStatusPush) => void) | null = null;
@@ -262,6 +269,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
             call: typeof call;
             setAgentControl: typeof setAgentControl;
             setViewerVisibility: typeof setViewerVisibility;
+            retryNativeRoute: typeof retryNativeRoute;
             latestFrame: typeof latestFrame;
             setStreamProfile: typeof setStreamProfile;
             liveTouch: typeof liveTouch;
@@ -280,6 +288,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
         call,
         setAgentControl,
         setViewerVisibility,
+        retryNativeRoute,
         latestFrame,
         setStreamProfile,
         liveTouch,
@@ -295,6 +304,7 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
     call,
     setAgentControl,
     setViewerVisibility,
+    retryNativeRoute,
     latestFrame,
     setStreamProfile,
     liveTouch,
@@ -354,6 +364,38 @@ afterEach(() => {
 });
 
 describe('IOSSimulatorTabBody', () => {
+  it('keeps Viewer status visible while control waits for renewed authorization', async () => {
+    const pausedStatus = readyStatus();
+    if (!pausedStatus.ok) throw new Error('Expected a ready simulator status.');
+    pausedStatus.controlAccess = 'paused';
+    const api = installStatus(pausedStatus);
+
+    render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
+
+    await screen.findByText('rightSidebar.iosSimulator.accessRequiredTitle');
+    expect(screen.getByText('iPhone 17 Pro')).toBeTruthy();
+    expect(
+      (
+        screen.getByRole('combobox', {
+          name: 'rightSidebar.iosSimulator.streamProfile',
+        }) as HTMLSelectElement
+      ).disabled,
+    ).toBe(true);
+    expect(api.requestAccess).not.toHaveBeenCalled();
+    api.requestAccess.mockImplementationOnce(async () => {
+      api.setStatusValue({ ...pausedStatus, controlAccess: 'active' });
+      return { granted: true };
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rightSidebar.iosSimulator.allowTaskAccess' }),
+    );
+    await waitFor(() => {
+      expect(api.requestAccess).toHaveBeenCalledWith({ sessionId: 'session-a' });
+      expect(screen.queryByText('rightSidebar.iosSimulator.accessRequiredTitle')).toBeNull();
+    });
+  });
+
   it('requires a user gesture before requesting native access for a restored panel', async () => {
     const api = installStatus(readyStatus());
     api.status.mockRejectedValueOnce(
@@ -378,6 +420,39 @@ describe('IOSSimulatorTabBody', () => {
       expect(api.status).toHaveBeenCalledTimes(2);
     });
     expect(screen.queryByText('rightSidebar.iosSimulator.accessRequiredTitle')).toBeNull();
+  });
+
+  it('shows the exact plugin-session reason instead of reporting an environment probe failure', async () => {
+    const api = installStatus(readyStatus());
+    api.status.mockRejectedValueOnce(
+      new Error(
+        'Error invoking remote method: Error: [IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE] The iOS Simulator plugin is unavailable in the current Cindy session.',
+      ),
+    );
+
+    render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.pluginSessionUnavailable')).toBeTruthy();
+    });
+    expect(screen.queryByText('rightSidebar.iosSimulator.connectionError')).toBeNull();
+    expect(screen.queryByText('rightSidebar.iosSimulator.accessRequiredTitle')).toBeNull();
+  });
+
+  it('distinguishes an internal Host status failure from a simulator environment failure', async () => {
+    const api = installStatus(readyStatus());
+    api.status.mockRejectedValueOnce(
+      new Error(
+        'Error invoking remote method: Error: [INTERNAL] iOS Simulator status is temporarily unavailable.',
+      ),
+    );
+
+    render(<IOSSimulatorTabBody state={{ instanceId: null }} ctx={ctx} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.statusInternalError')).toBeTruthy();
+    });
+    expect(screen.queryByText('rightSidebar.iosSimulator.connectionError')).toBeNull();
   });
 
   it('animates the access loader on an HTML wrapper instead of the SVG', async () => {
@@ -1041,6 +1116,7 @@ describe('IOSSimulatorTabBody', () => {
     const nativeFallback: IOSSimulatorRouteStatusPush = {
       ...nativeActive,
       updatedAt: '2026-08-06T00:00:01.000Z',
+      nativeRecoveryAvailable: true,
       stream: {
         adapter: 'wda',
         encoding: 'jpeg',
@@ -1121,6 +1197,7 @@ describe('IOSSimulatorTabBody', () => {
       api.emitRouteStatus({
         ...nativeActive,
         updatedAt: '2026-08-06T00:00:02.000Z',
+        nativeRecoveryAvailable: true,
         input: nativeFallback.input,
       }),
     );
@@ -1201,6 +1278,7 @@ describe('IOSSimulatorTabBody', () => {
       api.emitRouteStatus({
         ...nativeActive,
         updatedAt: '2026-08-06T00:00:01.000Z',
+        nativeRecoveryAvailable: true,
         stream: {
           adapter: 'wda',
           encoding: 'jpeg',
@@ -1276,11 +1354,23 @@ describe('IOSSimulatorTabBody', () => {
           state: 'fallback',
           reasonCode: 'native-decoder-fallback',
         },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-sidecar-unavailable',
+        },
       });
     });
     await waitFor(() => {
       expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
     });
+    expect(
+      screen.queryByRole('button', {
+        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+      }),
+    ).toBeNull();
 
     act(() => {
       visibilityState = 'hidden';
@@ -1309,6 +1399,7 @@ describe('IOSSimulatorTabBody', () => {
         instanceId: instance.instanceId,
         generation: instance.generation,
         updatedAt: '2026-08-06T00:00:00.000Z',
+        nativeRecoveryAvailable: true,
         stream: {
           adapter: 'wda',
           encoding: 'jpeg',
@@ -1413,6 +1504,7 @@ describe('IOSSimulatorTabBody', () => {
         instanceId: instance.instanceId,
         generation: instance.generation,
         updatedAt: '2026-08-06T00:00:00.000Z',
+        nativeRecoveryAvailable: true,
         stream: {
           adapter: 'wda',
           encoding: 'jpeg',
@@ -1455,6 +1547,261 @@ describe('IOSSimulatorTabBody', () => {
       );
       expect(rendered.container.querySelector('img')).toBeTruthy();
     });
+  });
+
+  it('hides Native recovery when the Host omits or denies recovery eligibility', async () => {
+    const instance = readyInstance();
+    const statusValue = readyStatus(instance);
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [
+      {
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        updatedAt: '2026-08-06T00:00:00.000Z',
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'fallback',
+          reasonCode: 'native-sidecar-unavailable',
+        },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-sidecar-unavailable',
+        },
+      },
+    ];
+    const api = installStatus(statusValue);
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+
+    render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('rightSidebar.iosSimulator.route.wdaJpeg')).toBeTruthy();
+    });
+    expect(
+      screen.queryByRole('button', {
+        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+      }),
+    ).toBeNull();
+    expect(api.retryNativeRoute).not.toHaveBeenCalled();
+
+    act(() => {
+      api.emitRouteStatus({
+        ...statusValue.routeStatuses![0]!,
+        updatedAt: '2026-08-06T00:00:01.000Z',
+        nativeRecoveryAvailable: false,
+      });
+    });
+    expect(
+      screen.queryByRole('button', {
+        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+      }),
+    ).toBeNull();
+  });
+
+  it('lets the current viewer explicitly re-arm Native without disabling WDA controls', async () => {
+    installFakeH264DecoderRuntime();
+    const instance = readyInstance();
+    const statusValue = readyStatus(instance);
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [
+      {
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        updatedAt: '2026-08-06T00:00:00.000Z',
+        nativeRecoveryAvailable: true,
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'fallback',
+          reasonCode: 'native-sidecar-unavailable',
+        },
+        input: {
+          adapter: 'wda',
+          state: 'fallback',
+          continuous: false,
+          multiTouch: false,
+          reasonCode: 'native-sidecar-unavailable',
+        },
+      },
+    ];
+    const api = installStatus(statusValue);
+    api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
+    api.latestFrame.mockResolvedValue(streamingJpegResult());
+    let resolveRecovery!: (value: IOSSimulatorToolResponse) => void;
+    api.retryNativeRoute.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRecovery = resolve;
+        }),
+    );
+
+    const rendered = render(
+      <IOSSimulatorTabBody
+        state={{ instanceId: instance.instanceId }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    const recoveryButton = await screen.findByRole('button', {
+      name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+    });
+    await waitFor(() => expect(rendered.container.querySelector('img')).toBeTruthy());
+    const image = rendered.container.querySelector('img');
+    expect(image?.className).toContain('w-full');
+    expect(image?.className).not.toContain('max-h-[520px]');
+    const textInput = screen.getByLabelText(
+      'rightSidebar.iosSimulator.textInputLabel',
+    ) as HTMLInputElement;
+    expect(textInput.disabled).toBe(false);
+
+    fireEvent.click(recoveryButton);
+    await waitFor(() => {
+      expect(api.retryNativeRoute).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        instanceId: instance.instanceId,
+        generation: instance.generation,
+        leaseId: instance.lease.id,
+        viewerToken: expect.any(String),
+      });
+      expect(
+        (
+          screen.getByRole('button', {
+            name: 'rightSidebar.iosSimulator.nativeRecovery.recoveringAction',
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+    });
+    expect(textInput.disabled).toBe(false);
+
+    resolveRecovery({ ok: true, data: { nativeRecovered: false } });
+    await screen.findByText('rightSidebar.iosSimulator.nativeRecovery.failed');
+    expect(rendered.container.querySelector('img')).toBeTruthy();
+    expect(textInput.disabled).toBe(false);
+  });
+
+  it('ignores an explicit Native recovery result after the viewer switches devices', async () => {
+    const statusValue = multiReadyStatus();
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = statusValue.instances.map((instance) => ({
+      sessionId: 'session-a',
+      instanceId: instance.instanceId,
+      generation: instance.generation,
+      updatedAt: '2026-08-06T00:00:00.000Z',
+      nativeRecoveryAvailable: true,
+      stream: {
+        adapter: 'wda',
+        encoding: 'jpeg',
+        state: 'fallback',
+        reasonCode: 'native-sidecar-unavailable',
+      },
+      input: {
+        adapter: 'wda',
+        state: 'fallback',
+        continuous: false,
+        multiTouch: false,
+        reasonCode: 'native-sidecar-unavailable',
+      },
+    }));
+    const api = installStatus(statusValue);
+    const jpegResult = (
+      request: IOSSimulatorViewerVisibilityRequest,
+    ): IOSSimulatorToolResponse => ({
+      ok: true,
+      data: {
+        stream: {
+          instanceId: request.instanceId,
+          generation: request.generation,
+          state: 'streaming',
+          reconnectAttempt: 0,
+          latestFrame: {
+            instanceId: request.instanceId,
+            generation: request.generation,
+            sequence: 1,
+            encoding: 'jpeg',
+            receivedAt: '2026-08-06T00:00:00.000Z',
+            bytes: new Uint8Array([1, 2, 3]),
+          },
+        },
+        viewport: { width: 393, height: 852, orientation: 'PORTRAIT' },
+      },
+    });
+    api.setViewerVisibility.mockImplementation(async (request) => jpegResult(request));
+    api.latestFrame.mockImplementation(async (request?: unknown) =>
+      jpegResult({
+        ...(request as IOSSimulatorViewerVisibilityRequest),
+        viewerToken: 'poll',
+        visible: true,
+        preferredEncoding: 'jpeg',
+      }),
+    );
+    let resolveA!: (value: IOSSimulatorToolResponse) => void;
+    let resolveB!: (value: IOSSimulatorToolResponse) => void;
+    api.retryNativeRoute.mockImplementation(
+      (request) =>
+        new Promise((resolve) => {
+          if (request.instanceId === 'instance-a') resolveA = resolve;
+          else resolveB = resolve;
+        }),
+    );
+
+    const rendered = render(
+      <IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active shellVisible />,
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+      }),
+    );
+    await waitFor(() => expect(api.retryNativeRoute).toHaveBeenCalledTimes(1));
+
+    rendered.rerender(
+      <IOSSimulatorTabBody state={{ instanceId: 'instance-b' }} ctx={ctx} active shellVisible />,
+    );
+    const recoveryButtonB = await screen.findByRole('button', {
+      name: 'rightSidebar.iosSimulator.nativeRecovery.action',
+    });
+    fireEvent.click(recoveryButtonB);
+    await waitFor(() => {
+      expect(api.retryNativeRoute).toHaveBeenCalledTimes(2);
+      expect(api.retryNativeRoute).toHaveBeenLastCalledWith(
+        expect.objectContaining({ instanceId: 'instance-b' }),
+      );
+    });
+
+    await act(async () => {
+      resolveA({ ok: true, data: { nativeRecovered: false } });
+      await Promise.resolve();
+    });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'rightSidebar.iosSimulator.nativeRecovery.recoveringAction',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.queryByText('rightSidebar.iosSimulator.nativeRecovery.failed')).toBeNull();
+
+    await act(async () => {
+      resolveB({ ok: true, data: { nativeRecovered: false } });
+      await Promise.resolve();
+    });
+    await screen.findByText('rightSidebar.iosSimulator.nativeRecovery.failed');
   });
 
   it('streams pointer samples through native touch and temporarily boosts frame rate', async () => {

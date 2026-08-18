@@ -1,4 +1,5 @@
 import { IOSSimulatorInstanceError } from '@cindy/ios-simulator-runtime';
+import type { IOSSimulatorMcpAccessDecision } from '@cindy/mcps';
 
 import type {
   IOSSimulatorNativeH264StreamProfileRequest,
@@ -12,6 +13,7 @@ import {
   callIOSSimulatorHostTool,
   getIOSSimulatorLatestFrame,
   getIOSSimulatorSessionStatus,
+  retryIOSSimulatorNativeRoute,
   setIOSSimulatorAgentControlGrant,
   setIOSSimulatorAgentMutationPaused,
   setIOSSimulatorViewerVisibility,
@@ -20,7 +22,8 @@ import {
 } from '../mcp-integrations/ios-simulator.js';
 import {
   getIOSSimulatorRendererSessionAccess,
-  hasIOSSimulatorRendererSessionAccess,
+  getIOSSimulatorRendererViewerAccess,
+  hasIOSSimulatorRendererViewerAccess,
   invalidateIOSSimulatorAgentControlElevation,
   isIOSSimulatorAgentControlApprovalCurrent,
   requestIOSSimulatorAgentControlElevation,
@@ -43,6 +46,7 @@ type IOSSimulatorIpcOperation =
   | 'call-tool'
   | 'set-agent-control'
   | 'set-viewer-visibility'
+  | 'retry-native-route'
   | 'set-mutation-control'
   | 'latest-frame'
   | 'set-stream-profile'
@@ -54,6 +58,7 @@ const IOS_SIMULATOR_SAFE_IPC_MESSAGES: Record<IOSSimulatorIpcOperation, string> 
   'call-tool': 'iOS Simulator operation failed.',
   'set-agent-control': 'iOS Simulator control permission could not be updated.',
   'set-viewer-visibility': 'iOS Simulator viewer state could not be updated.',
+  'retry-native-route': 'iOS Simulator Native acceleration could not be restored.',
   'set-mutation-control': 'iOS Simulator control state could not be updated.',
   'latest-frame': 'iOS Simulator frame is temporarily unavailable.',
   'set-stream-profile': 'iOS Simulator stream settings could not be updated.',
@@ -62,16 +67,18 @@ const IOS_SIMULATOR_SAFE_IPC_MESSAGES: Record<IOSSimulatorIpcOperation, string> 
 
 export interface IOSSimulatorHandlerDeps {
   assertTrustedSender(event: unknown): void;
-  isPluginAvailable(workingDir: string | null): boolean;
-  getSessionContext(
-    sessionId: string,
-  ): Promise<{ workingDir: string | null } | null>;
+  getPluginAccess(workingDir: string | null): IOSSimulatorMcpAccessDecision;
+  getSessionContext(sessionId: string): Promise<{ workingDir: string | null } | null>;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
   getSessionAccess(
     target: IOSSimulatorRendererWebContents,
   ): IOSSimulatorRendererAccessSnapshot | null;
-  hasSessionAccess(target: IOSSimulatorRendererWebContents, sessionId: string): boolean;
+  getViewerAccess(
+    target: IOSSimulatorRendererWebContents,
+    sessionId: string,
+  ): IOSSimulatorRendererAccessSnapshot | null;
+  hasViewerAccess(target: IOSSimulatorRendererWebContents, sessionId: string): boolean;
   requestSessionAccess(
     target: IOSSimulatorRendererWebContents,
     sessionId: string,
@@ -112,6 +119,12 @@ export interface IOSSimulatorHandlerDeps {
     viewerWebContentsId?: number,
     viewerToken?: string,
   ): Promise<IOSSimulatorToolResponse>;
+  retryNativeRoute(
+    sessionId: string,
+    route: { instanceId: string; generation: number; leaseId: string },
+    viewerWebContentsId: number,
+    viewerToken: string,
+  ): Promise<IOSSimulatorToolResponse>;
   setViewerStreamProfile(
     sessionId: string,
     route: { instanceId: string; generation: number; leaseId: string },
@@ -144,12 +157,18 @@ const defaultDeps: IOSSimulatorHandlerDeps = {
     assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
   // Production registration must inject the live Ghost capability gate. Tests
   // and any accidental alternate registration fail closed by default.
-  isPluginAvailable: () => false,
+  getPluginAccess: () => ({
+    allowed: false,
+    errorCode: 'IOS_SIMULATOR_PLUGIN_DISABLED',
+    message: 'The iOS Simulator plugin is unavailable.',
+    data: { reason: 'session-unavailable' },
+  }),
   getSessionContext: async () => null,
   getOwnerScopeKey: activeOwnerScopeKey,
   isOwnerBoundaryPending: isAppSessionBoundaryPending,
   getSessionAccess: getIOSSimulatorRendererSessionAccess,
-  hasSessionAccess: hasIOSSimulatorRendererSessionAccess,
+  getViewerAccess: getIOSSimulatorRendererViewerAccess,
+  hasViewerAccess: hasIOSSimulatorRendererViewerAccess,
   requestSessionAccess: requestIOSSimulatorRendererSessionAccess,
   confirmAgentControlElevation: requestIOSSimulatorAgentControlElevation,
   invalidateAgentControlElevation: invalidateIOSSimulatorAgentControlElevation,
@@ -159,6 +178,7 @@ const defaultDeps: IOSSimulatorHandlerDeps = {
   setAgentControlGrant: setIOSSimulatorAgentControlGrant,
   setAgentMutationPaused: setIOSSimulatorAgentMutationPaused,
   setViewerVisibility: setIOSSimulatorViewerVisibility,
+  retryNativeRoute: retryIOSSimulatorNativeRoute,
   setViewerStreamProfile: setIOSSimulatorViewerStreamProfile,
   getLatestFrame: getIOSSimulatorLatestFrame,
   updateViewerTouch: updateIOSSimulatorViewerTouch,
@@ -168,6 +188,29 @@ const defaultDeps: IOSSimulatorHandlerDeps = {
     });
   },
 };
+
+function throwIOSSimulatorPluginAccessError(
+  decision: Exclude<IOSSimulatorMcpAccessDecision, { allowed: true }>,
+): never {
+  const reason = decision.data?.reason;
+  switch (reason) {
+    case 'not-installed':
+      throwIpcError('IOS_SIMULATOR_PLUGIN_REQUIRED', 'The iOS Simulator plugin is not installed.');
+    case 'disabled-in-workdir':
+      throwIpcError(
+        'IOS_SIMULATOR_DISABLED',
+        'The iOS Simulator plugin is disabled for this project.',
+      );
+    case 'session-unavailable':
+      throwIpcError(
+        'IOS_SIMULATOR_PLUGIN_SESSION_UNAVAILABLE',
+        'The iOS Simulator plugin is unavailable in the current Cindy session.',
+      );
+    case 'disabled':
+    default:
+      throwIpcError('IOS_SIMULATOR_PLUGIN_DISABLED', 'The iOS Simulator plugin is disabled.');
+  }
+}
 
 const RENDERER_TOOL_NAMES = new Set<IOSSimulatorRendererToolName>(
   IOS_SIMULATOR_RENDERER_TOOL_NAMES,
@@ -214,12 +257,8 @@ async function callIOSSimulatorHost<T>(
     }
   };
   const assertCurrent = (): void => {
-    if (!deps.isPluginAvailable(workingDir)) {
-      throwIpcError(
-        'PERMISSION_DENIED',
-        'The iOS Simulator plugin must be installed and enabled.',
-      );
-    }
+    const pluginAccess = deps.getPluginAccess(workingDir);
+    if (!pluginAccess.allowed) throwIOSSimulatorPluginAccessError(pluginAccess);
     assertOwnerScopeCurrent();
     assertStillAuthorized?.();
   };
@@ -291,9 +330,9 @@ export function registerIOSSimulatorHandlers(
       return handler(event, ...args);
     });
   };
-  const assertSenderSession = (event: unknown, sessionId: string): number => {
+  const assertSenderViewerSession = (event: unknown, sessionId: string): number => {
     const sender = readSenderWebContents(event);
-    if (!resolved.hasSessionAccess(sender, sessionId)) {
+    if (!resolved.hasViewerAccess(sender, sessionId)) {
       throwIpcError('PERMISSION_DENIED', 'iOS Simulator access is limited to the current task');
     }
     return sender.id;
@@ -320,30 +359,88 @@ export function registerIOSSimulatorHandlers(
       }
     });
   };
+  const callIOSSimulatorHostForViewerSession = <T>(
+    event: unknown,
+    sessionId: string,
+    operation: IOSSimulatorIpcOperation,
+    call: (assertCurrent: () => void) => T | Promise<T>,
+  ): Promise<T> => {
+    const sender = readSenderWebContents(event);
+    const expectedAccess = resolved.getViewerAccess(sender, sessionId);
+    if (!expectedAccess) {
+      throwIpcError('PERMISSION_DENIED', 'iOS Simulator access is limited to the current task');
+    }
+    return callIOSSimulatorHost(resolved, operation, sessionId, call, () => {
+      const currentAccess = resolved.getViewerAccess(sender, sessionId);
+      if (
+        !currentAccess ||
+        currentAccess.sessionId !== expectedAccess.sessionId ||
+        currentAccess.generation !== expectedAccess.generation
+      ) {
+        throwIpcError('PERMISSION_DENIED', 'iOS Simulator viewer access grant expired');
+      }
+    });
+  };
+  const callIOSSimulatorHostForViewerStatus = <T>(
+    event: unknown,
+    sessionId: string,
+    call: (assertCurrent: () => void) => T | Promise<T>,
+  ): Promise<T> => {
+    const sender = readSenderWebContents(event);
+    let expectedAccess: IOSSimulatorRendererAccessSnapshot | null = null;
+    return callIOSSimulatorHost(resolved, 'status', sessionId, call, () => {
+      const currentAccess = resolved.getViewerAccess(sender, sessionId);
+      if (!expectedAccess) {
+        if (!currentAccess) {
+          throwIpcError('PERMISSION_DENIED', 'iOS Simulator access is limited to the current task');
+        }
+        // Capture only after callIOSSimulatorHost has validated the live
+        // plugin gate and owner scope. This lets a trusted panel surface the
+        // plugin's concrete unavailable reason after plugin changes cleared
+        // its grants, without weakening the Viewer boundary when the plugin
+        // remains available.
+        expectedAccess = currentAccess;
+        return;
+      }
+      if (
+        currentAccess?.sessionId !== expectedAccess.sessionId ||
+        currentAccess.generation !== expectedAccess.generation
+      ) {
+        throwIpcError('PERMISSION_DENIED', 'iOS Simulator viewer access grant expired');
+      }
+    });
+  };
   handle(MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS, async (event, payload) => {
     const sessionId = readSessionId(payload);
     const sender = readSenderWebContents(event);
+    const currentAccess = resolved.getSessionAccess(sender);
     const granted = await callIOSSimulatorHost(resolved, 'request-access', sessionId, () =>
-      resolved.hasSessionAccess(sender, sessionId)
+      currentAccess?.sessionId === sessionId
         ? true
         : resolved.requestSessionAccess(sender, sessionId),
     );
-    if (granted && !resolved.hasSessionAccess(sender, sessionId)) {
+    if (granted && resolved.getSessionAccess(sender)?.sessionId !== sessionId) {
       throwIpcError('PERMISSION_DENIED', 'iOS Simulator access grant expired');
     }
     return { granted };
   });
   handle(MAKER_INVOKE.IOS_SIMULATOR_STATUS, async (event, payload) => {
     const sessionId = readSessionId(payload);
-    assertSenderSession(event, sessionId);
-    return callIOSSimulatorHostForSession(event, sessionId, 'status', () =>
+    const sender = readSenderWebContents(event);
+    const status = await callIOSSimulatorHostForViewerStatus(event, sessionId, () =>
       resolved.getStatus(sessionId),
     );
+    if (!status.ok) return status;
+    return {
+      ...status,
+      controlAccess:
+        resolved.getSessionAccess(sender)?.sessionId === sessionId ? 'active' : 'paused',
+    };
   });
   handle(MAKER_INVOKE.IOS_SIMULATOR_CALL, async (event, payload) => {
     const record = readRecord(payload);
     const sessionId = readSessionId(record);
-    assertSenderSession(event, sessionId);
+    assertSenderViewerSession(event, sessionId);
     const name = record.name;
     const args = record.args;
     if (
@@ -366,7 +463,7 @@ export function registerIOSSimulatorHandlers(
   handle(MAKER_INVOKE.IOS_SIMULATOR_SET_AGENT_CONTROL, async (event, payload) => {
     const record = readRecord(payload);
     const sessionId = readSessionId(record);
-    assertSenderSession(event, sessionId);
+    assertSenderViewerSession(event, sessionId);
     const sender = readSenderWebContents(event);
     const instanceId = record.instanceId;
     const action = record.action;
@@ -414,7 +511,7 @@ export function registerIOSSimulatorHandlers(
   handle(MAKER_INVOKE.IOS_SIMULATOR_SET_VIEWER_VISIBILITY, async (event, payload) => {
     const record = readRecord(payload);
     const sessionId = readSessionId(record);
-    const viewerWebContentsId = assertSenderSession(event, sessionId);
+    const viewerWebContentsId = assertSenderViewerSession(event, sessionId);
     if (typeof record.visible !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'visible (boolean) required');
     }
@@ -442,7 +539,7 @@ export function registerIOSSimulatorHandlers(
     }
     const route = readViewerRoute(record);
     if (preferredEncoding === undefined && fallbackReason === undefined) {
-      return callIOSSimulatorHostForSession(event, sessionId, 'set-viewer-visibility', () =>
+      return callIOSSimulatorHostForViewerSession(event, sessionId, 'set-viewer-visibility', () =>
         resolved.setViewerVisibility(
           sessionId,
           route,
@@ -455,7 +552,7 @@ export function registerIOSSimulatorHandlers(
       );
     }
     if (fallbackReason === undefined) {
-      return callIOSSimulatorHostForSession(event, sessionId, 'set-viewer-visibility', () =>
+      return callIOSSimulatorHostForViewerSession(event, sessionId, 'set-viewer-visibility', () =>
         resolved.setViewerVisibility(
           sessionId,
           route,
@@ -467,7 +564,7 @@ export function registerIOSSimulatorHandlers(
         ),
       );
     }
-    return callIOSSimulatorHostForSession(event, sessionId, 'set-viewer-visibility', () =>
+    return callIOSSimulatorHostForViewerSession(event, sessionId, 'set-viewer-visibility', () =>
       resolved.setViewerVisibility(
         sessionId,
         route,
@@ -479,10 +576,26 @@ export function registerIOSSimulatorHandlers(
       ),
     );
   });
+  handle(MAKER_INVOKE.IOS_SIMULATOR_RETRY_NATIVE_ROUTE, async (event, payload) => {
+    const record = readRecord(payload);
+    const sessionId = readSessionId(record);
+    const viewerWebContentsId = assertSenderViewerSession(event, sessionId);
+    const viewerToken = record.viewerToken;
+    if (typeof viewerToken !== 'string' || !viewerToken.trim() || viewerToken.length > 128) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'viewerToken must be a non-empty string of at most 128 chars',
+      );
+    }
+    const route = readViewerRoute(record);
+    return callIOSSimulatorHostForSession(event, sessionId, 'retry-native-route', () =>
+      resolved.retryNativeRoute(sessionId, route, viewerWebContentsId, viewerToken.trim()),
+    );
+  });
   handle(MAKER_INVOKE.IOS_SIMULATOR_SET_MUTATION_CONTROL, async (event, payload) => {
     const record = readRecord(payload);
     const sessionId = readSessionId(record);
-    assertSenderSession(event, sessionId);
+    assertSenderViewerSession(event, sessionId);
     if (typeof record.paused !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'paused (boolean) required');
     }
@@ -495,15 +608,15 @@ export function registerIOSSimulatorHandlers(
     const record = readRecord(payload);
     const sessionId = readSessionId(record);
     const route = readViewerRoute(record);
-    const viewerWebContentsId = assertSenderSession(event, sessionId);
-    return callIOSSimulatorHostForSession(event, sessionId, 'latest-frame', () =>
+    const viewerWebContentsId = assertSenderViewerSession(event, sessionId);
+    return callIOSSimulatorHostForViewerSession(event, sessionId, 'latest-frame', () =>
       resolved.getLatestFrame(sessionId, route, viewerWebContentsId),
     );
   });
   handle(MAKER_INVOKE.IOS_SIMULATOR_SET_STREAM_PROFILE, async (event, payload) => {
     const record = readRecord(payload);
     const sessionId = readSessionId(record);
-    const viewerWebContentsId = assertSenderSession(event, sessionId);
+    const viewerWebContentsId = assertSenderViewerSession(event, sessionId);
     const viewerToken = record.viewerToken;
     if (typeof viewerToken !== 'string' || !viewerToken.trim() || viewerToken.length > 128) {
       throwIpcError(
@@ -551,7 +664,7 @@ export function registerIOSSimulatorHandlers(
       jpegQuality: Number(candidate.jpegQuality),
       scalingPercent: Number(candidate.scalingPercent),
     };
-    return callIOSSimulatorHostForSession(event, sessionId, 'set-stream-profile', () =>
+    return callIOSSimulatorHostForViewerSession(event, sessionId, 'set-stream-profile', () =>
       resolved.setViewerStreamProfile(
         sessionId,
         route,
@@ -565,7 +678,7 @@ export function registerIOSSimulatorHandlers(
   handle(MAKER_INVOKE.IOS_SIMULATOR_LIVE_TOUCH, async (event, payload) => {
     const record = readRecord(payload);
     const sessionId = readSessionId(record);
-    const viewerWebContentsId = assertSenderSession(event, sessionId);
+    const viewerWebContentsId = assertSenderViewerSession(event, sessionId);
     const gestureId = record.gestureId;
     const phase = record.phase;
     if (typeof gestureId !== 'string' || !gestureId.trim() || gestureId.trim().length > 128) {

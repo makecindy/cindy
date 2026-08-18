@@ -9,6 +9,7 @@ import type {
   CindyGhostSetupAssessment,
   CindyGhostSetupPlan,
   CindyGhostsMcpDeps,
+  CindyMediaCapability,
 } from "../types.js";
 import {
   buildForgeGuideToc,
@@ -67,9 +68,9 @@ const D_GHOST_CALL = [
   '下发——ghost_call({ghost_id, tool:"call_tool", args:{name:"<操作名>", args:{...}}});',
   "把操作名当 tool 直接调会返回 TOOL_NOT_FOUND,此时按上述形态改写重试,不要判定插件无此能力。",
   "执行发生在该插件的独立沙箱中(无文件/网络访问,用 AI 走主机统一通道)。",
-  "用户的图片/媒体文件要交给插件处理时,把其地址放进顶层 attachments",
+  "用户媒体或当前 Agent / Core 工具刚生成的媒体要交给插件处理、收录时,把其地址放进顶层 attachments",
   "(不是塞进 args):主机会把图过户给该插件并以指纹注入 args.attachments,插件",
-  "声明的工具若接受图片输入即可使用——这是插件触碰用户图片的唯一通道。",
+  "声明的工具若接受媒体输入即可使用。生成结果仍由 Agent 显式交给插件,Host 不自动回调插件。",
   "要把一个本地目录或单个文件交给插件上传(如部署构建产物)时,把其**绝对路径**放进",
   "顶层 dir(不是塞进 args):主机会收集文件并以",
   "一次性票据注入 args.dir_deposit,插件凭票上传——这是插件触碰用户目录的唯一通道。",
@@ -87,6 +88,19 @@ const D_GHOST_CALL = [
   "TOOL_NOT_FOUND(常见是把二级分派操作名当成了顶层 tool,按上文 call_tool 形态改写后重试)/ GHOST_CRASHED /",
   "TIMEOUT / ATTACHMENT_INVALID(附件过户失败,查 message)/",
   "DIR_INVALID(目录过户失败,查 message)/ INTERNAL。遇到 NOT_FOUND 类错误,已知目标时重查 ghost_info,否则用 ghost_list 看全量。",
+].join("\n");
+
+const D_MEDIA = [
+  "Cindy Core 的低级媒体接口，供当前 Agent 执行插件提供的上层能力；插件负责场景语义和可选 UI，Core 负责模型调用与媒体交付。",
+  "常规链路是 Agent 先调用插件工具，读取插件返回的普通 JSON，再自行调用本工具；不存在 mediaIntent 等保留结果格式，Host 也不会自动把插件结果转成本工具调用。",
+  "如果插件需要消费最终结果，Agent 可在本工具成功后再调用插件声明的普通工具，并通过 ghost_call.attachments 显式交接；这不是生成请求的必经步骤。",
+  "模型存在性来自当前账号的 Model Access model group；list_models 只投影同时满足 Gateway modalities、Guide operation 与当前客户端协议支持度的可执行模型。",
+  "媒体生成必须由当前 Agent 通过本工具发起；插件面板和插件沙箱代码不得直接提交生成请求。",
+  "插件已返回用户配置的 model_id 时可直接用它和目标 capability 走 prepare → request；没有已配置 model_id 时，先用 list_models 查询可用媒体模型。prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
+  "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
+  "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
+  "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
+  "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
 ].join("\n");
 
 const D_GHOST_FORGE_GUIDE = [
@@ -479,6 +493,108 @@ function sanitizeGhostInfo(ghost: CindyGhostInfo): CindyGhostInfo {
     ...safeGhost,
     ...(setup ? { setup } : {}),
   };
+}
+
+const MEDIA_CAPABILITIES = new Set<CindyMediaCapability>([
+  "image.generate",
+  "image.edit",
+  "video.generate",
+  "video.image_to_video",
+]);
+
+/** Core media 工具 handler；只做 MCP snake_case 边界到 Host 稳定类型的转换。 */
+export async function handleMedia(
+  deps: CindyGhostsMcpDeps,
+  input: {
+    action: "list_models" | "prepare" | "request" | "poll";
+    capability?: CindyMediaCapability;
+    model_id?: string;
+    invocation_id?: string;
+    body?: Record<string, unknown>;
+  },
+): Promise<McpTextResult> {
+  if (!deps.callMedia) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "MEDIA_NOT_SUPPORTED",
+        message: "当前 Cindy Host 尚未提供原生媒体调用能力。",
+      },
+      true,
+    );
+  }
+  if (input.capability && !MEDIA_CAPABILITIES.has(input.capability)) {
+    return textResult(
+      { ok: false, errorCode: "INVALID_INPUT", message: "capability 不受支持。" },
+      true,
+    );
+  }
+  try {
+    let result: Record<string, unknown>;
+    if (input.action === "list_models") {
+      result = await deps.callMedia({
+        action: "list_models",
+        ...(input.capability ? { capability: input.capability } : {}),
+      });
+    } else if (input.action === "prepare") {
+      if (!input.model_id || !input.capability) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: "INVALID_INPUT",
+            message: "prepare 必须提供 model_id 和 capability。",
+          },
+          true,
+        );
+      }
+      result = await deps.callMedia({
+        action: "prepare",
+        modelId: input.model_id,
+        capability: input.capability,
+      });
+    } else if (input.action === "request") {
+      if (!input.invocation_id || !input.body) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: "INVALID_INPUT",
+            message: "request 必须提供 invocation_id 和 body。",
+          },
+          true,
+        );
+      }
+      result = await deps.callMedia({
+        action: "request",
+        invocationId: input.invocation_id,
+        body: input.body,
+      });
+    } else {
+      if (!input.invocation_id) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: "INVALID_INPUT",
+            message: "poll 必须提供 invocation_id。",
+          },
+          true,
+        );
+      }
+      result = await deps.callMedia({
+        action: "poll",
+        invocationId: input.invocation_id,
+      });
+    }
+    return textResult(result, result.ok === false);
+  } catch (err) {
+    return textResult(
+      {
+        ok: false,
+        errorCode: "INTERNAL",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      true,
+    );
+  }
 }
 
 /** ghost_list 的 handler 主体(导出供单测)。 */
@@ -984,14 +1100,14 @@ export function createCindyGhostsMcpServer(
         .boolean()
         .optional()
         .describe(
-          "可选:true = 本次调用只做 attachments 批量交接、不执行工具(tool/args/dir/save_dir 全部被忽略)。非 Full Access 下计划连续使用多个工作目录外文件时必须先走一次,attachments 上限放宽到 32 张,让用户在一张确认卡上批完。Full Access 下不弹卡,且该自动交接不会建立降档后仍生效的人工永久授权。",
+          "可选:true = 本次调用只做 attachments 批量交接、不执行工具(tool/args/dir/save_dir 全部被忽略)。非 Full Access 下计划连续使用多个工作目录外文件时必须先走一次,attachments 上限放宽到 32 项,让用户在一张确认卡上批完。Full Access 下不弹卡,且该自动交接不会建立降档后仍生效的人工永久授权。",
         ),
       attachments: z
         .array(z.string())
         .max(32)
         .optional()
         .describe(
-          "可选,普通调用 ≤4 张(grant_only 批量交接 ≤32 张):要交给插件的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径——工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。仅在用户明确要拿自己的文件给插件处理时使用;非媒体类型文件改用顶层 dir。",
+          "可选,普通调用 ≤4 项(grant_only 批量交接 ≤32 项):要交给插件处理或收录的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径——工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。用户明确交出的媒体与当前 Agent / Core 工具刚生成、目标插件工具明确要求接收的结果都可使用;非媒体类型文件改用顶层 dir。",
         ),
       dir: z
         .string()
@@ -1013,6 +1129,40 @@ export function createCindyGhostsMcpServer(
     },
     async (input, extra) =>
       handleGhostCall(deps, input, extractAgentToolUseId(extra)),
+  );
+
+  server.tool(
+    "media",
+    D_MEDIA,
+    {
+      action: z
+        .enum(["list_models", "prepare", "request", "poll"])
+        .describe("要执行的媒体调用阶段"),
+      capability: z
+        .enum([
+          "image.generate",
+          "image.edit",
+          "video.generate",
+          "video.image_to_video",
+        ])
+        .optional()
+        .describe("list_models 的可选筛选项；prepare 时必填"),
+      model_id: z
+        .string()
+        .max(256)
+        .optional()
+        .describe("prepare 时必填；使用插件返回的已配置 model_id，或来自本次 list_models"),
+      invocation_id: z
+        .string()
+        .max(128)
+        .optional()
+        .describe("request / poll 时必填；必须来自 prepare 返回"),
+      body: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe("request 时必填；严格按 prepare 返回的说明组装，不含 model/endpoint/header"),
+    },
+    async (input) => handleMedia(deps, input),
   );
 
   server.tool(
