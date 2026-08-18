@@ -393,7 +393,7 @@ export function useSidebarFilter(
   const toggleProject = useCallback(
     (workingDir: string) => {
       setProjectsState((prev) => {
-        const next = nextProjectsAfterToggle(prev, workingDir);
+        const next = nextProjectsAfterToggle(prev, workingDir, window.electronAPI.platform);
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;
@@ -405,7 +405,7 @@ export function useSidebarFilter(
   const ensureProjectIncluded = useCallback(
     (workingDir: string) => {
       setProjectsState((prev) => {
-        const next = includeProjectInFilter(prev, workingDir);
+        const next = includeProjectInFilter(prev, workingDir, window.electronAPI.platform);
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;
@@ -425,7 +425,11 @@ export function useSidebarFilter(
   const gc = useCallback(
     (activeWorkingDirs: readonly string[]) => {
       setProjectsState((prev) => {
-        const next = gcProjectsAgainstActive(prev, activeWorkingDirs);
+        const next = gcProjectsAgainstActive(
+          prev,
+          activeWorkingDirs,
+          window.electronAPI.platform,
+        );
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;

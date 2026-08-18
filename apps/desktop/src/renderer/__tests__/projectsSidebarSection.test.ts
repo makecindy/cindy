@@ -49,9 +49,7 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain(
       "const hasVisibleProjectGroups = mixedEntries.some((entry) => entry.kind === 'project')",
     );
-    expect(projectsSectionSource).toContain(
-      'const allGroupsCollapsed = hasVisibleProjectGroups',
-    );
+    expect(projectsSectionSource).toContain('(!hasVisibleProjectGroups || isAllCollapsed)');
     // 平铺时来源标签要覆盖从项目摊出来的会话,不能只喂 dialogues。
     expect(projectsSectionSource).toContain('flattenedSessionsForSourceLabels');
     expect(projectsSectionSource).toContain(
@@ -152,6 +150,31 @@ describe('Projects sidebar section', () => {
   it('deviceGroupingActive excludes manual sort so derived state matches the rendered mode', () => {
     expect(projectsSectionSource).toContain(
       "deviceGroupingAvailable && filter.groupDevice && filter.sortBy !== 'manual'",
+    );
+  });
+
+  it('renders pre-grouped automation entries as one flat-list row', () => {
+    expect(projectsSectionSource).toContain(
+      "entry.kind === 'session' || entry.kind === 'automation-group'",
+    );
+    expect(projectsSectionSource).toContain('<SessionEntryRows');
+    expect(projectsSectionSource).toContain('entries={[entry]}');
+    expect(projectsSectionSource).not.toContain('sessions={[entry.session]}');
+  });
+
+  it('includes automation groups in the header batch fold state machine', () => {
+    expect(projectsSectionSource).toContain(
+      "const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session')",
+    );
+    expect(projectsSectionSource).toContain('useAutomationGroupsCollapsed(');
+    expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(true)');
+    expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(false)');
+    expect(projectsSectionSource).toContain('allAutomationGroupsCollapsed');
+    expect(projectsSectionSource).toContain(
+      'automationGroupCollapsed={isAutomationGroupCollapsed}',
+    );
+    expect(projectsSectionSource).toContain(
+      'onAutomationGroupCollapsedChange={setAutomationGroupCollapsed}',
     );
   });
 });

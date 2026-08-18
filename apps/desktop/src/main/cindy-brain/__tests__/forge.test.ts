@@ -137,6 +137,24 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
+  it.skipIf(process.platform === 'win32')(
+    'archives real Unix execute bits while stripping special bits',
+    async () => {
+      const dir = await makeSrcDir({
+        'ghost.json': JSON.stringify(GOOD_MANIFEST),
+        'main.js': 'export default {};',
+        'bin/tool': '#!/bin/sh\necho ok\n',
+      });
+      await fs.promises.chmod(path.join(dir, 'bin', 'tool'), 0o4755);
+
+      const packed = await packGhostDir(dir);
+      expect(packed).toMatchObject({ ok: true });
+      if (!packed.ok) return;
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(packed.cindyPath));
+      expect(Number(zip.files['bin/tool'].unixPermissions) & 0o7777).toBe(0o755);
+    },
+  );
+
   it('writes an in-workdir alias output to the canonical source directory', async () => {
     const sourceTarget = path.join(workDir, 'source-target');
     const sourceAlias = path.join(workDir, 'source-alias');
@@ -1615,7 +1633,7 @@ describe('FORGE_GUIDE', () => {
       '撑满内容区',
       '在独立窗口中打开',
       'minimize',
-      '最小化为浮动气泡',
+      '最小化面板',
       // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
       // 卡槽总数标记随 ios-simulator 槽合入更新为十八个。
       '十八个卡槽',

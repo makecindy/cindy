@@ -132,10 +132,14 @@ export function parseDeviceProvidersPayload(value: unknown): DeviceProvidersPayl
   if (!isRecord(value)) {
     throw new Error('Invalid provider list response');
   }
-  if (!Array.isArray(value.providers) || !value.providers.every(isProviderView)) {
+  if (!Array.isArray(value.providers)) {
     throw new Error('Invalid provider list response');
   }
-  const providersIn = value.providers;
+  const rawProviders = value.providers;
+  const providersIn = rawProviders.filter(isProviderView);
+  if (providersIn.length === 0 && rawProviders.length > 0) {
+    throw new Error('Invalid provider list response');
+  }
   const overrides = value.modelVisibilityOverrides;
   if (
     overrides !== undefined &&

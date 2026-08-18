@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 
 import type {
@@ -13,6 +14,17 @@ const CHAT_TOOL_NAME_MAX_LENGTH = 64;
 const TOOL_SEARCH_CHAT_NAME = 'tool_search';
 const CUSTOM_TOOL_INPUT_DESCRIPTION =
   'Raw string input for the original custom tool. Preserve formatting exactly.';
+const CUSTOM_EXEC_DESCRIPTION_MAX_BYTES = 32 * 1024;
+const COMPACT_CUSTOM_EXEC_DESCRIPTION = [
+  'Execute JavaScript in the Code Mode runtime. Pass the complete JavaScript source in `input`.',
+  'Call tools on the global `tools` object with `await tools.<name>(...)`; namespace tools use',
+  'the flattened `await tools.<namespace>__<name>(...)` form.',
+  'Inspect `ALL_TOOLS` for available shell, patch, plugin, connector, and MCP tools.',
+  'Use `yield_control()` to yield while execution continues, and `exit()` to stop early.',
+  'Return user-visible output with `text(...)`, `image(...)`, `audio(...)`, or',
+  '`generatedImage(...)`. Share serializable state across exec calls with `store(key, value)`',
+  'and `load(key)`, and report progress with `notify(value)`.',
+].join(' ');
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -35,12 +47,25 @@ function normalizeFunctionParameters(parameters: unknown): Record<string, unknow
     : { ...parameters, type: 'object' };
 }
 
-function stableToolDescription(tool: unknown): string {
+function stableToolDescription(tool: ResponsesCustomTool): string {
+  const metadata: Record<string, unknown> = { ...tool };
+  delete metadata.description;
   try {
-    return `Original Responses custom tool definition:\n${JSON.stringify(tool)}`;
+    return `Original Responses custom tool metadata:\n${JSON.stringify(metadata)}`;
   } catch {
-    return 'Original Responses custom tool definition is unavailable.';
+    return 'Original Responses custom tool metadata is unavailable.';
   }
+}
+
+function chatCustomToolDescription(tool: ResponsesCustomTool, namespace?: string): string {
+  const metadata = stableToolDescription(tool);
+  if (!tool.description) return metadata;
+  const description = namespace === undefined
+    && tool.name === 'exec'
+    && Buffer.byteLength(tool.description, 'utf8') > CUSTOM_EXEC_DESCRIPTION_MAX_BYTES
+    ? COMPACT_CUSTOM_EXEC_DESCRIPTION
+    : tool.description;
+  return `${description}\n\n${metadata}`;
 }
 
 export type ChatBridgeToolKind = 'function' | 'namespace' | 'custom' | 'tool_search';
@@ -169,9 +194,7 @@ export class ChatBridgeToolContext {
       type: 'function',
       function: {
         name: chatName,
-        description: tool.description
-          ? `${tool.description}\n\n${stableToolDescription(tool)}`
-          : stableToolDescription(tool),
+        description: chatCustomToolDescription(tool, namespace),
         parameters: {
           type: 'object',
           properties: {

@@ -45,6 +45,44 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('materializes the legacy Pi Messages protocol only for the exact Claude endpoint', () => {
+    const legacy = {
+      ...VALID_PRESET,
+      id: 'legacy-pi-messages',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://provider.example/anthropic/',
+          models: [{ id: 'm', name: 'M' }],
+        },
+        pi: {
+          baseUrl: 'https://provider.example/anthropic',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    };
+    expect(sanitizePresets([legacy])[0]?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
+
+    const differentEndpoint = {
+      ...legacy,
+      id: 'unconfigured-pi',
+      runtimes: {
+        ...legacy.runtimes,
+        pi: { ...legacy.runtimes.pi, baseUrl: 'https://provider.example/v1' },
+      },
+    };
+    expect(sanitizePresets([differentEndpoint])[0]?.runtimes.pi?.wireProtocol).toBeUndefined();
+
+    const explicit = {
+      ...legacy,
+      id: 'explicit-pi',
+      runtimes: {
+        ...legacy.runtimes,
+        pi: { ...legacy.runtimes.pi, wireProtocol: 'openai-responses' as const },
+      },
+    };
+    expect(sanitizePresets([explicit])[0]?.runtimes.pi?.wireProtocol).toBe('openai-responses');
+  });
+
   it('preserves valid per-model piApi only for supported PI protocol names', () => {
     const valid = {
       ...VALID_PRESET,
@@ -355,7 +393,6 @@ describe('sanitizePresets', () => {
     }
   });
 });
-
 describe('parseCatalog presets 容错', () => {
   it('presets 含坏条目时目录仍解析成功、坏条目被清洗', () => {
     const parsed = parseCatalog(minimalCatalog({ presets: [VALID_PRESET, { broken: true }] as never }));
@@ -740,6 +777,18 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
       }
     }
   });
+
+  it('所有第三方预设都显式声明 Pi runtime 与默认协议', () => {
+    const presets = BUNDLED_CATALOG.presets ?? [];
+
+    for (const preset of presets) {
+      expect(preset.runtimes.pi, `${preset.id} is missing runtimes.pi`).toBeDefined();
+      expect(
+        preset.runtimes.pi?.wireProtocol,
+        `${preset.id} is missing the Pi default protocol`,
+      ).toMatch(/^(anthropic-messages|openai-chat|openai-responses)$/);
+    }
+  });
 });
 
 describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
@@ -786,7 +835,7 @@ describe('官方渠道预设契约', () => {
     }));
   });
 
-  it('LongCat 同时提供 Anthropic Messages 与官方 Codex Responses 端点', () => {
+  it('LongCat 同时提供 Anthropic Messages、Codex 与 Pi Chat 端点', () => {
     expect(preset('longcat')?.runtimes).toEqual({
       'claude-code': {
         baseUrl: 'https://api.longcat.chat/anthropic',
@@ -795,6 +844,12 @@ describe('官方渠道预设契约', () => {
       },
       codex: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
+        modelsUrl: 'https://api.longcat.chat/openai/v1/models',
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
+      },
+      pi: {
+        baseUrl: 'https://api.longcat.chat/openai/v1',
+        wireProtocol: 'openai-chat',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
         models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
       },
@@ -980,13 +1035,48 @@ describe('官方渠道预设契约', () => {
       .toBe('https://token-plan-cn.xiaomimimo.com/v1');
   });
 
-  it('OpenCode Go 按官方逐模型协议拆成 Claude Messages 与 Codex Chat 两个 runtime', () => {
+  it('OpenCode Go 为 Pi 显式提供 Chat 默认与 Claude/Codex 精确模型并集', () => {
     const go = preset('opencode-go');
-    expect(go?.runtimes['claude-code']?.models.map((model) => model.id)).toContain('minimax-m3');
-    expect(go?.runtimes.codex?.models.map((model) => model.id)).toContain('glm-5.2');
+    const claudeModels = go?.runtimes['claude-code']?.models ?? [];
+    const codexModels = go?.runtimes.codex?.models ?? [];
+    const piModels = go?.runtimes.pi?.models ?? [];
     expect(go?.runtimes.codex?.wireProtocol).toBe('openai-chat');
     expect(go?.runtimes['claude-code']?.modelsUrl)
       .toBe('https://opencode.ai/zen/go/v1/models');
+    expect(go?.runtimes.pi).toMatchObject({
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      wireProtocol: 'openai-chat',
+      modelsUrl: 'https://opencode.ai/zen/go/v1/models',
+    });
+    expect(piModels.map((model) => model.id)).toEqual([
+      ...new Set([...claudeModels, ...codexModels].map((model) => model.id)),
+    ]);
+
+    const expectedOverrides = new Map([
+      ['minimax-m3', 'anthropic-messages'],
+      ['minimax-m2.7', 'anthropic-messages'],
+      ['minimax-m2.5', 'anthropic-messages'],
+      ['qwen3.7-max', 'anthropic-messages'],
+      ['qwen3.7-plus', 'anthropic-messages'],
+      ['qwen3.6-plus', 'anthropic-messages'],
+      ['grok-4.5', 'openai-responses'],
+    ]);
+    for (const [modelId, piApi] of expectedOverrides) {
+      expect(piModels.find((model) => model.id === modelId), modelId).toMatchObject({ piApi });
+    }
+    for (const modelId of [...expectedOverrides.entries()]
+      .filter(([, piApi]) => piApi === 'anthropic-messages')
+      .map(([modelId]) => modelId)) {
+      expect(piModels.find((model) => model.id === modelId), modelId).toMatchObject({
+        route: {
+          baseUrl: 'https://opencode.ai/zen/go',
+          wireProtocol: 'anthropic-messages',
+        },
+      });
+    }
+    for (const model of piModels.filter((candidate) => !expectedOverrides.has(candidate.id))) {
+      expect(model.piApi, model.id).toBeUndefined();
+    }
   });
 
   it('Vercel AI Gateway 使用 Messages 与 Responses 原生端点', () => {
@@ -994,6 +1084,11 @@ describe('官方渠道预设契约', () => {
     expect(vercel?.runtimes['claude-code']?.baseUrl).toBe('https://ai-gateway.vercel.sh');
     expect(vercel?.runtimes.codex?.baseUrl).toBe('https://ai-gateway.vercel.sh/v1');
     expect(vercel?.runtimes.codex?.wireProtocol).toBeUndefined();
+    expect(vercel?.runtimes.pi).toMatchObject({
+      baseUrl: 'https://ai-gateway.vercel.sh/v1',
+      wireProtocol: 'openai-chat',
+      modelsUrl: 'https://ai-gateway.vercel.sh/v1/models',
+    });
   });
 
   it('Google Gemini API 走公开 OpenAI Chat 兼容端点，不依赖 Gemini CLI 私有接口', () => {
@@ -1006,5 +1101,10 @@ describe('官方渠道预设契约', () => {
     }));
     expect(gemini?.runtimes.codex?.models.map((model) => model.id))
       .toContain('gemini-3.6-flash');
+    expect(gemini?.runtimes.pi).toEqual(expect.objectContaining({
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      wireProtocol: 'openai-chat',
+      modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/models',
+    }));
   });
 });

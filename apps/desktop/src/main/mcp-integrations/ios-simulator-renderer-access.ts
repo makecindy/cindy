@@ -62,12 +62,14 @@ export type IOSSimulatorRendererAccessRevocationObserver = (
  * Main-owned capability registry for the privileged Simulator renderer surface.
  *
  * A renderer URL, route hash, or renderer-reported sidebar context is never an
- * authorization source. Grants are minted only by an authoritative Host flow
- * that already owns the sessionId, and one WebContents can hold only one live
- * session grant at a time.
+ * authorization source. Viewer grants are minted only by an authoritative Host
+ * flow that already owns the sessionId and may be retained for multiple
+ * session-scoped sidebar buckets. A separate active grant selects the only
+ * session allowed to invoke mutation/control IPC from a WebContents family.
  */
 export class IOSSimulatorRendererAccessRegistry {
-  private readonly grants = new Map<number, IOSSimulatorRendererGrant>();
+  private readonly viewerGrants = new Map<number, Map<string, IOSSimulatorRendererGrant>>();
+  private readonly activeGrants = new Map<number, IOSSimulatorRendererGrant>();
   private readonly trackedTargets = new Map<number, IOSSimulatorRendererWebContents>();
   private readonly targetEpochs = new Map<number, number>();
   private readonly sessionEpochs = new Map<string, number>();
@@ -113,26 +115,38 @@ export class IOSSimulatorRendererAccessRegistry {
   }
 
   hasAccess(target: IOSSimulatorRendererWebContents, sessionId: string): boolean {
-    const grant = this.grants.get(target.id);
+    const grant = this.viewerGrants.get(target.id)?.get(sessionId);
     if (
       !grant ||
       grant.target !== target ||
       grant.sessionId !== sessionId ||
       grant.target.isDestroyed()
     ) {
-      if (grant?.target.isDestroyed()) this.revokeGrant(target.id, grant);
+      if (grant?.target.isDestroyed()) this.revokeTarget(target.id, grant.target);
       return false;
     }
     return true;
+  }
+
+  viewerAccessSnapshot(
+    target: IOSSimulatorRendererWebContents,
+    sessionId: string,
+  ): IOSSimulatorRendererAccessSnapshot | null {
+    const grant = this.viewerGrants.get(target.id)?.get(sessionId);
+    if (!grant || grant.target !== target || grant.target.isDestroyed()) {
+      if (grant?.target.isDestroyed()) this.revokeTarget(target.id, grant.target);
+      return null;
+    }
+    return { sessionId: grant.sessionId, generation: grant.generation };
   }
 
   /** Exact Main-owned binding for this live WebContents, never a route hint. */
   accessSnapshot(
     target: IOSSimulatorRendererWebContents,
   ): IOSSimulatorRendererAccessSnapshot | null {
-    const grant = this.grants.get(target.id);
+    const grant = this.activeGrants.get(target.id);
     if (!grant || grant.target !== target || grant.target.isDestroyed()) {
-      if (grant?.target.isDestroyed()) this.revokeGrant(target.id, grant);
+      if (grant?.target.isDestroyed()) this.revokeTarget(target.id, grant.target);
       return null;
     }
     return { sessionId: grant.sessionId, generation: grant.generation };
@@ -150,26 +164,28 @@ export class IOSSimulatorRendererAccessRegistry {
     const { focusTarget, targets } = resolved;
     if (targets.get(focusTarget.id) !== focusTarget) return false;
 
-    const generation = this.grantTargets(normalizedSessionId, targets.values());
-
     const request: IOSSimulatorFocusRequest = {
       sessionId: normalizedSessionId,
       ...(instanceId?.trim() ? { instanceId: instanceId.trim() } : {}),
       userInitiated: false,
     };
     try {
+      // Electron delivers webContents.send asynchronously. Queue the focus
+      // request first so a synchronous delivery failure leaves the existing
+      // Viewer and active grants untouched, then mint the Host grant before
+      // the Renderer can process the queued message.
       focusTarget.send(IOS_SIMULATOR_FOCUS_REQUEST_CHANNEL, request);
-      return true;
     } catch {
-      this.revokeGeneration(generation);
       return false;
     }
+    this.grantTargets(normalizedSessionId, targets.values());
+    return true;
   }
 
   requestAccess(sessionId: string, target: IOSSimulatorRendererWebContents): Promise<boolean> {
     const normalizedSessionId = sessionId.trim();
     if (!normalizedSessionId || target.isDestroyed()) return Promise.resolve(false);
-    if (this.hasAccess(target, normalizedSessionId)) return Promise.resolve(true);
+    if (this.hasActiveAccess(target, normalizedSessionId)) return Promise.resolve(true);
     if (!this.confirmation || Date.now() < (this.accessCooldownUntil.get(target.id) ?? 0)) {
       return Promise.resolve(false);
     }
@@ -197,7 +213,7 @@ export class IOSSimulatorRendererAccessRegistry {
   ): Promise<IOSSimulatorAgentControlApproval | null> {
     const normalizedSessionId = sessionId.trim();
     const normalizedInstanceId = instanceId.trim();
-    const grant = this.grants.get(target.id);
+    const grant = this.activeGrants.get(target.id);
     if (
       !normalizedSessionId ||
       !normalizedInstanceId ||
@@ -247,7 +263,7 @@ export class IOSSimulatorRendererAccessRegistry {
     target: IOSSimulatorRendererWebContents,
     approval: IOSSimulatorAgentControlApproval,
   ): boolean {
-    const current = this.grants.get(target.id);
+    const current = this.activeGrants.get(target.id);
     return Boolean(
       !target.isDestroyed() &&
       this.lifecycleEpoch === approval.lifecycleEpoch &&
@@ -261,17 +277,18 @@ export class IOSSimulatorRendererAccessRegistry {
 
   pushRouteStatus(status: IOSSimulatorPublicRouteStatus): number {
     let delivered = 0;
-    for (const [webContentsId, grant] of this.grants) {
-      if (grant.sessionId !== status.sessionId) continue;
+    for (const [webContentsId, grants] of this.viewerGrants) {
+      const grant = grants.get(status.sessionId);
+      if (!grant) continue;
       if (grant.target.isDestroyed()) {
-        this.revokeGrant(webContentsId, grant);
+        this.revokeTarget(webContentsId, grant.target);
         continue;
       }
       try {
         grant.target.send(IOS_SIMULATOR_ROUTE_STATUS_CHANNEL, status);
         delivered += 1;
       } catch {
-        this.revokeGrant(webContentsId, grant);
+        this.revokeTarget(webContentsId, grant.target);
       }
     }
     return delivered;
@@ -282,64 +299,92 @@ export class IOSSimulatorRendererAccessRegistry {
     sourceTarget: IOSSimulatorRendererWebContents,
     target: IOSSimulatorRendererWebContents,
   ): boolean {
-    const source = this.grants.get(sourceTarget.id);
+    const sourceViewerGrants = this.viewerGrants.get(sourceTarget.id);
     if (
-      !source ||
-      source.target !== sourceTarget ||
-      source.target.isDestroyed() ||
+      !sourceViewerGrants ||
+      sourceViewerGrants.size === 0 ||
+      [...sourceViewerGrants.values()].some((grant) => grant.target !== sourceTarget) ||
+      sourceTarget.isDestroyed() ||
       !Number.isSafeInteger(target.id) ||
       target.id <= 0 ||
       target.isDestroyed()
     ) {
       return false;
     }
-    const existing = this.grants.get(target.id);
-    if (existing?.target === target && existing.generation === source.generation) return true;
+    const sourceActive = this.activeGrants.get(sourceTarget.id);
+    const existingViewerGrants = this.viewerGrants.get(target.id);
+    const existingActive = this.activeGrants.get(target.id);
+    const alreadyInherited =
+      existingViewerGrants?.size === sourceViewerGrants.size &&
+      [...sourceViewerGrants].every(
+        ([sessionId, grant]) =>
+          existingViewerGrants.get(sessionId)?.target === target &&
+          existingViewerGrants.get(sessionId)?.generation === grant.generation,
+      ) &&
+      (sourceActive
+        ? existingActive?.target === target &&
+          existingActive.sessionId === sourceActive.sessionId &&
+          existingActive.generation === sourceActive.generation
+        : !existingActive);
+    if (alreadyInherited) return true;
     // Inheritance is an authoritative Host decision just like grantTargets.
     // Invalidate a manual confirmation that started before this detached
     // target was bound, including its first inherited grant.
     this.bumpTargetEpoch(target.id);
-    const revoked = existing ? this.removeGeneration(existing.generation) : [];
-    this.grants.set(target.id, {
-      sessionId: source.sessionId,
-      generation: source.generation,
-      target,
-    });
+    const existingTargetsMatch =
+      !existingViewerGrants ||
+      [...existingViewerGrants.values()].every((grant) => grant.target === target);
+    const revoked = existingViewerGrants
+      ? [...existingViewerGrants.values()].filter(
+          (grant) => !existingTargetsMatch || !sourceViewerGrants.has(grant.sessionId),
+        )
+      : [];
+    const inheritedViewerGrants = new Map<string, IOSSimulatorRendererGrant>();
+    for (const [sessionId, grant] of sourceViewerGrants) {
+      inheritedViewerGrants.set(sessionId, {
+        sessionId,
+        generation: grant.generation,
+        target,
+      });
+    }
+    this.viewerGrants.set(target.id, inheritedViewerGrants);
+    if (sourceActive) {
+      const inheritedActive = inheritedViewerGrants.get(sourceActive.sessionId);
+      if (inheritedActive) this.activeGrants.set(target.id, inheritedActive);
+    } else {
+      this.activeGrants.delete(target.id);
+    }
     this.trackDestroyed(target);
-    this.notifyRevoked(
-      revoked.filter((grant) => {
-        const current = this.grants.get(grant.target.id);
-        return current?.target !== grant.target || current.sessionId !== grant.sessionId;
-      }),
-    );
+    this.notifyRevoked(revoked);
     return true;
   }
 
-  revokeForSessionChange(
+  syncForSessionChange(
     preferredTarget: IOSSimulatorRendererWebContents,
     sessionId: string | null,
   ): number {
     const normalizedSessionId = sessionId?.trim() || null;
-    const targets =
-      this.resolveTargets(preferredTarget)?.targets ??
-      new Map([[preferredTarget.id, preferredTarget]]);
-    const generations = new Set<number>();
+    const resolved = this.resolveTargets(preferredTarget);
+    const targets = resolved?.targets ?? new Map([[preferredTarget.id, preferredTarget]]);
+    let changed = 0;
     for (const target of targets.values()) {
-      const grant = this.grants.get(target.id);
-      if (
-        grant?.target === target &&
-        (!normalizedSessionId || grant.sessionId !== normalizedSessionId)
-      ) {
-        generations.add(grant.generation);
-      }
       const pending = this.pendingAccess.get(target.id);
       if (pending && (!normalizedSessionId || pending.sessionId !== normalizedSessionId)) {
         this.bumpTargetEpoch(target.id);
       }
+      const current = this.activeGrants.get(target.id);
+      if (current?.target !== target) continue;
+      if (normalizedSessionId && current.sessionId === normalizedSessionId) continue;
+
+      // Renderer route reports are revocation-only. A renderer-controlled
+      // sessionId may pause a stale active mutation grant, but it must never
+      // promote any retained Viewer grant. Only Main/Host confirmation and
+      // focus flows may select the active grant again.
+      this.bumpTargetEpoch(target.id);
+      this.activeGrants.delete(target.id);
+      changed += 1;
     }
-    let revoked = 0;
-    for (const generation of generations) revoked += this.revokeGeneration(generation);
-    return revoked;
+    return changed;
   }
 
   revokeSession(sessionId: string): void {
@@ -349,18 +394,27 @@ export class IOSSimulatorRendererAccessRegistry {
       normalizedSessionId,
       (this.sessionEpochs.get(normalizedSessionId) ?? 0) + 1,
     );
-    const generations = new Set<number>();
-    for (const grant of this.grants.values()) {
-      if (grant.sessionId === normalizedSessionId) generations.add(grant.generation);
+    const revoked: IOSSimulatorRendererGrant[] = [];
+    for (const [webContentsId, grants] of this.viewerGrants) {
+      const grant = grants.get(normalizedSessionId);
+      if (!grant) continue;
+      grants.delete(normalizedSessionId);
+      if (grants.size === 0) this.viewerGrants.delete(webContentsId);
+      if (this.activeGrants.get(webContentsId) === grant) {
+        this.activeGrants.delete(webContentsId);
+      }
+      this.bumpTargetEpoch(webContentsId);
+      revoked.push(grant);
     }
-    for (const generation of generations) this.revokeGeneration(generation);
+    this.notifyRevoked(revoked);
   }
 
   clear(): void {
     this.lifecycleEpoch += 1;
-    const revoked = [...this.grants.values()];
+    const revoked = [...this.viewerGrants.values()].flatMap((grants) => [...grants.values()]);
     for (const grant of revoked) this.bumpTargetEpoch(grant.target.id);
-    this.grants.clear();
+    this.viewerGrants.clear();
+    this.activeGrants.clear();
     this.notifyRevoked(revoked);
   }
 
@@ -381,7 +435,7 @@ export class IOSSimulatorRendererAccessRegistry {
       confirmed = false;
     }
     if (!confirmed) {
-      const alreadyGranted = this.hasAccess(target, sessionId);
+      const alreadyGranted = this.hasActiveAccess(target, sessionId);
       if (!alreadyGranted) {
         this.accessCooldownUntil.set(
           target.id,
@@ -396,14 +450,14 @@ export class IOSSimulatorRendererAccessRegistry {
       (this.targetEpochs.get(target.id) ?? 0) !== targetEpoch ||
       (this.sessionEpochs.get(sessionId) ?? 0) !== sessionEpoch
     ) {
-      return this.hasAccess(target, sessionId);
+      return this.hasActiveAccess(target, sessionId);
     }
     const currentTargets = this.resolveTargets(target)?.targets;
     if (!currentTargets || currentTargets.get(target.id) !== target) {
-      return this.hasAccess(target, sessionId);
+      return this.hasActiveAccess(target, sessionId);
     }
     this.grantTargets(sessionId, currentTargets.values());
-    return this.hasAccess(target, sessionId);
+    return this.hasActiveAccess(target, sessionId);
   }
 
   private async performAgentControlElevation(
@@ -424,7 +478,7 @@ export class IOSSimulatorRendererAccessRegistry {
       confirmed = false;
     }
     if (!confirmed || target.isDestroyed()) return null;
-    const current = this.grants.get(target.id);
+    const current = this.activeGrants.get(target.id);
     if (
       this.lifecycleEpoch === lifecycleEpoch &&
       (this.targetEpochs.get(target.id) ?? 0) === targetEpoch &&
@@ -447,6 +501,10 @@ export class IOSSimulatorRendererAccessRegistry {
 
   private agentControlKey(sessionId: string, instanceId: string): string {
     return `${sessionId}\u0000${instanceId}`;
+  }
+
+  private hasActiveAccess(target: IOSSimulatorRendererWebContents, sessionId: string): boolean {
+    return this.accessSnapshot(target)?.sessionId === sessionId;
   }
 
   private resolveTargets(preferredTarget?: IOSSimulatorRendererWebContents): {
@@ -476,27 +534,24 @@ export class IOSSimulatorRendererAccessRegistry {
     // Invalidate any manual confirmation that started before this decision,
     // including the first grant for a previously ungranted WebContents.
     for (const target of targets) this.bumpTargetEpoch(target.id);
-    const previousGenerations = new Set<number>();
-    for (const target of targets) {
-      const existing = this.grants.get(target.id);
-      if (existing) previousGenerations.add(existing.generation);
-    }
-    const revoked: IOSSimulatorRendererGrant[] = [];
-    for (const generation of previousGenerations) {
-      revoked.push(...this.removeGeneration(generation));
-    }
-
     const generation = ++this.nextGeneration;
     for (const target of targets) {
-      this.grants.set(target.id, { sessionId, generation, target });
+      const grant = { sessionId, generation, target };
+      let grants = this.viewerGrants.get(target.id);
+      let revoked: IOSSimulatorRendererGrant[] = [];
+      if (!grants || [...grants.values()].some((existing) => existing.target !== target)) {
+        revoked = grants ? [...grants.values()] : [];
+        grants = new Map<string, IOSSimulatorRendererGrant>();
+        this.viewerGrants.set(target.id, grants);
+      }
+      grants.set(sessionId, grant);
+      this.activeGrants.set(target.id, grant);
       this.trackDestroyed(target);
+      // Notify after the replacement target is fully installed. The observer
+      // is keyed by session/WebContents id, so notifyRevoked suppresses cleanup
+      // when that logical Viewer authorization still exists on a reused id.
+      this.notifyRevoked(revoked);
     }
-    this.notifyRevoked(
-      revoked.filter((grant) => {
-        const current = this.grants.get(grant.target.id);
-        return current?.target !== grant.target || current.sessionId !== grant.sessionId;
-      }),
-    );
     return generation;
   }
 
@@ -507,8 +562,7 @@ export class IOSSimulatorRendererAccessRegistry {
       if (this.trackedTargets.get(target.id) !== target) return;
       this.trackedTargets.delete(target.id);
       this.bumpTargetEpoch(target.id);
-      const grant = this.grants.get(target.id);
-      if (grant?.target === target) this.revokeGrant(target.id, grant);
+      this.revokeTarget(target.id, target);
     });
   }
 
@@ -520,26 +574,43 @@ export class IOSSimulatorRendererAccessRegistry {
 
   private removeGeneration(generation: number): IOSSimulatorRendererGrant[] {
     const revoked: IOSSimulatorRendererGrant[] = [];
-    for (const [webContentsId, grant] of this.grants) {
-      if (grant.generation !== generation) continue;
-      this.grants.delete(webContentsId);
-      this.bumpTargetEpoch(webContentsId);
-      revoked.push(grant);
+    for (const [webContentsId, grants] of this.viewerGrants) {
+      for (const [sessionId, grant] of grants) {
+        if (grant.generation !== generation) continue;
+        grants.delete(sessionId);
+        if (this.activeGrants.get(webContentsId) === grant) {
+          this.activeGrants.delete(webContentsId);
+        }
+        this.bumpTargetEpoch(webContentsId);
+        revoked.push(grant);
+      }
+      if (grants.size === 0) this.viewerGrants.delete(webContentsId);
     }
     return revoked;
   }
 
-  private revokeGrant(webContentsId: number, expected: IOSSimulatorRendererGrant): void {
-    if (this.grants.get(webContentsId) !== expected) return;
-    this.grants.delete(webContentsId);
+  private revokeTarget(
+    webContentsId: number,
+    expectedTarget: IOSSimulatorRendererWebContents,
+  ): void {
+    const grants = this.viewerGrants.get(webContentsId);
+    if (!grants || [...grants.values()].some((grant) => grant.target !== expectedTarget)) return;
+    this.viewerGrants.delete(webContentsId);
+    if (this.activeGrants.get(webContentsId)?.target === expectedTarget) {
+      this.activeGrants.delete(webContentsId);
+    }
     this.bumpTargetEpoch(webContentsId);
-    this.notifyRevoked([expected]);
+    this.notifyRevoked([...grants.values()]);
   }
 
   private notifyRevoked(grants: readonly IOSSimulatorRendererGrant[]): void {
     if (grants.length === 0 || !this.revocationObserver) return;
+    const actuallyRevoked = grants.filter(
+      (grant) => !this.viewerGrants.get(grant.target.id)?.has(grant.sessionId),
+    );
+    if (actuallyRevoked.length === 0) return;
     try {
-      this.revocationObserver(grants);
+      this.revocationObserver(actuallyRevoked);
     } catch {
       // Authorization removal is authoritative even if resource cleanup fails.
     }
@@ -590,7 +661,14 @@ export function getIOSSimulatorRendererSessionAccess(
   return rendererAccessRegistry.accessSnapshot(target);
 }
 
-export function hasIOSSimulatorRendererSessionAccess(
+export function getIOSSimulatorRendererViewerAccess(
+  target: IOSSimulatorRendererWebContents,
+  sessionId: string,
+): IOSSimulatorRendererAccessSnapshot | null {
+  return rendererAccessRegistry.viewerAccessSnapshot(target, sessionId);
+}
+
+export function hasIOSSimulatorRendererViewerAccess(
   target: IOSSimulatorRendererWebContents,
   sessionId: string,
 ): boolean {
@@ -639,11 +717,11 @@ export function inheritIOSSimulatorRendererSessionAccess(
   return rendererAccessRegistry.inheritAccess(sourceTarget, target);
 }
 
-export function revokeIOSSimulatorRendererAccessForSessionChange(
+export function syncIOSSimulatorRendererAccessForSessionChange(
   target: IOSSimulatorRendererWebContents,
   sessionId: string | null,
 ): number {
-  return rendererAccessRegistry.revokeForSessionChange(target, sessionId);
+  return rendererAccessRegistry.syncForSessionChange(target, sessionId);
 }
 
 export function revokeIOSSimulatorRendererSession(sessionId: string): void {

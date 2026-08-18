@@ -29,6 +29,23 @@ import {
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
 import {
+  WORKLOUDER_CODEX_ACTION_CHANNEL,
+  WORKLOUDER_CODEX_GET_STATE_CHANNEL,
+  WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
+  WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
+  WORKLOUDER_CODEX_PROBE_CHANNEL,
+  WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL,
+  WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL,
+  type WorkLouderCodexPublishedTask,
+  WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderCodexPreviewInput,
+  type WorkLouderCodexRendererAction,
+  type WorkLouderCodexSettingsPatch,
+  type WorkLouderCodexState,
+} from '../shared/workLouderCodex';
+import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
@@ -160,6 +177,7 @@ import type {
   IOSSimulatorRouteStatusPush,
   IOSSimulatorLiveTouchRequest,
   IOSSimulatorMutationControlRequest,
+  IOSSimulatorRetryNativeRouteRequest,
   IOSSimulatorStatusRequest,
   IOSSimulatorToolRequest,
   IOSSimulatorToolResponse,
@@ -385,6 +403,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutUpdateChannelSettings = createIpcFanOut('update-channel-settings');
 const fanOutOrcaWorkerChanged = createIpcFanOut('maker:orca:worker-changed');
 // 右侧栏独立子窗口(RSB window)状态 / 上下文 / 命令推送
 const fanOutRsbWindowStateChanged = createIpcFanOut('maker:rsb-window:state-changed');
@@ -1059,7 +1078,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      imageEdit: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
       video: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
+      videoEdit: {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
@@ -1520,6 +1547,45 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     notifyWindowsCloseBehaviorPromptShown: (): void =>
       ipcRenderer.send(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL),
+  },
+
+  workLouderCodex: {
+    getState: (): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_GET_STATE_CHANNEL),
+    setSettings: (patch: WorkLouderCodexSettingsPatch): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, patch),
+    resetSettings: (): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL),
+    openInputMonitoringSettings: (): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL),
+    probe: (): Promise<WorkLouderCodexState> => ipcRenderer.invoke(WORKLOUDER_CODEX_PROBE_CHANNEL),
+    publishTasks: (tasks: WorkLouderCodexPublishedTask[]): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL, tasks),
+    setLayoutPreviewActive: (active: boolean): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL, active),
+    onStateChanged: (callback: (state: WorkLouderCodexState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WorkLouderCodexState): void => {
+        callback(state);
+      };
+      ipcRenderer.on(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+    },
+    onAction: (callback: (action: WorkLouderCodexRendererAction) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        action: WorkLouderCodexRendererAction,
+      ): void => callback(action);
+      ipcRenderer.on(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
+    },
+    onPreviewInput: (callback: (input: WorkLouderCodexPreviewInput) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        input: WorkLouderCodexPreviewInput,
+      ): void => callback(input);
+      ipcRenderer.on(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
+    },
   },
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────
@@ -3728,6 +3794,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── App Update (F2/F4) ──
 
   onUpdateStatus: fanOutUpdateStatus,
+  onUpdateChannelSettings: fanOutUpdateChannelSettings,
 
   checkForUpdate: (): Promise<{
     result:
@@ -5156,6 +5223,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         : {
             dataOwnerId: null,
             ownerGeneration: 0,
+            canWriteOwnerScoped: false,
             claimed: false,
             claimedByOtherOwner: false,
             canInitialize: false,
@@ -6549,6 +6617,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         request: IOSSimulatorViewerVisibilityRequest,
       ): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
+      retryNativeRoute: (
+        request: IOSSimulatorRetryNativeRouteRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
       latestFrame: (request: IOSSimulatorViewerRouteRequest): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
       setStreamProfile: (

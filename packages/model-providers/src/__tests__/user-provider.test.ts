@@ -455,6 +455,7 @@ describe('buildUserProvider (per-runtime)', () => {
     expect((p.models.pi ?? [])[0]?.defaultEffort).toBeNull();
     expect((p.models.pi ?? [])[0]?.group).toBe('custom:localollama');
     expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
+    expect(p.routing.pi?.wireProtocol).toBe('openai-chat');
   });
 
   it('never infers Pi efforts from a same-named Registry model', () => {

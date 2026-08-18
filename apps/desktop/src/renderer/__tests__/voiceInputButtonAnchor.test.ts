@@ -43,10 +43,10 @@ describe('ChatInput voice button anchor contract', () => {
     // 只在录音态挪 Stop 是不够的:录音结束且草稿非空时 Stop 会跳回右边,语音按钮同样
     // 左移一格,只是把误点风险推迟到「刚点完停止录音」那一刻。
     expect(chatInputSource).toContain(
-      'const showSecondaryStop =\n    showStopButton && (canSend || voiceInput.isBusy) && !sendDispatchInFlight;',
+      'const showSecondaryStop =\n    showStopButton && (canSend || voiceBusyOnCurrentComposer) && !sendDispatchInFlight;',
     );
     expect(chatInputSource).toContain(
-      'const mainSlotIsStop =\n    showStopButton && (sendDispatchInFlight || (!canSend && !voiceInput.isBusy));',
+      'const mainSlotIsStop =\n    showStopButton && (sendDispatchInFlight || (!canSend && !voiceBusyOnCurrentComposer));',
     );
   });
 
@@ -61,7 +61,7 @@ describe('ChatInput voice button anchor contract', () => {
     );
 
     expect(slotDecisionBlock).not.toContain('voiceInput.isListening');
-    expect(slotDecisionBlock).toContain('voiceInput.isBusy');
+    expect(slotDecisionBlock).toContain('voiceBusyOnCurrentComposer');
   });
 
   it('keeps the stop controls enabled while voice input owns the editor lock', () => {
@@ -69,7 +69,9 @@ describe('ChatInput voice button anchor contract', () => {
     // shortcut that is needed to end the active recording.
     expect(chatInputSource).toContain('const disabledRef = useRef(composerEditorLocked);');
     expect(chatInputSource).toContain('disabledRef.current = composerEditorLocked;');
-    expect(chatInputSource).toContain('disabled={composerEditorLocked || !editor}');
+    expect(chatInputSource).toContain(
+      'disabled={\n                      composerEditorLocked ||\n                      !editor ||\n                      (voiceInput.isBusy && !voiceBusyOnCurrentComposer)\n                    }',
+    );
     expect(chatInputSource).not.toContain('disabled={composerMutationLocked || !editor}');
   });
 });

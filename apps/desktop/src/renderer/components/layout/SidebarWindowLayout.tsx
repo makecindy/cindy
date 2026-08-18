@@ -295,7 +295,6 @@ export function SidebarWindowLayout() {
                 log.warn('merge back failed', err);
               });
             }}
-            title={t('rightSidebar.window.mergeBack')}
             aria-label={t('rightSidebar.window.mergeBack')}
           >
             <PanelRight size={14} />

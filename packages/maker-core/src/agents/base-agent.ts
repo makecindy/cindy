@@ -62,6 +62,7 @@ import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,
   DynamicToolSpec,
+  ReasoningEffort,
 } from './codex/app-server/protocol.js';
 import type {
   ScanAtResourcesOptions,
@@ -315,10 +316,20 @@ export interface PiExtraSpawnConfigContext {
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
+  requiredSpawnCredentialMode?: 'oauth-bearer';
   /** Cindy-side display fallback for Codex subagent cards. */
   subagentModelFallback?: string;
+  /** Provider route frozen alongside the locked subagent model for this app-server. */
+  subagentRoute?: {
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort: ReasoningEffort | null;
+  };
   /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
   codexBrowserUseAvailable?: boolean;
+  /** Whether the OpenAI identity provider on this app-server may use Responses WebSocket. */
+  codexOpenAiWebSocketsEnabled?: boolean;
   /** Exact verified Chrome plugin version provisioned into this app-server. */
   codexBrowserUseVersion?: string;
   /** Maximum startup wait copied from the verified companion descriptor. */
@@ -547,7 +558,7 @@ export interface AgentDeps {
    * - `openai-responses`：Model Access v3 明确指定的 Cindy AI Pi 路由；
    * - `anthropic-messages`：非 XD compat proxy 路由；
    * - `null`：模型属于 Cindy AI Pi 目录，但协议缺失或不匹配，Pi fail closed；
-   * - `undefined`：模型不属于当前来源的 XD Pi 目录，保留既有 Messages 协议。
+   * - `undefined`：当前来源未声明该模型的 Pi 协议；不得写入 `cindy` gateway 块。
    */
   resolvePiGatewayModelApi?: (
     providerId: string | null | undefined,
@@ -924,6 +935,11 @@ export interface AgentDeps {
     sessionId: string;
     threadId: string;
     text: string;
+    subagentRoute?: {
+      providerId: string;
+      catalogModel: string;
+      reasoningEffort: ReasoningEffort | null;
+    };
   }) => void;
 
   /**

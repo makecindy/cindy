@@ -46,6 +46,8 @@ type IOSSimulatorViewerRouteRequest =
   import('../shared/iosSimulatorIpc').IOSSimulatorViewerRouteRequest;
 type IOSSimulatorViewerVisibilityRequest =
   import('../shared/iosSimulatorIpc').IOSSimulatorViewerVisibilityRequest;
+type IOSSimulatorRetryNativeRouteRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorRetryNativeRouteRequest;
 type IOSSimulatorStreamProfileRequest =
   import('../shared/iosSimulatorIpc').IOSSimulatorStreamProfileRequest;
 type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing'];
@@ -69,6 +71,11 @@ type PendingRemotePrecreatedWorktreeTarget =
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
 type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawReleaseNotes;
+type WorkLouderCodexSettingsPatch =
+  import('../shared/workLouderCodex').WorkLouderCodexSettingsPatch;
+type WorkLouderCodexState = import('../shared/workLouderCodex').WorkLouderCodexState;
+type WorkLouderCodexRendererAction =
+  import('../shared/workLouderCodex').WorkLouderCodexRendererAction;
 
 interface NewMakerWorktreeBranchPreferenceSnapshot {
   baseRepo: string;
@@ -1229,7 +1236,15 @@ interface ElectronAPI {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      imageEdit: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
       video: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
+      videoEdit: {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
@@ -1797,6 +1812,28 @@ interface ElectronAPI {
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
     onWindowsCloseBehaviorRequested: (callback: () => void) => () => void;
     notifyWindowsCloseBehaviorPromptShown: () => void;
+  };
+
+  workLouderCodex: {
+    getState: () => Promise<WorkLouderCodexState>;
+    setSettings: (patch: WorkLouderCodexSettingsPatch) => Promise<WorkLouderCodexState>;
+    resetSettings: () => Promise<WorkLouderCodexState>;
+    openInputMonitoringSettings: () => Promise<void>;
+    /** Re-check whether the device is still attached; the SDK never says so itself. */
+    probe: () => Promise<WorkLouderCodexState>;
+    /**
+     * Hand the sidebar's task list to the agent keys. Main cannot see tasks on
+     * linked machines, nor which machine filter is applied.
+     */
+    publishTasks: (
+      tasks: import('../shared/workLouderCodex').WorkLouderCodexPublishedTask[],
+    ) => Promise<void>;
+    setLayoutPreviewActive: (active: boolean) => Promise<void>;
+    onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
+    onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
+    onPreviewInput: (
+      callback: (input: import('../shared/workLouderCodex').WorkLouderCodexPreviewInput) => void,
+    ) => () => void;
   };
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────
@@ -3438,6 +3475,9 @@ interface ElectronAPI {
   relaunchForChannelChange: () => Promise<void>;
   /** 打开 beta 前预检:探测 beta manifest 是否可达(HTTP 200)。 */
   probeBetaChannel: () => Promise<{ available: boolean }>;
+  onUpdateChannelSettings: (
+    callback: (payload: { enableBeta: boolean; isCustomized?: boolean }) => void,
+  ) => () => void;
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: { applyVibrancy: (familyId: string, isDark: boolean) => void };
@@ -5993,6 +6033,9 @@ interface ElectronAPI {
       ) => Promise<IOSSimulatorToolResponse>;
       setViewerVisibility: (
         request: IOSSimulatorViewerVisibilityRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      retryNativeRoute: (
+        request: IOSSimulatorRetryNativeRouteRequest,
       ) => Promise<IOSSimulatorToolResponse>;
       latestFrame: (request: IOSSimulatorViewerRouteRequest) => Promise<IOSSimulatorToolResponse>;
       setStreamProfile: (

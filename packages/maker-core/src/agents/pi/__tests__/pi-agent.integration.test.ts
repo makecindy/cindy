@@ -15,6 +15,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1297,11 +1299,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           model: 'byom-model', // 属于原生 provider,不是网关模型
         });
         // models.json 里有独立的 localbyom provider 块,baseUrl 直连原生端点。
-        // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根;
-        // 本 test 只起一个会话,run-tmp 下恰有一个子目录。
-        const { readFileSync, readdirSync } = await import('node:fs');
+        // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根。
+        // 整组测试共享 agentHome，前序用例可能留下已清空的 run-tmp 子目录；只认仍持有
+        // models.json 的活动会话目录，并要求当前恰好一个，避免目录枚举顺序造成误判。
         const runTmp = path.join(agentHome, 'run-tmp');
-        const configHome = path.join(runTmp, readdirSync(runTmp)[0]);
+        const activeConfigHomes = readdirSync(runTmp, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => path.join(runTmp, entry.name))
+          .filter((candidate) => existsSync(path.join(candidate, 'models.json')));
+        expect(activeConfigHomes).toHaveLength(1);
+        const configHome = activeConfigHomes[0];
+        if (!configHome) throw new Error('active Pi config home missing');
         const config = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8')) as {
           providers: Record<string, { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> }>;
         };

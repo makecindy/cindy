@@ -144,6 +144,7 @@ import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import {
   loadAllCommands,
   dispatchCommand,
+  leadingSlashInvocation,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
@@ -181,6 +182,13 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
+import {
+  copyCurrentTaskMarkdown,
+  forkCurrentTaskFromKeyboard,
+} from '@/lib/workLouderCodexTaskActions';
+import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
+import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -659,6 +667,16 @@ export function CCAgentSessionView({
   // 实例拥有右栏 / header 主权。SplitGroup 的常驻 pane 可用 routeOwner 显式转移
   // 主权；其它内嵌复用实例(doc rail / Orca worker)不传，行为保持不变。
   const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);
+  // Header/right-sidebar ownership is narrower than hardware task actions.
+  // A visible file-browse rail is still the open task, even when it is compact.
+  // Split panes stay mounted together; only the route-owning pane may consume
+  // hardware commands. The compact files rail is not a split pane.
+  const ownsHardwareTaskActions =
+    ownsRoute ||
+    (Boolean(sessionId) &&
+      viewVisible &&
+      navigationMode !== 'sidebar-embedded' &&
+      navigationMode !== 'split-pane');
   const showComposerControlledBanner = ownsRoute || showControlledBanner;
   const controlledBy = useControlledBy();
   const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
@@ -841,6 +859,16 @@ export function CCAgentSessionView({
   const remoteConn = useRemoteSessionConnection(remoteDeviceId);
   const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId);
   const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline';
+  const remoteWritesBlocked = remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
+  const showRemoteWriteBlockedToast = useCallback(() => {
+    toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+  }, [t]);
+  const { togglePin, archive } = useSessionHardwareTaskActions({
+    session,
+    remoteWritesBlocked,
+    onRemoteWriteBlocked: showRemoteWriteBlockedToast,
+    patchLocal: patchLocalSession,
+  });
   // 列表级 activity 在重 topic 的 maker status 之前就可用。远程 turn 正在执行 / 等待
   // 交互时,session 行天然是 startedAt > endedAt,不能把这个正常在飞窗口误判成
   // 「应用退出中断」。直接门控首帧,再锁存本次视图,避免 activity 终态与 ended patch
@@ -1463,6 +1491,71 @@ export function CCAgentSessionView({
     remoteDeviceId,
     sessionId,
     t,
+  ]);
+  useEffect(() => {
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type !== 'command') return false;
+      if (!sessionId || !ownsHardwareTaskActions) return false;
+      if (action.commandId === 'approval.approve') {
+        if (pendingPermission) {
+          respondToPermission({ behavior: 'allow' });
+          return true;
+        }
+        if (pendingPlanReview) {
+          respondToPlanReview(pendingPlanReview.requestId, true);
+          return true;
+        }
+        return false;
+      }
+      if (action.commandId === 'approval.decline') {
+        if (pendingPermission) {
+          respondToPermission({
+            behavior: 'deny',
+            message: 'User denied',
+            decisionClassification: 'user_reject',
+          });
+          return true;
+        }
+        if (pendingPlanReview) {
+          cancelPlanReview(pendingPlanReview.requestId);
+          return true;
+        }
+      }
+      if (action.commandId === 'forkTask') {
+        if (!canNavigateSession) return false;
+        void forkCurrentTaskFromKeyboard(sessionId, {
+          navigate,
+          t,
+        });
+        return true;
+      }
+      if (action.commandId === 'copyConversationMarkdown') {
+        void copyCurrentTaskMarkdown(sessionId, { navigate, t });
+        return true;
+      }
+      if (action.commandId === 'toggleTaskPin') {
+        void togglePin();
+        return true;
+      }
+      if (action.commandId === 'archiveTask') {
+        void archive();
+        return true;
+      }
+      return false;
+    });
+  }, [
+    archive,
+    canNavigateSession,
+    cancelPlanReview,
+    ownsHardwareTaskActions,
+    navigate,
+    pendingPermission,
+    pendingPlanReview,
+    respondToPermission,
+    respondToPlanReview,
+    sessionId,
+    t,
+    togglePin,
   ]);
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
   const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
@@ -2505,9 +2598,13 @@ export function CCAgentSessionView({
       },
     ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
-      if (!slashMatch) return { handled: false, accepted: false, message };
-      const cmdName = slashMatch[1].toLowerCase();
-      const args = slashMatch[2] ?? '';
+      const agentKind = dbToMakerAgentKind(session?.agentKind);
+      const leading = !slashMatch && agentKind === 'pi'
+        ? leadingSlashInvocation(message)
+        : undefined;
+      if (!slashMatch && !leading) return { handled: false, accepted: false, message };
+      const cmdName = (slashMatch?.[1] ?? leading!.name).toLowerCase();
+      const args = slashMatch?.[2] ?? '';
       const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
       const workingDir = options?.workingDirOverride ?? session?.workingDir;
       const cached = allCommandsRef.current;
@@ -2518,7 +2615,6 @@ export function CCAgentSessionView({
         : cached.length > 0
           ? cached
           : await getHelpCommandsSnapshot();
-      const agentKind = dbToMakerAgentKind(session?.agentKind);
       const reconcileParams = {
         agentKind,
         sessionId: session?.id,
@@ -2556,6 +2652,8 @@ export function CCAgentSessionView({
             agentKind === 'pi' ? rewriteAgentSkillInvocationForDispatch(message, hit) : message,
         };
       }
+      // Desktop commands stay `^/` only. A whitespace-prefixed `/help` is not a dispatch.
+      if (!slashMatch) return { handled: false, accepted: false, message };
       if (!allowDesktopDispatch) return { handled: false, accepted: false, message };
       // Review is handed to Main immediately with this invocation's serialized
       // attachments. It must not depend on this React view remaining mounted,
@@ -3830,6 +3928,7 @@ export function CCAgentSessionView({
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
+      ownsHardwareScrollActions={ownsHardwareTaskActions}
     />
   );
 
@@ -4222,6 +4321,7 @@ export function CCAgentSessionView({
                 onContinueAfterUsageReset={
                   usageLimitRecovery && !remoteDeviceId ? handleContinueAfterUsageReset : undefined
                 }
+                usageLimitRecovery={usageLimitRecovery}
                 onCancel={handleDismissError}
                 agentKind={session?.agentKind}
                 remoteHostId={session?.remoteHostId ?? undefined}
@@ -4402,6 +4502,7 @@ export function CCAgentSessionView({
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                   sessionId={sessionId}
+                  ownsHardwareComposerActions={ownsHardwareTaskActions}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
@@ -4645,10 +4746,11 @@ export function CCAgentSessionView({
                       // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
                       // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
                       // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
-                      compactChannel !== null
-                        && !(realAgentKind === 'pi' && !!session?.remoteHostId)
-                        && session != null && agentStatus.contextTokens > 0
-                        && !(compactChannel === 'compact-session' && agentStatus.isRunning)
+                      compactChannel !== null &&
+                      !(realAgentKind === 'pi' && !!session?.remoteHostId) &&
+                      session != null &&
+                      agentStatus.contextTokens > 0 &&
+                      !(compactChannel === 'compact-session' && agentStatus.isRunning)
                         ? handleCompactRequest
                         : undefined
                     }

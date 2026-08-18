@@ -141,6 +141,7 @@ import {
 import {
   createSubagentLiveCardTracker,
   type SubagentLiveCardUpdate,
+  type SubagentSpawnItemPhase,
 } from './subagent-live-cards.js';
 import {
   TurnRetryTracker,
@@ -2501,6 +2502,8 @@ export class CodexAgent extends BaseAgent {
     let remoteCompactionProviderId: string | undefined;
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     let subagentModelFallback: string | undefined;
+    let subagentRoute: CodexExtraSpawnConfig['subagentRoute'];
+    let codexOpenAiWebSocketsEnabled = true;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -2526,6 +2529,8 @@ export class CodexAgent extends BaseAgent {
       remoteCompactionProviderId = undefined;
       buildSessionMcpConfig = undefined;
       subagentModelFallback = undefined;
+      subagentRoute = undefined;
+      codexOpenAiWebSocketsEnabled = true;
       if (this.deps.prepareCodexExtraSpawnConfig) {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
@@ -2537,10 +2542,25 @@ export class CodexAgent extends BaseAgent {
             },
           );
           assertCurrentGeneration('spawn config');
+          if (
+            cfg.requiredSpawnCredentialMode
+            && cfg.requiredSpawnCredentialMode !== spawnCredentialMode
+          ) {
+            this.deps.logger.info('codex createHost: host routing requires a compatible spawn credential mode', {
+              key,
+              requestedCredentialMode: credentialMode ?? 'fallback',
+              previousSpawnCredentialMode: spawnCredentialMode ?? 'fallback',
+              requiredSpawnCredentialMode: cfg.requiredSpawnCredentialMode,
+            });
+            spawnCredentialMode = cfg.requiredSpawnCredentialMode;
+            continue;
+          }
           Object.assign(env, cfg.extraEnv);
           extraArgs = cfg.extraArgs;
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           subagentModelFallback = cfg.subagentModelFallback;
+          subagentRoute = cfg.subagentRoute;
+          codexOpenAiWebSocketsEnabled = cfg.codexOpenAiWebSocketsEnabled !== false;
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
           // Remote daemons own their browser companion and its CODEX_HOME;
           // preserve the host-provided availability snapshot instead of
@@ -2635,6 +2655,8 @@ export class CodexAgent extends BaseAgent {
       remoteCompactionProviderId,
       buildSessionMcpConfig,
       subagentModelFallback,
+      subagentRoute,
+      codexOpenAiWebSocketsEnabled,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
@@ -3215,6 +3237,8 @@ export class CodexAgent extends BaseAgent {
       quarantined: boolean;
       terminalSettled: boolean;
       capabilitySelectionText: string;
+      /** Catalog model frozen for this turn/start request. */
+      model?: string;
       sendGen: number;
       startedAtMs: number;
     }>();
@@ -3240,6 +3264,7 @@ export class CodexAgent extends BaseAgent {
         quarantined: false,
         terminalSettled: false,
         capabilitySelectionText,
+        ...(activeTurnModel ? { model: activeTurnModel } : {}),
         sendGen: ownerSendGen,
         startedAtMs: Date.now(),
       });
@@ -3289,6 +3314,8 @@ export class CodexAgent extends BaseAgent {
       startSeq: number | null;
       sendGen: number;
       startedAtMs: number;
+      /** Catalog model accepted for this turn; spawn cards freeze inheritance from this value. */
+      model?: string;
     }>();
 
     const hasOtherInFlightStart = (seq: number): boolean => {
@@ -4206,10 +4233,14 @@ export class CodexAgent extends BaseAgent {
      * 只在同步的 emitSubagentCardUpdate 内为 true(见那里的注释)。
      */
     let emittingDescendantUpdate = false;
+    const configuredSubagentRoute = host.getSubagentRoute?.();
+    const configuredSubagentModelFallback = configuredSubagentRoute?.catalogModel
+      ?? host.getSubagentModelFallback?.();
     const subagentLiveCards = createSubagentLiveCardTracker({
       // Fake/legacy hosts used by older callers may not expose this optional
       // Cindy metadata accessor; absence must remain an honest no-model state.
-      subagentModelFallback: host.getSubagentModelFallback?.(),
+      subagentModelFallback: configuredSubagentModelFallback,
+      lockSubagentModel: Boolean(configuredSubagentRoute),
     });
 
     const emitSubagentCardUpdate = (
@@ -4397,6 +4428,7 @@ export class CodexAgent extends BaseAgent {
               childThreadId,
               nested.model,
               nested.failed === true,
+              true,
             );
             if (replayedNested) {
               emitSubagentCardUpdate(
@@ -4448,15 +4480,44 @@ export class CodexAgent extends BaseAgent {
      *    status=completed —— 那只是 spawn 工具调用自己收口,子线程可能还在跑。不重新声明
      *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
      */
+    const withFrozenSubagentSpawnIdentity = <T,>(item: T, rootTurnId: string): T => {
+      const registration = readCodexSubagentSpawnRegistration(item);
+      if (!registration || !item || typeof item !== 'object' || Array.isArray(item)) return item;
+      const inheritedModel = turnOriginByTurnId.get(rootTurnId)?.model ?? activeTurnModel;
+      const model = configuredSubagentRoute?.catalogModel
+        ?? registration.model
+        ?? configuredSubagentModelFallback
+        ?? inheritedModel;
+      const current = item as Record<string, unknown>;
+      const next: Record<string, unknown> = { ...current };
+      if (model) next.model = model;
+      if (configuredSubagentRoute) {
+        if (configuredSubagentRoute.reasoningEffort) {
+          next.reasoningEffort = configuredSubagentRoute.reasoningEffort;
+        } else {
+          delete next.reasoningEffort;
+        }
+      }
+      if (
+        next.model === current.model
+        && next.reasoningEffort === current.reasoningEffort
+        && Object.hasOwn(next, 'reasoningEffort') === Object.hasOwn(current, 'reasoningEffort')
+      ) return item;
+      // 只改内部翻译视图：锁定路由展示 Proxy 的真实出站身份；未锁定时冻结 spawn
+      // 当刻的显式/继承模型。上游 Codex item 与创建流程保持原样。
+      return next as T;
+    };
+
     const noteSubagentSpawnItem = (
       item: unknown,
       rootTurnId: string,
+      phase: SubagentSpawnItemPhase,
     ): SubagentLiveCardUpdate | null => {
       if (!registerSubagentSpawnLineage(item, rootTurnId)) return null;
       // 先接 host 路由再进 tracker:registerDescendantLineage 会把子线程 TTL 缓冲里的
       // 早到通知同步补投进 handleDescendantNotification(tracker 缓冲),随后
       // noteSpawnItem 建卡时统一重放,首帧就带上真实用量。
-      return subagentLiveCards.noteSpawnItem(item);
+      return subagentLiveCards.noteSpawnItem(item, undefined, phase);
     };
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
@@ -4774,15 +4835,15 @@ export class CodexAgent extends BaseAgent {
     /**
      * 本 thread 的 Responses 请求是否走 WebSocket。
      *
-     * 等价于「选了 OpenAI 身份 provider」:spawn args 里只有该 provider 打开了
-     * `supports_websockets`(见 desktop 侧 buildCodexProxySpawnArgs),cindy_gateway
-     * 与其余供应商一律 false。所以 threadModelProvider 非空 ⟺ 该 thread 走 WS。
+     * 先要求 thread 选了 OpenAI 身份 provider，再服从本 app-server 启动时冻结的
+     * `supports_websockets` 能力。配置独立子代理 Provider 路由的 host 会整体关闭 WS，
+     * 此时 threadModelProvider 仍用于远端压缩身份，但请求改走 HTTP。
      *
-     * 单独起个名字而不是直接用 `!threadModelProvider`:两者当前等价但语义不同 ——
-     * 前者问"走不走 WS"(决定 prompt 注入通道),后者问"选没选那个 provider"
-     * (原本只为远端压缩)。哪天该 provider 不再开 WS,要改的是这里而不是下面的判定。
+     * 单独起名是为了把「选没选 provider」和「实际走不走 WS」分开，避免 prompt 注入
+     * 通道错误地只看 provider 身份。
      */
-    const threadUsesWebSocket = !!threadModelProvider;
+    const threadUsesWebSocket = !!threadModelProvider
+      && (host.getOpenAiWebSocketsEnabled?.() ?? true);
 
     /**
      * proxy 的 registry 注入通道本 thread 是否可用。
@@ -4807,7 +4868,13 @@ export class CodexAgent extends BaseAgent {
       registeredDeveloperInstructions = text;
       const register = this.deps.registerCodexSystemPromptForThread;
       if (!register) return;
-      register({ sessionId: sid, threadId, text });
+      const subagentRoute = host.getSubagentRoute?.();
+      register({
+        sessionId: sid,
+        threadId,
+        text,
+        ...(subagentRoute ? { subagentRoute } : {}),
+      });
     };
     const refreshCodexAutoReviewerRoute = (targetThreadId: string): void => {
       const routeCredentialMode = resolveAgentCredentialMode({
@@ -4963,8 +5030,10 @@ export class CodexAgent extends BaseAgent {
         }
         threadId = resp.thread.id;
         refreshCodexAutoReviewerRoute(threadId);
-        if (useProxyChannel) {
+        if (hostUsesCodexProxy) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
+        }
+        if (useProxyChannel) {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
         } else if (shouldSendNativeDeveloperInstructions) {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
@@ -5035,8 +5104,10 @@ export class CodexAgent extends BaseAgent {
         }
         threadId = resp.thread.id;
         refreshCodexAutoReviewerRoute(threadId);
-        if (useProxyChannel) {
+        if (hostUsesCodexProxy) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
+        }
+        if (useProxyChannel) {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
         } else if (developerInstructions) {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
@@ -5210,8 +5281,10 @@ export class CodexAgent extends BaseAgent {
             void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
           }
         }
-        if (useProxyChannel) {
+        if (hostUsesCodexProxy) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
+        }
+        if (useProxyChannel) {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
         } else {
           codexProductPromptDelivery = developerInstructions
@@ -9054,6 +9127,7 @@ export class CodexAgent extends BaseAgent {
           ? startedOwnerEntries[0]
           : undefined;
         const existingTurnOrigin = turnOriginByTurnId.get(params.turn.id);
+        const turnModel = startedOwner?.[1].model ?? existingTurnOrigin?.model ?? activeTurnModel;
         turnOriginByTurnId.set(params.turn.id, {
           startSeq: startedOwner?.[0] ?? null,
           sendGen: startedOwner?.[1].sendGen ?? sendGeneration,
@@ -9062,6 +9136,7 @@ export class CodexAgent extends BaseAgent {
             ?? (existingTurnOrigin
               ? existingTurnOrigin.startedAtMs
               : (startedOwnerEntries.length === 0 ? Date.now() : 0)),
+          ...(turnModel ? { model: turnModel } : {}),
         });
         // Notifications may arrive before the turn/start RPC response. Bind the
         // selector at the same unique-owner boundary as turnOrigin so an early
@@ -9323,9 +9398,17 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
         // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
-        const replayedSubagentUpdate = noteSubagentSpawnItem(params.item, params.turnId);
-        pushItemStatus(params.item);
-        translateItemNotification('started', params, eventQueue, {
+        const translatedItem = withFrozenSubagentSpawnIdentity(params.item, params.turnId);
+        const translatedParams = translatedItem === params.item
+          ? params
+          : { ...params, item: translatedItem };
+        const replayedSubagentUpdate = noteSubagentSpawnItem(
+          translatedItem,
+          params.turnId,
+          'started',
+        );
+        pushItemStatus(translatedItem);
+        translateItemNotification('started', translatedParams, eventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
@@ -9360,8 +9443,16 @@ export class CodexAgent extends BaseAgent {
         // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
         // 子线程的 item / token / turn 终态全被缓冲,卡片在整个运行期(可能好几分钟)没有实时
         // 数据,最后才一次性补上。那恰好是本 PR 要解决的问题本身(review)。
-        const replayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item, params.turnId);
-        translateItemNotification('updated', params, eventQueue, {
+        const translatedItem = withFrozenSubagentSpawnIdentity(params.item, params.turnId);
+        const translatedParams = translatedItem === params.item
+          ? params
+          : { ...params, item: translatedItem };
+        const replayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(
+          translatedItem,
+          params.turnId,
+          'updated',
+        );
+        translateItemNotification('updated', translatedParams, eventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
@@ -9416,9 +9507,14 @@ export class CodexAgent extends BaseAgent {
         // watchdog with a fresh budget.
         if (!isLateCollabTerminal) noteToolItemLifecycle(params.item, 'completed');
         // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
+        const translatedItem = withFrozenSubagentSpawnIdentity(params.item, params.turnId);
+        const translatedParams = translatedItem === params.item
+          ? params
+          : { ...params, item: translatedItem };
         const replayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(
-          params.item,
+          translatedItem,
           params.turnId,
+          'completed',
         );
         const itemEventQueue = isLateCollabTerminal
           ? {
@@ -9435,7 +9531,7 @@ export class CodexAgent extends BaseAgent {
             [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
           } as AsyncQueue<AgentEvent>
           : eventQueue;
-        translateItemNotification('completed', params, itemEventQueue, {
+        translateItemNotification('completed', translatedParams, itemEventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
@@ -10142,6 +10238,7 @@ export class CodexAgent extends BaseAgent {
                 startSeq: ownerSeq,
                 sendGen: startEntry.sendGen,
                 startedAtMs: startEntry.startedAtMs,
+                ...(startEntry.model ? { model: startEntry.model } : {}),
               });
             }
             // 缓冲的歧义 started 对账 (codex R9 P2): 本响应确立在飞 RPC 的
@@ -10224,6 +10321,7 @@ export class CodexAgent extends BaseAgent {
                 capabilitySelectionText,
               );
               // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
+              const turnModel = startEntry?.model ?? activeTurnModel;
               turnOriginByTurnId.set(resp.turn.id, {
                 startSeq: ownerSeq,
                 sendGen: mySendGen,
@@ -10231,6 +10329,7 @@ export class CodexAgent extends BaseAgent {
                   startEntry?.startedAtMs
                   ?? turnOriginByTurnId.get(resp.turn.id)?.startedAtMs
                   ?? Date.now(),
+                ...(turnModel ? { model: turnModel } : {}),
               });
               currentTurnId = resp.turn.id;
               isTurnInFlight = true;

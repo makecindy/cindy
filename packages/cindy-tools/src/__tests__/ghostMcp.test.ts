@@ -12,6 +12,7 @@ import {
   handleGhostInfo,
   handleGhostList,
   handleGhostManual,
+  handleMedia,
 } from "../ghost/mcpServer.js";
 import type {
   CindyGhostInfo,
@@ -1107,8 +1108,47 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
   });
 });
 
+describe("cindy · media MCP 边界", () => {
+  it("把 snake_case 输入转换为 Host 稳定类型", async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, status: "prepared" }));
+    const result = await handleMedia(fakeDeps({ callMedia }), {
+      action: "prepare",
+      capability: "image.generate",
+      model_id: "vendor/image-model",
+    });
+
+    expect(callMedia).toHaveBeenCalledWith({
+      action: "prepare",
+      capability: "image.generate",
+      modelId: "vendor/image-model",
+    });
+    expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
+  });
+
+  it("在进入 Host 前拒绝缺失字段和未知 capability", async () => {
+    const callMedia = vi.fn(async () => ({ ok: true }));
+    expect(
+      parsePayload(
+        await handleMedia(fakeDeps({ callMedia }), {
+          action: "prepare",
+          capability: "image.generate",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(
+      parsePayload(
+        await handleMedia(fakeDeps({ callMedia }), {
+          action: "list_models",
+          capability: "document.generate" as "image.generate",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(callMedia).not.toHaveBeenCalled();
+  });
+});
+
 describe("cindy_ghosts · server 构建", () => {
-  it("四件插件发现/读取/调用工具与三件锻造工具固定注册", () => {
+  it("四件插件发现/读取/调用工具、三件锻造工具与 Core media 固定注册", () => {
     const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
       _registeredTools: Record<string, { description?: string } | undefined>;
     };
@@ -1120,6 +1160,7 @@ describe("cindy_ghosts · server 构建", () => {
       "ghost_info",
       "ghost_list",
       "ghost_manual",
+      "media",
     ]);
     const infoDescription = server._registeredTools.ghost_info?.description ?? "";
     expect(infoDescription).toContain("精准查询单个当前可用插件");

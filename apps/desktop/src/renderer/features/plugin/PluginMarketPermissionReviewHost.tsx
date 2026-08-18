@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   GhostManualSummary,
+  GhostOauthClientChangedAlert,
   GhostPermissionList,
   GhostUpdateReview,
 } from '@/cindy-brain/GhostPermissionList';
@@ -60,11 +61,19 @@ export function PluginMarketPermissionReviewHost() {
                   ),
               content: review.permissionDiff ? (
                 <GhostUpdateReview
-                  diff={review.permissionDiff}
+                  diff={{
+                    ...review.permissionDiff,
+                    builtinOauthClientChanged:
+                      review.permissionDiff.builtinOauthClientChanged ||
+                      review.builtinOauthClientChanged === true,
+                  }}
                   manualCount={review.manifest.manual?.items.length ?? 0}
                 />
               ) : (
                 <div>
+                  {review.builtinOauthClientChanged === true ? (
+                    <GhostOauthClientChangedAlert />
+                  ) : null}
                   <GhostManualSummary count={review.manifest.manual?.items.length ?? 0} />
                   <GhostPermissionList items={ghostPermissionItems(review.manifest)} />
                 </div>

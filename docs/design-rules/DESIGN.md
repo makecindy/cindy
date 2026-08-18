@@ -1013,6 +1013,36 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 (不变量 A,含三种错误修法各自的反例)、
 `apps/desktop/src/renderer/__tests__/chatClickabilitySignal.test.ts`(源码级守卫)。
 
+### 14.6 Icon-only Controls and Tooltips
+
+- **Delivery contract for new and modified icon-only controls:** every icon-only interactive
+  control has two labels: a localized accessible name (`aria-label`) and a visible `Tip`.
+  Familiar glyphs, dense lists, and actions that only appear on hover are not exemptions: if
+  the control has no persistent text label, users must not have to guess what it does.
+- **Describe the action that will happen next.** Stateful controls say `Expand Sidebar` or
+  `Collapse Sidebar`, not the vague `Toggle Sidebar`; their tooltip and accessible name
+  change together. A disabled icon-only control explains why it is unavailable.
+- **Do not duplicate persistent labels.** A button that already contains a visible text
+  label normally does not need a tooltip. Decorative icons are silent and are not made
+  focusable.
+- **Tooltips supplement; they do not carry risk alone.** Destructive consequences,
+  permission requests, and other information needed before acting must remain visible in
+  the interface or confirmation flow.
+- **Desktop action controls use the shared Radix `Tip`, not native `title`.** Native `title`
+  remains acceptable for truncated persistent text, marked explicitly where the element is
+  interactive. Shared icon-button primitives own this behavior wherever possible.
+- **Windows system window controls are the narrow platform exception.** The shared
+  `WindowControls` minimize, maximize / restore, and close buttons follow familiar Windows window
+  chrome and do not require a visible `Tip`; they still expose localized accessible names. The
+  maximize toggle uses a state-independent name because the Renderer does not own the native
+  maximized state. This exception does not apply to Cindy-specific title-bar actions or panel
+  controls.
+- **Migration is incremental and guarded by surface.** Recursive regression coverage currently
+  enforces this contract for app chrome, the title bar, the left sidebar and session list, and
+  the right sidebar (`components/layout`, `components/sidebar`, `components/title-bar`,
+  `features/cc-agent/sidebar`, and `features/right-sidebar`). Legacy feature-local controls
+  outside those roots migrate when touched; their existence is not an exemption for new work.
+
 ## 15. CINDY Skin Family(品牌化可选 family)
 
 > This section records the CINDY skin family; it does **not** rewrite the §1–7 default-skin rules. Values were finalized from design-stage working files (`skin-docs/10-specs/` desktop, `skin-docs/30-mobile/` mobile errata — **not in this repo**, same status as the §16 login working files) plus the user's final sign-off of 2026-07-18. Zero discretion at implementation time: within the repo, the authoritative encodings are the theme files (`cindy-light.ts` / `cindy-dark.ts`), `cindyDecisionData.ts`, and the frozen tests — this section is their prose summary.
@@ -1046,6 +1076,7 @@ See the skin decision table §2 (design-stage working file, not in repo). The Li
 
 - Semantic colors: `warning-accent` `#EA6B17` (finalized 2026-07-17, replaces `#FF6600`) / `annotation-accent` `#FF3B30` (image-annotation burn-in ink — exempt, do not change) / `status-bar-accent` (alias of warning orange, auto-follows).
 - The status four (finalized 2026-07-17; same values both modes, all 9 themes follow with no override): running `#EA6B17` / awaiting `#19D2C1` / error (status family) `#D91F37` / done `#2AAE5B`; warning foreground `warning-fg` `#F3A115` (decoupled from Toast amber `#F59E0B` — Toast keeps its group-B status quo).
+- `sidebar-draft-indicator` is a narrow semantic exception for the 8px pencil shown on non-selected sidebar rows with a composer draft or paused send queue. Light uses deep teal `#0B726B`; dark aliases `card-status-awaiting` (`#19D2C1`). Both must remain ≥3:1 against ordinary and hover CINDY sidebar surfaces after the translucent sidebar is composited over black and white wallpaper extremes (worst case at registration: `3.17:1` light / `5.65:1` dark). Rail tiles therefore use `--sidebar-item-hover`, never the inverse upgrade-button-only `--update-btn-hover`. Do not reuse the indicator token for generic awaiting states or add an active-row variant; the pencil is intentionally hidden while that task is selected.
 - `focus-ring` `#417CDD` (blue — never red); diff red/green; modal scrim/shadows; `overlay-lightbox`; the four Toast colors.
 - `destructive` / `search-match-bg` stay outside HSL_FORMAT_IDS coverage.
 - **hljs syntax colors** (light = highlight.js `github.css`; dark = globals.css `.dark .hljs-*` mirroring github-dark) — dual-threshold ruling (2026-07-17): syntax colors ≥3:1, body text ≥4.5:1. The hljs palettes were designed for GitHub's default canvases; CINDY's code-block canvas (`surface-elevated`, since 2026-08 `#FDFDF8`/`#1F1F1F`; code block fill `perm-code-bg` `#FAFAF5`/`#191919`) sits close to default's, so marginal shortfalls are inherited, not CINDY-introduced (default is equally affected). Light: all syntax colors ≥3 — no remediation, itemized as exemptions. Dark: `[data-theme="cindy-dark"]` overrides `.hljs-section` to `#2573ec` (3.00:1 on the pre-2026-08 canvas; 3.72:1 after the darker revision — margins only improved, override retained) and sets `.hljs-punctuation` / `.hljs-tag` explicitly to `#c9d1d9` (defensive). Guarded by `cindyCodeBlockContrast.test.ts` (≥2 baseline + text ≥4.5). Full derivation: decision log.
