@@ -195,6 +195,24 @@ async function mutateAuthorized(
 }
 
 describe('Pi package executable-code boundary', () => {
+  it('uses a safe basename for a manifest-less local package display name', async () => {
+    const { root } = await createPackage({ source: '' });
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      version: '1.0.0',
+      pi: { extensions: ['./extensions'], prompts: ['./prompts'] },
+    }));
+    runtime.listOutput = `User packages:\n  ${root}\n    ${root}\n`;
+    const store = await import('../pi-package-store.js');
+
+    const result = await store.listPiPackages();
+
+    expect(result.packages).toMatchObject([{
+      source: root,
+      name: path.basename(root),
+    }]);
+    expect(result.packages[0]?.name).not.toContain(path.dirname(root));
+  });
+
   it.each([
     ['npm', 'npm:oversized-display'],
     ['git', 'git:https://example.com/acme/oversized-display.git'],

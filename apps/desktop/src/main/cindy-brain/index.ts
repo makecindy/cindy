@@ -56,10 +56,7 @@ import type {
   PluginMarketPackageReviewFacts,
 } from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import {
-  isGhostSkillProjectionBoundaryStableForOwner,
-  withGhostSkillProjectionReconcile,
-} from '../authBoundaryQuarantine.js';
+import { withGhostSkillProjectionReconcile } from '../authBoundaryQuarantine.js';
 import {
   activeOwnerScopeKey,
   getActiveDataOwnerPushStamp,
@@ -81,7 +78,13 @@ import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import { createOneShotTicketStore } from './oneShotTickets.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
-import { GhostPackagePermissionReviewRequiredError } from './packagePermissionReview.js';
+import {
+  GhostPackagePermissionReviewRequiredError,
+  marketPackageHostReviewDiff,
+  marketPackageManualSummaryChanged,
+  marketPackageNeedsHostReview,
+  marketPackageOauthIdentityChanged,
+} from './packagePermissionReview.js';
 import {
   clearBuiltinTombstone,
   listEligibleBuiltinCommands,
@@ -525,11 +528,7 @@ function captureGhostMutationOwner(): ActiveAppSession {
   if (isAppSessionBoundaryPending()) {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
   }
-  const owner = getActiveAppSession();
-  if (!isGhostSkillProjectionBoundaryStableForOwner(owner.dataOwnerId)) {
-    throw new Error('Plugin owner boundary is not durably stable');
-  }
-  return owner;
+  return getActiveAppSession();
 }
 
 /**
@@ -543,9 +542,6 @@ function beginGhostMutation(expectedOwner?: ActiveAppSession): () => void {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
   }
   const currentOwner = getActiveAppSession();
-  if (!isGhostSkillProjectionBoundaryStableForOwner(currentOwner.dataOwnerId)) {
-    throw new Error('Plugin owner boundary is not durably stable');
-  }
   if (expectedOwner) {
     if (
       currentOwner.mode !== expectedOwner.mode ||
@@ -576,9 +572,9 @@ const ghostOwnerScope: GhostOwnerScope = {
   isCurrent: (scope) =>
     !!scope && isSameAppSession(scope as ActiveAppSession, getActiveAppSession()),
   isStable: (scope) =>
-    !!scope && isGhostSkillProjectionBoundaryStableForOwner(
-      (scope as ActiveAppSession).dataOwnerId,
-    ),
+    !!scope
+    && !isAppSessionBoundaryPending()
+    && isSameAppSession(scope as ActiveAppSession, getActiveAppSession()),
   onInvalidated: (ghostId) => {
     try {
       getGhostRuntime().stop(ghostId);
@@ -845,8 +841,7 @@ export function waitForGhostMutations(): Promise<void> {
 
 /** Account-managed built-ins are unavailable outside a verified cloud session. */
 export function isGhostAvailableForActiveSession(id: string): boolean {
-  const activeOwner = getActiveAppSession().dataOwnerId;
-  if (!isGhostSkillProjectionBoundaryStableForOwner(activeOwner)) return false;
+  if (isAppSessionBoundaryPending()) return false;
   return !isCindyAccountGhostId(id) || getAppCapabilities().canUseCindyAccountServices;
 }
 
@@ -919,14 +914,10 @@ export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
 
 function requireGhostAvailableForActiveSession(id: string): void {
   if (!isGhostAvailableForActiveSession(id)) {
-    const activeOwner = getActiveAppSession().dataOwnerId;
-    if (
-      isAppSessionBoundaryPending() ||
-      !isGhostSkillProjectionBoundaryStableForOwner(activeOwner)
-    ) {
+    if (isAppSessionBoundaryPending()) {
       throwIpcError(
         'PRECONDITION_FAILED',
-        'Ghost projection is switching owners; retry after the boundary settles.',
+        'Plugin owner is switching; retry after the boundary settles.',
       );
     }
     throwIpcError('PERMISSION_DENIED', 'This Plugin requires a Cindy account.');
@@ -3565,17 +3556,11 @@ function resolveImageChannelForModel(model: string, operation: 'generate' | 'edi
 }
 
 /**
- * Combined Ghost-owner boundary gate for Ghost-only paths (media generation,
- * cindy-slot work). Unlike the app-wide isAppSessionBoundaryPending(), this
- * also fails closed while the durable projection owner (shared global marker)
- * differs, so a sibling instance flipping the owner cannot let an in-flight
- * Ghost task keep calling upstream or saving media.
+ * Plugin media and storage use the same process-local AppSession owner
+ * boundary as the rest of the owner-scoped runtime.
  */
 function isGhostBoundaryPending(): boolean {
-  return (
-    isAppSessionBoundaryPending() ||
-    !isGhostSkillProjectionBoundaryStableForOwner(getActiveAppSession().dataOwnerId)
-  );
+  return isAppSessionBoundaryPending();
 }
 
 export function getGhostCindySlot(): GhostCindySlot {
@@ -3873,8 +3858,8 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 管道;记成 'ghost' 会让 ghostCanRead 的 origin 分支把它当作该意识的
       // 出生物,与"作品"混为一谈。引用方(refId)才是意识,归属由此成立。
       depositMedia: async ({ ghostId, buffer, mimeType, label }) => {
-        // 与 saveGhostMedia 同口径的 durable owner 守卫:寄存器引用按 ghostId
-        // 落到 owner 作用域账本,落盘窗口翻转全局 owner 时必须 fail closed。
+        // 与 saveGhostMedia 同口径的应用会话守卫:寄存器引用按 ghostId
+        // 落到 owner 作用域账本,落盘窗口切换账号时必须 fail closed。
         const ownerScopeKey = activeOwnerScopeKey();
         const assertOwnerScopeCurrent = (): void => {
           if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
@@ -4281,9 +4266,9 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       // (规则 25)。mime 白名单同一来源(blobStore),槽内归一化后再判。
       isSupportedMediaMime: (mime) => supportedMime(mime),
       saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) => {
-        // 与 cindy 槽 saveGhostMedia 同口径的 durable owner 守卫:落盘前与
-        // ingestMedia 每个 await 边界都复查,防止兄弟实例在 fetch 读取窗口翻转
-        // 全局 Ghost owner marker 后,字节仍被登记为 ghost-gallery 作品。
+        // 与 cindy 槽 saveGhostMedia 同口径的应用会话守卫:落盘前与
+        // ingestMedia 每个 await 边界都复查,防止当前进程在 fetch 读取窗口切换
+        // 账号后,字节仍被登记为 ghost-gallery 作品。
         const ownerScopeKey = activeOwnerScopeKey();
         const assertOwnerScopeCurrent = (): void => {
           if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
@@ -4590,14 +4575,17 @@ export async function installOrUpdateMarketGhostPackage(
     /** receipt 模型并发护栏:更新分支比对 receipt 派生 token(与 main 硬化叠加,决策 A)。 */
     expectedInstalledApproval?: string;
     /**
-     * 手动首装确认真实包、同来源更新仅在真实包扩权时确认；默认安装只把
-     * 市场目录 manifest 当作 fail-closed 权限上限。目录 manifest 不记作批准。
+     * 用户已确认的 reviewedManifest 是权限上限:真实包没有超出则不再弹 Host。
+     * 没有这份上限时,手动首装仍确认真实包,同来源更新仅在相对已装基线扩权时确认。
+     * 默认安装(cap)只把目录 manifest 当作 fail-closed 上限,目录本身不记作批准。
      */
     permissionPolicy?:
       | { mode: 'manual'; sourceType: PluginMarketItemSource }
       | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
     /** 安装锁内从当前已落位包读取的 canonical 权限基线。 */
     permissionBaselineManifest?: GhostManifest;
+    /** 用户已在页面确认过的权限清单;真实包未超出则跳过 Host。 */
+    reviewedManifest?: GhostManifest;
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
@@ -4626,6 +4614,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       | { mode: 'manual'; sourceType: PluginMarketItemSource }
       | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
     permissionBaselineManifest?: GhostManifest;
+    reviewedManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
     beforeCommitInLock?: () => void;
@@ -4696,29 +4685,59 @@ async function installOrUpdateMarketGhostPackageLocked(
               inspected.canonicalManifest,
             )
           : [];
-      const needsReview =
-        permissionDiff?.builtinOauthClientChanged === true ||
-        (expected.permissionPolicy.mode === 'manual'
-          ? permissionDiff === null || permissionDiff.added.length > 0
-          : unreviewed.length > 0);
+      const extrasVersusReviewed = expected.reviewedManifest
+        ? unreviewedGhostPermissionItems(
+            expected.reviewedManifest,
+            baselineManifest ?? undefined,
+            inspected.canonicalManifest,
+          )
+        : null;
+      const builtinOauthClientChanged = marketPackageOauthIdentityChanged(
+        expected.reviewedManifest,
+        baselineManifest,
+        inspected.canonicalManifest,
+      );
+      const manualSummaryChanged = marketPackageManualSummaryChanged(
+        expected.reviewedManifest,
+        inspected.canonicalManifest,
+      );
+      const needsReview = marketPackageNeedsHostReview({
+        mode: expected.permissionPolicy.mode,
+        builtinOauthClientChanged,
+        manualSummaryChanged,
+        addedCount: permissionDiff === null ? null : permissionDiff.added.length,
+        unreviewedCount: unreviewed.length,
+        extrasVersusReviewedCount:
+          extrasVersusReviewed === null ? null : extrasVersusReviewed.length,
+      });
       if (needsReview && expected.approvedPackageSha256 === undefined) {
         const reviewKeys =
-          expected.permissionPolicy.mode === 'manual'
-            ? (permissionDiff?.added.map((item) => item.key) ?? [])
-            : unreviewed.map((item) => item.key);
+          extrasVersusReviewed !== null
+            ? extrasVersusReviewed.map((item) => item.key)
+            : expected.permissionPolicy.mode === 'manual'
+              ? (permissionDiff?.added.map((item) => item.key) ?? [])
+              : unreviewed.map((item) => item.key);
+        const reviewDiff = marketPackageHostReviewDiff({
+          permissionDiff,
+          extrasVersusReviewedCount:
+            extrasVersusReviewed === null ? null : extrasVersusReviewed.length,
+          builtinOauthClientChanged,
+          manualSummaryChanged,
+        });
         const review: PluginMarketPackageReviewFacts = {
           manifest: inspected.manifest,
-          permissionDiff,
+          permissionDiff: reviewDiff,
           isUpdate: installed !== undefined,
           packageSha256: inspected.packageSha256,
           installedBaseline,
           sourceType: expected.permissionPolicy.sourceType,
+          builtinOauthClientChanged,
         };
         log.info('market package requires permission review', {
           ghostId: expected.ghostId,
           mode: expected.permissionPolicy.mode,
           keys: reviewKeys,
-          builtinOauthClientChanged: permissionDiff?.builtinOauthClientChanged === true,
+          builtinOauthClientChanged,
         });
         throw new GhostPackagePermissionReviewRequiredError(review);
       }

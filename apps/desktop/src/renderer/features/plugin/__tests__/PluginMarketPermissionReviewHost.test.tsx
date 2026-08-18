@@ -69,6 +69,7 @@ describe('PluginMarketPermissionReviewHost', () => {
       reviewListener?.({
         requestId: 'review-a',
         ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+        builtinOauthClientChanged: false,
         manifest: {
           schemaVersion: 2,
           id: 'private-plugin',
@@ -119,6 +120,7 @@ describe('PluginMarketPermissionReviewHost', () => {
       reviewListener?.({
         requestId: 'stale-review',
         ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+        builtinOauthClientChanged: false,
         manifest: {
           schemaVersion: 2,
           id: 'private-plugin',
@@ -169,10 +171,44 @@ describe('PluginMarketPermissionReviewHost', () => {
         permissionDiff: { added: [], removed: [], unchanged: [], builtinOauthClientChanged: false },
         isUpdate: true,
         sourceType: 'server',
+        builtinOauthClientChanged: false,
       });
     });
 
     expect(await screen.findByText('settings.ghosts.installConfirm.manualCount:2')).toBeTruthy();
     expect(screen.getByText('settings.ghosts.updateConfirm.title')).toBeTruthy();
+  });
+
+  it('shows the OAuth identity warning on a first-install full permission card', async () => {
+    render(
+      <ConfirmDialogProvider>
+        <PluginMarketPermissionReviewHost />
+      </ConfirmDialogProvider>,
+    );
+
+    act(() => {
+      reviewListener?.({
+        requestId: 'first-install-oauth',
+        ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+        builtinOauthClientChanged: true,
+        manifest: {
+          schemaVersion: 2,
+          id: 'oauth-plugin',
+          name: 'OAuth Plugin',
+          version: '1.0.0',
+          kind: 'chip',
+          entry: 'main.js',
+          slots: ['network'],
+        },
+        permissionDiff: null,
+        isUpdate: false,
+        sourceType: 'server',
+      });
+    });
+
+    expect(
+      await screen.findByText('settings.ghosts.updateConfirm.oauthClientChanged'),
+    ).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.market.installConfirmTitle')).toBeTruthy();
   });
 });

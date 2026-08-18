@@ -27,11 +27,28 @@ import {
   createPendingWriteTracker,
   createSessionWriteQueue,
 } from '@/session/swipeRowRegistry';
-import { cacheSessionMessages, getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
+import {
+  cacheSessionMessagesIfCurrent,
+  captureSessionMessageCacheWriteAuthority,
+  getCachedSessionMessages,
+  isSessionMessageCacheWriteAuthorityCurrent,
+  replaceCachedSessionMessages,
+} from '@/session/mobileSessionMessageCache';
+import { readComposerDocumentDraftSync, readComposerDraftSync } from '@/session/composerDraftStore';
+import { composerDocumentHasContent } from '@/session/composerDocument';
+import { getQuotes } from '@/session/chatQuoteStore';
+import {
+  sessionMessageLifecycle,
+  type SessionMessageAuthority,
+  type SessionMessageReclaimReason,
+  type SessionMessageUnenteredAuthority,
+  type SessionMessageWorkLease,
+} from '@/session/sessionMessageLifecycle';
+import { classifySessionRetention, type SessionRetentionKind } from '@/session/sessionRetention';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
-import { compareMessageOrder } from '@/session/messagePaging';
+import { compareMessageOrder, MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 interface DeviceShard {
@@ -105,6 +122,8 @@ interface SessionMessageSyncMarker {
 }
 
 export interface SetLatestMessageWindowOptions {
+  /** 读取发起时捕获的详情代际；失焦或重新聚焦后旧响应必须拒写。 */
+  authority?: SessionMessageAuthority;
   /**
    * 本页**上沿之外服务端还有历史**(满页,或被 device-link 裁过行)。
    *
@@ -115,6 +134,10 @@ export interface SetLatestMessageWindowOptions {
    * 省略时按 false 处理(保持旧行为):调用方拿不到分页元信息时不该因此丢历史。
    */
   moreBeyondWindow?: boolean;
+}
+
+export interface SessionMessageWriteOptions {
+  authority?: SessionMessageAuthority;
 }
 
 interface LivePlanSnapshot {
@@ -510,6 +533,225 @@ const emptyMessages: RemoteMessage[] = [];
 const emptyPendingInteractions: PendingInteraction[] = [];
 const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
 
+const REGULAR_SESSION_GLOBAL_MESSAGE_BUDGET = 800;
+const REGULAR_SESSION_GLOBAL_MESSAGE_BYTES_BUDGET = 64 * 1024 * 1024;
+const MESSAGE_STRUCTURAL_BYTES_ESTIMATE = 512;
+const messageBytesEstimates = new WeakMap<RemoteMessage, number>();
+const sessionLastAccessOrder = new Map<string, number>();
+let nextSessionAccessOrder = 0;
+
+function sessionById(sessionId: string): RemoteSession | undefined {
+  return mergedSessions.find((session) => session.id === sessionId);
+}
+
+function retentionForSession(sessionId: string): SessionRetentionKind {
+  return classifySessionRetention(sessionById(sessionId));
+}
+
+function touchSessionAccess(sessionId: string): void {
+  sessionLastAccessOrder.set(sessionId, ++nextSessionAccessOrder);
+}
+
+function estimateMessageBytes(message: RemoteMessage): number {
+  const cached = messageBytesEstimates.get(message);
+  if (cached !== undefined) return cached;
+  let bytes = MESSAGE_STRUCTURAL_BYTES_ESTIMATE;
+  if (typeof message.content === 'string') bytes += message.content.length * 2;
+  else if (message.content != null) bytes += safeStableStringify(message.content).length * 2;
+  if (message.agentMeta) bytes += safeStableStringify(message.agentMeta).length * 2;
+  if (message.systemCardData) bytes += safeStableStringify(message.systemCardData).length * 2;
+  messageBytesEstimates.set(message, bytes);
+  return bytes;
+}
+
+function isMessageWindowProtectedRow(sessionId: string, message: RemoteMessage): boolean {
+  if (messageKey(message).startsWith('mobile-system-')) return true;
+  if (isPendingLiveAssistantMessage(sessionId, message)) return true;
+  return message.role === 'user' && !message.id;
+}
+
+/**
+ * 软窗口：不可重取的本地/在途行全部保留，剩余额度给最新服务端行。保护行较多时
+ * 允许略超上限，数据安全优先于精确条数。
+ */
+function trimMessageWindow(
+  sessionId: string,
+  list: readonly RemoteMessage[],
+  limit = MESSAGE_PAGE_SIZE,
+): RemoteMessage[] {
+  if (list.length <= limit) return [...list];
+  const protectedRows: RemoteMessage[] = [];
+  const evictableRows: RemoteMessage[] = [];
+  for (const row of list) {
+    if (isMessageWindowProtectedRow(sessionId, row)) protectedRows.push(row);
+    else evictableRows.push(row);
+  }
+  const keepEvictable = Math.max(0, limit - protectedRows.length);
+  return normalizeMessages([
+    ...protectedRows,
+    ...evictableRows.slice(Math.max(0, evictableRows.length - keepEvictable)),
+  ]);
+}
+
+function hasComposerDraft(sessionId: string): boolean {
+  if ((readComposerDraftSync(sessionId) ?? '').trim().length > 0) return true;
+  const document = readComposerDocumentDraftSync(sessionId);
+  if (document && composerDocumentHasContent(document)) return true;
+  return getQuotes(sessionId).length > 0;
+}
+
+function sessionStoreProtected(sessionId: string, includeVisible = true): boolean {
+  if (includeVisible && sessionMessageLifecycle.isVisible(sessionId)) return true;
+  if (readSessionRunStatus(sessionId).isRunning) return true;
+  if (sessionMakerTurnRunning.get(sessionId) === true) return true;
+  if ((pendingInteractions.get(sessionId)?.length ?? 0) > 0) return true;
+  if ((inputProjections.get(sessionId)?.pendingQueue.length ?? 0) > 0) return true;
+  if (sessionMessageLifecycle.hasLocalWork(sessionId)) return true;
+  if (retentionForSession(sessionId) === 'regular' && hasComposerDraft(sessionId)) return true;
+  return false;
+}
+
+function messageWriteAllowed(
+  sessionId: string,
+  authority?: SessionMessageAuthority,
+): boolean {
+  if (authority && (
+    authority.sessionId !== sessionId
+    || !sessionMessageLifecycle.canCommit(authority)
+  )) return false;
+  if (
+    sessionMessageLifecycle.isVisible(sessionId)
+    || sessionMessageLifecycle.hasLocalWork(sessionId)
+  ) return true;
+  // schedule 从未打开时也不能被全局 push 灌入正文；regular 在详情离场后同样
+  // 拒绝旧订阅/流式 flush，未曾打开的普通任务仍保留既有全局镜像行为。
+  if (retentionForSession(sessionId) === 'schedule') return false;
+  return !sessionMessageLifecycle.hasEntered(sessionId);
+}
+
+function normalizeWindowForRetention(
+  sessionId: string,
+  list: readonly RemoteMessage[],
+): RemoteMessage[] {
+  return retentionForSession(sessionId) === 'schedule'
+    ? trimMessageWindow(sessionId, list)
+    : [...list];
+}
+
+function clearSessionMessageCache(sessionId: string, deviceId?: string): void {
+  const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
+  if (!resolvedDeviceId) return;
+  void replaceCachedSessionMessages(resolvedDeviceId, sessionId, []).catch(() => undefined);
+}
+
+function invalidateSessionMessageWindowState(
+  sessionId: string,
+  requestRefresh: boolean,
+): boolean {
+  let changed = messages.delete(sessionId);
+  changed = livePlanSnapshots.delete(sessionId) || changed;
+  changed = sessionTaskUpdates.delete(sessionId) || changed;
+  changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
+  changed = sessionMessageSyncMarkers.delete(sessionId) || changed;
+  changed = streamingAssistantClientIds.delete(sessionId) || changed;
+  changed = pendingLiveAssistantClientIds.delete(sessionId) || changed;
+  if (pendingTextDeltaBatches.has(sessionId)) {
+    discardPendingTextDelta(sessionId);
+    changed = true;
+  }
+  if (sessionWindowCoverage.has(sessionId)) changed = true;
+  forgetWindowCoverage(sessionId);
+  changed = sessionLiveStreamAcked.delete(sessionId) || changed;
+  sessionLastAccessOrder.delete(sessionId);
+  if (requestRefresh && !pendingRefreshSessions.has(sessionId)) {
+    pendingRefreshSessions.add(sessionId);
+    changed = true;
+  } else if (!requestRefresh) {
+    changed = pendingRefreshSessions.delete(sessionId) || changed;
+  }
+  return changed;
+}
+
+function releaseSessionDetailProjections(sessionId: string): boolean {
+  let changed = livePlanSnapshots.delete(sessionId);
+  changed = sessionTaskUpdates.delete(sessionId) || changed;
+  changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
+  changed = inputProjections.delete(sessionId) || changed;
+  // 即使投影已经为空也要抬升 authority：离场/LRU 前启动的慢查询不能在下一次
+  // 打开同一任务后把旧 pending queue 或 continuation owner 写回来。
+  bumpInputProjectionAuthorityEpoch(sessionId);
+  return changed;
+}
+
+function reclaimScheduleRuntimeMaps(sessionId: string): boolean {
+  let changed = invalidateSessionMessageWindowState(sessionId, false);
+  changed = releaseSessionDetailProjections(sessionId) || changed;
+  return changed;
+}
+
+function enforceRegularMessageBudget(): boolean {
+  let totalCount = 0;
+  let totalBytes = 0;
+  const candidates: Array<{
+    sessionId: string;
+    accessOrder: number;
+    count: number;
+    bytes: number;
+  }> = [];
+  for (const [sessionId, list] of messages) {
+    if (retentionForSession(sessionId) !== 'regular') continue;
+    const bytes = list.reduce((sum, message) => sum + estimateMessageBytes(message), 0);
+    totalCount += list.length;
+    totalBytes += bytes;
+    if (!sessionStoreProtected(sessionId)) {
+      const protectedRows = list.filter((message) => isMessageWindowProtectedRow(sessionId, message));
+      // LRU 是整窗淘汰；只要含无服务端副本/尚未落库的保护行，就跳过整个会话。
+      // 否则保留保护行会被缓存 hook 误当成完整窗口落盘，反而覆盖磁盘上的最新页。
+      if (protectedRows.length > 0) continue;
+      candidates.push({
+        sessionId,
+        accessOrder: sessionLastAccessOrder.get(sessionId) ?? 0,
+        count: list.length,
+        bytes,
+      });
+    }
+  }
+  if (
+    totalCount <= REGULAR_SESSION_GLOBAL_MESSAGE_BUDGET
+    && totalBytes <= REGULAR_SESSION_GLOBAL_MESSAGE_BYTES_BUDGET
+  ) return false;
+  candidates.sort((left, right) => left.accessOrder - right.accessOrder);
+  let changed = false;
+  for (const candidate of candidates) {
+    if (
+      totalCount <= REGULAR_SESSION_GLOBAL_MESSAGE_BUDGET
+      && totalBytes <= REGULAR_SESSION_GLOBAL_MESSAGE_BYTES_BUDGET
+    ) break;
+    if (!messages.delete(candidate.sessionId)) continue;
+    forgetWindowCoverage(candidate.sessionId);
+    sessionLiveStreamAcked.delete(candidate.sessionId);
+    releaseSessionDetailProjections(candidate.sessionId);
+    totalCount -= candidate.count;
+    totalBytes -= candidate.bytes;
+    changed = true;
+    // 这里只淘汰内存，不删除磁盘缓存。重开仍可乐观 hydrate 最新窗口。
+  }
+  return changed;
+}
+
+function applyMessageWriteRetention(sessionId: string): void {
+  touchSessionAccess(sessionId);
+  const current = messages.get(sessionId);
+  if (current && retentionForSession(sessionId) === 'schedule') {
+    const trimmed = trimMessageWindow(sessionId, current);
+    if (!remoteMessageListsEqual(current, trimmed)) {
+      forgetWindowCoverage(sessionId);
+      messages.set(sessionId, trimmed);
+    }
+  }
+  enforceRegularMessageBudget();
+}
+
 let mergedSessions: RemoteSession[] = [];
 let messageVersion = 0;
 let storeVersion = 0;
@@ -530,13 +772,20 @@ function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
 }
 
 function commitInputProjection(sessionId: string, next: InputProjection): boolean {
-  if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) return false;
+  if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) {
+    if (next.pendingQueue.length === 0) sessionMessageLifecycle.retryPendingReclaim(sessionId);
+    return false;
+  }
   inputProjections.set(sessionId, next);
+  if (next.pendingQueue.length === 0) sessionMessageLifecycle.retryPendingReclaim(sessionId);
   emit();
   return true;
 }
 
 function recomputeSessions(): void {
+  const previousRetention = new Map(
+    mergedSessions.map((session) => [session.id, classifySessionRetention(session)] as const),
+  );
   sessionDeviceIndex.clear();
   // 跨 shard 去重 + 设备身份归一化。re-link 后同一 session.id 可能同时存在于 stale / current 两个 shard;
   // 保留「物理 deviceId 是当前已知设备」的那条(current shard 优先,它路由正确且是真身),都不是已知设备
@@ -583,6 +832,25 @@ function recomputeSessions(): void {
   // 数组级同样调和:全部元素引用与序都未变时保留旧数组引用——useRemoteSessions 的
   // useSyncExternalStore 快照经 Object.is 即可短路,消费屏对无关 emit 零重渲染。
   mergedSessions = sameElementRefs(mergedSessions, next) ? mergedSessions : next;
+  for (const session of mergedSessions) {
+    const nextRetention = classifySessionRetention(session);
+    if (nextRetention !== 'schedule' || previousRetention.get(session.id) === 'schedule') continue;
+    // source 晚到后立即切断旧缓存路径。旧 hydrate / debounce 回调还会在提交前
+    // 二次检查 retention；这里的串行删除负责收掉已经开始的旧写。
+    clearSessionMessageCache(session.id, session.deviceLinkDeviceId);
+    const current = messages.get(session.id);
+    if (!current) continue;
+    if (sessionMessageLifecycle.isVisible(session.id)) {
+      const trimmed = trimMessageWindow(session.id, current);
+      if (!remoteMessageListsEqual(current, trimmed)) {
+        messages.set(session.id, trimmed);
+        forgetWindowCoverage(session.id);
+        bumpMessageVersion();
+      }
+    } else {
+      sessionMessageLifecycle.leave(session.id, 'session-switch');
+    }
+  }
   emit();
 }
 
@@ -983,6 +1251,7 @@ function upsertMessage(sessionId: string, message: RemoteMessage): boolean {
       const next = existing.slice();
       next[fallbackIndex] = message;
       messages.set(sessionId, normalizeMessages(next));
+      applyMessageWriteRetention(sessionId);
       retireGeneratedStreamingFallback(sessionId);
       bumpMessageVersion();
       return true;
@@ -990,6 +1259,7 @@ function upsertMessage(sessionId: string, message: RemoteMessage): boolean {
   }
   if (index < 0) {
     messages.set(sessionId, normalizeMessages([...existing, message]));
+    applyMessageWriteRetention(sessionId);
     if (isPersistedAssistantMessage(message) && fallbackIndex < 0) {
       retireGeneratedStreamingFallback(sessionId);
     }
@@ -1001,6 +1271,7 @@ function upsertMessage(sessionId: string, message: RemoteMessage): boolean {
   const next = existing.slice();
   next[index] = replacement;
   messages.set(sessionId, normalizeMessages(next));
+  applyMessageWriteRetention(sessionId);
   if (message.role === 'assistant') {
     forgetPendingLiveAssistantMessageIdentity(
       sessionId,
@@ -1272,6 +1543,114 @@ export const remoteSessionStore = {
     return deviceList ?? [];
   },
 
+  getSessionRetention(sessionId: string): SessionRetentionKind {
+    return retentionForSession(sessionId);
+  },
+
+  enterSessionMessageDetail(sessionId: string): SessionMessageAuthority {
+    const authority = sessionMessageLifecycle.enter(sessionId);
+    touchSessionAccess(sessionId);
+    if (enforceRegularMessageBudget()) {
+      bumpMessageVersion();
+      emit();
+    }
+    return authority;
+  },
+
+  leaveSessionMessageDetail(
+    sessionId: string,
+    reason: SessionMessageReclaimReason,
+    authority?: SessionMessageAuthority | null,
+  ): boolean {
+    const left = sessionMessageLifecycle.leave(sessionId, reason, authority);
+    if (left) {
+      noteLiveStreamInterrupted(sessionId);
+      discardPendingTextDelta(sessionId);
+    }
+    return left;
+  },
+
+  /**
+   * rewind 等远端权威改写后，目标详情已不再拥有可证明正确的连续窗口。
+   * 清内存与磁盘预览并登记一次刷新；页面可见时立即 load，隐藏时下次打开再拉。
+   */
+  invalidateSessionMessageWindow(sessionId: string, deviceId?: string): void {
+    const changed = invalidateSessionMessageWindowState(sessionId, true);
+    clearSessionMessageCache(sessionId, deviceId);
+    if (changed) {
+      bumpMessageVersion();
+      emit();
+    }
+  },
+
+  captureSessionMessageAuthority(sessionId: string): SessionMessageAuthority {
+    return sessionMessageLifecycle.capture(sessionId);
+  },
+
+  isSessionMessageAuthorityCurrent(authority: SessionMessageAuthority): boolean {
+    return sessionMessageLifecycle.canCommit(authority);
+  },
+
+  isSessionMessageDetailVisible(sessionId: string): boolean {
+    return sessionMessageLifecycle.isVisible(sessionId);
+  },
+
+  hasSessionMessageDetailEntered(sessionId: string): boolean {
+    return sessionMessageLifecycle.hasEntered(sessionId);
+  },
+
+  captureUnenteredSessionMessageAuthority(sessionId: string): SessionMessageUnenteredAuthority {
+    return sessionMessageLifecycle.captureUnentered(sessionId);
+  },
+
+  canCommitUnenteredSessionMessageWindow(
+    authority: SessionMessageUnenteredAuthority,
+    deviceId: string,
+  ): boolean {
+    return retentionForSession(authority.sessionId) === 'regular'
+      && sessionDeviceIndex.get(authority.sessionId) === deviceId
+      && sessionMessageLifecycle.canCommitUnentered(authority);
+  },
+
+  acquireSessionMessageWork(sessionId: string, active = false): SessionMessageWorkLease {
+    return sessionMessageLifecycle.acquireWork(sessionId, active);
+  },
+
+  releaseSessionRuntimeState(
+    sessionId: string,
+    options: { reason: SessionMessageReclaimReason },
+  ): boolean {
+    if (!sessionId || sessionMessageLifecycle.isVisible(sessionId)) return true;
+    if (sessionStoreProtected(sessionId, false)) return false;
+    if (retentionForSession(sessionId) === 'schedule') {
+      const changed = reclaimScheduleRuntimeMaps(sessionId);
+      clearSessionMessageCache(sessionId);
+      if (changed) {
+        bumpMessageVersion();
+        emit();
+      }
+      return true;
+    }
+
+    const current = messages.get(sessionId);
+    let changed = releaseSessionDetailProjections(sessionId);
+    if (current && current.length > MESSAGE_PAGE_SIZE) {
+      const compacted = trimMessageWindow(sessionId, current);
+      if (!remoteMessageListsEqual(current, compacted)) {
+        messages.set(sessionId, compacted);
+        forgetWindowCoverage(sessionId);
+        changed = true;
+      }
+    }
+    changed = enforceRegularMessageBudget() || changed;
+    if (changed) {
+      bumpMessageVersion();
+      emit();
+    }
+    void options.reason;
+    return true;
+  },
+
   // 注入当前权威设备列表(首页从 /api/device-link/devices reconcile 后调用),用于设备身份归一化。
   // 仅在身份索引实际变化时重算,避免每次设备列表引用变动都刷新全部会话。
   setDeviceIdentity(devices: readonly { deviceId: string; name: string }[]): void {
@@ -1413,6 +1792,11 @@ export const remoteSessionStore = {
     if (patch.status === 'deleted' || patch.status === 'archived') {
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       sessionLiveActivity.delete(sessionId);
+      let messageStateChanged = invalidateSessionMessageWindowState(sessionId, false);
+      messageStateChanged = releaseSessionDetailProjections(sessionId) || messageStateChanged;
+      sessionMessageLifecycle.forget(sessionId);
+      if (patch.status === 'deleted') clearSessionMessageCache(sessionId, deviceId);
+      if (messageStateChanged) bumpMessageVersion();
     } else {
       const wasPinned = shard.sessions[idx].pinnedAt != null;
       const unpinned = Object.prototype.hasOwnProperty.call(patch, 'pinnedAt') && patch.pinnedAt == null;
@@ -1425,25 +1809,39 @@ export const remoteSessionStore = {
     if (shouldReseedAfterPatch) this.requestReseed(deviceId);
   },
 
-  setMessages(sessionId: string, list: readonly RemoteMessage[]): void {
+  setMessages(
+    sessionId: string,
+    list: readonly RemoteMessage[],
+    options: SessionMessageWriteOptions = {},
+  ): void {
+    if (!messageWriteAllowed(sessionId, options.authority)) return;
     const textFlushed = flushPendingTextDelta(sessionId);
-    const next = normalizeMessages(list);
+    const next = normalizeWindowForRetention(sessionId, normalizeMessages(list));
     // 记账在相等早退**之前**:这一页是服务端一次给出的连续段,它带来的连续性结论与"窗口内容有没有
     // 变"无关。冷开缓存恰好与服务端最新页逐行相同时(常态)若被早退跳过,这次权威响应就白来了 ——
     // 之后会话涨过一页、再遇一次满页重连刷新,本可保留的历史会被当成来源不明全丢(#1210 review)。
     coverReplacedWindow(sessionId, next);
+    if (next.length === 0) clearSessionMessageCache(sessionId);
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
       if (textFlushed) emit();
       return;
     }
     messages.set(sessionId, next);
+    applyMessageWriteRetention(sessionId);
     bumpMessageVersion();
     emit();
   },
 
   // 乐观 hydrate:仅当该会话当前还没有任何消息时,用本地缓存(冷开预览)种入。
   // 「if empty」是关键不变量——fresh 数据若已先到则不覆盖;fresh 之后到也会按 messageKey 对账替换。
-  hydrateMessagesIfEmpty(sessionId: string, list: readonly RemoteMessage[]): void {
+  hydrateMessagesIfEmpty(
+    sessionId: string,
+    list: readonly RemoteMessage[],
+    options: SessionMessageWriteOptions = {},
+  ): void {
+    // schedule 从不读取长期完整消息缓存，即使当前详情可见也不例外。
+    if (retentionForSession(sessionId) === 'schedule') return;
+    if (!messageWriteAllowed(sessionId, options.authority)) return;
     const textFlushed = flushPendingTextDelta(sessionId);
     if ((messages.get(sessionId)?.length ?? 0) > 0) {
       if (textFlushed) emit();
@@ -1455,6 +1853,7 @@ export const remoteSessionStore = {
       return;
     }
     messages.set(sessionId, next);
+    applyMessageWriteRetention(sessionId);
     bumpMessageVersion();
     emit();
   },
@@ -1464,8 +1863,9 @@ export const remoteSessionStore = {
     list: readonly RemoteMessage[],
     options: SetLatestMessageWindowOptions = {},
   ): void {
+    if (!messageWriteAllowed(sessionId, options.authority)) return;
     const textFlushed = flushPendingTextDelta(sessionId);
-    const latestWindow = normalizeMessages(list);
+    const latestWindow = normalizeWindowForRetention(sessionId, normalizeMessages(list));
     if (latestWindow.length === 0) {
       // 空窗口仍需保留本地系统卡(mobile-system-*):新会话首条消息发出后服务端
       // 消息列表可能仍为空,下一次 setLatestMessageWindow 传空数组不能把刚追加的
@@ -1483,6 +1883,8 @@ export const remoteSessionStore = {
         // 服务端行被清空(只余本地卡):旧覆盖区间连同它背书的那些行一起没了,不能留着背书。
         forgetWindowCoverage(sessionId);
         messages.set(sessionId, next);
+        applyMessageWriteRetention(sessionId);
+        if (next.length === 0) clearSessionMessageCache(sessionId);
         bumpMessageVersion();
         emit();
       } else if (textFlushed) {
@@ -1598,7 +2000,7 @@ export const remoteSessionStore = {
       }
     }
 
-    const next = normalizeMessages([...byKey.values()]);
+    const next = normalizeWindowForRetention(sessionId, normalizeMessages([...byKey.values()]));
     // 记账在相等早退**之前**(同 setMessages):这一页是服务端一次给出的连续段,它带来的结论与
     // "窗口内容有没有变"无关。被早退跳过时这次权威响应就白来了(#1210 review)。
     coverLatestPage(sessionId, latestOldestCreatedAt, latestNewestCreatedAt, joinedCoverage);
@@ -1607,6 +2009,7 @@ export const remoteSessionStore = {
       return;
     }
     messages.set(sessionId, next);
+    applyMessageWriteRetention(sessionId);
     bumpMessageVersion();
     emit();
   },
@@ -1634,7 +2037,12 @@ export const remoteSessionStore = {
     return true;
   },
 
-  mergeMessages(sessionId: string, list: readonly RemoteMessage[]): void {
+  mergeMessages(
+    sessionId: string,
+    list: readonly RemoteMessage[],
+    options: SessionMessageWriteOptions = {},
+  ): void {
+    if (!messageWriteAllowed(sessionId, options.authority)) return;
     const textFlushed = flushPendingTextDelta(sessionId);
     const byKey = new Map<string, RemoteMessage>();
     for (const item of messages.get(sessionId) ?? []) {
@@ -1657,12 +2065,13 @@ export const remoteSessionStore = {
         );
       }
     }
-    const next = normalizeMessages([...byKey.values()]);
+    const next = normalizeWindowForRetention(sessionId, normalizeMessages([...byKey.values()]));
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
       if (textFlushed) emit();
       return;
     }
     messages.set(sessionId, next);
+    applyMessageWriteRetention(sessionId);
     bumpMessageVersion();
     emit();
   },
@@ -1676,20 +2085,34 @@ export const remoteSessionStore = {
    *
    * 只有真正沿窗口最旧端连续翻页的调用方可以用它;补内部空洞请继续用 `mergeMessages`。
    */
-  mergeEarlierMessages(sessionId: string, list: readonly RemoteMessage[]): void {
+  mergeEarlierMessages(
+    sessionId: string,
+    list: readonly RemoteMessage[],
+    options: SessionMessageWriteOptions = {},
+  ): void {
+    if (retentionForSession(sessionId) === 'schedule') return;
+    if (!messageWriteAllowed(sessionId, options.authority)) return;
     // 合并前窗口的最旧行 = 这一页接上的那一行,尚无结论时它就是区间上界(见 coverEarlierPage)。
     const joinsAt = oldestCreatedAt(messages.get(sessionId) ?? emptyMessages);
-    this.mergeMessages(sessionId, list);
+    this.mergeMessages(sessionId, list, options);
     const pageOldest = oldestCreatedAt(list);
     if (pageOldest) coverEarlierPage(sessionId, pageOldest, joinsAt);
   },
 
-  appendMessage(sessionId: string, message: RemoteMessage): void {
+  appendMessage(
+    sessionId: string,
+    message: RemoteMessage,
+    options: SessionMessageWriteOptions = {},
+  ): void {
+    if (!messageWriteAllowed(sessionId, options.authority)) return;
     let changed = flushPendingTextDelta(sessionId);
     changed = upsertMessage(sessionId, overlayLivePlanSnapshot(sessionId, message)) || changed;
     // 订阅内到达的实时行可以把覆盖区间的上界往后推;断流后收到的不行(见 liveTailTrusted)。
     coverLiveRow(sessionId, message);
-    if (changed) emit();
+    if (changed) {
+      applyMessageWriteRetention(sessionId);
+      emit();
+    }
   },
 
   /**
@@ -1761,14 +2184,23 @@ export const remoteSessionStore = {
     for (const deletedClientId of deletedClientIds) {
       forgetPendingLiveAssistantMessageIdentity(sessionId, deletedClientId);
     }
+    // 磁盘窗口可能在 regular LRU 后仍存在，即使当前内存里找不到被删行，也必须
+    // 失效缓存，避免下次 hydrate 把远端已删除的正文复活。显式替换会推进 cache
+    // epoch，使更晚触发的旧 debounce/unmount flush 失去提交资格。
+    if (retentionForSession(sessionId) === 'schedule' || !messagesChanged) {
+      clearSessionMessageCache(sessionId, deviceId);
+    } else {
+      const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
+      if (resolvedDeviceId) {
+        void replaceCachedSessionMessages(resolvedDeviceId, sessionId, next).catch(() => undefined);
+      }
+    }
+    if (messagesChanged) {
+      applyMessageWriteRetention(sessionId);
+    }
     if (!messagesChanged && !tasksChanged) return;
     bumpMessageVersion();
     emit();
-    // useSessionMessageCacheSync 对空数组会跳过持久化；删除最后一条消息时在这里
-    // 主动清理 AsyncStorage，避免下次冷开又 hydrate 出已删除正文。
-    if (messagesChanged) {
-      if (deviceId) void cacheSessionMessages(deviceId, sessionId, next).catch(() => undefined);
-    }
   },
 
   /** 旧调用点兼容：精确移除一个 clientId。 */
@@ -1853,6 +2285,7 @@ export const remoteSessionStore = {
     // (#1493 review)。因此 authority 的翻转本身就是一次需要通知的变化。
     const authorityChanged = !pendingInteractionsAuthoritative.has(sessionId);
     pendingInteractionsAuthoritative.add(sessionId);
+    if (next.length === 0) sessionMessageLifecycle.retryPendingReclaim(sessionId);
     if (deepValueEqual(pendingInteractions.get(sessionId) ?? emptyPendingInteractions, next)) {
       if (streamingChanged || authorityChanged) emit();
       return;
@@ -2010,6 +2443,7 @@ export const remoteSessionStore = {
     const next = existing.filter((i) => i.request.requestId !== requestId);
     if (next.length === existing.length) return;
     pendingInteractions.set(sessionId, next);
+    if (next.length === 0) sessionMessageLifecycle.retryPendingReclaim(sessionId);
     emit();
   },
 
@@ -2072,6 +2506,7 @@ export const remoteSessionStore = {
       || !isInteractionResolveSuppressed(sessionId, item));
     if (next.length === existing.length) return;
     pendingInteractions.set(sessionId, next);
+    if (next.length === 0) sessionMessageLifecycle.retryPendingReclaim(sessionId);
     emit();
   },
 
@@ -2406,7 +2841,12 @@ export const remoteSessionStore = {
     const reconnectCleared = type !== null && type !== 'error' && type !== 'done'
       ? clearSessionReconnectAttempt(sessionId)
       : false;
+    const fullMessageWriteAllowed = messageWriteAllowed(sessionId);
     if (type === 'text') {
+      if (!fullMessageWriteAllowed) {
+        if (reconnectCleared) emit();
+        return;
+      }
       if (isRemoteTextDeltaEvent(event)) {
         if (enqueueRemoteTextDelta(sessionId, event, persistId) || reconnectCleared) emit();
         return;
@@ -2425,7 +2865,7 @@ export const remoteSessionStore = {
       || (!isTurnContinuationBoundaryEvent(event) && isTerminalMakerErrorEvent(event))
     ) {
       let terminalPlanChanged = false;
-      if (type === 'done' && readString(event, 'source') === 'codex') {
+      if (fullMessageWriteAllowed && type === 'done' && readString(event, 'source') === 'codex') {
         const data = isRecord(event.data) ? event.data : null;
         const rawTurn = isRecord(data?.raw) ? data.raw : null;
         const turnId = readString(rawTurn, 'id');
@@ -2462,7 +2902,7 @@ export const remoteSessionStore = {
             );
           }
         }
-      } else if (readString(event, 'source') === 'codex') {
+      } else if (fullMessageWriteAllowed && readString(event, 'source') === 'codex') {
         // 没有 done 的 codex 终态 error:这一轮的计划行等不到章,也等不到
         // persistCodexPlanOnDone 的 turnCompleted:false。与 desktop renderer 的
         // markCodexPlanTurnFailed 同款补印记,否则全勾完的失败计划会按旧数据
@@ -2496,7 +2936,7 @@ export const remoteSessionStore = {
       return;
     }
 
-    const textFlushed = flushPendingTextDelta(sessionId);
+    const textFlushed = fullMessageWriteAllowed ? flushPendingTextDelta(sessionId) : false;
     if (type === 'error') {
       const data = isRecord(event.data) ? event.data : null;
       const reconnectAttempt = data?.willRetry === true
@@ -2516,6 +2956,10 @@ export const remoteSessionStore = {
       return;
     }
     if (type === 'tool_use') {
+      if (!fullMessageWriteAllowed) {
+        if (reconnectCleared) emit();
+        return;
+      }
       // Finalize before applying update_plan so its row update and the streaming
       // row transition are published in one snapshot notification.
       const streamingChanged = finalizeRemoteStreamingMessages(
@@ -2531,6 +2975,10 @@ export const remoteSessionStore = {
       return;
     }
     if (type === 'agent_task_update') {
+      if (!fullMessageWriteAllowed) {
+        if (reconnectCleared) emit();
+        return;
+      }
       const rawSource = readString(event, 'source');
       const source = rawSource === 'codex' || rawSource === 'claude-code' || rawSource === 'pi'
         ? rawSource
@@ -2550,6 +2998,10 @@ export const remoteSessionStore = {
       return;
     }
     if (type === 'compact_boundary') {
+      if (!fullMessageWriteAllowed) {
+        if (reconnectCleared) emit();
+        return;
+      }
       const data = isRecord(event.data) ? event.data : {};
       const boundaryId = readString(data, 'boundaryId');
       // 新 producer 都会给 provider boundaryId；兼容旧事件时以完整 data 的 canonical
@@ -2711,6 +3163,8 @@ export const remoteSessionStore = {
         pendingLiveAssistantClientIds.delete(sessionId);
         sessionMakerTurnRunning.delete(sessionId);
         sessionParkedTaskUpdates.delete(sessionId);
+        sessionMessageLifecycle.forget(sessionId);
+        sessionLastAccessOrder.delete(sessionId);
         sessionDeviceIndex.delete(sessionId);
         // revision 下限按会话回收:它不参与单轮快照回收(那会把覆盖权还给晚到的
         // 旧快照),所以只能在会话本身消失时清,保持有界。
@@ -2762,6 +3216,9 @@ export const remoteSessionStore = {
     clearTextDeltaFlushTimer();
     sessionMakerTurnRunning.clear();
     sessionParkedTaskUpdates.clear();
+    sessionMessageLifecycle.reset();
+    sessionLastAccessOrder.clear();
+    nextSessionAccessOrder = 0;
     sessionDeviceIndex.clear();
     reseedHandlers.clear();
     mergedSessions = [];
@@ -2941,6 +3398,9 @@ export const remoteSessionStore = {
   },
 };
 
+sessionMessageLifecycle.setReclaimer((sessionId, reason) =>
+  remoteSessionStore.releaseSessionRuntimeState(sessionId, { reason }));
+
 function dedupeInteractions(list: readonly PendingInteraction[]): PendingInteraction[] {
   const byId = new Map<string, PendingInteraction>();
   for (const item of list) {
@@ -3065,7 +3525,10 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
   const prev = sessionMakerTurnRunning.get(sessionId) === true;
   if (running === prev) return false;
   if (running) sessionMakerTurnRunning.set(sessionId, true);
-  else sessionMakerTurnRunning.delete(sessionId);
+  else {
+    sessionMakerTurnRunning.delete(sessionId);
+    sessionMessageLifecycle.retryPendingReclaim(sessionId);
+  }
   return true;
 }
 
@@ -3076,7 +3539,10 @@ function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus):
   }
   sessionRunStatus.set(sessionId, next);
   if (next.isRunning) sessionRunning.set(sessionId, true);
-  else sessionRunning.delete(sessionId);
+  else {
+    sessionRunning.delete(sessionId);
+    sessionMessageLifecycle.retryPendingReclaim(sessionId);
+  }
   return true;
 }
 
@@ -3264,8 +3730,15 @@ function useSessionMessageCacheSync(
   messages: RemoteMessage[],
 ): void {
   const hydratedKeyRef = useRef<string | null>(null);
-  const hydrationReadyKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retention = useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.getSessionRetention(sessionId),
+  );
+  const authoritySnapshot = useSyncExternalStore(
+    sessionMessageLifecycle.subscribe,
+    () => sessionMessageLifecycle.getSnapshot(sessionId),
+  );
   // 持久化在定时器回调里读最新值,避免把每次渲染的 messages 都闭包进 timer。
   const ctxRef = useRef<{ deviceId?: string; sessionId: string; messages: RemoteMessage[] }>({
     deviceId,
@@ -3276,44 +3749,61 @@ function useSessionMessageCacheSync(
 
   // 乐观 hydrate:每个 (deviceId, sessionId) 只跑一次;缓存回来时若 store 仍为空才种入。
   useEffect(() => {
-    if (!deviceId || !sessionId) return;
+    if (!deviceId || !sessionId || retention !== 'regular') return;
+    const authority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
+    if (!remoteSessionStore.isSessionMessageAuthorityCurrent(authority)) return;
+    const cacheAuthority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
+    if (!cacheAuthority) return;
     const key = `${deviceId}::${sessionId}`;
     if (hydratedKeyRef.current === key) return;
     hydratedKeyRef.current = key;
-    hydrationReadyKeyRef.current = null;
     let cancelled = false;
     void getCachedSessionMessages(deviceId, sessionId)
       .then((cached) => {
         if (cancelled || cached.length === 0) return;
-        remoteSessionStore.hydrateMessagesIfEmpty(sessionId, cached);
+        // 消息 authority 只表示页面仍是同一详情代际；权威空窗口、删除、rewind 或
+        // schedule 改判不会撤销页面本身。缓存 key epoch 必须另行校验，防止这些
+        // 事件发生前启动的旧 getItem 在清空后把已删除正文重新 hydrate 回内存。
+        if (!isSessionMessageCacheWriteAuthorityCurrent(cacheAuthority)) return;
+        if (remoteSessionStore.getSessionRetention(sessionId) !== 'regular') return;
+        if (!remoteSessionStore.isSessionMessageAuthorityCurrent(authority)) return;
+        remoteSessionStore.hydrateMessagesIfEmpty(sessionId, cached, { authority });
       })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) hydrationReadyKeyRef.current = key;
-      });
+      .catch(() => undefined);
     return () => {
       cancelled = true;
+      if (hydratedKeyRef.current === key) hydratedKeyRef.current = null;
     };
-  }, [deviceId, sessionId]);
+  }, [authoritySnapshot, deviceId, retention, sessionId]);
+
+  // schedule 不读写长期完整消息缓存。分类晚到时也会走这条定点删除；缓存模块
+  // 对同 key 串行，能保证删除排在已经开始的旧写之后。
+  useEffect(() => {
+    if (!deviceId || !sessionId || retention !== 'schedule') return;
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = null;
+    void replaceCachedSessionMessages(deviceId, sessionId, []).catch(() => undefined);
+  }, [deviceId, retention, sessionId]);
 
   // 去抖持久化:messages 变化时重排定时器,静默后落盘最新快照。
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
-    if (!deviceId || !sessionId) return;
+    if (!deviceId || !sessionId || retention !== 'regular') return;
     const key = `${deviceId}::${sessionId}`;
-    if (messages.length === 0) {
-      if (hydrationReadyKeyRef.current !== key) return;
-      void cacheSessionMessages(deviceId, sessionId, []).catch(() => undefined);
-      return;
-    }
+    // 空内存可能只是 regular LRU 淘汰，绝不能据此删除磁盘缓存。真正的远端
+    // 删除由 removeMessages / 权威空窗显式处理。
+    if (messages.length === 0) return;
+    const cacheAuthority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
     persistTimerRef.current = setTimeout(() => {
       persistTimerRef.current = null;
       const ctx = ctxRef.current;
       if (!ctx.deviceId || !ctx.sessionId || ctx.messages.length === 0) return;
-      void cacheSessionMessages(ctx.deviceId, ctx.sessionId, ctx.messages).catch(() => undefined);
+      if (`${ctx.deviceId}::${ctx.sessionId}` !== key) return;
+      if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;
+      void cacheSessionMessagesIfCurrent(cacheAuthority, ctx.messages).catch(() => undefined);
     }, SESSION_MESSAGE_CACHE_PERSIST_DEBOUNCE_MS);
-  }, [deviceId, sessionId, messages]);
+  }, [deviceId, messages, retention, sessionId]);
 
   // 卸载时把尚未落盘的最新快照立即 flush(防止快速返回导致最后一次更新丢失)。
   useEffect(() => () => {
@@ -3322,7 +3812,9 @@ function useSessionMessageCacheSync(
     persistTimerRef.current = null;
     const ctx = ctxRef.current;
     if (!ctx.deviceId || !ctx.sessionId || ctx.messages.length === 0) return;
-    void cacheSessionMessages(ctx.deviceId, ctx.sessionId, ctx.messages).catch(() => undefined);
+    if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;
+    const cacheAuthority = captureSessionMessageCacheWriteAuthority(ctx.deviceId, ctx.sessionId);
+    void cacheSessionMessagesIfCurrent(cacheAuthority, ctx.messages).catch(() => undefined);
   }, []);
 }
 

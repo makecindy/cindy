@@ -12,6 +12,7 @@ import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
 import {
   advanceViewedPriorityHold,
   buildMainListEntries,
+  getMainListEntrySessions,
   holdViewedPriorityRank,
   sessionPriorityRank,
   splitEntriesByDevice,
@@ -64,7 +65,9 @@ function labels(entries: MainListEntry[]): string[] {
       ? `p:${entry.project.displayName}`
       : entry.kind === 'dialogue-group'
         ? 'dlg-group'
-        : `s:${entry.session.title}`,
+        : entry.kind === 'automation-group'
+          ? `auto:${entry.group.title}`
+          : `s:${entry.session.title}`,
   );
 }
 
@@ -122,6 +125,223 @@ describe('buildMainListEntries — 混排(recency)', () => {
       manualProjectOrder: [],
     });
     expect(labels(entries)).toEqual(['s:dlg', 's:in-proj']);
+  });
+
+  it('keeps repeated automation runs grouped when project grouping is flat', () => {
+    const olderRun = session({
+      updatedAt: '2026-08-10T10:00:00Z',
+      title: 'automation run 1',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const newerRun = session({
+      updatedAt: '2026-08-12T10:00:00Z',
+      title: 'automation run 2',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const manual = session({
+      updatedAt: '2026-08-11T10:00:00Z',
+      title: 'manual',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const scheduleInfo = {
+      scheduleId: 'schedule-cindy-check',
+      scheduleName: '自动检查 Cindy',
+      unreadRunIds: [],
+      hasUnreadRun: false,
+      hasUnreadFailedRun: false,
+    };
+
+    const entries = buildMainListEntries({
+      projects: [project('/repo', [olderRun, manual, newerRun])],
+      dialogues: [],
+      groupBy: 'flat',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      notifications: new Set(),
+      scheduleSessionIndex: new Map([
+        [olderRun.id, scheduleInfo],
+        [newerRun.id, scheduleInfo],
+      ]),
+    });
+
+    expect(labels(entries)).toEqual(['auto:自动检查 Cindy', 's:manual']);
+    const automationGroup = entries[0];
+    expect(automationGroup.kind).toBe('automation-group');
+    if (automationGroup.kind !== 'automation-group') throw new Error('expected automation group');
+    expect(automationGroup.group.sessions.map((item) => item.id)).toEqual([
+      newerRun.id,
+      olderRun.id,
+    ]);
+  });
+
+  it('keeps one schedule grouped after its working directory changes', () => {
+    const olderRun = session({
+      updatedAt: '2026-08-10T10:00:00Z',
+      title: 'automation run 1',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/old-repo',
+    });
+    const newerRun = session({
+      updatedAt: '2026-08-12T10:00:00Z',
+      title: 'automation run 2',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/new-repo',
+    });
+    const scheduleInfo = {
+      scheduleId: 'schedule-cindy-check',
+      scheduleName: '自动检查 Cindy',
+      unreadRunIds: [],
+      hasUnreadRun: false,
+      hasUnreadFailedRun: false,
+    };
+
+    const entries = buildMainListEntries({
+      projects: [
+        project('/old-repo', [olderRun]),
+        project('/new-repo', [newerRun]),
+      ],
+      dialogues: [],
+      groupBy: 'flat',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      scheduleSessionIndex: new Map([
+        [olderRun.id, scheduleInfo],
+        [newerRun.id, scheduleInfo],
+      ]),
+    });
+
+    expect(labels(entries)).toEqual(['auto:自动检查 Cindy']);
+    const automationGroup = entries[0];
+    expect(automationGroup.kind).toBe('automation-group');
+    if (automationGroup.kind !== 'automation-group') throw new Error('expected automation group');
+    expect(automationGroup.group.sessions.map((item) => item.id)).toEqual([
+      newerRun.id,
+      olderRun.id,
+    ]);
+  });
+
+  it('groups one schedule across project and dialogue destinations before grouping dialogues', () => {
+    const olderProjectRun = session({
+      updatedAt: '2026-08-10T10:00:00Z',
+      title: 'project run',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const newerDialogueRun = session({
+      updatedAt: '2026-08-12T10:00:00Z',
+      title: 'dialogue run',
+      source: 'scheduler',
+      workspaceKind: 'dialogue',
+      workingDir: null,
+    });
+    const manualDialogue = session({
+      updatedAt: '2026-08-11T10:00:00Z',
+      title: 'manual dialogue',
+    });
+    const scheduleInfo = {
+      scheduleId: 'schedule-cindy-check',
+      scheduleName: '自动检查 Cindy',
+      unreadRunIds: [],
+      hasUnreadRun: false,
+      hasUnreadFailedRun: false,
+    };
+
+    const entries = buildMainListEntries({
+      projects: [project('/repo', [olderProjectRun])],
+      dialogues: [manualDialogue, newerDialogueRun],
+      groupBy: 'flat',
+      groupDialogue: true,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      scheduleSessionIndex: new Map([
+        [olderProjectRun.id, scheduleInfo],
+        [newerDialogueRun.id, scheduleInfo],
+      ]),
+    });
+
+    expect(labels(entries)).toEqual(['auto:自动检查 Cindy', 'dlg-group']);
+    const automationGroup = entries[0];
+    expect(automationGroup.kind).toBe('automation-group');
+    if (automationGroup.kind !== 'automation-group') throw new Error('expected automation group');
+    expect(automationGroup.group.sessions.map((item) => item.id)).toEqual([
+      newerDialogueRun.id,
+      olderProjectRun.id,
+    ]);
+    const dialogueGroup = entries[1];
+    expect(dialogueGroup.kind).toBe('dialogue-group');
+    if (dialogueGroup.kind !== 'dialogue-group') throw new Error('expected dialogue group');
+    expect(dialogueGroup.sessions.map((item) => item.id)).toEqual([manualDialogue.id]);
+  });
+
+  it('keeps matching schedule ids isolated by remote device', () => {
+    const runs = ['dev-a', 'dev-b'].flatMap((deviceLinkDeviceId, deviceIndex) =>
+      [1, 2].map((runIndex) =>
+        session({
+          updatedAt: `2026-08-${10 + deviceIndex + runIndex}T10:00:00Z`,
+          title: `${deviceLinkDeviceId} run ${runIndex}`,
+          source: 'scheduler',
+          workspaceKind: 'project',
+          workingDir: '/repo',
+          deviceLinkDeviceId,
+        }),
+      ),
+    );
+    const scheduleSessionIndex = new Map(
+      runs.map((run) => [
+        run.id,
+        {
+          scheduleId: 'shared-schedule-id',
+          scheduleName: '远程自动检查',
+          unreadRunIds: [],
+          hasUnreadRun: false,
+          hasUnreadFailedRun: false,
+        },
+      ]),
+    );
+
+    const entries = buildMainListEntries({
+      projects: [project('/repo-a', runs.slice(0, 2)), project('/repo-b', runs.slice(2))],
+      dialogues: [],
+      groupBy: 'flat',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      scheduleSessionIndex,
+    });
+    const groups = entries.filter(
+      (entry): entry is Extract<MainListEntry, { kind: 'automation-group' }> =>
+        entry.kind === 'automation-group',
+    );
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((entry) => entry.group.id)).size).toBe(2);
+    expect(groups.map((entry) => entry.group.legacyId)).toEqual([
+      'schedule:shared-schedule-id',
+      'schedule:shared-schedule-id',
+    ]);
+    expect(
+      groups.map((entry) => new Set(entry.group.sessions.map((item) => item.deviceLinkDeviceId))),
+    ).toEqual([new Set(['dev-b']), new Set(['dev-a'])]);
+
+    const sections = splitEntriesByDevice(entries, ['dev-a', 'dev-b'], { sortBy: 'recency' });
+    expect(sections.map((section) => section.deviceId)).toEqual(['dev-a', 'dev-b']);
+    expect(
+      sections.map((section) =>
+        section.entries.flatMap((entry) => getMainListEntrySessions(entry).map((item) => item.id)),
+      ),
+    ).toEqual([
+      runs.slice(0, 2).map((run) => run.id).reverse(),
+      runs.slice(2).map((run) => run.id).reverse(),
+    ]);
   });
 });
 

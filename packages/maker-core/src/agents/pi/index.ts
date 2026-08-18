@@ -200,6 +200,34 @@ function isLoopbackOnlyBaseUrl(baseUrl: string): boolean {
     return false; // 非法 URL 不判 loopback(其它校验兜底)
   }
 }
+
+/**
+ * OpenAI subscription context profiles are catalog identities whose wire model id must be
+ * rewritten by Desktop's local compat handler. SSH Pi sessions do not traverse that handler,
+ * so publishing one remotely would leak the `[1m]` suffix to the gateway/upstream model id.
+ *
+ * An explicitly selected BYOM provider remains allowed: its owner controls the model id and
+ * endpoint, and must not be mistaken for Cindy's OpenAI subscription projection merely because
+ * it uses the same display namespace.
+ */
+function isLocalOnlyOpenAiPiContextProfile(
+  model: string,
+  providerId?: string | null,
+): boolean {
+  if (!model.startsWith('chatgpt/') || !model.endsWith('[1m]')) return false;
+  return providerId === undefined || providerId === null || providerId === 'openai';
+}
+
+function assertRemotePiContextProfileAvailable(
+  remoteHostId: string | null | undefined,
+  model: string,
+  providerId?: string | null,
+): void {
+  if (!remoteHostId || !isLocalOnlyOpenAiPiContextProfile(model, providerId)) return;
+  throw new Error(
+    '[REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE] remote Pi sessions cannot use this OpenAI context profile because its model-id rewrite is available only in the Desktop local subscription adapter; pick the XD gateway or a BYOM provider reachable from the SSH host',
+  );
+}
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
@@ -508,6 +536,22 @@ function piManagedPackageResultSummary(
   }
   const pkg = affected as Record<string, unknown>;
   const shortString = (value: unknown, max = 512): string | undefined => (typeof value === 'string' ? value.slice(0, max) : undefined);
+  const packageName = (() => {
+    const candidate = shortString(pkg.name);
+    const scopedPackageName = candidate ? /^@[^/\\]+[/\\][^/\\]+$/.test(candidate) : false;
+    if (
+      candidate
+      && !path.isAbsolute(candidate)
+      && !path.win32.isAbsolute(candidate)
+      && !candidate.startsWith('file:')
+      && ((!candidate.includes('/') && !candidate.includes('\\')) || scopedPackageName)
+    ) {
+      return candidate;
+    }
+    const requested = requestedSource.replace(/^file:/i, '').replace(/[\\/]+$/, '');
+    const basename = path.posix.basename(requested.replace(/\\/g, '/'));
+    return shortString(basename && basename !== '.' && basename !== '..' ? basename : 'Pi extension');
+  })();
   const resources = Array.isArray(pkg.resources)
     ? pkg.resources.slice(0, 128).flatMap((value) => {
         if (!value || typeof value !== 'object') return [];
@@ -548,7 +592,7 @@ function piManagedPackageResultSummary(
       // The package store may report its host-resolved local path. Receipts are
       // conversation data, so preserve only the spelling supplied by the user.
       source: shortString(requestedSource),
-      name: shortString(pkg.name),
+      name: packageName,
       version: shortString(pkg.version, 128),
       enabled: pkg.enabled === true,
       requiresExtensionApproval: pkg.requiresExtensionApproval === true,
@@ -1263,6 +1307,7 @@ export class PiAgent extends BaseAgent {
         message: 'pi remote sessions require a host-provided getRemotePiTransport hook',
       });
     }
+    assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
@@ -2946,6 +2991,7 @@ export class PiAgent extends BaseAgent {
       const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : undefined;
+      assertRemotePiContextProfileAvailable(opts.remoteHostId, model, requestedProviderId);
       // 心跳复用活进程会把当前 (provider, model) 再下发一次。
       // spawn 能靠 custom model id 跑在 Pi 自带目录没有的 SuperGrok
       // 路由上（grok-4.6）；重复 set_model 反而 fail-closed。

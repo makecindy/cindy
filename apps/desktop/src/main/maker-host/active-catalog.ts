@@ -46,6 +46,7 @@ import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-acces
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
+  applyLocalOverridesToRootModel,
   hasLocalAddition,
   EMPTY_MODEL_CATALOG_OVERRIDES,
   resolveLocalBridgeExclusions,
@@ -54,6 +55,7 @@ import {
 import {
   applyRegistryConsumerOverlay,
   applyRootRegistryPlan,
+  consumerPlanKey,
   planRegistryRoots,
   toChatgptBridgeModel,
   rootPlanKey,
@@ -375,6 +377,7 @@ function projectCodexModelsToBridges(
   p: Provider,
   claudeExcluded: ReadonlySet<string> = new Set(),
   prepareClaudeModel: (model: CatalogModel) => CatalogModel = (model) => model,
+  preparePiModel: (model: CatalogModel) => CatalogModel = (model) => model,
 ): Provider {
   const codex = p.models.codex ?? [];
   const canonical = new Map(codex.map((model) => [model.id, model]));
@@ -398,7 +401,12 @@ function projectCodexModelsToBridges(
     claudeSource.map((model) => toChatgptBridgeModel(prepareClaudeModel(model))),
     true,
   );
-  return augmentModels(withClaude, 'pi', codex.map(toChatgptBridgeModel), true);
+  return augmentModels(
+    withClaude,
+    'pi',
+    codex.map((model) => toChatgptBridgeModel(preparePiModel(model))),
+    true,
+  );
 }
 
 /** 静态段被淘汰的供应商：先清空 providers.models，再由 discovery + Registry/local root 装配。 */
@@ -746,8 +754,7 @@ function computeMerged(): Catalog {
         )
       : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
   const catalogXd = b.providers.find((provider) => provider.id === 'xd');
-  const xdShell =
-    catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
+  const xdShell = catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
   const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
@@ -828,12 +835,61 @@ function computeMerged(): Catalog {
           localOverrides,
           plan.warnings,
         );
-      const projected = projectCodexModelsToBridges(withRoot, excluded, prepareClaudeModel);
+      const preparePiModel = (model: CatalogModel): CatalogModel =>
+        applyLocalOverridesToRootModel(
+          'openai',
+          'codex',
+          applyRegistryConsumerOverlay(model, 'openai', 'pi', model.id, plan),
+          localOverrides,
+          plan.warnings,
+        );
+      const projected = projectCodexModelsToBridges(
+        withRoot,
+        excluded,
+        prepareClaudeModel,
+        preparePiModel,
+      );
+      const appendConsumerAdditions = (
+        agent: 'claude-code' | 'pi',
+        models: CatalogModel[],
+      ): CatalogModel[] => {
+        const additions = (plan.consumerAdditions.get(consumerPlanKey('openai', agent)) ?? []).map(
+          (model) =>
+            toChatgptBridgeModel(
+              agent === 'pi'
+                ? applyLocalOverridesToRootModel(
+                    'openai',
+                    'codex',
+                    model,
+                    localOverrides,
+                    plan.warnings,
+                  )
+                : applyLocalConsumerOverrides(
+                    'openai',
+                    'claude-code',
+                    model.id,
+                    model,
+                    localOverrides,
+                    plan.warnings,
+                  ),
+            ),
+        );
+        if (additions.length === 0) return models;
+        const seen = new Set(models.map((model) => model.id));
+        return [...models, ...additions.filter((model) => !seen.has(model.id))];
+      };
       return {
         ...projected,
         models: {
           ...projected.models,
-          pi: applyPiApiAnnotations('openai', projected.models.pi ?? []),
+          'claude-code': appendConsumerAdditions(
+            'claude-code',
+            projected.models['claude-code'] ?? [],
+          ),
+          pi: applyPiApiAnnotations(
+            'openai',
+            appendConsumerAdditions('pi', projected.models.pi ?? []),
+          ),
         },
       };
     }
@@ -1158,6 +1214,11 @@ export function commitModelPlaneFromCatalog(
 export function setLocalCatalogOverrides(overrides: ModelCatalogOverrides): void {
   localOverrides = overrides;
   markChanged();
+}
+
+/** 当前 active-catalog 使用的已清洗本地最终层快照。 */
+export function getLocalCatalogOverridesSnapshot(): ModelCatalogOverrides {
+  return localOverrides;
 }
 
 /** 最近一次合并的 registry 实体化告警(单 route 隔离;刷新路径读走打日志/计数)。 */

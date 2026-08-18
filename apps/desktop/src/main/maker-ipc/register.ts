@@ -835,6 +835,10 @@ import {
   toAgentCommandListFailure,
 } from './agentCommandListIpcBoundary.js';
 import {
+  assertAgentSkillListIpcCaller,
+  toAgentSkillListFailure,
+} from './agentSkillListIpcBoundary.js';
+import {
   captureDataOwnerBroadcastScope,
   tapWindowBroadcast,
 } from '../device-link/broadcast-tap.js';
@@ -6128,7 +6132,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(
     MAKER_INVOKE.LIST_AGENT_SKILLS,
-    async (_e, agentKind: unknown, params: unknown) => {
+    async (event, agentKind: unknown, params: unknown) => {
+      assertAgentSkillListIpcCaller(event, {
+        isDeviceLinkInvoke,
+        assertTrustedSender: (sourceEvent) =>
+          assertTrustedAppRendererEvent(
+            sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
+          ),
+      });
       try {
         const kind = requireAgentKind(agentKind);
         const skillParams = (params ?? {}) as {
@@ -6148,11 +6159,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const result = await maker.listAgentSkills(kind, skillParams);
         return { success: true, ...result };
       } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-          skills: [],
-        };
+        return toAgentSkillListFailure(err, {
+          reportError: (error) => {
+            log.warn('Agent skill list failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
       }
     },
   );

@@ -950,7 +950,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       changed: true,
       affectedPackage: {
         source: resolvedSource,
-        name: 'local-extension',
+        name: resolvedSource,
         enabled: false,
       },
     }));
@@ -993,12 +993,13 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const event = await events.next();
         if (event.done) break;
-        if (event.value.type === 'text' && event.value.data.text.includes('local-extension')) {
+        if (event.value.type === 'text' && event.value.data.text.includes('"name":"extension"')) {
           visibleReceipt = event.value.data.text;
           break;
         }
       }
       expect(visibleReceipt).toContain('"source":"./extension"');
+      expect(visibleReceipt).toContain('"name":"extension"');
       expect(visibleReceipt).not.toContain(resolvedSource);
     } finally {
       await handle.close();

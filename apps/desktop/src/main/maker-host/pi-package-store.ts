@@ -1195,7 +1195,9 @@ async function inspectPackage(
       rawSource: pkg.source,
       view: {
         source: displaySource,
-        name: truncateDisplayField(manifest.name?.trim() || displaySource, MAX_DISPLAY_NAME_BYTES),
+        name: manifest.name?.trim()
+          ? truncateDisplayField(manifest.name, MAX_DISPLAY_NAME_BYTES)
+          : packageDisplayNameFallback(pkg.source, root),
         ...(manifest.version?.trim()
           ? { version: truncateDisplayField(manifest.version, MAX_DISPLAY_VERSION_BYTES) }
           : {}),
@@ -1524,6 +1526,16 @@ function projectPackageSource(source: string): PackageSourceProjection {
 
 function redactPackageCommandMessage(message: string): string {
   return message.replace(PACKAGE_URL_PATTERN, (source) => projectPackageSource(source).displaySource);
+}
+
+function packageDisplayNameFallback(source: string, installedRoot: string): string {
+  const localSource = isLocalPackageSource(source)
+    || path.win32.isAbsolute(source)
+    || /^file:/i.test(source);
+  return truncateDisplayField(
+    localSource ? path.basename(installedRoot) : projectPackageSource(source).displaySource,
+    MAX_DISPLAY_NAME_BYTES,
+  );
 }
 
 export function findAffectedPiPackage(packages: PiPackageView[], requestedSource: string): PiPackageView | undefined {

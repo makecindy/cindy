@@ -56,13 +56,24 @@ interface HarnessProps {
   isCollapsed: boolean;
   isRail?: boolean;
   peekState?: SidebarPeekState | null;
+  forceMountFeatureContent?: boolean;
 }
 
-function Harness({ isCollapsed, isRail = false, peekState = null }: HarnessProps) {
+function Harness({
+  isCollapsed,
+  isRail = false,
+  peekState = null,
+  forceMountFeatureContent = false,
+}: HarnessProps) {
   return (
     <FeatureSidebarSlotProvider isCollapsed={peekState != null ? false : isCollapsed || isRail}>
       <RegisterUpper />
-      <Sidebar isCollapsed={isCollapsed} isRail={isRail} peekState={peekState} />
+      <Sidebar
+        isCollapsed={isCollapsed}
+        isRail={isRail}
+        peekState={peekState}
+        forceMountFeatureContent={forceMountFeatureContent}
+      />
     </FeatureSidebarSlotProvider>
   );
 }
@@ -97,6 +108,13 @@ describe('Sidebar secondary-window lazy feature content', () => {
 
   it('keeps feature content mounted in a secondary rail sidebar', () => {
     render(<Harness isCollapsed={false} isRail />);
+
+    expect(screen.getByTestId('conversation-search-provider')).toBeTruthy();
+    expect(screen.getByTestId('sidebar-upper')).toBeTruthy();
+  });
+
+  it('keeps the feature owner mounted for a hidden new-task sidebar', () => {
+    render(<Harness isCollapsed forceMountFeatureContent />);
 
     expect(screen.getByTestId('conversation-search-provider')).toBeTruthy();
     expect(screen.getByTestId('sidebar-upper')).toBeTruthy();
