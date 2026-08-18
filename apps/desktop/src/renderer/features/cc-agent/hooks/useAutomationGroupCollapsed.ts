@@ -6,10 +6,14 @@
  *
  * 折叠状态是**用户的明确选择,永久持久化、不按时间过期**:
  * - owner-scoped localStorage key derived from `cc-agent.sidebar.collapsedAutomationGroups`
- * - 默认展开(storage 里没有该组 = 展开);仅持久化"已收起"的组
- * - **不做定时 GC** —— 收起就一直收起,直到用户再展开,绝不"用了一阵自己弹开"。
+ * - 默认收起(storage 里没有该组 = 收起);仅持久化"已展开"的组
+ * - 冷启动跟版本默认:没写过 override 的组一律收起,避免侧栏被自动任务刷满
+ * - **不做定时 GC** —— 展开就一直展开,直到用户再收起,绝不"用了一阵自己弹开/收起"。
  *   删掉的定时任务会在本地留一条极小的孤儿记录(几十字节),量可忽略,不值得为清它引入
  *   "按时间删"从而误删活跃分组的风险(这正是早先 30 天 GC 会把活跃分组弹开的根因)。
+ *
+ * 历史兼容:旧版默认展开、只持久化 `collapsed: true`。这类条目仍按「已收起」读;
+ * 未写过条目的组不再被猜成「用户想展开」,而是跟随本版默认收起。
  *
  * 每个分组组件各自持有自己的 collapsed 状态(useState),toggle 时对 localStorage 做
  * "读-改-写、只动自己这个 key"。JS 单线程下读改写不可被打断,不同组各写各的 key,不存在
@@ -29,8 +33,8 @@ const log = createLogger('UseAutomationGroupCollapsed');
 const STORAGE_KEY = 'cc-agent.sidebar.collapsedAutomationGroups';
 
 interface StoredEntry {
-  /** 只存"已收起"的组,展开的组从 stored 中删除。 */
-  collapsed: true;
+  /** 当前版本只持久化已展开(false);旧版写入的 true 仍表示已收起。 */
+  collapsed: boolean;
   /** ISO 8601 — 上次写入时间(仅留作排查/未来用,不参与任何过期判定)。 */
   lastSeenAt: string;
 }
@@ -47,8 +51,8 @@ function loadStored(ownerId: string | null): Stored {
       for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
         if (value && typeof value === 'object') {
           const entry = value as Partial<StoredEntry>;
-          if (entry.collapsed === true && typeof entry.lastSeenAt === 'string') {
-            out[key] = { collapsed: true, lastSeenAt: entry.lastSeenAt };
+          if (typeof entry.collapsed === 'boolean' && typeof entry.lastSeenAt === 'string') {
+            out[key] = { collapsed: entry.collapsed, lastSeenAt: entry.lastSeenAt };
           }
         }
       }
@@ -68,30 +72,34 @@ function writeStored(next: Stored, ownerId: string | null): void {
   }
 }
 
-/** 读取某个分组当前是否收起(默认 false = 展开)。 */
-export function isAutomationGroupCollapsed(groupKey: string, ownerId: string | null): boolean {
-  return Boolean(loadStored(ownerId)[groupKey]);
+function isEntryCollapsed(entry: StoredEntry | undefined): boolean {
+  return entry ? entry.collapsed : true;
 }
 
-/** 写入某个分组的收起态:收起则记一条条目,展开则删除该 key(默认值跟随版本)。 */
+/** 读取某个分组当前是否收起(默认 true = 收起)。 */
+export function isAutomationGroupCollapsed(groupKey: string, ownerId: string | null): boolean {
+  return isEntryCollapsed(loadStored(ownerId)[groupKey]);
+}
+
+/** 写入某个分组的收起态:展开则记一条条目,收起则删除该 key(默认值跟随版本)。 */
 export function setAutomationGroupCollapsed(
   groupKey: string,
   collapsed: boolean,
   ownerId: string | null,
 ): void {
   const stored = loadStored(ownerId);
-  const wasCollapsed = Boolean(stored[groupKey]);
+  const wasCollapsed = isEntryCollapsed(stored[groupKey]);
   if (wasCollapsed === collapsed) return;
   if (collapsed) {
-    stored[groupKey] = { collapsed: true, lastSeenAt: new Date().toISOString() };
-  } else {
     delete stored[groupKey];
+  } else {
+    stored[groupKey] = { collapsed: false, lastSeenAt: new Date().toISOString() };
   }
   writeStored(stored, ownerId);
 }
 
 /**
- * 组件侧 hook:返回 [collapsed, toggle]。collapsed 由 localStorage 初始化(默认展开),
+ * 组件侧 hook:返回 [collapsed, toggle]。collapsed 由 localStorage 初始化(默认收起),
  * 并在 owner / group 边界变化时重新绑定；toggle 只写入创建它时对应的当前 binding。
  */
 export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean, () => void] {

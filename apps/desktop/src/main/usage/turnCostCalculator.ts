@@ -20,7 +20,7 @@ import {
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { buildTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails.js';
-import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
+import { isSubscriptionDirectRoute } from '../../shared/subscriptionModels.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 import type { ModelUsageDeltaEntry } from './modelUsageDelta.js';
 
@@ -195,7 +195,7 @@ export function resolveTurnCost(args: {
   // explicitly selected provider API (for example a bridge sub-agent inside an XD session).
   if (
     context.billingRoute === 'subscription' ||
-    (context.billingRoute !== 'provider-api' && isSubscriptionDirectModel(model))
+    (context.billingRoute !== 'provider-api' && isSubscriptionDirectRoute(model))
   ) {
     return { model, money: null, source: 'subscription' };
   }

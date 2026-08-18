@@ -338,6 +338,26 @@ describe('MacAgentIslandNativeHost', () => {
     });
   });
 
+  it('forwards collapse events from the helper', async () => {
+    const child = createFakeChild();
+    h.spawn.mockReturnValue(child);
+    const options = createOptions();
+    const { MacAgentIslandNativeHost } = await import('../MacAgentIslandNativeHost.js');
+    const host = new MacAgentIslandNativeHost(options);
+
+    expect(host.publish(createDisplayState(), createFrame())).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    (child.stdout as PassThrough).write(`${JSON.stringify({ type: 'ready' })}\n`);
+    (child.stdout as PassThrough).write(`${JSON.stringify({
+      type: 'collapse',
+      displayId: 2,
+    })}\n`);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(options.onCollapse).toHaveBeenCalledWith(2);
+  });
+
   it('copies builtin sounds when building the dev helper', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-island-dev-assets-'));
     const appPath = path.join(tempDir, 'app');
@@ -565,6 +585,7 @@ function createOptions(): ConstructorParameters<typeof import('../MacAgentIsland
   return {
     onPointerZones: vi.fn(),
     onExpand: vi.fn(),
+    onCollapse: vi.fn(),
     onFocusSession: vi.fn(),
     onOpenSettings: vi.fn(),
     onNewMessage: vi.fn(),

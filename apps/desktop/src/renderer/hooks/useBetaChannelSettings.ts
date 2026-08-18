@@ -38,16 +38,25 @@ export function useBetaChannelSettings(): {
 
   useEffect(() => {
     let cancelled = false;
+    let latestSeq = 0;
     void window.electronAPI
       .getUpdateChannelSettings()
       .then((payload) => {
-        if (!cancelled) setState(normalize(payload));
+        if (cancelled || latestSeq !== 0) return;
+        setState(normalize(payload));
       })
       .catch(() => {
-        if (!cancelled) setState((current) => ({ ...current, loading: false }));
+        if (cancelled || latestSeq !== 0) return;
+        setState((current) => ({ ...current, loading: false }));
       });
+    const unsubscribe = window.electronAPI.onUpdateChannelSettings((payload) => {
+      if (cancelled) return;
+      latestSeq += 1;
+      setState(normalize(payload));
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 

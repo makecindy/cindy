@@ -41,7 +41,9 @@ import {
   type ProviderConfig,
   type SocialProvider,
 } from '@cindy/auth-client';
-import { readReloginFlag, clearReloginFlag } from './updateService';
+import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
+import { probeBetaManifest } from './manifestService';
+import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
@@ -55,6 +57,7 @@ import {
 } from './authRefreshFailure';
 import { awaitWithStartupTimeout } from './authStartupGate';
 import { syncCanaryFlagAfterAuth } from './canaryFlagSync';
+import { maybeEnableXdOrgBetaDefault } from './xdOrgBetaDefault';
 import { canRestoreAuthSessionForMembership } from './authRealmPolicy';
 import {
   createAuthBrowserAuthorizationSlot,
@@ -1438,6 +1441,62 @@ function scheduleCanaryFlagSync(input: {
 }
 
 /**
+ * 登录态落地后为 xd 组织补一次设备级 beta 默认值,不阻塞进主界面。
+ *
+ * expectedAuthEpoch + expectedUserId 防止探测完成时已经登出 / 换号。
+ * 用户手动关过(isCustomized)后不再打开;probe 失败也不写盘,下次登录再试。
+ */
+function scheduleXdOrgBetaDefault(input: {
+  expectedAuthEpoch: number;
+  expectedUserId: string;
+}): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  const user = currentUser;
+  if (!user) return;
+  void maybeEnableXdOrgBetaDefault(
+    {
+      expectedAuthEpoch: input.expectedAuthEpoch,
+      expectedUserId: input.expectedUserId,
+      user: {
+        membershipKind: user.membershipKind,
+        orgName: user.orgName,
+        orgSlug: decodeAccessTokenOrgSlug(accessToken),
+      },
+    },
+    {
+      readCurrentAuthIdentity: () => ({
+        authEpoch: authStateEpoch,
+        userId: currentUser?.id ?? null,
+      }),
+      readChannelState: () => ({
+        enableBeta: readUpdateChannelSettings().enableBeta,
+        isCustomized: isEnableBetaUserCustomized(),
+      }),
+      probeBetaManifest,
+      enableBeta: () =>
+        enableUncustomizedBetaChannel(
+          () =>
+            authStateEpoch === input.expectedAuthEpoch && currentUser?.id === input.expectedUserId,
+        ),
+    },
+  )
+    .then((outcome) => {
+      if (outcome.kind === 'enabled') {
+        log.info('xd org beta channel default enabled');
+        return;
+      }
+      if (outcome.reason === 'stale-auth') {
+        log.debug('discarded stale xd org beta default');
+        return;
+      }
+      log.debug('xd org beta channel default skipped: reason=%s', outcome.reason);
+    })
+    .catch((err) => {
+      log.error('xd org beta channel default threw unexpectedly', err);
+    });
+}
+
+/**
  * 冷启动流程的进程内去重:主窗超时转后台之后,副窗 / 右侧栏窗口 mount 再调
  * initialize() 时复用同一个 in-flight promise(各自套各自的超时),避免两条流程
  * 并发轮换同一枚 refresh token 互相打成 INVALID_REFRESH_TOKEN。
@@ -2600,6 +2659,10 @@ async function runColdStartRefreshFlow(
       expectedAuthEpoch: epochAtStart,
       expectedUserId: refreshData.membership.id,
     });
+    scheduleXdOrgBetaDefault({
+      expectedAuthEpoch: epochAtStart,
+      expectedUserId: refreshData.membership.id,
+    });
     scheduleRefresh(refreshData.accessToken);
     // XD / Mivo key 均为本地 only,不再在冷启动从服务器同步到本地。
     // 账号边界对账:换账号则清掉上一个账号留在本机的 provider key,同账号保留(不必重填)。
@@ -2767,6 +2830,10 @@ async function completeLogin(
   });
   scheduleCanaryFlagSync({
     token: outcome.accessToken,
+    expectedAuthEpoch: loginEpoch,
+    expectedUserId: nextUser.id,
+  });
+  scheduleXdOrgBetaDefault({
     expectedAuthEpoch: loginEpoch,
     expectedUserId: nextUser.id,
   });
@@ -3366,6 +3433,10 @@ export async function refresh(): Promise<boolean> {
         }
         scheduleCanaryFlagSync({
           token: data.accessToken,
+          expectedAuthEpoch: refreshEpoch,
+          expectedUserId: nextUser.id,
+        });
+        scheduleXdOrgBetaDefault({
           expectedAuthEpoch: refreshEpoch,
           expectedUserId: nextUser.id,
         });

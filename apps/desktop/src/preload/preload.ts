@@ -160,6 +160,7 @@ import type {
   IOSSimulatorRouteStatusPush,
   IOSSimulatorLiveTouchRequest,
   IOSSimulatorMutationControlRequest,
+  IOSSimulatorRetryNativeRouteRequest,
   IOSSimulatorStatusRequest,
   IOSSimulatorToolRequest,
   IOSSimulatorToolResponse,
@@ -385,6 +386,7 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutUpdateChannelSettings = createIpcFanOut('update-channel-settings');
 const fanOutOrcaWorkerChanged = createIpcFanOut('maker:orca:worker-changed');
 // 右侧栏独立子窗口(RSB window)状态 / 上下文 / 命令推送
 const fanOutRsbWindowStateChanged = createIpcFanOut('maker:rsb-window:state-changed');
@@ -1060,7 +1062,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      imageEdit: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
       video: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
+      videoEdit: {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
@@ -3727,6 +3737,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── App Update (F2/F4) ──
 
   onUpdateStatus: fanOutUpdateStatus,
+  onUpdateChannelSettings: fanOutUpdateChannelSettings,
 
   checkForUpdate: (): Promise<{
     result:
@@ -5143,6 +5154,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         : {
             dataOwnerId: null,
             ownerGeneration: 0,
+            canWriteOwnerScoped: false,
             claimed: false,
             claimedByOtherOwner: false,
             canInitialize: false,
@@ -6541,6 +6553,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         request: IOSSimulatorViewerVisibilityRequest,
       ): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
+      retryNativeRoute: (
+        request: IOSSimulatorRetryNativeRouteRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
       latestFrame: (request: IOSSimulatorViewerRouteRequest): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
       setStreamProfile: (

@@ -91,6 +91,16 @@ describe('sidebar remote project icon', () => {
     );
   });
 
+  // 2026-08-17 用户裁决:绿点容易被误认成未读标记。在线是设备段的常态,不额外画点;
+  // 离线仍保留灰点 + 文字,异常状态不能静默。
+  it('shows a status dot only for offline device group headers', () => {
+    expect(projectsSectionSource).not.toContain('bg-[var(--card-status-done)]');
+    expect(projectsSectionSource).toMatch(
+      /\{!online && \([\s\S]*?bg-\[var\(--text-tertiary\)\][\s\S]*?\)\}/,
+    );
+    expect(projectsSectionSource).toContain("t('ccAgent.sidebar.deviceGroup.offline')");
+  });
+
   // 2026-08-12 用户裁决:按设备分组时列表已按设备切段、段头写着设备名,项目行不再
   // 重复标注归属;远程图标保留(表达「远程 + 连接状态」,不重复归属信息)。
   it('drops the per-row machine label while device grouping is active, keeping the remote icon', () => {

@@ -5,6 +5,11 @@
  * bridge runs in a standalone child process and embeds these specs into its
  * generated extension instead of maintaining a second handwritten regex list.
  */
+export const DOTENV_CREDENTIAL_PATH_PATTERN_SPEC = {
+  source: String.raw`(?:^|[\\/])\.env(?:\.[^\\/]+)?$`,
+  flags: "i",
+} as const;
+
 export const SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
   {
     source: String.raw`(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|azure|claude|codex)\b`,
@@ -14,6 +19,7 @@ export const SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
     source: String.raw`(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc|git-credentials)\b`,
     flags: "i",
   },
+  DOTENV_CREDENTIAL_PATH_PATTERN_SPEC,
   { source: String.raw`[\\/]\.cargo[\\/]credentials(?:\.toml)?\b`, flags: "i" },
   {
     source: String.raw`[\\/]\.m2[\\/]settings(?:-security)?\.xml\b`,
@@ -50,7 +56,6 @@ export const SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
  */
 export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
   ...SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS,
-  { source: String.raw`(?:^|[\\/])\.env(?:\.[^\\/]+)?$`, flags: "i" },
   // Git config can contain credential-bearing remote URLs, while object storage
   // can reconstruct a sensitive tracked file even when its worktree path is
   // denied. Review receives a sanitized diff and never needs raw .git access.
@@ -81,19 +86,9 @@ export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
  * Grep/Glob/Find tools need a second, execution/result-level boundary because
  * their input can be only a granted directory with no concrete file selector.
  */
-export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
+export const SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/.env",
   "**/.env.*",
-  "**/.git",
-  "**/.git/**",
-  "**/node_modules",
-  "**/node_modules/**",
-  "**/apps/claude-code-bin/**",
-  "**/apps/codex-bin/**",
-  "**/apps/pi-bin/**",
-  "**/apps/ripgrep-bin/**",
-  "**/tools/pi/updates/**",
-  "**/.vite/**",
   "**/.ssh/**",
   "**/.aws/**",
   "**/.gnupg/**",
@@ -113,7 +108,10 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/.m2/settings-security.xml",
   "**/application_default_credentials*",
   "**/credentials.json",
-  "**/auth.json",
+  "**/codex/auth.json",
+  "**/claude/auth.json",
+  "**/gcloud/auth.json",
+  "**/containers/auth.json",
   "**/.config/gh/**",
   "**/.config/hub/**",
   "**/.config/glab/**",
@@ -131,6 +129,32 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/.xdt-server",
   "**/.xdt-server/**",
 ] as const;
+
+export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
+  ...SENSITIVE_CREDENTIAL_GLOB_PATTERNS,
+  "**/auth.json",
+  "**/.git",
+  "**/.git/**",
+  "**/node_modules",
+  "**/node_modules/**",
+  "**/apps/claude-code-bin/**",
+  "**/apps/codex-bin/**",
+  "**/apps/pi-bin/**",
+  "**/apps/ripgrep-bin/**",
+  "**/tools/pi/updates/**",
+  "**/.vite/**",
+] as const;
+
+const DOTENV_CREDENTIAL_PATH_PATTERN = new RegExp(
+  DOTENV_CREDENTIAL_PATH_PATTERN_SPEC.source,
+  DOTENV_CREDENTIAL_PATH_PATTERN_SPEC.flags,
+);
+
+export function isDotenvCredentialPath(target: string): boolean {
+  return (
+    typeof target === "string" && DOTENV_CREDENTIAL_PATH_PATTERN.test(target)
+  );
+}
 
 export const SENSITIVE_CREDENTIAL_PATH_PATTERNS: readonly RegExp[] =
   SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS.map(

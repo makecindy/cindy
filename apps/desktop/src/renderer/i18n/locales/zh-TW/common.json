@@ -9,6 +9,7 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "該供應商不支援 SSH 遠端會話，請更換來源",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "未連線 Claude.ai 訂閱，請先連線或選擇閘道器模型",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目標裝置長時間無響應，請檢查遠端裝置後重試",
+    "INTERNAL": "操作失敗，請稍後重試。",
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端專案目錄不存在，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "遠端專案路徑不是資料夾，請重新選擇專案目錄。",
@@ -472,6 +473,13 @@
         "label": "任務列表顯示方式",
         "hint": "側邊欄主列表（置頂以外）的顯示形態：文字為緊湊單行，列表為帶預覽的兩行。",
         "aria": "切換任務列表顯示方式"
+      },
+      "ghostPanelRestore": {
+        "label": "插件面板恢復入口",
+        "hint": "選擇最小化插件面板後從哪裡恢復。",
+        "aria": "選擇插件面板恢復入口",
+        "bubble": "浮動氣泡",
+        "sidebar": "側邊欄"
       },
       "layout": {
         "label": "面板佈局",
@@ -1574,6 +1582,7 @@
         "enableModel": "啟用此模型",
         "capabilityGroupHint": "不會出現在對話模型選擇中，僅供影像生成等功能使用",
         "accessWriteFailed": "停用設定未能儲存，請重試",
+        "visibilityWriteFailed": "模型顯示設定未能儲存，請重試；如果仍然失敗，請重新啟動 Cindy。",
         "disabledGroup": "已停用",
         "enableAllModels": "全部啟用",
         "priceOverride": {
@@ -4574,7 +4583,7 @@
     "maximizeAria": "撐滿內容區",
     "restoreAria": "還原面板大小",
     "detachAria": "在獨立視窗中開啟",
-    "minimizeAria": "最小化為浮動氣泡",
+    "minimizeAria": "最小化面板",
     "closeAria": "關閉面板並停用插件"
   },
   "ghostPanel": {
@@ -4592,6 +4601,11 @@
     "restoreAria": "恢復 {{name}} 面板",
     "stackExpandAria": "已收起 {{count}} 個插件面板，點選展開",
     "stackCollapseAria": "收攏插件面板列表"
+  },
+  "ghostPanelRestore": {
+    "single": "恢復 {{name}}",
+    "multiple": "已收起的插件面板",
+    "multipleAria": "已收起 {{count}} 個插件面板，點擊選擇要恢復的面板"
   },
   "rightSidebar": {
     "ariaLabel": "右側邊欄",
@@ -4691,19 +4705,25 @@
       },
       "refresh": "重新整理",
       "checking": "正在檢查",
-      "accessRequiredTitle": "授权當前任務",
-      "accessRequiredDescription": "此面板尚未获得當前任務的模擬器存取權限。請先在系統弹窗中確認。",
-      "allowTaskAccess": "允許當前任務存取",
+      "accessRequiredTitle": "允許當前任務控制",
+      "accessRequiredDescription": "狀態檢視可能仍可使用，但點按、輸入和其他控制只有在目前任務獲得授權後才會開放。請在系統對話框中確認。",
+      "allowTaskAccess": "允許任務控制",
       "requestingAccess": "正在請求存取…",
       "accessDialogTitle": "允許控制 iOS 模擬器？",
       "accessDialogMessage": "允許當前 Cindy 視窗为任務“{{task}}”檢視和控制 iOS 模擬器吗？",
-      "accessDialogDetail": "此權限僅对该任務生效；切換任務后会自动撤銷。",
+      "accessDialogDetail": "此權限僅對該任務生效。切換到其他任務後會保留檢視授權，但控制會暫停；返回後請再次允許控制。",
       "accessDialogAllow": "允許模擬器控制",
       "accessDialogCancel": "取消",
       "accessDialogUntitledTask": "未命名任務",
       "readyTitle": "模擬器環境已就緒",
       "unavailableTitle": "模擬器不可用",
-      "connectionError": "Cindy 無法檢查本機模擬器環境，請重试。",
+      "connectionError": "Cindy 無法連線 iOS 模擬器 Host，請重試。",
+      "pluginNotInstalled": "目前的 Cindy 執行個體尚未安裝 iOS 模擬器插件。請前往插件市集安裝並啟用後重試。",
+      "pluginDisabled": "目前的 Cindy 執行個體已安裝 iOS 模擬器插件，但插件尚未啟用。請在插件頁啟用後重試。",
+      "pluginDisabledForProject": "iOS 模擬器插件已對此工作目錄停用。請在專案插件設定中啟用後重試。",
+      "pluginSessionUnavailable": "插件已安裝並啟用，但目前的 Cindy 執行個體暫時無法使用共享插件能力。另一個 Cindy 執行個體或帳號切換可能正在占用此能力；請稍後重新整理。",
+      "pluginStateChanging": "Cindy 正在切換帳號或插件狀態，請稍後重新整理。",
+      "statusInternalError": "Cindy 讀取 iOS 模擬器狀態時發生內部錯誤，請重試。",
       "remoteUnsupported": "iOS 模擬器僅支援本地 macOS 任務，不支援 SSH 或遠端任務。",
       "sessionUnavailable": "當前 Cindy 任務已不可用。",
       "setupTitle": "設定清單",
@@ -4801,6 +4821,13 @@
           "reconnecting": "正在重新連線…",
           "unavailable": "不可用"
         }
+      },
+      "nativeRecovery": {
+        "available": "Native 加速目前無法使用。重試期間，WDA 畫面和控制會保持可用。",
+        "action": "嘗試恢復 Native",
+        "recovering": "正在恢復 Native 加速，目前的 WDA 畫面和控制會保持可用。",
+        "recoveringAction": "正在恢復 Native…",
+        "failed": "暫時無法恢復 Native 加速，WDA 仍可正常使用。請稍後再試。"
       },
       "stream": {
         "idle": "待連線",
@@ -6234,6 +6261,10 @@
       "retry": "重試",
       "continueAfterReset": "恢復後繼續",
       "continueAfterResetTitle": "建立一次性自動化，在用量恢復後繼續當前任務",
+      "codexOrganizationUsageLimitWithReset": "目前連線的是企業 Codex 帳號，已達到用量上限，預計於 {{resetAt}} 恢復。",
+      "codexOrganizationUsageLimit": "目前連線的是企業 Codex 帳號，已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
+      "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
+      "codexUsageLimit": "目前連線的 Codex 帳號已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "gatewayQuotaExhausted": "Cindy AI 餘額不足，請充值後繼續",
       "viewBalance": "檢視餘額",
       "viewBalanceTitle": "開啟「用量和計費」檢視餘額並充值",
@@ -8360,7 +8391,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
+      "instruction": "我想給 {{appName}} 提交一條反饋。請協助我整理成一個高品質的 GitHub issue：先和我確認反饋型別(bug 還是功能建議)，並追問必要細節(現象、復現步驟或使用場景、期望行為)；整理時預設概括或泛化使用者提供的原話與範例，不要直接複製可識別個人、對話或業務的資訊；資訊足夠後用 cindy_helper 的 call_tool 呼叫 submit_github_issue 工具提交(category=feedback，可先 list_tools 檢視引數要求；提交前系統會彈確認卡片給我看)。如果提交失敗，如實告訴我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -8369,7 +8400,8 @@
       "typeFeature": "功能建議",
       "titleLabel": "標題",
       "bodyLabel": "正文(Markdown)",
-      "privacyHint": "偵測到常見金鑰、個人路徑及電子郵件地址時，系統會自動遮蔽。提交前請檢查公開內容。",
+      "privacyHint": "Issue 的標題與正文將公開顯示，且可能被搜尋或快取。系統只能遮蔽部分常見敏感資訊，無法辨識所有語意隱私。",
+      "privacyConfirm": "我已檢查以上公開內容，不包含不應公開的個人、對話或業務資訊",
       "submissionMethodLabel": "釋出方式",
       "identityGithubUser": "GitHub 帳號 @{{login}} 直接釋出",
       "identityGithubUserHint": "你將成為該 Issue 的 GitHub 作者，可以在 GitHub 編輯或關閉",

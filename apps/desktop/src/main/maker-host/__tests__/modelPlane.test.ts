@@ -530,7 +530,23 @@ describe('本地 override(local 永远最高)', () => {
   });
 
   it('一条 perAgent.codex patch 只修 xAI Codex 档位,claude root 与 Pi 官方目录不动', () => {
-    setActiveCatalog(baseCatalog([grokEntry()]));
+    const catalog = baseCatalog([grokEntry()]);
+    const xai = catalog.providers.find((provider) => provider.id === 'xai');
+    if (!xai) throw new Error('bundled catalog missing xai');
+    // Loaded catalogs keep CC/Codex fallback membership; official Pi extras must not leak.
+    xai.models.pi = [
+      ...(xai.models.pi ?? []),
+      {
+        id: 'grok-pi-only-fixture',
+        name: 'Pi Only Fixture',
+        group: 'grok',
+        contextWindow: 128_000,
+        efforts: ['low'],
+        defaultEffort: 'low',
+        status: 'active',
+      },
+    ];
+    setActiveCatalog(catalog);
     setLocalCatalogOverrides(
       overridesOf({
         patches: {
@@ -549,7 +565,7 @@ describe('本地 override(local 永远最高)', () => {
     expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toMatchObject({
       efforts: ['low', 'medium', 'high', 'xhigh'],
     });
-    expect(models('xai', 'pi').some((m) => m.id === 'grok-4.6')).toBe(false);
+    expect(models('xai', 'pi').some((m) => m.id === 'grok-pi-only-fixture')).toBe(false);
   });
 
   it('本地 perAgent 也在 bridge 目标端生效,且不能写展示/status 字段', () => {

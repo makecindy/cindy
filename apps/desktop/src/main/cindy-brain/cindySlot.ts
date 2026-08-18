@@ -2,7 +2,9 @@
  * cindySlot.ts — cindy 槽代办(卡槽⑤,原名模型槽)。
  * ---------------------------------------------------------------------------
  * 意识沙箱零网络零文件,
- * 想用 AI 只能经管子请主机代办。本模块处理上行 cindy-request(旧名 model-request 兼容):
+ * 想用 AI 只能经管子请主机代办。本模块处理存量上行 cindy-request
+ * (旧名 model-request 兼容)。新的通用媒体模型调用由当前 Agent 使用 Cindy Core
+ * media 工具发起，不再从插件沙箱或面板进入本链：
  *
  *   电子脑 cindy.send({type:'cindy-request', kind:'gen_image'|'edit_image'|'gen_video'|'edit_video', …})
  *     → 资格审(声明了 'cindy' 卡槽 + 能力详单?按类目.动作粒度)

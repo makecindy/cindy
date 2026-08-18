@@ -580,7 +580,7 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('By Cindy').className).toContain('truncate');
   });
 
-  it('marks Cindy model preferences as a card-width responsive control group', () => {
+  it('uses each Cindy capability catalog in the responsive control group', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -588,12 +588,26 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: {},
             image: {
-              options: [{ id: 'image-default', label: 'Image Default' }],
+              options: [
+                { id: 'image-default', label: 'Image Default' },
+                { id: 'image-option', label: 'Image Option' },
+              ],
               defaultModel: { id: 'image-default', label: 'Image Default' },
+            },
+            imageEdit: {
+              options: [
+                { id: 'image-edit', label: 'Image Edit' },
+                { id: 'image-edit-option', label: 'Image Edit Option' },
+              ],
+              defaultModel: { id: 'image-edit', label: 'Image Edit' },
             },
             video: {
               options: [{ id: 'video-default', label: 'Video Default' }],
               defaultModel: { id: 'video-default', label: 'Video Default' },
+            },
+            videoEdit: {
+              options: [{ id: 'video-edit', label: 'Video Edit' }],
+              defaultModel: { id: 'video-edit', label: 'Video Edit' },
             },
           }),
           setCindyPref: vi.fn(),
@@ -604,16 +618,25 @@ describe('Ghost plugin detail sections', () => {
     const { container } = render(
       <CindyCapabilityPrefs
         ghostId="builtin.example"
-        capabilities={['image.generate']}
+        capabilities={['image.generate', 'image.edit']}
         appearance="plugin"
       />,
     );
 
     expect(container.querySelector('.cindy-capability-prefs')).toBeTruthy();
     expect(container.querySelector('.cindy-capability-row')).toBeTruthy();
-    const select = screen.getByRole('combobox');
-    expect(select.className).toContain('cindy-capability-select');
-    expect(select.className).toContain('max-w-[60%]');
+    const selects = screen.getAllByRole('combobox') as HTMLSelectElement[];
+    expect(selects).toHaveLength(2);
+    expect(Array.from(selects[0]!.options, (option) => option.value)).toEqual([
+      '__default__',
+      'image-option',
+    ]);
+    expect(Array.from(selects[1]!.options, (option) => option.value)).toEqual([
+      '__default__',
+      'image-edit-option',
+    ]);
+    expect(selects[0]!.className).toContain('cindy-capability-select');
+    expect(selects[0]!.className).toContain('max-w-[60%]');
   });
 
   // 2026-08-05:快问快答钉档扩展为目录全量文本模型——富列表选择器(供应商
@@ -635,7 +658,9 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: {},
             image: { options: [], defaultModel: null },
+            imageEdit: { options: [], defaultModel: null },
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
             text: {
               options: [
                 {
@@ -721,7 +746,9 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: { 'text.oneshot': 'litellm-kimi-k2.6' },
             image: { options: [], defaultModel: null },
+            imageEdit: { options: [], defaultModel: null },
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
             text: {
               options: [
                 {
@@ -775,7 +802,9 @@ describe('Ghost plugin detail sections', () => {
           cindyPrefsSync: () => ({
             overrides: { 'text.oneshot': 'cat:gone:codex:retired-model' },
             image: { options: [], defaultModel: null },
+            imageEdit: { options: [], defaultModel: null },
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
             text: {
               options: [
                 {
@@ -833,8 +862,13 @@ describe('Ghost plugin detail sections', () => {
               options: [{ id: 'image-default', label: 'Image Default' }],
               defaultModel: { id: 'image-default', label: 'Image Default' },
             },
+            imageEdit: {
+              options: [{ id: 'image-edit', label: 'Image Edit' }],
+              defaultModel: { id: 'image-edit', label: 'Image Edit' },
+            },
             // 目录没给视频清单 = 能力暂不可用。
             video: { options: [], defaultModel: null },
+            videoEdit: { options: [], defaultModel: null },
           }),
           setCindyPref: vi.fn(),
         },

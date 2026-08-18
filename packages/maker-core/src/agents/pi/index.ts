@@ -3496,7 +3496,7 @@ export class PiAgent extends BaseAgent {
    * pi extension UI 子协议桥。
    *
    * cindy-bridge 的权限询问走 confirm(title='cindy:permission', message=JSON
-   * {toolName, input}),映射成 InteractionRequest(kind='permission')交给
+   * {toolName, input, resolvedCredentialPaths}),映射成 InteractionRequest(kind='permission')交给
    * cindy 审批 UI;resolver 缺失或抛错一律 deny(fail-closed —— ask 档没人接
    * 不得放行)。其它 dialog 请求 cancelled 兜底,不挂死 agent loop。
    *
@@ -3594,15 +3594,33 @@ export class PiAgent extends BaseAgent {
     if (method === 'confirm' && event.title === 'cindy:permission') {
       let toolName = 'tool';
       let input: Record<string, unknown> = {};
+      let resolvedCredentialPaths: string[] | null | undefined;
       try {
         const payload = JSON.parse(typeof event.message === 'string' ? event.message : '{}') as {
           toolName?: unknown;
           input?: unknown;
+          resolvedCredentialPaths?: unknown;
         };
         if (typeof payload.toolName === 'string' && payload.toolName.length > 0) toolName = payload.toolName;
         if (payload.input && typeof payload.input === 'object') input = payload.input as Record<string, unknown>;
+        if (Object.hasOwn(payload, 'resolvedCredentialPaths')) {
+          resolvedCredentialPaths = Array.isArray(payload.resolvedCredentialPaths)
+            && payload.resolvedCredentialPaths.length <= 64
+            && payload.resolvedCredentialPaths.every((item) => typeof item === 'string' && item.length > 0)
+            ? payload.resolvedCredentialPaths as string[]
+            : null;
+        }
       } catch {
         /* keep defaults */
+      }
+      if (
+        (toolName === 'read' || toolName === 'grep' || toolName === 'find' || toolName === 'ls' || toolName === 'bash')
+        && resolvedCredentialPaths === undefined
+      ) {
+        // Readonly calls and bash input redirects only reach Host with bridge-supplied
+        // canonical-path evidence. Missing evidence means an old or malformed bridge,
+        // not a safe read; require explicit consent instead of trusting a link name.
+        resolvedCredentialPaths = null;
       }
       const {
         resolver,
@@ -3843,6 +3861,7 @@ export class PiAgent extends BaseAgent {
           const action = normalizePiToolForAutoReview({
             toolName,
             input,
+            resolvedCredentialPaths,
             workspaceRoots,
             readRoots,
           });

@@ -46,7 +46,7 @@ import {
 } from '@/components/new-chat/sourceSwitch';
 import {
   isModelEnabled,
-  setManyVisibility,
+  setModelVisibilities,
   setModelVisibility,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
@@ -472,38 +472,46 @@ export function UnifiedModelList({
   const refreshLabel = refreshing
     ? t('settings.providers.models.refreshingAria')
     : (refreshIdleLabel ?? t('settings.providers.models.refreshAria'));
+  const showVisibilityWriteFailure = useCallback(() => {
+    toast.error(t('settings.providers.models.visibilityWriteFailed'));
+  }, [t]);
 
   /** 单开关(显示轴):一次写该行全部可用 agent(分歧行拨动即归一)。写入用各 agent 的
    *  **真实模型 id**(桥接投影行两端 id 不同:chatgpt/gpt-5.5 vs gpt-5.5),不能用规范化后的 row.id。 */
   const toggleRow = useCallback(
     (row: UnionModelRow) => {
       const next = !rowAnyEnabled(provider.id, row);
-      for (const a of row.avail) {
-        const m = row.byAgent[a];
-        if (m) setModelVisibility(a, provider.id, m.id, next);
+      const targets = row.avail.flatMap((agent) => {
+        const model = row.byAgent[agent];
+        return model ? [{ agent, modelId: model.id }] : [];
+      });
+      if (setModelVisibilities(provider.id, targets, next) === false) {
+        showVisibilityWriteFailure();
       }
     },
-    [provider.id],
+    [provider.id, showVisibilityWriteFailure],
   );
 
-  /** 全部显示 / 隐藏:逐 agent 批量写(单 agent 一次落盘)。只作用于**对话模型的显示轴**
+  /** 全部显示 / 隐藏:跨 agent 一次落盘。只作用于**对话模型的显示轴**
    *  —— 能力模型没有显示轴,停用行没有可显示态,都不写(写了 = 无效 override 污染存储,
    *  且历史上会把图像模型漏进选择器)。停用判定含乐观覆盖(pendingDisabled,按规范化
    *  行 key):刚停用、快照未回来的行同样不写(PR #744 review)。 */
   const handleBulk = useCallback(() => {
     const next = !allOn;
-    for (const agent of provider.agents) {
-      const ids = (provider.models[agent] ?? [])
+    const targets = provider.agents.flatMap((agent) =>
+      (provider.models[agent] ?? [])
         .filter(
           (m) =>
             isAgentSelectableModel(m, { userProvider: provider.source === 'user' }) &&
             (pendingDisabled[canonicalModelKey(provider, agent, m.id)] ?? m.disabled === true) !==
               true,
         )
-        .map((m) => m.id);
-      setManyVisibility(agent, provider.id, ids, next);
+        .map((model) => ({ agent, modelId: model.id })),
+    );
+    if (setModelVisibilities(provider.id, targets, next) === false) {
+      showVisibilityWriteFailure();
     }
-  }, [allOn, provider, pendingDisabled]);
+  }, [allOn, provider, pendingDisabled, showVisibilityWriteFailure]);
 
   /** 行级「⋯」菜单(hover 显现;菜单打开期间保持可见):停用动作的唯一入口。 */
   const rowMenu = (row: UnionModelRow) => (
@@ -795,7 +803,11 @@ export function UnifiedModelList({
                                   {m ? (
                                     <Switch
                                       checked={isModelEnabled(a, provider.id, m)}
-                                      onCheckedChange={(v) => setModelVisibility(a, provider.id, m.id, v)}
+                                      onCheckedChange={(v) => {
+                                        if (setModelVisibility(a, provider.id, m.id, v) === false) {
+                                          showVisibilityWriteFailure();
+                                        }
+                                      }}
                                       aria-label={`${rep.name} · ${AGENT_LABEL[a]}`}
                                     />
                                   ) : (
