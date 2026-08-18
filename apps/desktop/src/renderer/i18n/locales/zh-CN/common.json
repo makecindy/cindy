@@ -4568,6 +4568,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "切换侧边栏",
+    "collapseSidebar": "收起侧边栏",
+    "expandSidebar": "展开侧边栏",
     "collapsePanel": "收起",
     "expandPanel": "展开"
   },
@@ -7118,6 +7120,7 @@
       "scopeLocalSessions": "本机任务",
       "dialogues": "对话",
       "newDialogue": "新任务",
+      "creationInProgress": "正在创建，请稍候",
       "dialoguesToggleExpand": "展开对话",
       "dialoguesToggleCollapse": "收起对话",
       "loadingDialogues": "加载中…",
@@ -7306,6 +7309,7 @@
         "delete": "删除所选任务",
         "clear": "清除选择",
         "archiveNone": "所选任务没有可归档项",
+        "actionInProgress": "正在处理另一项操作",
         "skipRunning": "{{count}} 个运行中",
         "skipAttached": "{{count}} 个远程接管中",
         "skipNotActive": "{{count}} 个非活跃状态",

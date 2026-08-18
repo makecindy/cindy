@@ -1,5 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
+import { Tip, type TipProps } from '@/components/ui/tooltip';
+
 /**
  * ChromeIconButton —— 标题栏 28px 圆形图标按钮基元。
  *
@@ -17,11 +19,33 @@ const CHROME_ICON_BUTTON_CLASS =
 export function ChromeIconButton({
   children,
   className,
+  tooltip,
+  tooltipSide,
+  tooltipDelay,
+  title,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { children?: ReactNode }) {
-  return (
-    <button type="button" className={[CHROME_ICON_BUTTON_CLASS, className].filter(Boolean).join(' ')} {...rest}>
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  children?: ReactNode;
+  tooltip?: ReactNode;
+  tooltipSide?: TipProps['side'];
+  tooltipDelay?: number;
+}) {
+  const accessibleLabel = rest['aria-label'];
+  const tooltipText =
+    tooltip ?? title ?? (typeof accessibleLabel === 'string' ? accessibleLabel : undefined);
+  const button = (
+    <button
+      type="button"
+      className={[CHROME_ICON_BUTTON_CLASS, className].filter(Boolean).join(' ')}
+      {...rest}
+    >
       {children}
     </button>
+  );
+
+  return (
+    <Tip text={tooltipText} side={tooltipSide} delay={tooltipDelay}>
+      {rest.disabled ? <span className="inline-flex">{button}</span> : button}
+    </Tip>
   );
 }

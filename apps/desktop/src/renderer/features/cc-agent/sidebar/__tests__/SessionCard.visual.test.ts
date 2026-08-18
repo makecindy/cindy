@@ -65,6 +65,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children: ReactNode }) => children,
   Tooltip: {
     Provider: ({ children }: { children: ReactNode }) => children,
     Root: ({ children }: { children: ReactNode }) => children,

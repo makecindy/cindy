@@ -4568,6 +4568,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "サイドバーを切り替え",
+    "collapseSidebar": "サイドバーを折りたたむ",
+    "expandSidebar": "サイドバーを展開",
     "collapsePanel": "折りたたみ",
     "expandPanel": "展開"
   },
@@ -7118,6 +7120,7 @@
       "scopeLocalSessions": "このデバイスのセッション",
       "dialogues": "会話",
       "newDialogue": "新規セッション",
+      "creationInProgress": "作成処理が進行中です",
       "dialoguesToggleExpand": "会話を展開",
       "dialoguesToggleCollapse": "会話を折りたたむ",
       "loadingDialogues": "読み込み中…",
@@ -7306,6 +7309,7 @@
         "delete": "選択したセッションを削除",
         "clear": "選択を解除",
         "archiveNone": "選択中のセッションにアーカイブ可能な項目がありません",
+        "actionInProgress": "別の操作を処理中です",
         "skipRunning": "{{count}} 件は実行中",
         "skipAttached": "{{count}} 件は遠隔操作中",
         "skipNotActive": "{{count}} 件はアクティブではありません",

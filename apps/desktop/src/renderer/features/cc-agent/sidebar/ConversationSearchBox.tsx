@@ -607,18 +607,19 @@ export function ConversationSearchBox({
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          onClick={search.clearLock}
-          className={cn(
-            triggerClassName ??
-              'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-sidebar-item-hover',
-          )}
-          aria-label={t('ccAgent.search.open')}
-          title={t('ccAgent.search.open')}
-        >
-          <Search size={18} className="shrink-0" />
-        </button>
+        <Tip text={t('ccAgent.search.open')} side="right">
+          <button
+            type="button"
+            onClick={search.clearLock}
+            className={cn(
+              triggerClassName ??
+                'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-sidebar-item-hover',
+            )}
+            aria-label={t('ccAgent.search.open')}
+          >
+            <Search size={18} className="shrink-0" />
+          </button>
+        </Tip>
       </PopoverTrigger>
       <PopoverContent
         align="start"

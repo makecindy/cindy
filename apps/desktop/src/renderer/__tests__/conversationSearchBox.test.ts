@@ -35,14 +35,6 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: vi.fn(),
 }));
 
-vi.mock('@/components/ui/tooltip', async () => {
-  const React = await import('react');
-
-  return {
-    Tip: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children),
-  };
-});
-
 vi.mock('@/components/ui/popover', async () => {
   const React = await import('react');
   const PopoverContext = React.createContext<{

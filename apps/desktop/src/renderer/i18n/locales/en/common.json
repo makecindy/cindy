@@ -4570,6 +4570,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "Toggle sidebar",
+    "collapseSidebar": "Collapse Sidebar",
+    "expandSidebar": "Expand Sidebar",
     "collapsePanel": "Collapse",
     "expandPanel": "Expand"
   },
@@ -7130,6 +7132,7 @@
       "scopeLocalSessions": "This device’s sessions",
       "dialogues": "Chat",
       "newDialogue": "New session",
+      "creationInProgress": "Creation is already in progress",
       "dialoguesToggleExpand": "Expand Chat",
       "dialoguesToggleCollapse": "Collapse Chat",
       "loadingDialogues": "Loading…",
@@ -7318,6 +7321,7 @@
         "delete": "Delete selected sessions",
         "clear": "Clear selection",
         "archiveNone": "No selected sessions can be archived",
+        "actionInProgress": "Another action is already in progress",
         "skipRunning": "{{count}} running",
         "skipAttached": "{{count}} remotely controlled",
         "skipNotActive": "{{count}} not active",

@@ -176,7 +176,10 @@ describe('UserInfoSection — inner main button no longer owns hover background'
   it('main button preserves onClick / role="link" / aria-label (跳转和无障碍不破)', () => {
     expect(source).toContain('onClick={handleClick}');
     expect(source).toContain('role="link"');
-    expect(source).toContain("aria-label={t('sidebar.user.settingsLink', { name: displayName })}");
+    expect(source).toContain(
+      "const settingsLinkLabel = t('sidebar.user.settingsLink', { name: displayName });",
+    );
+    expect(source).toContain('aria-label={settingsLinkLabel}');
     expect(locale.sidebar.user.settingsLink).toBe('设置，当前用户：{{name}}');
   });
 });

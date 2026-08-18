@@ -4568,6 +4568,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "切換側邊欄",
+    "collapseSidebar": "收起側邊欄",
+    "expandSidebar": "展開側邊欄",
     "collapsePanel": "收起",
     "expandPanel": "展開"
   },
@@ -7118,6 +7120,7 @@
       "scopeLocalSessions": "本機任務",
       "dialogues": "對話",
       "newDialogue": "新任務",
+      "creationInProgress": "正在建立，請稍候",
       "dialoguesToggleExpand": "展開對話",
       "dialoguesToggleCollapse": "收起對話",
       "loadingDialogues": "載入中…",
@@ -7306,6 +7309,7 @@
         "delete": "刪除所選任務",
         "clear": "清除選擇",
         "archiveNone": "所選任務沒有可歸檔項",
+        "actionInProgress": "正在處理另一項操作",
         "skipRunning": "{{count}} 個執行中",
         "skipAttached": "{{count}} 個遠端接管中",
         "skipNotActive": "{{count}} 個非活躍狀態",

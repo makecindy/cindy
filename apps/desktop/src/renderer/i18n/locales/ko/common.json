@@ -4568,6 +4568,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "사이드바 전환",
+    "collapseSidebar": "사이드바 접기",
+    "expandSidebar": "사이드바 펼치기",
     "collapsePanel": "접기",
     "expandPanel": "펼치기"
   },
@@ -7118,6 +7120,7 @@
       "scopeLocalSessions": "이 기기의 세션",
       "dialogues": "대화",
       "newDialogue": "새 세션",
+      "creationInProgress": "생성이 이미 진행 중입니다",
       "dialoguesToggleExpand": "대화 펼치기",
       "dialoguesToggleCollapse": "대화 접기",
       "loadingDialogues": "불러오는 중…",
@@ -7306,6 +7309,7 @@
         "delete": "선택한 세션 삭제",
         "clear": "선택 해제",
         "archiveNone": "선택한 세션 중 보관할 수 있는 항목이 없습니다",
+        "actionInProgress": "다른 작업을 처리하는 중입니다",
         "skipRunning": "{{count}}개 실행 중",
         "skipAttached": "{{count}}개 원격 인계 중",
         "skipNotActive": "{{count}}개 비활성 상태",

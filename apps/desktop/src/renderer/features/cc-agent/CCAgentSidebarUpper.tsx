@@ -80,7 +80,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Tooltip } from '@/components/ui/tooltip';
+import { Tip, Tooltip } from '@/components/ui/tooltip';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
@@ -3178,6 +3178,21 @@ function ExpandedView({
       t,
     ],
   );
+  const bulkActionInProgressLabel = t('ccAgent.sidebar.bulkSelection.actionInProgress');
+  const bulkArchiveLabel =
+    bulkActionPending !== null
+      ? bulkActionInProgressLabel
+      : selectedActiveSessionCount === 0
+        ? t('ccAgent.sidebar.bulkSelection.archiveNone')
+        : t('ccAgent.sidebar.bulkSelection.archive');
+  const bulkDeleteLabel =
+    bulkActionPending !== null
+      ? bulkActionInProgressLabel
+      : t('ccAgent.sidebar.bulkSelection.delete');
+  const bulkClearLabel =
+    bulkActionPending !== null
+      ? bulkActionInProgressLabel
+      : t('ccAgent.sidebar.bulkSelection.clear');
 
   return (
     <>
@@ -3195,51 +3210,60 @@ function ExpandedView({
             <span className="min-w-0 flex-1 truncate text-xs font-medium">
               {t('ccAgent.sidebar.bulkSelection.selected', { count: selectedSessionIds.size })}
             </span>
-            <button
-              type="button"
-              onClick={() => void handleBulkArchive()}
-              disabled={bulkActionPending !== null || selectedActiveSessionCount === 0}
-              aria-label={t('ccAgent.sidebar.bulkSelection.archive')}
-              title={t('ccAgent.sidebar.bulkSelection.archive')}
-              className={cn(
-                'flex size-6 shrink-0 items-center justify-center rounded-full',
-                'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]',
-              )}
-            >
-              <Archive size={13} strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleBulkDelete()}
-              disabled={bulkActionPending !== null}
-              aria-label={t('ccAgent.sidebar.bulkSelection.delete')}
-              title={t('ccAgent.sidebar.bulkSelection.delete')}
-              className={cn(
-                'flex size-6 shrink-0 items-center justify-center rounded-full',
-                'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]',
-              )}
-            >
-              <Trash2 size={13} strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              onClick={handleClearSelection}
-              disabled={bulkActionPending !== null}
-              aria-label={t('ccAgent.sidebar.bulkSelection.clear')}
-              title={t('ccAgent.sidebar.bulkSelection.clear')}
-              className={cn(
-                'flex size-6 shrink-0 items-center justify-center rounded-full',
-                'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]',
-              )}
-            >
-              <X size={13} strokeWidth={2} />
-            </button>
+            <Tip text={bulkArchiveLabel} side="bottom">
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => void handleBulkArchive()}
+                  disabled={bulkActionPending !== null || selectedActiveSessionCount === 0}
+                  aria-label={bulkArchiveLabel}
+                  className={cn(
+                    'flex size-6 shrink-0 items-center justify-center rounded-full',
+                    'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                    'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]',
+                  )}
+                >
+                  <Archive size={13} strokeWidth={2} />
+                </button>
+              </span>
+            </Tip>
+            <Tip text={bulkDeleteLabel} side="bottom">
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => void handleBulkDelete()}
+                  disabled={bulkActionPending !== null}
+                  aria-label={bulkDeleteLabel}
+                  className={cn(
+                    'flex size-6 shrink-0 items-center justify-center rounded-full',
+                    'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                    'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]',
+                  )}
+                >
+                  <Trash2 size={13} strokeWidth={2} />
+                </button>
+              </span>
+            </Tip>
+            <Tip text={bulkClearLabel} side="bottom">
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={handleClearSelection}
+                  disabled={bulkActionPending !== null}
+                  aria-label={bulkClearLabel}
+                  className={cn(
+                    'flex size-6 shrink-0 items-center justify-center rounded-full',
+                    'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                    'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--cmd-palette-item-meta)]',
+                  )}
+                >
+                  <X size={13} strokeWidth={2} />
+                </button>
+              </span>
+            </Tip>
           </div>
         </div>
       )}
@@ -4186,26 +4210,29 @@ function RailPanels({
    *  新建页,面板随之收起。disabled = 远程写保护(与展开态 ProjectAction
    *  同语义置灰,不收面板不丢上下文,codex review)。 */
   const panelHeadCreateButton = (label: string, onCreate: () => void, disabled = false) => (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={() => {
-        railPanelStore.closeAll();
-        onCreate();
-      }}
-      className={cn(
-        'flex h-6 w-6 shrink-0 items-center justify-center self-center rounded-md -my-1',
-        'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
-        // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
-        // token 化 focus 环(DESIGN.md §10;codex review)。
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        'disabled:opacity-40 disabled:hover:text-[var(--text-tertiary)]',
-      )}
-    >
-      <SquarePen size={14} strokeWidth={2} />
-    </button>
+    <Tip text={label} side="bottom">
+      <span className="inline-flex self-center">
+        <button
+          type="button"
+          aria-label={label}
+          disabled={disabled}
+          onClick={() => {
+            railPanelStore.closeAll();
+            onCreate();
+          }}
+          className={cn(
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded-md -my-1',
+            'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+            // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
+            // token 化 focus 环(DESIGN.md §10;codex review)。
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            'disabled:opacity-40 disabled:hover:text-[var(--text-tertiary)]',
+          )}
+        >
+          <SquarePen size={14} strokeWidth={2} />
+        </button>
+      </span>
+    </Tip>
   );
 
   if (!panelState.openSection || !panelState.anchor) return null;
@@ -4230,7 +4257,9 @@ function RailPanels({
               t('ccAgent.sidebar.railNav.dialogues'),
               dialogues.length,
               panelHeadCreateButton(
-                t('ccAgent.sidebar.newDialogue'),
+                isCreateDialogueDisabled
+                  ? t('ccAgent.sidebar.creationInProgress')
+                  : t('ccAgent.sidebar.newDialogue'),
                 onCreateDialogue,
                 isCreateDialogueDisabled,
               ),

@@ -88,6 +88,7 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { Tip } from '@/components/ui/tooltip';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
@@ -1139,9 +1140,7 @@ export const SessionItem = memo(function SessionItem({
             {/* Action 按钮组（hover/menu open 时浮现，archivePending 期间整组让位给红色 pill）。
               尺寸/视觉与 Project Header 的 ProjectAction 同套（size-5 / icon 14 /
               strokeWidth 2 / gap-0.5）；普通行 hover 走 sidebar-item-hover，选中行
-              则用 active foreground 的半透明叠色保持红色胶囊内的反色体系。唯一差异
-              是 session 行的三个按钮**故意不挂 Tip 浮层** —— 图标语义已足够直观,
-              tooltip 在密集 sidebar 列表里反而干扰视觉。
+              则用 active foreground 的半透明叠色保持红色胶囊内的反色体系。
               组装顺序固定为 [Run(automation only), More, Archive | Undo]：
                 - 非 archived：More + Archive；Archive pill 撤回(超时/点外面)后
                   按钮立即还原,符合用户对 "撤回 = 回到点击前" 的直觉预期。
@@ -1364,8 +1363,7 @@ export const SessionItem = memo(function SessionItem({
 /** SessionItem 右侧 hover action 图标按钮 —— 尺寸/视觉与 Project Header 的
  *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 圆角 md /
  *  普通行 hover 用 sidebar-item-hover + foreground；选中行保持 active foreground,
- *  hover 只叠一层同色半透明高光),区别是这里
- *  **不挂 Tip 浮层**,图标语义已经够直观,sidebar 密集列表里少干扰为先。 */
+ *  hover 只叠一层同色半透明高光)。 */
 function SessionAction({
   label,
   onClick,
@@ -1377,27 +1375,27 @@ function SessionAction({
   isActive: boolean;
   children: ReactNode;
 }) {
-  // 这里**故意不挂 Tip 浮层** —— 三个按钮(More/Archive/Undo)的图标语义都足够
-  // 直观,加 tooltip 反而让 sidebar 视觉更乱。aria-label 保留给屏幕阅读器。
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(e);
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      className={cn(
-        'shrink-0 size-5 flex items-center justify-center rounded-md',
-        'focus:outline-none',
-        isActive
-          ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-          : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
+    <Tip text={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick(e);
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className={cn(
+          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'focus:outline-none',
+          isActive
+            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+            : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+        )}
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }

@@ -88,6 +88,7 @@ import {
 } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import {
@@ -1362,33 +1363,35 @@ function CardAction({
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(e);
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      className={cn(
-        variant === 'list'
-          ? cn(
-              'shrink-0 size-5 flex items-center justify-center rounded-md',
-              'focus:outline-none',
-              isActive
-                ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-                : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
-            )
-          : cn(
-              'flex size-6 items-center justify-center rounded-[7px]',
-              'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
-              'border border-sidebar-border',
-              'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
-            ),
-      )}
-    >
-      {children}
-    </button>
+    <Tip text={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick(e);
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className={cn(
+          variant === 'list'
+            ? cn(
+                'shrink-0 size-5 flex items-center justify-center rounded-md',
+                'focus:outline-none',
+                isActive
+                  ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+                  : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+              )
+            : cn(
+                'flex size-6 items-center justify-center rounded-[7px]',
+                'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
+                'border border-sidebar-border',
+                'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+              ),
+        )}
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }

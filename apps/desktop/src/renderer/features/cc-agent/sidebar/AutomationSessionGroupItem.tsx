@@ -582,22 +582,24 @@ export function AutomationSessionGroupItem({
                 </Tip>
                 <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
                   <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        event.currentTarget.blur();
-                      }}
-                      onPointerDown={(event) => event.stopPropagation()}
-                      aria-label={t('ccAgent.sidebar.automationGroup.menu.more')}
-                      className={cn(
-                        'flex size-5 shrink-0 items-center justify-center rounded-md',
-                        'transition-colors',
-                        actionButtonToneClassName,
-                      )}
-                    >
-                      <EllipsisVertical size={14} strokeWidth={2} />
-                    </button>
+                    <Tip text={t('ccAgent.sidebar.automationGroup.menu.more')} side="bottom">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          event.currentTarget.blur();
+                        }}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        aria-label={t('ccAgent.sidebar.automationGroup.menu.more')}
+                        className={cn(
+                          'flex size-5 shrink-0 items-center justify-center rounded-md',
+                          'transition-colors',
+                          actionButtonToneClassName,
+                        )}
+                      >
+                        <EllipsisVertical size={14} strokeWidth={2} />
+                      </button>
+                    </Tip>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent
                     align="end"
