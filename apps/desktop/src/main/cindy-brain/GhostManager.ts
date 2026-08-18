@@ -167,6 +167,15 @@ export interface GhostManagerLogger {
   error?(message: string, meta?: Record<string, unknown>): void;
 }
 
+export interface ApprovedGhostInstallEvidence {
+  /** Immutable package hash when the approval came from a modern install/update. */
+  packageSha256: string | null;
+  /** Unlocalized manifest frozen in the Host approval receipt. */
+  approvedManifest: GhostManifest;
+  /** True only when the completed one-time migration explicitly recorded this id. */
+  legacyMigrated: boolean;
+}
+
 export interface GhostManagerOptions {
   /** 意识仓库根目录(生产:userData/cindy-brain;测试:os.tmpdir 下临时目录)。 */
   getRootDir: () => string;
@@ -1039,6 +1048,30 @@ export class GhostManager {
 
   approvalStateRoot(): string {
     return this.receiptStore.rootDir();
+  }
+
+  /**
+   * Host-owned evidence for reconnecting an installation to retained source metadata.
+   * A pending package mutation or an invalid approval fails closed. Legacy provenance
+   * is accepted only from the completed one-time migration's explicit id list.
+   */
+  approvedInstallEvidence(id: string): ApprovedGhostInstallEvidence | null {
+    this.ensureCurrentOwnerContextSync();
+    if (!isValidGhostId(id) || this.hasPendingMutationJournal(id)) return null;
+    const approval = this.readApproval(id);
+    if (approval.state !== 'approved') return null;
+    const packageSha256 = approval.receipt.packageSha256;
+    const migration = this.receiptStore.readMigrationLedger();
+    return {
+      packageSha256:
+        packageSha256 && /^[a-f0-9]{64}$/.test(packageSha256) ? packageSha256 : null,
+      approvedManifest: approval.receipt.manifest,
+      legacyMigrated: Boolean(
+        migration
+        && migration.state !== 'in-progress'
+        && migration.migratedIds.includes(id)
+      ),
+    };
   }
 
   /**

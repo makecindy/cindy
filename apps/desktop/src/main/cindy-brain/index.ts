@@ -56,10 +56,7 @@ import type {
   PluginMarketPackageReviewFacts,
 } from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import {
-  isGhostSkillProjectionBoundaryStableForOwner,
-  withGhostSkillProjectionReconcile,
-} from '../authBoundaryQuarantine.js';
+import { withGhostSkillProjectionReconcile } from '../authBoundaryQuarantine.js';
 import {
   activeOwnerScopeKey,
   getActiveDataOwnerPushStamp,
@@ -525,11 +522,7 @@ function captureGhostMutationOwner(): ActiveAppSession {
   if (isAppSessionBoundaryPending()) {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
   }
-  const owner = getActiveAppSession();
-  if (!isGhostSkillProjectionBoundaryStableForOwner(owner.dataOwnerId)) {
-    throw new Error('Plugin owner boundary is not durably stable');
-  }
-  return owner;
+  return getActiveAppSession();
 }
 
 /**
@@ -543,9 +536,6 @@ function beginGhostMutation(expectedOwner?: ActiveAppSession): () => void {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
   }
   const currentOwner = getActiveAppSession();
-  if (!isGhostSkillProjectionBoundaryStableForOwner(currentOwner.dataOwnerId)) {
-    throw new Error('Plugin owner boundary is not durably stable');
-  }
   if (expectedOwner) {
     if (
       currentOwner.mode !== expectedOwner.mode ||
@@ -576,9 +566,9 @@ const ghostOwnerScope: GhostOwnerScope = {
   isCurrent: (scope) =>
     !!scope && isSameAppSession(scope as ActiveAppSession, getActiveAppSession()),
   isStable: (scope) =>
-    !!scope && isGhostSkillProjectionBoundaryStableForOwner(
-      (scope as ActiveAppSession).dataOwnerId,
-    ),
+    !!scope
+    && !isAppSessionBoundaryPending()
+    && isSameAppSession(scope as ActiveAppSession, getActiveAppSession()),
   onInvalidated: (ghostId) => {
     try {
       getGhostRuntime().stop(ghostId);
@@ -845,8 +835,7 @@ export function waitForGhostMutations(): Promise<void> {
 
 /** Account-managed built-ins are unavailable outside a verified cloud session. */
 export function isGhostAvailableForActiveSession(id: string): boolean {
-  const activeOwner = getActiveAppSession().dataOwnerId;
-  if (!isGhostSkillProjectionBoundaryStableForOwner(activeOwner)) return false;
+  if (isAppSessionBoundaryPending()) return false;
   return !isCindyAccountGhostId(id) || getAppCapabilities().canUseCindyAccountServices;
 }
 
@@ -919,14 +908,10 @@ export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
 
 function requireGhostAvailableForActiveSession(id: string): void {
   if (!isGhostAvailableForActiveSession(id)) {
-    const activeOwner = getActiveAppSession().dataOwnerId;
-    if (
-      isAppSessionBoundaryPending() ||
-      !isGhostSkillProjectionBoundaryStableForOwner(activeOwner)
-    ) {
+    if (isAppSessionBoundaryPending()) {
       throwIpcError(
         'PRECONDITION_FAILED',
-        'Ghost projection is switching owners; retry after the boundary settles.',
+        'Plugin owner is switching; retry after the boundary settles.',
       );
     }
     throwIpcError('PERMISSION_DENIED', 'This Plugin requires a Cindy account.');
@@ -3565,17 +3550,11 @@ function resolveImageChannelForModel(model: string, operation: 'generate' | 'edi
 }
 
 /**
- * Combined Ghost-owner boundary gate for Ghost-only paths (media generation,
- * cindy-slot work). Unlike the app-wide isAppSessionBoundaryPending(), this
- * also fails closed while the durable projection owner (shared global marker)
- * differs, so a sibling instance flipping the owner cannot let an in-flight
- * Ghost task keep calling upstream or saving media.
+ * Plugin media and storage use the same process-local AppSession owner
+ * boundary as the rest of the owner-scoped runtime.
  */
 function isGhostBoundaryPending(): boolean {
-  return (
-    isAppSessionBoundaryPending() ||
-    !isGhostSkillProjectionBoundaryStableForOwner(getActiveAppSession().dataOwnerId)
-  );
+  return isAppSessionBoundaryPending();
 }
 
 export function getGhostCindySlot(): GhostCindySlot {
@@ -3873,8 +3852,8 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 管道;记成 'ghost' 会让 ghostCanRead 的 origin 分支把它当作该意识的
       // 出生物,与"作品"混为一谈。引用方(refId)才是意识,归属由此成立。
       depositMedia: async ({ ghostId, buffer, mimeType, label }) => {
-        // 与 saveGhostMedia 同口径的 durable owner 守卫:寄存器引用按 ghostId
-        // 落到 owner 作用域账本,落盘窗口翻转全局 owner 时必须 fail closed。
+        // 与 saveGhostMedia 同口径的应用会话守卫:寄存器引用按 ghostId
+        // 落到 owner 作用域账本,落盘窗口切换账号时必须 fail closed。
         const ownerScopeKey = activeOwnerScopeKey();
         const assertOwnerScopeCurrent = (): void => {
           if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
@@ -4281,9 +4260,9 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       // (规则 25)。mime 白名单同一来源(blobStore),槽内归一化后再判。
       isSupportedMediaMime: (mime) => supportedMime(mime),
       saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) => {
-        // 与 cindy 槽 saveGhostMedia 同口径的 durable owner 守卫:落盘前与
-        // ingestMedia 每个 await 边界都复查,防止兄弟实例在 fetch 读取窗口翻转
-        // 全局 Ghost owner marker 后,字节仍被登记为 ghost-gallery 作品。
+        // 与 cindy 槽 saveGhostMedia 同口径的应用会话守卫:落盘前与
+        // ingestMedia 每个 await 边界都复查,防止当前进程在 fetch 读取窗口切换
+        // 账号后,字节仍被登记为 ghost-gallery 作品。
         const ownerScopeKey = activeOwnerScopeKey();
         const assertOwnerScopeCurrent = (): void => {
           if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
