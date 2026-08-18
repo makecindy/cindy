@@ -42,20 +42,22 @@ import type {
   TurnContinuationState,
 } from '@cindy/maker-core';
 import { clampEffortToSupported } from '@cindy/model-providers';
-import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
-import type {
-  Schedule,
-  ScheduleRun,
-  ScheduleRunner,
-  Notifier,
-  Logger,
-  FireContext,
-  FireResult,
-  Scheduler,
+import {
+  renderSessionTitleTemplate,
+  SCHEDULER_RUN_ID_VENDOR_OPTION,
+  type Schedule,
+  type ScheduleRun,
+  type ScheduleRunner,
+  type Notifier,
+  type Logger,
+  type FireContext,
+  type FireResult,
+  type Scheduler,
 } from '@cindy/maker-scheduler';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getSessionRowSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
+import { getResolvedMainLocale } from '../i18n.js';
 import {
   getSessionProvider,
   setSessionProvider,
@@ -963,6 +965,32 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // have arrived after the preceding guard.  Never create a late session.
     throwIfFireAborted(ctx.signal, 'session creation');
     let session: Awaited<ReturnType<Maker['createSession']>>;
+    const legacySessionTitle = `[Schedule] ${schedule.name}`;
+    let freshSessionTitle = legacySessionTitle;
+    if (!isHeartbeat && schedule.sessionTitleTemplate?.trim()) {
+      try {
+        freshSessionTitle =
+          renderSessionTitleTemplate(schedule.sessionTitleTemplate, {
+            scheduleName: schedule.name,
+            timezone: schedule.timezone,
+            scheduledFor: ctx.scheduledFor ?? ctx.firedAt,
+            source: ctx.source ?? 'automatic',
+            workspaceKind: schedule.workspaceKind,
+            // Use the configured project root, never the ephemeral worktree path selected
+            // for this run, so {projectName} stays stable across fires.
+            workingDir: schedule.workingDir,
+            runId: ctx.runId,
+            locale: getResolvedMainLocale(),
+          }) || legacySessionTitle;
+      } catch (err) {
+        // A corrupted row must never fail a scheduled run. Validation normally happens in
+        // Scheduler.create/update; this is the final fail-open boundary for old/manual DB data.
+        this.deps.logger.warn?.('[runner] invalid session title template; using legacy title', {
+          scheduleId: schedule.id,
+          error: String(err),
+        });
+      }
+    }
     try {
       session = await this.deps.maker.createSession({
         id: sessionId,
@@ -972,7 +1000,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         effort: reconciledEffort,
         fastMode,
         permissionMode,
-        title: isHeartbeat ? undefined : `[Schedule] ${schedule.name}`,
+        title: isHeartbeat ? undefined : freshSessionTitle,
         resumeSessionId,
         // Pi distinguishes an explicit null (Cindy default route) from undefined
         // (legacy model-based native-provider fallback). Preserve the scheduler's

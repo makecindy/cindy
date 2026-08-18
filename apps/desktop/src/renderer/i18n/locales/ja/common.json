@@ -7877,6 +7877,15 @@
         },
         "switchModelHint": "次回の実行時に、連携先セッションがこのモデルに切り替わります"
       },
+      "sessionTitleTemplate": {
+        "toggle": "詳細：新規セッションのタイトル",
+        "label": "新規セッションのタイトルテンプレート",
+        "placeholder": "例：{date:yyyy-MM-dd} {scheduleName}",
+        "help": "新しいセッションを作成するときだけ適用されます。既存セッションへの連携や継続利用では名前を変更しません。変数をクリックして挿入できます。波括弧を文字として出力するには同じ波括弧を2つ続けて入力します。",
+        "preview": "プレビュー：{{title}}",
+        "invalid": "テンプレートの構文が正しくありません",
+        "sampleName": "定期タスク"
+      },
       "thread": {
         "label": "対象スレッド",
         "loading": "セッションを読み込み中…",
@@ -7940,7 +7949,13 @@
         "selectProject": "プロジェクトディレクトリを選択してください",
         "modelUnavailable": "モデル {{model}} は利用できません。別のモデルを選択してください",
         "reasoningInvalid": "Reasoning は {{values}} のいずれかである必要があります",
-        "preRunHookCommandRequired": "事前チェックスクリプトのコマンドを入力してください"
+        "preRunHookCommandRequired": "事前チェックスクリプトのコマンドを入力してください",
+        "sessionTitleTemplate": {
+          "unknownToken": "未対応の変数です：{{token}}",
+          "tooLong": "タイトルテンプレートは {{max}} 文字以内で入力してください",
+          "unclosedToken": "タイトルテンプレートに閉じられていない変数の波括弧があります",
+          "unexpectedBrace": "タイトルテンプレートに対応しない右波括弧があります。波括弧を文字として出力するには同じ波括弧を2つ続けて入力してください"
+        }
       }
     },
     "chips": {

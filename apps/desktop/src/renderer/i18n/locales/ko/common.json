@@ -7877,6 +7877,15 @@
         },
         "switchModelHint": "다음 실행 시 연결된 세션이 이 모델로 전환됩니다"
       },
+      "sessionTitleTemplate": {
+        "toggle": "고급: 새 세션 제목",
+        "label": "새 세션 제목 템플릿",
+        "placeholder": "예: {date:yyyy-MM-dd} {scheduleName}",
+        "help": "새 세션을 만들 때만 적용됩니다. 기존 세션에 연결하거나 계속 재사용하는 세션의 이름은 바꾸지 않습니다. 변수를 클릭해 삽입할 수 있으며 중괄호를 문자 그대로 출력하려면 같은 중괄호를 두 번 연속 입력하세요.",
+        "preview": "미리보기: {{title}}",
+        "invalid": "템플릿 구문이 올바르지 않습니다",
+        "sampleName": "예약 작업"
+      },
       "thread": {
         "label": "대상 스레드",
         "loading": "세션 로드 중…",
@@ -7940,7 +7949,13 @@
         "selectProject": "프로젝트 디렉토리를 선택하세요",
         "modelUnavailable": "모델 {{model}}을 더 이상 사용할 수 없습니다. 다른 모델을 선택하세요.",
         "reasoningInvalid": "Reasoning은 {{values}} 중 하나여야 합니다",
-        "preRunHookCommandRequired": "사전 검사 스크립트 명령을 입력하세요"
+        "preRunHookCommandRequired": "사전 검사 스크립트 명령을 입력하세요",
+        "sessionTitleTemplate": {
+          "unknownToken": "지원하지 않는 변수입니다: {{token}}",
+          "tooLong": "제목 템플릿은 {{max}}자 이하여야 합니다",
+          "unclosedToken": "제목 템플릿에 닫히지 않은 변수 중괄호가 있습니다",
+          "unexpectedBrace": "제목 템플릿에 짝이 없는 닫는 중괄호가 있습니다. 중괄호를 문자 그대로 출력하려면 같은 중괄호를 두 번 입력하세요"
+        }
       }
     },
     "chips": {

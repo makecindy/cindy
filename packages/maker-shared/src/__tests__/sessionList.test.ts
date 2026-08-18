@@ -401,6 +401,58 @@ describe('sessionList', () => {
     });
   });
 
+  it('keeps only scheduler-generated compact associations across a persistent target rebind', () => {
+    const index = buildSessionScheduleIndex([
+      schedule('sched-1', { name: 'Daily', status: 'paused', targetSessionId: 'current' }),
+      schedule('sched-2', { name: 'Active target', targetSessionId: 'old-scheduler-session' }),
+    ], new Map([
+      ['sched-1', [
+        run('old-real', 'sched-1', {
+          sessionId: 'old-real-session',
+          status: 'success',
+          readAt: undefined,
+        }),
+        run('manual-association', 'sched-1', {
+          sessionId: 'old-manual-session',
+          associationOnly: true,
+          status: 'running',
+        }),
+        run('scheduler-association', 'sched-1', {
+          sessionId: 'old-scheduler-session',
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+          associationAllSchedulesStopped: true,
+          status: 'running',
+          readAt: undefined,
+        }),
+        run('stopped-association', 'sched-1', {
+          sessionId: 'stopped-history-session',
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+          associationAllSchedulesStopped: true,
+          status: 'success',
+          readAt: 1,
+        }),
+      ]],
+    ]), [
+      'old-real-session',
+      'old-manual-session',
+      'old-scheduler-session',
+      'stopped-history-session',
+    ]);
+
+    expect(index.has('old-real-session')).toBe(false);
+    expect(index.has('old-manual-session')).toBe(false);
+    expect(index.get('old-scheduler-session')).toMatchObject({
+      unreadCount: 0,
+      unreadRunIds: [],
+      running: false,
+      allSchedulesStopped: false,
+    });
+    expect(index.get('stopped-history-session')?.allSchedulesStopped).toBe(true);
+    expect(index.has('current')).toBe(false);
+  });
+
   it('groups multiple automation-generated sessions from the same schedule', () => {
     const now = new Date('2026-01-01T00:10:00.000Z').getTime();
     const scheduleIndex = buildSessionScheduleIndex([

@@ -5,6 +5,7 @@ export type IpcErrorCode =
   | 'INVALID_PARAMS'
   | 'NOT_FOUND'
   | 'INTERNAL'
+  | 'PAYLOAD_TOO_LARGE'
   | 'ALREADY_EXISTS'
   | 'PRECONDITION_FAILED'
   | 'MAKER_MEMORY_NOT_READY'
@@ -231,6 +232,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'INVALID_PARAMS',
   'NOT_FOUND',
   'INTERNAL',
+  'PAYLOAD_TOO_LARGE',
   'ALREADY_EXISTS',
   'IDENTITY_CONFLICT',
   'PRECONDITION_FAILED',

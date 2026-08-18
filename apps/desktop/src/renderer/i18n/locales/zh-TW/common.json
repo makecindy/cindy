@@ -7877,6 +7877,15 @@
         },
         "switchModelHint": "下次觸發時會將繫結任務切換到此模型"
       },
+      "sessionTitleTemplate": {
+        "toggle": "進階：新任務標題",
+        "label": "新任務標題範本",
+        "placeholder": "例如：{date:yyyy-MM-dd} {scheduleName}",
+        "help": "僅在建立新任務時生效；繫結既有任務或持續重用時不會改名。點選變數即可插入；要輸出字面大括號，請連續輸入兩個相同大括號。",
+        "preview": "預覽：{{title}}",
+        "invalid": "範本語法無效",
+        "sampleName": "定時任務"
+      },
       "thread": {
         "label": "目標任務",
         "loading": "載入任務中…",
@@ -7940,7 +7949,13 @@
         "selectProject": "請選擇專案目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請重新選擇",
         "reasoningInvalid": "Reasoning 必須是 {{values}} 之一",
-        "preRunHookCommandRequired": "請填寫前置檢查指令碼命令"
+        "preRunHookCommandRequired": "請填寫前置檢查指令碼命令",
+        "sessionTitleTemplate": {
+          "unknownToken": "不支援變數：{{token}}",
+          "tooLong": "標題範本最多 {{max}} 個字元",
+          "unclosedToken": "標題範本中有未閉合的變數大括號",
+          "unexpectedBrace": "標題範本中有孤立的右大括號；要輸出字面大括號，請連續輸入兩個相同大括號"
+        }
       }
     },
     "chips": {

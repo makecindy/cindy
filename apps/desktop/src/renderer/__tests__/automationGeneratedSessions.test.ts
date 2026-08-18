@@ -354,6 +354,7 @@ describe('automation-generated sessions', () => {
         }),
       ],
     ]);
+    // 两个实例标题模拟 `{date} deploy {runId:short}`，只能依赖稳定的 scheduleId 聚合。
     const sessions = [
       makeSession({
         id: 'manual',
@@ -363,13 +364,13 @@ describe('automation-generated sessions', () => {
       }),
       makeSession({
         id: 'jira-2',
-        title: 'BUG-2',
+        title: '2026-08-11 deploy 12345678',
         source: 'scheduler',
         userSendAt: '2026-01-04T00:00:00.000Z',
       }),
       makeSession({
         id: 'jira-1',
-        title: 'BUG-1',
+        title: '2026-08-10 deploy abcdefgh',
         source: 'scheduler',
         userSendAt: '2026-01-03T00:00:00.000Z',
       }),
@@ -884,6 +885,10 @@ describe('automation-generated sessions', () => {
       new URL('../../main/scheduler-host/storage.ts', import.meta.url),
       'utf8',
     );
+    const bindingPolicySource = readTextLf(
+      new URL('../../main/localDb/scheduleSessionBindingPolicy.ts', import.meta.url),
+      'utf8',
+    );
     const preloadSource = readTextLf(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
 
     // 这个 hook 取 snapshot 变体:除了 run 列表还要引擎的 in-flight 集合,用于通知抑制
@@ -905,8 +910,20 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain('readAt: session.updatedAt');
     expect(storageSource).toContain('linkedLegacyRows');
     expect(storageSource).toContain('scheduleByLegacyKey.set(key');
-    expect(storageSource).toContain('legacyTitleWhere()');
-    expect(storageSource).toContain("eq(sessions.source, 'scheduler')");
+    expect(storageSource).toContain('validScheduleSessionRunWhere()');
+    expect(bindingPolicySource).toContain('export function validScheduleSessionRunWhere()');
+    expect(bindingPolicySource).toContain(
+      'return validScheduleSessionWhere(scheduleRuns.sessionId);',
+    );
+    expect(bindingPolicySource).toContain('export function strictLegacyScheduleTitleWhere()');
+    expect(bindingPolicySource).toContain(
+      'sql`substr(${sessions.title}, 1, ${LEGACY_SCHEDULE_TITLE_PREFIX.length}) = ${LEGACY_SCHEDULE_TITLE_PREFIX}`',
+    );
+    expect(bindingPolicySource).toContain(
+      'sql`length(trim(substr(${sessions.title}, ${LEGACY_SCHEDULE_TITLE_PREFIX.length + 1}))) > 0`',
+    );
+    expect(bindingPolicySource).toContain("eq(sessions.source, 'scheduler')");
+    expect(bindingPolicySource).toContain('eq(schedules.legacySessionFallback, true)');
     expect(storageSource).toContain('listDirectScheduleIdsByLegacyKey');
     expect(storageSource).toContain('directScheduleId && directScheduleId !== row.id');
     expect(scheduleIndexHookSource).toContain('nextFireAt: run.nextFireAt');
@@ -916,6 +933,10 @@ describe('automation-generated sessions', () => {
   it('surfaces total automation task cost from deduped schedule sessions', () => {
     const storageSource = readTextLf(
       new URL('../../main/scheduler-host/storage.ts', import.meta.url),
+      'utf8',
+    );
+    const bindingPolicySource = readTextLf(
+      new URL('../../main/localDb/scheduleSessionBindingPolicy.ts', import.meta.url),
       'utf8',
     );
     const schedulePageSource = readTextLf(
@@ -964,7 +985,7 @@ describe('automation-generated sessions', () => {
     );
     expect(storageSource).toContain('totalMoney');
     expect(storageSource).toContain('listLegacySessionRuns');
-    expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
+    expect(bindingPolicySource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
     expect(storageSource).toContain("LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:'");
     expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
     expect(storageSource).toContain('listLegacyAliasesForSchedule');

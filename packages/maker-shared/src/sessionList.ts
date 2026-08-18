@@ -593,9 +593,12 @@ export function buildRemoteSessionCardPreview(
 export function buildSessionScheduleIndex(
   schedules: readonly RemoteSchedule[],
   runsBySchedule: ReadonlyMap<string, readonly RemoteScheduleRun[]>,
+  allowedSessionIds?: readonly string[],
 ): Map<string, RemoteSessionScheduleInfo> {
+  const allowed = allowedSessionIds === undefined ? null : new Set(allowedSessionIds);
   const schedulesById = new Map(schedules.map((schedule) => [schedule.id, schedule]));
   const scheduleIdsBySession = new Map<string, Set<string>>();
+  const associationStoppedBySession = new Map<string, boolean>();
   const index = new Map<string, RemoteSessionScheduleInfo>();
   const recordScheduleBinding = (sessionId: string, scheduleId: string) => {
     const scheduleIds = scheduleIdsBySession.get(sessionId) ?? new Set<string>();
@@ -604,6 +607,7 @@ export function buildSessionScheduleIndex(
   };
   for (const schedule of schedules) {
     if (!schedule.targetSessionId) continue;
+    if (allowed && !allowed.has(schedule.targetSessionId)) continue;
     recordScheduleBinding(schedule.targetSessionId, schedule.id);
     if (!index.has(schedule.targetSessionId)) {
       index.set(schedule.targetSessionId, {
@@ -622,15 +626,29 @@ export function buildSessionScheduleIndex(
     const schedule = schedulesById.get(scheduleId);
     for (const run of runs) {
       if (!run.sessionId) continue;
+      if (allowed && !allowed.has(run.sessionId)) continue;
       // targetSessionId 是当前持久绑定的权威来源。schedule 改绑后，历史 run 仍保留旧
       // sessionId；继续把它们算作当前绑定会污染旧会话的聚合状态与未读信息。
-      if (schedule?.targetSessionId && run.sessionId !== schedule.targetSessionId) continue;
+      if (
+        !(run.associationOnly === true && run.schedulerGeneratedAssociation === true)
+        && schedule?.targetSessionId
+        && run.sessionId !== schedule.targetSessionId
+      ) continue;
       recordScheduleBinding(run.sessionId, scheduleId);
+      if (
+        run.associationOnly === true
+        && typeof run.associationAllSchedulesStopped === 'boolean'
+      ) {
+        associationStoppedBySession.set(run.sessionId, run.associationAllSchedulesStopped);
+      }
       const firedAt = toMillis(run.firedAt);
       const existing = index.get(run.sessionId);
       const unreadRunIds = existing ? [...existing.unreadRunIds] : [];
-      if (isUnreadRunStatus(run.status) && !run.readAt) unreadRunIds.push(run.id);
-      const running = (existing?.running ?? false) || run.status === 'running';
+      if (run.associationOnly !== true && isUnreadRunStatus(run.status) && !run.readAt) {
+        unreadRunIds.push(run.id);
+      }
+      const running = (existing?.running ?? false)
+        || (run.associationOnly !== true && run.status === 'running');
       const isLatest = !existing || firedAt >= existing.latestRunAt;
       index.set(run.sessionId, {
         scheduleId: isLatest ? scheduleId : existing.scheduleId,
@@ -646,10 +664,14 @@ export function buildSessionScheduleIndex(
   }
   for (const [sessionId, info] of index) {
     const scheduleIds = scheduleIdsBySession.get(sessionId) ?? new Set<string>();
-    const allSchedulesStopped = scheduleIds.size > 0 && Array.from(scheduleIds).every((scheduleId) => {
+    const visibleSchedulesStopped = scheduleIds.size > 0 && Array.from(scheduleIds).every((scheduleId) => {
       const status = schedulesById.get(scheduleId)?.status;
       return status === 'paused' || status === 'expired';
     });
+    const associationSchedulesStopped = associationStoppedBySession.get(sessionId);
+    const allSchedulesStopped = associationSchedulesStopped === undefined
+      ? visibleSchedulesStopped
+      : associationSchedulesStopped && visibleSchedulesStopped;
     index.set(sessionId, { ...info, allSchedulesStopped });
   }
   return index;

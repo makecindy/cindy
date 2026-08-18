@@ -76,6 +76,7 @@ describe('mobile schedule form model', () => {
       persistentSession: true,
       silentWhenIdle: true,
       intervalMs: 3_600_000,
+      sessionTitleTemplate: '{isoWeek} {scheduleName}',
       notify: { desktop: false, feishu: true },
     }));
     const input = buildMobileScheduleInput({ ...draft, name: '更新后的巡检' });
@@ -86,8 +87,11 @@ describe('mobile schedule form model', () => {
       targetSessionId: 'session-1',
       persistentSession: true,
       silentWhenIdle: true,
+      sessionTitleTemplate: '{isoWeek} {scheduleName}',
       notify: { desktop: false, feishu: true },
     });
+    const wire = JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
+    expect(wire.sessionTitleTemplate).toBe('{isoWeek} {scheduleName}');
   });
 
   it('clears intervalMs with a serializable null that survives the JSON wire', () => {

@@ -3,14 +3,17 @@ import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import {
   getScheduleIndexInvalidationVersion,
+  getScheduleIndexRequestGeneration,
   invalidateOfflineScheduleIndexFailureFor,
   invalidateRunningSessionScheduleEntries,
   invalidateScheduleIndexForDevice,
   invalidateTransientScheduleIndexFailures,
+  isScheduleIndexRequestCurrent,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
   resetScheduleIndexThrottleForTesting,
+  sessionScheduleIndexScopeKey,
   SCHEDULE_INDEX_FAILURE_TTL_MS,
   SCHEDULE_INDEX_THROTTLE_TTL_MS,
 } from '@/session/scheduleIndex';
@@ -31,6 +34,227 @@ function makerWithSchedules(
 }
 
 describe('scheduleIndex', () => {
+  it('uses the sidebar snapshot to keep deleted-history instances grouped without unread state', async () => {
+    const listRuns = vi.fn(async () => []);
+    const listSidebarIndexRuns = vi.fn(async () => ({
+      runs: [
+        {
+          runId: 'schedule-session-binding:sched-1:session-a',
+          scheduleId: 'sched-1',
+          sessionId: 'session-a',
+          firedAt: 100,
+          status: 'success',
+          readAt: 100,
+        },
+        {
+          runId: 'schedule-session-binding:sched-1:session-b',
+          scheduleId: 'sched-1',
+          sessionId: 'session-b',
+          firedAt: 200,
+          status: 'success',
+          readAt: 200,
+        },
+      ],
+      inflightRunIds: [],
+    }));
+    const maker = {
+      schedule: {
+        list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+        listRuns,
+        listSidebarIndexRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    const index = await loadSessionScheduleIndex(maker);
+
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(1);
+    expect(listRuns).not.toHaveBeenCalled();
+    expect([...index.entries()]).toEqual([
+      [
+        'session-a',
+        expect.objectContaining({
+          scheduleId: 'sched-1',
+          scheduleName: 'Daily',
+          unreadCount: 0,
+          unreadRunIds: [],
+          running: false,
+          latestRunAt: 100,
+        }),
+      ],
+      [
+        'session-b',
+        expect.objectContaining({
+          scheduleId: 'sched-1',
+          scheduleName: 'Daily',
+          unreadCount: 0,
+          unreadRunIds: [],
+          running: false,
+          latestRunAt: 200,
+        }),
+      ],
+    ]);
+  });
+
+  it('falls back to listRuns for older Desktop sidebar channels and shapes', async () => {
+    for (const listSidebarIndexRuns of [
+      vi.fn(async () => {
+        throw Object.assign(new Error('unsupported'), {
+          code: 'CHANNEL_NOT_ALLOWED',
+        });
+      }),
+      vi.fn(async () => ({
+        runs: [
+          {
+            runId: 'old-shape',
+            scheduleId: 'sched-1',
+            sessionId: 'session-old',
+            status: 'success',
+          },
+        ],
+        inflightRunIds: [],
+      })),
+    ]) {
+      const listRuns = vi.fn(async () => [
+        {
+          id: 'fallback-run',
+          scheduleId: 'sched-1',
+          sessionId: 'session-fallback',
+          status: 'success',
+          firedAt: 300,
+          readAt: 300,
+        },
+      ]);
+      const maker = {
+        schedule: {
+          list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+          listRuns,
+          listSidebarIndexRuns,
+        },
+      } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+      const index = await loadSessionScheduleIndex(maker);
+
+      expect(listRuns).toHaveBeenCalledWith('sched-1', 50);
+      expect(index.get('session-fallback')).toMatchObject({
+        scheduleId: 'sched-1',
+        unreadCount: 0,
+      });
+    }
+  });
+
+  it.each(['NOT_CONNECTED', 'DEVICE_OFFLINE', 'INVOKE_TIMEOUT'])(
+    'does not expand %s failures into the legacy 1+N request path',
+    async (code) => {
+      const listRuns = vi.fn(async () => []);
+      const maker = {
+        schedule: {
+          list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+          listRuns,
+          listSidebarIndexRuns: async () => {
+            throw Object.assign(new Error(code), { code });
+          },
+        },
+      } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+      await expect(loadSessionScheduleIndex(maker)).rejects.toMatchObject({
+        code,
+      });
+      expect(listRuns).not.toHaveBeenCalled();
+    },
+  );
+
+  it('falls back to legacy listRuns when compact exceeds the Desktop byte budget', async () => {
+    const listRuns = vi.fn(async () => [{
+      id: 'fallback-run',
+      scheduleId: 'sched-1',
+      sessionId: 'session-1',
+      firedAt: 300,
+      status: 'success',
+      readAt: 300,
+    }]);
+    const maker = {
+      schedule: {
+        list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+        listRuns,
+        listSidebarIndexRuns: async () => {
+          throw Object.assign(new Error('[PAYLOAD_TOO_LARGE] compact snapshot'), {
+            code: 'PAYLOAD_TOO_LARGE',
+          });
+        },
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    const index = await loadSessionScheduleIndex(maker, { sessionIds: ['session-1'] });
+    expect(listRuns).toHaveBeenCalledWith('sched-1', 50);
+    expect(index.has('session-1')).toBe(true);
+  });
+
+  it('batches more than 200 requested sessions and merges exact ownership', async () => {
+    const sessionIds = Array.from({ length: 401 }, (_, index) => `session-${index}`);
+    const listSidebarIndexRuns = vi.fn(async (scope: readonly string[] | undefined) => ({
+      runs: (scope ?? []).map((sessionId, index) => ({
+        runId: `association-${sessionId}`,
+        scheduleId: 'sched-1',
+        sessionId,
+        firedAt: index,
+        associationOnly: true,
+        schedulerGeneratedAssociation: true,
+        status: 'success',
+        readAt: 1,
+      })),
+      inflightRunIds: [],
+    }));
+    const maker = {
+      schedule: {
+        list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+        listRuns: vi.fn(async () => []),
+        listSidebarIndexRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    const index = await loadSessionScheduleIndex(maker, { sessionIds });
+    expect(listSidebarIndexRuns.mock.calls.map(([scope]) => scope?.length)).toEqual([200, 200, 1]);
+    expect(index.size).toBe(401);
+    expect(index.has('session-400')).toBe(true);
+  });
+
+  it('bisects an oversized compact batch before considering legacy listRuns', async () => {
+    const sessionIds = Array.from({ length: 200 }, (_, index) => `session-${index}`);
+    const listRuns = vi.fn(async () => []);
+    const listSidebarIndexRuns = vi.fn(async (scope: readonly string[] | undefined) => {
+      if ((scope?.length ?? 0) > 100) {
+        throw Object.assign(new Error('[IPC_ERROR:PAYLOAD_TOO_LARGE] compact snapshot'), {
+          code: 'PAYLOAD_TOO_LARGE',
+        });
+      }
+      return {
+        runs: (scope ?? []).map((sessionId) => ({
+          runId: `association-${sessionId}`,
+          scheduleId: 'sched-1',
+          sessionId,
+          firedAt: 1,
+          associationOnly: true,
+          schedulerGeneratedAssociation: true,
+          status: 'success',
+          readAt: 1,
+        })),
+        inflightRunIds: [],
+      };
+    });
+    const maker = {
+      schedule: {
+        list: async () => [{ id: 'sched-1', name: 'Daily', status: 'active' }],
+        listRuns,
+        listSidebarIndexRuns,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    const index = await loadSessionScheduleIndex(maker, { sessionIds });
+    expect(listSidebarIndexRuns.mock.calls.map(([scope]) => scope?.length)).toEqual([200, 100, 100]);
+    expect(listRuns).not.toHaveBeenCalled();
+    expect(index.size).toBe(200);
+  });
+
   it('loads schedule unread and running metadata without failing the whole index on one bad schedule', async () => {
     const listRuns = vi.fn(async (scheduleId: string) => {
       if (scheduleId === 'broken') throw new Error('remote schedule runs unavailable');
@@ -302,6 +526,29 @@ describe('scheduleIndex', () => {
 });
 
 describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
+  it('reloads when session scope changes and rejects an older same-scope generation', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn(async () => new Map<string, RemoteSessionScheduleInfo>());
+    const scopeA = sessionScheduleIndexScopeKey(['b', 'a', 'a']);
+    const scopeB = sessionScheduleIndexScopeKey(['c']);
+    await loadSessionScheduleIndexThrottled('dev-scope', load, { scopeKey: scopeA });
+    const firstGeneration = getScheduleIndexRequestGeneration('dev-scope');
+    await loadSessionScheduleIndexThrottled('dev-scope', load, { scopeKey: scopeB });
+    const preForceGeneration = getScheduleIndexRequestGeneration('dev-scope');
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(isScheduleIndexRequestCurrent('dev-scope', scopeA, firstGeneration)).toBe(false);
+
+    const forced = loadSessionScheduleIndexThrottled('dev-scope', load, {
+      force: true,
+      scopeKey: scopeB,
+    });
+    const forcedGeneration = getScheduleIndexRequestGeneration('dev-scope');
+    await forced;
+    expect(forcedGeneration).toBeGreaterThan(firstGeneration);
+    expect(isScheduleIndexRequestCurrent('dev-scope', scopeB, preForceGeneration)).toBe(false);
+    expect(isScheduleIndexRequestCurrent('dev-scope', scopeB, forcedGeneration)).toBe(true);
+  });
+
   it('TTL 内的重复触发复用同一在途/已完成 promise,不重复加载', async () => {
     resetScheduleIndexThrottleForTesting();
     const load = vi.fn(async () => new Map<string, RemoteSessionScheduleInfo>());

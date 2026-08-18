@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./cron": "./src/engine/cron.ts",
+    "./session-title-template": "./src/session-title-template.ts",
     "./types": "./src/types.ts",
     "./templates": "./src/builtin-templates.ts",
     "./template-engine": "./src/engine/template.ts"

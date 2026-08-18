@@ -22,6 +22,17 @@ import type { ChildRunInput, ScheduleRunner } from '../interfaces/schedule-runne
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
+import { validateSessionTitleTemplate } from '../session-title-template.js';
+
+function normalizeSessionTitleTemplate(
+  value: string | null | undefined,
+): string | undefined {
+  const result = validateSessionTitleTemplate(value);
+  if (!result.valid) {
+    throw new Error(`Invalid session title template: ${result.error.message}`);
+  }
+  return result.template;
+}
 
 /**
  * Interval-mode 下次触发时间。`baseMs` 是上次完成（或 createdAt）。
@@ -649,6 +660,8 @@ export class Scheduler extends EventEmitter {
   private async fireOne(schedule: Schedule): Promise<void> {
     const runId = this.generateId();
     const now = this.clock.now();
+    // Preserve the original planned slot before claimDueFire clears nextFireAt.
+    const scheduledFor = schedule.nextFireAt ?? now;
     this.beginInflightAttempt({
       scheduleId: schedule.id,
       scheduleName: schedule.name,
@@ -659,13 +672,17 @@ export class Scheduler extends EventEmitter {
       phase: 'claiming',
     });
     try {
-      await this.fireOneInner(schedule, runId);
+      await this.fireOneInner(schedule, runId, scheduledFor);
     } finally {
       this.finishInflightAttempt(runId);
     }
   }
 
-  private async fireOneInner(schedule: Schedule, runId: string): Promise<void> {
+  private async fireOneInner(
+    schedule: Schedule,
+    runId: string,
+    scheduledFor: number,
+  ): Promise<void> {
     // 跨进程互斥:先在 DB 对这次触发做原子认领(CAS:nextFireAt 必须仍等于本进程
     // 内存里看到的值)。dev / release 双开共用同一 DB 时两边引擎会同时判定"到点
     // 了",只有认领成功的一方真正执行;失败方刷新内存副本后放弃,保证同一次到点
@@ -773,6 +790,8 @@ export class Scheduler extends EventEmitter {
       const result = await this.runner.fire(schedule, {
         runId,
         firedAt,
+        source: 'automatic',
+        scheduledFor,
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
         onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
@@ -1073,6 +1092,8 @@ export class Scheduler extends EventEmitter {
       const result = await this.runner.fire(schedule, {
         runId,
         firedAt,
+        source: 'run-now',
+        scheduledFor: firedAt,
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
         onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
@@ -1249,6 +1270,7 @@ export class Scheduler extends EventEmitter {
 
   async create(input: CreateScheduleInput): Promise<Schedule> {
     input = this.normalizeManagedWorkingDir(input);
+    const sessionTitleTemplate = normalizeSessionTitleTemplate(input.sessionTitleTemplate);
     const now = this.clock.now();
     const id = this.generateId();
     const manual = input.manual ?? false;
@@ -1286,6 +1308,7 @@ export class Scheduler extends EventEmitter {
       scriptConfig: normalizeScriptConfig(input.scriptConfig),
       manual,
       persistentSession: input.persistentSession ?? false,
+      sessionTitleTemplate,
       silentWhenIdle: input.silentWhenIdle ?? false,
       status: 'active',
       createdAt: now,
@@ -1344,9 +1367,13 @@ export class Scheduler extends EventEmitter {
     if (Object.prototype.hasOwnProperty.call(patch, 'preRunHook') && patch.preRunHook === null) {
       updates.preRunHook = undefined;
     }
+    if (Object.prototype.hasOwnProperty.call(patch, 'sessionTitleTemplate')) {
+      updates.sessionTitleTemplate = normalizeSessionTitleTemplate(patch.sessionTitleTemplate);
+    }
     const existing = await this.storage.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
     const candidate: Schedule = { ...existing, ...updates };
+    normalizeSessionTitleTemplate(candidate.sessionTitleTemplate);
     validateScheduleExecutionShape(
       candidate,
       {

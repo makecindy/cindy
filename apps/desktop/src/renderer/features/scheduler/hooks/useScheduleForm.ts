@@ -9,7 +9,6 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
 import type { Session } from '@/lib/ccAgent.types';
 import {
@@ -22,6 +21,16 @@ import {
   PENDING_SESSION_ID,
   resolveTemplateAgentFields,
 } from '../lib/scheduleFormLogic';
+import {
+  SESSION_TITLE_TEMPLATE_MAX_CODE_POINTS,
+  validateSessionTitleTemplate,
+} from '@cindy/maker-scheduler/session-title-template';
+import type {
+  CreateScheduleInput,
+  Schedule,
+  ScheduleTemplate,
+  ScheduleWorkspaceKind,
+} from '@cindy/maker-scheduler/types';
 import type { ScheduleFormState, RunMode, RememberedBinding } from '../lib/scheduleFormLogic';
 
 // 类型与 effort 白名单已迁入 lib/scheduleFormLogic(纯函数层,node 环境可测);
@@ -52,6 +61,7 @@ const DEFAULT_FORM: ScheduleFormState = {
   useWorktree: false,
   targetSessionId: '',
   persistentSession: false,
+  sessionTitleTemplate: '',
   silentWhenIdle: false,
   preRunHookEnabled: false,
   preRunHookCommand: '',
@@ -240,6 +250,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     useWorktree: workspaceKind === 'project' && s.useWorktree,
     targetSessionId: s.targetSessionId ?? '',
     persistentSession: !!s.persistentSession,
+    sessionTitleTemplate: s.sessionTitleTemplate ?? '',
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookEnabled: !!s.preRunHook?.command,
     preRunHookCommand: s.preRunHook?.command ?? '',
@@ -385,6 +396,28 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     }
     if (!form.cronExpr.trim()) return { key: 'scheduler.editor.validation.scheduleRequired' };
     if (!form.timezone.trim()) return { key: 'scheduler.editor.validation.timezoneRequired' };
+
+    const titleTemplateValidation = validateSessionTitleTemplate(form.sessionTitleTemplate);
+    if (!titleTemplateValidation.valid) {
+      const { error } = titleTemplateValidation;
+      if (error.code === 'unknown-token') {
+        return {
+          key: 'scheduler.editor.validation.sessionTitleTemplate.unknownToken',
+          values: { token: `{${error.token ?? ''}}` },
+        };
+      }
+      if (error.code === 'too-long') {
+        return {
+          key: 'scheduler.editor.validation.sessionTitleTemplate.tooLong',
+          values: { max: String(SESSION_TITLE_TEMPLATE_MAX_CODE_POINTS) },
+        };
+      }
+      return {
+        key: `scheduler.editor.validation.sessionTitleTemplate.${
+          error.code === 'unclosed-token' ? 'unclosedToken' : 'unexpectedBrace'
+        }`,
+      };
+    }
 
     const tgt = form.targetSessionId.trim();
     const isHeartbeat = !!tgt;

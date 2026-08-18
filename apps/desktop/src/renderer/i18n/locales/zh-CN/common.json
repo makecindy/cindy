@@ -7877,6 +7877,15 @@
         },
         "switchModelHint": "下次触发时会将绑定任务切换到此模型"
       },
+      "sessionTitleTemplate": {
+        "toggle": "高级：新任务标题",
+        "label": "新任务标题模板",
+        "placeholder": "例如：{date:yyyy-MM-dd} {scheduleName}",
+        "help": "仅新建任务时生效；绑定已有任务或持续复用时不会改名。点击变量可插入；要输出字面量花括号，请连续输入两个相同花括号。",
+        "preview": "预览：{{title}}",
+        "invalid": "模板语法无效",
+        "sampleName": "定时任务"
+      },
       "thread": {
         "label": "目标任务",
         "loading": "加载任务中…",
@@ -7940,7 +7949,13 @@
         "selectProject": "请选择项目目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请重新选择",
         "reasoningInvalid": "Reasoning 必须是 {{values}} 之一",
-        "preRunHookCommandRequired": "请填写前置检查脚本命令"
+        "preRunHookCommandRequired": "请填写前置检查脚本命令",
+        "sessionTitleTemplate": {
+          "unknownToken": "不支持变量：{{token}}",
+          "tooLong": "标题模板最多 {{max}} 个字符",
+          "unclosedToken": "标题模板中有未闭合的变量花括号",
+          "unexpectedBrace": "标题模板中有孤立的右花括号；要输出字面量花括号，请连续输入两个相同花括号"
+        }
       }
     },
     "chips": {

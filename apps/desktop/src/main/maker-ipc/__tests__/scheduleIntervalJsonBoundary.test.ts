@@ -33,8 +33,11 @@ vi.mock('../../agent-island/service.js', () => ({
 }));
 
 import {
+  buildCreateScheduleInput,
   normalizeLegacyDeviceLinkIntervalClear,
   normalizeNullableIntervalMs,
+  normalizeNullableScheduleFields,
+  normalizeNullableSessionTitleTemplate,
 } from '../schedule';
 
 function hasOwn(value: object, key: string): boolean {
@@ -72,6 +75,53 @@ describe('normalizeNullableIntervalMs(device-link JSON 边界)', () => {
     const out = normalizeNullableIntervalMs(wire);
     expect(hasOwn(out, 'intervalMs')).toBe(true);
     expect(out.intervalMs).toBeUndefined();
+  });
+});
+
+describe('normalizeNullableSessionTitleTemplate(device-link JSON boundary)', () => {
+  it('turns null into an own undefined key while preserving omitted and string values', () => {
+    const wire = JSON.parse(JSON.stringify({ sessionTitleTemplate: null })) as {
+      sessionTitleTemplate?: string | null;
+    };
+    const cleared = normalizeNullableSessionTitleTemplate(wire);
+    expect(hasOwn(cleared, 'sessionTitleTemplate')).toBe(true);
+    expect(cleared.sessionTitleTemplate).toBeUndefined();
+
+    const omitted: { prompt: string; sessionTitleTemplate?: string | null } = { prompt: 'p' };
+    expect(normalizeNullableSessionTitleTemplate(omitted)).toBe(omitted);
+    const set = { sessionTitleTemplate: '{date}' };
+    expect(normalizeNullableSessionTitleTemplate(set)).toBe(set);
+  });
+
+  it('composes with interval normalization for create-from-template overrides', () => {
+    const overrides = normalizeNullableScheduleFields({
+      intervalMs: null,
+      sessionTitleTemplate: null,
+      name: 'template override',
+    });
+    expect(hasOwn(overrides, 'intervalMs')).toBe(true);
+    expect(overrides.intervalMs).toBeUndefined();
+    expect(hasOwn(overrides, 'sessionTitleTemplate')).toBe(true);
+    expect(overrides.sessionTitleTemplate).toBeUndefined();
+    expect(overrides.name).toBe('template override');
+
+    const input = buildCreateScheduleInput(
+      {
+        id: 'template',
+        name: 'Template',
+        description: 'Template',
+        category: 'test',
+        source: 'builtin',
+        prompt: 'prompt',
+        cronExpr: '0 9 * * *',
+        timezone: 'Asia/Shanghai',
+        sessionTitleTemplate: '{date}',
+      },
+      'prompt',
+      overrides,
+    );
+    expect(hasOwn(input, 'sessionTitleTemplate')).toBe(true);
+    expect(input.sessionTitleTemplate).toBeUndefined();
   });
 });
 

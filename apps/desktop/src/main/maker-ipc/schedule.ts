@@ -57,7 +57,10 @@ import {
 } from '@cindy/maker-scheduler';
 
 import { createLogger } from '../logger.js';
-import type { DrizzleScheduleStorage } from '../scheduler-host/storage.js';
+import type {
+  DrizzleScheduleStorage,
+  ScheduleSidebarIndexRun,
+} from '../scheduler-host/storage.js';
 import { executePreRunHook } from '../scheduler-host/pre-run-hook.js';
 import {
   HookScriptUtilityModelError,
@@ -236,6 +239,111 @@ export function normalizeNullableIntervalMs<T extends { intervalMs?: number | nu
   return { ...input, intervalMs: undefined };
 }
 
+/** JSON-boundary clear semantics for sessionTitleTemplate, parallel to intervalMs. */
+export function normalizeNullableSessionTitleTemplate<
+  T extends { sessionTitleTemplate?: string | null },
+>(input: T): Omit<T, 'sessionTitleTemplate'> & { sessionTitleTemplate?: string } {
+  if (input.sessionTitleTemplate !== null) {
+    return input as Omit<T, 'sessionTitleTemplate'> & { sessionTitleTemplate?: string };
+  }
+  return { ...input, sessionTitleTemplate: undefined };
+}
+
+export function normalizeNullableScheduleFields<
+  T extends { intervalMs?: number | null; sessionTitleTemplate?: string | null },
+>(input: T) {
+  return normalizeNullableSessionTitleTemplate(normalizeNullableIntervalMs(input));
+}
+
+export function isCompactSidebarIndexRequest(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && (value as { compact?: unknown }).compact === true);
+}
+
+export const COMPACT_SIDEBAR_MAX_SESSION_IDS = 200;
+export const COMPACT_SIDEBAR_MAX_SESSION_ID_LENGTH = 512;
+export const COMPACT_SIDEBAR_RESPONSE_BYTE_CAP = 512 * 1024;
+
+export interface CompactSidebarIndexRequest {
+  compact: true;
+  /** undefined is the compatibility shape sent by older Mobile builds. */
+  sessionIds?: string[];
+}
+
+export function parseCompactSidebarIndexRequest(value: unknown): CompactSidebarIndexRequest | null {
+  if (!isCompactSidebarIndexRequest(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (body.sessionIds === undefined) return { compact: true };
+  if (!Array.isArray(body.sessionIds)) {
+    throwIpcError('INVALID_PARAMS', 'sessionIds must be an array');
+  }
+  if (body.sessionIds.length > COMPACT_SIDEBAR_MAX_SESSION_IDS) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      `sessionIds must contain at most ${COMPACT_SIDEBAR_MAX_SESSION_IDS} items`,
+    );
+  }
+  const sessionIds: string[] = [];
+  const seen = new Set<string>();
+  for (const sessionId of body.sessionIds) {
+    if (
+      typeof sessionId !== 'string'
+      || sessionId.length === 0
+      || sessionId.length > COMPACT_SIDEBAR_MAX_SESSION_ID_LENGTH
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `each sessionId must be a non-empty string of at most ${COMPACT_SIDEBAR_MAX_SESSION_ID_LENGTH} characters`,
+      );
+    }
+    if (!seen.has(sessionId)) {
+      seen.add(sessionId);
+      sessionIds.push(sessionId);
+    }
+  }
+  return { compact: true, sessionIds };
+}
+
+export function toCompactSidebarIndexRun(run: ScheduleSidebarIndexRun) {
+  return {
+    runId: run.runId,
+    scheduleId: run.scheduleId,
+    ...(run.sessionId === undefined ? {} : { sessionId: run.sessionId }),
+    firedAt: run.firedAt,
+    ...(run.associationOnly === undefined ? {} : { associationOnly: run.associationOnly }),
+    ...(run.schedulerGeneratedAssociation === undefined
+      ? {}
+      : { schedulerGeneratedAssociation: run.schedulerGeneratedAssociation }),
+    ...(run.associationAllSchedulesStopped === undefined
+      ? {}
+      : { associationAllSchedulesStopped: run.associationAllSchedulesStopped }),
+    status: run.status,
+    ...(run.readAt === undefined ? {} : { readAt: run.readAt }),
+  };
+}
+
+export function serializeCompactSidebarIndexRuns(
+  runs: readonly ScheduleSidebarIndexRun[],
+  byteCap = COMPACT_SIDEBAR_RESPONSE_BYTE_CAP,
+): { runs: ReturnType<typeof toCompactSidebarIndexRun>[]; inflightRunIds: [] } {
+  const prioritized = [...runs].sort((left, right) => {
+    const priority = (run: ScheduleSidebarIndexRun) =>
+      run.associationOnly === true ? 0 : run.status === 'running' ? 1 : 2;
+    return priority(left) - priority(right) || right.firedAt - left.firedAt;
+  });
+  const snapshot = {
+    runs: prioritized.map(toCompactSidebarIndexRun),
+    inflightRunIds: [] as [],
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8');
+  if (bytes > byteCap) {
+    throwIpcError(
+      'PAYLOAD_TOO_LARGE',
+      `compact sidebar index is ${bytes} bytes (limit ${byteCap})`,
+    );
+  }
+  return snapshot;
+}
+
 /**
  * 版本错位兼容的另一半:**旧版 mobile** 清空间隔靠「全量表单不带 intervalMs key +
  * 引擎隐式清空」表达;真 partial 语义下省略 key 变成「不修改」,旧 mobile 的清空
@@ -267,7 +375,7 @@ function findTemplate(id: string): ScheduleTemplate | null {
   return listAllTemplates().find((template) => template.id === id) ?? null;
 }
 
-function buildCreateScheduleInput(
+export function buildCreateScheduleInput(
   template: ScheduleTemplate,
   prompt: string,
   overrides: Partial<CreateScheduleInput>,
@@ -289,6 +397,9 @@ function buildCreateScheduleInput(
     useWorktree: overrides.useWorktree ?? template.useWorktree ?? false,
     targetSessionId: overrides.targetSessionId,
     persistentSession: overrides.persistentSession ?? template.persistentSession,
+    sessionTitleTemplate: Object.prototype.hasOwnProperty.call(overrides, 'sessionTitleTemplate')
+      ? overrides.sessionTitleTemplate
+      : template.sessionTitleTemplate,
     silentWhenIdle: overrides.silentWhenIdle ?? template.silentWhenIdle,
     preRunHook: overrides.preRunHook,
     notify: overrides.notify ?? template.notify ?? { desktop: true, feishu: false },
@@ -337,7 +448,12 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     requireObject(input, 'input');
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
-        normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
+        normalizeNullableScheduleFields(
+          input as CreateScheduleInput & {
+            intervalMs?: number | null;
+            sessionTitleTemplate?: string | null;
+          },
+        ),
         hookPathDeps,
       );
       return scheduler.create(normalized);
@@ -352,8 +468,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         stabilizePreRunHookForUpdate(
           existing,
           normalizeLegacyDeviceLinkIntervalClear(
-            normalizeNullableIntervalMs(
-              patch as UpdateScheduleInput & { intervalMs?: number | null },
+            normalizeNullableScheduleFields(
+              patch as UpdateScheduleInput & {
+                intervalMs?: number | null;
+                sessionTitleTemplate?: string | null;
+              },
             ),
             isDeviceLinkInvoke(),
           ),
@@ -553,11 +672,21 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   // 注意这**不是**原子快照:两次读之间隔着 DB 查询的 await,run 恰好在那个窗口内结束时
   // 会出现「行还是 running、controller 已注销」。消费方(reconcileRunMarkers)能识别这种
   // 不一致并安排一次重查,所以这里不为它忙等重采样。
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_SIDEBAR_INDEX_RUNS, async () =>
-    withScheduler(async ({ storage, scheduler }) => ({
-      runs: await storage.listSidebarIndexRuns(),
-      inflightRunIds: scheduler.listInflightRunIds(),
-    })),
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_SIDEBAR_INDEX_RUNS, async (_e, request: unknown) =>
+    withScheduler(async ({ storage, scheduler }) => {
+      const compact = parseCompactSidebarIndexRequest(request);
+      if (compact) {
+        const runs = await storage.listSidebarIndexRuns({
+          compact: true,
+          ...(compact.sessionIds === undefined ? {} : { sessionIds: compact.sessionIds }),
+        });
+        return serializeCompactSidebarIndexRuns(runs);
+      }
+      return {
+        runs: await storage.listSidebarIndexRuns(),
+        inflightRunIds: scheduler.listInflightRunIds(),
+      };
+    }),
   );
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () =>
@@ -639,8 +768,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         : {};
     const overrides =
       body.overrides && typeof body.overrides === 'object'
-        ? normalizeNullableIntervalMs(
-            body.overrides as Partial<CreateScheduleInput> & { intervalMs?: number | null },
+        ? normalizeNullableScheduleFields(
+            body.overrides as Partial<CreateScheduleInput> & {
+              intervalMs?: number | null;
+              sessionTitleTemplate?: string | null;
+            },
           )
         : {};
     return withScheduler(({ scheduler }) => {

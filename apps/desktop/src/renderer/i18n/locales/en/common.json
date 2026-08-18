@@ -7889,6 +7889,15 @@
         },
         "switchModelHint": "The bound session will switch to this model on the next run"
       },
+      "sessionTitleTemplate": {
+        "toggle": "Advanced: new session title",
+        "label": "New session title template",
+        "placeholder": "Example: {date:yyyy-MM-dd} {scheduleName}",
+        "help": "Applies only when a new session is created. Bound or continuously reused sessions are not renamed. Click a variable to insert it; double an opening or closing brace to output it literally.",
+        "preview": "Preview: {{title}}",
+        "invalid": "Invalid template syntax",
+        "sampleName": "Scheduled task"
+      },
       "thread": {
         "label": "Target thread",
         "loading": "Loading sessions…",
@@ -7952,7 +7961,13 @@
         "selectProject": "Select a project directory",
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
-        "preRunHookCommandRequired": "Enter the pre-run check command"
+        "preRunHookCommandRequired": "Enter the pre-run check command",
+        "sessionTitleTemplate": {
+          "unknownToken": "Unsupported variable: {{token}}",
+          "tooLong": "The title template can contain at most {{max}} characters",
+          "unclosedToken": "The title template contains an unclosed variable brace",
+          "unexpectedBrace": "The title template contains an unmatched closing brace; double a brace to output it literally"
+        }
       }
     },
     "chips": {

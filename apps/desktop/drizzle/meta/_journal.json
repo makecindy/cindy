@@ -645,6 +645,27 @@
       "when": 1786794359638,
       "tag": "0091_amazing_blur",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "6",
+      "when": 1786930110533,
+      "tag": "0092_add_schedule_session_title_template",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "6",
+      "when": 1786930147088,
+      "tag": "0093_add_schedule_run_session_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "6",
+      "when": 1786941011630,
+      "tag": "0094_add_schedule_session_bindings",
+      "breakpoints": true
     }
   ]
 }

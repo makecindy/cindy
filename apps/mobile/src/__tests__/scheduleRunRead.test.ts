@@ -21,6 +21,42 @@ function transientError(message = 'target timed out'): Error & { code: string } 
   return Object.assign(new Error(message), { code: 'INVOKE_TIMEOUT' });
 }
 
+function compactPagingMaker(
+  runs: readonly { id: string; scheduleId: string }[],
+  markImpl: (runId: string) => Promise<void> = async () => undefined,
+) {
+  const read = new Set<string>();
+  const listSidebarIndexRuns = vi.fn(async () => ({
+    runs: runs
+      .filter((run) => !read.has(run.id))
+      .slice(0, 50)
+      .map((run, index) => ({
+        runId: run.id,
+        scheduleId: run.scheduleId,
+        sessionId: 'session-1',
+        firedAt: runs.length - index,
+        status: 'success' as const,
+      })),
+    inflightRunIds: [],
+  }));
+  const markRunRead = vi.fn(async (runId: string) => {
+    await markImpl(runId);
+    read.add(runId);
+  });
+  const maker = {
+    schedule: {
+      list: async () => [
+        { id: 'sched-a', name: 'A', status: 'active' },
+        { id: 'sched-b', name: 'B', status: 'active' },
+      ],
+      listRuns: vi.fn(async () => []),
+      listSidebarIndexRuns,
+      markRunRead,
+    },
+  } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+  return { listSidebarIndexRuns, maker, markRunRead };
+}
+
 describe('markSessionScheduleRunsRead', () => {
   it('marks only the target session unread runs as read', async () => {
     const markRunRead = vi.fn(async () => undefined);
@@ -100,6 +136,65 @@ describe('markSessionScheduleRunsRead', () => {
     ], markRunRead);
 
     await expect(markSessionScheduleRunsRead(maker, 'session-1')).resolves.toEqual(['run-a', 'run-b']);
+  });
+
+  it('drains 60 unread runs across compact pages and schedules', async () => {
+    const runs = [
+      ...Array.from({ length: 30 }, (_, index) => ({ id: `a-${index}`, scheduleId: 'sched-a' })),
+      ...Array.from({ length: 30 }, (_, index) => ({ id: `b-${index}`, scheduleId: 'sched-b' })),
+    ];
+    const { listSidebarIndexRuns, maker, markRunRead } = compactPagingMaker(runs);
+
+    await expect(markSessionScheduleRunsRead(maker, 'session-1'))
+      .resolves.toEqual(runs.map((run) => run.id));
+    expect(markRunRead).toHaveBeenCalledTimes(60);
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(3);
+  });
+
+  it('lets a permanent failure occupy one slot while draining later pages, then stops', async () => {
+    const runs = Array.from({ length: 55 }, (_, index) => ({
+      id: `run-${index}`,
+      scheduleId: index < 30 ? 'sched-a' : 'sched-b',
+    }));
+    const { listSidebarIndexRuns, maker, markRunRead } = compactPagingMaker(
+      runs,
+      async (runId) => {
+        if (runId === 'run-0') throw new Error('not found');
+      },
+    );
+
+    await expect(markSessionScheduleRunsRead(maker, 'session-1'))
+      .resolves.toEqual(runs.slice(1).map((run) => run.id));
+    expect(markRunRead).toHaveBeenCalledTimes(55);
+    expect(markRunRead.mock.calls.filter(([runId]) => runId === 'run-0')).toHaveLength(1);
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not remark or loop on a repeated static compact page', async () => {
+    const markRunRead = vi.fn(async (_runId: string) => undefined);
+    const listSidebarIndexRuns = vi.fn(async () => ({
+      runs: ['run-a', 'run-b'].map((runId, index) => ({
+        runId,
+        scheduleId: 'sched-a',
+        sessionId: 'session-1',
+        firedAt: index + 1,
+        status: 'success' as const,
+      })),
+      inflightRunIds: [],
+    }));
+    const maker = {
+      schedule: {
+        list: async () => [{ id: 'sched-a', name: 'A', status: 'active' }],
+        listRuns: vi.fn(async () => []),
+        listSidebarIndexRuns,
+        markRunRead,
+      },
+    } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+
+    await expect(markSessionScheduleRunsRead(maker, 'session-1'))
+      .resolves.toEqual(['run-a', 'run-b']);
+    expect(markRunRead.mock.calls.map(([runId]) => runId)).toEqual(['run-a', 'run-b']);
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(2);
   });
 });
 
