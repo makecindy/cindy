@@ -84,7 +84,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getCachedDeviceProviders('dev-invalid')).toBeNull();
   });
 
-  it('provider 数组混入非法元素时整份进入 error，不得部分发布或落缓存', async () => {
+  it('provider 数组混入非法元素时丢掉坏项，保留合法供应商', async () => {
     const invoke = vi.fn(async () => ({ providers: [provider('valid'), null] }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
     const mod = await import('@/hooks/useDeviceProviders');
@@ -93,12 +93,15 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
     await mod.prefetchDeviceProviders('dev-invalid-item');
 
-    expect(listener).toHaveBeenCalledWith({
-      status: 'error',
-      error: 'Invalid provider list response',
-      unsupported: false,
-    });
-    expect(mod.getCachedDeviceProviders('dev-invalid-item')).toBeNull();
+    expect(mod.getCachedDeviceProviders('dev-invalid-item')?.providers.map((row) => row.id)).toEqual([
+      'valid',
+    ]);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ready',
+        providers: [expect.objectContaining({ id: 'valid' })],
+      }),
+    );
   });
 
   it('接受不含执行字段的安全投影 provider', async () => {

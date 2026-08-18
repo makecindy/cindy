@@ -228,6 +228,8 @@ export function ConfirmDialog({
               <button
                 ref={confirmBtnRef}
                 disabled={loading || confirmDisabled}
+                aria-busy={loading || undefined}
+                aria-label={resolvedConfirmText}
                 onClick={() => onConfirm?.({ dontShowAgain })}
                 className={cn(
                   'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',

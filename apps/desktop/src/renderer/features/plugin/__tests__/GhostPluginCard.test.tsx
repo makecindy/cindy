@@ -1,7 +1,8 @@
 /**
  * Regression coverage for installed Plugin card actions (redesigned card:
  * whole-card opens detail, kind-specific primary button, manage entry),
- * market card actions, and the legacy recovery notice.
+ * market card actions, the legacy recovery notice, and market success navigation
+ * (first install opens detail; update stays put).
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -33,6 +34,7 @@ import {
   LegacyGhostRecoveryNotice,
   marketUpdateAllowsPermissionExpansion,
   MarketPluginCard,
+  shouldOpenInstalledDetailAfterMarketSuccess,
 } from '../GhostPluginPage';
 import {
   __ingestGhostBadgeForTest,
@@ -99,6 +101,16 @@ describe('marketUpdateAllowsPermissionExpansion', () => {
   it('only allows approved installs when the reviewed diff adds permissions', () => {
     expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 0)).toBe(false);
     expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 1)).toBe(true);
+  });
+});
+
+describe('shouldOpenInstalledDetailAfterMarketSuccess', () => {
+  it('opens the installed detail after a first-time market install', () => {
+    expect(shouldOpenInstalledDetailAfterMarketSuccess(false)).toBe(true);
+  });
+
+  it('stays on the current page after an update or replacement', () => {
+    expect(shouldOpenInstalledDetailAfterMarketSuccess(true)).toBe(false);
   });
 });
 
@@ -304,6 +316,27 @@ describe('GhostPluginCard', () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
+  });
+
+  it('replaces the update pill with a spinner while this card is pending', () => {
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        updateVersion="1.1.0"
+        updateBusy
+        updatePending
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    const update = screen.getByRole('button', {
+      name: 'settings.ghosts.page.updateAria',
+    });
+    expect(update.getAttribute('aria-busy')).toBe('true');
+    expect(update.querySelector('.animate-spin')).toBeTruthy();
+    expect(update.textContent).toBe('');
   });
 
   it('sends a tool-only plugin to manage and renders no primary button', () => {
@@ -603,6 +636,26 @@ describe('MarketPluginCard', () => {
     expect((busyCardBody as HTMLButtonElement).disabled).toBe(true);
     expect(busyCardBody.className).toContain('cursor-wait');
     expect(busyCardBody.className).not.toContain('cursor-not-allowed');
+  });
+
+  it('replaces the install label with a spinner while this card is pending', () => {
+    render(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy
+        pending
+        onSelect={vi.fn()}
+        onInstall={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const install = screen.getByRole('button', {
+      name: 'settings.ghosts.page.installAria',
+    });
+    expect(install.getAttribute('aria-busy')).toBe('true');
+    expect(install.querySelector('.animate-spin')).toBeTruthy();
+    expect(install.textContent).toBe('');
   });
 });
 

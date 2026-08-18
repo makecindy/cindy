@@ -972,6 +972,33 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /** reconcile 真正的执行体 —— 只经由 reconcileWithSystemCodex(AfterLogin) 调用, 不直接对外。 */
   private async runReconcileWithSystemCodex(): Promise<void> {
+    // dev 沙箱凭证隔离(XDT_ISOLATED_AUTH=1,仅非 packaged 生效):完全不与本机
+    // ~/.codex 协调 —— 不建共享硬链;当前 auth.json 若已是与系统文件同 inode 的
+    // 硬链,解除本沙箱这一端(系统文件与其它实例的链接不受影响),让沙箱回到
+    // 未登录、之后的登录写独立文件。背景:共享硬链下沙箱内登录/登出会改写
+    // 正式实例与本机 CLI 共用的凭证(2026-08-13 Chris 实测:沙箱一登录,本机
+    // OAuth 全被退登),隔离沙箱要可安全测登录必须掐掉这条共享。
+    if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1') {
+      const isolatedMyAuth = path.join(this.codexHome, 'auth.json');
+      const isolatedSystemAuth = getSystemCodexAuthPath();
+      try {
+        if (existsSync(isolatedMyAuth) && existsSync(isolatedSystemAuth)) {
+          const [sysStat, myStat] = await Promise.all([
+            fsp.stat(isolatedSystemAuth),
+            fsp.stat(isolatedMyAuth),
+          ]);
+          if (sysStat.ino === myStat.ino && sysStat.dev === myStat.dev) {
+            await fsp.unlink(isolatedMyAuth);
+            log.info('isolated-auth: detached shared codex auth hardlink for this sandbox');
+          }
+        }
+      } catch (err) {
+        log.warn('isolated-auth: failed to detach shared codex auth hardlink', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
     this.ensureInvalidationMarkerLoaded();
     if (this.suppressSystemCodexReconcile) {
       const marker = readInvalidatedSystemCodexAuthMarker(this.codexHome);

@@ -32,6 +32,8 @@ export interface AutomationScheduleSessionInfo {
 
 export interface AutomationSessionGroup {
   id: string;
+  /** 追加设备作用域前的分组 id；仅用于继承旧版持久化偏好。 */
+  legacyId?: string;
   scheduleId?: string;
   scheduleStatus?: Schedule['status'];
   scheduleSource?: Schedule['source'];
@@ -58,11 +60,21 @@ export function getEntryActivityMs(entry: SidebarSessionEntry): number {
 
 export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete';
 
-function fallbackAutomationGroupKey(session: Session): string {
+interface ScopedAutomationGroupKey {
+  key: string;
+  legacyKey?: string;
+}
+
+function fallbackAutomationGroupKey(session: Session): ScopedAutomationGroupKey {
   const workspace = session.workspaceKind ?? 'project';
   const dir = normalizeWorkingDir(session.workingDir) ?? '__no_working_dir__';
   const title = getAutomationSessionDisplayTitle(session).trim() || session.id;
-  return `fallback:${workspace}:${dir}:${title}`;
+  return scopeAutomationGroupKey(`fallback:${workspace}:${dir}:${title}`, session);
+}
+
+function scopeAutomationGroupKey(key: string, session: Session): ScopedAutomationGroupKey {
+  const deviceId = session.deviceLinkDeviceId?.trim();
+  return deviceId ? { key: `${key}:device:${deviceId}`, legacyKey: key } : { key };
 }
 
 export function getAutomationSidebarGroupInfo(
@@ -70,6 +82,7 @@ export function getAutomationSidebarGroupInfo(
   scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>,
 ): {
   key: string;
+  legacyKey?: string;
   title: string;
   scheduleId?: string;
   scheduleStatus?: Schedule['status'];
@@ -82,8 +95,9 @@ export function getAutomationSidebarGroupInfo(
 
   const indexed = scheduleSessionIndex?.get(session.id);
   if (indexed) {
+    const scopedKey = scopeAutomationGroupKey(`schedule:${indexed.scheduleId}`, session);
     return {
-      key: `schedule:${indexed.scheduleId}`,
+      ...scopedKey,
       scheduleId: indexed.scheduleId,
       scheduleStatus: indexed.scheduleStatus,
       scheduleSource: indexed.scheduleSource,
@@ -94,8 +108,9 @@ export function getAutomationSidebarGroupInfo(
     };
   }
 
+  const fallbackKey = fallbackAutomationGroupKey(session);
   return {
-    key: fallbackAutomationGroupKey(session),
+    ...fallbackKey,
     title: getAutomationSessionDisplayTitle(session),
   };
 }
@@ -124,6 +139,7 @@ export function groupAutomationSidebarEntries(
     } else {
       groups.set(groupInfo.key, {
         id: groupInfo.key,
+        legacyId: groupInfo.legacyKey,
         scheduleId: groupInfo.scheduleId,
         scheduleStatus: groupInfo.scheduleStatus,
         scheduleSource: groupInfo.scheduleSource,

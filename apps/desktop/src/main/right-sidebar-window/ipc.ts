@@ -70,6 +70,9 @@ function parseCommand(raw: unknown): RsbWindowCommand {
   if (r.type === 'open-terminal') {
     return { type: 'open-terminal', sessionId: r.sessionId };
   }
+  if (r.type === 'toggle-review-tab') {
+    return { type: 'toggle-review-tab', sessionId: r.sessionId };
+  }
   if (r.type === 'open-web-browser') {
     if (typeof r.url !== 'string' || r.url.length === 0) {
       throwIpcError('INVALID_PARAMS', 'command.url required');

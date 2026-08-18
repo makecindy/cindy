@@ -502,11 +502,14 @@ export const sessionsStore = {
     // never leak into the regular desktop Session cache through the optimistic
     // prepend path (the IPC list already excludes source='bot').
     if (session.source === 'bot') return;
+    // 插入前叠乐观预览:createSession 往往先于 sessions:created 刷新返回,但预览
+    // 必须在入库前就登记。若不在这里叠,第一帧仍是哨兵,用户会先看到「未命名任务」。
+    const [withPreview] = applyAutoTitlePreviews([session]);
     let touched = false;
     for (const [k, list] of cache) {
       if (k === 'archived') continue;
       if (list.some((s) => s.id === session.id)) continue;
-      cache.set(k, [session, ...list]);
+      cache.set(k, [withPreview, ...list]);
       touched = true;
     }
     if (touched) notify();

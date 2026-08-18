@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Tip } from '@/components/ui/tooltip';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -161,7 +162,9 @@ export function BotDelegationsBody({ state, ctx, active = true, shellVisible = t
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3">
-          <button type="button" onClick={() => ctx.patchState({ selectedDelegationId: null })} aria-label={t('rightSidebar.botDelegations.back')} className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><ArrowLeft size={15} /></button>
+          <Tip text={t('rightSidebar.botDelegations.back')} side="bottom">
+            <button type="button" onClick={() => ctx.patchState({ selectedDelegationId: null })} aria-label={t('rightSidebar.botDelegations.back')} className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><ArrowLeft size={15} /></button>
+          </Tip>
           <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">{selected.targetBotName}</span>
           <span className={`text-11 ${statusClass(selected.status)}`}>{t(`rightSidebar.botDelegations.status.${selected.status}`)}</span>
         </div>

@@ -42,6 +42,10 @@ import {
 } from './ghostManualValidation.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
+import {
+  ARCHIVE_REGULAR_0644,
+  unixRegularFilePermissionsForArchive,
+} from './ghostZipPermissions.js';
 import { isPathInsideDir } from './dirDeposit.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
@@ -721,20 +725,22 @@ async function buildGhostPackage(
     // 文件耗尽内存。快照字节也必须出自这把闸,不能再按路径重读。
     let manifestRaw: unknown;
     let manifestBytes: Buffer;
+    let manifestUnixPermissions: number;
     try {
-      const bytes = await readBoundedFileNoFollow(
+      const read = await readBoundedFileNoFollowWithStat(
         path.join(realDir, GHOST_MANIFEST_FILE),
         GHOST_MANIFEST_MAX_BYTES,
         { containWithin: realDir },
       );
-      if (bytes === null) {
+      if (read === null) {
         return {
           ok: false,
           errorCode: 'MANIFEST_INVALID',
           message: `${GHOST_MANIFEST_FILE} 不是普通文件或超过 ${GHOST_MANIFEST_MAX_BYTES} 字节上限`,
         };
       }
-      manifestBytes = bytes;
+      manifestBytes = read.bytes;
+      manifestUnixPermissions = unixRegularFilePermissionsForArchive(read.stat.mode);
       manifestRaw = JSON.parse(manifestBytes.toString('utf-8'));
     } catch (err) {
       return {
@@ -846,7 +852,10 @@ async function buildGhostPackage(
     // Markdown 文件；逐文件限量、严格 UTF-8，并拒绝并发截短与二进制内容。
     // 缓存本次校验过的字节，生成 zip 时直接使用同一份快照，避免“预检一份、
     // 入包时又读到另一份”的竞态。嵌套单元共享缓存，同一物理文件只校验一次。
-    const manualFileSnapshots = new Map<string, Buffer>();
+    const manualFileSnapshots = new Map<
+      string,
+      { bytes: Buffer; unixPermissions: number }
+    >();
     for (const item of manifest.manual?.items ?? []) {
       const unitRoot = path.join(dir, ...item.dir.split('/'));
       const validateManualDir = async (
@@ -932,7 +941,10 @@ async function buildGhostPackage(
               message: `manual 文件不合格(${logicalPath}):${decoded.reason}`,
             };
           }
-          manualFileSnapshots.set(logicalPath, read.bytes);
+          manualFileSnapshots.set(logicalPath, {
+            bytes: read.bytes,
+            unixPermissions: unixRegularFilePermissionsForArchive(read.stat.mode),
+          });
         }
         return null;
       };
@@ -1129,29 +1141,35 @@ async function buildGhostPackage(
     let packedBytes = 0;
     for (const f of files) {
       let content: Buffer;
+      let unixPermissions: number;
       if (f.rel === GHOST_MANIFEST_FILE) {
         content = manifestBytes;
+        unixPermissions = manifestUnixPermissions;
       } else if (iconPng !== undefined && f.rel === FORGE_AI_ICON_PATH) {
         content = iconPng;
+        unixPermissions = ARCHIVE_REGULAR_0644;
       } else if (manualFileSnapshots.has(f.rel)) {
-        content = manualFileSnapshots.get(f.rel)!;
+        const snapshot = manualFileSnapshots.get(f.rel)!;
+        content = snapshot.bytes;
+        unixPermissions = snapshot.unixPermissions;
       } else {
-        let bytes: Buffer | null;
+        let read: Awaited<ReturnType<typeof readBoundedFileNoFollowWithStat>>;
         try {
-          bytes = await readBoundedFileNoFollow(f.abs, maxTotalBytes - packedBytes, {
+          read = await readBoundedFileNoFollowWithStat(f.abs, maxTotalBytes - packedBytes, {
             containWithin: realDir,
           });
         } catch {
-          bytes = null;
+          read = null;
         }
-        if (bytes === null) {
+        if (read === null) {
           return {
             ok: false,
             errorCode: 'TOO_LARGE',
             message: `文件在打包期间被并发改动或超出剩余体积预算:${f.rel}`,
           };
         }
-        content = bytes;
+        content = read.bytes;
+        unixPermissions = unixRegularFilePermissionsForArchive(read.stat.mode);
       }
       packedBytes += content.byteLength;
       if (packedBytes > maxTotalBytes) {
@@ -1161,7 +1179,7 @@ async function buildGhostPackage(
           message: `总体积超上限(${maxTotalBytes} 字节)`,
         };
       }
-      zip.file(f.rel, content);
+      zip.file(f.rel, content, { unixPermissions });
     }
     if (iconPng !== undefined && !iconSourceEntry) {
       packedBytes += iconPng.byteLength;
@@ -1172,9 +1190,13 @@ async function buildGhostPackage(
           message: `总体积超上限(${maxTotalBytes} 字节)`,
         };
       }
-      zip.file(FORGE_AI_ICON_PATH, iconPng);
+      zip.file(FORGE_AI_ICON_PATH, iconPng, { unixPermissions: ARCHIVE_REGULAR_0644 });
     }
-    const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    const buf = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      platform: 'UNIX',
+    });
     const maxCindyBytes = manifest.node ? MAX_NODE_CINDY_BYTES : MAX_BASIC_CINDY_BYTES;
     if (buf.byteLength > maxCindyBytes) {
       return {
@@ -4042,6 +4064,9 @@ const opened = await cindy.iosSimulator.request({
    开发已有插件，先把源码复制/迁出到工作目录中的新目录，再从该副本制作;
 2. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——校验 + 打包 + 弹装入确认框;
    产物落在源码目录里(\`<id>-<version>.cindy\`,同版本覆盖,下次打包自动跳过);
+   macOS / Linux 源文件的普通 Unix 权限会原样进入包(特殊位会剥除)，所以随包本机
+   可执行程序必须在打包前就设好执行位(例如 \`chmod 755 path/to/program\`)，不要靠
+   文件扩展名或 \`bin/\` 目录让宿主猜测;
    若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`,不要重试或换大小写、软链接、junction 绕过,
    按上一步迁出源码后再打包;也可能返回 \`SOURCE_OUTSIDE_WORKDIR\`(源码不在会话工作目录内);
 3. **告知用户去点弹窗**(装入默认沉睡,提醒用户勾"立即开启"或到主界面侧边栏「插件」中唤醒);

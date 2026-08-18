@@ -181,6 +181,67 @@ describe('UserMessageEditBox — idle 发送', () => {
     expect(commitMock.mock.calls[0][0].slashCommandRanges).toBeUndefined();
   });
 
+  it('未确认的 /skill: 散文被用户删掉前缀后不再静默改回 runtime 名', async () => {
+    const box = renderBox({
+      initialText: '/skill:unknown is prose',
+      slashCommandRanges: [],
+    });
+    fireEvent.change(box.textarea, { target: { value: '/unknown is prose' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('/unknown is prose');
+    expect(commitMock.mock.calls[0][0].slashCommandRanges).toBeUndefined();
+  });
+
+  it('后文已确认的命令 range 不会让首行未确认的 /skill: 散文被改回', async () => {
+    const original = '/skill:unknown\n/help later';
+    const helpStart = original.indexOf('/help');
+    const box = renderBox({
+      initialText: original,
+      initialSubmitText: original,
+      slashCommandRanges: [{ start: helpStart, end: helpStart + 5 }],
+    });
+    fireEvent.change(box.textarea, { target: { value: '/unknown\n/help later' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('/unknown\n/help later');
+    expect(commitMock.mock.calls[0][0].slashCommandRanges).toBeUndefined();
+  });
+
+  it('已确认 range 覆盖的 Pi skill 编辑后仍恢复 runtime 名', async () => {
+    const box = renderBox({
+      initialText: '/git please',
+      initialSubmitText: '/skill:git please',
+      slashCommandRanges: [{ start: 0, end: 10 }],
+    });
+    fireEvent.change(box.textarea, { target: { value: '/git review' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('/skill:git review');
+    expect(commitMock.mock.calls[0][0].slashCommandRanges).toEqual([{ start: 0, end: 10 }]);
+  });
+
+  it('引用 marker 落库坐标仍能恢复可见 /git',
+    async () => {
+    const wire = [
+      '> <!-- cindy-composer-quote -->',
+      '> quoted',
+      '',
+      '/skill:git follow-up',
+    ].join('\n');
+    const skillStart = wire.indexOf('/skill:git');
+    const box = renderBox({
+      initialText: 'quoted\n\n/git follow-up',
+      initialSubmitText: wire,
+      quotesEncoded: true,
+      slashCommandRanges: [{ start: skillStart, end: skillStart + 10 }],
+    });
+    fireEvent.change(box.textarea, { target: { value: 'quoted\n\n/git please' } });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(commitMock.mock.calls[0][0].text).toBe('quoted\n\n/skill:git please');
+  });
+
   it('被拦消息覆盖重发在文本未修改时透传语义引用与 chip ranges', async () => {
     const override = vi.fn(async () => {});
     const agentReferences = [{
