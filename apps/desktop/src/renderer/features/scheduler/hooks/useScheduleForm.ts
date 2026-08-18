@@ -170,7 +170,7 @@ export function schedulerFallbackModel(agentKind: ScheduleFormState['agentKind']
 export function getScheduleDefaultModel(agentKind: ScheduleFormState['agentKind']): string {
   const prefs = getScheduleAgentPrefs(agentKind);
   if (prefs.model.trim()) return prefs.model;
-  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc');
+  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : agentKind === 'kimi-code' ? 'kimi' : 'cc');
   if (chatLast.trim()) return chatLast;
   return schedulerFallbackModel(agentKind);
 }

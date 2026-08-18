@@ -627,6 +627,19 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         limit: limitSnapshot(settings.workerHardLimit, activeCount),
       };
     }
+    const providerRouting = await deps.getProviderRoutingContext();
+    const providerAvailability = providerRouting.availability;
+    const agentProviders = providerAvailability[params.agent] ?? [];
+    // 无 provider 的快速失败必须先于 capabilities 读取:未注册的 agent(如运行时尚未
+    // 接入的 kimi-code)在 getAvailableModels 里会撞 requireAgent 抛错,先把更可操作的
+    // NO_PROVIDER_FOR_AGENT 返回给调用方(review 四轮 P1)。
+    if (agentProviders.length === 0) {
+      return {
+        ok: false,
+        errorCode: 'NO_PROVIDER_FOR_AGENT',
+        message: buildNoProviderMessage(params.agent, providerAvailability),
+      };
+    }
     const availableModels = deps.getAvailableModels(params.agent);
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
     // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
@@ -635,9 +648,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const providerRouting = await deps.getProviderRoutingContext();
-    const providerAvailability = providerRouting.availability;
-    const agentProviders = providerAvailability[params.agent] ?? [];
     const explicitModelResolution = params.model !== undefined
       ? resolveWorkerModelId({
           agent: params.agent,
@@ -663,15 +673,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         ok: false,
         errorCode: 'INVALID_PARAMS',
         message: `model "${explicitModelResolution.model}" not available for ${params.agent}. valid: ${validModels.join(', ')}`,
-      };
-    }
-
-    // 先保留无 provider 的快速失败；精确的 provider + model 校验要等 Lead/defaults 解析完成。
-    if (agentProviders.length === 0) {
-      return {
-        ok: false,
-        errorCode: 'NO_PROVIDER_FOR_AGENT',
-        message: buildNoProviderMessage(params.agent, providerAvailability),
       };
     }
 

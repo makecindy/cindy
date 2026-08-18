@@ -248,6 +248,7 @@ async function getMostRecentSessionAgent(): Promise<AgentKind | null> {
     if (row.agentKind === 'cc' || row.agentKind === 'claude-code') return 'claude-code';
     if (row.agentKind === 'codex') return 'codex';
     if (row.agentKind === 'pi') return 'pi';
+    if (row.agentKind === 'kimi' || row.agentKind === 'kimi-code') return 'kimi-code';
     return null;
   } catch (err) {
     log.debug('help recent-agent probe failed', { error: String(err) });

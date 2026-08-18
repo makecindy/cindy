@@ -499,6 +499,7 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' | 'kimi' {
 function toAgentKind(vendor: MakerVendor): KnownAgent {
   if (vendor === 'codex') return 'codex';
   if (vendor === 'pi') return 'pi';
+  if (vendor === 'kimi') return 'kimi-code';
   if (vendor === 'cc') return 'claude-code';
   throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
 }
@@ -517,14 +518,16 @@ export function WorkspacePrefsEditor({
   const claudeCaps = useAgentCapabilities('claude-code');
   const codexCaps = useAgentCapabilities('codex');
   const piCaps = useAgentCapabilities('pi');
+  const kimiCaps = useAgentCapabilities('kimi-code');
   const capsByAgent = useMemo(
     () =>
       ({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
         pi: piCaps.capabilities,
+        'kimi-code': kimiCaps.capabilities,
       }) as Record<KnownAgent, AgentCapabilities | null>,
-    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
+    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities, kimiCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>

@@ -69,6 +69,7 @@ const PERMISSION_ICONS: Record<string, typeof Hand> = {
 function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi' | 'kimi'): AgentKind {
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'kimi') return 'kimi-code';
   return 'claude-code';
 }
 

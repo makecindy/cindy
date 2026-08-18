@@ -37,7 +37,7 @@ export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi' | 'kimi'): {
   const [readiness, setReadiness] = useState<Readiness>('loading');
 
   const revalidate = useCallback(async (opts?: { includeSuspended?: boolean }): Promise<Readiness> => {
-    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex';
+    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : vendorKey === 'kimi' ? 'kimi-code' : 'codex';
 
     // 轴 2(codex / pi,正交于来源):本地二进制是运行时前提,缺了连发都发不了 → 优先返回
     // binary-missing。binary 状态走 maker:agent:status(其 authReady 是 codex OAuth 专属,已被

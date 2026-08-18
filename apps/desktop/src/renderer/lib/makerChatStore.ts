@@ -9284,6 +9284,7 @@ function dbAgentKindToMakerKind(
   if (dbKind === 'codex') return 'codex';
   if (dbKind === 'cc') return 'claude-code';
   if (dbKind === 'pi') return 'pi';
+  if (dbKind === 'kimi' || dbKind === 'kimi-code') return 'kimi-code';
   return fallback;
 }
 
