@@ -454,4 +454,26 @@ describe('Pi Skill invocation validation', () => {
     expect(delivered).toBe(false);
     expect(currentSession).toBe(sessionB);
   });
+
+  it('rechecks queued turn Session and manifest identities after the awaited proof', () => {
+    const registerSource = fs.readFileSync(
+      path.resolve(__dirname, '..', 'register.ts'),
+      'utf8',
+    );
+    const start = registerSource.indexOf('const validateQueuedAgentSkillInvocation = async (');
+    const end = registerSource.indexOf('\n  const inputCoordinator:', start);
+    const validation = registerSource.slice(start, end);
+    const proof = validation.indexOf('const invocationIsCurrent = await isCurrentPiSkillInvocation(');
+    const sessionRecheck = validation.indexOf('maker.getSession(sessionId) === session', proof);
+    const manifestRecheck = validation.indexOf(
+      'session.getRuntimeCapabilities() === manifest',
+      proof,
+    );
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(proof).toBeGreaterThanOrEqual(0);
+    expect(sessionRecheck).toBeGreaterThan(proof);
+    expect(manifestRecheck).toBeGreaterThan(proof);
+  });
 });
