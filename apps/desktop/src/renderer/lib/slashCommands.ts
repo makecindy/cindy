@@ -371,6 +371,14 @@ export async function loadAllCommands(
   return mergeCommands(desktop, agentBuiltin, agentSkill);
 }
 
+function isPiUserSkillAwaitingRuntimeProof(
+  command: UnifiedCommand | undefined,
+): boolean {
+  return command?.kind === 'agent-skill'
+    && command.scope === 'user'
+    && command.runtimeStatus !== 'loaded';
+}
+
 /**
  * A Pi runtime catalog may finish after the palette/dispatch snapshot was
  * created. Recheck desktop hits before executing them so a newly loaded
@@ -389,7 +397,8 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   const current = findCommand(params.commands);
   const shouldReload = !current
     || current.kind === 'desktop'
-    || isSlashCommandUnavailable(current);
+    || isSlashCommandUnavailable(current)
+    || isPiUserSkillAwaitingRuntimeProof(current);
   if (params.agentKind !== 'pi' || !params.sessionId || !shouldReload) {
     return { command: current, commands: params.commands };
   }
@@ -426,7 +435,8 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   );
   const shouldPrepareRuntime = !current
     || current.kind === 'desktop'
-    || isSlashCommandUnavailable(current);
+    || isSlashCommandUnavailable(current)
+    || isPiUserSkillAwaitingRuntimeProof(current);
   if (
     params.agentKind === 'pi'
     && params.sessionId
@@ -439,6 +449,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   for (const delayMs of retryDelaysMs) {
     const shouldRetry = result.command !== undefined && (
       isSlashCommandUnavailable(result.command)
+      || isPiUserSkillAwaitingRuntimeProof(result.command)
       || (
         result.command.kind === 'desktop'
         && hasShadowedUnavailableSkill(result.commands, params.commandName)

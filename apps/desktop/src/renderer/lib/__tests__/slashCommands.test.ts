@@ -388,6 +388,42 @@ describe('Pi project skill availability', () => {
     expect(reloads).toBe(3);
   });
 
+  it('waits for a user Skill with a guessed command to gain loaded runtime proof', async () => {
+    const pending = skill({
+      name: 'demo',
+      scope: 'user',
+      path: '/home/user/.agents/skills/demo',
+      runtimeCommandName: 'skill:demo',
+    });
+    const loaded = skill({
+      ...pending,
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:frontmatter-demo',
+    });
+    const sleeps: number[] = [];
+    let reloads = 0;
+
+    const result = await reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [pending],
+      retryDelaysMs: [10, 20],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload: async () => (++reloads < 2 ? [pending] : [loaded]),
+    });
+
+    expect(result).toEqual({ command: loaded, commands: [loaded] });
+    expect(agentSkillInvocationForDispatch('/demo run this', result.command)).toEqual({
+      name: 'demo',
+      scope: 'user',
+      sourcePath: '/home/user/.agents/skills/demo',
+      runtimeCommandName: 'skill:frontmatter-demo',
+    });
+    expect(sleeps).toEqual([10]);
+    expect(reloads).toBe(2);
+  });
+
   it('keeps waiting when a Desktop command temporarily shadows a same-name Pi skill', async () => {
     const desktop: UnifiedCommand = { kind: 'desktop', name: 'help', description: 'Help' };
     const discovered = skill({ name: 'help', scope: 'repo', runtimeStatus: 'discovered' });
