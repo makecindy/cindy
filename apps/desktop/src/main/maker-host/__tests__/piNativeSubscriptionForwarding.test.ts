@@ -257,9 +257,57 @@ describe('PI native subscription forwarding', () => {
     const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
     expect(request.tools).toEqual([
       { type: 'function', name: 'read_file', parameters: { type: 'object' } },
-      { type: 'x_search' },
+      { type: 'x_search', from_date: '2026-08-01' },
     ]);
     expect(request.tool_choice).toEqual({ type: 'function', name: 'read_file' });
+  });
+
+  it.each([
+    [
+      'keeps a configured x_search before a legacy declaration',
+      [
+        { type: 'x_search', from_date: '2026-08-01' },
+        { type: 'live_search', sources: [{ type: 'x' }] },
+      ],
+      [{ type: 'x_search', from_date: '2026-08-01' }],
+    ],
+    [
+      'normalizes a lone legacy declaration',
+      [{ type: 'live_search', sources: [{ type: 'x' }] }],
+      [{ type: 'x_search' }],
+    ],
+    [
+      'keeps the first of multiple native declarations',
+      [
+        { type: 'x_search', from_date: '2026-08-01' },
+        { type: 'x_search', to_date: '2026-08-18' },
+      ],
+      [{ type: 'x_search', from_date: '2026-08-01' }],
+    ],
+  ])('%s', async (_name, tools, expectedTools) => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-x-search-dedupe', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = { model: 'grok-4.5', tools };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 12,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request.tools).toEqual(expectedTools);
   });
 
   it('preserves an existing native x_search declaration without duplicating it', async () => {

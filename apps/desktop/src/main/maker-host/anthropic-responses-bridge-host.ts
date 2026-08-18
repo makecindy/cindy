@@ -553,6 +553,9 @@ function withNativeXaiServerSideTools(
   const serverTools = xaiServerSideTools(model);
   if (serverTools.length === 0) return null;
 
+  const preferredXSearchTool = existing.find((tool) => (
+    isPlainRecord(tool) && tool.type === XAI_X_SEARCH_TOOL_TYPE
+  ));
   let searchToolDeclared = false;
   let toolsChanged = false;
   const tools = existing.flatMap((tool) => {
@@ -567,7 +570,11 @@ function withNativeXaiServerSideTools(
       return [];
     }
     searchToolDeclared = true;
-    if (tool.type === XAI_X_SEARCH_TOOL_TYPE) return [tool];
+    if (preferredXSearchTool !== undefined) {
+      if (tool === preferredXSearchTool) return [tool];
+      toolsChanged = true;
+      return [preferredXSearchTool];
+    }
     toolsChanged = true;
     // live_search options belong to the deprecated Chat Completions shape and
     // are not interchangeable with Responses x_search options.
