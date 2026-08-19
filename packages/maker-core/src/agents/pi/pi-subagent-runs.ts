@@ -154,8 +154,19 @@ export type PiSubagentControlAction = 'stop' | 'steer' | 'follow_up' | 'approval
  *    Subagent launches for anyone (including its own replacement).
  *  - The reclaim loop still runs: the fence closes the window, the loop clears
  *    whatever was already in flight when it closed.
+ *
+ * **Ownership is the file name.** `pi-agent-home` is shared by dev, packaged and
+ * every `--passive` launch, so two instances can update at once. With a single
+ * shared file the later writer overwrote the earlier one's fence and either
+ * one's cancellation deleted it outright — after which the still-restarting
+ * instance's own launcher read a fence naming somebody else, ignored it, and
+ * spawned a runner straight through the window. Per-host names make the whole
+ * class impossible: nobody writes or deletes a file that is not theirs, and the
+ * content check stays as a second line of defence.
  */
 export const PI_SUBAGENT_LAUNCH_FENCE_FILENAME = '.launch-fence.json';
+const PI_SUBAGENT_LAUNCH_FENCE_PREFIX = '.launch-fence-';
+const PI_SUBAGENT_LAUNCH_FENCE_SUFFIX = '.json';
 
 interface PiSubagentLaunchFence {
   version: 1;
@@ -177,8 +188,34 @@ function piSubagentAgentHomeFromRunRoot(runRoot: string): string {
   return path.dirname(path.dirname(path.dirname(runRoot)));
 }
 
-export function piSubagentLaunchFencePath(agentHome: string): string {
+/**
+ * This host's own fence file. The pid in the name is what makes ownership
+ * unambiguous without reading anything.
+ */
+export function piSubagentLaunchFencePath(agentHome: string, hostPid = process.pid): string {
+  return path.join(
+    piSubagentRunsRoot(agentHome),
+    `${PI_SUBAGENT_LAUNCH_FENCE_PREFIX}${hostPid}${PI_SUBAGENT_LAUNCH_FENCE_SUFFIX}`,
+  );
+}
+
+/**
+ * The pre-per-host file name.
+ *
+ * Read alongside the owned one so a half-upgraded pair of instances (one build
+ * writing the shared name, one writing its own) still blocks correctly. Safe to
+ * delete once no shipped build writes the shared name any more.
+ */
+function legacyLaunchFencePath(agentHome: string): string {
   return path.join(piSubagentRunsRoot(agentHome), PI_SUBAGENT_LAUNCH_FENCE_FILENAME);
+}
+
+function readLaunchFence(file: string): PiSubagentLaunchFence | null {
+  try {
+    return parseLaunchFence(JSON.parse(readFileSync(file, 'utf8')));
+  } catch {
+    return null;
+  }
 }
 
 function parseLaunchFence(value: unknown): PiSubagentLaunchFence | null {
@@ -201,14 +238,13 @@ function parseLaunchFence(value: unknown): PiSubagentLaunchFence | null {
  * without an await budget. Unreadable or absent means "no fence".
  */
 export function isPiSubagentLaunchFenceActive(agentHome: string, hostPid: number): boolean {
-  let fence: PiSubagentLaunchFence | null;
-  try {
-    fence = parseLaunchFence(JSON.parse(readFileSync(piSubagentLaunchFencePath(agentHome), 'utf8')));
-  } catch {
-    return false;
+  // Named lookup, no directory scan: only this host's own fence can block it.
+  // The legacy shared name is still consulted for the upgrade window.
+  for (const file of [piSubagentLaunchFencePath(agentHome, hostPid), legacyLaunchFencePath(agentHome)]) {
+    const fence = readLaunchFence(file);
+    if (fence && fence.hostPid === hostPid && isProcessAlive(fence.hostPid) !== false) return true;
   }
-  if (!fence || fence.hostPid !== hostPid) return false;
-  return isProcessAlive(fence.hostPid) !== false;
+  return false;
 }
 
 /**
@@ -217,6 +253,8 @@ export function isPiSubagentLaunchFenceActive(agentHome: string, hostPid: number
  * would be refused until it exits.
  */
 export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<() => Promise<void>> {
+  // Writes and deletes only this host's file, so a concurrent instance's fence
+  // can neither be clobbered by this one nor removed by its cancellation.
   const file = piSubagentLaunchFencePath(agentHome);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await writeAtomicJson(file, {
@@ -238,16 +276,33 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
  * fence owned by a live process (another instance mid-relaunch) is left alone.
  */
 export async function clearStalePiSubagentLaunchFence(agentHome: string): Promise<void> {
-  const file = piSubagentLaunchFencePath(agentHome);
-  let fence: PiSubagentLaunchFence | null;
+  const runsRoot = piSubagentRunsRoot(agentHome);
+  let entries: string[];
   try {
-    fence = parseLaunchFence(JSON.parse(await fs.readFile(file, 'utf8')));
+    entries = await fs.readdir(runsRoot);
   } catch {
     return;
   }
-  // A record we cannot attribute is as good as abandoned; so is a dead owner.
-  if (fence && isProcessAlive(fence.hostPid) !== false) return;
-  await fs.rm(file, { force: true }).catch(() => undefined);
+  const fences = entries.filter((entry) => (
+    entry === PI_SUBAGENT_LAUNCH_FENCE_FILENAME
+    || (entry.startsWith(PI_SUBAGENT_LAUNCH_FENCE_PREFIX)
+      && entry.endsWith(PI_SUBAGENT_LAUNCH_FENCE_SUFFIX))
+  ));
+  await Promise.all(fences.map(async (entry) => {
+    const file = path.join(runsRoot, entry);
+    let fence: PiSubagentLaunchFence | null;
+    try {
+      fence = parseLaunchFence(JSON.parse(await fs.readFile(file, 'utf8')));
+    } catch {
+      // Unreadable or malformed: nothing owns it, so nothing is lost by
+      // removing it — and leaving it would be a permanent no-op file.
+      await fs.rm(file, { force: true }).catch(() => undefined);
+      return;
+    }
+    // A live owner is an instance genuinely mid-relaunch; leave it alone.
+    if (fence && isProcessAlive(fence.hostPid) !== false) return;
+    await fs.rm(file, { force: true }).catch(() => undefined);
+  }));
 }
 
 interface TranscriptCursor {

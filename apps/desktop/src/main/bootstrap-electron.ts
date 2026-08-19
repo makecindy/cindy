@@ -6987,6 +6987,17 @@ app.on('ready', async () => {
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
     reconcilePersistedSessionRuntimes: reconcilePersistedIOSSimulatorOwnership,
     withSessionLock: withSendToSessionLock,
+    // Mirrors exactly what the resume handler requires (`maker-ipc/register.ts`):
+    // a loaded session for this task whose agent is PI. Without it a finished
+    // run kept advertising `resume` after a restart and the sidebar offered a
+    // follow-up composer that could only ever fail.
+    isParentPiSessionLive: (sessionId) => {
+      try {
+        return getMakerIfReady()?.getSession(sessionId)?.agentKind === 'pi';
+      } catch {
+        return false;
+      }
+    },
     isOwnerCurrent: (userId) =>
       isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending()),
     discardStaleOwner: (userId) =>

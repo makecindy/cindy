@@ -152,6 +152,77 @@ describe('Subagent runs broadcast boundary', () => {
     expect(h.persistSubagentTaskUpdate).toHaveBeenCalledTimes(order.length);
   });
 
+  /**
+   * `resume` only works while the parent task is a loaded PI session — the
+   * control handler resolves `maker.getSession(sessionId)` and refuses
+   * otherwise. Browsing a finished run after a restart never loads it, so the
+   * stored `resume: true` was offering a follow-up composer whose every send
+   * was guaranteed to fail.
+   */
+  describe('resume capability masking', () => {
+    const finished = {
+      id: 'run-1',
+      logicalAgentId: 'parent-tool',
+      provider: 'pi' as const,
+      status: 'completed' as const,
+      providerRunIds: ['run-1'],
+      capabilities: { viewActivity: true, viewFullTranscript: true, resume: true, steer: false, stop: false },
+    };
+
+    it('hides resume while the parent task is not a live PI session', async () => {
+      registerSubagentRunsIpc({ isParentPiSessionLive: () => false });
+      const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+      const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+      h.listPiSubagentRuns.mockResolvedValue([]);
+      h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
+      h.getSubagentRunDetail.mockResolvedValue({ ...finished });
+      h.listSubagentRuns.mockResolvedValue({ runs: [{ ...finished }], nextCursor: null });
+
+      const detailResponse = await detail({}, {
+        sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+      }) as { run: { capabilities: { resume: boolean; viewFullTranscript: boolean } } };
+      expect(detailResponse.run.capabilities.resume).toBe(false);
+      // Only that one capability is masked; the rest of the row is untouched.
+      expect(detailResponse.run.capabilities.viewFullTranscript).toBe(true);
+
+      const listResponse = await list({}, { sessionId: 'session-1' }) as {
+        runs: Array<{ capabilities: { resume: boolean } }>;
+      };
+      expect(listResponse.runs[0]?.capabilities.resume).toBe(false);
+    });
+
+    it('offers resume again once the task is loaded', async () => {
+      // The detail poll re-reads capabilities, so opening the task restores it
+      // without anything being rewritten in the database.
+      registerSubagentRunsIpc({ isParentPiSessionLive: () => true });
+      const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+      h.listPiSubagentRuns.mockResolvedValue([]);
+      h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
+      h.getSubagentRunDetail.mockResolvedValue({ ...finished });
+
+      const response = await detail({}, {
+        sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+      }) as { run: { capabilities: { resume: boolean } } };
+      expect(response.run.capabilities.resume).toBe(true);
+    });
+
+    it('applies the same judgement to a device-link read', async () => {
+      // Remote detail goes through this very handler, so there is no second
+      // assembly path that could still advertise it.
+      h.deviceLinkInvoke = true;
+      registerSubagentRunsIpc({ isParentPiSessionLive: () => false });
+      const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+      h.listPiSubagentRuns.mockResolvedValue([]);
+      h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
+      h.getSubagentRunDetail.mockResolvedValue({ ...finished });
+
+      const response = await detail({}, {
+        sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+      }) as { run: { capabilities: { resume: boolean } } };
+      expect(response.run.capabilities.resume).toBe(false);
+    });
+  });
+
   it('recovers the row after one transient unreadable status', async () => {
     // A terminal record is reconciled, then the same generation becomes briefly
     // unreadable — a Windows sharing conflict on status.json is enough — so the

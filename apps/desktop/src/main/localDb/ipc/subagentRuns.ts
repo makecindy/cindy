@@ -13,8 +13,10 @@ import {
 } from '@cindy/maker-core/pi-subagent-runs';
 import {
   SUBAGENT_RUNS_CHANGED_CHANNEL,
+  type SubagentCapabilities,
   type SubagentProvider,
   type SubagentRunDetailResponse,
+  type SubagentRunStatus,
   type SubagentRunsChangedPayload,
   type SubagentTranscriptPageResponse,
   type SubagentRunsListResponse,
@@ -302,10 +304,47 @@ export function broadcastSubagentRunsInvalidated(
   );
 }
 
+/**
+ * Is the parent task loaded as a live PI session right now?
+ *
+ * Injected from the composition root rather than imported, because the storage
+ * layer must not reach back into the Maker (see the durable-write note below).
+ * Absent means "assume it is" — the pre-existing behaviour, so a caller that
+ * does not wire this up is unchanged.
+ */
+type ParentPiSessionLivePredicate = (sessionId: string) => boolean;
+
+let isParentPiSessionLive: ParentPiSessionLivePredicate = () => true;
+
+/**
+ * `resume` is only actually available while the parent task is a loaded PI
+ * session: the handler resolves `maker.getSession(sessionId)` and refuses
+ * otherwise. After a Desktop restart a user can browse a finished run's detail
+ * without that session ever being loaded, and the stored projection still
+ * advertised `resume: true` — so the sidebar offered a follow-up composer whose
+ * every send was guaranteed to fail with UNSUPPORTED_CAPABILITY.
+ *
+ * Masked on the way out, never in the row: the capability is a property of the
+ * current runtime, not of the run, and it comes back by itself on the next
+ * detail poll once the task is opened.
+ */
+function maskUnavailableResume<T extends { status: SubagentRunStatus; capabilities: SubagentCapabilities }>(
+  run: T,
+  sessionId: string,
+): T {
+  if (!run.capabilities.resume) return run;
+  if (isParentPiSessionLive(sessionId)) return run;
+  return { ...run, capabilities: { ...run.capabilities, resume: false } };
+}
+
 export function registerSubagentRunsIpc(
-  options: { enqueueDurableWrite?: DurableWriteEnqueue } = {},
+  options: {
+    enqueueDurableWrite?: DurableWriteEnqueue;
+    isParentPiSessionLive?: ParentPiSessionLivePredicate;
+  } = {},
 ): void {
   enqueueProjectionWrite = options.enqueueDurableWrite ?? runProjectionWriteDirectly;
+  isParentPiSessionLive = options.isParentPiSessionLive ?? (() => true);
   const assertTrustedCaller = (event: Electron.IpcMainInvokeEvent): void => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
   };
@@ -323,7 +362,7 @@ export function registerSubagentRunsIpc(
     });
     return {
       supported: page !== null,
-      runs: page?.runs ?? [],
+      runs: (page?.runs ?? []).map((run) => maskUnavailableResume(run, sessionId)),
       ...(page?.nextCursor ? { nextCursor: page.nextCursor } : {}),
     } satisfies SubagentRunsListResponse;
   });
@@ -381,7 +420,7 @@ export function registerSubagentRunsIpc(
     }
     return {
       supported: projectedRun !== undefined,
-      run: projectedRun ?? null,
+      run: projectedRun ? maskUnavailableResume(projectedRun, sessionId) : null,
     } satisfies SubagentRunDetailResponse;
   });
 

@@ -86,6 +86,12 @@ export interface RegisterLocalDbIpcOpts {
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
   withSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /**
+   * Is the parent task currently loaded as a live PI session? Decides whether a
+   * finished durable Subagent may still advertise `resume`, which the control
+   * handler only accepts while that session exists.
+   */
+  isParentPiSessionLive?: (sessionId: string) => boolean;
+  /**
    * 可选回调：localDb.ensureReady 成功（含已就绪复用路径）后触发。
    * 用途：启动依赖 localDb 的 host 单例（如 scheduler-host）。失败时协调器会
    * 丢弃已提交的 owner DB 并返回 DB_INIT_FAILED，允许 renderer 完整重试。
@@ -241,7 +247,13 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   // reconciliation and an agent_task_update cannot both insert the first
   // sighting of the same run. Supplied here because the storage layer must not
   // import the broadcaster back (it already depends on localDb).
-  registerSubagentRunsIpc({ enqueueDurableWrite });
+  registerSubagentRunsIpc({
+    enqueueDurableWrite,
+    // `resume` is a runtime capability, not a property of the stored run: the
+    // handler needs the parent task loaded as a live PI session. Supplied from
+    // the composition root so this layer never imports the Maker.
+    ...(opts.isParentPiSessionLive ? { isParentPiSessionLive: opts.isParentPiSessionLive } : {}),
+  });
   registerSearchIpc();
   registerDevSqliteVecIpc();
 }

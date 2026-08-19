@@ -683,25 +683,24 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
 }
 
 // Cross-process launch fence, written by the Host into the shared runs
-// directory while it is restarting for an update. It names the host pid it
-// belongs to; we only obey a fence that names *our* host and whose process is
-// still alive, so a fence from another instance sharing this agent home, or one
-// left by a host that died, never blocks anything. Host side and full protocol:
-// piSubagentLaunchFencePath in pi-subagent-runs.ts.
-const LAUNCH_FENCE_FILENAME = '.launch-fence.json';
+// directory while it is restarting for an update. The file name carries the
+// host pid that owns it, because this agent home is shared by dev, packaged and
+// every --passive launch: a single shared name let one updating instance
+// overwrite or delete another's fence, and the loser's own launcher then read a
+// fence naming somebody else, ignored it, and spawned right through the window.
+// We only obey the fence belonging to *our* host, and only while its process is
+// alive. Host side and full protocol: piSubagentLaunchFencePath in
+// pi-subagent-runs.ts.
+const LAUNCH_FENCE_PREFIX = '.launch-fence-';
+const LAUNCH_FENCE_SUFFIX = '.json';
+// Pre-per-host name, still read so a half-upgraded pair of instances does not
+// leave a gap. Removable once no shipped build writes the shared name.
+const LEGACY_LAUNCH_FENCE_FILENAME = '.launch-fence.json';
 
-function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {
-  const separator = runtimeOwnerId.indexOf(':');
-  if (separator <= 0) return false;
-  // Owner ids are <pid>:<scope> or <pid>.<startSec>:<scope>; only the pid
-  // segment is read here, deliberately without importing the Host's parser.
-  const host = runtimeOwnerId.slice(0, separator);
-  const dot = host.indexOf('.');
-  const hostPid = Number(dot < 0 ? host : host.slice(0, dot));
-  if (!Number.isSafeInteger(hostPid) || hostPid <= 0) return false;
+function fenceNamesLiveHost(file, hostPid) {
   let fence;
   try {
-    fence = JSON.parse(readFileSync(join(dirname(runRoot), LAUNCH_FENCE_FILENAME), 'utf8'));
+    fence = JSON.parse(readFileSync(file, 'utf8'));
   } catch (err) {
     return false;
   }
@@ -712,6 +711,21 @@ function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {
   } catch (err) {
     return !!err && err.code === 'EPERM';
   }
+}
+
+function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {
+  const separator = runtimeOwnerId.indexOf(':');
+  if (separator <= 0) return false;
+  // Owner ids are <pid>:<scope> or <pid>.<startSec>:<scope>; only the pid
+  // segment is read here, deliberately without importing the Host's parser.
+  const host = runtimeOwnerId.slice(0, separator);
+  const dot = host.indexOf('.');
+  const hostPid = Number(dot < 0 ? host : host.slice(0, dot));
+  if (!Number.isSafeInteger(hostPid) || hostPid <= 0) return false;
+  const fenceDir = dirname(runRoot);
+  const owned = join(fenceDir, LAUNCH_FENCE_PREFIX + String(hostPid) + LAUNCH_FENCE_SUFFIX);
+  if (fenceNamesLiveHost(owned, hostPid)) return true;
+  return fenceNamesLiveHost(join(fenceDir, LEGACY_LAUNCH_FENCE_FILENAME), hostPid);
 }
 
 function launchDurableRun(binary, tasks, runtime, taskId, mode, context, displayTitle, interactiveOwner, timeoutMs) {

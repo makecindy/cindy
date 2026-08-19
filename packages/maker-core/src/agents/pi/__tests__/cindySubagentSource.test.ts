@@ -160,7 +160,14 @@ describe('cindy-subagent extension source', () => {
     // side always sees the other. Both halves are pinned here because either
     // one moving re-opens the hole.
     const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
-    expect(src).toContain("const LAUNCH_FENCE_FILENAME = '.launch-fence.json'");
+    // Ownership is the file name: a shared one let a concurrent instance's
+    // relaunch overwrite or delete this host's fence.
+    expect(src).toContain("const LAUNCH_FENCE_PREFIX = '.launch-fence-'");
+    expect(src).toContain(
+      "join(fenceDir, LAUNCH_FENCE_PREFIX + String(hostPid) + LAUNCH_FENCE_SUFFIX)",
+    );
+    // The pre-per-host name stays readable through the upgrade window.
+    expect(src).toContain("const LEGACY_LAUNCH_FENCE_FILENAME = '.launch-fence.json'");
     const launch = src.indexOf('function launchDurableRun(');
     const mkdir = src.indexOf('mkdirSync(runDir', launch);
     const publish = src.indexOf("writePrivateJson(join(runDir, 'status.json')", launch);
@@ -180,7 +187,7 @@ describe('cindy-subagent extension source', () => {
     expect(src.slice(check, spawned)).toContain('rmSync(runDir, { recursive: true, force: true })');
     // Only our own host's live fence counts: a fence from another instance
     // sharing the agent home, or one left by a dead host, must not block.
-    const fn = src.slice(src.indexOf('function launchFenceBlocksSpawn('), launch);
+    const fn = src.slice(src.indexOf('function fenceNamesLiveHost('), launch);
     expect(fn).toContain('fence.hostPid !== hostPid');
     expect(fn).toContain('process.kill(hostPid, 0)');
   });

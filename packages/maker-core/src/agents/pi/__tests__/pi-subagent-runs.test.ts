@@ -1023,13 +1023,18 @@ describe('PI durable subagent run store', () => {
   describe('launch fence', () => {
     const runId = '123e4567-e89b-42d3-a456-4266141740e0';
 
-    async function fenceHome(hostPid: number): Promise<string> {
-      const agentHome = await makeRoot();
-      await mkdir(path.dirname(piSubagentLaunchFencePath(agentHome)), { recursive: true });
+    /** Write `hostPid`'s own fence file, as that host's process would. */
+    async function writeFenceFor(agentHome: string, hostPid: number): Promise<void> {
+      await mkdir(path.dirname(piSubagentLaunchFencePath(agentHome, hostPid)), { recursive: true });
       await writeFile(
-        piSubagentLaunchFencePath(agentHome),
+        piSubagentLaunchFencePath(agentHome, hostPid),
         `${JSON.stringify({ version: 1, hostPid, createdAt: Date.now() })}\n`,
       );
+    }
+
+    async function fenceHome(hostPid: number): Promise<string> {
+      const agentHome = await makeRoot();
+      await writeFenceFor(agentHome, hostPid);
       return agentHome;
     }
 
@@ -1076,6 +1081,82 @@ describe('PI durable subagent run store', () => {
 
       expect(hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid })).toBe(true);
       await release();
+    });
+
+    /**
+     * `pi-agent-home` is shared by dev, packaged and every `--passive` launch,
+     * so two instances can be updating at the same moment. A single shared
+     * fence file made that a data race: the later writer replaced the earlier
+     * one's fence, and either instance's cancellation deleted it outright —
+     * after which the still-restarting instance's own launcher read a fence
+     * naming somebody else, ignored it, and spawned straight through.
+     */
+    describe('two instances updating at once', () => {
+      const otherHostPid = process.ppid;
+
+      it('keeps each host to its own file, so neither can clobber the other', async () => {
+        const agentHome = await makeRoot();
+        const release = await acquirePiSubagentLaunchFence(agentHome);
+        await writeFenceFor(agentHome, otherHostPid);
+
+        // Both fences exist, under different names, and each blocks its owner.
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        expect(isPiSubagentLaunchFenceActive(agentHome, otherHostPid)).toBe(true);
+        expect(piSubagentLaunchFencePath(agentHome, process.pid))
+          .not.toBe(piSubagentLaunchFencePath(agentHome, otherHostPid));
+        await release();
+      });
+
+      it('leaves the other instance fenced when this one cancels', async () => {
+        const agentHome = await makeRoot();
+        const release = await acquirePiSubagentLaunchFence(agentHome);
+        await writeFenceFor(agentHome, otherHostPid);
+
+        // This instance gives up on its relaunch.
+        await release();
+
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        // The one still restarting must still be fenced — its launcher would
+        // otherwise sail through the window this cancellation had nothing to
+        // do with.
+        expect(isPiSubagentLaunchFenceActive(agentHome, otherHostPid)).toBe(true);
+      });
+
+      it('sweeps only the fences whose owner is gone', async () => {
+        const agentHome = await makeRoot();
+        await writeFenceFor(agentHome, 4_194_303);
+        await writeFenceFor(agentHome, otherHostPid);
+
+        await clearStalePiSubagentLaunchFence(agentHome);
+
+        await expect(readFile(piSubagentLaunchFencePath(agentHome, 4_194_303), 'utf8'))
+          .rejects.toMatchObject({ code: 'ENOENT' });
+        expect(isPiSubagentLaunchFenceActive(agentHome, otherHostPid)).toBe(true);
+      });
+
+      it('still honours a fence written under the pre-per-host name', async () => {
+        // Half-upgraded pair: the other build writes the shared name. Ours must
+        // keep obeying it, or the upgrade itself opens the window.
+        const agentHome = await makeRoot();
+        const legacy = path.join(
+          path.dirname(piSubagentLaunchFencePath(agentHome)),
+          '.launch-fence.json',
+        );
+        await mkdir(path.dirname(legacy), { recursive: true });
+        await writeFile(
+          legacy,
+          `${JSON.stringify({ version: 1, hostPid: process.pid, createdAt: Date.now() })}\n`,
+        );
+
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        // And a legacy fence owned by a dead host is swept like any other.
+        await writeFile(
+          legacy,
+          `${JSON.stringify({ version: 1, hostPid: 4_194_303, createdAt: Date.now() })}\n`,
+        );
+        await clearStalePiSubagentLaunchFence(agentHome);
+        await expect(readFile(legacy, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      });
     });
 
     it('raises, releases, and cleans up after a departed owner', async () => {
