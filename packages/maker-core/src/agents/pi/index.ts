@@ -93,6 +93,8 @@ import {
   controlPiSubagentRuns,
   countPiSubagentRunDirectories,
   isPiSubagentTerminal,
+  listPiSubagentRunDiagnostics,
+  listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
   piSubagentRunRoot,
   piSubagentApprovalScope,
@@ -100,6 +102,7 @@ import {
   resumePiSubagentRun,
   stopPiSubagentRunsForAccountBoundary,
   syncPiSubagentPermissions,
+  type PiSubagentRunDiagnostic,
   type PiSubagentRunStatus,
 } from './pi-subagent-runs.js';
 import {
@@ -2695,6 +2698,44 @@ export class PiAgent extends BaseAgent {
         },
       });
     };
+    /**
+     * Terminal projection for a run that ended without saying so.
+     *
+     * Deliberately the same shape the durable reconciler writes for a stale
+     * diagnostic (`localDb/ipc/subagentRuns.ts`), on the same `agent_task_update`
+     * channel: the Host persists it and broadcasts the change, which is what
+     * makes the sidebar re-read. Only *provably* dead runs get this — a record
+     * that is merely unreadable is held, not buried.
+     */
+    const emitPiSubagentDiagnostic = (
+      previous: PiSubagentRunStatus,
+      diagnostic: PiSubagentRunDiagnostic,
+    ): void => {
+      queue.push({
+        type: 'agent_task_update',
+        source: 'pi',
+        data: {
+          provider: 'pi',
+          taskId: previous.taskId,
+          parentToolUseId: previous.taskId,
+          status: 'failed',
+          taskType: 'pi_subagent_diagnostic',
+          title: diagnostic.title ?? previous.title ?? 'Unavailable PI Subagent run',
+          ...(diagnostic.description ?? previous.description
+            ? { description: diagnostic.description ?? previous.description }
+            : {}),
+          summary: diagnostic.message,
+          createdAt: new Date(diagnostic.startedAt || previous.startedAt).toISOString(),
+          updatedAt: new Date(diagnostic.updatedAt || previous.updatedAt).toISOString(),
+          subagentObservation: {
+            kind: 'spawn',
+            logicalSubagentId: previous.runId,
+            parentToolUseId: previous.taskId,
+            providerRunIds: [previous.runId],
+          },
+        },
+      });
+    };
     const resolvePiSubagentApproval = async (
       status: PiSubagentRunStatus,
       task: PiSubagentRunStatus['tasks'][number],
@@ -3033,11 +3074,40 @@ export class PiAgent extends BaseAgent {
           emitPiSubagentStatus(status);
           for (const task of status.tasks) void resolvePiSubagentApproval(status, task);
         }
-        for (const [taskId, previous] of piSubagentStatuses) {
-          if (newestTaskIds.has(taskId)) continue;
-          piSubagentStatuses.delete(taskId);
-          piSubagentFingerprints.delete(taskId);
-          clearPiSubagentApprovalState(previous.runId);
+        // Dropping out of the parseable list is not a reason on its own. That
+        // list hides anything it cannot read, and a status.json is unreadable
+        // for a moment every time it is rewritten — tearing down on that alone
+        // deleted the approval dedupe state, so the same pendingApproval was
+        // offered again the instant the file parsed and two decisions raced for
+        // one request. Ask the directory set what actually happened.
+        const missing = [...piSubagentStatuses].filter(([taskId]) => !newestTaskIds.has(taskId));
+        if (missing.length > 0) {
+          const [runIds, diagnostics] = await Promise.all([
+            listPiSubagentRunDirectoryIds(subagentRunRoot),
+            listPiSubagentRunDiagnostics(subagentRunRoot),
+          ]);
+          if (closed) return;
+          const presentRunIds = new Set(runIds);
+          const staleDiagnostics = new Map(
+            diagnostics.filter((entry) => entry.kind === 'stale').map((entry) => [entry.runId, entry]),
+          );
+          for (const [taskId, previous] of missing) {
+            const stale = staleDiagnostics.get(previous.runId);
+            if (!stale && presentRunIds.has(previous.runId)) {
+              // Still on disk and not provably dead: unknown, not finished.
+              // Keep the entry and its dedupe records until it says otherwise.
+              continue;
+            }
+            piSubagentStatuses.delete(taskId);
+            piSubagentFingerprints.delete(taskId);
+            clearPiSubagentApprovalState(previous.runId);
+            // A run whose runner died without publishing a terminal status
+            // leaves the row reading `running` forever: the panel refreshes off
+            // change pushes, and removing this silently emits none. Project the
+            // same diagnostic the durable reconciler would, through the same
+            // update channel, so the row and the sidebar both settle.
+            if (stale) emitPiSubagentDiagnostic(previous, stale);
+          }
         }
       } catch (error) {
         deps.logger.warn('pi subagent durable status refresh failed', {
@@ -4873,6 +4943,16 @@ export class PiAgent extends BaseAgent {
         // 悬着(同 CC / Codex)。例外是仍在跑的 detached Subagent —— 它的卡回到
         // durable mailbox 待决(surfaceLost),不能被当成用户拒绝。
         clearActiveTurnPermissionPolicy('session_closed', { dismissPending: true, surfaceLost: true });
+        // Raise the account-boundary fence *before* any await in this path.
+        // `stopDetachedSubagentRunsForAccountBoundary` used to be the only
+        // place that set it, which left the whole `piSubagentResumeTail` wait
+        // uncovered: a Pi process exiting in that window ran `onExit` with the
+        // fence still down, and the supervisor it started handed the outgoing
+        // owner's proxy disposer to detached children and re-armed their
+        // approval surface — the exact handover this boundary exists to stop.
+        // Only meaningful when this really is an account boundary; ordinary
+        // navigation still reads the fence as false throughout.
+        if (accountBoundary) accountBoundaryTeardown = true;
         // MCP route belongs to the root and closes immediately. Transfer the
         // proxy-token disposer first so detached children keep their gateway
         // lease until their durable statuses settle.

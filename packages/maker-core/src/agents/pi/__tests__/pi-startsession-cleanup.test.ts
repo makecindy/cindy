@@ -12,7 +12,7 @@
  * resume 路径、启动 RPC 也不会即时拒),控制流本身才是被测对象。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -474,6 +474,96 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
     writeDurableRunStatus(runId, 'completed');
     await vi.waitFor(() => expect(proxyDisposed).toBe(2), { timeout: 2_000 });
+  });
+
+  it('raises the account-boundary fence before close() awaits anything', () => {
+    // The fence used to be raised only inside
+    // `stopDetachedSubagentRunsForAccountBoundary`, which runs *after*
+    // `await piSubagentResumeTail`. A Pi process exiting inside that await ran
+    // `onExit` with the fence still down, and the supervisor it started handed
+    // the outgoing owner's proxy disposer to detached children and re-armed
+    // their approval surface — the handover the boundary exists to prevent.
+    //
+    // Asserted on the source because the window only exists while a resume is
+    // in flight; the behavioural fixtures here have an already-settled tail, so
+    // they cannot tell the two orderings apart. What has to hold is the order
+    // itself: the fence is raised before the first await on this path.
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const closeStart = source.indexOf("const accountBoundary = (closeOpts?.reason ?? 'account-boundary')");
+    expect(closeStart).toBeGreaterThan(-1);
+    const raise = source.indexOf('if (accountBoundary) accountBoundaryTeardown = true;', closeStart);
+    const firstAwait = source.indexOf('await piSubagentResumeTail;', closeStart);
+    const boundaryStop = source.indexOf('await stopDetachedSubagentRunsForAccountBoundary();', closeStart);
+    expect(raise).toBeGreaterThan(closeStart);
+    expect(firstAwait).toBeGreaterThan(raise);
+    expect(boundaryStop).toBeGreaterThan(firstAwait);
+  });
+
+  it('projects a diagnostic when a run dies without publishing a terminal status', async () => {
+    // The panel refreshes off change pushes. Dropping the run from the in-memory
+    // map without emitting one left the row reading `running` for good — the
+    // durable reconciler only runs when something asks it to.
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const updates: unknown[] = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'agent_task_update') updates.push(event.data);
+      }
+    })();
+
+    const runId = '123e4567-e89b-42d3-a456-4266141740f1';
+    writeDurableRunStatus(runId, 'running');
+    await vi.waitFor(
+      () => expect(updates.some((u) => (u as { taskType?: string }).taskType === 'pi_subagent')).toBe(true),
+      { timeout: 3_000 },
+    );
+
+    // The runner dies without writing a terminal status: an expired heartbeat
+    // over a pid that is provably gone is what "stale" means.
+    writeDurableRunStatus(runId, 'running', {
+      runnerPid: 4_194_303,
+      updatedAt: Date.now() - 120_000,
+      startedAt: Date.now() - 180_000,
+    });
+
+    await vi.waitFor(() => {
+      const diagnostic = updates.find(
+        (u) => (u as { taskType?: string }).taskType === 'pi_subagent_diagnostic',
+      ) as { status?: string; summary?: string; taskId?: string } | undefined;
+      expect(diagnostic).toBeDefined();
+      expect(diagnostic?.status).toBe('failed');
+      expect(diagnostic?.taskId).toBe('tool-durable');
+      expect(diagnostic?.summary).toMatch(/stopped unexpectedly/i);
+    }, { timeout: 3_000 });
+
+    await handle.close({ reason: 'navigation' });
+  });
+
+  it('holds approval dedupe state through a status that is briefly unreadable', async () => {
+    // `listPiSubagentRuns` hides what it cannot parse, and a status.json is
+    // unreadable for a moment every time it is rewritten. Treating that as "the
+    // run is gone" cleared the dedupe records, so the same pendingApproval was
+    // offered again the instant the file parsed — two decisions racing for one
+    // request.
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    const list = vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRunDirectoryIds').mockResolvedValue([run.runId]);
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRunDiagnostics').mockResolvedValue([]);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const));
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+
+    // One refresh cannot read it — the directory is still there, so nothing is
+    // concluded — and then it reads again, unchanged.
+    list.mockResolvedValueOnce([]);
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+    // Still exactly one decision for that approval.
+    expect(control).toHaveBeenCalledTimes(1);
+    await handle.close({ reason: 'navigation' });
   });
 
   it('does not release the lease on an empty scan while Pi can still launch', async () => {

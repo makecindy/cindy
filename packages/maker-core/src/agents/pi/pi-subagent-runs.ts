@@ -954,6 +954,17 @@ export async function countPiSubagentRunDirectories(root: string): Promise<numbe
   return (await listRunDirectoryIds(root)).length;
 }
 
+/**
+ * Every UUID run directory under `root`, readable status or not.
+ *
+ * The honest denominator for "is this run still there?": `listPiSubagentRuns`
+ * omits anything it cannot parse, so a caller that only has that list cannot
+ * tell a removed run from one whose status.json is momentarily unreadable.
+ */
+export async function listPiSubagentRunDirectoryIds(root: string): Promise<string[]> {
+  return listRunDirectoryIds(root);
+}
+
 export async function listPiSubagentRuns(root: string): Promise<PiSubagentRunStatus[]> {
   const runIds = await listRunDirectoryIds(root);
   const now = Date.now();
