@@ -23,6 +23,7 @@ import { sortEntriesForAgent } from '@cindy/model-providers';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
 import type { Effort } from '@/lib/userPreferences.types';
+import { applyProviderOrderIds } from '../../../shared/providerOrder';
 import type { ModelFavoriteItem } from '@/state/modelFavorites';
 
 /** 引擎在**选择器 / 草稿链路**里的口径(vendor);catalog / capabilities 侧是 AgentKind。 */
@@ -304,6 +305,7 @@ export function railItemKey(item: UnifiedRailItem): string {
 export function buildUnifiedRail(
   entries: readonly UnifiedModelEntry[],
   sessionAgent?: AgentKind,
+  providerOrder?: readonly string[],
 ): UnifiedRailItem[] {
   const items: UnifiedRailItem[] = [];
   // ★ 常驻(设计稿 renderRail:collection 永远在第一格,空收藏点进去看空态引导)——
@@ -312,10 +314,16 @@ export function buildUnifiedRail(
   if (sessionAgent) items.push({ kind: 'engine', agent: sessionAgent });
   items.push({ kind: 'all' });
   const seen = new Set<string>();
+  const firstSeen: string[] = [];
   for (const entry of entries) {
     if (seen.has(entry.providerId)) continue;
     seen.add(entry.providerId);
-    items.push({ kind: 'provider', providerId: entry.providerId });
+    firstSeen.push(entry.providerId);
+  }
+  const ordered =
+    providerOrder === undefined ? firstSeen : applyProviderOrderIds(firstSeen, providerOrder);
+  for (const providerId of ordered) {
+    items.push({ kind: 'provider', providerId });
   }
   return items;
 }
@@ -374,13 +382,18 @@ function entryKeyOf(providerId: string, modelId: string): string {
  * 移除会让用户在「全部」视图里找不到那个模型。
  *
  * 排序不自己发明:**供应商簇内**按 `sortOrder` 升序(缺省排末尾、相等保持入参序),
- * 簇与组的先后 = 首个条目在入参清单里的位置(= unifiedModelEntries 的供应商迭代序)。
+ * 簇与组的先后 = 首个条目在入参清单里的位置(= unifiedModelEntries 的供应商迭代序);
+ * 调用方传入 `providerOrder`(设置 → 模型供应商的拖动序)时组间改按该序,未收录的
+ * 供应商按首见序追加 —— 与旧版分段选择器同一条「显示偏好」规则,只影响陈列,
+ * 不影响来源解析与目录派生的 canonical 顺序。
  */
 export function buildUnifiedListSections(args: {
   entries: readonly UnifiedModelEntry[];
   favorites: readonly ModelFavoriteItem[];
   query: string;
   rail: UnifiedRailFilter;
+  /** 供应商组间显示顺序(设置页拖动序);缺省 = 入参首见序。 */
+  providerOrder?: readonly string[];
 }): UnifiedListSection[] {
   const { entries, favorites, rail } = args;
   const q = args.query.trim().toLowerCase();
@@ -449,8 +462,12 @@ export function buildUnifiedListSections(args: {
     }
     cluster.push(entry);
   }
+  const orderedClusterOrder =
+    args.providerOrder === undefined
+      ? clusterOrder
+      : applyProviderOrderIds(clusterOrder, args.providerOrder);
   const base: UnifiedModelEntry[] = [];
-  for (const providerId of clusterOrder) {
+  for (const providerId of orderedClusterOrder) {
     base.push(
       ...[...clusters.get(providerId)!].sort(
         (a, b) =>
