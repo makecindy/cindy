@@ -602,7 +602,10 @@ describe('Subagent runs broadcast boundary', () => {
     );
   });
 
-  it('reads a PI transcript only through a durable native run id', async () => {
+  it('reads a PI transcript across every durable generation, oldest first', async () => {
+    // `providerRunIds` is the run's generations in the order they happened, with
+    // child ids mixed in. Passing only the newest — the previous behaviour —
+    // dropped the original task and everything before the last follow-up.
     registerSubagentRunsIpc();
     const transcript = h.ipcHandlers.get('local-db:subagent-runs:transcript');
     if (!transcript) throw new Error('Subagent transcript handler not registered');
@@ -610,6 +613,7 @@ describe('Subagent runs broadcast boundary', () => {
       provider: 'pi',
       providerRunIds: [
         '123e4567-e89b-42d3-a456-426614174000',
+        'child-not-a-run-directory',
         '123e4567-e89b-42d3-a456-426614174001',
       ],
       capabilities: { viewFullTranscript: true },
@@ -622,7 +626,10 @@ describe('Subagent runs broadcast boundary', () => {
     })).resolves.toEqual({ supported: true, entries: [] });
     expect(h.readPiSubagentTranscriptPage).toHaveBeenCalledWith(
       '/user-data/pi-agent-home/runtime/pi-subagent-runs/session-1',
-      '123e4567-e89b-42d3-a456-426614174001',
+      [
+        '123e4567-e89b-42d3-a456-426614174000',
+        '123e4567-e89b-42d3-a456-426614174001',
+      ],
       { cursor: undefined, limit: 25 },
     );
   });

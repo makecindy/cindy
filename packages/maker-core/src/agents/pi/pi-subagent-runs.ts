@@ -1258,19 +1258,34 @@ function transcriptEntry(
   };
 }
 
-function decodeTranscriptCursor(raw: string | undefined, runId: string): number {
-  if (!raw) return 0;
+/**
+ * Locate a cursor within the generation list.
+ *
+ * The cursor already carried `runId`, so it addresses a generation as well as a
+ * byte offset without any change to its shape: a cursor minted by an older Host
+ * for a single-generation run still resolves here, and one minted here is still
+ * a plain offset cursor to an older Host.
+ *
+ * A generation that is no longer listed — evicted from the caller's rolling
+ * window — is rejected exactly as an unrelated run id always was.
+ */
+function decodeTranscriptCursor(
+  raw: string | undefined,
+  generations: readonly string[],
+): { index: number; offset: number } {
+  if (!raw) return { index: 0, offset: 0 };
   if (raw.length > 512) throw new Error('invalid PI Subagent transcript cursor');
   try {
     const value = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as TranscriptCursor;
+    const index = generations.indexOf(value.runId);
     if (
       value.version !== 1
-      || value.runId !== runId
+      || index < 0
       || !Number.isSafeInteger(value.offset)
       || value.offset < 0
       || value.offset > MAX_TRANSCRIPT_BYTES
     ) throw new Error('invalid');
-    return value.offset;
+    return { index, offset: value.offset };
   } catch {
     throw new Error('invalid PI Subagent transcript cursor');
   }
@@ -1281,61 +1296,148 @@ function encodeTranscriptCursor(runId: string, offset: number): string {
     .toString('base64url');
 }
 
-/** Read a bounded chronological page without trusting transcript paths from status.json. */
-export async function readPiSubagentTranscriptPage(
+/**
+ * Open one generation's transcript, or report why it cannot be read.
+ *
+ * `unsupported` is the "no such record" answer a sole generation still returns
+ * verbatim; `unreadable` is a record that exists but must not be streamed
+ * (symlink, non-file, past the byte cap).
+ */
+async function openTranscriptGeneration(
   root: string,
   runId: string,
-  options: { cursor?: string; limit?: number } = {},
-): Promise<SubagentTranscriptPageResponse> {
-  if (!RUN_DIR_RE.test(runId)) {
-    return { supported: false, entries: [] };
-  }
-  const transcriptPath = path.join(root, runId, 'transcript.jsonl');
+): Promise<
+  { kind: 'ok'; file: string; size: number }
+  | { kind: 'unsupported' }
+  | { kind: 'unreadable'; error: Error }
+> {
+  const file = path.join(root, runId, 'transcript.jsonl');
   let stat: import('node:fs').Stats;
   try {
-    stat = await fs.lstat(transcriptPath);
+    stat = await fs.lstat(file);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { supported: false, entries: [] };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'unsupported' };
     throw error;
   }
   if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_TRANSCRIPT_BYTES) {
-    throw new Error('oversized, linked, or non-file PI Subagent transcript');
+    return { kind: 'unreadable', error: new Error('oversized, linked, or non-file PI Subagent transcript') };
   }
-  const start = decodeTranscriptCursor(options.cursor, runId);
-  if (start > stat.size) throw new Error('PI Subagent transcript cursor exceeds file size');
+  return { kind: 'ok', file, size: stat.size };
+}
+
+/**
+ * Read a bounded chronological page without trusting transcript paths from
+ * status.json.
+ *
+ * `runId` may be a single run directory or the caller's full generation list,
+ * **oldest first** — a resumed task keeps its logical identity across runs and
+ * the panel shows one conversation, so paging walks the generations in order
+ * and steps to the next one as each is exhausted. Reading only the newest (the
+ * previous behaviour) lost the original task, its replies and its tool cards
+ * the moment a follow-up created a second generation.
+ *
+ * Only the tail generation can still be growing: a resume is admitted solely
+ * after the previous generation reached a terminal state (see
+ * `claimPiSubagentResume`), so an earlier generation's EOF is final and
+ * stepping past it cannot skip a line that arrives later. Generations the
+ * caller's rolling window has already evicted are simply not in the list, and
+ * the transcript then starts at the oldest one that survived.
+ */
+export async function readPiSubagentTranscriptPage(
+  root: string,
+  runId: string | readonly string[],
+  options: { cursor?: string; limit?: number } = {},
+): Promise<SubagentTranscriptPageResponse> {
+  const generations = (typeof runId === 'string' ? [runId] : [...runId])
+    .filter((id) => RUN_DIR_RE.test(id));
+  if (generations.length === 0) return { supported: false, entries: [] };
+  const sole = generations.length === 1;
   const requested = typeof options.limit === 'number' && Number.isFinite(options.limit)
     ? Math.floor(options.limit)
     : 50;
   const limit = Math.max(1, Math.min(MAX_TRANSCRIPT_PAGE_SIZE, requested));
+  const position = decodeTranscriptCursor(options.cursor, generations);
   const entries: SubagentTranscriptEntry[] = [];
-  let offset = start;
-  const input = createReadStream(transcriptPath, { encoding: 'utf8', start });
-  const lines = createInterface({ input, crlfDelay: Infinity });
-  try {
-    for await (const line of lines) {
-      const lineOffset = offset;
-      offset += Buffer.byteLength(line, 'utf8') + 1;
-      const entry = transcriptEntry(runId, lineOffset, line);
-      if (entry) entries.push(entry);
-      if (entries.length >= limit) {
-        lines.close();
-        input.destroy();
-        break;
-      }
+  // Where this page stopped. Kept as (generation, offset) rather than a global
+  // sequence so a resume lands on the same byte of the same record.
+  let cursorIndex = position.index;
+  let cursorOffset = position.offset;
+  let more = false;
+  for (let index = position.index; index < generations.length; index += 1) {
+    if (entries.length >= limit) {
+      // Filled exactly at a generation boundary: the remainder is real.
+      more = true;
+      break;
     }
-  } finally {
-    lines.close();
-    input.destroy();
+    const generation = generations[index]!;
+    const start = index === position.index ? position.offset : 0;
+    const opened = await openTranscriptGeneration(root, generation);
+    if (opened.kind !== 'ok') {
+      // A sole generation keeps the original answers: "no such transcript", or
+      // a hard failure for a record that exists but is not safe to stream.
+      if (sole) {
+        if (opened.kind === 'unsupported') return { supported: false, entries: [] };
+        throw opened.error;
+      }
+      // One damaged generation must not cost the user the others. Mark the gap
+      // where it belongs in the timeline and carry on. The marker's id is
+      // stable, so a page that resumes here merges instead of duplicating.
+      entries.push({
+        id: `${generation}:0`,
+        sequence: 0,
+        role: 'system',
+        content: 'An earlier part of this conversation could not be read.',
+        occurredAt: 0,
+        systemEvent: { kind: 'generation-unreadable' },
+      });
+      cursorIndex = index;
+      cursorOffset = 0;
+      continue;
+    }
+    if (start > opened.size) throw new Error('PI Subagent transcript cursor exceeds file size');
+    let offset = start;
+    const input = createReadStream(opened.file, { encoding: 'utf8', start });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        const lineOffset = offset;
+        offset += Buffer.byteLength(line, 'utf8') + 1;
+        const entry = transcriptEntry(generation, lineOffset, line);
+        if (entry) entries.push(entry);
+        if (entries.length >= limit) {
+          lines.close();
+          input.destroy();
+          break;
+        }
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+    cursorIndex = index;
+    cursorOffset = offset;
+    if (offset < opened.size) {
+      more = true;
+      break;
+    }
+    // Exhausted this generation. The cursor stays on its EOF rather than
+    // jumping to the next one's zero: for the newest generation that is exactly
+    // the tail a change event resumes from, and for an older one the next read
+    // finds EOF immediately and steps forward on its own.
+    if (entries.length >= limit && index < generations.length - 1) {
+      more = true;
+      break;
+    }
   }
   // `tailCursor` is returned even at EOF, where `nextCursor` is deliberately
   // absent: the renderer keeps it to resume from the byte it stopped at and
   // append only newly written lines, instead of re-reading a record that may
   // grow to the 50MB cap while a long-lived child keeps running.
-  const tailCursor = encodeTranscriptCursor(runId, offset);
+  const tailCursor = encodeTranscriptCursor(generations[cursorIndex]!, cursorOffset);
   return {
     supported: true,
     entries,
-    ...(offset < stat.size ? { nextCursor: tailCursor } : {}),
+    ...(more ? { nextCursor: tailCursor } : {}),
     tailCursor,
   };
 }

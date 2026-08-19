@@ -5737,7 +5737,8 @@
         "control-requested": "상위 작업에서 제어 요청을 보냈습니다.",
         "transcript-truncated": "기록 저장 한도에 도달했습니다.",
         "turn-ended": "서브에이전트 턴이 종료되었습니다.",
-        "command-refused": "PI가 하위 에이전트 명령을 거부했습니다."
+        "command-refused": "PI가 하위 에이전트 명령을 거부했습니다.",
+        "generation-unreadable": "이 대화의 이전 부분을 읽을 수 없습니다."
       },
       "activityKinds": {
         "started": "시작됨",

@@ -2577,6 +2577,16 @@ export class PiAgent extends BaseAgent {
     const piSubagentApprovalRequests = new Set<string>();
     const piSubagentApprovalDeliveries = new Set<string>();
     const piSubagentApprovalDecisions = new Map<string, PiPermissionResolution>();
+    /**
+     * Approval offers that have been started but have not settled yet.
+     *
+     * An offer awaits the user, so it can outlive the poll round that fired it
+     * — and, before this set existed, the close that was supposed to end the
+     * session. An account boundary needs a point where nothing is still writing
+     * a child's mailbox through the outgoing owner's resolver, and a bare
+     * `void dispatch()` gave it none.
+     */
+    const piSubagentApprovalDispatches = new Set<Promise<void>>();
     let piSubagentRefreshInFlight = false;
     // Approval delivery belongs to the *detached run* lifecycle, not to the
     // parent handle. After a navigation close the foreground refresh timer is
@@ -3059,6 +3069,18 @@ export class PiAgent extends BaseAgent {
         piSubagentApprovalRequests.delete(key);
       }
     };
+    /** Fire an approval offer and keep it awaitable until it settles. */
+    const dispatchPiSubagentApproval = (
+      status: PiSubagentRunStatus,
+      task: PiSubagentRunStatus['tasks'][number],
+    ): void => {
+      const dispatch = resolvePiSubagentApproval(status, task);
+      piSubagentApprovalDispatches.add(dispatch);
+      const forget = (): void => { piSubagentApprovalDispatches.delete(dispatch); };
+      // Both arms: a rejected offer must neither stay in the set nor surface as
+      // an unhandled rejection. The awaiting side uses `allSettled` anyway.
+      dispatch.then(forget, forget);
+    };
     const refreshPiSubagentRuns = async (): Promise<void> => {
       if (closed || piSubagentRefreshInFlight) return;
       piSubagentRefreshInFlight = true;
@@ -3072,7 +3094,7 @@ export class PiAgent extends BaseAgent {
           newestTaskIds.add(status.taskId);
           piSubagentStatuses.set(status.taskId, status);
           emitPiSubagentStatus(status);
-          for (const task of status.tasks) void resolvePiSubagentApproval(status, task);
+          for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
         }
         // Dropping out of the parseable list is not a reason on its own. That
         // list hides anything it cannot read, and a status.json is unreadable
@@ -3278,6 +3300,16 @@ export class PiAgent extends BaseAgent {
       if (firstError) throw firstError;
     };
     /**
+     * Settles when the detached-run supervisor loop has left.
+     *
+     * Already resolved while no supervisor is running, so a caller can await it
+     * unconditionally. Raising the account-boundary fence only makes the loop
+     * *decide* to leave — up to one 250ms round plus the scan it is inside
+     * later — and until it does it is still consuming approvals through the
+     * outgoing owner's resolver.
+     */
+    let supervisorExited: Promise<void> = Promise.resolve();
+    /**
      * Account boundary teardown for this task's detached runners.
      *
      * Bounded on purpose: a runner that does not acknowledge in time still
@@ -3301,6 +3333,28 @@ export class PiAgent extends BaseAgent {
       } catch (error) {
         this.deps.logger.warn('pi detached Subagent account boundary stop failed', {
           message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      // Raising the fence and stopping the children only *starts* the wind-down.
+      // The supervisor sees the fence at the top of its next round, and an
+      // approval offer already dispatched is awaiting a resolver that still
+      // belongs to the outgoing owner — so without this barrier close() returned
+      // while the old token was briefly still valid and the old resolver could
+      // still write a child's control mailbox.
+      //
+      // Bounded, because an offer waits on a human: a card nobody answers must
+      // not wedge a logout. Missing the deadline is not a security decision on
+      // its own — the caller's shutdown report and the account-boundary sweep
+      // are what refuse the handover — so this layer converges the common case
+      // and hands the rest upwards.
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const converged = await Promise.race([
+        Promise.allSettled([supervisorExited, ...piSubagentApprovalDispatches]).then(() => true),
+        new Promise<boolean>((resolve) => { deadline = setTimeout(() => resolve(false), 2_000); }),
+      ]).finally(() => { if (deadline) clearTimeout(deadline); });
+      if (!converged) {
+        this.deps.logger.warn('pi detached Subagent approvals did not converge before the account boundary deadline', {
+          sessionId: opts.sessionId,
         });
       }
     };
@@ -3341,6 +3395,8 @@ export class PiAgent extends BaseAgent {
         initialInspectionSettled = true;
         resolveInitialInspection();
       };
+      let resolveSupervisorExited!: () => void;
+      supervisorExited = new Promise<void>((resolve) => { resolveSupervisorExited = resolve; });
       void (async () => {
         for (;;) {
           // The boundary can be raised *after* this loop started: Pi crashes,
@@ -3374,7 +3430,7 @@ export class PiAgent extends BaseAgent {
           if (localSubagentSupported && !leaseDisposed) {
             for (const status of statuses) {
               if (isPiSubagentTerminal(status.state)) continue;
-              for (const task of status.tasks) void resolvePiSubagentApproval(status, task);
+              for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
             }
           }
           // Pi's own exit is the lifecycle boundary. Until then a launch may be
@@ -3411,7 +3467,7 @@ export class PiAgent extends BaseAgent {
         this.deps.logger.warn('pi detached Subagent proxy lease failed closed', {
           message: error instanceof Error ? error.message : String(error),
         });
-      });
+      }).finally(resolveSupervisorExited);
       return proxyLeaseInitialInspection;
     };
     let durableSpawnEnv: NodeJS.ProcessEnv = {};

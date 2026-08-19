@@ -207,10 +207,10 @@ function finiteTime(value: string | undefined, fallback: number): number {
  *
  * Truncating the head instead (the previous `slice(0, max)`) silently dropped
  * every id seen after the cap was reached. For `providerRunIds` that broke two
- * things at once: the detail and transcript readers select a durable generation
- * by membership — and the transcript reader takes the *last* run-directory id
- * (`ipc/subagentRuns.ts`, `[...providerRunIds].reverse().find(...)`) — so the
- * panel pinned itself to an old generation forever; and `persistSubagentTaskUpdate`
+ * things at once: the detail and transcript readers select durable generations
+ * by membership — and the transcript reader walks this array in order, oldest
+ * first (`ipc/subagentRuns.ts`) — so the panel pinned itself to an old
+ * generation forever; and `persistSubagentTaskUpdate`
  * decides "this is a resume" by asking whether any incoming id is absent from
  * the persisted list, so a current id that could never land re-fired `resumed`
  * on every reconciliation tick, reopening the terminal row and discarding its

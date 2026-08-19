@@ -5710,7 +5710,8 @@
         "control-requested": "父任务发来了一条控制请求。",
         "transcript-truncated": "已达到记录的存储上限。",
         "turn-ended": "Subagent 本轮已结束。",
-        "command-refused": "PI 拒绝了一条子任务命令。"
+        "command-refused": "PI 拒绝了一条子任务命令。",
+        "generation-unreadable": "这段对话中较早的部分无法读取。"
       },
       "activityKinds": {
         "started": "已启动",

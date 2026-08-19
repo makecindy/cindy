@@ -5737,7 +5737,8 @@
         "control-requested": "父任務送出了一則控制要求。",
         "transcript-truncated": "已達到記錄的儲存上限。",
         "turn-ended": "Subagent 本輪已結束。",
-        "command-refused": "PI 拒絕了一則子任務命令。"
+        "command-refused": "PI 拒絕了一則子任務命令。",
+        "generation-unreadable": "這段對話中較早的部分無法讀取。"
       },
       "activityKinds": {
         "started": "已啟動",

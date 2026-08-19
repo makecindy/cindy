@@ -1651,6 +1651,100 @@ describe('PI durable subagent run store', () => {
     expect(tail.tailCursor).not.toBe(first.tailCursor);
   });
 
+  it('reads a resumed task as one conversation across its generations', async () => {
+    // A follow-up starts a new run directory. Reading only the newest — what
+    // the panel used to do — dropped the original task, its reply and its tool
+    // cards the moment the user continued the conversation.
+    const root = await makeRoot();
+    const first = '123e4567-e89b-42d3-a456-426614174060';
+    const second = '123e4567-e89b-42d3-a456-426614174061';
+    await writeStatus(root, status(first, { state: 'completed' }));
+    await writeStatus(root, status(second));
+    const line = (at: number, text: string): string => `${JSON.stringify({
+      type: 'cindy.subagent.child_event',
+      at,
+      childId: 'child-1',
+      event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } },
+    })}\n`;
+    await writeFile(path.join(root, first, 'transcript.jsonl'), line(100, 'gen one') + line(110, 'gen one tail'));
+    await writeFile(path.join(root, second, 'transcript.jsonl'), line(200, 'gen two'));
+
+    const page = await readPiSubagentTranscriptPage(root, [first, second], { limit: 200 });
+    expect(page.entries.map((entry) => entry.content)).toEqual(['gen one', 'gen one tail', 'gen two']);
+    expect(page.nextCursor).toBeUndefined();
+    // Every entry stays addressable by its own generation, so an overlapping
+    // page merges by id instead of colliding on a shared byte offset.
+    expect(page.entries[0]!.id.startsWith(`${first}:`)).toBe(true);
+    expect(page.entries[2]!.id.startsWith(`${second}:`)).toBe(true);
+
+    // The tail cursor sits on the newest generation, so an incremental read
+    // picks up only what was appended there.
+    const idle = await readPiSubagentTranscriptPage(root, [first, second], { cursor: page.tailCursor });
+    expect(idle.entries).toEqual([]);
+    await appendFile(path.join(root, second, 'transcript.jsonl'), line(210, 'gen two more'));
+    const tail = await readPiSubagentTranscriptPage(root, [first, second], { cursor: page.tailCursor });
+    expect(tail.entries.map((entry) => entry.content)).toEqual(['gen two more']);
+  });
+
+  it('pages across a generation boundary and honours a cursor from an older generation', async () => {
+    const root = await makeRoot();
+    const first = '123e4567-e89b-42d3-a456-426614174062';
+    const second = '123e4567-e89b-42d3-a456-426614174063';
+    await writeStatus(root, status(first, { state: 'completed' }));
+    await writeStatus(root, status(second));
+    const line = (at: number, text: string): string => `${JSON.stringify({
+      type: 'cindy.subagent.child_event',
+      at,
+      childId: 'child-1',
+      event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } },
+    })}\n`;
+    await writeFile(path.join(root, first, 'transcript.jsonl'), line(100, 'a') + line(110, 'b'));
+    await writeFile(path.join(root, second, 'transcript.jsonl'), line(200, 'c') + line(210, 'd'));
+
+    const collected: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page += 1) {
+      const response = await readPiSubagentTranscriptPage(root, [first, second], { cursor, limit: 1 });
+      collected.push(...response.entries.map((entry) => entry.content));
+      cursor = response.nextCursor;
+      if (!cursor) break;
+    }
+    expect(collected).toEqual(['a', 'b', 'c', 'd']);
+
+    // A cursor minted against the older generation — by an earlier read, or by
+    // a client that has been holding it since before the follow-up — resumes
+    // there and rolls forward into the newer one.
+    const mid = await readPiSubagentTranscriptPage(root, [first, second], { limit: 1 });
+    const resumed = await readPiSubagentTranscriptPage(root, [first, second], { cursor: mid.nextCursor });
+    expect(resumed.entries.map((entry) => entry.content)).toEqual(['b', 'c', 'd']);
+  });
+
+  it('marks a generation it cannot read instead of losing the ones it can', async () => {
+    const root = await makeRoot();
+    const first = '123e4567-e89b-42d3-a456-426614174064';
+    const second = '123e4567-e89b-42d3-a456-426614174065';
+    await writeStatus(root, status(first, { state: 'completed' }));
+    await writeStatus(root, status(second));
+    // First generation's transcript never made it to disk.
+    await writeFile(path.join(root, second, 'transcript.jsonl'), `${JSON.stringify({
+      type: 'cindy.subagent.child_event',
+      at: 200,
+      childId: 'child-1',
+      event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'gen two' }] } },
+    })}\n`);
+
+    const page = await readPiSubagentTranscriptPage(root, [first, second], { limit: 200 });
+    expect(page.entries).toEqual([
+      expect.objectContaining({ role: 'system', systemEvent: { kind: 'generation-unreadable' } }),
+      expect.objectContaining({ content: 'gen two' }),
+    ]);
+    // A single generation keeps answering exactly as it did: not supported.
+    await expect(readPiSubagentTranscriptPage(root, [first], { limit: 200 })).resolves.toEqual({
+      supported: false,
+      entries: [],
+    });
+  });
+
   it('keeps skipping unparsable and unknown transcript lines', async () => {
     const root = await makeRoot();
     const runId = '123e4567-e89b-42d3-a456-426614174023';

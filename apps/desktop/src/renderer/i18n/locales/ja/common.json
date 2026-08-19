@@ -5737,7 +5737,8 @@
         "control-requested": "親タスクから制御リクエストが送信されました。",
         "transcript-truncated": "記録の保存上限に達しました。",
         "turn-ended": "サブエージェントのターンが終了しました。",
-        "command-refused": "PI が子エージェントのコマンドを拒否しました。"
+        "command-refused": "PI が子エージェントのコマンドを拒否しました。",
+        "generation-unreadable": "この会話の以前の部分を読み取れませんでした。"
       },
       "activityKinds": {
         "started": "開始",

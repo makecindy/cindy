@@ -366,8 +366,9 @@ describe('durable Subagent runs', () => {
   it('keeps the newest generations once providerRunIds passes its cap', async () => {
     // The cap used to truncate the head, so past 64 generations the current run
     // id could never land. Two things broke at once: the transcript reader
-    // takes the *last* run-directory id, so the panel pinned itself to an old
-    // generation forever; and "is this a resume?" is decided by asking whether
+    // walks this array oldest-first and tails the newest generation, so the
+    // panel pinned itself to an old generation forever; and "is this a resume?"
+    // is decided by asking whether
     // an incoming id is missing from the persisted list, so every reconciliation
     // tick re-fired `resumed` — reopening the terminal row and discarding its
     // result each pass.
@@ -385,8 +386,10 @@ describe('durable Subagent runs', () => {
     const detail = await getSubagentRunDetail('session-1', 'pi', 'capped-tool');
     const ids = detail?.providerRunIds ?? [];
     expect(ids).toHaveLength(64);
-    // Newest survives and stays at the tail: the transcript reader reverse-finds
-    // the last run-directory id, so a rolled window must not reorder.
+    // Newest survives and stays at the tail: the transcript reader reads the
+    // array in order and tails its last entry, so a rolled window must not
+    // reorder. Generations evicted from the front are the ones the panel
+    // truthfully no longer shows.
     expect(ids.at(-1)).toBe(generation(total - 1));
     expect(ids[0]).toBe(generation(total - 64));
     // The evicted head is genuinely gone from the array (it stays resolvable

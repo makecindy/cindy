@@ -892,6 +892,51 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(resolver.mock.calls.length).toBe(answeredBeforeBoundary);
   });
 
+  it('does not return from an account-boundary close while an approval write is still in flight', async () => {
+    // Raising the fence and stopping the children only starts the wind-down. An
+    // offer already dispatched keeps going on its own: it holds the outgoing
+    // owner's resolver and finishes by writing the child's control mailbox. So
+    // before the barrier, close() could return — the caller then revoking the
+    // token and handing the runtime over — with that write still in progress.
+    let approvalGeneration = 0;
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockImplementation(async () => {
+      approvalGeneration += 1;
+      const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+      run.tasks[0]!.pendingApproval!.id = `approval-${approvalGeneration}`;
+      return [run];
+    });
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    let writesStarted = 0;
+    let writesFinished = 0;
+    vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockImplementation(async () => {
+      writesStarted += 1;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      writesFinished += 1;
+      return 1;
+    });
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    knobs.onExit?.({ code: 1, signal: null });
+    // A mailbox write is under way, and deliberately not finished yet.
+    await vi.waitFor(() => expect(writesStarted).toBeGreaterThan(0), { timeout: 2_000 });
+    expect(writesFinished).toBe(0);
+
+    await handle.close({ reason: 'account-boundary' });
+
+    // Nothing of the outgoing owner's is still writing once close resolved.
+    expect(writesFinished).toBe(writesStarted);
+    const startedAtClose = writesStarted;
+    const offersAtClose = resolver.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(writesStarted).toBe(startedAtClose);
+    expect(resolver.mock.calls.length).toBe(offersAtClose);
+    // And the lease went back with it.
+    expect(proxyDisposed).toBe(2);
+  });
+
   it('fails closed to the account boundary when a teardown caller names no reason', async () => {
     const agent = new PiAgent(buildDeps());
     const handle = await agent.startSession(opts());

@@ -442,9 +442,16 @@ export function registerSubagentRunsIpc(
     if (!run || provider !== 'pi' || !run.capabilities.viewFullTranscript) {
       return { supported: false, entries: [] } satisfies SubagentTranscriptPageResponse;
     }
-    const nativeRunId = [...run.providerRunIds]
-      .reverse()
-      .find((id) => RUN_DIRECTORY_ID.test(id));
+    // `providerRunIds` is oldest-first (the rolling window in
+    // `localDb/subagentRuns.ts` evicts from the front), so this is the run's
+    // generations in the order they happened. Taking only the last one — what
+    // this did — meant a follow-up that started a new generation erased the
+    // original task, its replies and its tool cards from the panel, and made
+    // every cursor held against the previous generation invalid. Generations
+    // pushed out of that window are gone from here too; the conversation then
+    // begins at the oldest one still listed.
+    const generations = run.providerRunIds.filter((id) => RUN_DIRECTORY_ID.test(id));
+    const nativeRunId = generations.at(-1);
     if (!nativeRunId) {
       return { supported: false, entries: [] } satisfies SubagentTranscriptPageResponse;
     }
@@ -452,9 +459,11 @@ export function registerSubagentRunsIpc(
     const root = piSubagentRunRoot(agentHome, sessionId);
     const response = await readPiSubagentTranscriptPage(
       root,
-      nativeRunId,
+      generations,
       { cursor, limit },
     );
+    // Child titles come from the newest generation: that is the status the
+    // detail view shows, and a resumed child keeps its id across generations.
     const status = (await listPiSubagentRuns(root)).find((candidate) => candidate.runId === nativeRunId);
     if (!status) return response;
     const childTitles = new Map(status.tasks.map((task) => [task.childId, task.title ?? task.agent]));

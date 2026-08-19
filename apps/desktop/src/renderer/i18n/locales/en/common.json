@@ -5712,7 +5712,8 @@
         "control-requested": "A control request was sent from the parent task.",
         "transcript-truncated": "Transcript storage limit reached.",
         "turn-ended": "Subagent turn ended.",
-        "command-refused": "PI rejected a child command."
+        "command-refused": "PI rejected a child command.",
+        "generation-unreadable": "An earlier part of this conversation could not be read."
       },
       "activityKinds": {
         "started": "Started",
