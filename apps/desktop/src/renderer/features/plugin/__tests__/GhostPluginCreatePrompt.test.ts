@@ -24,7 +24,9 @@ describe('Ghost Plugin creation prompt', () => {
     expect(prompt).toContain('先从提问开始');
     expect(prompt.indexOf('ghost_forge_guide')).toBeGreaterThanOrEqual(0);
     expect(prompt.indexOf('ghost_forge_guide')).toBeLessThan(prompt.indexOf('ghost_forge_pack'));
-    expect(prompt).toContain('卡槽总览、沙箱红线与打包流程三章');
+    // 用真实章号指向卡槽总览:agent 可能照抄文案字样调 ghost_forge_guide 的
+    // section 取章,而章节匹配只认章号或标题子串,"卡槽总览"不是任何标题的子串。
+    expect(prompt).toContain('第 2 章卡槽总览');
     expect(prompt).toContain('打包并安装插件');
   });
 
@@ -48,5 +50,6 @@ describe('Ghost Plugin creation prompt', () => {
     expect(prompt).toContain('媒体能力');
     // 必读章节含 §2 卡槽总览:18 个槽的全局视野是"按需读相关章节"的前提。
     expect(prompt).toContain('卡槽总览');
+    expect(prompt).toContain('第 2 章');
   });
 });
