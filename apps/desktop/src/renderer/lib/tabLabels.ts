@@ -22,12 +22,13 @@ export type SettingsTab =
   | 'tina'
   | 'ghosts'
   | 'builtin-tools'
+  | 'pi-extensions'
   | 'computer-use'
   | 'im-bot'
   | 'help'
   | 'about';
 
-export const TAB_IDS: ReadonlyArray<SettingsTab> = [
+export const TAB_IDS = [
   'general',
   'personalization',
   'providers',
@@ -50,7 +51,9 @@ export const TAB_IDS: ReadonlyArray<SettingsTab> = [
   'computer-use',
   'help',
   'about',
-];
+] as const satisfies ReadonlyArray<SettingsTab>;
+
+export type VisibleSettingsTab = (typeof TAB_IDS)[number];
 
 export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   general: 'settings.tabs.general',
@@ -67,16 +70,16 @@ export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   tina: 'settings.tabs.tina',
   ghosts: 'settings.tabs.ghosts',
   'builtin-tools': 'settings.tabs.builtinTools',
+  'pi-extensions': 'settings.tabs.piExtensions',
   'computer-use': 'settings.tabs.computerUse',
   'im-bot': 'settings.tabs.imBot',
   help: 'settings.tabs.help',
   about: 'settings.tabs.about',
 };
 
-// 只校验当前「可见/可路由」的 tab(即 TAB_IDS 里的项)。注意 `tina` 仍保留在
-// SettingsTab 类型与 TAB_LABEL_KEY 中(供 SettingsView 的 `?tab=tina` → `im-bot`
-// legacy 重定向复用),但已从 TAB_IDS 移除,因此 isSettingsTab('tina') 返回 false
-// 是有意为之——tina 不再是独立可停靠的 tab,重定向在调用本守卫之前就已处理。
+// 只校验当前「可见/可路由」的 tab(即 TAB_IDS 里的项)。注意 `tina` 与
+// `pi-extensions` 仍保留在 SettingsTab 类型与 TAB_LABEL_KEY 中,分别供旧深链
+// 重定向和通用页内嵌管理面板复用；二者都不是独立可停靠的一级 tab。
 export function isSettingsTab(value: string | null): value is SettingsTab {
   return value !== null && (TAB_IDS as ReadonlyArray<string>).includes(value);
 }

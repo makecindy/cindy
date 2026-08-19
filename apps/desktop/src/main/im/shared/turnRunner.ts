@@ -69,6 +69,7 @@ import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupIn
 
 import {
   isTerminalAgentErrorEvent,
+  MAIN_OWNED_SEND_CONTEXT,
   TurnPermissionPolicyUnsupportedError,
 } from '@cindy/maker-core';
 import type {
@@ -1053,6 +1054,13 @@ export function createTurnRunner(
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
+        // The channel adapter and routing state live in Main. A symbol-keyed
+        // context survives the in-process Session → Agent handoff but cannot be
+        // fabricated by Renderer/device-link structured-clone input.
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'im', channel, taskId: item.turn.userMessageId ?? undefined },
+          rawChannelText: item.text,
+        },
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         beforeProviderStart: async () => {
           // 策略轮持一张 host turn lease:期间 setPermissionMode 切到 agent 声明为

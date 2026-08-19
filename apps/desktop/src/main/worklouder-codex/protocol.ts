@@ -17,6 +17,12 @@ export const enum WorkLouderLightingEffect {
   ShallowBreath = 6,
 }
 
+/** Hardware lighting consumes only the stable activity facets it renders. */
+export type WorkLouderCodexSessionActivity = Pick<
+  AgentIslandSessionActivity,
+  'sessionId' | 'phase' | 'attention' | 'compactDetail'
+>;
+
 export interface WorkLouderLightingSide {
   effect: WorkLouderLightingEffect;
   brightness: number;
@@ -97,7 +103,7 @@ const OFF_SIDE: WorkLouderLightingSide = {
   color: 0,
 };
 
-const PHASE_PRIORITY: Readonly<Record<AgentIslandSessionActivity['phase'], number>> = {
+const PHASE_PRIORITY: Readonly<Record<WorkLouderCodexSessionActivity['phase'], number>> = {
   'needs-interaction': 4,
   error: 3,
   running: 2,
@@ -109,11 +115,11 @@ const PHASE_PRIORITY: Readonly<Record<AgentIslandSessionActivity['phase'], numbe
  * zones plus its six per-thread indicators.
  */
 export function createWorkLouderCodexLightingFrame(
-  activity: readonly AgentIslandSessionActivity[],
+  activity: readonly WorkLouderCodexSessionActivity[],
   slotSessionIds?: readonly string[],
 ): WorkLouderCodexLightingFrame {
   const slots = projectWorkLouderCodexSlotActivity(activity, slotSessionIds);
-  const aggregate = slots.reduce<AgentIslandSessionActivity['phase'] | null>((current, item) => {
+  const aggregate = slots.reduce<WorkLouderCodexSessionActivity['phase'] | null>((current, item) => {
     if (!item) return current;
     return current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
       ? item.phase
@@ -131,16 +137,16 @@ export function createWorkLouderCodexLightingFrame(
 
 /** The ordered task assignment shared by the six LEDs and their physical keys. */
 export function selectWorkLouderCodexSlotActivity(
-  activity: readonly AgentIslandSessionActivity[],
-): AgentIslandSessionActivity[] {
+  activity: readonly WorkLouderCodexSessionActivity[],
+): WorkLouderCodexSessionActivity[] {
   return activity.filter(isLightingVisibleActivity).slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
 }
 
 /** Aligns activity LEDs with an explicit six-task key assignment when one is available. */
 export function projectWorkLouderCodexSlotActivity(
-  activity: readonly AgentIslandSessionActivity[],
+  activity: readonly WorkLouderCodexSessionActivity[],
   slotSessionIds?: readonly string[],
-): Array<AgentIslandSessionActivity | undefined> {
+): Array<WorkLouderCodexSessionActivity | undefined> {
   if (slotSessionIds === undefined) return selectWorkLouderCodexSlotActivity(activity);
   const visibleBySessionId = new Map(
     activity.filter(isLightingVisibleActivity).map((item) => [item.sessionId, item] as const),
@@ -331,7 +337,7 @@ function isWorkLouderCodexDeviceState(value: unknown): value is WorkLouderCodexD
   );
 }
 
-function isLightingVisibleActivity(activity: AgentIslandSessionActivity): boolean {
+function isLightingVisibleActivity(activity: WorkLouderCodexSessionActivity): boolean {
   return (
     activity.phase === 'running' ||
     activity.phase === 'needs-interaction' ||
@@ -339,7 +345,7 @@ function isLightingVisibleActivity(activity: AgentIslandSessionActivity): boolea
   );
 }
 
-function ambientForPhase(phase: AgentIslandSessionActivity['phase']): WorkLouderLightingSide {
+function ambientForPhase(phase: WorkLouderCodexSessionActivity['phase']): WorkLouderLightingSide {
   switch (phase) {
     case 'running':
       return side(WorkLouderLightingEffect.Snake, 0.7, 0.4, COLORS.running);
@@ -352,7 +358,7 @@ function ambientForPhase(phase: AgentIslandSessionActivity['phase']): WorkLouder
   }
 }
 
-function keysForPhase(phase: AgentIslandSessionActivity['phase']): WorkLouderLightingSide {
+function keysForPhase(phase: WorkLouderCodexSessionActivity['phase']): WorkLouderLightingSide {
   const effect =
     phase === 'error' ? WorkLouderLightingEffect.Breath : WorkLouderLightingEffect.Solid;
   const brightness = phase === 'needs-interaction' || phase === 'error' ? 0.28 : 0.16;
@@ -361,7 +367,7 @@ function keysForPhase(phase: AgentIslandSessionActivity['phase']): WorkLouderLig
 
 function threadForActivity(
   id: number,
-  activity: AgentIslandSessionActivity | undefined,
+  activity: WorkLouderCodexSessionActivity | undefined,
 ): WorkLouderThreadLighting {
   if (!activity) {
     return {

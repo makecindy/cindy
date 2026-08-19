@@ -9,7 +9,12 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 
 import { Session } from './session.js';
-import type { AgentSessionHandle, TurnContinuationState } from './agents/base-agent.js';
+import {
+  MAIN_OWNED_SEND_CONTEXT,
+  type AgentSessionHandle,
+  type SendOptions,
+  type TurnContinuationState,
+} from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest, SendOrigin } from './types/events.js';
 import type { AgentKind } from './types/common.js';
 
@@ -42,12 +47,14 @@ function createControllableHandle(opts?: {
   const buffered: AgentEvent[] = [];
   const continuationStates = new Map<number, TurnContinuationState>();
   let interactionResolver: ((req: InteractionRequest) => Promise<InteractionDecision>) | null = null;
+  let lastSendOptions: SendOptions | undefined;
 
   const handle: AgentSessionHandle = {
     id: 'thread-1',
     agentKind: opts?.agentKind ?? 'codex',
     model: 'gpt-5.4',
-    async send() {
+    async send(_message, sendOptions) {
+      lastSendOptions = sendOptions;
       sendCount += 1;
       if (opts?.sendError && (opts.sendErrorOnSend ?? 1) === sendCount) {
         throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
@@ -125,6 +132,7 @@ function createControllableHandle(opts?: {
       else buffered.push(event);
     },
     closeCalls: () => closeCalls,
+    lastSendOptions: () => lastSendOptions,
   };
 }
 
@@ -188,6 +196,18 @@ describe('Session interaction fallback', () => {
 });
 
 describe('Session per-turn origin 打标', () => {
+  it('preserves symbol-keyed Main context through the Session wrapper', async () => {
+    const { handle, lastSendOptions } = createControllableHandle();
+    const session = makeSession(handle);
+    const context = {
+      origin: { kind: 'im' as const, channel: 'feishu' as const, taskId: 'message-1' },
+    };
+
+    await session.send('go', { [MAIN_OWNED_SEND_CONTEXT]: context });
+
+    expect(lastSendOptions()?.[MAIN_OWNED_SEND_CONTEXT]).toBe(context);
+  });
+
   it('host turn lease serializes a new send across a vendor idle edge', async () => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);

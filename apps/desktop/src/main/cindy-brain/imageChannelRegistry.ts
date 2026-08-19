@@ -68,12 +68,14 @@ export interface ImageChannel {
     model: string;
     prompt: string;
     aspectRatio?: GhostImageAspectRatio;
+    signal?: AbortSignal;
   }): Promise<ImageChannelResult>;
   editImage(params: {
     model: string;
     prompt: string;
     imagePaths: string[];
     aspectRatio?: GhostImageAspectRatio;
+    signal?: AbortSignal;
   }): Promise<ImageChannelResult>;
 }
 

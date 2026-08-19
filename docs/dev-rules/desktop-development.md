@@ -7,12 +7,26 @@
 
 ## Agent 启动入口
 
-Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域：
+Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。用户只说
+「启动开发版 / 启动测试版 / 看当前改动」且没有指定模式时，使用当前 worktree 的
+命名隔离沙箱，不要默认共享正式登录态：
 
 ```bash
-pnpm restart:desktop:remote --region=global
-pnpm restart:desktop:remote --region=cn
+pnpm restart:desktop:remote --region=global -- --isolated=@worktree
+pnpm restart:desktop:remote --region=cn -- --isolated=@worktree
 ```
+
+`--isolated=@worktree` 按 checkout 目录名派生稳定沙箱名（去掉前导 `cindy-`，
+再加路径短哈希，例如 `cindy-local-ollama-models` → `local-ollama-models-a1b2c3`）。
+同一 worktree 下次还用这个名字，登录态会留在这份沙箱里。
+
+只有用户明确说「共享登录 / 不要重新登录 / 用现有数据 / 不要关当前实例」时才加
+`--preserve-running`。不要把「用户没提模式」理解成共享。
+
+启动命令结束时必须出现一行 `DESKTOP_DEV_VERDICT=ready` 才算成功；看到
+`DESKTOP_DEV_VERDICT=failed` 或根本没有 verdict 行，不得声称开发版已起来。
+失败时把 `code` / `message` 交给用户。若有 `next=` 且用户没有点名必须共享，
+可以执行那条 next 命令重试。不要给启动命令接会吞退出码的管道。
 
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
 「跳过登录」（应用内显示为「未登录」，无需账号即可使用本机 agent；代码内部标识仍为
@@ -20,21 +34,25 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
 `pnpm dev:desktop` 或 `pnpm dev:desktop:remote` 绕过包装脚本。
 
 启动包装会先停止**当前 checkout** 已有的 Desktop dev 进程；其他 worktree／命名沙箱的
-实例不受影响。必须尊重宿主提供的并行或保活工作流；如果脚本因为当前 Agent 运行在
-Cindy 内部而拒绝重启，或因目标 userData 被其他 checkout 占用而中止，不要换命令绕过，
-应把提示交给用户。
+实例不受影响。必须尊重宿主提供的并行或保活工作流。脚本只在宿主是**当前 checkout**
+的 desktop dev 时拒绝重启（杀掉宿主会连这次启动一起收掉）。宿主是正式版或另一个
+worktree 时可以起隔离沙箱；从另一个 checkout 的 desktop dev 里起共享实例仍会拒绝，
+避免两份进程抢同一份正式 profile。若因当前 checkout 宿主拒绝、或目标 userData 被其他
+checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户。
 
 ## 可选启动参数
 
-两个 restart 命令都支持下列参数；**用户没提就不要主动加**（不带 = 共库 + 正常调度）。
-这些参数只对 dev 生效，不影响用户机器上的正式版。
+两个 restart 命令都支持下列参数。脚本本身不加这些旗标时仍是共库 + 正常调度（给人在
+终端里手跑）。**Agent 例外**见上一节：用户只说启动开发版时必须加
+`--isolated=@worktree`。这些参数只对 dev 生效，不影响用户机器上的正式版。
 
 - `--region=cn|global`（默认 `global`）：切换构建身份与仓内端点清单；中国大陆版
   必须显式传 `--region=cn`，读取 `config/endpoint.json`。
-- `--isolated` / `--isolated=<名字>`：使用独立 userData 沙箱，数据库、登录态、会话、定时
+- `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、登录态、会话、定时
   任务与设备身份都与正式版彻底隔离（首次需重新登录）；命名沙箱每个名字一条独立沙箱，
-  名字限 `A-Za-z0-9_-`、≤32 字符。用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
-  数据」时用。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
+  名字限 `A-Za-z0-9_-`、≤32 字符。`@worktree` 是保留名，按当前 checkout 目录派生沙箱名。
+  用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
+  数据」时用；Agent 把「启动开发版」也落在这条路径。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
   （见 [`database-and-migrations.md`](database-and-migrations.md)）。沙箱（及任何 dev
   userData 覆写）内不触发首登旧数据迁移（mToc）：不探测老目录、不弹确认窗、不把正式
   数据复制进沙箱。**`--isolated` 不得落在任一正式 profile 上**：显式 `XDT_USER_DATA_DIR`

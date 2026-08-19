@@ -1448,7 +1448,16 @@
         "compat": {
           "supportsStore": false,
           "supportsDeveloperRole": false,
-          "supportsReasoningEffort": false
+          "supportsReasoningEffort": true
+        },
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": "xhigh",
+          "max": null
         }
       },
       {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const serverApiFetchMock = vi.hoisted(() => vi.fn());
 const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
+const listProviderMediaModelsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../serverApiClient.js', () => ({
   serverApiFetch: serverApiFetchMock,
@@ -20,6 +21,9 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../../maker-host/model-disable-store.js', () => ({
   readModelDisableOverrides: readModelDisableOverridesMock,
+}));
+vi.mock('../../cindy-media/providerMediaRuntime.js', () => ({
+  listProviderMediaModels: listProviderMediaModelsMock,
 }));
 
 import {
@@ -73,6 +77,7 @@ describe('listAvailableMediaModels', () => {
   beforeEach(() => {
     serverApiFetchMock.mockReset().mockResolvedValue(payload);
     readModelDisableOverridesMock.mockReset().mockReturnValue({});
+    listProviderMediaModelsMock.mockReset().mockReturnValue([]);
   });
 
   it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
@@ -96,6 +101,25 @@ describe('listAvailableMediaModels', () => {
         id: 'image-with-guide',
         modalities: { input: ['text', 'image'], output: ['image'] },
       },
+    ]);
+  });
+
+  it('同名媒体模型按 providerId 保留为两个可选来源', async () => {
+    listProviderMediaModelsMock.mockReturnValue([
+      {
+        id: 'image-with-guide',
+        name: 'Provider Image',
+        providerId: 'openai',
+        mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+
+    const models = await listAvailableMediaModels('image.generate');
+
+    expect(models.filter((model) => model.id === 'image-with-guide')).toMatchObject([
+      { id: 'image-with-guide', providerId: 'xd' },
+      { id: 'image-with-guide', providerId: 'openai' },
     ]);
   });
 

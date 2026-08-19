@@ -144,6 +144,15 @@ import {
 import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
 import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
 import {
+  resolveSessionQueueCounts,
+  type SessionQueueInspectionEntry,
+} from './sessionQueueInspection.js';
+import {
+  createSessionControlService,
+  sessionQueueOriginForDispatcher,
+} from './sessionControlService.js';
+import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
+import {
   listAtBrowserTabs,
   parseAtContextCatalogRequest,
   readAtDesktopWindows,
@@ -157,11 +166,15 @@ import {
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeGeneratedImage } from '../cindy-media/generatedMedia.js';
-import { getDbClient } from '../localDb/client/current.js';
+import {
+  getDbClient,
+  isDbClientNotReadyError,
+} from '../localDb/client/current.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshot,
+  loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
 } from '../localDb/agentInputQueueSnapshots.js';
 import {
@@ -502,6 +515,23 @@ import {
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
+import {
+  mergePiPackageCommands,
+  shouldListPiPackageCommands,
+  type PiPackageMutationRequest,
+} from '../../shared/piPackages.js';
+import {
+  capturePiPackageEnableIdentity,
+  listManagedPiPromptCommands,
+  listPiPackages,
+  mutatePiPackage,
+  onPiPackagesChanged,
+} from '../maker-host/pi-package-store.js';
+import {
+  issuePiPackageMutationGrant,
+  piPackageMutationNeedsGrant,
+} from '../maker-host/pi-package-mutation-grant.js';
+import { escapePiPackageNativeDialogText } from '../maker-host/pi-package-native-dialog.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   triggerClaudeSubscriptionUsageRefresh,
@@ -516,7 +546,11 @@ import {
   recordModelTurnUsage,
   recordTurnSpend,
 } from '../usageBroadcaster.js';
-import { throwIpcError } from '../utils/ipcValidate.js';
+import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import {
+  runPiPackageListIpcBoundary,
+  runPiPackageMutationIpcBoundary,
+} from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -810,6 +844,14 @@ import {
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
+import {
+  assertAgentCommandListIpcCaller,
+  toAgentCommandListFailure,
+} from './agentCommandListIpcBoundary.js';
+import {
+  assertAgentSkillListIpcCaller,
+  toAgentSkillListFailure,
+} from './agentSkillListIpcBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
   tapWindowBroadcast,
@@ -1446,6 +1488,8 @@ type SendToSessionInternalResult =
       wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
+      /** jump 排队时的可寻址句柄；直发 / create 时省略。 */
+      queuedMessageId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
       worktreePath?: string | null;
       model?: string;
@@ -1476,6 +1520,93 @@ type SendToSessionInternalResult =
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
+  listSessionQueue: (sessionId: string) => Promise<
+    | { ok: true; messages: SessionQueueInspectionEntry[] }
+    | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  listSessionQueuedCounts: (sessionIds: string[]) => Promise<
+    | { ok: true; counts: Record<string, number> }
+    | { ok: false; errorCode: 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  updateSessionQueuedMessage: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    queuedMessageId: string;
+    message: string;
+  }) => Promise<
+    | { ok: true; queuedMessageId: string }
+    | {
+        ok: false;
+        errorCode:
+          | 'NOT_FOUND'
+          | 'QUEUED_MESSAGE_NOT_FOUND'
+          | 'MESSAGE_CONSUMING'
+          | 'NOT_AUTHORIZED'
+          | 'INVALID_ARGS'
+          | 'HOST_NOT_READY'
+          | 'INTERNAL';
+        message: string;
+      }
+  >;
+  cancelSessionQueuedMessage: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    queuedMessageId: string;
+  }) => Promise<
+    | { ok: true; queuedMessageId: string }
+    | {
+        ok: false;
+        errorCode:
+          | 'NOT_FOUND'
+          | 'QUEUED_MESSAGE_NOT_FOUND'
+          | 'MESSAGE_CONSUMING'
+          | 'NOT_AUTHORIZED'
+          | 'INVALID_ARGS'
+          | 'HOST_NOT_READY'
+          | 'INTERNAL';
+        message: string;
+      }
+  >;
+  steerSession: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    message: string;
+  }) => Promise<
+    | { ok: true; queuedMessageId: string }
+    | {
+        ok: false;
+        errorCode:
+          | 'NOT_FOUND'
+          | 'NO_ACTIVE_TURN'
+          | 'UNSUPPORTED_CAPABILITY'
+          | 'INPUT_LOCKED'
+          | 'DELIVERY_FAILED'
+          | 'HOST_NOT_READY'
+          | 'INTERNAL';
+        message: string;
+      }
+  >;
+  stopSessionTurn: (params: { targetSessionId: string }) => Promise<
+    | {
+        ok: true;
+        status: 'no-active-turn' | 'waiting-for-safe-point' | 'requested' | 'unconfirmed';
+        turnGeneration?: number;
+        reason?: string;
+      }
+    | {
+        ok: false;
+        errorCode: 'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY' | 'HOST_NOT_READY' | 'INTERNAL';
+        message: string;
+      }
+  >;
+  getSessionRuntime: (params: { targetSessionId: string }) => Promise<
+    | { ok: true; runtime: Awaited<ReturnType<typeof readCanonicalSessionActivity>> }
+    | {
+        ok: false;
+        errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL';
+        message: string;
+      }
+  >;
   sendToSession: (params: {
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
@@ -5228,6 +5359,8 @@ export interface RegisterMakerIpcOptions {
   onProviderModelAutoRefreshConfigured(): void;
 }
 
+let disposePiPackagesChangedBroadcast: (() => void) | null = null;
+
 /**
  * Register before the first BrowserWindow: modelVisibilityPrefs mirrors its initial snapshot as
  * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
@@ -5254,6 +5387,14 @@ export function registerModelVisibilitySyncIpc(): void {
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
   log.info('registering maker:* IPC handlers');
+  disposePiPackagesChangedBroadcast?.();
+  disposePiPackagesChangedBroadcast = onPiPackagesChanged(() => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(MAKER_PUSH.PI_PACKAGES_CHANGED);
+      }
+    }
+  });
   getAgentIslandService()?.setPermissionResolver(resolvePendingPermissionFromAgentIsland);
   sessionTurnActivityTracker.setTurnKeepaliveChangeListener(
     options.onAnySessionTurnKeepaliveChange ?? null,
@@ -6016,21 +6157,92 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await getDesktopCommandRegistry().execute(name, c);
   });
 
-  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, (_e, agentKind: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, async (event, agentKind: unknown, rawParams?: unknown) => {
+    assertAgentCommandListIpcCaller(event, {
+      isDeviceLinkInvoke,
+      assertTrustedSender: (sourceEvent) =>
+        assertTrustedAppRendererEvent(
+          sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
+        ),
+    });
     try {
-      return { success: true, commands: maker.listAgentCommands(requireAgentKind(agentKind)) };
+      const kind = requireAgentKind(agentKind);
+      const params = rawParams === undefined ? {} : requireObject(rawParams);
+      if (params.sessionId !== undefined && typeof params.sessionId !== 'string') {
+        throwIpcError('INVALID_PARAMS', 'sessionId must be a string');
+      }
+      if (
+        params.allowManagedPiPackagePreview !== undefined
+        && typeof params.allowManagedPiPackagePreview !== 'boolean'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'allowManagedPiPackagePreview must be a boolean');
+      }
+      const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+        ? params.sessionId.trim()
+        : undefined;
+      const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
+      const builtins = maker.listAgentCommands(kind);
+      const mayListPackageCommands = shouldListPiPackageCommands(
+        kind,
+        sessionId !== undefined,
+        sessionMeta,
+        params.allowManagedPiPackagePreview !== false,
+      );
+      let packageCommands: Array<{ name: string; description: string }> = [];
+      let runtimeStatus: import('../../shared/piPackages.js').PiPackageCommandRuntimeStatus | undefined;
+      if (mayListPackageCommands && sessionId) {
+        const manifest = maker.getSessionRuntimeCapabilities(sessionId);
+        runtimeStatus = manifest?.status === 'loaded'
+          ? 'loaded'
+          : manifest?.status === 'failed'
+            ? 'failed'
+            : manifest?.status === 'unknown'
+              ? 'unknown'
+              : 'pending';
+        const managedNames = new Set(manifest?.managedPackageCommandNames ?? []);
+        if (manifest?.status === 'loaded') {
+          packageCommands = manifest.commands.flatMap((command) => (
+            managedNames.has(command.name) && !command.name.startsWith('skill:')
+              ? [{
+                  name: command.name,
+                  description: command.description ?? `Pi extension command: ${command.name}`,
+                }]
+              : []
+          ));
+        } else if (!manifest) {
+          // An empty local Pi task may have a persisted session row before its
+          // process starts. Keep inspected Prompt templates visible; send waits
+          // for this task's get_commands catalog before allowing execution.
+          packageCommands = await listManagedPiPromptCommands();
+        }
+      } else if (mayListPackageCommands) {
+        // Before a task exists, only prompt templates are statically knowable.
+        // Extension commands appear after that exact Pi runtime confirms them.
+        packageCommands = await listManagedPiPromptCommands();
+      }
+      const commands = mergePiPackageCommands(kind, builtins, packageCommands);
+      return { success: true, commands, ...(runtimeStatus ? { runtimeStatus } : {}) };
     } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-        commands: [],
-      };
+      return toAgentCommandListFailure(err, {
+        reportError: (error) => {
+          log.warn('Agent command list failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      });
     }
   });
 
   ipcMain.handle(
     MAKER_INVOKE.LIST_AGENT_SKILLS,
-    async (_e, agentKind: unknown, params: unknown) => {
+    async (event, agentKind: unknown, params: unknown) => {
+      assertAgentSkillListIpcCaller(event, {
+        isDeviceLinkInvoke,
+        assertTrustedSender: (sourceEvent) =>
+          assertTrustedAppRendererEvent(
+            sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
+          ),
+      });
       try {
         const kind = requireAgentKind(agentKind);
         const skillParams = (params ?? {}) as {
@@ -6053,14 +6265,119 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const result = await maker.listAgentSkills(kind, skillParams);
         return { success: true, ...result };
       } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-          skills: [],
-        };
+        return toAgentSkillListFailure(err, {
+          reportError: (error) => {
+            log.warn('Agent skill list failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
       }
     },
   );
+
+  ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_LIST, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return runPiPackageListIpcBoundary(
+      () => listPiPackages(),
+      t('settings.piPackages.loadFailed'),
+      (error) => {
+        log.warn('Pi extension list failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+  });
+
+  ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_MUTATE, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const payload = requireObject(raw);
+    const action = requireEnum(
+      payload.action,
+      ['install', 'remove', 'update', 'set-enabled'] as const,
+      'action',
+    );
+    if (typeof payload.source !== 'string' || payload.source.length > 2_048) {
+      throwIpcError('INVALID_PARAMS', 'invalid Pi extension source');
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'confirmed')) {
+      throwIpcError('INVALID_PARAMS', 'Renderer confirmation is not accepted');
+    }
+    if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+    }
+    const request: PiPackageMutationRequest = {
+      action,
+      source: payload.source,
+      ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
+    };
+    return runPiPackageMutationIpcBoundary(async () => {
+      if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
+
+      const enableIdentity = request.action === 'set-enabled' && request.enabled === true
+        ? await capturePiPackageEnableIdentity(request.source)
+        : undefined;
+      const grantBinding = enableIdentity
+        ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
+        : undefined;
+
+      const source = escapePiPackageNativeDialogText(request.source);
+      const copy =
+        request.action === 'set-enabled'
+          ? {
+              title: t('settings.piPackages.extensionApprovalTitle'),
+              message: enableIdentity?.displayLabel ?? '',
+              detail: t('settings.piPackages.extensionApprovalDescription'),
+              confirm: t('settings.piPackages.approveAndEnable'),
+            }
+          : request.action === 'remove'
+            ? {
+                title: t('settings.piPackages.uninstallTitle'),
+                message: t('settings.piPackages.uninstallTitle'),
+                detail: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
+                confirm: t('settings.piPackages.confirmUninstall'),
+              }
+            : request.action === 'update'
+              ? {
+                  title: t('settings.piPackages.updateConfirmTitle'),
+                  message: t('settings.piPackages.updateConfirmTitle'),
+                  detail: t('settings.piPackages.updateConfirmDescription').replace(
+                    '{{source}}',
+                    source,
+                  ),
+                  confirm: t('settings.piPackages.confirmUpdate'),
+                }
+              : {
+                  title: t('settings.piPackages.confirmTitle'),
+                  message: t('settings.piPackages.confirmTitle'),
+                  detail: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
+                  confirm: t('settings.piPackages.confirmInstall'),
+                };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const options = {
+        type: 'warning' as const,
+        title: copy.title,
+        message: copy.message,
+        detail: copy.detail,
+        buttons: [copy.confirm, t('settings.piPackages.cancel')],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      };
+      const decision = owner
+        ? await dialog.showMessageBox(owner, options)
+        : await dialog.showMessageBox(options);
+      if (decision.response !== 0) {
+        throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+      }
+      return mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding));
+    }, t('settings.piPackages.operationFailed'), (error) => {
+      log.warn('Pi extension mutation failed', {
+        action: request.action,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
 
   ipcMain.handle(
     MAKER_INVOKE.SCAN_AT_RESOURCES,
@@ -8006,6 +8323,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createDefaults,
       inheritSourcePermissionMode,
     } = params;
+    const queuedOrigin = sessionQueueOriginForDispatcher({
+      dispatcherSessionId,
+      message,
+      explicitOrigin: origin,
+    });
     if (!message) {
       return {
         ok: false,
@@ -8345,13 +8667,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           dbRow,
           onAccepted,
           onAcceptedRollback,
-          origin,
+          origin: queuedOrigin,
         });
         return {
           ok: true as const,
           targetSessionId,
           agentKind: meta.agentKind,
           wakeKind: 'queued' as const,
+          queuedMessageId: qClientId,
           targetTitle: dbRow.title,
           targetLastUserSendAt:
             dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -8394,13 +8717,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             dbRow,
             onAccepted,
             onAcceptedRollback,
-            origin,
+            origin: queuedOrigin,
           });
           return {
             ok: true as const,
             targetSessionId,
             agentKind: meta.agentKind,
             wakeKind: 'queued' as const,
+            queuedMessageId: clientId,
             targetTitle: dbRow.title,
             targetLastUserSendAt:
               dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -8518,13 +8842,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               dbRow,
               onAccepted,
               onAcceptedRollback,
-              origin,
+              origin: queuedOrigin,
             });
             return {
               ok: true as const,
               targetSessionId,
               agentKind: meta.agentKind,
               wakeKind: 'queued' as const,
+              queuedMessageId: clientId,
               targetTitle: dbRow.title,
               targetLastUserSendAt:
                 dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -8616,13 +8941,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             dbRow,
             onAccepted,
             onAcceptedRollback,
-            origin,
+            origin: queuedOrigin,
           });
           return {
             ok: true as const,
             targetSessionId,
             agentKind: meta.agentKind,
             wakeKind: 'queued' as const,
+            queuedMessageId: clientId,
             targetTitle: dbRow.title,
             targetLastUserSendAt:
               dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null,
@@ -8953,8 +9279,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedRollback?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
   }): Promise<void> {
+    const queued = await buildSessionControlInputItem(params);
+    if (params.onAccepted) {
+      orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
+        params.clientId,
+        params.onAccepted,
+        params.onAcceptedRollback,
+      );
+    }
+    // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
+    // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
+    await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
+    inputCoordinator.enqueue(params.targetSessionId, queued);
+    log.info('send_to_session queued while target busy', {
+      targetSessionId: params.targetSessionId,
+      clientId: params.clientId,
+    });
+  }
+
+  async function buildSessionControlInputItem(params: {
+    targetSessionId: string;
+    message: string;
+    persistedContent: string;
+    clientId: string;
+    meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
+    origin?: AgentInputQueuedMessage['origin'];
+  }): Promise<AgentInputQueuedMessage> {
     const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta);
-    const queued: AgentInputQueuedMessage = {
+    return {
       clientId: params.clientId,
       text: params.message,
       persistedContent: params.persistedContent,
@@ -8972,21 +9324,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createOpts,
       ...(params.origin ? { origin: params.origin } : {}),
     };
-    if (params.onAccepted) {
-      orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
-        params.clientId,
-        params.onAccepted,
-        params.onAcceptedRollback,
-      );
-    }
-    // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
-    // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
-    await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
-    inputCoordinator.enqueue(params.targetSessionId, queued);
-    log.info('send_to_session queued while target busy', {
-      targetSessionId: params.targetSessionId,
-      clientId: params.clientId,
-    });
   }
 
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
@@ -9511,10 +9848,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionQueueSnapshot: async (sessionId) => {
       // 先补崩溃恢复,保证重启后 lead 仍能看到快照恢复出的排队消息。
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-      const projection = inputCoordinator.getProjection(sessionId);
+      const snapshot = inputCoordinator.getQueueControlSnapshot(sessionId);
+      const inspection = inputCoordinator.getQueueInspection(sessionId);
       return {
-        pendingQueue: projection.pendingQueue,
-        steeringClientIds: projection.steeringQueueClientIds,
+        pendingQueue: snapshot.pendingQueue,
+        steeringClientIds: snapshot.steeringQueueClientIds,
+        consumingClientIds: inspection
+          .filter((entry) => entry.consuming)
+          .map((entry) => entry.queuedMessageId),
       };
     },
     removeQueuedMessage: (sessionId, clientId) => {
@@ -9801,11 +10142,111 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   idleReleaseWatcher.start();
 
+  const sessionControlService = createSessionControlService({
+    sessionExists: async (sessionId) =>
+      (await maker.getSessionMeta(sessionId)) !== null,
+    getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
+    getSessionActivitySnapshot: readCanonicalSessionActivity,
+    assertExternalInputAllowed: assertReviewExternalInputAllowed,
+    createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
+      const meta = await maker.getSessionMeta(targetSessionId);
+      if (!meta) throw new Error(`session ${targetSessionId} not found`);
+      return buildSessionControlInputItem({
+        targetSessionId,
+        message,
+        persistedContent: message,
+        clientId: queuedMessageId,
+        meta,
+        origin: {
+          kind: 'session',
+          senderSessionId: callerSessionId,
+          displayText: message,
+        },
+      });
+    },
+    steerQueuedMessage: async (sessionId, item, expectedTurn) => {
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      return inputCoordinator.steer(sessionId, item, {
+        touchUserSend: true,
+        fallbackToTurn: false,
+        expectedTurnSession: expectedTurn.session,
+        expectedTurnGeneration: expectedTurn.turnGeneration,
+      });
+    },
+    getQueueSnapshot: async (sessionId) => {
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      if (!inputCoordinator.isQueueRestored(sessionId)) {
+        throw new Error(`queue restore incomplete for ${sessionId}`);
+      }
+      const snapshot = inputCoordinator.getQueueControlSnapshot(sessionId);
+      const consumingClientIds = inputCoordinator
+        .getQueueInspection(sessionId)
+        .filter((entry) => entry.consuming)
+        .map((entry) => entry.queuedMessageId);
+      return { pendingQueue: snapshot.pendingQueue, consumingClientIds };
+    },
+    replaceQueuedMessage: (sessionId, clientId, next) =>
+      inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
+    removeQueuedMessage: (sessionId, clientId) => {
+      if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId)) {
+        return false;
+      }
+      inputCoordinator.remove(sessionId, clientId);
+      return !inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId);
+    },
+    createId,
+  });
+
   // ─── 把 internal 业务函数发布到 module-level holder ────────────────────
   // mcp-providers.ts 的 cindy_helper control deps 通过
   // tryGetOrcaCollabService() 拿到这些函数引用, 让 MCP tool
   // 走与 IPC handler 完全相同的业务路径。
   orcaCollabServiceHolder = {
+    listSessionQueue: async (sessionId) => {
+      try {
+        const meta = await maker.getSessionMeta(sessionId);
+        if (!meta) {
+          return { ok: false, errorCode: 'NOT_FOUND', message: `session ${sessionId} not found` };
+        }
+        await inputCoordinator.ensureQueueRestored(sessionId);
+        if (!inputCoordinator.isQueueRestored(sessionId)) {
+          return { ok: false, errorCode: 'INTERNAL', message: `queue restore incomplete for ${sessionId}` };
+        }
+        return {
+          ok: true,
+          messages: inputCoordinator.getQueueInspection(sessionId),
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          errorCode: isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL',
+          message,
+        };
+      }
+    },
+    listSessionQueuedCounts: async (sessionIds) => {
+      try {
+        const counts = await resolveSessionQueueCounts(sessionIds, {
+          getLiveQueue: (sessionId) =>
+            inputCoordinator.getQueueInspectionIfRestored(sessionId),
+          loadPersistedCounts: loadAgentInputQueueSnapshotCounts,
+        });
+        return { ok: true, counts };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          errorCode: isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL',
+          message,
+        };
+      }
+    },
+    updateSessionQueuedMessage: (params) => sessionControlService.updateQueuedMessage(params),
+    cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
+    steerSession: (params) => sessionControlService.steerSession(params),
+    stopSessionTurn: (params) => sessionControlService.stopSessionTurn(params),
+    getSessionRuntime: (params) => sessionControlService.getSessionRuntime(params),
     sendToSession: sendToSessionInternal,
     enableOrca: enableOrcaInternal,
     disableOrca: disableOrcaInternal,
@@ -10284,11 +10725,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ): Promise<void> => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     await assertReviewExternalInputAllowed(sessionId);
-    const sess = maker.getSession(sessionId);
-    if (!sess) {
-      log.warn('steer: session not running', { sessionId });
-      throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} is not running`);
-    }
+    const so = (sendOpts ?? {}) as {
+      messageUuid?: string;
+      userName?: string;
+      signal?: AbortSignal;
+      /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
+      fromMobileClient?: boolean;
+      expectedClearBoundaryMs?: number | null;
+      expectedInputGeneration?: number;
+      expectedTurnSession?: object;
+      expectedTurnGeneration?: number;
+    };
+    const readCurrentSteerSession = () => {
+      const current = maker.getSession(sessionId);
+      if (!current) {
+        log.warn('steer: session not running', { sessionId });
+        throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} is not running`);
+      }
+      if (
+        (so.expectedTurnSession !== undefined && current !== so.expectedTurnSession) ||
+        (so.expectedTurnGeneration !== undefined &&
+          current.getTurnGeneration() !== so.expectedTurnGeneration)
+      ) {
+        throw new Error(`[STALE_TURN] Session ${sessionId} changed turns before steer delivery`);
+      }
+      return current;
+    };
+    let sess = readCurrentSteerSession();
     log.info('steer: invoked', {
       sessionId,
       agentKind: sess.agentKind,
@@ -10325,19 +10788,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       activeAfterNormalize: sess.isTurnRunning(),
       ...summarizeIpcUserMessage(normalized),
     });
+    sess = readCurrentSteerSession();
     if (!sess.isTurnRunning()) {
       throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
     }
     const meta = await maker.getSessionMeta(sessionId).catch(() => null);
-    const so = (sendOpts ?? {}) as {
-      messageUuid?: string;
-      userName?: string;
-      signal?: AbortSignal;
-      /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
-      fromMobileClient?: boolean;
-      expectedClearBoundaryMs?: number | null;
-      expectedInputGeneration?: number;
-    };
+    sess = readCurrentSteerSession();
     // 手机说明同样只进 wire payload(steer 路径不落库用户消息,天然不污染原话)。
     // 两个来源都要认:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
     const steerNote =
@@ -10356,6 +10812,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputClearBoundary(sessionId, precondition.expected);
       }
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
+      sess = readCurrentSteerSession();
       await sess.steer(steerPayload as never, {
         logTitle: meta?.title,
         messageUuid: so.messageUuid,
@@ -11057,6 +11514,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
+    getTurnSessionIdentity: (sessionId) => getStableSessionForTurnBoundary(sessionId) ?? null,
     reconcileTurnIdle: (sessionId) => {
       // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止
       // 但终态事件丢失时，都走同一条收口路径。
@@ -11300,8 +11758,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getAgentIslandService()?.notifyQueueEmptied(sessionId);
     },
     // 排队输入崩溃恢复(issue #761):快照写入 fire-and-forget(模块内 per-session
-    // 写链保序 + 失败落日志),读回由 IPC 入口的 ensureQueueRestored 懒触发。
+    // 写链保序 + 失败落日志),读回由 ensureQueueRestored 懒触发。恢复前先严格
+    // 水合 durable /clear 边界，所有入口共用，避免仅 projection 路径安全。
     persistQueueSnapshot: (sessionId, items) => saveAgentInputQueueSnapshot(sessionId, items),
+    loadClearBoundary: async (sessionId) =>
+      (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: (sessionId) => loadAgentInputQueueSnapshot(sessionId),
     getPersistedClientIds: getPersistedInputClientIds,
   });

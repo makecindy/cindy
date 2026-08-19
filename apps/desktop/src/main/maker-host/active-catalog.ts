@@ -215,6 +215,83 @@ let localOverrides: ModelCatalogOverrides = EMPTY_MODEL_CATALOG_OVERRIDES;
 let lastPlanWarnings: ModelPlaneWarning[] = [];
 
 type Effort = CatalogModel['efforts'][number];
+const EFFORT_RANK: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+
+/** Union discovery with the known official ladder so an incomplete SuperGrok payload cannot hide xhigh.
+ * Official source (2026-08-16): https://docs.x.ai/developers/model-capabilities/text/reasoning
+ * Grok 4.6 = low | medium | high (default) | xhigh. */
+function mergeKnownXaiEfforts(
+  discovered: readonly Effort[] | undefined,
+  baseline: readonly Effort[] | undefined,
+): Effort[] {
+  const seen = new Set<Effort>([...(discovered ?? []), ...(baseline ?? [])]);
+  return EFFORT_RANK.filter((effort) => seen.has(effort));
+}
+
+function isOfficialGrok46Id(modelId: string): boolean {
+  return modelId === 'grok-4.6' || modelId.endsWith('/grok-4.6');
+}
+
+function pickXaiDefaultEffort(
+  efforts: readonly Effort[],
+  candidates: ReadonlyArray<Effort | null | undefined>,
+  fallback: 'official-high' | 'first',
+): Effort | null {
+  for (const candidate of candidates) {
+    if (candidate != null && efforts.includes(candidate)) return candidate;
+  }
+  if (efforts.length === 0) return null;
+  if (fallback === 'official-high' && efforts.includes('high')) return 'high';
+  return fallback === 'official-high'
+    ? (efforts[efforts.length - 1] ?? null)
+    : (efforts[0] ?? null);
+}
+
+/** SuperGrok 账号档位：官方梯子/默认 high 只作用于 Grok 4.6；其余以 discovery 为准。 */
+function resolveXaiAccountCapabilities(
+  entry: XaiDiscoveredModel,
+  baselineEfforts: readonly Effort[] | undefined,
+  registryDefault: Effort | null | undefined,
+  catalogDefault: Effort | null | undefined,
+): { efforts: Effort[]; defaultEffort: Effort | null } {
+  const isGrok46 = isOfficialGrok46Id(entry.id);
+  const efforts = isGrok46
+    ? mergeKnownXaiEfforts(entry.efforts, baselineEfforts)
+    : entry.efforts !== undefined
+      ? [...entry.efforts]
+      : [...(baselineEfforts ?? [])];
+  const defaultEffort = isGrok46
+    ? pickXaiDefaultEffort(
+        efforts,
+        [registryDefault, catalogDefault, entry.defaultEffort],
+        'official-high',
+      )
+    : pickXaiDefaultEffort(
+        efforts,
+        [entry.defaultEffort, registryDefault, catalogDefault],
+        'first',
+      );
+  return { efforts, defaultEffort };
+}
+
+/** Registry overlay 会写回静态档位;非 4.6 的 discovery 显式值必须压过它。 */
+function preserveNonGrok46DiscoveryEfforts(
+  models: readonly CatalogModel[],
+  discovered: readonly XaiDiscoveredModel[],
+): CatalogModel[] {
+  const byId = new Map(discovered.map((entry) => [entry.id, entry]));
+  return models.map((model) => {
+    const entry = byId.get(model.id) ?? byId.get(`xai/${model.id}`);
+    if (!entry || isOfficialGrok46Id(entry.id)) return model;
+    const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
+      entry,
+      model.efforts,
+      model.defaultEffort,
+      model.defaultEffort,
+    );
+    return { ...model, efforts, defaultEffort };
+  });
+}
 
 function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return (model.agents ?? []).filter((agent) => {
@@ -614,19 +691,12 @@ function materializeXaiAccountModels(
       xaiCatalogModelById(provider, entry.id, agent) ??
       xaiCatalogModelById(provider, entry.id, 'pi');
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
-    const efforts = entry.efforts
-      ? [...entry.efforts]
-      : [...(registry?.efforts ?? catalogModel?.efforts ?? [])];
-    const requestedDefault =
-      entry.defaultEffort !== undefined
-        ? entry.defaultEffort
-        : (registry?.defaultEffort ?? catalogModel?.defaultEffort ?? null);
-    const defaultEffort =
-      requestedDefault !== null && efforts.includes(requestedDefault)
-        ? requestedDefault
-        : efforts.includes('high')
-          ? 'high'
-          : (efforts[efforts.length - 1] ?? null);
+    const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
+      entry,
+      registry?.efforts ?? catalogModel?.efforts,
+      registry?.defaultEffort,
+      catalogModel?.defaultEffort,
+    );
     const contextWindow =
       entry.contextWindow ?? registry?.contextWindow ?? catalogModel?.contextWindow ?? 200_000;
     const contextWindowVerified =
@@ -959,16 +1029,26 @@ function computeMerged(): Catalog {
       const codexRoot = authoritativeMembers
         ? assembleAuthoritativeRoot('xai', 'codex', codexSeed, plan)
         : assembleRoot('xai', 'codex', codexSeed, plan, true);
+      const claudeAccountRoot = useAccountMembership
+        ? preserveNonGrok46DiscoveryEfforts(claudeRoot, accountModels)
+        : claudeRoot;
+      const codexAccountRoot = useAccountMembership
+        ? preserveNonGrok46DiscoveryEfforts(codexRoot, accountModels)
+        : codexRoot;
       const stripPiApi = (model: CatalogModel): CatalogModel => {
         if (model.piApi === undefined) return model;
         const rest = { ...model };
         delete rest.piApi;
         return rest;
       };
-      const piModels = applyPiApiAnnotations(
+      const piProjected = applyPiApiAnnotations(
         'xai',
-        claudeRoot.map((model) => projectXaiPiModel(p, model)),
+        claudeAccountRoot.map((model) => projectXaiPiModel(p, model)),
       );
+      // Pi 投影会写回静态 official map;非 4.6 的 discovery 显式档位/默认值仍须压过它。
+      const piModels = useAccountMembership
+        ? preserveNonGrok46DiscoveryEfforts(piProjected, accountModels)
+        : piProjected;
       return {
         ...p,
         agents: p.agents.includes('pi') ? p.agents : [...p.agents, 'pi' as AgentKind],
@@ -984,8 +1064,8 @@ function computeMerged(): Catalog {
         },
         models: {
           ...p.models,
-          'claude-code': claudeRoot.map(stripPiApi),
-          codex: codexRoot.map(stripPiApi),
+          'claude-code': claudeAccountRoot.map(stripPiApi),
+          codex: codexAccountRoot.map(stripPiApi),
           pi: piModels,
         },
       };

@@ -8,6 +8,7 @@ import type {
   CollabDispatchSuccessOutcome,
 } from './collabSendOutcome.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
+import { createSessionQueueControlService } from './sessionQueueControl.js';
 
 /**
  * OrcaTeamService 只接管已存在 worker 的派活、释放、归档与 auto-bridge。
@@ -220,6 +221,7 @@ export interface OrcaTeamServiceDeps {
   getSessionQueueSnapshot(sessionId: string): Promise<{
     pendingQueue: AgentInputQueuedMessage[];
     steeringClientIds: string[];
+    consumingClientIds: string[];
   }>;
   /** 从队列移除一条排队消息;实现方必须走 coordinator.remove(带 discard settle)。返回是否真的移除。 */
   removeQueuedMessage(sessionId: string, clientId: string): boolean;
@@ -301,6 +303,17 @@ export function findFocusTargetWorker<
 
 export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamService {
   const autoBridge = new Map<string, AutoBridgeState>();
+  const queueControl = createSessionQueueControlService({
+    getSnapshot: async (sessionId) => {
+      const snapshot = await deps.getSessionQueueSnapshot(sessionId);
+      return {
+        pendingQueue: snapshot.pendingQueue,
+        consumingClientIds: snapshot.consumingClientIds,
+      };
+    },
+    replaceQueuedMessage: deps.replaceQueuedMessage,
+    removeQueuedMessage: deps.removeQueuedMessage,
+  });
   /** Per-worker transition tails serialize dispatch reservations against implicit done acknowledgement. */
   const workerTransitionTails = new Map<string, Promise<void>>();
   /** Active dispatch count stays positive from pre-resume reservation through host dispatch settlement. */
@@ -828,51 +841,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return 'user';
   }
 
-  /**
-   * update / cancel 共用的目标定位与权限校验:worker 归属(resolveWorkerRef)→
-   * 条目存在 → 必须是 lead 自己的 orca 条目(用户 / scheduler 排队消息绝不可动)→
-   * 未进入 steering 投递。全部通过才返回条目与 link。
-   */
-  async function resolveLeadQueuedMessage(params: {
-    callerLeadSessionId: string;
-    workerRef: string;
-    queuedMessageId: string;
-  }): Promise<
-    | { ok: true; link: OrcaWorkerLinkSnapshot; entry: AgentInputQueuedMessage }
-    | { ok: false; errorCode: WorkerQueuedMessageFailureCode; message: string }
-  > {
-    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
-    if (!found.ok) {
-      return found.errorCode === 'NOT_FOUND'
-        ? { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerRef} not found` }
-        : { ok: false, errorCode: 'INTERNAL', message: found.message };
-    }
-    const snapshot = await deps.getSessionQueueSnapshot(found.worker.sessionId);
-    const entry = snapshot.pendingQueue.find((item) => item.clientId === params.queuedMessageId);
-    if (!entry) {
-      return {
-        ok: false,
-        errorCode: 'QUEUED_MESSAGE_NOT_FOUND',
-        message: `queued message ${params.queuedMessageId} not found — it may have been dispatched or cancelled already`,
-      };
-    }
-    if (entry.origin?.kind !== 'orca') {
-      return {
-        ok: false,
-        errorCode: 'NOT_LEAD_MESSAGE',
-        message: `queued message ${params.queuedMessageId} was not sent by the lead; user/scheduler queued messages cannot be modified`,
-      };
-    }
-    if (snapshot.steeringClientIds.includes(entry.clientId)) {
-      return {
-        ok: false,
-        errorCode: 'MESSAGE_CONSUMING',
-        message: `queued message ${params.queuedMessageId} is being delivered and can no longer be modified`,
-      };
-    }
-    return { ok: true, link: found.link, entry };
-  }
-
   async function listWorkerQueuedMessages(params: {
     callerLeadSessionId: string;
     workerRef: string;
@@ -896,7 +864,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         position: index,
         source,
         content,
-        consuming: snapshot.steeringClientIds.includes(item.clientId),
+        consuming: snapshot.consumingClientIds.includes(item.clientId),
       };
     });
     return {
@@ -913,31 +881,36 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     queuedMessageId: string;
     message: string;
   }): Promise<WorkerQueuedMessageControlResult> {
-    if (params.message.trim().length === 0) {
-      return { ok: false, errorCode: 'INVALID_ARGS', message: 'message must not be empty' };
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
+    if (!found.ok) {
+      return found.errorCode === 'NOT_FOUND'
+        ? {
+            ok: false,
+            errorCode: 'WORKER_NOT_FOUND',
+            message: `worker ${params.workerRef} not found`,
+          }
+        : { ok: false, errorCode: 'INTERNAL', message: found.message };
     }
-    const resolved = await resolveLeadQueuedMessage(params);
-    if (!resolved.ok) return resolved;
-    const next = rebuildQueuedOrcaLeadMessage(resolved.entry, params.message, resolved.link.workerId);
-    const replaced = deps.replaceQueuedMessage(
-      resolved.link.workerSessionId,
-      params.queuedMessageId,
-      next,
-    );
-    if (!replaced) {
-      // resolve 与 replace 之间的窄竞态:条目刚被 drain 取走 / steering 挡住。
-      return {
-        ok: false,
-        errorCode: 'QUEUED_MESSAGE_NOT_FOUND',
-        message: `queued message ${params.queuedMessageId} was consumed before the update could apply`,
-      };
-    }
+    const controlled = await queueControl.update({
+      sessionId: found.worker.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      message: params.message,
+      authorize: (entry) =>
+        entry.origin?.kind === 'orca'
+          ? { ok: true }
+          : {
+              ok: false,
+              message: `queued message ${params.queuedMessageId} was not sent by the lead; user/scheduler queued messages cannot be modified`,
+            },
+      rebuild: (entry, message) => rebuildQueuedOrcaLeadMessage(entry, message, found.worker.id),
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
     deps.log.info('orca lead updated queued worker message', {
-      workerId: resolved.link.workerId,
-      workerSessionId: resolved.link.workerSessionId,
+      workerId: found.worker.id,
+      workerSessionId: found.worker.sessionId,
       queuedMessageId: params.queuedMessageId,
     });
-    return { ok: true, workerId: resolved.link.workerId, queuedMessageId: params.queuedMessageId };
+    return { ok: true, workerId: found.worker.id, queuedMessageId: params.queuedMessageId };
   }
 
   async function cancelWorkerQueuedMessage(params: {
@@ -945,26 +918,50 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     workerRef: string;
     queuedMessageId: string;
   }): Promise<WorkerQueuedMessageControlResult> {
-    const resolved = await resolveLeadQueuedMessage(params);
-    if (!resolved.ok) return resolved;
-    // coordinator.remove 内部触发 onDiscardedQueuedMessage → dispatcher 丢弃该
-    // clientId 的 accepted 暂存回调,与 Stop 清队列共用同一条 settle 路径
-    // (架构文档「queued accepted 也要同样结算」不变量);queued 未 accepted,
-    // 无运行副作用需要回滚。
-    const removed = deps.removeQueuedMessage(resolved.link.workerSessionId, params.queuedMessageId);
-    if (!removed) {
-      return {
-        ok: false,
-        errorCode: 'QUEUED_MESSAGE_NOT_FOUND',
-        message: `queued message ${params.queuedMessageId} was consumed before the cancel could apply`,
-      };
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
+    if (!found.ok) {
+      return found.errorCode === 'NOT_FOUND'
+        ? {
+            ok: false,
+            errorCode: 'WORKER_NOT_FOUND',
+            message: `worker ${params.workerRef} not found`,
+          }
+        : { ok: false, errorCode: 'INTERNAL', message: found.message };
     }
+    // coordinator.remove 仍负责 discard settle；公共 service 只统一定位、授权与竞态分类。
+    const controlled = await queueControl.cancel({
+      sessionId: found.worker.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      authorize: (entry) =>
+        entry.origin?.kind === 'orca'
+          ? { ok: true }
+          : {
+              ok: false,
+              message: `queued message ${params.queuedMessageId} was not sent by the lead; user/scheduler queued messages cannot be modified`,
+            },
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
     deps.log.info('orca lead cancelled queued worker message', {
-      workerId: resolved.link.workerId,
-      workerSessionId: resolved.link.workerSessionId,
+      workerId: found.worker.id,
+      workerSessionId: found.worker.sessionId,
       queuedMessageId: params.queuedMessageId,
     });
-    return { ok: true, workerId: resolved.link.workerId, queuedMessageId: params.queuedMessageId };
+    return { ok: true, workerId: found.worker.id, queuedMessageId: params.queuedMessageId };
+  }
+
+  function mapWorkerQueueControlFailure(failure: {
+    ok: false;
+    errorCode: string;
+    message: string;
+  }): WorkerQueuedMessageControlResult {
+    return {
+      ok: false,
+      errorCode:
+        failure.errorCode === 'NOT_AUTHORIZED'
+          ? 'NOT_LEAD_MESSAGE'
+          : (failure.errorCode as WorkerQueuedMessageFailureCode),
+      message: failure.message,
+    };
   }
 
   async function closeWorkerSessionBestEffort(sessionId: string, owner: string): Promise<void> {
