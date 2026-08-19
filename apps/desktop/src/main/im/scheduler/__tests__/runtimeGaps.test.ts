@@ -48,6 +48,33 @@ describe('bounded runtime gaps', () => {
     expect(gaps.values()).toEqual([]);
   });
 
+  it('keeps a full resolved window fail-closed when a new tombstone crosses the trim boundary', () => {
+    const gaps = new RuntimeGapSet();
+    const resolvedWindow = Array.from({ length: 32 }, (_, index) =>
+      gap('12345678901234567', index.toString(16).padStart(32, '0')),
+    );
+    const newest = gap('12345678901234567', 'f'.repeat(32));
+
+    for (const runtime of resolvedWindow) expect(gaps.resolve(runtime)).toBe(true);
+    expect(gaps.resolve(newest)).toBe(true);
+
+    // The overflowing binding is represented by one bounded lifecycle
+    // barrier, so neither the newly inserted tombstone nor an older evicted
+    // generation can return through a delayed dirty advertisement.
+    expect(gaps.adopt(newest)).toBe(false);
+    expect(gaps.adopt(resolvedWindow[0])).toBe(false);
+    expect(gaps.values()).toEqual([]);
+
+    const laterClean = gap('12345678901234567', 'e'.repeat(32));
+    expect(gaps.resolve(laterClean)).toBe(false);
+    expect(gaps.adopt(laterClean)).toBe(false);
+
+    // Rebinding clears the fail-closed barrier and allows the new lifecycle to
+    // collect legitimate gaps again.
+    expect(gaps.clearIdentity('12345678901234567')).toBe(true);
+    expect(gaps.adopt(newest)).toBe(true);
+  });
+
   it('retains at most the protocol limit with deterministic tuple ordering', () => {
     const gaps = new RuntimeGapSet();
     for (let index = 0; index < 9; index += 1) {
