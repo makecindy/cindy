@@ -103,6 +103,7 @@ import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
 } from './pi-proxy-session-auth.js';
+import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -596,6 +597,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
         // 旧 #794 strip 继续兜底。
         buildVisionBridgeProxyTransform(log),
+        createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。
         createActiveStripTransform({
