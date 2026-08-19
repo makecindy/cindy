@@ -91,6 +91,33 @@ describe('WorkLouderCodexHostClient', () => {
     expect(fork).toHaveBeenCalledTimes(2);
   });
 
+  it('restarts a still-wanted host after disable finishes stopping', () => {
+    const stopping = new FakeChild();
+    const restarted = new FakeChild();
+    const children = [stopping, restarted];
+    const fork = vi.fn(() => children.shift()!);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    client.setDeviceEnabled(false);
+    stopping.postMessage.mockClear();
+    client.setDeviceEnabled(true);
+
+    expect(fork).toHaveBeenCalledTimes(1);
+    expect(stopping.postMessage).not.toHaveBeenCalled();
+
+    stopping.emit('message', { kind: 'stopped' });
+
+    expect(fork).toHaveBeenCalledTimes(2);
+    expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'init', sdkEntry: '/sdk' });
+    expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
   it('kills a host that never acknowledges stop after disable', async () => {
     vi.useFakeTimers();
     try {

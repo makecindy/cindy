@@ -69,6 +69,54 @@ describe('WorkLouderCodexLightingController', () => {
     expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
   });
 
+  it('promotes an unslotted lead when only its worker is running', async () => {
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const catalog = [
+      'idle-1',
+      'idle-2',
+      'idle-3',
+      'idle-4',
+      'idle-5',
+      'idle-6',
+      'lead-outside',
+    ];
+    const loadWorkerSessions = vi.fn(async (leadIds: readonly string[]) => {
+      expect(leadIds).toContain('lead-outside');
+      return { 'lead-outside': ['worker-1'] };
+    });
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => catalog,
+      vi.fn(),
+      vi.fn(),
+      loadWorkerSessions,
+    );
+    controller.applySettings(settings({ agentSource: 'priority' }));
+    await controller.resumeTaskSlots();
+
+    controller.updateSessionActivity([
+      {
+        sessionId: 'worker-1',
+        phase: 'running',
+        compactDetail: '',
+        attention: false,
+      },
+    ]);
+
+    expect(controller.getState().agentSlots[0]?.action).toMatchObject({
+      type: 'task',
+      sessionId: 'lead-outside',
+    });
+    expect(sink.update.mock.lastCall?.[0]?.threads[0]?.brightness).toBeGreaterThan(0);
+  });
+
   it('activates the task assigned to the pressed Agent key', async () => {
     const keyHandlerRef: { current: ((slot: number) => void) | null } = { current: null };
     const sink = {

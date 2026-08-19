@@ -89,6 +89,8 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private wantsHidInput = false;
   private deviceEnabled = true;
   private wantsPresence = false;
+  /** True while the current host is stopping so re-enable cannot talk to it. */
+  private hostStopping = false;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
 
@@ -217,6 +219,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private ensureChild(): WorkLouderCodexChildLike | null {
+    if (this.hostStopping) return null;
     if (!this.deviceEnabled && !this.wantsPresence) return null;
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
@@ -410,6 +413,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.clearConnectWatchdog();
     this.clearStableConnection();
     this.child = null;
+    this.hostStopping = false;
     this.lastStatus = null;
     if (this.disposed) {
       this.completeDispose(child);
@@ -418,6 +422,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (!this.deviceEnabled) {
       this.updateConnectionReason(null);
       this.updateConnectionStatus('disabled');
+      if (this.wantsPresence) this.discoverPresence();
       return;
     }
     if (recycled) {
@@ -515,17 +520,22 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       clearTimeout(this.disconnectTimer);
       this.disconnectTimer = null;
     }
-    if (this.child === child) {
+    const owned = this.child === child;
+    if (owned) {
       try {
         child.kill();
       } catch {
         // The utility process may already have exited after acknowledging stop.
       }
       this.child = null;
+      this.hostStopping = false;
     }
     const finish = this.finishDispose;
     this.finishDispose = null;
     finish?.();
+    if (this.disposed || !owned || this.child) return;
+    if (this.deviceEnabled) this.restartHost();
+    else if (this.wantsPresence) this.discoverPresence();
   }
 
   private updateConnectionStatus(status: WorkLouderCodexConnectionStatus): void {
@@ -549,6 +559,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.clearStableConnection();
     const child = this.child;
     if (child) {
+      this.hostStopping = true;
       if (this.disconnectTimer) {
         clearTimeout(this.disconnectTimer);
         this.disconnectTimer = null;

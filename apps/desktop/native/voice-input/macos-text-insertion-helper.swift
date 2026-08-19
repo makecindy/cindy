@@ -436,7 +436,14 @@ func virtualKey(for name: String) throws -> CGKeyCode {
   }
 }
 
+func requireAccessibilityTrusted() throws {
+  guard AXIsProcessTrusted() else {
+    throw HelperError.accessibilityNotTrusted
+  }
+}
+
 func postHardwareKey(name: String) throws {
+  try requireAccessibilityTrusted()
   let virtualKey = try virtualKey(for: name)
   guard let source = CGEventSource(stateID: .privateState),
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
@@ -478,6 +485,7 @@ func keyEventPayload(options: Options) throws -> [String: Any] {
 }
 
 func scrollEventPayload(options: Options) throws -> [String: Any] {
+  try requireAccessibilityTrusted()
   try postScroll(deltaY: options.scrollDeltaY)
   return [
     "ok": true,
@@ -492,6 +500,7 @@ func scrollEventPayload(options: Options) throws -> [String: Any] {
 /// signed pixels/second; we own the 16ms clock so a held stick keeps scrolling
 /// even when the device stops sending move events.
 func runHoldScroll() throws {
+  try requireAccessibilityTrusted()
   let lock = NSLock()
   var velocity = 0
   var stopped = false

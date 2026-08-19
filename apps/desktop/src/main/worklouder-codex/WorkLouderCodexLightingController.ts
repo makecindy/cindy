@@ -244,9 +244,9 @@ export class WorkLouderCodexLightingController {
         const catalog = normalizeTaskCatalog(await this.loadTaskCatalog());
         if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
         this.taskCatalog = catalog;
-        this.publishAgentSlots();
         await this.refreshWorkerSessions(refreshVersion);
         if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
+        this.publishAgentSlots();
         this.updateLightingFrame(true);
         this.emitState();
       } finally {
@@ -284,9 +284,9 @@ export class WorkLouderCodexLightingController {
     }
     this.taskSlotsEnabled = true;
     this.inputActionsEnabled = true;
-    this.publishAgentSlots();
     await this.refreshWorkerSessions(refreshVersion);
     if (refreshVersion !== this.slotRefreshVersion) return;
+    this.publishAgentSlots();
     this.updateLightingFrame(true);
     this.emitState();
   }
@@ -664,7 +664,7 @@ export class WorkLouderCodexLightingController {
   }
 
   private async refreshWorkerSessions(refreshVersion: number): Promise<void> {
-    const leadIds = [...new Set(this.slotSessionIds.filter(Boolean))];
+    const leadIds = catalogLeadSessionIds(this.taskCatalog);
     const workersByLead = await this.loadWorkerSessions(leadIds);
     if (refreshVersion !== this.slotRefreshVersion) return;
     this.workersByLead = workersByLead;
@@ -872,6 +872,16 @@ function emptyAgentSlots(): WorkLouderCodexAgentSlotState[] {
     title: null,
     action: null,
   }));
+}
+
+function catalogLeadSessionIds(catalog: WorkLouderCodexTaskCatalog): string[] {
+  return [
+    ...new Set(
+      [...catalog.options, ...catalog.sidebar, ...catalog.lastSent]
+        .map((task) => task.id)
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function normalizeTaskCatalog(
