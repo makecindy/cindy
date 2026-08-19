@@ -7652,6 +7652,7 @@
       "taskInfo": {
         "time": "시간",
         "pr": "PR 상태",
+        "worktree": "worktree",
         "tokens": "토큰",
         "cost": "비용"
       },

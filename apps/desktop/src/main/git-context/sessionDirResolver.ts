@@ -29,6 +29,7 @@ import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current';
 import { messages, sessions } from '../localDb/schema';
 import { createLogger } from '../logger.js';
+import { detectCwd } from '../worktree/WorktreeManager.js';
 import { readGitHead, type GitHeadInfo } from './headReader.js';
 
 const log = createLogger('git-context/session-dir');
@@ -115,6 +116,60 @@ export interface ResolveSessionGitDirDeps {
   recentToolUseContents: (sessionId: string) => Promise<string[]>;
   /** 读目录 HEAD(= readGitHead);非 git 目录 / 不存在返回 null。 */
   probeGitDir: (dir: string) => Promise<GitHeadInfo | null>;
+}
+
+/** 任务信息 worktree 徽标:最多回溯这么多个不重复遥测目录。 */
+const MAX_UNIQUE_TELEMETRY_DIRS = 20;
+
+export interface FindLiveLinkedWorktreeDeps {
+  recentToolUseContents: (sessionId: string) => Promise<string[]>;
+  isInsideWorktree: (dir: string) => Promise<boolean>;
+  probeGitDir: (dir: string) => Promise<GitHeadInfo | null>;
+}
+
+/** 按 recency 去重收集 tool-use 目录。纯函数,便于单测。 */
+export function collectUniqueTelemetryDirs(
+  contents: string[],
+  pathPlatform: NodeJS.Platform = process.platform,
+): string[] {
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const content of contents) {
+    const candidate = extractDirCandidate(content, pathPlatform);
+    if (!candidate) continue;
+    let resolved: string;
+    try {
+      resolved = path.resolve(candidate);
+    } catch {
+      continue;
+    }
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    dirs.push(resolved);
+    if (dirs.length >= MAX_UNIQUE_TELEMETRY_DIRS) break;
+  }
+  return dirs;
+}
+
+/**
+ * 侧栏 worktree 徽标专用:在遥测目录里找**仍然活着的 linked worktree**。
+ * 与 resolveSessionGitDir 不同——后者只看最近一次 git 目录、删了不往回翻(防主仓冒充)。
+ * 这里要的是「任务里用过、现在还在」:跳过主 checkout,继续看更早的候选,直到目录没了。
+ */
+export async function findLiveLinkedWorktree(
+  sessionId: string,
+  deps: FindLiveLinkedWorktreeDeps,
+): Promise<{ workdir: string; branch: string | null } | null> {
+  const contents = await deps.recentToolUseContents(sessionId);
+  for (const dir of collectUniqueTelemetryDirs(contents)) {
+    if (!(await deps.isInsideWorktree(dir))) continue;
+    const head = await deps.probeGitDir(dir);
+    return {
+      workdir: dir,
+      branch: head?.kind === 'branch' ? head.branch : null,
+    };
+  }
+  return null;
 }
 
 /**
@@ -238,4 +293,35 @@ export async function resolveSessionGitDirLive(input: {
     },
     probeGitDir: (dir) => readGitHead(dir),
   });
+}
+
+/** 本机 Desktop 侧栏 worktree 徽标:遥测里仍活着的 linked worktree。永不抛错。 */
+export async function findLiveLinkedWorktreeLive(
+  sessionId: string,
+): Promise<{ workdir: string; branch: string | null } | null> {
+  try {
+    return await findLiveLinkedWorktree(sessionId, {
+      recentToolUseContents: async (sid) => {
+        try {
+          return await queryRecentToolUseContents(sid);
+        } catch {
+          return [];
+        }
+      },
+      isInsideWorktree: async (dir) => {
+        try {
+          return Boolean((await detectCwd(dir)).isInsideWorktree);
+        } catch {
+          return false;
+        }
+      },
+      probeGitDir: (dir) => readGitHead(dir),
+    });
+  } catch (err) {
+    log.warn('find live linked worktree failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }

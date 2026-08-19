@@ -170,7 +170,10 @@ import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/backgro
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { useWorktreeCreation, worktreeCreationStore } from '@/lib/worktreeCreationStore';
-import { useWorktreeForSession } from '@/contexts/WorktreeContext';
+import {
+  formatWorktreeChipText,
+  useTaskInfoWorktree,
+} from '@/features/cc-agent/sidebar/sessionWorktreeInfo';
 import {
   getSessionRouteOwnerId,
   isOrcaLeadSession,
@@ -787,7 +790,16 @@ export function CCAgentSessionView({
   // worktree meta:当前 session 跑在某个 worktree 里时返回 { baseRepo, name, branch, path };
   // 否则 null。workingDir chip 用这个把显示从单一 "feat-button-ui" 升级成
   // "xdt-maker (feat-button-ui)",一眼看出这是 baseRepo xdt-maker 上的 worktree。
-  const worktreeMeta = useWorktreeForSession(sessionId);
+  const liveWorktree = useTaskInfoWorktree(
+    session ?? {
+      id: sessionId ?? '',
+      workingDir: null,
+      worktreePath: null,
+      deviceLinkDeviceId: undefined,
+      remoteHostId: undefined,
+    },
+    Boolean(session),
+  );
 
   // Fetch fresh session data from server whenever sessionId changes.
   useEffect(() => {
@@ -1475,15 +1487,7 @@ export function CCAgentSessionView({
       log.error('recover persisted deferred Worker assignment after session mount failed', err);
       toast.error(t('newChat.collaboration.assignmentFailed'));
     });
-  }, [
-    historyLoaded,
-    isOrcaLeadSessionView,
-    messages,
-    remoteConn,
-    remoteDeviceId,
-    sessionId,
-    t,
-  ]);
+  }, [historyLoaded, isOrcaLeadSessionView, messages, remoteConn, remoteDeviceId, sessionId, t]);
   useEffect(() => {
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type !== 'command') return false;
@@ -2591,9 +2595,8 @@ export function CCAgentSessionView({
     ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
       const agentKind = dbToMakerAgentKind(session?.agentKind);
-      const leading = !slashMatch && agentKind === 'pi'
-        ? leadingSlashInvocation(message)
-        : undefined;
+      const leading =
+        !slashMatch && agentKind === 'pi' ? leadingSlashInvocation(message) : undefined;
       if (!slashMatch && !leading) return { handled: false, accepted: false, message };
       const cmdName = (slashMatch?.[1] ?? leading!.name).toLowerCase();
       const args = slashMatch?.[2] ?? '';
@@ -3557,8 +3560,7 @@ export function CCAgentSessionView({
                   continueAsSingleSession: true,
                 }),
               ),
-            onAssignmentUnconfirmed: () =>
-              toast.error(t('newChat.collaboration.assignmentFailed')),
+            onAssignmentUnconfirmed: () => toast.error(t('newChat.collaboration.assignmentFailed')),
           });
           if (remoteCollab.ok) {
             deferredUiAssignment = remoteCollab.deferredUiAssignment;
@@ -3726,8 +3728,7 @@ export function CCAgentSessionView({
                   continueAsSingleSession: true,
                 }),
               ),
-            onAssignmentUnconfirmed: () =>
-              toast.error(t('newChat.collaboration.assignmentFailed')),
+            onAssignmentUnconfirmed: () => toast.error(t('newChat.collaboration.assignmentFailed')),
           });
           if (remoteCollab.ok) {
             deferredUiAssignment = remoteCollab.deferredUiAssignment;
@@ -3840,8 +3841,8 @@ export function CCAgentSessionView({
     ? '\u00A0'
     : session.workspaceKind === 'dialogue'
       ? `${t('ccAgent.layout.dialogueLabel')} ${basename(session.workingDir).slice(0, 8)}`
-      : worktreeMeta
-        ? `${basename(worktreeMeta.baseRepo)} (${worktreeMeta.name})`
+      : liveWorktree
+        ? formatWorktreeChipText(liveWorktree)
         : basename(session.workingDir);
   const workingDirChipContent = (
     <>
@@ -3850,10 +3851,8 @@ export function CCAgentSessionView({
           "<dialogueLabel> <first-8-chars>" so the chip carries
           semantic meaning while keeping inter-session distinguishability.
           Full path stays in the hover tip.
-          Worktree-mode: 走 baseRepo basename + worktree name 的两段式
-          "xdt-maker (feat-button-ui)" —— 单段 basename 只显示 worktree
-          名字,看不出是哪个 repo 的 worktree;两段式让用户一眼定位到 repo,
-          括号里再补 worktree 标识。完整 worktree 绝对路径仍在 hover tip 里。 */}
+          Worktree-mode: 官方与识别出的非官方都走 repo (worktree) 两段式,
+          例如 "cindy (steady-goodall)"。完整路径仍在 hover tip 里。 */}
       <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
         {workingDirLabel}
       </span>
@@ -4348,15 +4347,16 @@ export function CCAgentSessionView({
               agent 区分 pending)。内部会订阅 ccMgrUpgradeStore, 该 host 无 pending
               时自渲染 null (零开销)。sessionId 传给 banner 用于 U3 — 升级完成后
               自动重发该 session 的 last user message。 */}
-            {(session?.agentKind === 'cc' || session?.agentKind === 'pi') && session?.remoteHostId && (
-              <UpgradeBanner
-                hostId={session.remoteHostId}
-                agent={session.agentKind === 'pi' ? 'pi' : 'cc'}
-                sessionId={session.id}
-                style={{ width: inputWidth }}
-                className="py-1"
-              />
-            )}
+            {(session?.agentKind === 'cc' || session?.agentKind === 'pi') &&
+              session?.remoteHostId && (
+                <UpgradeBanner
+                  hostId={session.remoteHostId}
+                  agent={session.agentKind === 'pi' ? 'pi' : 'cc'}
+                  sessionId={session.id}
+                  style={{ width: inputWidth }}
+                  className="py-1"
+                />
+              )}
 
             {/* 零可用模型引导条:与首屏引导卡共享判定与 dismiss(useProviderOnboarding),
               组件自判 visible、不可见渲染 null。device-link 远程会话不出——连接态在被控端。 */}
@@ -4761,9 +4761,7 @@ export function CCAgentSessionView({
           {!isMac &&
             (ownsRoute || showRsbToggle) &&
             rightSidebarCollapsed &&
-            rightSidebarSide === 'right' && (
-              <div aria-hidden className="h-7 w-7 shrink-0" />
-            )}
+            rightSidebarSide === 'right' && <div aria-hidden className="h-7 w-7 shrink-0" />}
         </TopRightChipStack>
       </section>
     </>

@@ -7625,6 +7625,7 @@
       "taskInfo": {
         "time": "时间",
         "pr": "PR 状态",
+        "worktree": "worktree",
         "tokens": "Token",
         "cost": "费用"
       },

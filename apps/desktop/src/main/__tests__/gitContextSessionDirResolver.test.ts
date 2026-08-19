@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import type { GitHeadInfo } from '../git-context/headReader';
 import {
   extractDirCandidate,
+  findLiveLinkedWorktree,
   posixDriveToWin32,
   resolveSessionGitDir,
   type ResolveSessionGitDirDeps,
@@ -186,5 +187,34 @@ describe('resolveSessionGitDir', () => {
       deps({ contents: [], gitDirs: {} }),
     );
     expect(res).toEqual({ workdir: null, head: null, source: null });
+  });
+});
+
+describe('findLiveLinkedWorktree', () => {
+  it('skips the latest main checkout and keeps an older live linked worktree', async () => {
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/main' }),
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' }),
+      ],
+      isInsideWorktree: async (dir) => dir === path.resolve('/Users/x/wt-a'),
+      probeGitDir: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? branchHead('feat/a') : branchHead('main'),
+    });
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-a'),
+      branch: 'feat/a',
+    });
+  });
+
+  it('clears the candidate when every telemetry worktree is gone', async () => {
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-gone' }),
+      ],
+      isInsideWorktree: async () => false,
+      probeGitDir: async () => null,
+    });
+    expect(res).toBeNull();
   });
 });

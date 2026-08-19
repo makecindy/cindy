@@ -3964,6 +3964,10 @@ interface ElectronAPI {
       worktreePath: string | null;
       remoteHostId?: string | null;
     }) => Promise<import('@/lib/gitContext.types').SessionGitDirResult>;
+    findLinkedWorktree: (input: { sessionId: string }) => Promise<{
+      workdir: string;
+      branch: string | null;
+    } | null>;
     watch: (workdir: string) => Promise<void>;
     unwatch: (workdir: string) => Promise<void>;
     listPrRefs: (sessionId: string) => Promise<import('@/lib/gitContext.types').SessionPrRef[]>;

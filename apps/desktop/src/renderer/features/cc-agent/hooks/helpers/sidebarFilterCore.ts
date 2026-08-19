@@ -76,9 +76,9 @@ export function nextSortByAfterGroupByChange(
 }
 /**
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
- * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里四个选项的排列另有固定顺序。
+ * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -499,6 +499,7 @@ export function persistSortBy(sortBy: FilterSortBy): void {
 const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'time',
   'pr',
+  'worktree',
   'tokens',
   'cost',
 ]);
