@@ -78,6 +78,7 @@ import {
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
+import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
@@ -382,6 +383,21 @@ export function SessionContentHeader({
 
   /* ---- 导出会话(.cshare)---- 弹窗仅打开时挂载,与 SessionItem 同款。 */
   const [shareExportOpen, setShareExportOpen] = useState(false);
+  const [branchTreeOpen, setBranchTreeOpen] = useState(false);
+  const allKnownSessions = useMemo(
+    () => [...sessions, ...remoteProjectSessions],
+    [remoteProjectSessions, sessions],
+  );
+  const hasSessionFamily = useMemo(
+    () =>
+      allKnownSessions.some(
+        (item) => item.parentSessionId === session.id || item.id === session.parentSessionId,
+      ),
+    [allKnownSessions, session.id, session.parentSessionId],
+  );
+  // 只给 Cindy 任务分叉家族保留入口。Pi 原生 branch tree 不再单凭 agentKind=pi 露出,
+  // 避免普通 Pi 任务把 overflow 撑长；有父子任务时仍可打开统一树。
+  const canShowBranchTree = !isEmpty && hasSessionFamily;
 
   /* ---- Archive / Delete / Unarchive ----
    * 执行序列共用 useSessionLifecycleActions（与 CCAgentSidebarUpper 同一实现）；
@@ -589,8 +605,8 @@ export function SessionContentHeader({
                 - Draft：Rename / Copy ‖ Delete
                 - 标准：Pin↔Unpin / Rename / [移动到项目 ▸] ‖ Copy / 新窗口打开 /
                   [导出会话] ‖ Archive / Delete
-                Pi 专属入口（任务分支 / 导出 HTML / 压缩上下文）暂不进 overflow 菜单。
-                压缩仍走对话区 context ring；分支树与 HTML 导出保留后端能力。 */}
+                Pi 专属入口（导出 HTML / 压缩上下文）暂不进 overflow 菜单。
+                压缩仍走对话区 context ring。任务分支只在存在 Cindy 分叉家族时显示。 */}
             {isArchived ? (
               <>
                 <DropdownMenuItem
@@ -621,6 +637,14 @@ export function SessionContentHeader({
                 >
                   {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
                 </DropdownMenuItem>
+                {canShowBranchTree && (
+                  <DropdownMenuItem
+                    onSelect={() => setBranchTreeOpen(true)}
+                    className={MENU_ITEM_CLASS}
+                  >
+                    {t('ccAgent.sidebar.sessionMenu.sessionBranches')}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -716,6 +740,14 @@ export function SessionContentHeader({
                 >
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
+                {canShowBranchTree && (
+                  <DropdownMenuItem
+                    onSelect={() => setBranchTreeOpen(true)}
+                    className={MENU_ITEM_CLASS}
+                  >
+                    {t('ccAgent.sidebar.sessionMenu.sessionBranches')}
+                  </DropdownMenuItem>
+                )}
                 {canExportShare && (
                   <DropdownMenuItem
                     onSelect={() => setShareExportOpen(true)}
@@ -754,6 +786,16 @@ export function SessionContentHeader({
           open={shareExportOpen}
           sessionId={session.id}
           onOpenChange={setShareExportOpen}
+        />
+      )}
+      {branchTreeOpen && (
+        <SessionBranchTreeDialog
+          open={branchTreeOpen}
+          onOpenChange={setBranchTreeOpen}
+          session={session}
+          sessions={allKnownSessions}
+          running={runningSessionIds.has(session.id)}
+          writeBlocked={remoteWritesBlocked}
         />
       )}
     </div>
