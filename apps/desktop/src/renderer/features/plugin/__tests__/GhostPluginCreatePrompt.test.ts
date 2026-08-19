@@ -24,6 +24,7 @@ describe('Ghost Plugin creation prompt', () => {
     expect(prompt).toContain('先从提问开始');
     expect(prompt.indexOf('ghost_forge_guide')).toBeGreaterThanOrEqual(0);
     expect(prompt.indexOf('ghost_forge_guide')).toBeLessThan(prompt.indexOf('ghost_forge_pack'));
+    expect(prompt).toContain('卡槽总览、沙箱红线与打包流程三章');
     expect(prompt).toContain('打包并安装插件');
   });
 
@@ -39,5 +40,13 @@ describe('Ghost Plugin creation prompt', () => {
     // 面板收束(2026-08-02):tab 形态住在插件页内,不再是右侧栏页签。
     expect(prompt).toContain('插件页内面板');
     expect(prompt).not.toContain('右侧栏页签');
+    // 与 §0 七类"隐藏"设计选项保持同步:后台能力 / 运行形态(node 槽)/ 媒体
+    // 能力三类曾长期缺席,导致提问阶段就把这些能力漏掉(2026-08-19 补齐)。
+    expect(prompt).toContain('后台能力');
+    expect(prompt).toContain('未读角标');
+    expect(prompt).toContain('随包 Node 进程');
+    expect(prompt).toContain('媒体能力');
+    // 必读章节含 §2 卡槽总览:18 个槽的全局视野是"按需读相关章节"的前提。
+    expect(prompt).toContain('卡槽总览');
   });
 });

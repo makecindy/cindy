@@ -1661,6 +1661,13 @@ describe('FORGE_GUIDE', () => {
       '发布到官方插件仓的额外门禁',
       'makecindy/cindy-official-plugins',
       '四语言 locale 缺一不可',
+      // 2026-08-19 范例与源码指引:§1 补官方插件仓 URL(真实完整范例)与
+      // 主仓地址(插件基座,apps/desktop/src/main/cindy-brain/),并写死边界
+      // ——API 契约一律以手册为准,main 分支可能与用户安装版本不一致。
+      'github.com/makecindy/cindy-official-plugins',
+      'apps/desktop/src/main/cindy-brain/',
+      'API 契约一律以本手册为准',
+      'github.com/makecindy/cindy',
       // 2026-07-29 寄存通道(#784):§2 的 media 类目 + §4.0.1 章节,
       // 以及 §6 沙箱红线里"改图只认名下媒体"的口径更新。
       "kind: 'deposit_media'",
