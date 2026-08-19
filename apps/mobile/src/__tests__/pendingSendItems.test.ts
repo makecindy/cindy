@@ -206,7 +206,7 @@ describe('pending_send 渲染接线', () => {
     const bubbleSource = readFileSync(
       resolvePath(process.cwd(), 'src/session/PendingSendBubble.tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     expect(bubbleSource).toContain('<SentInlineAtomBody');
     expect(bubbleSource).toContain('interactiveAtoms={false}');
     expect(bubbleSource).toContain('maxVisibleLines={selected ? undefined : 6}');
