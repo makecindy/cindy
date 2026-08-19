@@ -217,6 +217,33 @@ describe('selectVisibleModels — excludeSubscriptionDirect(SSH 远程保留但�
     });
     expect(ids(out)).toEqual(['chatgpt/gpt-5.5', 'claude-opus-4-8', 'xai/grok-4.3', 'gpt-5.5']);
   });
+
+  it('SSH Pi 隐藏仅本地可改写的 OpenAI [1m] profile,普通订阅模型仍保留', () => {
+    const out = selectVisibleModels({
+      agentKind: 'pi',
+      deviceId: undefined,
+      providers: [provider('openai', 'pi', [
+        'chatgpt/gpt-5.6-sol',
+        'chatgpt/gpt-5.6-sol[1m]',
+        'gateway-model',
+      ])],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      excludeSubscriptionDirect: true,
+    });
+    expect(ids(out)).toEqual(['chatgpt/gpt-5.6-sol', 'gateway-model']);
+  });
+
+  it('本地 Pi 保留 OpenAI [1m] profile', () => {
+    const out = selectVisibleModels({
+      agentKind: 'pi',
+      deviceId: undefined,
+      providers: [provider('openai', 'pi', ['chatgpt/gpt-5.6-sol[1m]'])],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+    });
+    expect(ids(out)).toEqual(['chatgpt/gpt-5.6-sol[1m]']);
+  });
 });
 
 describe('selectVisibleModels — excludeChatBridgedCodex(SSH 远程隐藏 Chat 桥接的 Codex 供应商)', () => {

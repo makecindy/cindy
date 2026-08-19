@@ -21,10 +21,11 @@
  */
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { CircleCheck, CircleDot, Circle } from 'lucide-react';
+import { CircleCheck, CircleDot, Circle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -102,6 +103,7 @@ export function TodoListCard({
   todos,
   animated = false,
   maxWidth,
+  onDismiss,
 }: {
   todos: TodoItem[];
   /**
@@ -112,6 +114,8 @@ export function TodoListCard({
   animated?: boolean;
   /** Composer/chat column width. Keeps the flyout inside clipped compact panes. */
   maxWidth?: number;
+  /** Hide the current rendered snapshot without mutating the agent's plan state. */
+  onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
   const flyoutId = useId();
@@ -243,7 +247,7 @@ export function TodoListCard({
             <div
               aria-hidden={!revealed}
               className={cn(
-                'w-full origin-bottom overflow-hidden rounded-[12px]',
+                'relative w-full origin-bottom overflow-hidden rounded-[12px]',
                 'border border-[var(--msg-tool-card-border)]',
                 'bg-[var(--msg-tool-card-bg)]',
                 revealed ? 'animate-float-in' : 'animate-float-out',
@@ -252,7 +256,30 @@ export function TodoListCard({
                 if (!revealed) setRenderFlyout(false);
               }}
             >
-              <div className="flex max-h-[280px] flex-col gap-[2px] overflow-y-auto px-[14px] py-[10px]">
+              {onDismiss && revealed && (
+                <Tip text={t('chat.planPill.dismiss')}>
+                  <button
+                    type="button"
+                    onClick={onDismiss}
+                    aria-label={t('chat.planPill.dismiss')}
+                    className={cn(
+                      'absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full',
+                      'text-[var(--msg-tool-card-chevron)] transition-colors',
+                      'hover:bg-[var(--model-item-hover)] hover:text-[var(--msg-tool-card-text)]',
+                      'active:scale-[0.98]',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    )}
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </Tip>
+              )}
+              <div
+                className={cn(
+                  'flex max-h-[280px] flex-col gap-[2px] overflow-y-auto py-[10px] pl-[14px]',
+                  onDismiss ? 'pr-10' : 'pr-[14px]',
+                )}
+              >
                 {todos.map((todo, i) => (
                   <div key={i} className="flex h-[30px] items-center gap-[10px]">
                       {/* Icon */}

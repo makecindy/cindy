@@ -53,6 +53,7 @@ import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
 
@@ -1443,7 +1444,7 @@ export function onAssistantTextEvent(
   data: { text?: unknown; isFinal?: unknown; isFullText?: unknown },
   agentMeta: AgentMeta | null,
 ): string | undefined {
-  const text = typeof data.text === 'string' ? data.text : '';
+  const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;
 
@@ -1456,37 +1457,38 @@ export function onAssistantTextEvent(
       // 消息中相邻 text block 互相覆盖。
       if (
         isFullText ||
-        (text.length > block.text.length && text.startsWith(block.text))
+        (rawText.length > block.text.length && rawText.startsWith(block.text))
       ) {
-        block.text = text;
+        block.text = rawText;
       }
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
     }
     // 非流式 isFinal burst(result 兜底补推也走这):无在飞 block,立即落库。
-    if (text) {
+    const visible = stripInternalWebCitations(rawText);
+    if (visible) {
       // DUP-SKIP(对齐 renderer 老 757-762):若紧邻的上一条已落库消息正是内容完全
       // 相同的 assistant(典型:重复 isFinal / block flush 后又来同内容补推),复用其
       // persistId、不再 create,把重复行挡在 main 落库层。中间夹过别的消息则 last.role
       // 不是 assistant,不会误删合法的相同文本回复。
       const last = lastPersistedMsgBySession.get(sessionId);
-      if (last && last.role === 'assistant' && last.text === text) {
+      if (last && last.role === 'assistant' && last.text === visible) {
         return last.persistId;
       }
       const persistId = createId();
-      enqueuePersistAssistant(sessionId, persistId, text, agentMeta, Date.now());
+      enqueuePersistAssistant(sessionId, persistId, visible, agentMeta, Date.now());
       return persistId;
     }
     return undefined;
   }
 
-  // delta
+  // delta: accumulate the raw snapshot; strip only the completed block.
   let block = assistantBlocks.get(sessionId);
   if (!block) {
-    block = { persistId: createId(), text, agentMeta, createdAt: Date.now() };
+    block = { persistId: createId(), text: rawText, agentMeta, createdAt: Date.now() };
     assistantBlocks.set(sessionId, block);
   } else {
-    block.text += text;
+    block.text += rawText;
     if (agentMeta) block.agentMeta = agentMeta;
   }
   return block.persistId;
@@ -1507,11 +1509,12 @@ export function flushAssistantBlock(
   const block = assistantBlocks.get(sessionId);
   if (!block) return;
   assistantBlocks.delete(sessionId);
-  if (!block.text) return;
+  const visible = stripInternalWebCitations(block.text);
+  if (!visible) return;
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  enqueuePersistAssistant(sessionId, block.persistId, block.text, meta, block.createdAt);
+  enqueuePersistAssistant(sessionId, block.persistId, visible, meta, block.createdAt);
 }
 
 /**

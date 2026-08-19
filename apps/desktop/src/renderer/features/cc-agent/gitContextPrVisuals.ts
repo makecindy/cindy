@@ -49,3 +49,52 @@ export const PR_STATUS_COLOR: Record<PrStatusKind, string> = {
   merged: 'var(--focus-ring)',
   closed: 'var(--error-fg)',
 };
+
+/** 侧栏任务行 PR icon 所在表面:跟实际底色走,不跟主题名走。 */
+export type PrIconSurface = 'light' | 'dark';
+
+/** 从 `H S% L%` / `H S% L% / A` 取 L(0–100)。解析不了返回 null。 */
+export function hslTripletLightness(raw: string): number | null {
+  const parsed = raw.trim().match(/(-?[\d.]+)\s+(-?[\d.]+)%\s+(-?[\d.]+)%/);
+  if (!parsed) return null;
+  const lightness = Number(parsed[3]);
+  return Number.isFinite(lightness) ? lightness : null;
+}
+
+/**
+ * 侧栏 open 绿按表面取,不跟当前主题名走(2026-08-17 用户选 B):
+ *   浅表面 → `--pr-open-on-light` `#2EA043`
+ *   深表面 → `--pr-open-on-dark` `#3FB950`
+ * 选中胶囊是否反相因主题而异(Cindy 反相,社区/导入主题多半不反相),
+ * 所以优先用实际背景的 HSL L%;读不到时才退回 Cindy 反相假设。
+ * 顶栏 GitContextBadge / hover tooltip 仍用 PR_STATUS_COLOR(主题 `--diff-add-fg`)。
+ */
+export function prIconSurface(opts: {
+  themeIsDark: boolean;
+  isActive: boolean;
+  /** 实际行底 `--sidebar` / `--sidebar-item-active` 的 L%。 */
+  backgroundLightness?: number | null;
+}): PrIconSurface {
+  if (opts.backgroundLightness != null && Number.isFinite(opts.backgroundLightness)) {
+    return opts.backgroundLightness >= 50 ? 'light' : 'dark';
+  }
+  if (opts.isActive) return opts.themeIsDark ? 'light' : 'dark';
+  return opts.themeIsDark ? 'dark' : 'light';
+}
+
+export function prStatusIconColor(kind: PrStatusKind | null, surface: PrIconSurface): string {
+  if (kind === 'open') {
+    return surface === 'light' ? 'var(--pr-open-on-light)' : 'var(--pr-open-on-dark)';
+  }
+  if (kind) return PR_STATUS_COLOR[kind];
+  return 'var(--text-tertiary)';
+}
+
+/** open / draft 且有未解决 review thread 才打角点;merged / closed 当历史噪声。 */
+export function shouldShowPrUnresolvedDot(
+  kind: PrStatusKind | null,
+  unresolvedCount: number | null | undefined,
+): boolean {
+  if (!unresolvedCount || unresolvedCount <= 0) return false;
+  return kind === 'open' || kind === 'draft';
+}

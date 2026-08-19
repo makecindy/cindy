@@ -44,14 +44,17 @@ export function storedCustomProviderId(providerId: string): string {
 /**
  * 自定义模型的默认 effort 档位（「参考默认设置」）——与内置当代旗舰模型对齐：
  *   - claude-code：low/medium/high/xhigh/max（同 opus / fable）；
- *   - codex：low/medium/high/xhigh（同 gpt-5.x）。
+ *   - codex：low/medium/high/xhigh/max（gpt-5.x 同款五档，ultra 仍仅限已登记模型）。
  * 让自定义模型像内置模型一样能在选择器里切 reasoning/thinking 强度（默认 high）。
  * 端点是否真支持由其后端决定：cc 经 `thinking`、codex 经 reasoning effort 透传，
  * anthropic-compat-proxy 仅对个别内置 model id strip 字段、对自定义 id 一律字节透传。
+ * 未登记模型（Registry 无法确认能力）也放开到 max：第三方 Responses 兼容端点普遍
+ * 接受与否只有端点方/用户知道，选到不支持的档位会被上游拒绝，用户改选即可；
+ * 默认档保持 high，存量行为不变（见 #2964）。
  */
 const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
   'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['low', 'medium', 'high', 'xhigh'],
+  codex: ['low', 'medium', 'high', 'xhigh', 'max'],
 };
 /** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
 const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
@@ -151,11 +154,7 @@ function toCatalogModel(
 }
 
 function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
-  // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
-  // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
-  // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
   if (agent === 'claude-code') return 'anthropic-messages';
-  if (agent === 'pi') return 'openai-chat';
   return 'openai-responses';
 }
 
@@ -180,7 +179,9 @@ function toRouting(
       ? { disabled: true }
       : {}),
     ...(requestPath ? { requestPath } : {}),
-    ...(wireProtocol && wireProtocol !== defaultWireProtocol(agent) ? { wireProtocol } : {}),
+    ...(wireProtocol && (agent === 'pi' || wireProtocol !== defaultWireProtocol(agent))
+      ? { wireProtocol }
+      : {}),
   };
   if (headers && Object.keys(headers).length > 0) {
     r.headerOverride = { ...headers };

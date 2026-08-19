@@ -404,6 +404,22 @@ export function requestAgentIslandManualExpand(state: AgentIslandState, displayI
   return changed;
 }
 
+export function requestAgentIslandManualCollapse(state: AgentIslandState, now: number): boolean {
+  if (state.layoutDragActive) return false;
+  const changed = state.hoverExpanded
+    || state.hoverIntentAt !== null
+    || state.collapseAt !== null
+    || state.protectedDismissPending;
+  state.hoverIntentAt = null;
+  state.hoverExpanded = false;
+  state.collapseAt = null;
+  state.protectedDismissPending = false;
+  state.hoverCooldownUntil = now + AGENT_ISLAND_HOVER_SHORT_COOLDOWN_MS;
+  // Keep current pointer-zone flags. Hover expand only re-arms after leave+re-enter,
+  // so clicking the original compact position does not immediately pop the island open again.
+  return changed;
+}
+
 export function applyAgentIslandMetadata(
   state: AgentIslandState,
   meta: AgentIslandSessionMeta,
@@ -438,7 +454,7 @@ export function applyAgentIslandUserPrompt(
   if (!text) return false;
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
-  markSessionRunning(state, session);
+  markSessionRunning(state, session, now);
   session.phase = 'running';
   session.interactionKind = undefined;
   session.detail = '';
@@ -518,7 +534,7 @@ export function applyAgentIslandEvent(
     const isRunning = data?.isRunning;
     const status = typeof data?.status === 'string' ? data.status : null;
     if (isRunning === true) {
-      markSessionRunning(state, session);
+      markSessionRunning(state, session, now);
       if (session.pendingInteractionIds.size === 0) {
         session.phase = 'running';
         session.interactionKind = undefined;
@@ -556,7 +572,7 @@ export function applyAgentIslandEvent(
     const toolDescription = toolName
       ? formatIslandToolDetail(toolName, toolInput, { wording: state.toolWording }, data ?? undefined)
       : firstNonEmptyString(data?.description, data?.toolDescription);
-    markSessionRunning(state, session);
+    markSessionRunning(state, session, now);
     if (toolUseId) {
       dismissPendingInteraction(state, session, toolUseId, now, { requirePending: true });
     }
@@ -669,7 +685,7 @@ export function applyAgentIslandInteractionRequest(
   session.pendingInteractionIds.add(request.requestId);
   session.pendingInteractionKinds.set(request.requestId, request.kind);
   session.pendingInteractionDetails.set(request.requestId, detailForInteraction(request, state.toolWording));
-  session.running = true;
+  markSessionRunning(state, session, now);
   session.completionAllowedAfterTerminalError = false;
   const activateRequest = request.kind !== 'permission' || session.permissionRequestId === null;
   if (request.kind === 'permission') {
@@ -1235,7 +1251,12 @@ function updateFocusVerificationLifecycle(state: AgentIslandState, now: number):
   state.pendingFocusUntil = null;
 }
 
-function markSessionRunning(state: AgentIslandState, session: AgentIslandSessionState): void {
+function markSessionRunning(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  now: number,
+): void {
+  if (!session.running) session.startedAt = now;
   session.running = true;
   session.completedUntil = null;
   session.errorUntil = null;

@@ -2780,6 +2780,42 @@ describe('ghost · network 详单校验', () => {
     }
   });
 
+  it('ghostExternalLinkUrls 同时聚合 network secret 与 node secret binding 地址', () => {
+    const parsed = validateGhostManifest({
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'network', 'node'],
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            ...goodSecret(),
+            url: 'https://network.example.com/settings/keys',
+          },
+        ],
+      },
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'worker_token',
+            label: 'Worker Token',
+            methods: ['worker/run'],
+            url: 'https://node.example.com/settings/keys',
+          },
+        ],
+      },
+    });
+
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    if (!parsed.ok) return;
+    expect(ghostExternalLinkUrls(parsed.manifest)).toEqual([
+      'https://network.example.com/settings/keys',
+      'https://node.example.com/settings/keys',
+    ]);
+  });
+
   it('secrets.source:login-email 收入清单;user 归一化省略;野值拒;login-email 带 url 拒', () => {
     const withSource = (secret: Record<string, unknown>) =>
       validateGhostManifest(withNet({ hosts: ['api.example.com'], secrets: [secret] }));

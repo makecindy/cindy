@@ -64,6 +64,21 @@ describe('PluginManagementLayout', () => {
     });
   });
 
+  it('keeps Plugins / Skills inside Settings when onSelectTab is provided', () => {
+    const onSelectTab = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=ghosts']}>
+        <PluginManagementLayout activeTab="plugins" embedded onSelectTab={onSelectTab}>
+          <CurrentPath />
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
+    expect(onSelectTab).toHaveBeenCalledWith('skills');
+    expect(screen.getByTestId('current-path').textContent).toBe('/settings');
+  });
+
   it('keeps the Plugin sidebar view active for a direct Skill deep link', () => {
     render(
       <MemoryRouter initialEntries={['/skillhub/local/skill/global/example']}>

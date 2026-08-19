@@ -52,11 +52,11 @@ export interface GhostPluginListItem {
 }
 
 /**
- * 卡片主动作的四分法:
+ * 卡片主动作的四分法(只驱动右下角胶囊;整卡点击一律进详情):
  * - `panel`:有页签面板 → 「使用」直接打开面板;
  * - `command`:只有 $指令 → 「对话」把指令插进输入框起话题;
  * - `capability`:Host 承载的能力 → 「对话」进入该能力的工作流;
- * - `manage`:纯工具型(Agent 对话中自动调用)→ 无主按钮,点卡片进管理页。
+ * - `manage`:纯工具型(Agent 对话中自动调用)→ 无主按钮。
  * 停靠形态(left/right)的面板由布局树承载,不算 panel 主动作。
  */
 export type GhostPrimaryAction = 'panel' | 'command' | 'capability' | 'manage';

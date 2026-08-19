@@ -65,6 +65,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children: ReactNode }) => children,
   Tooltip: {
     Provider: ({ children }: { children: ReactNode }) => children,
     Root: ({ children }: { children: ReactNode }) => children,
@@ -333,7 +334,9 @@ describe('SessionCard visual cases', () => {
       );
 
       const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
-      const title = within(card!).getByText(visualCase.session.title);
+      const title = within(card!).getByText(visualCase.session.title, {
+        selector: variant === 'list' ? '.sidebar-title-marquee__ellipsis' : undefined,
+      });
       const actionButton = card?.querySelector<HTMLButtonElement>(
         'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
       );
@@ -419,9 +422,7 @@ describe('SessionCard visual cases', () => {
 
   it('uses the unified Timer for automation cases without a bound schedule', () => {
     renderCase('automation-timer');
-    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBe(
-      '由自动化创建',
-    );
+    expect(screen.getByRole('button', { name: '查看自动化任务' }).getAttribute('title')).toBeNull();
     expect(
       screen.getByRole('button', { name: '查看自动化任务' }).querySelector('.lucide-timer'),
     ).not.toBeNull();
@@ -658,6 +659,7 @@ describe('SessionCard visual cases', () => {
       expect(action.className).toContain('size-5');
       expect(action.className).toContain('rounded-md');
       expect(action.className).toContain('text-sidebar-action-icon');
+      expect(action.className).not.toMatch(/(?:^|\s)bg-sidebar(?:\s|$)/);
       expect(action.className).not.toContain('size-6');
       expect(action.className).not.toContain('bg-[var(--cmd-palette-bg)]');
       expect(action.className).not.toContain('border-sidebar-border');
@@ -677,6 +679,7 @@ describe('SessionCard visual cases', () => {
       name: moreActionsName,
     });
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
+    expect(activeListMore.className).not.toContain('bg-sidebar-item-active');
     expect(activeListMore.className).toContain(
       'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
     );

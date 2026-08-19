@@ -37,6 +37,14 @@
     "checkFailedDetail": "업데이트 확인에 실패했습니다: {{detail}}",
     "checkFailed": "업데이트 확인에 실패했습니다. 잠시 후 다시 시도해 주세요."
   },
+  "betaChannel": {
+    "title": "베타 채널",
+    "description": "베타 채널에 참여하면 출시 예정인 클라이언트 업데이트를 먼저 받을 수 있습니다.",
+    "restartHint": "베타 채널은 앱을 재시작해야 적용됩니다. 앱을 다시 시작해 주세요.",
+    "ok": "확인",
+    "saveFailed": "베타 채널 설정 저장 실패",
+    "unavailable": "베타 채널을 사용할 수 없습니다. 베타 업데이트 서버에 연결할 수 없습니다."
+  },
   "notifications": {
     "sectionTitle": "알림",
     "taskDone": "작업 완료 알림",

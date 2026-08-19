@@ -119,9 +119,7 @@ export function WindowControls({
     }
   };
 
-  const selectWindowsCloseBehavior = async (
-    behavior: WindowsCloseBehavior,
-  ): Promise<void> => {
+  const selectWindowsCloseBehavior = async (behavior: WindowsCloseBehavior): Promise<void> => {
     if (savingWindowsCloseBehaviorRef.current) return;
     savingWindowsCloseBehaviorRef.current = true;
     setSavingWindowsCloseBehavior(true);
@@ -188,6 +186,7 @@ export function WindowControls({
             className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
             onClick={handleMinimizeClick}
             aria-label={t('titleBar.minimize')}
+            data-tooltip-exempt="windows-system-control"
           >
             <Minus size={14} />
           </button>
@@ -195,18 +194,38 @@ export function WindowControls({
         <button
           className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
           onClick={() => window.electronAPI.windowMaximize()}
-          aria-label={t('titleBar.maximize')}
+          aria-label={t('titleBar.maximizeOrRestore')}
+          data-tooltip-exempt="windows-system-control"
         >
           <Square size={14} />
         </button>
-        <button
-          className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
-          onClick={() => void handleCloseClick()}
-          aria-label={t('titleBar.close')}
-          disabled={closing}
-        >
-          <X size={14} />
-        </button>
+        {closing ? (
+          <span
+            role="button"
+            aria-disabled="true"
+            aria-label={t('titleBar.closing.title')}
+            tabIndex={0}
+            data-tooltip-exempt="windows-system-control"
+            className="inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            <button
+              className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+              aria-hidden="true"
+              disabled
+            >
+              <X size={14} />
+            </button>
+          </span>
+        ) : (
+          <button
+            className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+            onClick={() => void handleCloseClick()}
+            aria-label={t('titleBar.close')}
+            data-tooltip-exempt="windows-system-control"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
       <ConfirmDialog
         open={showWindowsCloseBehaviorDialog}
@@ -277,9 +296,7 @@ function ClosingOverlay({ visible }: { visible: boolean }) {
         style={{ background: 'var(--surface-elevated)' }}
       >
         <Spinner size={16} className="text-[var(--text-primary)]" />
-        <span className="text-sm text-[var(--text-primary)]">
-          {t('titleBar.closing.title')}
-        </span>
+        <span className="text-sm text-[var(--text-primary)]">{t('titleBar.closing.title')}</span>
       </div>
     </div>,
     document.body,

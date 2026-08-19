@@ -12,7 +12,7 @@
  * resume 路径、启动 RPC 也不会即时拒),控制流本身才是被测对象。
  */
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,11 +21,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const knobs = vi.hoisted(() => ({
   ctorThrows: false,
   getStateRejects: false,
+  getStateGate: null as Promise<void> | null,
+  closeRejects: false,
+  closeFailuresRemaining: 0,
+  closeGate: null as Promise<void> | null,
   closeCount: 0,
   onExit: null as null | ((info: { code: number | null; signal: string | null }) => void),
   onEvent: null as null | ((event: unknown) => void),
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
+  requests: [] as string[],
 }));
 
 vi.mock('../transport.js', () => ({
@@ -67,7 +72,10 @@ vi.mock('../rpc-client.js', () => ({
       knobs.onEvent = o?.onEvent ?? null;
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
+      knobs.requests.push(cmd.type);
       if (cmd.type === 'get_state') {
+        const gate = knobs.getStateGate;
+        if (gate) await gate;
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
@@ -77,6 +85,13 @@ vi.mock('../rpc-client.js', () => ({
     send(): void {}
     async close(): Promise<void> {
       knobs.closeCount++;
+      const gate = knobs.closeGate;
+      if (gate) await gate;
+      if (knobs.closeFailuresRemaining > 0) {
+        knobs.closeFailuresRemaining -= 1;
+        throw new Error('close unconfirmed (mock)');
+      }
+      if (knobs.closeRejects) throw new Error('close unconfirmed (mock)');
       this.isClosed = true;
     }
     get pid(): number { return 1234; }
@@ -104,11 +119,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   beforeEach(() => {
     knobs.ctorThrows = false;
     knobs.getStateRejects = false;
+    knobs.getStateGate = null;
+    knobs.closeRejects = false;
+    knobs.closeFailuresRemaining = 0;
+    knobs.closeGate = null;
     knobs.closeCount = 0;
     knobs.onExit = null;
     knobs.onEvent = null;
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
+    knobs.requests = [];
     disposed = 0;
     proxyDisposed = 0;
     preparedMcpContext = undefined;
@@ -246,6 +266,90 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
   });
 
+  it('quarantines a failed startup process until cleanup is confirmed', async () => {
+    knobs.getStateRejects = true;
+    knobs.closeRejects = true;
+    const agent = new PiAgent(buildDeps());
+
+    await expect(agent.startSession(opts())).rejects.toThrow(/cleanup remains unconfirmed/);
+    expect(knobs.spawnedEnvs).toHaveLength(1);
+    // Same business id cannot spawn while the old proc still fails cleanup.
+    await expect(agent.startSession(opts())).rejects.toThrow(/close unconfirmed/);
+    expect(knobs.spawnedEnvs).toHaveLength(1);
+
+    knobs.closeRejects = false;
+    knobs.getStateRejects = false;
+    const handle = await agent.startSession(opts());
+    expect(knobs.spawnedEnvs).toHaveLength(2);
+    await handle.close();
+  });
+
+  it('retries every quarantined startup process during dispose and remains idempotent', async () => {
+    knobs.getStateRejects = true;
+    knobs.closeRejects = true;
+    const agent = new PiAgent(buildDeps());
+
+    await expect(agent.startSession(opts())).rejects.toThrow(/cleanup remains unconfirmed/);
+    await expect(agent.startSession({ ...opts(), sessionId: 's2' })).rejects.toThrow(
+      /cleanup remains unconfirmed/,
+    );
+    expect(knobs.closeCount).toBe(2);
+
+    knobs.closeRejects = false;
+    await agent.dispose();
+    await agent.dispose();
+
+    expect(knobs.closeCount).toBe(4);
+  });
+
+  it('reclaims a startup cleanup entry registered after dispose begins', async () => {
+    let releaseGetState!: () => void;
+    knobs.getStateGate = new Promise<void>((resolve) => {
+      releaseGetState = resolve;
+    });
+    knobs.getStateRejects = true;
+    knobs.closeFailuresRemaining = 1;
+    const agent = new PiAgent(buildDeps());
+
+    const startup = agent.startSession(opts());
+    const startupFailure = expect(startup).rejects.toThrow(/cleanup remains unconfirmed/);
+    await vi.waitFor(() => expect(knobs.spawnedEnvs).toHaveLength(1));
+    const disposing = agent.dispose();
+    releaseGetState();
+
+    await startupFailure;
+    await disposing;
+    expect(knobs.closeCount).toBe(2);
+    await expect(agent.startSession(opts())).rejects.toThrow(/disposing/);
+  });
+
+  it('shares a late dispose cleanup and fences replacement startup', async () => {
+    knobs.getStateRejects = true;
+    knobs.closeRejects = true;
+    const agent = new PiAgent(buildDeps());
+
+    await expect(agent.startSession(opts())).rejects.toThrow(/cleanup remains unconfirmed/);
+    expect(knobs.spawnedEnvs).toHaveLength(1);
+
+    let releaseClose!: () => void;
+    knobs.closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    knobs.closeRejects = false;
+    const firstDispose = agent.dispose();
+    const secondDispose = agent.dispose();
+    await vi.waitFor(() => expect(knobs.closeCount).toBe(2));
+    await expect(agent.startSession(opts())).rejects.toThrow(/disposing/);
+    expect(knobs.spawnedEnvs).toHaveLength(1);
+
+    releaseClose();
+    await Promise.all([firstDispose, secondDispose]);
+    knobs.closeGate = null;
+
+    expect(knobs.spawnedEnvs).toHaveLength(1);
+    expect(knobs.closeCount).toBe(2);
+  });
+
   it('does not dispose ctx on the success path (dispose is deferred to close())', async () => {
     const agent = new PiAgent(buildDeps());
     const handle = await agent.startSession(opts());
@@ -264,6 +368,44 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(disposed).toBe(1); // close() 才注销
     expect(proxyDisposed).toBe(1);
+  });
+
+  it('graceful stop uses only the Pi abort RPC and keeps the process alive', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    knobs.onEvent?.({ type: 'message_start' });
+    knobs.requests = [];
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+    expect(knobs.requests).toEqual(['abort']);
+    expect(knobs.closeCount).toBe(0);
+
+    await handle.close();
+  });
+
+  it('keeps local runtime files until a close retry confirms process exit', async () => {
+    knobs.closeFailuresRemaining = 1;
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const env = knobs.spawnedEnvs[0]!;
+    const configHome = env.PI_CODING_AGENT_DIR!;
+    const permissionFile = env.CINDY_PI_PERMISSION_FILE!;
+    const subagentRuntimeFile = env.CINDY_PI_SUBAGENT_RUNTIME_FILE!;
+
+    expect(existsSync(configHome)).toBe(true);
+    expect(existsSync(permissionFile)).toBe(true);
+    expect(existsSync(subagentRuntimeFile)).toBe(true);
+
+    await expect(handle.close()).rejects.toThrow(/close unconfirmed/);
+    expect(existsSync(configHome)).toBe(true);
+    expect(existsSync(permissionFile)).toBe(true);
+    expect(existsSync(subagentRuntimeFile)).toBe(true);
+
+    await expect(handle.close()).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(existsSync(configHome)).toBe(false);
+      expect(existsSync(permissionFile)).toBe(false);
+      expect(existsSync(subagentRuntimeFile)).toBe(false);
+    });
+    expect(knobs.closeCount).toBe(2);
   });
 
   it('always disables project trust and implicit extensions while explicitly restoring only Cindy extensions', async () => {
@@ -527,7 +669,19 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       'rev-approved-only',
       [skillPath],
     ));
-    const agent = new PiAgent(buildDeps({ resolvePiProjectTrustInput }));
+    const packageExtension = path.join(agentHome, 'managed-packages', 'extension.ts');
+    const packageSkill = path.join(agentHome, 'managed-packages', 'skill-one');
+    const packagePrompt = path.join(agentHome, 'managed-packages', 'prompt-one.md');
+    const resolvePiManagedPackageResources = vi.fn(async () => ({
+      extensions: [packageExtension],
+      skills: [{ path: packageSkill, name: 'package-skill' }],
+      promptTemplates: [packagePrompt],
+      packageRoots: [path.dirname(packageExtension)],
+    }));
+    const agent = new PiAgent(buildDeps({
+      resolvePiProjectTrustInput,
+      resolvePiManagedPackageResources,
+    }));
     const [approvedHandle, reviewHandle] = await Promise.all([
       agent.startSession({ sessionId: 'approved', workingDir: cwd, model: 'm' }),
       agent.startSession({
@@ -551,19 +705,29 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     );
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--skill')).toEqual([
       stagedSkillPath(approvedHome, 0, skillPath),
+      packageSkill,
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
       path.posix.join(approvedHome, 'extensions', 'cindy-bridge.ts'),
       path.posix.join(approvedHome, 'extensions', 'cindy-subagent.ts'),
+      packageExtension,
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([
       path.posix.join(reviewHome, 'extensions', 'cindy-bridge.ts'),
     ]);
+    expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([
+      packagePrompt,
+    ]);
+    expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--prompt-template')).toEqual([]);
     expect(resolvePiProjectTrustInput).toHaveBeenCalledOnce();
     expect(resolvePiProjectTrustInput).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'approved',
     }));
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledOnce();
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith({
+      snapshotRoot: path.join(approvedHome, 'managed-packages'),
+    });
     await vi.waitFor(() => {
       expect(approvedHandle.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
         status: 'approved', approvalRevision: 'rev-approved-only', requestedSkillCount: 1,

@@ -56,6 +56,7 @@ import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
 } from './ghostManualValidation.js';
+import { installedFileModeFromZip, isZipSymbolicLinkMode } from './ghostZipPermissions.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -112,9 +113,7 @@ const DISABLED_MARKER_FILE = '.disabled';
 export const TRUST_METADATA_FILE = '.cindy-trust.json';
 
 function isZipSymbolicLink(entry: JSZip.JSZipObject): boolean {
-  return (
-    typeof entry.unixPermissions === 'number' && (entry.unixPermissions & 0o170000) === 0o120000
-  );
+  return isZipSymbolicLinkMode(entry.unixPermissions);
 }
 
 /** 只有宿主安装/播种路径可以写入的 Cindy 官方身份。 */
@@ -165,6 +164,15 @@ export interface GhostManagerLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
   /** 可选:仅用于"本该收敛却失败"的状态(如撤销批准失败后转进程内隔离)。 */
   error?(message: string, meta?: Record<string, unknown>): void;
+}
+
+export interface ApprovedGhostInstallEvidence {
+  /** Immutable package hash when the approval came from a modern install/update. */
+  packageSha256: string | null;
+  /** Unlocalized manifest frozen in the Host approval receipt. */
+  approvedManifest: GhostManifest;
+  /** True only when the completed one-time migration explicitly recorded this id. */
+  legacyMigrated: boolean;
 }
 
 export interface GhostManagerOptions {
@@ -1039,6 +1047,30 @@ export class GhostManager {
 
   approvalStateRoot(): string {
     return this.receiptStore.rootDir();
+  }
+
+  /**
+   * Host-owned evidence for reconnecting an installation to retained source metadata.
+   * A pending package mutation or an invalid approval fails closed. Legacy provenance
+   * is accepted only from the completed one-time migration's explicit id list.
+   */
+  approvedInstallEvidence(id: string): ApprovedGhostInstallEvidence | null {
+    this.ensureCurrentOwnerContextSync();
+    if (!isValidGhostId(id) || this.hasPendingMutationJournal(id)) return null;
+    const approval = this.readApproval(id);
+    if (approval.state !== 'approved') return null;
+    const packageSha256 = approval.receipt.packageSha256;
+    const migration = this.receiptStore.readMigrationLedger();
+    return {
+      packageSha256:
+        packageSha256 && /^[a-f0-9]{64}$/.test(packageSha256) ? packageSha256 : null,
+      approvedManifest: approval.receipt.manifest,
+      legacyMigrated: Boolean(
+        migration
+        && migration.state !== 'in-progress'
+        && migration.migratedIds.includes(id)
+      ),
+    };
   }
 
   /**
@@ -3774,6 +3806,17 @@ export class GhostManager {
       }
       await fs.promises.mkdir(path.dirname(dest), { recursive: true });
       await fs.promises.writeFile(dest, data);
+      // 签名与 mode 的关系是**有意如此**,别当成漏改:statement 只覆盖
+      // (path, sha256, bytes),mode 不在其中,所以归档 mode 属未认证元数据。
+      // 仍然采纳它,是因为在 `installedFileModeFromZip` 的钳位之后,能篡改包
+      // 字节的攻击者只剩下「翻转 r / x 位」:内容改不了、文件增删不了(白名单
+      // + 逐文件哈希)、特殊位剥掉、group/other 写位钳掉、owner 读写强制保留。
+      // 去掉 +x 只是他本来就能造成的可用性破坏(改坏一字节即验签失败);加上
+      // +x 作用在他无法选择内容的文件上,而执行流指向哪个文件由签名覆盖的
+      // manifest 与插件自身代码决定 —— 拿不到代码执行。若日后有任何逻辑开始
+      // 依赖 mode 做安全判断,这个前提就失效,届时须把归一化 mode 签进 statement。
+      const mode = installedFileModeFromZip(entry.unixPermissions);
+      if (mode !== null) await fs.promises.chmod(dest, mode);
     }
     if (opts.disabled) {
       await fs.promises.writeFile(path.join(stagingDir, DISABLED_MARKER_FILE), '');

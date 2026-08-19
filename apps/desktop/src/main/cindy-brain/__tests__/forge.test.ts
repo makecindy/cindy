@@ -137,6 +137,24 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
+  it.skipIf(process.platform === 'win32')(
+    'archives real Unix execute bits while stripping special bits',
+    async () => {
+      const dir = await makeSrcDir({
+        'ghost.json': JSON.stringify(GOOD_MANIFEST),
+        'main.js': 'export default {};',
+        'bin/tool': '#!/bin/sh\necho ok\n',
+      });
+      await fs.promises.chmod(path.join(dir, 'bin', 'tool'), 0o4755);
+
+      const packed = await packGhostDir(dir);
+      expect(packed).toMatchObject({ ok: true });
+      if (!packed.ok) return;
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(packed.cindyPath));
+      expect(Number(zip.files['bin/tool'].unixPermissions) & 0o7777).toBe(0o755);
+    },
+  );
+
   it('writes an in-workdir alias output to the canonical source directory', async () => {
     const sourceTarget = path.join(workDir, 'source-target');
     const sourceAlias = path.join(workDir, 'source-alias');
@@ -1440,6 +1458,31 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).toContain('会在插件边界固定映射为 `en`');
   });
 
+  it('settingsHtml / panel 普通 HTTPS 外链契约与宿主安全闸一致', () => {
+    const settingsSection = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 4.8 设置自绘(settingsHtml)+ 自定义参数存取(/kv)'),
+      FORGE_GUIDE.indexOf('## 4.9'),
+    );
+    for (const marker of [
+      '<a href="https://…">',
+      'network.secrets[].url',
+      'node.secretBindings[].url',
+      '逐字一致',
+      'xd.com',
+      'xd.cn',
+      'workers.xd.team',
+      '二次确认',
+      '非 HTTPS',
+      '用户名/密码',
+      'target="_blank"',
+      'window.open()',
+      '不支持',
+    ]) {
+      expect(settingsSection).toContain(marker);
+    }
+    expect(settingsSection).not.toContain('声明之外的任何外链点了没反应');
+  });
+
   it('分章体量守卫:每个 ## 章节须留在单次工具结果安全体量内(#890 分章投递的不变量)', () => {
     // 手册"随主机版本演进"持续增长;任一章越过单次 MCP 结果上限会静默复现 #890 于该章。
     // 上限取 32KB:当前最大章 ~22KB,余量 ~45%,越线即该拆小节。
@@ -1615,7 +1658,7 @@ describe('FORGE_GUIDE', () => {
       '撑满内容区',
       '在独立窗口中打开',
       'minimize',
-      '最小化为浮动气泡',
+      '最小化面板',
       // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
       // 卡槽总数标记随 ios-simulator 槽合入更新为十八个。
       '十八个卡槽',

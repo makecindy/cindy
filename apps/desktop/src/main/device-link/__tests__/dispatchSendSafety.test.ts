@@ -530,6 +530,21 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
   });
 
+  it('revoked 控制端反复 link-open 不重复 closeLink,但仍每次 purge 订阅', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    deviceLinkSettings.value.revokedControllers = ['ctrl-revoked'];
+
+    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-1', undefined);
+    subscriptions.subscribe('ctrl-revoked', ['session:s1']);
+    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-2', undefined);
+    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-3', undefined);
+
+    expect(client.closeLink).toHaveBeenCalledTimes(1);
+    expect(client.sendLinkAccept).not.toHaveBeenCalled();
+    expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
+  });
+
   it('legacy link-open restores wildcard behavior and replays wildcard backlog', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);

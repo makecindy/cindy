@@ -6,12 +6,15 @@
  * 才能停止自动滚动。修复后解除跟随走事件意图(wheel / touch / 键盘),恢复
  * 跟随走「距离 + 向下方向」。三个纯函数的规则见 autoFollowIntent.ts 模块注释。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   resolveLastUserMessageObservation,
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
+  resolveSendWindowHandoff,
   selectTailUserMessageId,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
@@ -81,7 +84,7 @@ describe('shouldUnpinOnUpIntent', () => {
 describe('resolveNearBottomOnScroll', () => {
   const BASE = { thresholdPx: 100, directionDeadZonePx: 1 };
 
-  it('距底超过阈值 → 一律 false(滚动条拖拽等无 wheel 路径的解除兜底)', () => {
+  it('距底超过阈值 + 明确上滚 / 已解除 → false(滚动条拖拽等无 wheel 路径的解除兜底)', () => {
     expect(
       resolveNearBottomOnScroll({
         ...BASE,
@@ -98,6 +101,33 @@ describe('resolveNearBottomOnScroll', () => {
         scrollDelta: 40,
       }),
     ).toBe(false);
+  });
+
+  it('已在跟 + 距底越线但未上滚 → 保持跟随(发送后内容长高 / 迟到 pin 的 scroll 不得解除)', () => {
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: true,
+        distanceFromBottom: 400,
+        scrollDelta: 0,
+      }),
+    ).toBe(true);
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: true,
+        distanceFromBottom: 400,
+        scrollDelta: 80,
+      }),
+    ).toBe(true);
+    expect(
+      resolveNearBottomOnScroll({
+        ...BASE,
+        wasNearBottom: true,
+        distanceFromBottom: 400,
+        scrollDelta: -1,
+      }),
+    ).toBe(true);
   });
 
   it('阈值带内 + 原本在跟 → 保持跟随(布局钳位 / 滚动条微拖的被动上移不解除)', () => {
@@ -272,6 +302,54 @@ describe('selectTailUserMessageId', () => {
   });
 });
 
+describe('resolveSendWindowHandoff', () => {
+  it('local send leaves any anchored window so later tail items keep following', () => {
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: true,
+        windowCoversEnd: true,
+      }),
+    ).toEqual({ clearWindowAnchor: true, deferPinToNextRender: false });
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: true,
+        windowCoversEnd: false,
+      }),
+    ).toEqual({ clearWindowAnchor: true, deferPinToNextRender: true });
+  });
+
+  it('does not touch the default tail window or an external injection', () => {
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: false,
+        windowCoversEnd: true,
+      }),
+    ).toEqual({ clearWindowAnchor: false, deferPinToNextRender: false });
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: true,
+        sentFromThisRenderer: false,
+        hasWindowAnchor: true,
+        windowCoversEnd: false,
+      }),
+    ).toEqual({ clearWindowAnchor: false, deferPinToNextRender: false });
+    expect(
+      resolveSendWindowHandoff({
+        isNewUserSend: false,
+        sentFromThisRenderer: true,
+        hasWindowAnchor: true,
+        windowCoversEnd: true,
+      }),
+    ).toEqual({ clearWindowAnchor: false, deferPinToNextRender: false });
+  });
+});
+
 describe('resolveLastUserMessageObservation', () => {
   it('seeds a restored user tail hydrated after mount without treating it as a send', () => {
     expect(
@@ -297,5 +375,18 @@ describe('resolveLastUserMessageObservation', () => {
       baselineUserMessageId: 'historical-user',
       isNewUserSend: true,
     });
+  });
+});
+
+describe('MessageStream send-window handoff wiring', () => {
+  it('clears any anchored window on a local send and only defers pin for stale slices', () => {
+    const source = readFileSync(
+      resolve(__dirname, '../components/chat/MessageStream.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('resolveSendWindowHandoff({');
+    expect(source).toContain('if (windowHandoff.clearWindowAnchor)');
+    expect(source).toContain('if (decision.pinToBottom && !windowHandoff.deferPinToNextRender)');
+    expect(source).not.toContain('realTailUserSendOutsideWindow');
   });
 });

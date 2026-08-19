@@ -80,6 +80,8 @@ import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forg
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
 import * as blobStore from '../cindy-media/blobStore.js';
+import { commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
+import { callCindyMedia } from '../cindy-media/invocationService.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
@@ -383,13 +385,13 @@ async function prepareLocalPathAttachments(params: {
   sessionId: string | null;
   sessionInstanceId: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
-  /** 张数上限(普通调用 MAX_GRANT_ATTACHMENTS;grant_only 批量预授权放宽)。 */
+  /** 项数上限(普通调用 MAX_GRANT_ATTACHMENTS;grant_only 批量预授权放宽)。 */
   maxCount: number;
 }): Promise<
   { ok: true; resolved: Map<string, ResolvedGrantSource> } | { ok: false; message: string }
 > {
   const resolved = new Map<string, ResolvedGrantSource>();
-  // 超张数上限时不弹确认,直接交给 grant 流程报标准错(别让用户白点一次)。
+  // 超项数上限时不弹确认,直接交给 grant 流程报标准错(别让用户白点一次)。
   if (params.urls.length > params.maxCount) return { ok: true, resolved };
   const outside: Array<{
     url: string;
@@ -831,7 +833,7 @@ async function grantAttachmentUrls(params: {
     {
       // 宽容解析:模型可能只有本地路径、缩图副本路径、或把 xdt-image
       // 地址的会话段拼丢(多个会话实测都踩过)——统一归一化。
-      // 总仓 blob 形态(聊天附件迁总仓后模型手里的用户图地址)额外过
+      // 总仓 blob 形态(聊天附件或当前 Agent 工具结果的受管地址)额外过
       // 账本出生闸:必须进过聊天流(session-attachment)才可过户,
       // 纯画廊产物/孤儿文件拒;过户行按真实出生记账(user/tool)。
       resolveImageUrl: async (url) => {
@@ -868,7 +870,7 @@ async function grantAttachmentUrls(params: {
             throw new GrantPolicyError('附件授权状态已变化，请重试');
           }
           // 策略拒绝标记:message 原样透给模型(落格式教学文案会误导自纠)。
-          throw new GrantPolicyError('该图片不是聊天里出现过的附件,不可过户');
+          throw new GrantPolicyError('该媒体不是聊天里出现过的附件或工具结果,不可过户');
         }
         return { absPath: r.absPath, mimeType: r.mimeType, originKind: origin };
       },
@@ -1183,6 +1185,27 @@ export function getCindyGhostsMcpDeps(
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
     getLiziMcpSessionContext() ?? sessionCtx;
   return {
+    callMedia: async (request) => {
+      const result = await callCindyMedia(request);
+      const sessionId = resolveSessionContext()?.sessionId;
+      if (result.ok !== false && sessionId) {
+        // Core 结果返回给当前 Agent 前先同步挂到本会话。后续消息落库钩子仍会
+        // 幂等补账，但不能依赖那个异步时序：Agent 可能紧接着通过
+        // ghost_call.attachments 把结果交给插件。
+        const committed = await commitMessageMediaRefs({
+          sessionId,
+          role: 'tool',
+          content: result,
+        });
+        if (committed && committed.failed > 0) {
+          log.warn('Core media result session ref commit incomplete', {
+            sessionId,
+            failed: committed.failed,
+          });
+        }
+      }
+      return result;
+    },
     // 花名册快照(server 装配时取一次):唤醒的芯片意识 + 召回线索,进
     // ghost_list 工具描述做语义召回。system 段由 getGhostRosterPrompt 在每个
     // session 装配时按 workdir 单独取数,更准确;实时真相以 ghost_list 调用返回为准。
@@ -1278,7 +1301,7 @@ export function getCindyGhostsMcpDeps(
       );
       if (!initialVisibility.ok) return initialVisibility;
       const target = initialVisibility.ghost;
-      // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记可读引用
+      // 媒体过户:显式 attachments 逐张落媒体总仓 + 记可读引用
       // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
       // 不做半成品授权。全链路见 grantAttachmentUrls。
@@ -1436,10 +1459,11 @@ export function getCindyGhostsMcpDeps(
           },
         };
       }
-      if (attachments && attachments.length > 0) {
+      const attachmentUrls = [...new Set(attachments ?? [])];
+      if (attachmentUrls.length > 0) {
         const grant = await grantAttachmentUrls({
           ghostId,
-          urls: attachments,
+          urls: attachmentUrls,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,

@@ -88,11 +88,16 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { Tip } from '@/components/ui/tooltip';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
-import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import { useAgentIslandActivity } from '@/state/agentIslandActivity';
+import {
+  projectSidebarSessionActivity,
+  resolveSidebarRightStatus,
+} from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import {
@@ -120,6 +125,14 @@ function loadScheduleSidebarIndexRunsCached(): Promise<ScheduleSidebarIndexRun[]
   return _scheduleIndexPromise;
 }
 
+const SESSION_ROW_INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"]';
+
+function isNestedSessionRowAction(target: EventTarget | null, row: Element): boolean {
+  if (!(target instanceof Element)) return false;
+  const interactive = target.closest(SESSION_ROW_INTERACTIVE_SELECTOR);
+  return interactive !== null && interactive !== row;
+}
+
 const log = createLogger('SessionItem');
 
 interface SidebarTitleMarqueeProps {
@@ -129,10 +142,11 @@ interface SidebarTitleMarqueeProps {
 }
 
 /**
- * 标题保持原生省略号，只有实际溢出且鼠标停留在标题区域时才播放一次横向滚动。
+ * 标题保持原生省略号，只有实际溢出且任务行处于悬浮态时才播放一次横向滚动。
+ * 绑在行上而不是标题上:指针移到更多/归档时跑马灯不能停。
  * 通过 DOM 属性和 CSS 变量驱动，避免给高密度侧栏行增加 React 状态订阅。
  */
-function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarqueeProps) {
+export function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarqueeProps) {
   const containerRef = useRef<HTMLSpanElement>(null);
   const trackRef = useRef<HTMLSpanElement>(null);
   const isHoveredRef = useRef(false);
@@ -194,6 +208,31 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
     if (isHoveredRef.current) startMarquee();
   }, [startMarquee, title]);
 
+  useEffect(() => {
+    const row = containerRef.current?.closest('[data-sidebar-session-row="true"]');
+    if (!(row instanceof HTMLElement)) return undefined;
+
+    const onEnter = () => {
+      isHoveredRef.current = true;
+      startMarquee();
+      startObserving();
+    };
+    const onLeave = () => {
+      isHoveredRef.current = false;
+      stopObserving();
+      stopMarquee();
+    };
+
+    row.addEventListener('mouseenter', onEnter);
+    row.addEventListener('mouseleave', onLeave);
+    if (row.matches(':hover')) onEnter();
+    return () => {
+      row.removeEventListener('mouseenter', onEnter);
+      row.removeEventListener('mouseleave', onLeave);
+      onLeave();
+    };
+  }, [startMarquee, startObserving, stopMarquee, stopObserving]);
+
   useEffect(() => () => stopObserving(), [stopObserving]);
 
   return (
@@ -201,16 +240,6 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
       ref={containerRef}
       className="sidebar-title-marquee min-w-0 max-w-full shrink overflow-hidden"
       title={title}
-      onMouseEnter={() => {
-        isHoveredRef.current = true;
-        startMarquee();
-        startObserving();
-      }}
-      onMouseLeave={() => {
-        isHoveredRef.current = false;
-        stopObserving();
-        stopMarquee();
-      }}
     >
       <span className={cn('sidebar-title-marquee__ellipsis', className)}>{children}</span>
       <span
@@ -367,32 +396,23 @@ export const SessionItem = memo(function SessionItem({
   // 通过 SessionAttentionUrgencyContext 由上游注入,避免误把失败的 automation 涂成 Completed。
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
+  const islandActivity = useAgentIslandActivity(session.id);
   // device-link 远程会话行:本地 attention/running 链路对被控端后台会话是盲区,状态改由
   // 被控端灵动岛 relay 的活动镜像驱动(remoteSessionActivityStore,按行精准订阅;本地
   // 会话恒 undefined 零开销)。镜像只保留活跃态与未读终态,映射与本地五档同一张色表。
   const remoteActivity = useRemoteSessionActivity(session.id);
-  const remoteRightStatus =
-    remoteActivity == null
-      ? null
-      : remoteActivity.phase === 'error'
-        ? ('error' as const)
-        : remoteActivity.phase === 'needs-interaction'
-          ? ('awaiting' as const)
-          : remoteActivity.phase === 'running'
-            ? ('running' as const)
-            : ('done' as const);
-  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
-  // 状态槽,图标颜色不会刷新。只并入 phase=running,与折叠 rail 的 remoteLampOf
-  // 以及本地 pending-prompt 口径一致:needs-interaction 继续由右侧 awaiting 表达。
-  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
-  const rightStatusKind =
-    remoteRightStatus ??
-    resolveSidebarRightStatus({
-      attentionKind,
-      isUrgentFromContext,
-      isRunning,
-      hasAttentionNotification,
-    });
+  const sessionActivity = projectSidebarSessionActivity({
+    sessionId: session.id,
+    title: session.title,
+    recordStatus: session.status,
+    liveActivity: remoteActivity ?? islandActivity,
+    attentionKind,
+    isUrgentFromContext,
+    isRunning,
+    hasAttentionNotification,
+  });
+  const leftIconRunning = sessionActivity.currentTurnActive === true;
+  const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const showRightStatus = rightStatusKind !== 'time';
   const remoteIconKind = session.deviceLinkDeviceId
     ? 'device-link'
@@ -498,6 +518,7 @@ export const SessionItem = memo(function SessionItem({
   // 右键菜单弹出位置：null = 关闭；{x,y} = 在该屏幕坐标处弹出（fixed 定位的
   // 隐形 trigger 锚定到这里）。与 ProjectNode 同款 coordinate-anchored 模式。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [rowTooltipOpen, setRowTooltipOpen] = useState(false);
 
   // Codex 风行内 archive 确认：archivePending=true 时右侧图标按钮被一个红色
   // "Confirm" 胶囊替换；4s 不动 or 点别处 → 自动撤回。第二次点击 Confirm 才真正
@@ -870,6 +891,10 @@ export const SessionItem = memo(function SessionItem({
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerOver={(event) => {
+        setRowTooltipOpen(!isNestedSessionRowAction(event.target, event.currentTarget));
+      }}
+      onPointerLeave={() => setRowTooltipOpen(false)}
       onPointerDownCapture={(event) => {
         dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
       }}
@@ -941,7 +966,11 @@ export const SessionItem = memo(function SessionItem({
           ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
           : isSelected
             ? 'bg-[var(--chat-input-chip-bg)] text-foreground'
-            : 'text-foreground hover:bg-sidebar-item-hover',
+            : cn(
+                'text-foreground hover:bg-sidebar-item-hover',
+                // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
+                menuPos !== null && 'bg-sidebar-item-hover',
+              ),
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
       )}
       aria-current={isActive ? 'page' : undefined}
@@ -995,19 +1024,20 @@ export const SessionItem = memo(function SessionItem({
           {boundSchedules.length > 0 ? (
             <ScheduleBindingBadge schedules={boundSchedules} activeForeground={isActive} />
           ) : isAutomationGenerated ? (
-            <button
-              type="button"
-              className="inline-flex shrink-0 cursor-pointer focus:outline-none"
-              aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-              title={t('ccAgent.sidebar.automationGenerated')}
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleAutomationIconClick();
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              <AutomationTimerIcon size={10} activeForeground={isActive} />
-            </button>
+            <Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}>
+              <button
+                type="button"
+                className="inline-flex shrink-0 cursor-pointer focus:outline-none"
+                aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleAutomationIconClick();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <AutomationTimerIcon size={10} activeForeground={isActive} />
+              </button>
+            </Tip>
           ) : null}
           <SidebarTitleMarquee
             title={displayTitle}
@@ -1048,12 +1078,10 @@ export const SessionItem = memo(function SessionItem({
           WorktreeBadge 紧贴时间左侧(仅在 WorktreeContext map 中存在 sessionId 时
           渲染), 与时间同步 hover-fade 让位给 action buttons —— 让右侧只看到一组
           视觉元素, 不和 action buttons 共存。
-          archive 快捷按钮 hover/focus 时覆盖整个槽位,避免右侧拥挤;完整菜单仍走右键。
-          槽宽跟可见内容走:状态点 / worktree / 任务信息有多宽占多宽,「任务信息 =
-          无」且无状态、无 worktree 时宽度归零,把行宽还给标题。hover / 菜单打开 /
-          二次确认时,信息层与操作占位叠在同一格,槽宽取两者较大值,标题走 truncate,
-          可见按钮仍绝对定位叠在同一槽上——不再常驻 56px,也不叠到标题上,更不把
-          信息宽和按钮宽相加。 */}
+          archive 快捷按钮 hover/focus 时进同一格文档流,标题 truncate 让位;
+          完整菜单仍走右键。槽宽跟可见内容走:平时信息槽有多宽占多宽,「任务信息 =
+          无」且无状态、无 worktree 时宽度归零。hover / 菜单打开时按钮入流,
+          槽宽取信息层与按钮的较大值——不再绝对定位盖到标题上。 */}
       {!isEditing && (
         <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
           {/* WorktreeBadge + time 同步 fade-out:hover/菜单打开/archivePending 时
@@ -1064,102 +1092,101 @@ export const SessionItem = memo(function SessionItem({
               group-focus-within,选中态(非 hover)时间会被永久隐藏而 action
               buttons 又不显示,右侧变空白。 */}
           <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
-          <div
-            className={cn(
-              'col-start-1 row-start-1 flex items-center gap-1',
-              // duration 与 action 按钮组的渐显同拍(120ms),让位/回归一进一出同步。
-              'transition-opacity duration-[120ms]',
-              !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
-              menuPos !== null && 'opacity-0',
-              archivePending && 'opacity-0',
-              // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
-              ordinalBadgeLabel != null && 'opacity-0',
-            )}
-          >
-            <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
-            {showRightStatus ? (
-              <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
-            ) : (
-              // 任务信息复选(C 期):按用户勾选拼装 pr / tokens / cost / time;默认仅
-              // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
-              <SessionInfoMeta pieces={infoPieces} prRef={infoPrRef} isActive={isActive} />
-            )}
-          </div>
-
-          {canQuickArchive && archivePending && (
-            <span aria-hidden className="invisible col-start-1 row-start-1 inline-block h-6 w-14" />
-          )}
-          {ordinalBadgeLabel != null && (
-            <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
-              <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
-            </span>
-          )}
-          {canQuickArchive && archivePending && (
-            <button
-              ref={confirmPillRef}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setArchivePending(false);
-                onAction(session.id, 'archive-now');
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
+            <div
               className={cn(
-                'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
-                'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,transparent)] text-[hsl(var(--destructive))] hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,transparent)]',
-                'transition-colors focus:outline-none',
+                'col-start-1 row-start-1 flex items-center gap-1',
+                // duration 与 action 按钮组的渐显同拍(120ms),让位/回归一进一出同步。
+                'transition-opacity duration-[120ms]',
+                !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
+                menuPos !== null && 'opacity-0',
+                archivePending && 'opacity-0',
+                // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
+                ordinalBadgeLabel != null && 'opacity-0',
               )}
-              aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
             >
-              {t('ccAgent.sidebar.sessionMenu.archived')}
-            </button>
-          )}
-          {/* Action 按钮组（hover/menu open 时浮现，archivePending 期间整组让位给红色 pill）。
+              <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
+              {showRightStatus ? (
+                <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
+              ) : (
+                // 任务信息复选(C 期):按用户勾选拼装 pr / tokens / cost / time;默认仅
+                // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
+                <SessionInfoMeta pieces={infoPieces} prRef={infoPrRef} isActive={isActive} />
+              )}
+            </div>
+
+            {canQuickArchive && archivePending && (
+              <span
+                aria-hidden
+                className="invisible col-start-1 row-start-1 inline-block h-6 w-14"
+              />
+            )}
+            {ordinalBadgeLabel != null && (
+              <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex">
+                <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+              </span>
+            )}
+            {canQuickArchive && archivePending && (
+              <button
+                ref={confirmPillRef}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setArchivePending(false);
+                  onAction(session.id, 'archive-now');
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={cn(
+                  'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
+                  'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,transparent)] text-[hsl(var(--destructive))] hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,transparent)]',
+                  'transition-colors focus:outline-none',
+                )}
+                aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
+              >
+                {t('ccAgent.sidebar.sessionMenu.archived')}
+              </button>
+            )}
+            {/* Action 按钮组（hover/menu open 时浮现，archivePending 期间整组让位给红色 pill）。
               尺寸/视觉与 Project Header 的 ProjectAction 同套（size-5 / icon 14 /
               strokeWidth 2 / gap-0.5）；普通行 hover 走 sidebar-item-hover，选中行
-              则用 active foreground 的半透明叠色保持红色胶囊内的反色体系。唯一差异
-              是 session 行的三个按钮**故意不挂 Tip 浮层** —— 图标语义已足够直观,
-              tooltip 在密集 sidebar 列表里反而干扰视觉。
+              则用 active foreground 的半透明叠色保持红色胶囊内的反色体系。
               组装顺序固定为 [Run(automation only), More, Archive | Undo]：
                 - 非 archived：More + Archive；Archive pill 撤回(超时/点外面)后
                   按钮立即还原,符合用户对 "撤回 = 回到点击前" 的直觉预期。
                 - archived：More + Undo（lucide Undo），单击直接走 unarchive，
                   不像 Archive 那样需要二次确认 pill（unarchive 非破坏性）。 */}
-          {!archivePending && (
-            <>
-              <div
-                aria-hidden
-                className={cn(
-                  'invisible col-start-1 row-start-1 flex h-6 items-center gap-0.5',
-                  menuPos === null && 'hidden group-hover:flex group-focus-within/slot:flex',
-                )}
-              >
-                {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
-                <span className="size-5 shrink-0" />
-                {isArchived && !remoteWritesBlocked ? (
+            {!archivePending && (
+              <>
+                {/* 入流占位只负责把标题挤窄;真正的按钮保持可聚焦,不能 display:none。 */}
+                <div
+                  aria-hidden
+                  className={cn(
+                    'invisible col-start-1 row-start-1 h-6 items-center gap-0.5',
+                    menuPos !== null
+                      ? 'flex'
+                      : 'hidden group-hover:flex group-focus-within/slot:flex',
+                  )}
+                >
+                  {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
                   <span className="size-5 shrink-0" />
-                ) : canQuickArchive ? (
-                  <span className="size-5 shrink-0" />
-                ) : null}
-              </div>
-              <div
-                // 渐显(120ms)配 pointer-events 守卫:淡出期间按钮不再占据鼠标位置,
-                // 解决了旧注释"渐变让按钮在 fade 期间仍占着鼠标位置、Radix Tooltip
-                // 收不到 pointerleave 导致 tip 挂着"的问题(当年因此禁用了
-                // transition-opacity);键盘焦点不受 pointer-events 影响,focus 路径不变。
-                className={cn(
-                  'absolute right-0 top-0 flex h-6 items-center gap-0.5',
-                  'transition-opacity duration-[120ms]',
-                  menuPos !== null
-                    ? 'opacity-100'
-                    : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
-                )}
-              >
-                {sessionActionButtons}
-              </div>
-            </>
-          )}
+                  {isArchived && !remoteWritesBlocked ? (
+                    <span className="size-5 shrink-0" />
+                  ) : canQuickArchive ? (
+                    <span className="size-5 shrink-0" />
+                  ) : null}
+                </div>
+                <div
+                  className={cn(
+                    'absolute right-0 top-0 flex h-6 items-center gap-0.5',
+                    menuPos !== null
+                      ? 'opacity-100'
+                      : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+                  )}
+                >
+                  {sessionActionButtons}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1336,6 +1363,7 @@ export const SessionItem = memo(function SessionItem({
       sessionId={session.id}
       prRefs={prRefs}
       isAutomationSession={showAutomationTooltip}
+      controlledOpen={rowTooltipOpen}
     >
       {row}
     </SessionTooltip>
@@ -1345,8 +1373,7 @@ export const SessionItem = memo(function SessionItem({
 /** SessionItem 右侧 hover action 图标按钮 —— 尺寸/视觉与 Project Header 的
  *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 圆角 md /
  *  普通行 hover 用 sidebar-item-hover + foreground；选中行保持 active foreground,
- *  hover 只叠一层同色半透明高光),区别是这里
- *  **不挂 Tip 浮层**,图标语义已经够直观,sidebar 密集列表里少干扰为先。 */
+ *  hover 只叠一层同色半透明高光)。 */
 function SessionAction({
   label,
   onClick,
@@ -1358,27 +1385,27 @@ function SessionAction({
   isActive: boolean;
   children: ReactNode;
 }) {
-  // 这里**故意不挂 Tip 浮层** —— 三个按钮(More/Archive/Undo)的图标语义都足够
-  // 直观,加 tooltip 反而让 sidebar 视觉更乱。aria-label 保留给屏幕阅读器。
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(e);
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      className={cn(
-        'shrink-0 size-5 flex items-center justify-center rounded-md',
-        'focus:outline-none',
-        isActive
-          ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-          : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
+    <Tip text={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick(e);
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className={cn(
+          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'focus:outline-none',
+          isActive
+            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+            : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+        )}
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }

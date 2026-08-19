@@ -657,7 +657,11 @@ describe('Ghost manifest contract', () => {
           description: 'Run the helper.',
           parameters: {
             type: 'object',
-            properties: { input: { type: 'string' } },
+            properties: {
+              input: { type: 'string' },
+              mediaUrl: { type: 'string' },
+              references: { type: 'array', items: { type: 'string' } },
+            },
             required: ['input'],
           },
         },

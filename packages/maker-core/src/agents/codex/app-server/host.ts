@@ -62,6 +62,7 @@ import {
   type ReasoningSummaryTextDeltaNotification,
   type ReasoningSummaryPartAddedNotification,
   type ReasoningTextDeltaNotification,
+  type ReasoningEffort,
   type AccountRateLimitsUpdatedNotification,
   type AgentMessageDeltaNotification,
   type ThreadStatusChangedNotification,
@@ -274,6 +275,14 @@ export interface AppServerHostOptions {
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   /** Cindy-side fallback used only when a subagent's actual model is not reported. */
   subagentModelFallback?: string;
+  /** Frozen provider/model/effort identity for the configured locked subagent route. */
+  subagentRoute?: {
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort: ReasoningEffort | null;
+  };
+  /** Whether the OpenAI identity provider may use Responses WebSocket on this host. */
+  codexOpenAiWebSocketsEnabled?: boolean;
 }
 
 interface BufferedNotification {
@@ -432,6 +441,18 @@ export class AppServerHost {
   /** Display metadata only; observed thread model always wins. */
   getSubagentModelFallback(): string | undefined {
     return this.opts.subagentModelFallback;
+  }
+
+  getSubagentRoute(): {
+    providerId: string;
+    catalogModel: string;
+    reasoningEffort: ReasoningEffort | null;
+  } | undefined {
+    return this.opts.subagentRoute;
+  }
+
+  getOpenAiWebSocketsEnabled(): boolean {
+    return this.opts.codexOpenAiWebSocketsEnabled !== false;
   }
 
   getConnectionId(): string {

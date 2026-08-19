@@ -58,6 +58,13 @@ export interface RsbWindowControllerDeps {
   broadcastState: (state: { detached: boolean; open: boolean }) => void;
   /** 向裁决后的 renderer host 推送 context / command；窗口有效性由 controller 保证。 */
   sendToWindow: (win: BrowserWindow, channel: string, payload: unknown) => void;
+  /**
+   * 缓存窗口每次重新显示前的 Host 同步钩子。调用时窗口仍标记为 hidden，
+   * capability 同步必须以该精确 WebContents 为目标；原生 show 前完成。
+   */
+  onWindowWillShow?: (win: BrowserWindow) => void;
+  /** 缓存窗口隐藏后立即暂停 Host 侧交互能力，但保留 renderer 与分桶状态。 */
+  onWindowHidden?: (win: BrowserWindow) => void;
   contextChannel: string;
   commandChannel: string;
   /** main → renderer host；用于内嵌 / 分离宿主之间交接内存态 tab。 */
@@ -517,6 +524,10 @@ export class RsbWindowController {
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = shouldFocus;
+    // 先同步 Host capability，再真正展示 renderer；保持 hidden 状态可确保同步
+    // 失败时只 fail-close 该缓存子窗口，不会误清当前主窗口 family。
+    this.deps.onWindowWillShow?.(win);
+    this.visible = true;
     if (win.isMinimized()) win.restore();
     win.webContents.setBackgroundThrottling(true);
     if (shouldFocus) {
@@ -525,7 +536,6 @@ export class RsbWindowController {
     } else {
       win.showInactive();
     }
-    this.visible = true;
     // lastOpen 由 open() 在外层写，这里只负责展示
     this.deps.sendToWindow(win, RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible: true });
     // 隐藏复用期间的 passive 命令不能在用户看不见时改动子窗口 store；
@@ -539,8 +549,9 @@ export class RsbWindowController {
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = true;
-    if (win.isVisible()) win.hide();
     this.visible = false;
+    this.deps.onWindowHidden?.(win);
+    if (win.isVisible()) win.hide();
     try {
       this.deps.sendToWindow(win, RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible: false });
     } catch {
@@ -554,8 +565,17 @@ export class RsbWindowController {
   private onNativeVisibilityChanged(win: BrowserWindow, visible: boolean): void {
     if (win !== this.winRef || win.isDestroyed() || this.destroyingWindow || this.disposed) return;
     if (this.visible === visible && !this.pendingOpen) return;
-    this.visible = visible;
-    if (visible) this.pendingOpen = false;
+    // 原生 show / restore 可能绕过 showWindow；仍需在 renderer 收到 visible=true
+    // 之前完成同一轮 Host capability 同步。恢复时保持 hidden 到同步结束，失败
+    // 回退才只会清理该精确 WebContents；隐藏时则先退出可见 family 再暂停能力。
+    if (visible) {
+      this.deps.onWindowWillShow?.(win);
+      this.visible = true;
+      this.pendingOpen = false;
+    } else {
+      this.visible = false;
+      this.deps.onWindowHidden?.(win);
+    }
     try {
       this.deps.sendToWindow(win, RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible });
     } catch {
@@ -660,7 +680,11 @@ export class RsbWindowController {
     if (shouldRestore) {
       this.pendingOpen = true;
     }
-    if (this.visible) win.hide();
+    if (this.visible) {
+      this.visible = false;
+      this.deps.onWindowHidden?.(win);
+      win.hide();
+    }
     win.webContents.setBackgroundThrottling(false);
     this.rendererReady = false;
     this.presentationReady = false;

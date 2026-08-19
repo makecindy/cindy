@@ -1,11 +1,12 @@
 /**
- * compaction-settings-store —— Claude Code 自动上下文压缩阈值的 main 端持久化 source of truth。
+ * compaction-settings-store —— Claude Code 与 Pi 共用的自动上下文压缩阈值。
  *
  * 文件: <userData>/compaction-settings.json
  *   { "claudeCodeAutoCompactPct": 75 }
+ * 字段名保留历史 key，避免用户已调过的阈值丢失；Codex 不读这份设置。
  *
  * 默认 75 —— 对齐历史自动压缩默认阈值。范围固定 50–95,
- * 写入和读取都 clamp + round, 确保注入给 Claude Code 子进程的 env 始终是合法整数百分比。
+ * 写入和读取都 clamp + round, 确保注入 runtimeConfig.autoCompactThresholdPct 始终是合法整数百分比。
  *
  * 同步 R/W —— 文件极小, Electron main 已是 background, 不会卡 renderer 主线程。
  * read 失败 (corrupt JSON / 文件不存在) → 走默认值, 同时清掉坏文件避免反复报错。
