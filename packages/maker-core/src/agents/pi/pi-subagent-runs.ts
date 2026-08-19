@@ -358,22 +358,50 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
   // Writes and deletes only this host's file, so a concurrent instance's fence
   // can neither be clobbered by this one nor removed by its cancellation.
   const file = piSubagentLaunchFencePath(agentHome);
+  // Reserved in one synchronous run, before the first await. Registering after
+  // the write looked safer — a failed acquire could not pin the fence up — but
+  // it left the read and the registration on opposite sides of two awaits, and
+  // two boundaries of this process do start together (an update reclaim the
+  // user quits out of, an account teardown overlapping a quit). Both then read
+  // `undefined`, minted separate leases, and the later write and the later
+  // `set` each replaced the earlier one — leaving a Map that knew about one
+  // holder. Whichever boundary finished first matched that entry, matched the
+  // file, and took the fence down while the other was still reclaiming.
+  //
+  // Node runs this block to completion before any other task, so a second
+  // caller cannot miss this reservation: it either runs entirely before it, and
+  // this one joins *its* lease, or entirely after, and joins this one. Its own
+  // rewrite is then the same payload with the same leaseId — idempotent.
   const existing = launchFenceLeases.get(file);
   const leaseId = existing?.leaseId ?? randomUUID();
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  // Every acquisition rewrites, including a nested one: the file may have been
-  // swept away underneath us, and rewriting with the *same* leaseId keeps the
-  // holders that are already counted able to release it.
-  await writeAtomicJson(file, {
-    version: 1,
-    hostPid: process.pid,
-    hostStartTimeSec: ownProcessStartTimeSec(),
-    leaseId,
-    createdAt: Date.now(),
-  } satisfies PiSubagentLaunchFence);
-  // Counted only after the write succeeded: a throw here leaves no holder
-  // behind, so a failed acquire cannot pin the fence up for the process's life.
   launchFenceLeases.set(file, { leaseId, holders: (existing?.holders ?? 0) + 1 });
+  /** Undo this acquisition's reservation, leaving any concurrent one intact. */
+  const dropReservation = (): void => {
+    const lease = launchFenceLeases.get(file);
+    if (!lease || lease.leaseId !== leaseId) return;
+    if (lease.holders > 1) launchFenceLeases.set(file, { leaseId, holders: lease.holders - 1 });
+    else launchFenceLeases.delete(file);
+  };
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    // Every acquisition rewrites, including a nested one: the file may have
+    // been swept away underneath us, and rewriting with the *same* leaseId
+    // keeps the holders that are already counted able to release it.
+    await writeAtomicJson(file, {
+      version: 1,
+      hostPid: process.pid,
+      hostStartTimeSec: ownProcessStartTimeSec(),
+      leaseId,
+      createdAt: Date.now(),
+    } satisfies PiSubagentLaunchFence);
+  } catch (error) {
+    // Balance the reservation before the caller ever hears about the failure,
+    // or a failed acquire would pin the fence up for the process's life. A
+    // concurrent holder that incremented in between keeps its count: this only
+    // takes back the one increment it made.
+    dropReservation();
+    throw error;
+  }
   let released = false;
   return async () => {
     if (released) return;

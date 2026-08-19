@@ -1280,6 +1280,71 @@ describe('PI durable subagent run store', () => {
         expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
       });
 
+      /**
+       * Two boundaries of one process really do start together — an update
+       * reclaim the user quits out of, an account teardown overlapping a quit.
+       * Registering the holder only after the write left both of them reading
+       * an empty Map, minting separate leases, and each replacing the other's
+       * entry and file; the Map ended up knowing about a single holder, and
+       * whichever boundary owned that entry took the fence down on its own
+       * release while the other was still reclaiming.
+       *
+       * Repeated, and driven from both release orders, because *which* of the
+       * two ends up owning the Map entry and the file is a genuine race — the
+       * atomic write's rename is not ordered — and each end state is only
+       * visible from one of the orders. One pair therefore reproduces the old
+       * behaviour about half the time; a run of them makes it certain. With the
+       * reservation taken synchronously there is no race left to sample: both
+       * calls share one lease, every iteration.
+       */
+      it.each([
+        ['the second holder finishes first', 'second-first'],
+        ['the first holder finishes first', 'first-first'],
+      ] as const)('composes two acquisitions that start in the same tick (%s)', async (_label, order) => {
+        for (let iteration = 0; iteration < 16; iteration += 1) {
+          const agentHome = await makeRoot();
+          // Deliberately not awaited in between: this is the interleaving.
+          const firstAcquire = acquirePiSubagentLaunchFence(agentHome);
+          const secondAcquire = acquirePiSubagentLaunchFence(agentHome);
+          const [releaseFirst, releaseSecond] = await Promise.all([firstAcquire, secondAcquire]);
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          const [earlier, later] = order === 'second-first'
+            ? [releaseSecond, releaseFirst]
+            : [releaseFirst, releaseSecond];
+
+          await earlier();
+          expect(existsSync(file)).toBe(true);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+
+          await later();
+          expect(existsSync(file)).toBe(false);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        }
+      });
+
+      it.skipIf(process.platform === 'win32' || (process.getuid?.() ?? 0) === 0)(
+        'gives back its reservation when the write fails under a concurrent holder',
+        async () => {
+          // Reserving before the write is what makes the composition sound, so
+          // the failure path has to hand that reservation back — and hand back
+          // only its own, since another boundary may have incremented in the
+          // meantime. Leaking it would leave the survivor's release decrementing
+          // to a holder that does not exist, and the fence up for good.
+          const agentHome = await makeRoot();
+          const release = await acquirePiSubagentLaunchFence(agentHome);
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          const dir = path.dirname(file);
+          // A read-only directory: the atomic write cannot create its temp file.
+          await chmod(dir, 0o500);
+          await expect(acquirePiSubagentLaunchFence(agentHome)).rejects.toThrow();
+          await chmod(dir, 0o700);
+
+          await release();
+
+          expect(existsSync(file)).toBe(false);
+        },
+      );
+
       it('refuses to delete a fence file it did not write', async () => {
         // Defence in depth for what the counter cannot see: the payload was
         // replaced after this holder acquired, so the file on disk belongs to

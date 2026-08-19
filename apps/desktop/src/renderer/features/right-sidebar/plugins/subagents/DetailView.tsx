@@ -390,7 +390,31 @@ function PiDurableDetailView({
   // outside the eagerly paged window, leaving only task and tool items behind.
   // Gating the durable-result fallback on "any item" then swallowed a finished
   // result that the durable record still had.
-  const hasAssistantItem = conversation.items.some((item) => item.kind === 'subagent');
+  //
+  // Scoped to the *current* generation. The transcript now carries every
+  // generation of this child permanently, so a reply the previous one gave
+  // would otherwise go on standing in for a newest generation that has none —
+  // truncated at the 50MB cap, unreadable, or simply outside the paged window.
+  // That is a steady state, not a moment: the user would be left reading the
+  // old answer with the new `returnedResult` nowhere on screen.
+  //
+  // Judged on the transcript entries rather than `conversation.items`, which
+  // drop `childId` in the projection. `entry.role === 'subagent'` is exactly
+  // the predicate that produces a `kind: 'subagent'` item, so the two cannot
+  // disagree. An entry with no `childId` at all — a single-generation record,
+  // or an older wire format — counts as current, which is what it always was
+  // before aliases existed.
+  const currentGenerationChildIds = useMemo(
+    () => new Set(selectedChild ? [selectedChild.id] : children.map((child) => child.id)),
+    [children, selectedChild],
+  );
+  const hasAssistantItem = useMemo(
+    () => visibleTranscript.some((entry) => (
+      entry.role === 'subagent'
+      && (!entry.childId || currentGenerationChildIds.has(entry.childId))
+    )),
+    [currentGenerationChildIds, visibleTranscript],
+  );
   // Old or truncated records can start mid-run. The assignment is still the
   // first thing the user needs, so it is prepended when the transcript itself
   // carries no parent line.

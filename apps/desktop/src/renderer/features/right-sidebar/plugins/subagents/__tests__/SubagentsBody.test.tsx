@@ -1147,6 +1147,189 @@ describe('SubagentsBody', () => {
     expect(screen.queryByText('rightSidebar.subagents.completedNoReply')).toBeNull();
   });
 
+  it('shows the durable result when only an older generation carried a reply', async () => {
+    // The transcript now aggregates every generation of a child permanently, so
+    // "some assistant line exists" stopped meaning "this run answered". A
+    // resumed generation whose reply is missing — 50MB cap, unreadable page,
+    // outside the paged window — was left showing the *previous* generation's
+    // answer with the new `returnedResult` nowhere on screen, and no
+    // missing-reply notice either.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'the resumed answer',
+      // A selected child shows its own returned output; the run-level result is
+      // what the overview uses.
+      children: [{
+        id: 'run-2-1', identityAliases: ['run-1-1'], role: 'scout', status: 'completed',
+        output: 'the resumed answer',
+      }],
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', role: 'parent', content: 'the original assignment' }),
+        entry({ id: 'e2', childId: 'run-1-1', content: 'the first generation answer' }),
+        entry({ id: 'e3', childId: 'run-2-1', role: 'parent', content: 'the follow-up' }),
+        entry({
+          id: 'e4', childId: 'run-2-1', role: 'tool', toolPhase: 'start',
+          toolName: 'read', content: 'read b.txt',
+        }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // The older generation stays readable, and the newest run's own result is
+    // on screen rather than suppressed by it.
+    // Wait for the transcript to land first. Before it does, there is no
+    // conversation at all and the fallback renders for a moment on every
+    // implementation — asserting into that window would pass without testing
+    // anything.
+    expect(await screen.findByText('the follow-up')).toBeTruthy();
+    expect(screen.getByText('the first generation answer')).toBeTruthy();
+    expect(screen.getByText('read b.txt')).toBeTruthy();
+    expect(screen.getByText('the resumed answer')).toBeTruthy();
+    expect(screen.queryByText('rightSidebar.subagents.completedNoReply')).toBeNull();
+  });
+
+  it('still suppresses the durable result once the current generation replies', async () => {
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'the resumed answer',
+      children: [{
+        id: 'run-2-1', identityAliases: ['run-1-1'], role: 'scout', status: 'completed',
+        output: 'the resumed answer',
+      }],
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', content: 'the first generation answer' }),
+        entry({ id: 'e2', childId: 'run-2-1', content: 'the resumed answer' }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // Settled state only, for the same reason as above.
+    expect(await screen.findByText('the first generation answer')).toBeTruthy();
+    // Exactly once: the transcript carried it, so the fallback must not repeat it.
+    expect(screen.getAllByText('the resumed answer')).toHaveLength(1);
+  });
+
+  it('counts a reply with no childId as the current generation', async () => {
+    // Single-generation records, and any older wire format, carry no `childId`.
+    // Before aliases existed every entry was the current generation, and that
+    // has to stay literally true.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'durable copy of the answer',
+      children: [{
+        id: 'run-1-1', role: 'scout', status: 'completed',
+        output: 'durable copy of the answer',
+      }],
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [entry({ id: 'e1', content: 'the only answer' })],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('the only answer')).toBeTruthy();
+    expect(screen.queryByText('durable copy of the answer')).toBeNull();
+    expect(screen.queryByText('rightSidebar.subagents.completedNoReply')).toBeNull();
+  });
+
+  it('reads the overview by every current child, not by one generation of one', async () => {
+    // No selection: the reply may belong to any of the children, and only their
+    // *current* ids count — an older generation of either must not stand in.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'the batch result',
+      children: [
+        { id: 'run-2-1', identityAliases: ['run-1-1'], role: 'scout', title: 'Scout', status: 'completed' },
+        { id: 'run-2-2', identityAliases: ['run-1-2'], role: 'reviewer', title: 'Reviewer', status: 'completed' },
+      ],
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', content: 'scout first generation answer' }),
+        entry({ id: 'e2', childId: 'run-1-2', content: 'reviewer first generation answer' }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // Settled state: the transcript is in, and neither current generation
+    // replied — so the durable result is what the user has, and it must be on
+    // screen next to the older generations.
+    expect(await screen.findByText('scout first generation answer')).toBeTruthy();
+    expect(screen.getByText('reviewer first generation answer')).toBeTruthy();
+    expect(screen.getByText('the batch result')).toBeTruthy();
+  });
+
   it('does not render the result twice when the transcript already ends with it', async () => {
     currentDetail = {
       ...detail('unused'),
