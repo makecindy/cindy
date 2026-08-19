@@ -94,7 +94,10 @@ async function findNearestGitRoot(
 }
 
 async function validateSkillPathsImmediatelyBeforeLaunch(
-  skillPaths: readonly string[],
+  skillEvidence: readonly {
+    readonly discoveredPath: string;
+    readonly canonicalPath: string;
+  }[],
   stat: (path: string) => Promise<PiPathStat>,
   realpath: (path: string) => Promise<string>,
   identity: PiProjectTrustInputSnapshot['identity'],
@@ -136,15 +139,19 @@ async function validateSkillPathsImmediatelyBeforeLaunch(
           deadlineAtMs,
           'approved skill assembly deadline expired',
         ),
-        Promise.all(skillPaths.map(async (skillPath) => {
-          const stats = await boundedStat(skillPath);
-          const resolvedPath = await boundedRealpath(skillPath);
+        Promise.all(skillEvidence.map(async ({ discoveredPath, canonicalPath: skillPath }) => {
+          const [stats, resolvedPath, resolvedDiscoveredPath] = await Promise.all([
+            boundedStat(skillPath),
+            boundedRealpath(skillPath),
+            boundedRealpath(discoveredPath),
+          ]);
           if (!stats.isDirectory()) return { skillPath, stats, resolvedPath };
           const skillFile = pathApi.join(skillPath, 'SKILL.md');
           return {
             skillPath,
             stats,
             resolvedPath,
+            resolvedDiscoveredPath,
             skillFileStats: await boundedStat(skillFile),
             resolvedSkillFile: await boundedRealpath(skillFile),
           };
@@ -163,8 +170,16 @@ async function validateSkillPathsImmediatelyBeforeLaunch(
     ) return 'repo-mismatch';
     if (entries.some(({ stats, skillFileStats }) =>
       !stats.isDirectory() || !skillFileStats?.isFile())) return 'unavailable';
-    return entries.every(({ skillPath, resolvedPath, stats, resolvedSkillFile }) =>
+    return entries.every(({
+      skillPath,
+      resolvedPath,
+      resolvedDiscoveredPath,
+      stats,
+      resolvedSkillFile,
+    }) =>
       piCanonicalPathsEqual(identity, skillPath, resolvedPath)
+      && typeof resolvedDiscoveredPath === 'string'
+      && piCanonicalPathsEqual(identity, skillPath, resolvedDiscoveredPath)
       && piCanonicalPathIsWithin(identity, canonicalRepoRoot, resolvedPath)
       && (stats.isDirectory() && (
         typeof resolvedSkillFile === 'string'
@@ -206,6 +221,10 @@ export async function assembleApprovedPiProjectResources(
     capabilities: { explicitSkills: true },
   });
   const eligibleSkillPaths = [...decision.eligibleSkillPaths];
+  const eligibleSkillEvidence = eligibleSkillPaths.map((canonicalPath, index) => ({
+    discoveredPath: input.discovered.skills[index] ?? '',
+    canonicalPath,
+  }));
   let reason = decision.reason;
   let skillPaths: readonly string[] = eligibleSkillPaths;
 
@@ -221,7 +240,7 @@ export async function assembleApprovedPiProjectResources(
       ? Date.now() + deadlineMs
       : Date.now();
     const pathStatus = await validateSkillPathsImmediatelyBeforeLaunch(
-      eligibleSkillPaths,
+      eligibleSkillEvidence,
       options.stat ?? fs.stat,
       options.realpath ?? fs.realpath,
       input.identity,

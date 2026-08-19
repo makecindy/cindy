@@ -320,6 +320,28 @@ describe('Pi approved project resource assembly', () => {
     expect(result.diagnostic.reason).toBe('approved-skill-path-changed');
   });
 
+  it('invalidates a discovered Skill symlink retargeted after the resolver snapshot', async () => {
+    const workingDir = '/repo-a/packages/app';
+    const discoveredPath = `${workingDir}/.agents/skills/demo`;
+    const canonicalPath = '/repo-a/packages/shared/a';
+    const input = inputFor(
+      workingDir,
+      approved(workingDir, 'rev-discovered-retarget'),
+      [discoveredPath],
+    );
+    input.discovered.canonicalSkillEvidence = [{ discoveredPath, canonicalPath }];
+
+    const result = await assembleApprovedPiProjectResources(input, workingDir, {
+      ...available,
+      realpath: async (candidate) => candidate === discoveredPath
+        ? '/repo-a/packages/shared/b'
+        : candidate,
+    });
+
+    expect(result.skillPaths).toEqual([]);
+    expect(result.diagnostic.reason).toBe('approved-skill-path-changed');
+  });
+
   it('invalidates a skill whose SKILL.md entrypoint is retargeted after discovery', async () => {
     const workingDir = '/repo-a/packages/app';
     const input = inputFor(workingDir, approved(workingDir, 'rev-a'));
