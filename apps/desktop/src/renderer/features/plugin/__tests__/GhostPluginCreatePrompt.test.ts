@@ -45,6 +45,10 @@ describe('Ghost Plugin creation prompt', () => {
     // 与 §0 七类"隐藏"设计选项保持同步:后台能力 / 运行形态(node 槽)/ 媒体
     // 能力三类曾长期缺席,导致提问阶段就把这些能力漏掉(2026-08-19 补齐)。
     expect(prompt).toContain('后台能力');
+    expect(prompt).toContain('应用内轻提示');
+    expect(prompt).not.toContain('系统提示（');
+    // notify 桌上弹的是应用内 toast,不是 OS 级通知——措辞不得回退成
+    // "系统提示/system notifications" 引导用户误解(PR #3023 review)。
     expect(prompt).toContain('未读角标');
     expect(prompt).toContain('随包 Node 进程');
     expect(prompt).toContain('媒体能力');
