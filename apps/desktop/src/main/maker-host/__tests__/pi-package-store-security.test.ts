@@ -921,6 +921,14 @@ describe('Pi package executable-code boundary', () => {
     let resolvedResources;
     try {
       resolvedResources = await store.resolveManagedPiPackageResources({ snapshotRoot });
+      await expect(store.listPiPackages()).resolves.toMatchObject({
+        packages: [{
+          source: packageFile,
+          enabled: false,
+          canToggle: false,
+          warning: 'inspection-failed',
+        }],
+      });
     } finally {
       realpathSpy.mockRestore();
       nowSpy.mockRestore();
@@ -932,14 +940,6 @@ describe('Pi package executable-code boundary', () => {
       extensions: [], skills: [], promptTemplates: [], packageRoots: [],
     });
     await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
-    await expect(store.listPiPackages()).resolves.toMatchObject({
-      packages: [{
-        source: packageFile,
-        enabled: false,
-        canToggle: false,
-        warning: 'inspection-failed',
-      }],
-    });
   });
 
   it('rejects a direct file snapshot whose package root is replaced by a symlink', async () => {
