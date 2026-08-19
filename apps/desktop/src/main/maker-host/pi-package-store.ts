@@ -1649,7 +1649,7 @@ export async function resolveManagedPiPackageResources(
       }
       try {
         const snapshotLimits = options.snapshotLimits ?? DEFAULT_SNAPSHOT_LIMITS;
-        const staged = await stageManagedPackageSnapshot(
+        let staged = await stageManagedPackageSnapshot(
           resources,
           options.snapshotRoot,
           snapshotLimits,
@@ -1657,22 +1657,37 @@ export async function resolveManagedPiPackageResources(
         const stageMetadata = snapshotStageMetadata.get(staged);
         const changedSources = new Set<string>();
         const copiedSourceRoots = stageMetadata?.sourcePackageRoots ?? resources.packageRoots;
-        const snapshotProjectionChanged = await persistSnapshotUnavailableProjection(
-          (stageMetadata?.skippedPackageRoots ?? []).map((root) => (
-            [root, 'inspection-limit'] as const
-          )),
-        );
         const verificationBudget = createSnapshotBudgetCounters(snapshotLimits);
+        const unavailableVerificationRoots = new Map<string, SnapshotUnavailableWarning>();
+        const failedVerificationIndexes = new Set<number>();
+        let aggregateVerificationLimitReached = false;
+        // Fingerprint verification has the same partial-success contract as
+        // staging: a budget breach quarantines only the unverified roots, so
+        // already copied and authenticated resources remain usable.
         for (const [index, sourceRoot] of copiedSourceRoots.entries()) {
           const approvals = approvalsByRoot.get(sourceRoot);
           if (!approvals?.length) continue;
+          if (aggregateVerificationLimitReached) {
+            unavailableVerificationRoots.set(sourceRoot, 'inspection-limit');
+            failedVerificationIndexes.add(index);
+            continue;
+          }
           const stagedRoot = staged.packageRoots[index];
           if (!stagedRoot) throw new Error('Pi extension snapshot root mapping is incomplete');
-          const copiedFingerprint = await fingerprintPiPackageTree(
-            stagedRoot,
-            snapshotLimits,
-            verificationBudget,
-          );
+          let copiedFingerprint: string;
+          try {
+            copiedFingerprint = await fingerprintPiPackageTree(
+              stagedRoot,
+              snapshotLimits,
+              verificationBudget,
+            );
+          } catch (error) {
+            if (!(error instanceof PiPackageSnapshotLimitError)) throw error;
+            unavailableVerificationRoots.set(sourceRoot, 'inspection-limit');
+            failedVerificationIndexes.add(index);
+            if (error.scope === 'aggregate') aggregateVerificationLimitReached = true;
+            continue;
+          }
           for (const approval of approvals) {
             if (approval.fingerprint !== copiedFingerprint) changedSources.add(approval.source);
           }
@@ -1683,6 +1698,52 @@ export async function resolveManagedPiPackageResources(
           await publishPiPackagesChanged();
           return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
         }
+
+        if (failedVerificationIndexes.size > 0) {
+          for (const index of failedVerificationIndexes) {
+            const stagedRoot = staged.packageRoots[index];
+            if (stagedRoot) {
+              await fs.rm(stagedRoot, { recursive: true, force: true });
+            }
+          }
+          const failedTargets = [...failedVerificationIndexes]
+            .map((index) => staged.packageRoots[index])
+            .filter((target): target is string => Boolean(target));
+          const isFailedResource = (resourcePath: string): boolean => failedTargets.some((target) => (
+            isWithinConfinement(target, resourcePath)
+          ));
+          const filtered: PiManagedPackageResources = {
+            extensions: staged.extensions.filter((entry) => !isFailedResource(entry)),
+            skills: staged.skills.filter((skill) => !isFailedResource(skill.path)),
+            promptTemplates: staged.promptTemplates.filter((entry) => !isFailedResource(entry)),
+            packageRoots: staged.packageRoots.filter((_, index) => !failedVerificationIndexes.has(index)),
+          };
+          const failedSources = copiedSourceRoots.filter((_, index) => (
+            failedVerificationIndexes.has(index)
+          ));
+          const nextSkippedRoots = [
+            ...(stageMetadata?.skippedPackageRoots ?? []),
+            ...failedSources,
+          ];
+          snapshotStageMetadata.set(filtered, {
+            sourcePackageRoots: copiedSourceRoots.filter((_, index) => (
+              !failedVerificationIndexes.has(index)
+            )),
+            skippedPackageRoots: [...new Set(nextSkippedRoots)],
+          });
+          staged = filtered;
+        }
+
+        const unavailableRoots = new Map<string, SnapshotUnavailableWarning>();
+        for (const root of stageMetadata?.skippedPackageRoots ?? []) {
+          unavailableRoots.set(root, 'inspection-limit');
+        }
+        for (const [root, warning] of unavailableVerificationRoots) {
+          unavailableRoots.set(root, warning);
+        }
+        const snapshotProjectionChanged = await persistSnapshotUnavailableProjection(
+          unavailableRoots,
+        );
         if (snapshotProjectionChanged) {
           await publishPiPackagesChanged({ invalidateCache: false });
         }

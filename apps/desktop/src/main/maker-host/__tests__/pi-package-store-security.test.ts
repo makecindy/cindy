@@ -925,8 +925,6 @@ describe('Pi package executable-code boundary', () => {
         packages: [{
           source: packageFile,
           enabled: false,
-          canToggle: false,
-          warning: 'inspection-failed',
         }],
       });
     } finally {
@@ -1152,6 +1150,140 @@ describe('Pi package executable-code boundary', () => {
       packages: [
         { source: sources[0], enabled: true },
         { source: sources[1], enabled: false, warning: 'inspection-limit' },
+      ],
+    });
+  });
+
+  it('keeps earlier roots when a later copied root exceeds fingerprint budget', async () => {
+    const first = await createPackage({ source: 'npm:fingerprint-first' });
+    const second = await createPackage({ source: 'npm:fingerprint-second' });
+    runtime.listOutput = [
+      'User packages:',
+      `  ${first.source}`,
+      `    ${first.root}`,
+      `  ${second.source}`,
+      `    ${second.root}`,
+      '',
+    ].join('\n');
+
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source: first.source, enabled: true });
+    await mutateAuthorized(store, { action: 'set-enabled', source: second.source, enabled: true });
+
+    const snapshotRoot = path.join(runtime.userData, 'fingerprint-package-isolation');
+    const originalOpen = fs.open.bind(fs);
+    let now = Date.now();
+    let delayedSecondRoot = false;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (
+        !delayedSecondRoot
+        && target.includes(`${path.sep}fingerprint-package-isolation${path.sep}1${path.sep}`)
+      ) {
+        delayedSecondRoot = true;
+        now += 20_000;
+      }
+      return originalOpen(...args);
+    });
+
+    let snapshot;
+    try {
+      snapshot = await store.resolveManagedPiPackageResources({
+        snapshotRoot,
+        snapshotLimits: {
+          maxEntries: 100,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 10_000,
+        },
+      });
+    } finally {
+      openSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+
+    expect(delayedSecondRoot).toBe(true);
+    expect(snapshot.packageRoots).toEqual([path.join(snapshotRoot, '0')]);
+    expect(snapshot.extensions).toEqual([
+      path.join(snapshotRoot, '0', 'extensions', 'index.ts'),
+    ]);
+    await expect(fs.stat(path.join(snapshotRoot, '1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [
+        { source: first.source, enabled: true },
+        { source: second.source, enabled: false, warning: 'inspection-limit' },
+      ],
+    });
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { snapshotUnavailableRoots: Record<string, string> };
+    expect(state.snapshotUnavailableRoots).toEqual({
+      [await fs.realpath(second.root)]: 'inspection-limit',
+    });
+  });
+
+  it('isolates current and later roots when aggregate fingerprint budget is exhausted', async () => {
+    const packages = await Promise.all([
+      createPackage({ source: 'npm:aggregate-fingerprint-first' }),
+      createPackage({ source: 'npm:aggregate-fingerprint-second' }),
+      createPackage({ source: 'npm:aggregate-fingerprint-third' }),
+    ]);
+    runtime.listOutput = [
+      'User packages:',
+      ...packages.flatMap((pkg) => [`  ${pkg.source}`, `    ${pkg.root}`]),
+      '',
+    ].join('\n');
+
+    const store = await import('../pi-package-store.js');
+    for (const pkg of packages) {
+      await mutateAuthorized(store, { action: 'set-enabled', source: pkg.source, enabled: true });
+    }
+
+    const snapshotRoot = path.join(runtime.userData, 'aggregate-fingerprint-isolation');
+    const originalLstat = fs.lstat.bind(fs);
+    let now = Date.now();
+    let advancedForSecondRoot = false;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (
+        !advancedForSecondRoot
+        && path.resolve(target) === path.resolve(path.join(snapshotRoot, '1'))
+      ) {
+        advancedForSecondRoot = true;
+        now += 20_000;
+      }
+      return originalLstat(...args);
+    });
+
+    let snapshot;
+    try {
+      snapshot = await store.resolveManagedPiPackageResources({
+        snapshotRoot,
+        snapshotLimits: {
+          maxEntries: 100,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 10_000,
+        },
+      });
+    } finally {
+      lstatSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+
+    expect(advancedForSecondRoot).toBe(true);
+    expect(snapshot.packageRoots).toEqual([path.join(snapshotRoot, '0')]);
+    expect(snapshot.extensions).toEqual([
+      path.join(snapshotRoot, '0', 'extensions', 'index.ts'),
+    ]);
+    await expect(fs.stat(path.join(snapshotRoot, '1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(snapshotRoot, '2'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [
+        { source: packages[0]!.source, enabled: true },
+        { source: packages[1]!.source, enabled: false, warning: 'inspection-limit' },
+        { source: packages[2]!.source, enabled: false, warning: 'inspection-limit' },
       ],
     });
   });
