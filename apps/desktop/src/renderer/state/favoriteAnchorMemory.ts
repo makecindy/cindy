@@ -66,6 +66,13 @@ export interface DraftFavoriteAnchor {
    * device-link seed / 另一窗口把草稿从来源 A 切到同 wire model 的来源 B 后,旧锚点会继续
    * 选中 A 的收藏并抑制 B 模型行的勾,之后编辑 / 删除的也是错误副本。面板行恒带显式来源,
    * 所以这里恒为 string(与会话槽同口径)。
+   *
+   * ★ 深度 / Fast **刻意不进锚点记录**(2026-08-19 review P2):锚点只存**身份**快照
+   * (哪个 uid、指向哪个 wire model / 来源 / 引擎),配置维的等值校验放在消费点 ——
+   * 统一面板派生 activeFavoriteUid 时用「该收藏当前副本的解析结果 vs 正在跑的完整配置」
+   * 直接比(见 unifiedModelSelection.resolveActiveFavoriteAnchorUid)。把 effort/Fast 抄进
+   * 锚点会造出第二份会过期的副本:编辑选中收藏的每条路径都得记得同步它,漏一处就把
+   * 刚编辑完、本该保持选中的收藏误杀出勾选态。
    */
   providerId: string;
 }

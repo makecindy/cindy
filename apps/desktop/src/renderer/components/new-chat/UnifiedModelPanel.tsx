@@ -42,6 +42,7 @@ import {
   computeSelectedRowScrollTop,
   priceTierOf,
   railItemKey,
+  resolveActiveFavoriteAnchorUid,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
   sameAnchor,
@@ -417,12 +418,30 @@ export function UnifiedModelPanel({
   // 选中的收藏锚点**必须仍然存在**才算数(规格 §1.5「删除选中条目时选中回落到对应模型
   // 默认」)。同一条兜底也覆盖切账号:收藏 store 按 dataOwnerId 分区,换号后旧 uid 在新
   // 分区里查无此条 —— 不做这层解析就会两头落空(收藏行没了、模型行的勾又被抑制)。
+  // 存在之外还要**完整配置仍然相等**(2026-08-19 review P2):上游锚点校验只比身份三维
+  // (模型/来源/引擎),外部(device-link seed / 另一窗口 / 另一控制端)只改同一模型的
+  // 深度或 Fast 时,身份照样全对 —— 副本 ≠ live 的收藏不能再勾住。逐维口径与误杀
+  // 分析见 resolveActiveFavoriteAnchorUid 头注;所有锚点入口都汇到这一个派生点。
   const activeFavoriteUid = useMemo(
     () =>
-      selectedFavoriteUid && favorites.some((item) => item.uid === selectedFavoriteUid)
-        ? selectedFavoriteUid
-        : null,
-    [favorites, selectedFavoriteUid],
+      resolveActiveFavoriteAnchorUid({
+        selectedFavoriteUid,
+        favorites,
+        entries,
+        liveEffort: selectedEffort,
+        liveFast: fastMode,
+        liveAgent: liveEngineAgent,
+        agentFastModeCapable,
+      }),
+    [
+      agentFastModeCapable,
+      entries,
+      fastMode,
+      favorites,
+      liveEngineAgent,
+      selectedEffort,
+      selectedFavoriteUid,
+    ],
   );
 
   // ★ 引擎那一半(engineOverride / pinnedEngine / forceEngine 的合成与 isSelectedModelRow

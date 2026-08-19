@@ -717,6 +717,10 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       vendorKey: 'cc',
+      // 选中的收藏 = 草稿正在跑它的副本:live 深度/Fast 必须与副本一致,否则锚点按
+      // 「副本 ≠ live」回落(2026-08-19 review P2 的完整配置校验)。
+      effort: 'low',
+      fastMode: true,
     });
     await act(async () => {
       fireEvent.click(favoriteStar());
@@ -1346,6 +1350,9 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       vendorKey: 'codex',
+      // 副本无显式档 → 解析成 codex 目录默认 high;live 深度须与之一致,锚点才成立
+      // (2026-08-19 review P2 的完整配置校验)。
+      effort: 'high',
       onEffortChange: vi.fn(),
       onFastModeChange,
     });
@@ -1961,7 +1968,10 @@ describe('统一面板 · 新会话选中直通', () => {
     const { unmount } = render(
       React.createElement(ModelSelectorContent, {
         modelId: 'gpt-5.5',
-        effort: 'medium',
+        // 选中的收藏 = 草稿正在跑它的副本(2026-08-19 review P2 的完整配置校验):
+        // 引擎对齐副本(vendorKey codex),深度对齐副本解析值(无显式档 → codex 目录默认 high)。
+        vendorKey: 'codex',
+        effort: 'high',
         onModelChange: vi.fn(),
         onEffortChange: vi.fn(),
         currentProviderId: 'xd',
