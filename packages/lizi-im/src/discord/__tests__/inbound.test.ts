@@ -839,6 +839,54 @@ describe('DiscordIM inbound pipeline', () => {
     expect(handoffFinished).toBe(true);
   });
 
+  it('keeps the draining outbound lease when the Gateway reconnects during handoff', async () => {
+    const channel = makeChannel('dm-1');
+    const gateway = makeGateway({ client: makeClient(channel) });
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage((event) => {
+      const terminal = (async () => {
+        await releaseTask.promise;
+        await im.sendText(event.senderId, 'final response after reconnect');
+      })();
+      im.trackAcceptedTask(terminal);
+    });
+
+    await im.init();
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    gateway.emitStatus({ kind: 'connecting' });
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby();
+    await flushMicrotasks();
+
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    await flushMicrotasks();
+
+    expect(gateway.closeIngress).toHaveBeenCalledOnce();
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(channel.send).not.toHaveBeenCalled();
+
+    releaseTask.resolve(undefined);
+    await handoff;
+
+    expect(channel.send).toHaveBeenCalledWith('final response after reconnect');
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
   it('cancels a stale handoff when this Desktop regains ingress while accepted work drains', async () => {
     const gateway = makeGateway();
     const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;

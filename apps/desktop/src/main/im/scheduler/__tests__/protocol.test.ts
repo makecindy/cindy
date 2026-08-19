@@ -22,6 +22,23 @@ describe('Discord scheduler protocol', () => {
       inReplyTo: '1234567890abcdef',
     })).toBe(true);
     expect(isImSchedulerFrame({
+      kind: 'advertisement',
+      sentAt: 1,
+      channels: [],
+      runtimeGaps: [
+        {
+          identity: '12345678901234567',
+          generation: 'c'.repeat(32),
+          state: 'dirty',
+        },
+        {
+          identity: '12345678901234567',
+          generation: 'd'.repeat(32),
+          state: 'dirty',
+        },
+      ],
+    })).toBe(true);
+    expect(isImSchedulerFrame({
       kind: 'probe',
       sentAt: 1,
       nonce: '1234567890abcdef',
@@ -119,7 +136,7 @@ describe('Discord scheduler protocol', () => {
         },
         {
           identity: '12345678901234567',
-          generation: 'd'.repeat(32),
+          generation: 'c'.repeat(32),
           state: 'dirty',
         },
       ],

@@ -36,6 +36,14 @@ const ACTIVATION_RETRY_MS = 10_000;
 const RUNTIME_RECONNECT_GRACE_MS = 15_000;
 const INITIAL_ACTIVATION_TIMEOUT_MS = 15_000;
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function runtimeGenerationKey(identity: string, generation: string): string {
+  return `${identity}\0${generation}`;
+}
+
 interface PeerAdvertisement {
   deviceId: string;
   sentAt: number;
@@ -446,7 +454,7 @@ export class ImSchedulerManager {
     if (this.discord.isSchedulerTransportConnecting()) return;
     if (sameIntent && Date.now() - this.lastActivationAttemptAt < ACTIVATION_RETRY_MS) return;
     this.lastActivationAttemptAt = Date.now();
-    const predecessor = this.runtimeGaps.get(identity)?.generation;
+    const predecessor = this.firstRuntimeGap(identity)?.generation;
     if (predecessor) this.discord.markSchedulerOfflineGap();
     const activation = this.discord.init();
     let activationTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -693,13 +701,19 @@ export class ImSchedulerManager {
   /** Keep older Desktops interoperable while newer peers receive every gap. */
   private legacyRuntimeGap(): SchedulerRuntimeFrame | undefined {
     return [...this.runtimeGaps.values()]
-      .sort((left, right) => left.generation.localeCompare(right.generation))[0];
+      .sort((left, right) => (
+        compareCodeUnits(left.generation, right.generation)
+        || compareCodeUnits(left.identity, right.identity)
+      ))[0];
   }
 
   private advertisedRuntimeGaps(): SchedulerRuntimeFrame[] | undefined {
     if (this.runtimeGaps.size === 0) return undefined;
     if (this.runtimeGaps.size === 1 && !this.localRuntime) return undefined;
-    return [...this.runtimeGaps.values()];
+    return [...this.runtimeGaps.values()].sort((left, right) => (
+      compareCodeUnits(left.generation, right.generation)
+      || compareCodeUnits(left.identity, right.identity)
+    ));
   }
 
   private advertisedChannels(): SchedulerAdvertisementFrame['channels'] {
@@ -783,7 +797,9 @@ export class ImSchedulerManager {
     runtimeGaps: SchedulerRuntimeFrame[] | undefined,
   ): void {
     if (runtime) {
-      if (runtime.predecessor) this.resolveRuntimeGeneration(runtime.predecessor);
+      if (runtime.predecessor) {
+        this.resolveRuntimeGeneration(runtime.identity, runtime.predecessor);
+      }
       if (runtime.state === 'clean') {
         const pending = this.pendingCleanHandoffs.get(runtime.identity);
         if (!pending || pending.generation !== runtime.generation) {
@@ -792,12 +808,10 @@ export class ImSchedulerManager {
             generation: runtime.generation,
           });
         }
-        this.resolveRuntimeGeneration(runtime.generation);
+        this.resolveRuntimeGeneration(runtime.identity, runtime.generation);
       } else if (runtime.state === 'active') {
         this.pendingCleanHandoffs.delete(runtime.identity);
-        if (this.runtimeGaps.get(runtime.identity)?.generation === runtime.generation) {
-          this.runtimeGaps.delete(runtime.identity);
-        }
+        this.runtimeGaps.delete(runtimeGenerationKey(runtime.identity, runtime.generation));
       } else {
         this.adoptRuntimeGap(runtime);
       }
@@ -835,14 +849,10 @@ export class ImSchedulerManager {
   }
 
   private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
-    if (this.resolvedRuntimeGenerations.has(runtime.generation)) return;
+    const key = runtimeGenerationKey(runtime.identity, runtime.generation);
+    if (this.resolvedRuntimeGenerations.has(key)) return;
     if (this.localRuntime?.state === 'active' && this.localRuntime.identity === runtime.identity) return;
-    // A generation is an opaque random token, not a clock.  Concurrent peers
-    // can report more than one unresolved gap before their advertisements
-    // converge; keep the lexical minimum only as an order-independent
-    // tie-breaker so every observer carries the same compensation token.
-    const existing = this.runtimeGaps.get(runtime.identity);
-    if (existing && existing.generation <= runtime.generation) return;
+    if (this.runtimeGaps.has(key)) return;
     this.setRuntimeGap({
       identity: runtime.identity,
       generation: runtime.generation,
@@ -852,24 +862,31 @@ export class ImSchedulerManager {
   }
 
   private setRuntimeGap(runtime: SchedulerRuntimeFrame): void {
-    this.runtimeGaps.set(runtime.identity, runtime);
+    const key = runtimeGenerationKey(runtime.identity, runtime.generation);
+    this.runtimeGaps.set(key, runtime);
     if (this.runtimeGaps.size <= MAX_RUNTIME_GAPS) return;
 
-    // Keep the same deterministic subset on every observer when the local
-    // identity map exceeds the wire-format limit. Generation is opaque, so
-    // lexical order is only a stable tie-breaker, never an age claim.
+    // Keep the same deterministic subset on every observer when the unresolved
+    // generation set exceeds the wire-format limit. Generation is opaque, so
+    // code-unit order is only a stable tie-breaker, never an age claim.
     const retained = [...this.runtimeGaps.entries()]
       .sort((left, right) => (
-        left[1].generation.localeCompare(right[1].generation)
-        || left[0].localeCompare(right[0])
+        compareCodeUnits(left[1].generation, right[1].generation)
+        || compareCodeUnits(left[1].identity, right[1].identity)
       ))
       .slice(0, MAX_RUNTIME_GAPS);
     this.runtimeGaps.clear();
-    for (const [identity, gap] of retained) this.runtimeGaps.set(identity, gap);
+    for (const [retainedKey, gap] of retained) this.runtimeGaps.set(retainedKey, gap);
+  }
+
+  private firstRuntimeGap(identity: string): SchedulerRuntimeFrame | undefined {
+    return [...this.runtimeGaps.values()]
+      .filter((runtime) => runtime.identity === identity)
+      .sort((left, right) => compareCodeUnits(left.generation, right.generation))[0];
   }
 
   private beginLocalRuntime(identity: string, predecessor?: string): void {
-    if (predecessor) this.resolveRuntimeGeneration(predecessor);
+    if (predecessor) this.resolveRuntimeGeneration(identity, predecessor);
     this.localRuntime = {
       identity,
       generation: randomUUID().replaceAll('-', ''),
@@ -877,7 +894,6 @@ export class ImSchedulerManager {
       ...(predecessor ? { predecessor } : {}),
     };
     this.pendingCleanHandoffs.delete(identity);
-    this.runtimeGaps.delete(identity);
   }
 
   private recordActivationGapAfterCleanHandoff(identity: string): void {
@@ -899,7 +915,7 @@ export class ImSchedulerManager {
     const generation = this.localRuntime.generation;
     if (runtimeClean) {
       this.localRuntime = { identity, generation, state: 'clean' };
-      this.resolveRuntimeGeneration(generation);
+      this.resolveRuntimeGeneration(identity, generation);
     } else {
       this.localRuntime = null;
       this.setRuntimeGap({ identity, generation, state: 'dirty' });
@@ -910,17 +926,16 @@ export class ImSchedulerManager {
     this.finishLocalRuntime(identity, false);
   }
 
-  private resolveRuntimeGeneration(generation: string): void {
-    if (this.resolvedRuntimeGenerations.has(generation)) return;
-    this.resolvedRuntimeGenerations.add(generation);
-    this.resolvedRuntimeGenerationOrder.push(generation);
+  private resolveRuntimeGeneration(identity: string, generation: string): void {
+    const key = runtimeGenerationKey(identity, generation);
+    if (this.resolvedRuntimeGenerations.has(key)) return;
+    this.resolvedRuntimeGenerations.add(key);
+    this.resolvedRuntimeGenerationOrder.push(key);
     if (this.resolvedRuntimeGenerationOrder.length > 32) {
       const oldest = this.resolvedRuntimeGenerationOrder.shift();
       if (oldest) this.resolvedRuntimeGenerations.delete(oldest);
     }
-    for (const [identity, runtime] of this.runtimeGaps) {
-      if (runtime.generation === generation) this.runtimeGaps.delete(identity);
-    }
+    this.runtimeGaps.delete(key);
   }
 
   private clearActivationFailure(): void {

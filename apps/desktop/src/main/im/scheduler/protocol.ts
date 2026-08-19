@@ -16,7 +16,7 @@ export interface SchedulerAdvertisementFrame {
   sentAt: number;
   channels: SchedulerChannelIdentity[];
   runtime?: SchedulerRuntimeFrame;
-  /** Bounded dirty runtime gaps, keyed by Discord identity. */
+  /** Bounded unresolved dirty runtime generations. */
   runtimeGaps?: SchedulerRuntimeFrame[];
   /** Echoes a discovery probe so the receiver knows this view is current. */
   inReplyTo?: string;
@@ -105,11 +105,12 @@ export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {
 function isSchedulerRuntimeGaps(value: unknown): value is SchedulerRuntimeFrame[] | undefined {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length > MAX_RUNTIME_GAPS) return false;
-  const identities = new Set<string>();
+  const generations = new Set<string>();
   return value.every((runtime) => {
     if (!isSchedulerRuntimeFrame(runtime) || runtime.state !== 'dirty') return false;
-    if (identities.has(runtime.identity)) return false;
-    identities.add(runtime.identity);
+    const key = `${runtime.identity}\0${runtime.generation}`;
+    if (generations.has(key)) return false;
+    generations.add(key);
     return true;
   });
 }

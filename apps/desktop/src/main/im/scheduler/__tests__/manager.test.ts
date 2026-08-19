@@ -587,7 +587,7 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
-  it('converges concurrent dirty generations with an order-independent tie-breaker', async () => {
+  it('keeps concurrent dirty generations and resolves only the matching clean generation', async () => {
     harness.owner = false;
     harness.peers = [
       { deviceId: 'a', platform: 'darwin', online: true, lastSeenAt: Date.now() },
@@ -625,8 +625,38 @@ describe('Discord scheduler manager', () => {
           && typeof payload === 'object'
           && payload !== null
           && (payload as { kind?: unknown }).kind === 'advertisement',
-      )?.[2] as { runtime?: { generation?: string } } | undefined;
+      )?.[2] as {
+        runtime?: { generation?: string };
+        runtimeGaps?: Array<{ identity?: string; generation?: string }>;
+      } | undefined;
       expect(advertisement?.runtime?.generation).toBe(lowerGeneration);
+      expect(advertisement?.runtimeGaps?.map((gap) => gap.generation)).toEqual([
+        lowerGeneration,
+        higherGeneration,
+      ]);
+
+      confirmPeer('a', [], {
+        identity: '12345678901234567',
+        generation: lowerGeneration,
+        state: 'clean',
+      });
+      harness.presenceHandler?.({
+        deviceId: 'a',
+        platform: 'darwin',
+        online: true,
+        lastSeenAt: Date.now(),
+      });
+      const afterClean = [...harness.sendPush.mock.calls].reverse().find(
+        ([target, , payload]) => target === 'a'
+          && typeof payload === 'object'
+          && payload !== null
+          && (payload as { kind?: unknown }).kind === 'advertisement',
+      )?.[2] as {
+        runtime?: { generation?: string };
+        runtimeGaps?: Array<{ identity?: string; generation?: string }>;
+      } | undefined;
+      expect(afterClean?.runtime?.generation).toBe(higherGeneration);
+      expect(afterClean?.runtimeGaps).toBeUndefined();
       await manager.stop();
     }
   });
