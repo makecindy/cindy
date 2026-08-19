@@ -3048,6 +3048,15 @@ export class PiAgent extends BaseAgent {
       }
       if (resolution === undefined) resolution = 'system-deny';
       piSubagentApprovalDecisions.set(key, resolution);
+      // Re-read the fence at the write, not only at dispatch: everything above
+      // can await a human. An answer decided under the outgoing account must
+      // not reach the child's mailbox after that account stopped being the
+      // owner — the decision stays cached and undelivered, which is the same
+      // state a failed delivery already leaves behind.
+      if (accountBoundaryTeardown) {
+        piSubagentApprovalRequests.delete(key);
+        return;
+      }
       try {
         const controlled = await controlPiSubagentRuns(subagentRunRoot, status.taskId, 'approval', {
           childId: task.childId,
@@ -3069,11 +3078,20 @@ export class PiAgent extends BaseAgent {
         piSubagentApprovalRequests.delete(key);
       }
     };
-    /** Fire an approval offer and keep it awaitable until it settles. */
+    /**
+     * Fire an approval offer and keep it awaitable until it settles.
+     *
+     * The single door every offer goes through, which is what lets the account
+     * boundary close it: once the fence is up nothing new is dispatched, so the
+     * set can actually be drained rather than merely sampled. Not answering is
+     * not denying — the request stays in the durable mailbox for whoever owns
+     * the runtime next, exactly as a lost approval surface leaves it.
+     */
     const dispatchPiSubagentApproval = (
       status: PiSubagentRunStatus,
       task: PiSubagentRunStatus['tasks'][number],
     ): void => {
+      if (accountBoundaryTeardown) return;
       const dispatch = resolvePiSubagentApproval(status, task);
       piSubagentApprovalDispatches.add(dispatch);
       const forget = (): void => { piSubagentApprovalDispatches.delete(dispatch); };
@@ -3342,16 +3360,37 @@ export class PiAgent extends BaseAgent {
       // while the old token was briefly still valid and the old resolver could
       // still write a child's control mailbox.
       //
-      // Bounded, because an offer waits on a human: a card nobody answers must
-      // not wedge a logout. Missing the deadline is not a security decision on
-      // its own — the caller's shutdown report and the account-boundary sweep
-      // are what refuse the handover — so this layer converges the common case
-      // and hands the rest upwards.
-      let deadline: ReturnType<typeof setTimeout> | undefined;
-      const converged = await Promise.race([
-        Promise.allSettled([supervisorExited, ...piSubagentApprovalDispatches]).then(() => true),
-        new Promise<boolean>((resolve) => { deadline = setTimeout(() => resolve(false), 2_000); }),
-      ]).finally(() => { if (deadline) clearTimeout(deadline); });
+      // Four layers, and only the first actually closes the window:
+      //  1. the dispatch gate (`dispatchPiSubagentApproval`) plus the re-check
+      //     before the mailbox write. After the fence is up no offer starts and
+      //     no answer lands, so the set below can only shrink.
+      //  2. this drain. Sampling the set once was not enough: a supervisor
+      //     round that passed its fence check before the fence went up could
+      //     still be inside its directory scan, and the offers it fired when
+      //     the scan returned were not in that sample. Looping means an offer
+      //     that appeared during the previous round is picked up by the next —
+      //     and with (1) in place there can be at most one such round.
+      //  3. the budget. An offer waits on a human, and a card nobody answers
+      //     must not wedge a logout, so a slow convergence is logged and let go.
+      //  4. the caller. Missing the deadline is not a security decision here:
+      //     the shutdown report and the account-boundary sweep are what refuse
+      //     the handover. This function converges the common case and hands
+      //     anything left upwards.
+      let expired: ReturnType<typeof setTimeout> | undefined;
+      const budget = new Promise<'timed-out'>((resolve) => {
+        expired = setTimeout(() => resolve('timed-out'), 2_000);
+      });
+      let converged = true;
+      try {
+        // The supervisor first: it is the thing that could still open an offer.
+        converged = await Promise.race([supervisorExited.then(() => 'done' as const), budget]) === 'done';
+        while (converged && piSubagentApprovalDispatches.size > 0) {
+          const round = Promise.allSettled([...piSubagentApprovalDispatches]).then(() => 'done' as const);
+          converged = await Promise.race([round, budget]) === 'done';
+        }
+      } finally {
+        if (expired) clearTimeout(expired);
+      }
       if (!converged) {
         this.deps.logger.warn('pi detached Subagent approvals did not converge before the account boundary deadline', {
           sessionId: opts.sessionId,

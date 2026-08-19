@@ -476,6 +476,35 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await vi.waitFor(() => expect(proxyDisposed).toBe(2), { timeout: 2_000 });
   });
 
+  it('drains the approval set at the boundary instead of sampling it once', () => {
+    // Defence in depth, asserted on the source because it cannot be observed:
+    // the dispatch gate makes a second round impossible, so a single snapshot
+    // now happens to be sufficient and the two shapes behave identically. The
+    // loop is what keeps that true if the gate is ever weakened — sampling once
+    // is precisely how the previous version let an offer fired after the fence
+    // escape the wait.
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const teardown = source.slice(
+      source.indexOf('const stopDetachedSubagentRunsForAccountBoundary = async ()'),
+    );
+    const barrier = teardown.slice(0, teardown.indexOf('let proxyLeaseInitialInspection'));
+    expect(barrier).toContain('while (converged && piSubagentApprovalDispatches.size > 0)');
+    // Still bounded, and the budget is shared by every round rather than
+    // restarted per round — a wedged resolver must not extend a logout.
+    expect(barrier).toContain("setTimeout(() => resolve('timed-out'), 2_000)");
+    expect([...barrier.matchAll(/setTimeout\(/g)]).toHaveLength(1);
+    // The gate itself: no offer may start once the fence is up, which is what
+    // makes a drain terminate at all.
+    const dispatcher = source.slice(source.indexOf('const dispatchPiSubagentApproval = ('));
+    const gate = dispatcher.indexOf('if (accountBoundaryTeardown) return;');
+    const call = dispatcher.indexOf('resolvePiSubagentApproval(status, task)');
+    expect(gate).toBeGreaterThan(-1);
+    expect(call).toBeGreaterThan(gate);
+    // And every dispatch site goes through that one door.
+    expect([...source.matchAll(/resolvePiSubagentApproval\(status, task\)/g)]).toHaveLength(1);
+  });
+
   it('raises the account-boundary fence before close() awaits anything', () => {
     // The fence used to be raised only inside
     // `stopDetachedSubagentRunsForAccountBoundary`, which runs *after*
@@ -935,6 +964,111 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(resolver.mock.calls.length).toBe(offersAtClose);
     // And the lease went back with it.
     expect(proxyDisposed).toBe(2);
+  });
+
+  it('does not dispatch an approval the boundary raised while a scan was in flight', async () => {
+    // The gap the barrier alone could not close: a supervisor round passes its
+    // fence check, then blocks in the directory scan. The fence goes up while
+    // it is in there, so the round's own check is already stale — and the
+    // offers it fires when the scan returns were never in the set the barrier
+    // sampled. Closing that means refusing at dispatch, not waiting harder.
+    let openScan!: () => void;
+    let releaseScan!: () => void;
+    const scanStarted = new Promise<void>((resolve) => { openScan = resolve; });
+    const scanGate = new Promise<void>((resolve) => { releaseScan = resolve; });
+    let scans = 0;
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockImplementation(async () => {
+      scans += 1;
+      if (scans === 1) {
+        openScan();
+        await scanGate;
+      }
+      return [pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } })];
+    });
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    knobs.onExit?.({ code: 1, signal: null });
+    await scanStarted;
+    // close() raises the fence before its first await, so it is up by the time
+    // the scan is allowed to finish.
+    const closing = handle.close({ reason: 'account-boundary' });
+    releaseScan();
+    await closing;
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    expect(scans).toBeGreaterThan(0);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(control).not.toHaveBeenCalled();
+    expect(proxyDisposed).toBe(2);
+  });
+
+  it('refuses to deliver an answer decided before the boundary but ready after it', async () => {
+    // Auto-review reaches the mailbox without ever touching a user surface, so
+    // the offer is not parked when the session closes — it simply finishes its
+    // await and writes. Deciding under the outgoing account is fine; delivering
+    // to a child after that account stopped owning the runtime is not, so the
+    // fence is read again immediately before the write.
+    let openReview!: () => void;
+    let releaseReview!: () => void;
+    const reviewStarted = new Promise<void>((resolve) => { openReview = resolve; });
+    const reviewGate = new Promise<void>((resolve) => { releaseReview = resolve; });
+    const run = pendingSubagentRun({
+      toolName: 'bash',
+      input: { command: 'printf hi > ./inside.txt' },
+    }, {}, 'input');
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+    const review = vi.fn(async () => {
+      openReview();
+      await reviewGate;
+      return { verdict: 'allow' as const };
+    });
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review }))
+      .startSession({ ...opts(), permissionMode: 'auto' });
+
+    await reviewStarted;
+    const closing = handle.close({ reason: 'account-boundary' });
+    releaseReview();
+    await closing;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(review).toHaveBeenCalled();
+    expect(control).not.toHaveBeenCalled();
+  });
+
+  it('stays idempotent over a repeated account-boundary close', async () => {
+    let approvalGeneration = 0;
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockImplementation(async () => {
+      approvalGeneration += 1;
+      const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+      run.tasks[0]!.pendingApproval!.id = `approval-${approvalGeneration}`;
+      return [run];
+    });
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    knobs.onExit?.({ code: 1, signal: null });
+    await vi.waitFor(() => expect(control.mock.calls.length).toBeGreaterThan(0), { timeout: 2_000 });
+    await handle.close({ reason: 'account-boundary' });
+    const writes = control.mock.calls.length;
+
+    // A second teardown must not re-enter the barrier's budget, which is what a
+    // leaked dispatch entry would cause, and must add no mailbox writes.
+    const startedAt = Date.now();
+    await handle.close({ reason: 'account-boundary' });
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(control.mock.calls.length).toBe(writes);
   });
 
   it('fails closed to the account boundary when a teardown caller names no reason', async () => {
