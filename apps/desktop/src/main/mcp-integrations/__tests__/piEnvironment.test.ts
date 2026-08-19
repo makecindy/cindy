@@ -76,6 +76,12 @@ function createTestServer(name: string): McpServer {
       text: JSON.stringify(getLiziMcpSessionContext()?.vendorOptions ?? {}),
     }],
   }));
+  server.tool('current_remote_host', 'Return the active lizi MCP remote host id.', {}, async () => ({
+    content: [{
+      type: 'text' as const,
+      text: getLiziMcpSessionContext()?.remoteHostId ?? 'local',
+    }],
+  }));
   return server;
 }
 
@@ -664,5 +670,50 @@ describe('piEnvironment per-session identity', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('carries remoteHostId into the session ctx so MCP tools can tell a remote session apart', async () => {
+    // Remote Pi keeps the MCP bridge (remotePiSkipMcpBridge returns false), so
+    // tools do run for SSH sessions — but their workingDir is a path on the
+    // remote host. A tool that cannot see remoteHostId resolves it against the
+    // local filesystem instead, which is either a confusing "not found" or,
+    // when the same absolute path exists locally, silently the wrong file.
+    const askRemoteHost = async (ctx: Parameters<typeof getPiExtraSpawnConfig>[2]) => {
+      const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), ctx);
+      const server = config!.mcpBridge!.servers[0]!;
+      const headers = {
+        authorization: `Bearer ${config!.mcpBridge!.token}`,
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      };
+      const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(1) });
+      const mcpSessionId = initResp.headers.get('mcp-session-id');
+      await initResp.text();
+      const callResp = await fetch(server.url, {
+        method: 'POST',
+        headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name: 'current_remote_host', arguments: {} },
+        }),
+      });
+      return readRpcText(callResp);
+    };
+
+    await expect(
+      askRemoteHost({
+        sessionId: 'pi-remote-1',
+        workingDir: '/remote/repo',
+        vendorOptions: {},
+        remoteHostId: 'ssh-host-1',
+      }),
+    ).resolves.toMatchObject({ result: { content: [{ type: 'text', text: 'ssh-host-1' }] } });
+
+    // A local session must stay indistinguishable from before this change.
+    await expect(
+      askRemoteHost({ sessionId: 'pi-local-1', workingDir: '/repo', vendorOptions: {} }),
+    ).resolves.toMatchObject({ result: { content: [{ type: 'text', text: 'local' }] } });
   });
 });

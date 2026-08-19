@@ -223,6 +223,14 @@ export async function getPiExtraSpawnConfig(
       ? { sessionInstanceId: sessionCtx.sessionInstanceId }
       : {}),
     workingDir: sessionCtx?.workingDir ?? '',
+    // Remote sessions must be recognisable as remote by the MCP tools: their
+    // workingDir is a path on the SSH host, so a tool that resolves it against
+    // the local filesystem either errors confusingly or — when the same
+    // absolute path happens to exist here — silently operates on the wrong
+    // local file. Codex already forwards this (codexEnvironment.ts); Pi kept
+    // the MCP bridge for remote sessions but never carried the id across, so
+    // every remote Pi session looked local to lizi-mcps.
+    ...(sessionCtx?.remoteHostId ? { remoteHostId: sessionCtx.remoteHostId } : {}),
     vendorOptions,
     mcpCallerKind: sessionCtx?.mcpCallerKind ?? 'unknown',
     mcpCallerAttested: sessionCtx?.mcpCallerAttested === true,
