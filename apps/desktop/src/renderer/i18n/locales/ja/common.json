@@ -5014,6 +5014,12 @@
       "title": "「{{name}}」を無効にしますか？",
       "body": "このパネルを閉じるとプラグインが無効になり、機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
       "confirm": "無効にする"
+    },
+    "externalLinkConfirm": {
+      "title": "Cindy で外部ウェブサイトを開きますか？",
+      "message": "Cindy で外部ウェブサイトを開きますか？",
+      "open": "ウェブサイトを開く",
+      "cancel": "キャンセル"
     }
   },
   "ghostPanelWindow": {
@@ -6641,7 +6647,8 @@
       "outputFile": "出力: {{path}}"
     },
     "planPill": {
-      "step": "ステップ {{current}} / {{total}}"
+      "step": "ステップ {{current}} / {{total}}",
+      "dismiss": "計画を閉じる"
     },
     "forkOrigin": {
       "label": "元のセッションから作成"

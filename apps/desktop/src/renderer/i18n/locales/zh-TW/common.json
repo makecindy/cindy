@@ -5014,6 +5014,12 @@
       "title": "停用「{{name}}」？",
       "body": "關閉這個面板會停用插件並暫停其能力。你可以隨時在側邊欄「插件」中重新啟用。",
       "confirm": "停用"
+    },
+    "externalLinkConfirm": {
+      "title": "是否要讓 Cindy 開啟外部網站",
+      "message": "是否要讓 Cindy 開啟外部網站",
+      "open": "開啟網站",
+      "cancel": "取消"
     }
   },
   "ghostPanelWindow": {
@@ -6639,9 +6645,10 @@
       "lastTool": "最近工具：{{tool}}",
       "outputFile": "輸出：{{path}}"
     },
-    "planPill": {
-      "step": "第 {{current}} / {{total}} 步"
-    },
+      "planPill": {
+        "step": "第 {{current}} / {{total}} 步",
+        "dismiss": "關閉計劃"
+      },
     "forkOrigin": {
       "label": "基於原任務建立"
     },
