@@ -49,7 +49,22 @@ describe('SessionInfoMeta worktree 徽标', () => {
         worktree: managed,
       }),
     );
-    expect(screen.getByLabelText('ccAgent.sidebar.taskInfo.worktree')).toBeTruthy();
+    expect(screen.getByLabelText('ccAgent.sidebar.taskInfo.openWorktree')).toBeTruthy();
     expect(screen.queryByText('steady-goodall')).toBeNull();
+  });
+
+  it('does not make observed worktree icons an action control', () => {
+    render(
+      createElement(SessionInfoMeta, {
+        pieces: [{ key: 'worktree', text: '' }],
+        worktree: {
+          ...managed,
+          source: 'observed',
+          canReveal: false,
+        },
+      }),
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByLabelText('ccAgent.sidebar.taskInfo.openWorktree')).toBeNull();
   });
 });

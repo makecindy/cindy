@@ -148,4 +148,20 @@ describe('sessionWorktreeInfo', () => {
       }),
     ).toBe('/remote/repo');
   });
+
+  it('treats device-link the same as SSH: never open a remote path locally', () => {
+    expect(
+      composerWorkingDirPath({
+        workingDir: '/Users/other/project',
+        liveWorktree: {
+          path: '/Users/other/.cindy-worktrees/foo',
+          name: 'foo',
+          branch: 'cindy/foo',
+          source: 'managed',
+          canReveal: true,
+        },
+        isRemote: true,
+      }),
+    ).toBe('/Users/other/project');
+  });
 });

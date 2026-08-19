@@ -4,7 +4,8 @@
  *   managed  = Cindy 官方 create 仍登记在 store 里,且目录还是 linked worktree
  *   observed = 本机任务遥测里仍活着的 linked worktree(可回溯,不只最近一次 cwd)
  *
- * 本机 Desktop 专用 observed;SSH / device-link 只显示官方 managed。
+ * 本机 Desktop 专用。SSH / device-link / Mobile 第一期不显示。
+ * 侧栏任务信息只读官方 store(共享快照,不每行扫 Git);打开中的任务才回溯遥测。
  * 不写 store、不改变回收。目录没了摘掉徽标。外部 observed 不可 reveal。
  */
 
@@ -97,6 +98,7 @@ export function useTaskInfoWorktree(
     'id' | 'workingDir' | 'worktreePath' | 'deviceLinkDeviceId' | 'remoteHostId'
   >,
   enabled: boolean,
+  opts?: { observeTelemetry?: boolean },
 ): SessionWorktreeInfo | null {
   const official = useWorktreeForSession(session.id);
   const managed = resolveManagedWorktree(official);
@@ -105,11 +107,12 @@ export function useTaskInfoWorktree(
   const officialPath = official?.path ?? null;
   const deviceId = session.deviceLinkDeviceId ?? null;
   const isRemote = Boolean(deviceId || session.remoteHostId);
+  const observeTelemetry = Boolean(opts?.observeTelemetry);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || isRemote || !observeTelemetry) {
       setObserved(null);
-      setOfficialStillLive(true);
+      setOfficialStillLive(!isRemote);
       return;
     }
     let cancelled = false;
@@ -164,8 +167,17 @@ export function useTaskInfoWorktree(
       unsubscribe?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [enabled, officialPath, deviceId, isRemote, session.id]);
+  }, [enabled, officialPath, deviceId, isRemote, observeTelemetry, session.id]);
 
+  if (isRemote) return null;
+  if (!observeTelemetry) {
+    return selectDisplayedWorktree({
+      enabled,
+      managed,
+      officialStillLive: true,
+      observed: null,
+    });
+  }
   return selectDisplayedWorktree({
     enabled,
     managed,

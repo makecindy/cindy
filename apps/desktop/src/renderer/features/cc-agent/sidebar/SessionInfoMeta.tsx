@@ -234,25 +234,21 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
  */
 function WorktreePiece({ info }: { info: SessionWorktreeInfo }) {
   const { t } = useTranslation();
-  const title = info.branch ? `${info.branch} · ${info.path}` : info.path;
+  const openLabel = t('ccAgent.sidebar.taskInfo.openWorktree');
+  const detail = info.branch ? `${info.branch} · ${info.path}` : info.path;
   const icon = <Folders size={11} strokeWidth={1.75} className="block" />;
   if (!info.canReveal) {
     return (
-      <Tip text={title} mono>
-        <span
-          className="flex shrink-0 items-center"
-          aria-label={t('ccAgent.sidebar.taskInfo.worktree')}
-        >
-          {icon}
-        </span>
+      <Tip text={detail} mono>
+        <span className="flex shrink-0 items-center">{icon}</span>
       </Tip>
     );
   }
   return (
-    <Tip text={title} mono>
+    <Tip text={`${openLabel} · ${detail}`} mono>
       <button
         type="button"
-        aria-label={t('ccAgent.sidebar.taskInfo.worktree')}
+        aria-label={openLabel}
         onClick={(event) => {
           event.stopPropagation();
           void window.electronAPI

@@ -800,6 +800,10 @@ export function CCAgentSessionView({
       remoteHostId: undefined,
     },
     Boolean(session),
+    { observeTelemetry: true },
+  );
+  const isRemoteWorktreeSession = Boolean(
+    session?.deviceLinkDeviceId || session?.remoteHostId,
   );
 
   // Fetch fresh session data from server whenever sessionId changes.
@@ -1229,13 +1233,12 @@ export function CCAgentSessionView({
     const wd = composerWorkingDirPath({
       workingDir: session?.workingDir,
       liveWorktree,
-      isRemote: Boolean(session?.remoteHostId),
+      isRemote: isRemoteWorktreeSession,
     });
     if (!wd) return;
-    // remote session 的 workingDir 是远端主机上的路径,本机 openPath 只会打开错误的
-    // 本地同名目录或直接报错。远端文件能力接入前,remote chip 不响应点击(仅作信息
-    // 展示,完整路径 + Host 仍在 hover Tip 里)。
-    if (session?.remoteHostId) return;
+    // SSH / device-link 的 workingDir 是远端路径,本机 openPath 会打开错误目录。
+    // 远端文件能力接入前,remote chip 不响应点击(仅作信息展示)。
+    if (isRemoteWorktreeSession) return;
     try {
       const result = await window.electronAPI.openPath(wd);
       if (!result.success) toast.error(result.error || t('ccAgent.common.openFolderFailed'));
@@ -1243,7 +1246,7 @@ export function CCAgentSessionView({
       log.error('[open workingDir]', err);
       toast.error(t('ccAgent.common.openFolderFailed'));
     }
-  }, [session?.workingDir, session?.remoteHostId, liveWorktree, t]);
+  }, [session?.workingDir, isRemoteWorktreeSession, liveWorktree, t]);
 
   const handleReturnToDispatcher = useCallback(() => {
     if (!ownsWindowRoute) {
@@ -3845,7 +3848,7 @@ export function CCAgentSessionView({
   const composerDir = composerWorkingDirPath({
     workingDir: session?.workingDir,
     liveWorktree,
-    isRemote: Boolean(session?.remoteHostId),
+    isRemote: isRemoteWorktreeSession,
   });
   const workingDirLabel = !composerDir
     ? '\u00A0'
@@ -4688,7 +4691,7 @@ export function CCAgentSessionView({
                     mono
                     side="top"
                   >
-                    {session?.remoteHostId ? (
+                    {isRemoteWorktreeSession ? (
                       <div className="flex min-w-0 items-center gap-1.5">
                         {workingDirChipContent}
                       </div>

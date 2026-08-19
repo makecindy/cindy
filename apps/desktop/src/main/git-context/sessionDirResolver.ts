@@ -24,7 +24,7 @@
 
 import path from 'node:path';
 
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { messages, sessions } from '../localDb/schema';
@@ -57,6 +57,9 @@ export function posixDriveToWin32(p: string, platform: NodeJS.Platform = process
 
 /** 倒序扫描的 tool-use 上限——只为找到最近一条带候选目录的;200 足够穿过连续的 Read。 */
 const SCAN_LIMIT = 200;
+/** 侧栏/composer 回溯 linked worktree 时最多翻这么多条 tool-use,避免「用过但超出 200 条窗口」丢标。 */
+const MAX_LINKED_WORKTREE_SCAN = 2000;
+const messageRowid = sql<number>`"messages"."rowid"`;
 
 /** 解析结果:目录 + 其 HEAD + 来源(决定徽标对分支的信任度)。 */
 export interface SessionGitDirResult {
@@ -220,8 +223,11 @@ export async function resolveSessionGitDir(
   return { workdir: null, head: null, source: null };
 }
 
-/** 查该 session 可见的 tool-use 消息 content,createdAt 降序、bounded(可见性同 prRefsStore)。 */
-export async function queryRecentToolUseContents(sessionId: string): Promise<string[]> {
+/** 查该 session 可见的 tool-use 消息 content,createdAt+rowid 降序、bounded(可见性同 prRefsStore)。 */
+export async function queryRecentToolUseContentRows(
+  sessionId: string,
+  opts?: { limit?: number; before?: { createdAt: number; rowid: number } },
+): Promise<Array<{ content: string; createdAt: number; rowid: number }>> {
   const db = getDbClient().drizzle;
   const [sessionRow] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -229,6 +235,7 @@ export async function queryRecentToolUseContents(sessionId: string): Promise<str
     .where(eq(sessions.id, sessionId))
     .limit(1);
   const clearedAt = sessionRow?.clearedAt ?? null;
+  const limit = opts?.limit ?? SCAN_LIMIT;
 
   const conds = [
     eq(messages.sessionId, sessionId),
@@ -236,14 +243,48 @@ export async function queryRecentToolUseContents(sessionId: string): Promise<str
     isNull(messages.rewindAt),
   ];
   if (clearedAt !== null) conds.push(gt(messages.createdAt, clearedAt));
+  if (opts?.before) {
+    const { createdAt, rowid } = opts.before;
+    conds.push(
+      or(
+        lt(messages.createdAt, createdAt),
+        and(eq(messages.createdAt, createdAt), lt(messageRowid, rowid)),
+      )!,
+    );
+  }
 
-  const rows = await db
-    .select({ content: messages.content })
+  return db
+    .select({
+      content: messages.content,
+      createdAt: messages.createdAt,
+      rowid: messageRowid,
+    })
     .from(messages)
     .where(and(...conds))
-    .orderBy(desc(messages.createdAt), desc(sql<number>`"messages"."rowid"`))
-    .limit(SCAN_LIMIT);
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(limit);
+}
+
+export async function queryRecentToolUseContents(sessionId: string): Promise<string[]> {
+  const rows = await queryRecentToolUseContentRows(sessionId, { limit: SCAN_LIMIT });
   return rows.map((r) => r.content);
+}
+
+async function queryLinkedWorktreeTelemetryContents(sessionId: string): Promise<string[]> {
+  const contents: string[] = [];
+  let before: { createdAt: number; rowid: number } | undefined;
+  while (contents.length < MAX_LINKED_WORKTREE_SCAN) {
+    const page = await queryRecentToolUseContentRows(sessionId, {
+      limit: SCAN_LIMIT,
+      before,
+    });
+    if (page.length === 0) break;
+    for (const row of page) contents.push(row.content);
+    const last = page[page.length - 1];
+    before = { createdAt: last.createdAt, rowid: last.rowid };
+    if (page.length < SCAN_LIMIT) break;
+  }
+  return contents;
 }
 
 /**
@@ -303,7 +344,7 @@ export async function findLiveLinkedWorktreeLive(
     return await findLiveLinkedWorktree(sessionId, {
       recentToolUseContents: async (sid) => {
         try {
-          return await queryRecentToolUseContents(sid);
+          return await queryLinkedWorktreeTelemetryContents(sid);
         } catch {
           return [];
         }
