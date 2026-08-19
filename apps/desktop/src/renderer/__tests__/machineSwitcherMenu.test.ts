@@ -174,9 +174,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       "labelKey: 'ccAgent.sidebar.viewStyleListWide', Icon: LayoutList",
     );
 
-    // 任务信息四项各配数据类型图标;时间用 Clock 而非 Timer(后者是自动任务专用字形)。
+    // 任务信息各项各配数据类型图标;时间用 Clock 而非 Timer(后者是自动任务专用字形)。
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest");
+    expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.tokens', Icon: Coins");
     expect(filterSource).toContain("labelKey: 'ccAgent.sidebar.taskInfo.cost', Icon: Wallet");
     expect(filterSource).not.toMatch(/taskInfo\.time', Icon: Timer/);
@@ -350,6 +351,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(infoMetaSource).toContain("if (field === 'pr' && hasPrRef)");
     expect(infoMetaSource).toContain("pieces.push({ key: 'pr', text: '' })");
     expect(infoMetaSource).toContain("piece.key === 'pr' ?");
+    expect(infoMetaSource).toContain("if (field === 'worktree' && hasWorktree)");
+    expect(infoMetaSource).toContain("piece.key === 'worktree' ?");
     // 菜单摘要的图标串同样按勾选顺序(遍历 taskInfoFields,不是遍历选项表)。
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
     expect(filterSource).toContain('{taskInfoFields.map((field) => {');

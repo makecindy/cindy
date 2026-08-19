@@ -7,7 +7,7 @@
  *     alphabetic 已删除）
  *   - 筛选：一级只占一行，右侧显示摘要（「无」/「N 项生效」），展开二级子菜单
  *     承载 Status / Project / Agent / Last activity 四维度 + 重置筛选
- *   - 显示：主列表形态(文字/列表)+ 任务信息复选(time / pr / tokens / cost)
+ *   - 显示：主列表形态(文字/列表)+ 任务信息复选(time / pr / worktree / tokens / cost)
  *
  * 入口仍复用 sliders-horizontal 图标；内容为行式菜单 + 子菜单。
  *
@@ -32,6 +32,7 @@ import {
   Coins,
   Filter,
   Folder,
+  Folders,
   GitPullRequest,
   Globe,
   Info,
@@ -131,14 +132,16 @@ const PROJECT_SORT_BY_OPTIONS: ReadonlyArray<Option<FilterSortBy>> = [
 ];
 
 /**
- * 本表的顺序 = 菜单里四个复选项的排列顺序(固定)。列表行的**渲染顺序**另算:
+ * 本表的顺序 = 菜单里复选项的排列顺序(固定)。列表行的**渲染顺序**另算:
  * 按用户勾选先后(2026-08-12 用户裁决),见 SessionInfoMeta。
  * 图标对应各自的数据类型:时间=Clock(Timer 已被自动任务独占,不复用避免撞义)、
- * PR=GitPullRequest(与顶栏 / 侧栏徽标未知态同一个字形)、token=Coins、费用=Wallet。
+ * PR=GitPullRequest、worktree=Folders(独立工作副本,不跟 PR 的 git 分叉抢形)、
+ * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
+  { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },
   { value: 'tokens', labelKey: 'ccAgent.sidebar.taskInfo.tokens', Icon: Coins },
   { value: 'cost', labelKey: 'ccAgent.sidebar.taskInfo.cost', Icon: Wallet },
 ];

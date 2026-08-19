@@ -7655,6 +7655,8 @@
       "taskInfo": {
         "time": "時間",
         "pr": "PR 狀態",
+        "worktree": "worktree",
+        "openWorktree": "開啟 worktree 資料夾",
         "tokens": "Token",
         "cost": "費用"
       },

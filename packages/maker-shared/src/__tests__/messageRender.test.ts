@@ -1030,6 +1030,50 @@ describe('message render todo grouping', () => {
       });
     });
 
+    it('does not let an old Task update carry later TaskCreate calls across a user boundary', () => {
+      const staleTask = tool(
+        'task-old',
+        'TaskCreate',
+        { subject: 'Old work' },
+        'create-old',
+      );
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-task-boundary',
+        content: '开始另一项工作',
+        createdAt: at(5),
+      };
+      const staleProgress = tool(
+        'task-old-progress',
+        'TaskUpdate',
+        { taskId: 'old', status: 'in_progress' },
+        'update-old',
+      );
+      const freshTask = tool(
+        'task-new',
+        'TaskCreate',
+        { subject: 'Current work' },
+        'create-new',
+      );
+
+      const latest = findLatestMessageTodoInsertion([
+        staleTask,
+        result('create-old', 'Task #old created successfully: Old work'),
+        newUserTurn,
+        // 指向旧 id 的更新可以合法穿过边界,但不能把 session 的所有权锚点
+        // 搬到新 turn,否则紧随其后的新 TaskCreate 会继续并入旧清单。
+        staleProgress,
+        freshTask,
+        result('create-new', 'Task #new created successfully: Current work'),
+      ]);
+
+      expect(latest).toMatchObject({
+        key: 'todo-task-new',
+        source: 'task',
+        todos: [{ content: 'Current work', status: 'pending' }],
+      });
+    });
+
     it('does not cut a session at synthetic user rows (auto-resume / scheduler)', () => {
       const staleTodo = tool('todo-live', 'TodoWrite', {
         todos: [

@@ -7,6 +7,8 @@
  * 全不选渲染 null(行右侧留空)。
  *
  * 数据口径:
+ *   - worktree:Cindy 官方仍登记且目录还在,或本机任务遥测里仍活着的 linked
+ *     worktree(可回溯,不只最近 cwd)。Folders + 短名;官方可点开目录,外部只展示。
  *   - pr:session_pr_refs 的最新一条(lastSeenAt 降序首位),显示「状态 icon +
  *     等宽 `#号`」,与会话顶栏 GitContextBadge 的 PrChip 同款(2026-08-12 用户
  *     裁决:仿顶栏,状态颜色只上在 icon 上,`#号` 文字用信息槽常规灰):形状表
@@ -33,15 +35,17 @@
  */
 
 import { useEffect, useState } from 'react';
-import { GitPullRequest } from 'lucide-react';
+import { Folders, GitPullRequest } from 'lucide-react';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { useTranslation } from 'react-i18next';
 
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
+import { Tip } from '@/components/ui/tooltip';
 import { usePrActions, usePrStatus } from '@/contexts/PrRefsContext';
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
 import type { SessionPrRef } from '@/lib/gitContext.types';
+import { createLogger } from '@/lib/logger';
 import { formatMoney, formatUsd } from '@/lib/usageFormat';
 import { prStatusKey } from '@/lib/prStatus';
 import {
@@ -53,6 +57,9 @@ import {
 } from '../gitContextPrVisuals';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import type { TaskInfoField } from '../hooks/useTaskInfoFields';
+import type { SessionWorktreeInfo } from './sessionWorktreeInfo';
+
+const log = createLogger('SessionInfoMeta');
 
 type TFunc = (key: string, options?: Record<string, unknown>) => string;
 
@@ -79,6 +86,8 @@ export function buildSessionInfoPieces(
   t: TFunc,
   /** 该会话是否有 PR 引用;有才为 'pr' 排一个占位(无 PR 的行不占位)。 */
   hasPrRef = false,
+  /** 该会话是否有可显示的 worktree;有才为 'worktree' 排一个占位。 */
+  hasWorktree = false,
 ): SessionInfoPiece[] {
   const pieces: SessionInfoPiece[] = [];
   for (const field of fields) {
@@ -122,6 +131,10 @@ export function buildSessionInfoPieces(
       // 占位:PR 徽标要单独订阅状态缓存(见 PrNumberPiece),内容由 SessionInfoMeta
       // 渲染时替换。放进 pieces 只为让它参与「按勾选顺序」排列。
       pieces.push({ key: 'pr', text: '' });
+      continue;
+    }
+    if (field === 'worktree' && hasWorktree) {
+      pieces.push({ key: 'worktree', text: '' });
     }
   }
   return pieces;
@@ -219,19 +232,62 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
  * prRef 的位置由 pieces 里的 'pr' 占位决定(= 用户勾选顺序);兼容未传
  * hasPrRef 的旧调用:那时 pieces 里没有占位,PR 仍前置渲染。
  */
+function WorktreePiece({ info }: { info: SessionWorktreeInfo }) {
+  const { t } = useTranslation();
+  const openLabel = t('ccAgent.sidebar.taskInfo.openWorktree');
+  const detail = info.branch ? `${info.branch} · ${info.path}` : info.path;
+  const icon = <Folders size={11} strokeWidth={1.75} className="block" />;
+  if (!info.canReveal) {
+    return (
+      <Tip text={detail} mono>
+        <span className="flex shrink-0 items-center">{icon}</span>
+      </Tip>
+    );
+  }
+  return (
+    <Tip text={`${openLabel} · ${detail}`} mono>
+      <button
+        type="button"
+        aria-label={openLabel}
+        onClick={(event) => {
+          event.stopPropagation();
+          void window.electronAPI
+            .worktreeReveal({ path: info.path })
+            .then((result) => {
+              if (result && result.ok === false) {
+                log.warn('reveal rejected:', result.error?.message ?? 'unknown');
+              }
+            })
+            .catch((err) => {
+              log.warn('reveal failed:', err);
+            });
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="flex shrink-0 items-center"
+      >
+        {icon}
+      </button>
+    </Tip>
+  );
+}
+
 export function SessionInfoMeta({
   pieces,
   prRef,
+  worktree,
   isActive,
   className,
 }: {
   pieces: readonly SessionInfoPiece[];
   /** 勾选了 pr 且该会话有 PR 引用时传入(最新一条);否则 undefined 不占位。 */
   prRef?: SessionPrRef;
+  /** 勾选了 worktree 且该会话有 live / 路径形态 worktree 时传入。 */
+  worktree?: SessionWorktreeInfo;
   isActive?: boolean;
   className?: string;
 }) {
-  if (pieces.length === 0 && !prRef) return null;
+  if (pieces.length === 0 && !prRef && !worktree) return null;
   return (
     <span
       className={cn(
@@ -240,14 +296,19 @@ export function SessionInfoMeta({
         className,
       )}
     >
-      {/* 顺序完全由 pieces 决定(= 用户勾选顺序);'pr' 是占位,这里换成徽标。
-          兼容旧调用:未把 pr 排进 pieces 时(hasPrRef 未传),仍按老样子前置。 */}
+      {/* 顺序完全由 pieces 决定(= 用户勾选顺序);'pr' / 'worktree' 是占位,这里换成徽标。
+          兼容旧调用:未把字段排进 pieces 时,仍按老样子前置。 */}
       {prRef && !pieces.some((piece) => piece.key === 'pr') && (
         <PrNumberPiece prRef={prRef} isActive={isActive} />
       )}
+      {worktree && !pieces.some((piece) => piece.key === 'worktree') && (
+        <WorktreePiece info={worktree} />
+      )}
       {pieces.map((piece, index) => (
         <span key={piece.key} className="flex shrink-0 items-center gap-1" title={piece.title}>
-          {(index > 0 || (prRef && !pieces.some((p) => p.key === 'pr'))) && (
+          {(index > 0 ||
+            (prRef && !pieces.some((p) => p.key === 'pr')) ||
+            (worktree && !pieces.some((p) => p.key === 'worktree'))) && (
             <span aria-hidden className="opacity-50">
               ·
             </span>
@@ -255,6 +316,10 @@ export function SessionInfoMeta({
           {piece.key === 'pr' ? (
             prRef ? (
               <PrNumberPiece prRef={prRef} isActive={isActive} />
+            ) : null
+          ) : piece.key === 'worktree' ? (
+            worktree ? (
+              <WorktreePiece info={worktree} />
             ) : null
           ) : piece.dateTime ? (
             <time dateTime={piece.dateTime}>{piece.text}</time>

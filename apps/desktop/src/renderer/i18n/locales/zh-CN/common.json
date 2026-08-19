@@ -7628,6 +7628,8 @@
       "taskInfo": {
         "time": "时间",
         "pr": "PR 状态",
+        "worktree": "worktree",
+        "openWorktree": "打开 worktree 文件夹",
         "tokens": "Token",
         "cost": "费用"
       },

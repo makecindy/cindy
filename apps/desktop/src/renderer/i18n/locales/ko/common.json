@@ -7655,6 +7655,8 @@
       "taskInfo": {
         "time": "시간",
         "pr": "PR 상태",
+        "worktree": "worktree",
+        "openWorktree": "worktree 폴더 열기",
         "tokens": "토큰",
         "cost": "비용"
       },

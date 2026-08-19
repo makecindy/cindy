@@ -299,8 +299,8 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
   });
 
   it('persist → load round-trips and drops illegal / duplicate entries', () => {
-    persistTaskInfoFields(['pr', 'tokens', 'cost', 'time']);
-    expect(loadTaskInfoFields()).toEqual(['pr', 'tokens', 'cost', 'time']);
+    persistTaskInfoFields(['pr', 'worktree', 'tokens', 'cost', 'time']);
+    expect(loadTaskInfoFields()).toEqual(['pr', 'worktree', 'tokens', 'cost', 'time']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'bogus', 'time', 42, 'cost']));
     expect(loadTaskInfoFields()).toEqual(['time', 'cost']);
   });

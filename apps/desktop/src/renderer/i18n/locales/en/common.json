@@ -7640,6 +7640,8 @@
       "taskInfo": {
         "time": "Time",
         "pr": "PR status",
+        "worktree": "worktree",
+        "openWorktree": "Open worktree folder",
         "tokens": "Tokens",
         "cost": "Cost"
       },

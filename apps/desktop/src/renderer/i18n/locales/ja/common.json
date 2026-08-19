@@ -7655,6 +7655,8 @@
       "taskInfo": {
         "time": "時間",
         "pr": "PR ステータス",
+        "worktree": "worktree",
+        "openWorktree": "worktree フォルダーを開く",
         "tokens": "トークン",
         "cost": "コスト"
       },
