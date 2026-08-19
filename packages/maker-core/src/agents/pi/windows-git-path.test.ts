@@ -359,71 +359,28 @@ describe('Windows Git/PATH helpers', () => {
     'C:\\Git\\mingw64\\bin\\git.exe',
   ])('uses a PATH executable at %s to add the inferred root paths', (gitPath) => {
     const fs = fakeFs([gitPath, 'C:\\Git\\cmd\\git.exe']);
-    let execPathProbeCalled = false;
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: '',
-      probes: {
-        readRegistryInstallPaths: () => [],
-        findGitExecutablesOnPath: () => [gitPath],
-        readGitExecPaths: () => {
-          execPathProbeCalled = true;
-          return new Map();
-        },
-        ...fs,
-      },
+      probes: { readRegistryInstallPaths: () => [], findGitExecutablesOnPath: () => [gitPath], ...fs },
     });
-    expect(execPathProbeCalled).toBe(false);
     expect(result).toContain('C:\\Git\\cmd');
   });
 
-  it('uses git --exec-path to resolve an executable shim without package-manager-specific rules', () => {
-    const fs = fakeFs([
-      'C:\\Users\\alice\\scoop\\apps\\git\\current\\cmd\\git.exe',
-      'C:\\Users\\alice\\scoop\\apps\\git\\current\\usr\\bin\\ls.exe',
-    ]);
+  it('ignores executable shims without running PATH candidates', () => {
+    const shim = 'C:\\Users\\alice\\workspace\\tools\\git.exe';
+    const standardGit = 'C:\\PortableGit\\cmd\\git.exe';
+    const fs = fakeFs([shim, standardGit]);
     const result = resolveWindowsGitPath({
       platform: 'win32',
       existingPath: 'C:\\Windows',
       probes: {
         readRegistryInstallPaths: () => [],
-        findGitExecutablesOnPath: () => ['C:\\Users\\alice\\scoop\\shims\\git.exe'],
-        readGitExecPaths: () => new Map([
-          ['C:\\Users\\alice\\scoop\\shims\\git.exe', 'C:/Users/alice/scoop/apps/git/current/mingw64/libexec/git-core'],
-        ]),
+        findGitExecutablesOnPath: () => [shim, standardGit],
         ...fs,
       },
     });
-    expect(result.split(';')).toEqual([
-      'C:\\Windows',
-      'C:\\Users\\alice\\scoop\\apps\\git\\current\\cmd',
-      'C:\\Users\\alice\\scoop\\apps\\git\\current\\usr\\bin',
-    ]);
-  });
-
-  it('probes multiple executable shims in one shared exec-path batch', () => {
-    const firstShim = 'C:\\Users\\alice\\scoop\\shims\\git.exe';
-    const secondShim = 'C:\\Tools\\git.exe';
-    const root = 'C:\\PortableGit';
-    const fs = fakeFs([`${root}\\cmd\\git.exe`]);
-    const batches: string[][] = [];
-
-    const result = resolveWindowsGitPath({
-      platform: 'win32',
-      existingPath: 'C:\\Windows',
-      probes: {
-        readRegistryInstallPaths: () => [],
-        findGitExecutablesOnPath: () => [firstShim, secondShim],
-        readGitExecPaths: (gitPaths) => {
-          batches.push([...gitPaths]);
-          return new Map([[secondShim, `${root}\\mingw64\\libexec\\git-core`]]);
-        },
-        ...fs,
-      },
-    });
-
-    expect(batches).toEqual([[firstShim, secondShim]]);
-    expect(result).toBe(`C:\\Windows;${root}\\cmd`);
+    expect(result).toBe('C:\\Windows;C:\\PortableGit\\cmd');
   });
 
   it('fails open when a wrapper cannot identify a valid Git for Windows root', () => {
@@ -434,7 +391,6 @@ describe('Windows Git/PATH helpers', () => {
       probes: {
         readRegistryInstallPaths: () => [],
         findGitExecutablesOnPath: () => ['C:\\Tools\\git.cmd'],
-        readGitExecPaths: () => new Map(),
         isDirectory: () => false,
         isFile: () => false,
       },
