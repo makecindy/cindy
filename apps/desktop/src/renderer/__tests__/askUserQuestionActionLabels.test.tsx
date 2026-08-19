@@ -46,24 +46,17 @@ describe('AskUserQuestionPrompt action labels', () => {
     fireEvent.change(view.getByPlaceholderText('Type your answer…'), {
       target: { value: 'Custom answer' },
     });
-    expect(
-      (view.getByRole('button', { name: 'Update & Next' }) as HTMLButtonElement).disabled,
-    ).toBe(false);
+    expect((view.getByTestId('ask-user-custom-next') as HTMLButtonElement).disabled).toBe(false);
 
-    fireEvent.click(view.getByRole('button', { name: 'Update & Next' }));
+    fireEvent.click(view.getByTestId('ask-user-custom-next'));
     await waitFor(() => expect(view.queryByText('Second question')).not.toBeNull());
     await waitFor(() => expect(view.queryByRole('button', { name: /Back/ })).not.toBeNull());
 
     fireEvent.click(view.getByRole('button', { name: /Back/ }));
     await waitFor(() => expect(view.queryByText('First question')).not.toBeNull());
-    await waitFor(() => expect(view.queryByRole('button', { name: 'Next' })).not.toBeNull());
+    await waitFor(() => expect(view.queryByTestId('ask-user-custom-next')).not.toBeNull());
 
-    expect((view.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    expect(
-      (view.getByRole('button', { name: 'Update & Next' }) as HTMLButtonElement).disabled,
-    ).toBe(false);
+    expect((view.getByTestId('ask-user-custom-next') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('uses Submit for a custom answer on the final question without a footer duplicate', () => {
@@ -137,9 +130,6 @@ describe('AskUserQuestionPrompt action labels', () => {
     for (const [locale, labels] of Object.entries(expected)) {
       expect(i18n.t('chat.askUserQuestion.next', { lng: locale })).toBe(labels[0]);
       expect(i18n.t('chat.askUserQuestion.submit', { lng: locale })).toBe(labels[1]);
-      expect(i18n.t('chat.askUserQuestion.updateAndNext', { lng: locale })).not.toBe(
-        'chat.askUserQuestion.updateAndNext',
-      );
       expect(i18n.t('chat.askUserQuestion.customAnswer', { lng: locale })).not.toBe(
         'chat.askUserQuestion.customAnswer',
       );

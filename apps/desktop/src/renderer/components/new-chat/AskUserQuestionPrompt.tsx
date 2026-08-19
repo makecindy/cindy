@@ -686,9 +686,8 @@ export function AskUserQuestionPrompt({
                       type="button"
                       onClick={handleCustomSubmit}
                       disabled={!customInput.trim()}
-                      aria-label={
-                        isLastQuestion ? undefined : t('chat.askUserQuestion.updateAndNext')
-                      }
+                      data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
+                      aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
                       className={cn(
                         'self-end shrink-0 rounded-[9999px] text-13 font-medium',
                         isLastQuestion
@@ -763,9 +762,8 @@ export function AskUserQuestionPrompt({
                 type="button"
                 onClick={() => customInput.trim() && advance(customInput.trim())}
                 disabled={!customInput.trim()}
-                aria-label={
-                  isLastQuestion ? undefined : t('chat.askUserQuestion.updateAndNext')
-                }
+                data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
+                aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
                 className={cn(
                   'h-10 rounded-[9999px] text-14 font-medium transition-colors',
                   isLastQuestion ? 'px-4' : 'flex w-10 items-center justify-center',

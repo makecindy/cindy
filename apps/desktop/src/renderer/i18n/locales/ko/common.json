@@ -6589,8 +6589,7 @@
       "next": "다음",
       "submit": "제출",
       "customAnswer": "다른 답변 입력…",
-      "answerPlaceholder": "답변을 입력하세요…",
-      "updateAndNext": "수정 후 다음"
+      "answerPlaceholder": "답변을 입력하세요…"
     },
     "planReviewBubble": {
       "title": "계획 검토",

@@ -6562,8 +6562,7 @@
       "next": "下一题",
       "submit": "提交",
       "customAnswer": "输入其他回答…",
-      "answerPlaceholder": "请输入回答…",
-      "updateAndNext": "更新并继续"
+      "answerPlaceholder": "请输入回答…"
     },
     "planReviewBubble": {
       "title": "计划审阅",
