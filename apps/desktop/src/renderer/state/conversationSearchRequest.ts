@@ -17,6 +17,8 @@ export interface ConversationSearchProjectRequest {
   projectKey: string;
   projectName: string;
   sessionIds: string[];
+  workingDir?: string | null;
+  deviceLinkDeviceId?: string | null;
   requestId: number;
 }
 
@@ -33,6 +35,8 @@ export function requestConversationSearch(req: {
   projectKey: string;
   projectName: string;
   sessionIds: string[];
+  workingDir?: string | null;
+  deviceLinkDeviceId?: string | null;
 }): void {
   current = { ...req, requestId: nextRequestId++ };
   emit();

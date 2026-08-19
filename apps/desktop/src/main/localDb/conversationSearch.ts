@@ -14,6 +14,7 @@ import type {
 } from '../../shared/conversationSearch.js';
 import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
@@ -73,7 +74,7 @@ export async function searchConversations(
       poolCapped: false,
     };
   }
-  const sessionRows = await listSearchableSessions(filters);
+  const sessionRows = applyWorkingDirFilter(await listSearchableSessions(filters), filters.workingDirs);
   if (sessionRows.length === 0) {
     return {
       query,
@@ -207,6 +208,7 @@ interface NormalizedConversationSearchFilters {
   agentKind: ConversationSearchAgentFilter;
   lastActivity: ConversationSearchLastActivityFilter;
   sessionIds: string[] | null;
+  workingDirs: string[] | null;
 }
 
 function normalizeFilters(request: ConversationSearchRequest): NormalizedConversationSearchFilters {
@@ -215,7 +217,8 @@ function normalizeFilters(request: ConversationSearchRequest): NormalizedConvers
   const agentKind = normalizeAgentFilter(input.agentKind);
   const lastActivity = normalizeLastActivity(input.lastActivity);
   const sessionIds = normalizeSessionIds(input.sessionIds);
-  return { status, agentKind, lastActivity, sessionIds };
+  const workingDirs = normalizeWorkingDirs(input.workingDirs);
+  return { status, agentKind, lastActivity, sessionIds, workingDirs };
 }
 
 function normalizeStatusFilter(
@@ -253,6 +256,32 @@ function normalizeSessionIds(value: ConversationSearchFilters['sessionIds']): st
     out.push(trimmed);
   }
   return out;
+}
+
+function normalizeWorkingDirs(value: ConversationSearchFilters['workingDirs']): string[] | null {
+  if (value == null || !Array.isArray(value)) return null;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const normalized = normalizeWorkingDirForGrouping(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out.length > 0 ? out : null;
+}
+
+function applyWorkingDirFilter(
+  rows: SessionRow[],
+  workingDirs: string[] | null,
+): SessionRow[] {
+  if (workingDirs == null) return rows;
+  const allowed = new Set(workingDirs);
+  return rows.filter((row) => {
+    const key = normalizeWorkingDirForGrouping(row.workingDir);
+    return key != null && allowed.has(key);
+  });
 }
 
 function normalizeSortBy(value: ConversationSearchSortBy | undefined): ConversationSearchSortBy {

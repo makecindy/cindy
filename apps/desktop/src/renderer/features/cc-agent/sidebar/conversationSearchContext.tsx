@@ -9,9 +9,10 @@
  *   - SidebarTopNav 的搜索行(输入 / 排序 / 筛选 / hover 展开);
  *   - ExpandedView 的结果列表(读 query / status / results)。
  *
- * allKnownProjects 在此就地计算(与 CCAgentSidebarUpper 的 projectUniverse 同口径:全量
- * 会话、排除 Orca worker),供筛选面板列举项目与项目内搜索会话集解析。rail 态的搜索是
- * CollapsedView 里独立的 ConversationSearchBox 图标弹窗,不走本 context。
+ * allKnownProjects 在此就地计算(与 CCAgentSidebarUpper 同口径:本机 ∪ device-link
+ * 远程镜像,按机器切换栏过滤,排除 Orca worker),供筛选面板列举项目与项目内搜索
+ * 会话集解析。rail 态的搜索是 CollapsedView 里独立的 ConversationSearchBox 图标弹窗,
+ * 不走本 context。
  */
 
 import {
@@ -27,6 +28,16 @@ import { useNavigate } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
+import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import { selectVisibleSessions } from '@/features/device-link/selectedMachineStore';
+import {
+  useEffectiveSelectedMachineId,
+  useSwitcherDevices,
+} from '@/features/device-link/useMachineSwitcher';
+import {
+  searchDevicesFromSwitcher,
+  shouldReleaseConversationSearchLock,
+} from '@/lib/conversationSearchFanout';
 import { useConversationSearchRequest } from '@/state/conversationSearchRequest';
 import { useProjectAliases } from '../hooks/useProjectAliases';
 import { useHiddenProjects } from '../hooks/useHiddenProjects';
@@ -58,19 +69,27 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   const projectFilterRequest = useConversationSearchRequest();
   const [openSignal, setOpenSignal] = useState(0);
 
-  // allKnownProjects:全量会话(含归档)、排除 Orca worker,与 CCAgentSidebarUpper 同口径。
+  // allKnownProjects:本机 ∪ 远程镜像(含归档)、按机器切换栏过滤、排除 Orca worker。
   const { sessions } = useCCSessions({ includeArchived: 'all' });
+  const remoteProjectSessions = useRemoteProjectSessions();
+  const selectedMachineId = useEffectiveSelectedMachineId();
+  const switcherDevices = useSwitcherDevices();
+  const searchDevices = useMemo(
+    () => searchDevicesFromSwitcher(switcherDevices),
+    [switcherDevices],
+  );
   const { aliases } = useProjectAliases();
   const { hiddenProjectKeys } = useHiddenProjects();
-  const searchSessions = useMemo(() => sessions.filter((s) => !isOrcaWorkerSession(s)), [sessions]);
+  const searchSessions = useMemo(
+    () =>
+      selectVisibleSessions(sessions, remoteProjectSessions, selectedMachineId).filter(
+        (session) => !isOrcaWorkerSession(session),
+      ),
+    [remoteProjectSessions, selectedMachineId, sessions],
+  );
   const { projects } = useProjectGroups(searchSessions, aliases);
   const visibleProjects = useMemo(
-    () =>
-      visibleSidebarProjects(
-        projects,
-        hiddenProjectKeys,
-        window.electronAPI.platform,
-      ),
+    () => visibleSidebarProjects(projects, hiddenProjectKeys, window.electronAPI.platform),
     [projects, hiddenProjectKeys],
   );
   const allowedSessionIds = useMemo(
@@ -92,6 +111,8 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     allKnownProjects: visibleProjects,
     allowedSessionIds,
     projectFilterRequest,
+    machineSelection: selectedMachineId,
+    searchDevices,
     onProgrammaticOpen: handleProgrammaticOpen,
   });
 
@@ -101,16 +122,18 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   useEffect(() => {
     if (
       search.lockedProjectKey &&
-      isProjectHidden(
-        search.lockedProjectKey,
-        hiddenProjectKeys,
-        window.electronAPI.platform,
-      )
+      (isProjectHidden(search.lockedProjectKey, hiddenProjectKeys, window.electronAPI.platform) ||
+        shouldReleaseConversationSearchLock({
+          lockedProjectKey: search.lockedProjectKey,
+          visibleProjects,
+          localPlatform: window.electronAPI.platform,
+        }))
     ) {
       search.reset();
       search.clearLock();
       return;
     }
+    if (search.lockedProjectKey) return;
     if (search.projectSelection === 'all') return;
     const next = reconcileProjectSelectionWithVisibleProjects(
       search.projectSelection,
@@ -120,7 +143,8 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     if (
       next.length === search.projectSelection.length &&
       next.every((projectKey, index) => projectKey === search.projectSelection[index])
-    ) return;
+    )
+      return;
     search.setProjectSelection(next.length > 0 ? next : 'all');
   }, [
     hiddenProjectKeys,

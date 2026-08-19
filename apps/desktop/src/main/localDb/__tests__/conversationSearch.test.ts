@@ -29,4 +29,9 @@ describe('conversationSearch source invariants', () => {
   it('keeps the raw stored title in the session summary', () => {
     expect(conversationSearchSource).toContain('title: row.title,');
   });
+
+  it('applies grouping-normalized workingDirs so remote project search is not window-bound', () => {
+    expect(conversationSearchSource).toContain('applyWorkingDirFilter');
+    expect(conversationSearchSource).toContain('normalizeWorkingDirForGrouping');
+  });
 });

@@ -2,8 +2,21 @@ import type {
   ConversationSearchRequest,
   ConversationSearchResponse,
 } from '../../shared/conversationSearch';
+import type { Session } from '@/lib/ccAgent.types';
 import { ApiError } from '@/lib/httpClient';
 import { extractIpcError } from '@/utils/ipcError';
+import {
+  emptyConversationSearchResponse,
+  filterResultsByRequestFilters,
+  LEGACY_REMOTE_SESSION_LIST_LIMIT,
+  mergeConversationSearchFanout,
+  requestForOrigin,
+  searchCachedSessionsByTitle,
+  stampRemoteSearchResponse,
+  type ConversationSearchOrigin,
+} from './conversationSearchFanout';
+import type { ConversationSearchResultItem } from '../../shared/conversationSearch';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
@@ -18,8 +31,195 @@ function wrap<T>(p: Promise<T>): Promise<T> {
   });
 }
 
+export interface ConversationSearchFanoutDeps {
+  origins: ConversationSearchOrigin[];
+  searchLocal: (request: ConversationSearchRequest) => Promise<ConversationSearchResponse>;
+  invokeRemote: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
+  listCachedRemoteSessions: (deviceId: string) => Session[];
+  pinSessionOrigin: (deviceId: string, sessionId: string) => void;
+}
+
+export async function searchConversationsAcrossOrigins(
+  request: ConversationSearchRequest,
+  deps: ConversationSearchFanoutDeps & {
+    reuseRemoteResults?: ConversationSearchResultItem[];
+  },
+): Promise<ConversationSearchResponse> {
+  const query = request.query.trim();
+  if (!query) return emptyConversationSearchResponse('');
+  const reuseRemote = deps.reuseRemoteResults != null;
+  const origins = reuseRemote
+    ? deps.origins.filter((origin) => origin.kind === 'local')
+    : deps.origins;
+  if (origins.length === 0 && !reuseRemote) return emptyConversationSearchResponse(query);
+
+  const pages = await Promise.all(
+    origins.map((origin) => searchOneOrigin(request, origin, deps)),
+  );
+  const present = pages.filter((page): page is ConversationSearchResponse => page !== null);
+  if (reuseRemote) {
+    present.push({
+      query,
+      results: deps.reuseRemoteResults ?? [],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+  }
+  if (present.length === 0) {
+    throw new ApiError('UNKNOWN', 0, 'conversation search failed');
+  }
+  return mergeConversationSearchFanout(present, request.limit ?? 24, request.sortBy ?? 'relevance');
+}
+
+async function searchOneOrigin(
+  request: ConversationSearchRequest,
+  origin: ConversationSearchOrigin,
+  deps: ConversationSearchFanoutDeps,
+): Promise<ConversationSearchResponse | null> {
+  const originRequest = requestForOrigin(request, origin);
+  if (origin.kind === 'local') {
+    try {
+      return await deps.searchLocal(originRequest);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!origin.connected) {
+    return finalizeRemoteResponse(
+      searchCachedSessionsByTitle(deps.listCachedRemoteSessions(origin.deviceId), originRequest),
+      origin,
+      originRequest,
+      deps.pinSessionOrigin,
+    );
+  }
+
+  try {
+    const response = await searchRemoteIndexed(origin.deviceId, originRequest, deps.invokeRemote);
+    return finalizeRemoteResponse(response, origin, originRequest, deps.pinSessionOrigin);
+  } catch (error) {
+    if (isDeviceLinkNotConnected(error)) {
+      return finalizeRemoteResponse(
+        searchCachedSessionsByTitle(deps.listCachedRemoteSessions(origin.deviceId), originRequest),
+        origin,
+        originRequest,
+        deps.pinSessionOrigin,
+      );
+    }
+    if (isChannelNotAllowed(error)) {
+      try {
+        const sessions = await listRemoteSessions(
+          origin.deviceId,
+          originRequest,
+          deps.invokeRemote,
+        );
+        return finalizeRemoteResponse(
+          searchCachedSessionsByTitle(sessions, originRequest),
+          origin,
+          originRequest,
+          deps.pinSessionOrigin,
+        );
+      } catch {
+        return finalizeRemoteResponse(
+          searchCachedSessionsByTitle(
+            deps.listCachedRemoteSessions(origin.deviceId),
+            originRequest,
+          ),
+          origin,
+          originRequest,
+          deps.pinSessionOrigin,
+        );
+      }
+    }
+    return finalizeRemoteResponse(
+      searchCachedSessionsByTitle(deps.listCachedRemoteSessions(origin.deviceId), originRequest),
+      origin,
+      originRequest,
+      deps.pinSessionOrigin,
+    );
+  }
+}
+
+async function searchRemoteIndexed(
+  deviceId: string,
+  request: ConversationSearchRequest,
+  invokeRemote: ConversationSearchFanoutDeps['invokeRemote'],
+): Promise<ConversationSearchResponse> {
+  const response = await invokeRemote(deviceId, 'local-db:conversations:search', [request]);
+  return response as ConversationSearchResponse;
+}
+
+async function listRemoteSessions(
+  deviceId: string,
+  request: ConversationSearchRequest,
+  invokeRemote: ConversationSearchFanoutDeps['invokeRemote'],
+): Promise<Session[]> {
+  const status =
+    request.filters?.status === 'active' || request.filters?.status === 'archived'
+      ? request.filters.status
+      : 'all';
+  return (await invokeRemote(deviceId, 'local-db:sessions:list', [
+    LEGACY_REMOTE_SESSION_LIST_LIMIT,
+    status,
+  ])) as Session[];
+}
+
+function finalizeRemoteResponse(
+  response: ConversationSearchResponse,
+  origin: Extract<ConversationSearchOrigin, { kind: 'remote' }>,
+  originRequest: ConversationSearchRequest,
+  pinSessionOrigin: ConversationSearchFanoutDeps['pinSessionOrigin'],
+): ConversationSearchResponse {
+  const stamped = filterResultsByRequestFilters(
+    stampRemoteSearchResponse(response, {
+      deviceId: origin.deviceId,
+      deviceName: origin.deviceName,
+    }),
+    originRequest,
+  );
+  for (const item of stamped.results) {
+    pinSessionOrigin(origin.deviceId, item.session.id);
+  }
+  return stamped;
+}
+
+function isChannelNotAllowed(error: unknown): boolean {
+  const code = extractIpcError(error)?.code ?? (error instanceof ApiError ? error.code : null);
+  if (code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  return error instanceof Error && /CHANNEL_NOT_ALLOWED/.test(error.message);
+}
+
+function isDeviceLinkNotConnected(error: unknown): boolean {
+  const code = extractIpcError(error)?.code ?? (error instanceof ApiError ? error.code : null);
+  return code === 'DEVICE_LINK_NOT_CONNECTED';
+}
+
 export function searchConversations(
   request: ConversationSearchRequest,
+  options?: {
+    origins?: ConversationSearchOrigin[];
+    reuseRemoteResults?: ConversationSearchResultItem[];
+  },
 ): Promise<ConversationSearchResponse> {
-  return wrap(window.electronAPI.localDb.conversations.search(request));
+  return searchConversationsAcrossOrigins(request, {
+    origins: options?.origins ?? [
+      {
+        kind: 'local',
+        sessionIds: request.filters?.sessionIds ?? null,
+        workingDirs: request.filters?.workingDirs ?? null,
+      },
+    ],
+    reuseRemoteResults: options?.reuseRemoteResults,
+    searchLocal: (next) => wrap(window.electronAPI.localDb.conversations.search(next)),
+    invokeRemote: (deviceId, channel, args) =>
+      window.electronAPI.deviceLink.invoke(deviceId, channel, args),
+    listCachedRemoteSessions: (deviceId) =>
+      remoteProjectsStore
+        .getMergedRemoteSessions()
+        .filter((session) => session.deviceLinkDeviceId === deviceId),
+    pinSessionOrigin: (deviceId, sessionId) => {
+      remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
+    },
+  });
 }

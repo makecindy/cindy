@@ -35,6 +35,16 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { searchConversations } from '@/lib/conversationSearchService';
+import {
+  mergeConversationSearchFanout,
+  resolveConversationSearchOrigins,
+  shouldReleaseConversationSearchLock,
+  type ConversationSearchDevice,
+} from '@/lib/conversationSearchFanout';
+import {
+  MACHINE_ALL,
+  type MachineSelection,
+} from '@/features/device-link/selectedMachineStore';
 import { formatSidebarTime } from '../lib/formatSidebarTime';
 import {
   getSearchSortBy,
@@ -52,6 +62,8 @@ import type {
 import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { conversationSearchResultKey } from '@/lib/conversationSearchFanout';
 import {
   projectKeyComparisonKey,
   type ProjectNode as ProjectNodeData,
@@ -70,6 +82,7 @@ const SEMANTIC_SEARCH_DEBOUNCE_MS = 900;
 const SEARCH_LIMIT = 24;
 const MAX_VISIBLE_HITS_PER_RESULT = 3;
 const EMPTY_SESSION_IDS: string[] = [];
+const EMPTY_SEARCH_DEVICES: ConversationSearchDevice[] = [];
 
 type ProjectSelection = 'all' | string[];
 type Option<T extends string> = {
@@ -165,8 +178,12 @@ export interface UseConversationSearchParams {
     projectKey: string;
     projectName: string;
     sessionIds: string[];
+    workingDir?: string | null;
+    deviceLinkDeviceId?: string | null;
     requestId: number;
   } | null;
+  machineSelection?: MachineSelection;
+  searchDevices?: readonly ConversationSearchDevice[];
   /** 收到「在此项目内搜索」请求(锁定项目)时回调:popover 用它打开面板,内联用它聚焦输入。 */
   onProgrammaticOpen?: () => void;
   /** 选中某条结果后回调(navigate 之前):popover 用它关闭面板并上报托盘。 */
@@ -185,6 +202,8 @@ export function useConversationSearch({
   allKnownProjects,
   allowedSessionIds,
   projectFilterRequest,
+  machineSelection = MACHINE_ALL,
+  searchDevices = EMPTY_SEARCH_DEVICES,
   onProgrammaticOpen,
   onResultChosen,
 }: UseConversationSearchParams) {
@@ -206,13 +225,18 @@ export function useConversationSearch({
   const [lockedProjectKey, setLockedProjectKey] = useState<string | null>(null);
   const [lockedProjectName, setLockedProjectName] = useState<string | null>(null);
   const [lockedProjectSessionIds, setLockedProjectSessionIds] = useState<string[]>([]);
+  const [lockedProjectWorkingDir, setLockedProjectWorkingDir] = useState<string | null>(null);
+  const [lockedProjectDeviceId, setLockedProjectDeviceId] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'searching' | 'done' | 'error'>('idle');
   const [response, setResponse] = useState<ConversationSearchResponse | null>(null);
   const requestSeqRef = useRef(0);
   const semanticStartedSeqRef = useRef(0);
+  const remoteResultsRef = useRef<ConversationSearchResultItem[]>([]);
   const requestProjectKey = projectFilterRequest?.projectKey ?? null;
   const requestProjectName = projectFilterRequest?.projectName ?? null;
   const requestProjectSessionIds = projectFilterRequest?.sessionIds ?? EMPTY_SESSION_IDS;
+  const requestProjectWorkingDir = projectFilterRequest?.workingDir ?? null;
+  const requestProjectDeviceId = projectFilterRequest?.deviceLinkDeviceId ?? null;
   const requestId = projectFilterRequest?.requestId ?? 0;
 
   const trimmed = query.trim();
@@ -249,6 +273,55 @@ export function useConversationSearch({
     localPlatform,
     projectSelection,
   ]);
+  const selectedProjectTargets = useMemo(() => {
+    if (projectSelection === 'all') return null;
+    const selected = buildProjectKeyComparisonSet(projectSelection, localPlatform);
+    const fromVisible = allKnownProjects
+      .filter((project) => {
+        const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+        return comparisonKey != null && selected.has(comparisonKey);
+      })
+      .flatMap((project) => {
+        const workingDir = project.workingDir?.trim();
+        if (!workingDir) return [];
+        return [{
+          deviceId: project.deviceLinkDeviceId,
+          workingDir,
+        }];
+      });
+    if (fromVisible.length > 0) return fromVisible;
+    const lockedComparison = projectKeyComparisonKey(lockedProjectKey, localPlatform);
+    if (
+      lockedProjectWorkingDir &&
+      lockedComparison &&
+      selected.size === 1 &&
+      selected.has(lockedComparison)
+    ) {
+      return [{
+        deviceId: lockedProjectDeviceId,
+        workingDir: lockedProjectWorkingDir,
+      }];
+    }
+    return null;
+  }, [
+    allKnownProjects,
+    localPlatform,
+    lockedProjectDeviceId,
+    lockedProjectKey,
+    lockedProjectWorkingDir,
+    projectSelection,
+  ]);
+  const searchOrigins = useMemo(
+    () =>
+      resolveConversationSearchOrigins({
+        machineSelection,
+        sessionIds: selectedProjectTargets ? null : selectedProjectSessionIds,
+        projectTargets: selectedProjectTargets,
+        devices: searchDevices,
+        getSessionDeviceId: (sessionId) => remoteProjectsStore.getSessionDeviceId(sessionId),
+      }),
+    [machineSelection, searchDevices, selectedProjectSessionIds, selectedProjectTargets],
+  );
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (statusFilter !== 'all') count += 1;
@@ -263,6 +336,8 @@ export function useConversationSearch({
     setLockedProjectKey(requestProjectKey);
     setLockedProjectName(requestProjectName);
     setLockedProjectSessionIds([...new Set(requestProjectSessionIds)]);
+    setLockedProjectWorkingDir(requestProjectWorkingDir);
+    setLockedProjectDeviceId(requestProjectDeviceId);
     setProjectSelection([requestProjectKey]);
     onProgrammaticOpen?.(); // popover:打开面板并上报托盘;内联:聚焦输入框
     setQuery('');
@@ -271,7 +346,15 @@ export function useConversationSearch({
     // 处理完即清零跨层请求:否则切到 rail(本组件卸载)再切回(重挂)时,本 effect 会在挂载
     // 阶段读到 stale current,把搜索框误弹出来(PR #246 review,镜像 pendingProjectFocus 的 consume)。
     consumeConversationSearchRequest();
-  }, [requestId, requestProjectKey, requestProjectName, requestProjectSessionIds, onProgrammaticOpen]);
+  }, [
+    requestId,
+    requestProjectKey,
+    requestProjectName,
+    requestProjectSessionIds,
+    requestProjectWorkingDir,
+    requestProjectDeviceId,
+    onProgrammaticOpen,
+  ]);
 
   useEffect(() => {
     requestSeqRef.current += 1;
@@ -283,6 +366,7 @@ export function useConversationSearch({
       return;
     }
     setStatus('searching');
+    remoteResultsRef.current = [];
     const request = {
       query: trimmed,
       limit: SEARCH_LIMIT,
@@ -292,17 +376,38 @@ export function useConversationSearch({
         status: statusFilter,
         agentKind: agentFilter,
         lastActivity: lastActivityFilter,
-        sessionIds: selectedProjectSessionIds,
+        sessionIds: selectedProjectTargets ? null : selectedProjectSessionIds,
       },
     } as const;
     const keywordTimer = window.setTimeout(() => {
       searchConversations({
         ...request,
         semanticMode: 'keyword',
-      })
+      }, { origins: searchOrigins })
         .then((next) => {
           if (seq !== requestSeqRef.current) return;
-          if (semanticStartedSeqRef.current === seq) return;
+          const remoteResults = next.results.filter((item) => item.session.deviceLinkDeviceId);
+          remoteResultsRef.current = remoteResults;
+          if (semanticStartedSeqRef.current === seq) {
+            setResponse((current) => mergeConversationSearchFanout([
+              {
+                query: trimmed,
+                results: (current?.results ?? []).filter((item) => !item.session.deviceLinkDeviceId),
+                vectorUsed: current?.vectorUsed === true,
+                vectorSkipReason: current?.vectorSkipReason ?? null,
+                poolCapped: current?.poolCapped === true,
+              },
+              {
+                query: trimmed,
+                results: remoteResults,
+                vectorUsed: false,
+                vectorSkipReason: null,
+                poolCapped: false,
+              },
+            ], SEARCH_LIMIT, sortBy));
+            setStatus('done');
+            return;
+          }
           setResponse(next);
           setStatus('done');
         })
@@ -317,6 +422,9 @@ export function useConversationSearch({
       searchConversations({
         ...request,
         semanticMode: 'hybrid',
+      }, {
+        origins: searchOrigins,
+        reuseRemoteResults: remoteResultsRef.current,
       })
         .then((next) => {
           if (seq !== requestSeqRef.current) return;
@@ -337,7 +445,9 @@ export function useConversationSearch({
     agentFilter,
     lastActivityFilter,
     enabled,
+    searchOrigins,
     selectedProjectSessionIds,
+    selectedProjectTargets,
     sortBy,
     statusFilter,
     trimmed,
@@ -365,6 +475,8 @@ export function useConversationSearch({
     setLockedProjectKey(null);
     setLockedProjectName(null);
     setLockedProjectSessionIds([]);
+    setLockedProjectWorkingDir(null);
+    setLockedProjectDeviceId(null);
     setProjectSelection('all');
   }, [lockedProjectKey]);
 
@@ -382,6 +494,10 @@ export function useConversationSearch({
       hitOverride?: ConversationSearchResultItem['contentHit'],
     ) => {
       try {
+        const remoteDeviceId = item.session.deviceLinkDeviceId;
+        if (remoteDeviceId) {
+          remoteProjectsStore.pinSessionOrigin(remoteDeviceId, item.session.id);
+        }
         const baseRoute = await resolveSessionRoute(item.session.id, item.session);
         const hit = hitOverride ?? item.contentHit;
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
@@ -486,7 +602,12 @@ export function SearchResultsBody({
   return (
     <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
       {results.map((item) => (
-        <SearchResultRow key={item.session.id} item={item} query={trimmed} onSelect={onSelect} />
+        <SearchResultRow
+          key={conversationSearchResultKey(item)}
+          item={item}
+          query={trimmed}
+          onSelect={onSelect}
+        />
       ))}
     </div>
   );
@@ -501,8 +622,12 @@ export interface ConversationSearchBoxProps {
     projectKey: string;
     projectName: string;
     sessionIds: string[];
+    workingDir?: string | null;
+    deviceLinkDeviceId?: string | null;
     requestId: number;
   } | null;
+  machineSelection?: MachineSelection;
+  searchDevices?: readonly ConversationSearchDevice[];
   /** icon variant 触发钮 className 覆盖——rail 用 SIDEBAR_RAIL_ICON_BUTTON_CLASS。 */
   triggerClassName?: string;
   /** Popover open 态变化上报(供 SidebarActionBar 的 openChildCount 守卫;含程序化打开)。 */
@@ -520,6 +645,8 @@ export function ConversationSearchBox({
   allowedSessionIds,
   hiddenProjectKeys,
   projectFilterRequest,
+  machineSelection = MACHINE_ALL,
+  searchDevices = EMPTY_SEARCH_DEVICES,
   triggerClassName,
   onOpenChange,
 }: ConversationSearchBoxProps) {
@@ -549,6 +676,8 @@ export function ConversationSearchBox({
     allowedSessionIds,
     allKnownProjects,
     projectFilterRequest,
+    machineSelection,
+    searchDevices,
     onProgrammaticOpen: handleProgrammaticOpen,
     onResultChosen: handleResultChosen,
   });
@@ -561,7 +690,12 @@ export function ConversationSearchBox({
           lockedProjectKey,
           hiddenProjectKeys,
           window.electronAPI.platform,
-        )
+        ) ||
+        shouldReleaseConversationSearchLock({
+          lockedProjectKey,
+          visibleProjects: allKnownProjects,
+          localPlatform: window.electronAPI.platform,
+        })
       ) {
         search.reset();
         search.clearLock();
@@ -1026,9 +1160,11 @@ function SearchResultRow({
   const activityIso = item.session.updatedAt;
   const activityText = formatSidebarTime(activityIso, t);
   const sourceText = primaryHit ? searchSourceLabel(primaryHit, t) : t('ccAgent.search.source.titleOnly');
+  const deviceLabel = item.session.deviceLinkDeviceName?.trim() || null;
   const meta = [
     sourceText,
     activityText,
+    deviceLabel,
     item.session.workingDir,
   ].filter(Boolean).join(' · ');
   const tooltip = (

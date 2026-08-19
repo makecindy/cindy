@@ -108,7 +108,8 @@ import {
 } from '@/lib/sessionAttentionStore';
 import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
-import { requestConversationSearch } from '@/state/conversationSearchRequest';
+import { requestConversationSearch, useConversationSearchRequest } from '@/state/conversationSearchRequest';
+import { searchDevicesFromSwitcher } from '@/lib/conversationSearchFanout';
 
 import { emitRefresh, onPatch } from '@/lib/sessionsBus';
 
@@ -411,9 +412,17 @@ export function CCAgentSidebarUpper() {
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
   const { sessions: allSessionsForAttention } = useCCSessions({ includeArchived: 'all' });
+  const remoteProjectSessions = useRemoteProjectSessions();
+  const remoteDevices = useRemoteDevices();
+  const selectedMachineId = useEffectiveSelectedMachineId();
   const searchProjectSessions = useMemo(
-    () => allSessionsForAttention.filter((s) => !isOrcaWorkerSession(s)),
-    [allSessionsForAttention],
+    () =>
+      selectVisibleSessions(
+        allSessionsForAttention,
+        remoteProjectSessions,
+        selectedMachineId,
+      ).filter((session) => !isOrcaWorkerSession(session)),
+    [allSessionsForAttention, remoteProjectSessions, selectedMachineId],
   );
   const projectAliases = useProjectAliases();
   const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
@@ -581,9 +590,6 @@ export function CCAgentSidebarUpper() {
   // 否则置顶的远程会话一拖进 rail 模式就消失、也无法从 rail 打开(codex review)。
   // 机器切换栏选中某机器后按 selectedMachineId 整体过滤(本机 → 只本地;远程 → 只该机器),
   // rail 与展开态共用同一选择态,保证 rail 折叠后仍尊重选中机器。
-  const remoteProjectSessions = useRemoteProjectSessions();
-  const remoteDevices = useRemoteDevices();
-  const selectedMachineId = useEffectiveSelectedMachineId();
   useEffect(() => {
     if (filter.status === 'active') return;
     const selectedRemoteIds =
@@ -932,6 +938,8 @@ function ExpandedView({
       projectKey: project.projectKey,
       projectName: projectDisplayLabelWithMachine(project),
       sessionIds: project.sessions.map((session) => session.id),
+      workingDir: project.workingDir,
+      deviceLinkDeviceId: project.deviceLinkDeviceId,
     });
   }, []);
   // Archived All（右键菜单）走全局 ConfirmDialogProvider —— 与单条 archive 的 inline
@@ -3768,6 +3776,14 @@ function CollapsedView({
   manualPinnedOrder,
   onReorderPinned,
 }: CollapsedProps) {
+  const isCollapsed = useSidebarCollapsedState();
+  const projectFilterRequest = useConversationSearchRequest();
+  const selectedMachineId = useEffectiveSelectedMachineId();
+  const switcherDevices = useSwitcherDevices();
+  const searchDevices = useMemo(
+    () => searchDevicesFromSwitcher(switcherDevices),
+    [switcherDevices],
+  );
   const { t } = useTranslation();
   // 只读 running 快照——**不传 options**：通知副作用（onSessionDone 等）由
   // ExpandedView 的实例独家持有，两个视图常驻挂载，双回调会重复发桌面通知。
@@ -3868,6 +3884,9 @@ function CollapsedView({
         allKnownProjects={allSearchProjects}
         allowedSessionIds={searchableSessionIds}
         hiddenProjectKeys={hiddenProjectKeys}
+        projectFilterRequest={isCollapsed ? projectFilterRequest : null}
+        machineSelection={selectedMachineId}
+        searchDevices={searchDevices}
         triggerClassName={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
       />
 
