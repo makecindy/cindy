@@ -247,27 +247,39 @@ export function useConversationSearch({
   const selectedProjectSessionIds = useMemo(() => {
     if (projectSelection === 'all') return null;
     const selected = buildProjectKeyComparisonSet(projectSelection, localPlatform);
-    let indexedSessionIds = allKnownProjects
-      .filter((project) => {
-        const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
-        return comparisonKey != null && selected.has(comparisonKey);
-      })
+    const selectedProjects = allKnownProjects.filter((project) => {
+      const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+      return comparisonKey != null && selected.has(comparisonKey);
+    });
+    let indexedSessionIds = selectedProjects
+      .filter((project) => project.deviceLinkDeviceId == null)
       .flatMap((project) => project.sessions.map((session) => session.id));
     const lockedProjectComparisonKey = projectKeyComparisonKey(lockedProjectKey, localPlatform);
+    const lockedMatchesSelection =
+      lockedProjectComparisonKey != null &&
+      selected.size === 1 &&
+      selected.has(lockedProjectComparisonKey);
     if (
       indexedSessionIds.length === 0 &&
-      lockedProjectComparisonKey &&
-      selected.size === 1 &&
-      selected.has(lockedProjectComparisonKey) &&
+      !lockedProjectDeviceId &&
+      lockedMatchesSelection &&
       lockedProjectSessionIds.length > 0
     ) {
       indexedSessionIds = lockedProjectSessionIds;
     }
-    if (allowedSessionIdSet == null) return indexedSessionIds;
-    return indexedSessionIds.filter((sessionId) => allowedSessionIdSet.has(sessionId));
+    const allowedIds =
+      allowedSessionIdSet == null
+        ? indexedSessionIds
+        : indexedSessionIds.filter((sessionId) => allowedSessionIdSet.has(sessionId));
+    if (allowedIds.length > 0) return allowedIds;
+    const selectedRemoteOnly =
+      selectedProjects.some((project) => project.deviceLinkDeviceId != null) ||
+      Boolean(lockedProjectDeviceId && lockedMatchesSelection);
+    return selectedRemoteOnly ? null : [];
   }, [
     allKnownProjects,
     allowedSessionIdSet,
+    lockedProjectDeviceId,
     lockedProjectKey,
     lockedProjectSessionIds,
     localPlatform,
@@ -282,16 +294,15 @@ export function useConversationSearch({
         return comparisonKey != null && selected.has(comparisonKey);
       })
       .flatMap((project) => {
+        const deviceId = project.deviceLinkDeviceId?.trim();
         const workingDir = project.workingDir?.trim();
-        if (!workingDir) return [];
-        return [{
-          deviceId: project.deviceLinkDeviceId,
-          workingDir,
-        }];
+        if (!deviceId || !workingDir) return [];
+        return [{ deviceId, workingDir }];
       });
     if (fromVisible.length > 0) return fromVisible;
     const lockedComparison = projectKeyComparisonKey(lockedProjectKey, localPlatform);
     if (
+      lockedProjectDeviceId &&
       lockedProjectWorkingDir &&
       lockedComparison &&
       selected.size === 1 &&
@@ -315,7 +326,7 @@ export function useConversationSearch({
     () =>
       resolveConversationSearchOrigins({
         machineSelection,
-        sessionIds: selectedProjectTargets ? null : selectedProjectSessionIds,
+        sessionIds: selectedProjectSessionIds,
         projectTargets: selectedProjectTargets,
         devices: searchDevices,
         getSessionDeviceId: (sessionId) => remoteProjectsStore.getSessionDeviceId(sessionId),
@@ -376,7 +387,7 @@ export function useConversationSearch({
         status: statusFilter,
         agentKind: agentFilter,
         lastActivity: lastActivityFilter,
-        sessionIds: selectedProjectTargets ? null : selectedProjectSessionIds,
+        sessionIds: selectedProjectSessionIds,
       },
     } as const;
     const keywordTimer = window.setTimeout(() => {

@@ -191,6 +191,28 @@ describe('resolveConversationSearchOrigins', () => {
     ]);
   });
 
+  it('keeps local/SSH session ids when mixed with a device-link project target', () => {
+    expect(
+      resolveConversationSearchOrigins({
+        machineSelection: MACHINE_ALL,
+        sessionIds: ['ssh-hit'],
+        projectTargets: [{ deviceId: 'dev-a', workingDir: '/workspace/repo' }],
+        devices,
+        getSessionDeviceId: () => undefined,
+      }),
+    ).toEqual([
+      {
+        kind: 'remote',
+        deviceId: 'dev-a',
+        deviceName: 'Studio',
+        connected: true,
+        sessionIds: null,
+        workingDirs: ['/workspace/repo'],
+      },
+      { kind: 'local', sessionIds: ['ssh-hit'] },
+    ]);
+  });
+
   it('does not fall back to local when only a connecting device is selected', () => {
     const connecting = searchDevicesFromSwitcher([
       { deviceId: 'dev-connecting', name: 'New Box', status: 'connecting' },

@@ -277,15 +277,14 @@ describe('ConversationSearchBox live search', () => {
           query: 'needle',
           semanticMode: 'keyword',
           filters: expect.objectContaining({
-            sessionIds: null,
+            sessionIds: ['session-a1', 'session-a2'],
           }),
         }),
         expect.objectContaining({
           origins: [
             expect.objectContaining({
               kind: 'local',
-              sessionIds: null,
-              workingDirs: ['/repo-a'],
+              sessionIds: ['session-a1', 'session-a2'],
             }),
           ],
         }),
@@ -417,14 +416,14 @@ describe('ConversationSearchBox live search', () => {
         expect.objectContaining({
           semanticMode: 'keyword',
           filters: expect.objectContaining({
-            sessionIds: null,
+            sessionIds: ['session-a1', 'session-a2'],
           }),
         }),
         expect.objectContaining({
           origins: [
             expect.objectContaining({
               kind: 'local',
-              workingDirs: ['c:/repo-a'],
+              sessionIds: ['session-a1', 'session-a2'],
             }),
           ],
         }),
@@ -568,6 +567,68 @@ describe('ConversationSearchBox live search', () => {
     expect(projectNodeSource).not.toContain('useSessionSearch');
     expect(projectNodeSource).not.toContain('search.isOpen');
     expect(projectNodeSource).not.toContain('search.open();');
+  });
+
+  it('keeps SSH project identity when a local project shares the same workingDir', async () => {
+    vi.mocked(searchConversations).mockResolvedValue({
+      query: 'needle',
+      results: [],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+    const localTwin: ProjectNodeData = {
+      ...projects[0],
+      projectKey: 'local:/workspace/repo',
+      workingDir: '/workspace/repo',
+      displayName: 'Local Repo',
+      sessions: [{ id: 'local-same-path' } as ProjectNodeData['sessions'][number]],
+    };
+    const sshTwin: ProjectNodeData = {
+      ...projects[0],
+      projectKey: 'remote:ssh-host:/workspace/repo',
+      scope: 'remote',
+      workingDir: '/workspace/repo',
+      remoteHostId: 'ssh-host',
+      displayName: 'SSH Repo',
+      sessions: [{ id: 'ssh-same-path' } as ProjectNodeData['sessions'][number]],
+    };
+    render(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [localTwin, sshTwin],
+        allowedSessionIds: ['local-same-path', 'ssh-same-path'],
+        hiddenProjectKeys,
+      }),
+    );
+    fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+    await screen.findByTestId('conversation-search-popover');
+    fireEvent.click(screen.getByText('SSH Repo').closest('button') as HTMLButtonElement);
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), {
+      target: { value: 'needle' },
+    });
+    await waitFor(() => {
+      expect(searchConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          semanticMode: 'keyword',
+          filters: expect.objectContaining({ sessionIds: ['ssh-same-path'] }),
+        }),
+        expect.objectContaining({
+          origins: [
+            expect.objectContaining({
+              kind: 'local',
+              sessionIds: ['ssh-same-path'],
+            }),
+          ],
+        }),
+      );
+    }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
+    expect(searchConversations).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        origins: [expect.objectContaining({ workingDirs: ['/workspace/repo'] })],
+      }),
+    );
   });
 
   it('searches a filter-selected remote project by workingDir instead of mirrored ids', async () => {

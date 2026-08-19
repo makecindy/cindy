@@ -50,7 +50,8 @@ export function searchDevicesFromSwitcher(
 }
 
 export interface ConversationSearchProjectTarget {
-  deviceId: string | null;
+  /** device-link 设备。本机 / SSH 项目不走这条路径，避免丢掉 remoteHostId。 */
+  deviceId: string;
   workingDir: string;
 }
 
@@ -98,15 +99,20 @@ export function resolveConversationSearchOrigins(args: {
   devices: readonly ConversationSearchDevice[];
   getSessionDeviceId: (sessionId: string) => string | undefined;
 }): ConversationSearchOrigin[] {
-  if (args.projectTargets && args.projectTargets.length > 0) {
-    return originsFromProjectTargets(args.projectTargets, args.devices);
-  }
+  const targetOrigins =
+    args.projectTargets && args.projectTargets.length > 0
+      ? originsFromProjectTargets(args.projectTargets, args.devices)
+      : [];
   const sessionIds = normalizeSessionIds(args.sessionIds);
-  if (sessionIds && sessionIds.length === 0) return [];
+  if (sessionIds && sessionIds.length === 0 && targetOrigins.length === 0) return [];
 
-  if (sessionIds) {
-    return originsFromSessionIds(sessionIds, args.devices, args.getSessionDeviceId);
+  if (sessionIds && sessionIds.length > 0) {
+    return mergeProjectAndSessionOrigins(
+      targetOrigins,
+      originsFromSessionIds(sessionIds, args.devices, args.getSessionDeviceId),
+    );
   }
+  if (targetOrigins.length > 0) return targetOrigins;
 
   return originsFromMachineSelection(args.machineSelection, args.devices);
 }
@@ -116,40 +122,46 @@ function originsFromProjectTargets(
   devices: readonly ConversationSearchDevice[],
 ): ConversationSearchOrigin[] {
   const deviceById = new Map(devices.map((device) => [device.deviceId, device]));
-  const localDirs: string[] = [];
   const remoteDirs = new Map<string, string[]>();
 
   for (const target of targets) {
+    const deviceId = target.deviceId.trim();
     const workingDir = normalizeWorkingDirForGrouping(target.workingDir);
-    if (workingDir == null) continue;
-    if (!target.deviceId) {
-      if (!localDirs.includes(workingDir)) localDirs.push(workingDir);
-      continue;
-    }
-    const bucket = remoteDirs.get(target.deviceId);
+    if (!deviceId || workingDir == null) continue;
+    const bucket = remoteDirs.get(deviceId);
     if (bucket) {
       if (!bucket.includes(workingDir)) bucket.push(workingDir);
     } else {
-      remoteDirs.set(target.deviceId, [workingDir]);
+      remoteDirs.set(deviceId, [workingDir]);
     }
   }
 
-  const origins: ConversationSearchOrigin[] = [];
-  if (localDirs.length > 0) {
-    origins.push({ kind: 'local', sessionIds: null, workingDirs: localDirs });
-  }
-  for (const [deviceId, workingDirs] of remoteDirs) {
+  return [...remoteDirs].map(([deviceId, workingDirs]) => {
     const device = deviceById.get(deviceId);
-    origins.push({
-      kind: 'remote',
+    return {
+      kind: 'remote' as const,
       deviceId,
       deviceName: device?.deviceName ?? null,
       connected: device?.connected === true,
       sessionIds: null,
       workingDirs,
-    });
-  }
-  return origins;
+    };
+  });
+}
+
+function mergeProjectAndSessionOrigins(
+  targetOrigins: ConversationSearchOrigin[],
+  sessionOrigins: ConversationSearchOrigin[],
+): ConversationSearchOrigin[] {
+  const targetDeviceIds = new Set(
+    targetOrigins.flatMap((origin) => (origin.kind === 'remote' ? [origin.deviceId] : [])),
+  );
+  return [
+    ...targetOrigins,
+    ...sessionOrigins.filter(
+      (origin) => origin.kind === 'local' || !targetDeviceIds.has(origin.deviceId),
+    ),
+  ];
 }
 
 function originsFromSessionIds(
