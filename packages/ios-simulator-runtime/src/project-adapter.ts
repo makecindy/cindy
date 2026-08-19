@@ -522,7 +522,7 @@ export class IOSSimulatorProjectBuilder {
       if (effective && !effective.includes(input.expectedArch)) {
         throw new IOSSimulatorProjectBuildError(
           "APP_ARCH_MISMATCH",
-          `The build would produce architectures [${effective.join(", ")}], but the target simulator needs ${input.expectedArch}. Check whether a dependency excludes ${input.expectedArch} (for example EXCLUDED_ARCHS or an arm64-less binary framework).`,
+          `The app target would produce architectures [${effective.join(", ")}], but the target simulator needs ${input.expectedArch}. Check the app target's ARCHS and EXCLUDED_ARCHS.`,
           commandLogTail([archSettings]),
           null,
           Boolean(archSettings.outputTruncated),

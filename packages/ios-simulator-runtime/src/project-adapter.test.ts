@@ -636,7 +636,12 @@ describe("IOSSimulatorProjectBuilder", () => {
         derivedDataPath: path.join(root, "derived"),
         expectedArch: "arm64",
       }),
-    ).rejects.toMatchObject({ code: "APP_ARCH_MISMATCH" });
+    ).rejects.toMatchObject({
+      code: "APP_ARCH_MISMATCH",
+      message: expect.stringMatching(
+        /app target would produce architectures \[x86_64\].*needs arm64.*ARCHS and EXCLUDED_ARCHS/s,
+      ),
+    });
     // The build command must never run when the preflight rejects.
     expect(
       run.mock.calls.some(([, args]) => args.includes("build")),
