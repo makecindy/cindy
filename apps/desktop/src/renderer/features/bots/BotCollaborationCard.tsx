@@ -205,8 +205,18 @@ function CollaborationCardBody({
     const deliveredCount = row.outputArtifacts.length;
     // 定稿的战报一行是「本本 · 用时 8 秒 · 交付 1 份文档」——「完成」只说了事情结束了，
     // 「交付 N 件」才说了它到底交出来什么。真有产物时用后者。
+    //
+    // 失败时另说：只写「失败」等于要用户自己点开找原因，而最常见的原因（没登录）
+    // 恰恰是一句话就能说清、也一句话就能解决的。所以有原因就把原因摆在折叠行上。
+    const failureReason = row.status === 'failed' && row.lastError
+      ? row.lastError.replace(/^[A-Z_]+:\s*/, '')
+      : null;
     const reportKey =
-      row.status === 'completed' && deliveredCount > 0 ? 'delivered' : terminalKey(row.status);
+      row.status === 'completed' && deliveredCount > 0
+        ? 'delivered'
+        : failureReason
+          ? 'failedReason'
+          : terminalKey(row.status);
     return (
       <div className="my-2 max-w-[440px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] text-12">
         <button
@@ -221,6 +231,7 @@ function CollaborationCardBody({
               name: to.name,
               duration: elapsed,
               count: deliveredCount,
+              reason: failureReason ?? '',
             })}
           </span>
           {expanded ? (
@@ -319,6 +330,14 @@ function CollaborationCardBody({
           </span>
         ) : null}
       </div>
+      {/*
+        waiting = 第一句话没能送进对方的任务，正在退避重试。以前这里什么都不说，
+        卡片和「正在做」长得一模一样——用户以为对方在干活，其实一次都没开始。
+        重试有次数上限，用完会翻成失败终态；在那之前至少要如实说「还没开始」。
+      */}
+      {row?.status === 'waiting' ? (
+        <p className="mt-1.5 text-11 text-[var(--text-tertiary)]">{t('bots.collab.retrying')}</p>
+      ) : null}
       {row ? (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
           <button

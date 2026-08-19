@@ -6623,6 +6623,7 @@
       "stop": "停止",
       "openTask": "看 {{name}} 的對話",
       "actionFailed": "沒送出去，再試一次。",
+      "retrying": "還沒開始，正在重試…",
       "status": {
         "queued": "正在開始",
         "waiting": "等待開始",
@@ -6635,6 +6636,7 @@
       "report": {
         "done": "{{name}} · 用時 {{duration}} · 完成",
         "failed": "{{name}} · 用時 {{duration}} · 失敗",
+        "failedReason": "{{name}} · 失敗：{{reason}}",
         "stopped": "{{name}} · 用時 {{duration}} · 已停止",
         "delivered": "{{name}} · 用時 {{duration}} · 交付 {{count}} 件"
       },

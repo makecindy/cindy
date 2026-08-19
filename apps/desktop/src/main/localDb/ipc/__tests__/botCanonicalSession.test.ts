@@ -132,6 +132,10 @@ import {
   markBotProfileRuntimeFailed,
 } from '../../../maker-ipc/botProfileRuntime';
 import { createBotDelegationService } from '../../../maker-ipc/botDelegationService';
+import {
+  BOT_DELEGATION_MAX_DISPATCH_ATTEMPTS,
+} from '../../../maker-ipc/botDelegationDispatchOutcome';
+import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../../../shared/accountProviderReadiness';
 import { createBotDeliveryOutboxService } from '../../../maker-ipc/botDeliveryOutboxService';
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
@@ -2195,6 +2199,12 @@ describe('Bot canonical Session lifecycle', () => {
     ).toBe('deleted');
   });
 
+  /**
+   * 注意作用域：这条（以及本 describe 里其它委派用例）**桩掉了 dispatch 与 turn 结算**，
+   * 测的是 `botDelegationService` 的状态机与投影——不是「子任务真的跑起来了」。
+   * 去程真的能不能起、回程真的有没有落回发起方的对话，见文件末尾
+   * `Bot delegation end-to-end runtime` 那个 describe。
+   */
   it('wakes a target Bot without a canonical task, runs a child task, and returns the result', async () => {
     await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
@@ -5219,6 +5229,392 @@ describe('Bot teammate collaboration', () => {
       ).toEqual({ status: 'completed', resultSummary: '矩阵查完了：三个版本都兼容。' });
     } finally {
       restored.dispose();
+    }
+  });
+});
+
+/**
+ * 委派全链（真链路）。
+ *
+ * 与上面那些委派用例的区别，就是这一整个 describe 存在的理由：**它们桩掉了 dispatch**。
+ * 桩 dispatch 等于假设「消息一送必到、子任务一定跑得起来」，于是测到的只是
+ * `botDelegationService` 内部的状态机——真机上断掉的恰恰是被假设掉的那一段：
+ * 子任务因为没继承目标伙伴的执行配置（来源/档位）而**根本起不来**，委派停在 waiting
+ * 无限重试，协作卡永远转圈，结果永远回不来。
+ *
+ * 这里把桩下移一层：dispatch 是真的（按主机通路的判据逐条走：clientId 去重 → 会话行
+ * 存在与状态 → 账号/模型来源就绪门 → harness 鉴权 → 落库 → 起 turn），只有「模型
+ * 进程」这一层是假的。委派服务、外发队列、localDb、事件接线全部是真的。
+ */
+describe('Bot delegation end-to-end runtime', () => {
+  const PROVIDER = 'localstub';
+
+  interface StartedTurn {
+    sessionId: string;
+    providerId: string | null;
+    model: string;
+    effort: string;
+    fastMode: number;
+    agentKind: string;
+  }
+
+  function createDelegationRuntime(options: {
+    accountReady?: () => boolean;
+    replyFor?: (sessionId: string) => string;
+  } = {}) {
+    const accountReady = options.accountReady ?? (() => true);
+    const started: StartedTurn[] = [];
+    const pendingTurns: string[] = [];
+    const changed: Array<{ delegationId: string; status: string }> = [];
+    let currentTime = 10_000;
+    let seq = 0;
+
+    const readSession = (sessionId: string) =>
+      h
+        .sqlite!.prepare(
+          `SELECT status, model, provider_id AS providerId, effort,
+                  fast_mode AS fastMode, agent_kind AS agentKind
+           FROM sessions WHERE id = ?`,
+        )
+        .get(sessionId) as
+        | {
+            status: string;
+            model: string;
+            providerId: string | null;
+            effort: string;
+            fastMode: number;
+            agentKind: string;
+          }
+        | undefined;
+
+    const hasMessage = (sessionId: string, clientId: string): boolean =>
+      h.sqlite!.prepare('SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?')
+        .get(sessionId, clientId) !== undefined;
+
+    const writeMessage = (
+      sessionId: string,
+      clientId: string,
+      role: 'user' | 'assistant',
+      content: string,
+    ): void => {
+      h.sqlite!.prepare(
+        `INSERT OR IGNORE INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(`msg-${++seq}`, clientId, sessionId, role, content, currentTime);
+    };
+
+    /**
+     * 主机投递通路的等价实现（apps/desktop/src/main/maker-ipc/register.ts 的
+     * dispatchBotSessionMessage → sendToSessionInternal）。判据顺序刻意与真机一致：
+     * 任何一条在真机上会挡住会话启动的门，这里也必须挡住。
+     */
+    const dispatch = async (params: {
+      targetSessionId: string;
+      message: string;
+      persistedContent?: string;
+      clientId?: string;
+      onAccepted?: () => void | Promise<void>;
+    }) => {
+      if (params.clientId && hasMessage(params.targetSessionId, params.clientId)) {
+        await params.onAccepted?.();
+        return {
+          ok: true as const,
+          targetSessionId: params.targetSessionId,
+          wakeKind: 'already-active' as const,
+        };
+      }
+      const row = readSession(params.targetSessionId);
+      if (!row) {
+        return {
+          ok: false as const,
+          errorCode: 'NOT_FOUND',
+          message: `session ${params.targetSessionId} not found`,
+        };
+      }
+      if (row.status !== 'active') {
+        return {
+          ok: false as const,
+          errorCode: row.status === 'deleted' ? 'DELETED' : 'ARCHIVED',
+          message: `session ${params.targetSessionId} is ${row.status}`,
+        };
+      }
+      // maker-host 的 prepareStartOptions 门：没登录 / 正在切账号时会话根本不会启动。
+      if (!accountReady()) {
+        return {
+          ok: false as const,
+          errorCode: 'AGENT_NOT_READY',
+          message: `${ACCOUNT_PROVIDER_NOT_READY_CODE}: account provider models are not ready`,
+        };
+      }
+      // harness 鉴权：来源（provider）解析不出来就起不来。真机上这条长这样：
+      // "AGENT_NOT_READY: pi not authenticated: cindy_gateway_key_unavailable"。
+      if (!row.providerId) {
+        return {
+          ok: false as const,
+          errorCode: 'AGENT_NOT_READY',
+          message: `${row.agentKind} not authenticated: cindy_gateway_key_unavailable`,
+        };
+      }
+      started.push({
+        sessionId: params.targetSessionId,
+        providerId: row.providerId,
+        model: row.model,
+        effort: row.effort,
+        fastMode: row.fastMode,
+        agentKind: row.agentKind,
+      });
+      const clientId = params.clientId ?? `auto-${++seq}`;
+      writeMessage(
+        params.targetSessionId,
+        clientId,
+        'user',
+        params.persistedContent ?? params.message,
+      );
+      await params.onAccepted?.();
+      h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = ? WHERE id = ?')
+        .run(currentTime, params.targetSessionId);
+      pendingTurns.push(params.targetSessionId);
+      return {
+        ok: true as const,
+        targetSessionId: params.targetSessionId,
+        wakeKind: 'resumed' as const,
+      };
+    };
+
+    const delegation = createBotDelegationService({
+      dispatch,
+      enqueueDelivery: (params) => outbox.enqueue(params),
+      abortSession: vi.fn(async () => undefined),
+      archiveSession: async (sessionId: string) => {
+        h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(sessionId);
+      },
+      closeSession: vi.fn(async () => undefined),
+      broadcastSessionCreated: vi.fn(),
+      onChanged: (payload) => {
+        changed.push({ delegationId: payload.delegationId, status: payload.status });
+      },
+      now: () => currentTime,
+      createId: () => `delegation-${++seq}`,
+    });
+
+    const outbox = createBotDeliveryOutboxService({
+      // register.ts 的 session-message 分支：投递就是再走一次同一条主机通路。
+      deliver: async (_row, payload) => {
+        if (payload.kind !== 'session-message') {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'UNSUPPORTED_DELIVERY_KIND',
+            message: String(payload.kind),
+          };
+        }
+        const result = await dispatch({
+          targetSessionId: String(payload.targetSessionId),
+          message: String(payload.message),
+          persistedContent: String(payload.persistedContent ?? payload.message),
+          clientId: String(payload.clientId),
+        });
+        return result.ok
+          ? { ok: true as const }
+          : {
+              ok: false as const,
+              retryable: true,
+              errorCode: result.errorCode,
+              message: result.message,
+            };
+      },
+      now: () => currentTime,
+      createId: () => `outbox-${++seq}`,
+    });
+
+    /**
+     * 真机上 turn 结束是异步事件；register.ts 在 `done` 上调 settleSession。
+     * 这里同构：dispatch 只负责把 turn 排上，回合结算单独发生。
+     */
+    const runPendingTurns = async (): Promise<void> => {
+      while (pendingTurns.length > 0) {
+        const sessionId = pendingTurns.shift()!;
+        const reply = options.replyFor?.(sessionId) ?? `${sessionId} 的结论。`;
+        writeMessage(sessionId, `assistant-${++seq}`, 'assistant', reply);
+        h.sqlite!.prepare(
+          `UPDATE sessions SET total_token_usage = total_token_usage + 100,
+             last_turn_ended_at = ? WHERE id = ?`,
+        ).run(currentTime, sessionId);
+        await delegation.settleSession({
+          childSessionId: sessionId,
+          outcome: 'done',
+          resultText: reply,
+        });
+      }
+    };
+
+    return {
+      delegation,
+      outbox,
+      started,
+      changed,
+      runPendingTurns,
+      dispose: () => {
+        delegation.dispose();
+        outbox.dispose();
+      },
+      advance: (ms: number) => {
+        currentTime += ms;
+      },
+    };
+  }
+
+  async function seedPair(capabilities: Record<string, unknown> = {}): Promise<void> {
+    const base = {
+      harness: 'pi',
+      model: 'grok-4.5',
+      permissions: 'trusted',
+      providerId: PROVIDER,
+      effort: 'high',
+      fastMode: true,
+      ...capabilities,
+    };
+    await invoke('local-db:bots:create', { id: 'bot-a', name: '发起方伙伴', capabilities: base });
+    await invoke('local-db:bots:create', { id: 'bot-b', name: '目标伙伴', capabilities: base });
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-a',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+  }
+
+  it('starts the child task and lands the result back in the requesting conversation', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({
+      replyFor: (sessionId) =>
+        sessionId === 'session-3' ? '结论：三个版本都兼容。' : `${sessionId} 收到。`,
+    });
+    try {
+      const delegated = await runtime.delegation.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-b',
+        objective: '查一下版本兼容矩阵。',
+      });
+      expect(delegated).toMatchObject({ ok: true, childSessionId: 'session-3', status: 'running' });
+
+      // 去程第一跳：子任务真的被启动了，而且带着目标伙伴自己的执行配置。
+      // 真机断裂点就在这一行：provider_id 为空 → harness 起不来 → 委派停在 waiting。
+      expect(runtime.started).toContainEqual({
+        sessionId: 'session-3',
+        providerId: PROVIDER,
+        model: 'grok-4.5',
+        effort: 'high',
+        fastMode: 1,
+        agentKind: 'pi',
+      });
+
+      await runtime.runPendingTurns();
+      expect(
+        h
+          .sqlite!.prepare(
+            'SELECT status, result_summary AS resultSummary FROM bot_delegations WHERE id = ?',
+          )
+          .get(delegated.ok ? delegated.delegationId : ''),
+      ).toEqual({ status: 'completed', resultSummary: '结论：三个版本都兼容。' });
+
+      // 回程：结果必须经外发队列真的落到发起方的对话里，而不是停在队列上。
+      await runtime.outbox.drain();
+      const completionClientId = `bot-delegation-completion:${
+        delegated.ok ? delegated.delegationId : ''
+      }`;
+      expect(
+        h
+          .sqlite!.prepare('SELECT role, content FROM messages WHERE session_id = ? AND client_id = ?')
+          .get('session-1', completionClientId),
+      ).toEqual({
+        role: 'user',
+        content: expect.stringContaining('结论：三个版本都兼容。'),
+      });
+      expect(
+        h.sqlite!.prepare('SELECT status FROM bot_delivery_outbox WHERE idempotency_key = ?')
+          .pluck()
+          .get(completionClientId),
+      ).toBe('delivered');
+      // 发起方那一侧也真的被唤醒了（否则「结果回到 A 的对话」只是写了一行数据库）。
+      expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
+      expect(runtime.changed.at(-1)).toEqual({
+        delegationId: delegated.ok ? delegated.delegationId : '',
+        status: 'completed',
+      });
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('fails a delegation visibly when no account provider is available instead of hanging', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ accountReady: () => false });
+    try {
+      const delegated = await runtime.delegation.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-b',
+        objective: '未登录时也必须给个交代。',
+      });
+      expect(delegated).toMatchObject({ ok: true, status: 'failed' });
+      const delegationId = delegated.ok ? delegated.delegationId : '';
+
+      const row = h
+        .sqlite!.prepare('SELECT status, last_error AS lastError FROM bot_delegations WHERE id = ?')
+        .get(delegationId) as { status: string; lastError: string };
+      expect(row.status).toBe('failed');
+      expect(row.lastError).toContain('ACCOUNT_NOT_READY');
+      expect(row.lastError).toContain('需要登录后才能执行');
+
+      // 协作卡靠这条推送翻终态；没有它，卡片就永远停在「进行中」。
+      expect(runtime.changed.at(-1)).toEqual({ delegationId, status: 'failed' });
+      // 失败同样要作为一次结果回传排进外发队列，而不是只写进日志。
+      expect(
+        h
+          .sqlite!.prepare(
+            'SELECT payload_ref_json AS payload FROM bot_delivery_outbox WHERE idempotency_key = ?',
+          )
+          .pluck()
+          .get(`bot-delegation-completion:${delegationId}`),
+      ).toContain('需要登录后才能执行');
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('gives up a delegation whose child task can never authenticate', async () => {
+    // 目标伙伴没有配置来源 → 子任务继承到的也是空来源 → harness 永远起不来。
+    // 这正是真机取证里那条 "AGENT_NOT_READY: pi not authenticated" 的形状。
+    await seedPair({ providerId: null });
+    vi.useFakeTimers();
+    const runtime = createDelegationRuntime();
+    try {
+      const delegated = await runtime.delegation.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-b',
+        objective: '起不来的活也要有终点。',
+      });
+      expect(delegated).toMatchObject({ ok: true, status: 'waiting' });
+      const delegationId = delegated.ok ? delegated.delegationId : '';
+      expect(
+        h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').pluck().get(delegationId),
+      ).toBe('waiting');
+      expect(
+        h.sqlite!.prepare('SELECT provider_id FROM sessions WHERE id = ?').pluck().get('session-3'),
+      ).toBeNull();
+
+      // 退避重试是有上限的：1+2+4+8+16 秒之后必须收口，而不是一直转到委派超时
+      // （默认 30 分钟）——那半小时里用户看到的只有一个一直转圈的协作卡。
+      await vi.advanceTimersByTimeAsync(120_000);
+      const finalRow = h
+        .sqlite!.prepare('SELECT status, last_error AS lastError FROM bot_delegations WHERE id = ?')
+        .get(delegationId) as { status: string; lastError: string };
+      expect(finalRow.status).toBe('failed');
+      expect(finalRow.lastError).toContain('DISPATCH_UNAVAILABLE');
+      expect(finalRow.lastError).toContain(`连续 ${BOT_DELEGATION_MAX_DISPATCH_ATTEMPTS} 次`);
+      expect(runtime.changed.at(-1)).toEqual({ delegationId, status: 'failed' });
+    } finally {
+      runtime.dispose();
+      vi.useRealTimers();
     }
   });
 });

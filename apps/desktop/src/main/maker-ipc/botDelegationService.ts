@@ -34,6 +34,7 @@ import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.j
 import { createLogger } from '../logger.js';
 import { resolveBusinessSessionId } from '../sessionIds.js';
 import { registerBotDelegationParentCancellation } from './botDelegationLifecycle.js';
+import { classifyBotDelegationDispatchFailure } from './botDelegationDispatchOutcome.js';
 import type {
   BotCapabilityCatalogEntry,
   BotDelegationChangedPayload,
@@ -220,6 +221,34 @@ function boundedStringList(value: string[] | undefined, max = 32): string[] {
 
 function botAgentKind(config: Record<string, unknown>): 'cc' | 'codex' | 'pi' {
   return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : 'cc';
+}
+
+/**
+ * 目标 Bot 的执行配置 → 子任务 session 行字段。
+ *
+ * 与 `createBotCanonicalSession` 读同一份 `capabilities_json`，口径必须一致：委派子任务
+ * 是目标 Bot 的另一个运行时，不是一个「默认配置的新会话」。尤其是 `providerId` ——
+ * 它是模型路由的唯一依据，缺省(null)意味着回落该 harness 的隐式默认来源；目标 Bot 连
+ * 的是自定义 / 订阅来源时，这条子任务会直接以 AGENT_NOT_READY 起不来。
+ */
+function botExecutionRowFields(config: Record<string, unknown>): {
+  providerId?: string | null;
+  effort?: string;
+  fastMode: boolean;
+} {
+  const providerId = typeof config.providerId === 'string' && config.providerId.trim()
+    ? config.providerId.trim()
+    : config.providerId === null
+      ? null
+      : undefined;
+  const effort = typeof config.effort === 'string' && config.effort.trim()
+    ? config.effort.trim()
+    : undefined;
+  return {
+    ...(providerId !== undefined ? { providerId } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    fastMode: config.fastMode === true,
+  };
 }
 
 function targetPermissionMode(
@@ -1339,10 +1368,37 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     retryTimers.set(delegationId, timer);
   }
 
+  /**
+   * 去程投递失败到无法自愈时的收口：委派立刻变成 `failed`，并把人话原因送回发起方。
+   *
+   * 单独抽出来是因为这条路径有三件事必须一起发生，缺一件就退化成「静默挂起」：
+   * 收口 delegation 行（协作卡据此翻终态）、中止并归档子任务、把失败当作一次结果
+   * 回传（发起方的对话里必须出现这句话，而不是只在日志里）。
+   */
+  async function failDelegationDispatch(
+    row: DelegationRow,
+    lastError: string,
+  ): Promise<void> {
+    clearRetryTimer(row.id);
+    const changed = await updateTerminal({
+      delegationId: row.id,
+      status: 'failed',
+      lastError,
+      abortChild: true,
+    });
+    if (changed) {
+      await deliverCompletion({ ...row, status: 'failed', lastError });
+    }
+  }
+
   async function attemptDispatch(
     delegationId: string,
     attempt = 0,
-  ): Promise<{ ok: boolean; status: 'queued' | 'waiting' | 'running'; error?: DispatchResult }> {
+  ): Promise<{
+    ok: boolean;
+    status: 'queued' | 'waiting' | 'running' | 'failed';
+    error?: DispatchResult;
+  }> {
     const db = getDbClient().drizzle;
     const [row] = await db
       .select()
@@ -1359,24 +1415,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const deadlineAt = readDeadline(row.permissionSnapshotJson);
     if (deadlineAt !== null && deadlineAt <= now()) {
       await timeoutDelegation(delegationId);
-      return { ok: false, status: 'waiting' };
+      return { ok: false, status: 'failed' };
     }
     const validation = await validateDispatchPlan(row);
     if (!validation.ok) {
-      const changed = await updateTerminal({
-        delegationId: row.id,
-        status: 'failed',
-        lastError: `${validation.errorCode}: ${validation.message}`,
-        abortChild: true,
-      });
-      if (changed) {
-        await deliverCompletion({
-          ...row,
-          status: 'failed',
-          lastError: `${validation.errorCode}: ${validation.message}`,
-        });
-      }
-      return { ok: false, status: 'waiting' };
+      await failDelegationDispatch(row, `${validation.errorCode}: ${validation.message}`);
+      return { ok: false, status: 'failed' };
     }
     const dispatched = await deps.dispatch({
       targetSessionId: row.childSessionId,
@@ -1442,6 +1486,24 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ? 'waiting'
             : 'queued',
       };
+    }
+    // 去程没送出去。**不能**一律标 waiting 然后永远重试下去：没登录、子任务已归档
+    // 这类原因不会自愈，无限退避只会让协作卡永远转圈、发起方永远等不到任何交代。
+    const verdict = classifyBotDelegationDispatchFailure({
+      errorCode: dispatched.errorCode,
+      message: dispatched.message,
+      attempt,
+    });
+    if (verdict.kind === 'fatal') {
+      log.warn('Bot delegation dispatch gave up', {
+        delegationId: row.id,
+        targetBotId: row.targetBotId,
+        attempt,
+        errorCode: verdict.errorCode,
+        dispatchErrorCode: dispatched.errorCode,
+      });
+      await failDelegationDispatch(row, `${verdict.errorCode}: ${verdict.message}`);
+      return { ok: false, status: 'failed', error: dispatched };
     }
     const failedAt = now();
     const [waiting] = await db
@@ -1585,6 +1647,24 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       })
       .where(and(eq(botDelegations.id, row.id), eq(botDelegations.status, 'running')));
     clearRetryTimer(row.id);
+    // 重启续跑与首次投递同一条纪律：不会自愈的原因要立刻说出来，别把「running」
+    // 挂到超时（默认 30 分钟）才收口——那半小时里用户看到的只有一个转圈的卡片。
+    const verdict = classifyBotDelegationDispatchFailure({
+      errorCode: dispatched.errorCode,
+      message: dispatched.message,
+      attempt,
+    });
+    if (verdict.kind === 'fatal') {
+      log.warn('Bot delegation resume gave up', {
+        delegationId: row.id,
+        targetBotId: row.targetBotId,
+        attempt,
+        errorCode: verdict.errorCode,
+        dispatchErrorCode: dispatched.errorCode,
+      });
+      await failDelegationDispatch(row, `${verdict.errorCode}: ${verdict.message}`);
+      return;
+    }
     const delay = Math.min(MAX_RETRY_DELAY_MS, 1_000 * 2 ** Math.min(attempt, 6));
     const timer = setTimeout(() => {
       retryTimers.delete(row.id);
@@ -1857,7 +1937,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   ): Promise<BotDelegationResult<{
     delegationId: string;
     childSessionId: string;
-    status: 'queued' | 'waiting' | 'running';
+    /**
+     * `failed` 也是一个合法的即时结果：去程遇到不会自愈的原因（最典型是没登录）时，
+     * 委派在返回前就已经收口。发起方的模型据此当场知道「这活没派出去」，而不是拿到
+     * 一个「排队中」的假承诺再永远等下去。
+     */
+    status: 'queued' | 'waiting' | 'running' | 'failed';
     targetBotId: string;
     targetBotName: string;
     depth: number;
@@ -2229,6 +2314,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       },
     };
     const permissionSnapshotJson = JSON.stringify(plan);
+    const execution = botExecutionRowFields(config);
     const childRow = {
       ...sessionCreateToRow(
         childSessionId,
@@ -2237,6 +2323,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           workingDir,
           model:
             plan.target.model,
+          // 执行配置必须与目标 Bot 的主任务同源:来源(providerId)决定这条子任务能不能
+          // 解析出模型路由。漏掉它 = 子任务回落到「隐式默认路由」,目标 Bot 明明连了
+          // 自定义来源 / 订阅来源也会以 AGENT_NOT_READY 起不来,委派停在 waiting 无限
+          // 重试 —— 表现就是「对方永远不动、结果永远不回来」。effort / fastMode 同理:
+          // 派出去的活必须按 TA 自己的档位跑,不能悄悄换成缺省。
+          ...execution,
           agentKind: plan.target.agentKind,
           permissionMode,
           remoteHostId: binding?.remoteHostId ?? undefined,
@@ -2268,6 +2360,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           workspaceKind: childRow.workspaceKind,
           model: childRow.model,
           effort: childRow.effort,
+          fastMode: childRow.fastMode,
           permissionMode: childRow.permissionMode,
           agentKind: childRow.agentKind,
           remoteHostId: childRow.remoteHostId ?? null,

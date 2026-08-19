@@ -6623,6 +6623,7 @@
       "stop": "중지",
       "openTask": "{{name}}의 대화 보기",
       "actionFailed": "보내지 못했습니다. 다시 시도해 주세요.",
+      "retrying": "아직 시작하지 못했습니다. 다시 시도 중…",
       "status": {
         "queued": "시작하는 중",
         "waiting": "시작 대기 중",
@@ -6635,6 +6636,7 @@
       "report": {
         "done": "{{name}} · {{duration}} · 완료",
         "failed": "{{name}} · {{duration}} · 실패",
+        "failedReason": "{{name}} · 실패: {{reason}}",
         "stopped": "{{name}} · {{duration}} · 중지",
         "delivered": "{{name}} · {{duration}} · {{count}}건 전달"
       },

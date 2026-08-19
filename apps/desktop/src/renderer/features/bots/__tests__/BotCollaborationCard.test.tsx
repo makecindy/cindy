@@ -307,6 +307,35 @@ describe('BotCollaborationCard', () => {
     expect(await screen.findByText(/bots\.collab\.report\.stopped/)).toBeTruthy();
   });
 
+  it('says the work has not started yet while the first handoff is still being retried', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [
+        delegation('waiting', { lastError: 'AGENT_NOT_READY: pi not authenticated' }),
+      ],
+    });
+    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+    // 「等待开始」和「正在做」以前长得一模一样：用户以为对方在干活，其实一次都没开始。
+    expect(await screen.findByText('bots.collab.retrying')).toBeTruthy();
+  });
+
+  it('puts the failure reason on the collapsed report line so it needs no expanding', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [
+        delegation('failed', {
+          completedAt: Date.now(),
+          lastError: 'ACCOUNT_NOT_READY: 需要登录后才能执行：当前没有可用的账号与模型来源。',
+        }),
+      ],
+    });
+    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+    const line = await screen.findByText(/bots\.collab\.report\.failedReason/);
+    // 机读前缀不进人话，原因本身必须出现在折叠行上。
+    expect(line.textContent).toContain('需要登录后才能执行');
+    expect(line.textContent).not.toContain('ACCOUNT_NOT_READY');
+  });
+
   it('renders an interjection as a quiet one-line trace', () => {
     render(
       <BotCollaborationCard

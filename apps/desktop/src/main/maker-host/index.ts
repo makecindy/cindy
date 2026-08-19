@@ -151,6 +151,7 @@ import {
   createAutoReviewModelRouter,
 } from './auto-review-model-router.js';
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
+import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   armCodexHttpRecovery,
@@ -2159,7 +2160,17 @@ export function getMaker(): Maker {
           pendingBotRuntimeSnapshots.delete(sessionId);
           const providerReady = await ensureCurrentAccountProviderReadiness();
           if (!providerReady) {
-            throw new Error('Account provider models are not ready for this app session; retry.');
+            // 未登录 / 正在切账号时这里恒 false。主机通路只把失败压成 errorCode +
+            // message 两个字符串，所以稳定标记必须写进 message 本身：调用方（如 Bot
+            // 委派）据此把「这不会自愈，得让用户去登录」和「瞬时故障，值得重试」分开，
+            // 而不是无差别重试到天荒地老。见 botDelegationDispatchOutcome.ts。
+            throw Object.assign(
+              new Error(
+                `${ACCOUNT_PROVIDER_NOT_READY_CODE}: account provider models are not ready `
+                + '(usually not signed in, or an account switch is in flight)',
+              ),
+              { code: ACCOUNT_PROVIDER_NOT_READY_CODE },
+            );
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           const createOpts = opts as MakerSessionCreateOpts;

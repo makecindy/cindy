@@ -6625,6 +6625,7 @@
       "stop": "Stop",
       "openTask": "Open {{name}}'s conversation",
       "actionFailed": "That didn't go through. Try again.",
+      "retrying": "Hasn't started yet — retrying…",
       "status": {
         "queued": "Getting started",
         "waiting": "Waiting to start",
@@ -6637,6 +6638,7 @@
       "report": {
         "done": "{{name}} · {{duration}} · done",
         "failed": "{{name}} · {{duration}} · failed",
+        "failedReason": "{{name}} · failed: {{reason}}",
         "stopped": "{{name}} · {{duration}} · stopped",
         "delivered": "{{name}} · {{duration}} · delivered {{count}}"
       },
