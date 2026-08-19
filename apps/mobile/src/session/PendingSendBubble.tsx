@@ -223,7 +223,7 @@ export function PendingSendBubble({
           accessibilityRole="button"
           accessibilityState={{ expanded: selected, disabled: !interactive }}
           disabled={!interactive}
-          hitSlop={{ left: iconSize.sm + spacing.sm }}
+          hitSlop={{ left: iconSize.xl + spacing.sm }}
           onPress={() => actions.onSelect(selected ? null : item.clientId)}
           style={({ pressed }) => [
             styles.bubble,
