@@ -75,23 +75,24 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
     'utf8',
   );
 
-  it('discover 的 sole email_code 自动串发路径先过 ensureEmailCaptchaGate', () => {
+  it('discover 的 sole email_code 自动串发路径先过 ensureCaptchaGate', () => {
     const soleBranch = authContextSource.slice(
       authContextSource.indexOf("sole?.type === 'email_code'"),
       authContextSource.indexOf("updateLoginState(\n                reduceAuthFlow(currentState, {\n                  type: 'code-requested'"),
     );
-    expect(soleBranch).toContain('ensureEmailCaptchaGate()');
-    expect(soleBranch).toContain('requestEmailCodeWithCaptchaFallback');
+    expect(soleBranch).toContain("ensureCaptchaGate('email')");
+    expect(soleBranch).toContain('requestCodeWithCaptchaFallback');
   });
 
-  it('request-code 分支的 email 路径先过闸,取消不派发', () => {
+  it('request-code 的 email/phone 都按 requiredFor 动作过闸,取消不派发', () => {
     const branch = authContextSource.slice(
       authContextSource.indexOf("if (action.type === 'request-code')"),
       authContextSource.indexOf("if (action.type === 'verify-code')"),
     );
-    expect(branch).toContain('ensureEmailCaptchaGate()');
+    expect(branch).toContain('ensureCaptchaGate(action.kind)');
     expect(branch).toContain('if (!gate.proceed) return false;');
-    expect(branch).toContain('requestEmailCodeWithCaptchaFallback');
+    expect(branch).toContain('requestCodeWithCaptchaFallback');
+    expect(authContextSource).toContain('captchaRequiredActionForVerificationKind(kind)');
   });
 
   it('挑战页地址由构建区域 authApiBaseUrl + 共享路径常量拼出', () => {

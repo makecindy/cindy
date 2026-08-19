@@ -15,6 +15,7 @@ import {
   AuthApiError,
   CAPTCHA_CHALLENGE_PAGE_PATH,
   CindyAuthClient,
+  captchaRequiredActionForVerificationKind,
   discoverSsoOrgRealm,
   parseAccountDeletionReceiptRecord,
   parseAuthSessionRecord,
@@ -397,7 +398,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  /* ── 登录人机验证(Turnstile 托管挑战页,global 邮箱发码前置闸)── */
+  /* ── 登录人机验证(Turnstile 托管挑战页,按 requiredFor 控制邮箱/短信发码)── */
   const captchaConfigRef = useRef<CaptchaConfig | null>(null);
   const [captchaChallenge, setCaptchaChallenge] = useState<{ url: string } | null>(null);
   const captchaResolveRef = useRef<((token: string | null) => void) | null>(null);
@@ -433,36 +434,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  /** 发码前置闸:未启用 → 放行;启用 → 出题,取消 → 不放行(调用方不发码)。 */
-  const ensureEmailCaptchaGate = useCallback(async (): Promise<
-    { proceed: true; captchaToken?: string } | { proceed: false }
-  > => {
-    if (captchaConfigRef.current?.requiredFor.includes('email_request_code') !== true) {
-      return { proceed: true };
-    }
-    const token = await runCaptchaChallenge();
-    return token === null ? { proceed: false } : { proceed: true, captchaToken: token };
-  }, [runCaptchaChallenge]);
+  /** 按发码类型执行前置闸:未启用 → 放行;启用 → 出题;取消 → 不发码。 */
+  const ensureCaptchaGate = useCallback(
+    async (
+      kind: VerificationKind,
+    ): Promise<
+      { proceed: true; captchaToken?: string } | { proceed: false }
+    > => {
+      if (
+        captchaConfigRef.current?.requiredFor.includes(
+          captchaRequiredActionForVerificationKind(kind),
+        ) !== true
+      ) {
+        return { proceed: true };
+      }
+      const token = await runCaptchaChallenge();
+      return token === null
+        ? { proceed: false }
+        : { proceed: true, captchaToken: token };
+    },
+    [runCaptchaChallenge],
+  );
 
   /**
-   * 发邮箱验证码 + 错误驱动兜底:服务端返回 CAPTCHA_REQUIRED/CAPTCHA_INVALID
+   * 发验证码 + 错误驱动兜底:服务端返回 CAPTCHA_REQUIRED/CAPTCHA_INVALID
    * (providers 缓存旧于服务端开关,或 token 恰好过期)时重新出题一次后重试,
    * 仅一次防循环;重试被取消或再失败则抛原错误走统一错误链路。
    */
-  const requestEmailCodeWithCaptchaFallback = useCallback(
-    async (did: string, email: string, captchaToken: string | undefined): Promise<void> => {
+  const requestCodeWithCaptchaFallback = useCallback(
+    async (
+      did: string,
+      kind: VerificationKind,
+      identifier: string,
+      captchaToken: string | undefined,
+    ): Promise<void> => {
       try {
-        await authClientFor(did, BUILD_AUTH_REGION).requestCode('email', email, {
-          captchaToken,
-        });
+        await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+          kind,
+          identifier,
+          {
+            captchaToken,
+          },
+        );
       } catch (error) {
         const code = authErrorCode(error);
-        if (code !== 'CAPTCHA_REQUIRED' && code !== 'CAPTCHA_INVALID') throw error;
+        if (code !== 'CAPTCHA_REQUIRED' && code !== 'CAPTCHA_INVALID')
+          throw error;
         const retryToken = await runCaptchaChallenge();
         if (retryToken === null) throw error;
-        await authClientFor(did, BUILD_AUTH_REGION).requestCode('email', email, {
-          captchaToken: retryToken,
-        });
+        await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+          kind,
+          identifier,
+          {
+            captchaToken: retryToken,
+          },
+        );
       }
     },
     [runCaptchaChallenge],
@@ -1157,7 +1183,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (sole?.type === 'email_code') {
               // 人机验证前置闸(覆盖 discovery→发码的自动串发路径):取消则不
               // 串发,落 method-choice,用户可从个人行再次发起(会重新过闸)。
-              const gate = await ensureEmailCaptchaGate();
+              const gate = await ensureCaptchaGate('email');
               if (!gate.proceed) {
                 updateLoginState(
                   reduceAuthFlow(currentState, {
@@ -1168,7 +1194,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 );
                 return true;
               }
-              await requestEmailCodeWithCaptchaFallback(did, email, gate.captchaToken);
+              await requestCodeWithCaptchaFallback(
+                did,
+                'email',
+                email,
+                gate.captchaToken,
+              );
               updateLoginState(
                 reduceAuthFlow(currentState, {
                   type: 'code-requested',
@@ -1261,17 +1292,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           if (action.type === 'request-code') {
             const identifier = action.identifier.trim();
-            if (action.kind === 'email') {
-              const gate = await ensureEmailCaptchaGate();
-              // 取消:不发码、不改状态、不报错(用户可再点发送/重发)。
-              if (!gate.proceed) return false;
-              await requestEmailCodeWithCaptchaFallback(did, identifier, gate.captchaToken);
-            } else {
-              await authClientFor(did, BUILD_AUTH_REGION).requestCode(
-                action.kind,
-                identifier,
-              );
-            }
+            const gate = await ensureCaptchaGate(action.kind);
+            // 取消:不发码、不改状态、不报错(用户可再点发送/重发)。
+            if (!gate.proceed) return false;
+            await requestCodeWithCaptchaFallback(
+              did,
+              action.kind,
+              identifier,
+              gate.captchaToken,
+            );
             updateLoginState(
               reduceAuthFlow(loginStateRef.current, {
                 type: 'code-requested',
@@ -1451,8 +1480,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       acceptOutcome,
       completeOAuthCallback,
-      ensureEmailCaptchaGate,
-      requestEmailCodeWithCaptchaFallback,
+      ensureCaptchaGate,
+      requestCodeWithCaptchaFallback,
       suspendSessionRecoveryForLogin,
       updateLoginState,
     ],

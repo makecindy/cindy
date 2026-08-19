@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AuthApiError,
+  captchaRequiredActionForVerificationKind,
   CindyAuthClient,
   discoverSsoOrgRealm,
   parseAccountDeletionReceiptRecord,
@@ -84,7 +85,8 @@ describe("CindyAuthClient", () => {
     await expect(client(fetch).getProviders()).resolves.toMatchObject({
       captcha: { provider: "turnstile", requiredFor: ["email_request_code"] },
     });
-    // 新 server append-only 增加动作时，旧客户端忽略未知值但保留已知闸门。
+    // 客户端预认短信发码动作；服务端以后仅需下发该值即可启用，无需客户端发版。
+    // 其他 append-only 未知动作仍忽略，不让整份 providers 解析失败。
     const extendedFetch = vi.fn(async () =>
       response(200, {
         region: "cn",
@@ -95,12 +97,25 @@ describe("CindyAuthClient", () => {
         captcha: {
           provider: "turnstile",
           siteKey: "scenario-captcha-sitekey",
-          requiredFor: ["email_request_code", "phone_request_code"],
+          requiredFor: [
+            "email_request_code",
+            "phone_request_code",
+            "future_request_code",
+          ],
         },
       }),
     );
     const extended = await client(extendedFetch).getProviders();
-    expect(extended.captcha?.requiredFor).toEqual(["email_request_code"]);
+    expect(extended.captcha?.requiredFor).toEqual([
+      "email_request_code",
+      "phone_request_code",
+    ]);
+    expect(captchaRequiredActionForVerificationKind("email")).toBe(
+      "email_request_code",
+    );
+    expect(captchaRequiredActionForVerificationKind("phone")).toBe(
+      "phone_request_code",
+    );
     // 旧 server 缺字段 → undefined(可选字段,不整份拒绝)
     const legacyFetch = vi.fn(async () =>
       response(200, {

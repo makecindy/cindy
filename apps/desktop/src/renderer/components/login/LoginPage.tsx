@@ -15,7 +15,7 @@ import type {
   SocialProvider,
   VerificationKind,
 } from '@cindy/auth-client';
-import { isValidEmail } from '@cindy/auth-client';
+import { captchaRequiredActionForVerificationKind, isValidEmail } from '@cindy/auth-client';
 
 import { cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
@@ -446,11 +446,11 @@ export function LoginPage() {
     void dispatch({ type: 'reset' });
   };
 
-  /* ── 人机验证前置闸(global 邮箱发码防批量注册)──
+  /* ── 人机验证前置闸(邮箱/短信发码防批量注册)──
      providers.captcha 只随 identifier/realm-confirmation 步的 state 下发,而发码
      动作发生在后续步骤(method-choice 个人行 / 验证码页重发),进 ref 存续——
      登录流必经 identifier,ref 必然先就位。cn 构建 / 服务端未开启时字段缺席,
-     整条闸是 no-op。 */
+     整条闸是 no-op；当前服务端只下发邮箱动作，未来下发短信动作即可启用。 */
   const captchaConfigRef = useRef<CaptchaConfig | null>(null);
   useEffect(() => {
     if (loginState?.step === 'identifier' || loginState?.step === 'realm-confirmation') {
@@ -490,8 +490,10 @@ export function LoginPage() {
       captchaChallengePendingRef.current = false;
     }
   };
-  const emailCaptchaRequired = () =>
-    captchaConfigRef.current?.requiredFor.includes('email_request_code') === true;
+  const captchaRequiredFor = (kind: VerificationKind) =>
+    captchaConfigRef.current?.requiredFor.includes(
+      captchaRequiredActionForVerificationKind(kind),
+    ) === true;
 
   // AuthContext「唯一邮箱方式自动发码」快捷链的前置闸:那条链不经过下面的
   // dispatchRequestCode,借用本组件的挑战 overlay。latest-ref 模式:注册一次,
@@ -500,7 +502,7 @@ export function LoginPage() {
     Promise.resolve(undefined),
   );
   captchaGateRef.current = () =>
-    emailCaptchaRequired() ? obtainCaptchaToken() : Promise.resolve(undefined);
+    captchaRequiredFor('email') ? obtainCaptchaToken() : Promise.resolve(undefined);
   useEffect(() => {
     setLoginEmailCaptchaGate(() => captchaGateRef.current());
     return () => setLoginEmailCaptchaGate(null);
@@ -534,7 +536,7 @@ export function LoginPage() {
   // 失败(含重发失败)不 arm → 保持当前 deadline。
   const dispatchRequestCode = async (kind: VerificationKind, value: string) => {
     let captchaToken: string | undefined;
-    if (kind === 'email' && emailCaptchaRequired()) {
+    if (captchaRequiredFor(kind)) {
       const token = await obtainCaptchaToken();
       if (token === null) return; // 取消:不发码、不 arm、不报错
       captchaToken = token;
@@ -549,7 +551,6 @@ export function LoginPage() {
     // 重新出题一次后原参重试,仅一次防循环。
     if (
       !result.success &&
-      kind === 'email' &&
       (result.code === 'CAPTCHA_REQUIRED' || result.code === 'CAPTCHA_INVALID')
     ) {
       const retryToken = await obtainCaptchaToken();

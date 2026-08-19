@@ -26,19 +26,30 @@ export type AuthMembership = z.infer<typeof membershipSchema>;
 
 /**
  * 人机验证（CAPTCHA）配置：auth-server 开启时经 GET /api/auth/providers 下发。
- * requiredFor 声明哪些动作发起前必须先完成挑战（当前仅邮箱发码）。
+ * requiredFor 声明哪些动作发起前必须先完成挑战。
+ * 客户端预认邮箱与短信发码；服务端当前可只下发邮箱动作，后续下发短信动作
+ * 即可启用既有客户端闸门，无需变更 wire 结构。
  * 关闭时服务端整字段省略 → undefined = 不需要人机验证。
  */
+export const captchaRequiredActionSchema = z.enum([
+  "email_request_code",
+  "phone_request_code",
+]);
+export type CaptchaRequiredAction = z.infer<typeof captchaRequiredActionSchema>;
+
 export const captchaConfigSchema = z.object({
   provider: z.literal("turnstile"),
   siteKey: z.string().min(1),
-  // 服务端可 append-only 扩展动作；旧客户端只保留自己认识的闸门，
-  // 避免一个未知动作让整份 providers 响应解析失败。
-  requiredFor: z.array(z.string()).transform((actions) =>
-    actions.filter(
-      (action): action is "email_request_code" => action === "email_request_code",
+  // 服务端可 append-only 扩展动作；当前客户端预认邮箱与短信发码，其他未知
+  // 动作忽略，避免一个未来动作让整份 providers 响应解析失败。
+  requiredFor: z
+    .array(z.string())
+    .transform((actions) =>
+      actions.filter(
+        (action): action is CaptchaRequiredAction =>
+          captchaRequiredActionSchema.safeParse(action).success,
+      ),
     ),
-  ),
 });
 export type CaptchaConfig = z.infer<typeof captchaConfigSchema>;
 
@@ -264,6 +275,13 @@ export type DesktopAuthorizationPoll = z.infer<
 export type AuthClientType = "desktop" | "mobile" | "web";
 export type VerificationKind = "email" | "phone";
 export type SsoVerificationChannel = "email" | "sms";
+
+/** 发码类型到 providers.captcha.requiredFor wire action 的唯一映射。 */
+export function captchaRequiredActionForVerificationKind(
+  kind: VerificationKind,
+): CaptchaRequiredAction {
+  return kind === "email" ? "email_request_code" : "phone_request_code";
+}
 
 export type AuthFlowState =
   | { step: "identifier"; providers: ProviderConfig }

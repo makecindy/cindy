@@ -3,13 +3,20 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CindyAuthClient, reduceAuthFlow, type AuthFlowState } from '@cindy/auth-client';
+import {
+  CindyAuthClient,
+  reduceAuthFlow,
+  type AuthFlowState,
+  type CaptchaRequiredAction,
+  type VerificationKind,
+} from '@cindy/auth-client';
 import { createScenarioFetch } from '@cindy/auth-client/fixtures';
 
 /**
  * 登录人机验证(captcha)harness 测试:
  *  - providers:email-captcha 场景驱动「providers 主动触发」路径——重发前
  *    overlay 先出现,webview 回传 token 后 dispatch body 才带 captchaToken;
+ *  - phone_request_code 预接线：服务端未来下发即可启用短信发码闸;
  *  - 取消 = 不派发、不报错;
  *  - CAPTCHA_REQUIRED 错误驱动兜底(providers 无 captcha 字段时服务端刚开开关)
  *    自动出题一次后原参重试;
@@ -61,16 +68,28 @@ function scenarioClient(scenario: string) {
 }
 
 /** identifier(带 captcha providers)→ verification-code:重发链路的现网状态序列。 */
-async function statesFor(scenario: string): Promise<{
+async function statesFor(
+  scenario: string,
+  kind: VerificationKind = 'email',
+  requiredFor?: CaptchaRequiredAction[],
+): Promise<{
   identifier: AuthFlowState;
   verification: AuthFlowState;
 }> {
-  const providers = await scenarioClient(scenario).getProviders();
+  const parsedProviders = await scenarioClient(scenario).getProviders();
+  const providers =
+    parsedProviders.captcha && requiredFor
+      ? {
+          ...parsedProviders,
+          captcha: { ...parsedProviders.captcha, requiredFor },
+        }
+      : parsedProviders;
+  const identifierValue = kind === 'email' ? 'user@example.com' : '+8613800138000';
   const identifier = reduceAuthFlow(null, { type: 'providers-loaded', providers });
   const verification = reduceAuthFlow(identifier, {
     type: 'code-requested',
-    kind: 'email',
-    identifier: 'user@example.com',
+    kind,
+    identifier: identifierValue,
   });
   return { identifier, verification };
 }
@@ -144,6 +163,28 @@ describe('LoginPage captcha 前置闸(providers 主动触发)', () => {
     // 结果回传后 overlay 关闭
     await waitFor(() =>
       expect(screen.queryByTestId('login-captcha-overlay')).toBeNull(),
+    );
+  });
+
+  it('服务端未来仅下发 phone_request_code 即可启用短信发码闸', async () => {
+    const { identifier, verification } = await statesFor('providers:email-captcha', 'phone', [
+      'phone_request_code',
+    ]);
+    const { rerender } = mount(identifier);
+    setState(rerender, verification);
+
+    fireEvent.click(screen.getByText('login.resendCode'));
+    await screen.findByTestId('login-captcha-overlay');
+    expect(loginHook.value.dispatchWithResult).not.toHaveBeenCalled();
+
+    await emitCaptchaResult('cindy-captcha=ok.phone-captcha-token');
+    await waitFor(() =>
+      expect(loginHook.value.dispatchWithResult).toHaveBeenCalledWith({
+        type: 'request-code',
+        kind: 'phone',
+        identifier: '+8613800138000',
+        captchaToken: 'phone-captcha-token',
+      }),
     );
   });
 
