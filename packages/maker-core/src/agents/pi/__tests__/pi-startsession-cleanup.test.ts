@@ -28,6 +28,8 @@ const knobs = vi.hoisted(() => ({
   closeCount: 0,
   onExit: null as null | ((info: { code: number | null; signal: string | null }) => void),
   onEvent: null as null | ((event: unknown) => void),
+  /** Everything the bridge pushed back to the Pi process. */
+  sent: [] as Array<Record<string, unknown>>,
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
   requests: [] as string[],
@@ -82,7 +84,9 @@ vi.mock('../rpc-client.js', () => ({
       // switch_session / set_thinking_level / set_auto_compaction / get_entries 等一律成功。
       return { success: true, data: { entries: [] } };
     }
-    send(): void {}
+    send(message: unknown): void {
+      knobs.sent.push(message as Record<string, unknown>);
+    }
     async close(): Promise<void> {
       knobs.closeCount++;
       const gate = knobs.closeGate;
@@ -130,6 +134,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.closeCount = 0;
     knobs.onExit = null;
     knobs.onEvent = null;
+    knobs.sent = [];
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
     knobs.requests = [];
@@ -1231,6 +1236,112 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       fixture.releasePublish();
       await closing;
       expect(sweep).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The live bridge is the other exit for the same decision. The durable path
+   * publishes into a mailbox; this one answers the running Pi process directly,
+   * and both used to release unconditionally after an await that can outlast
+   * the account it was authorised under.
+   */
+  describe('the live extension bridge across an account boundary', () => {
+    function responsesFor(id: string): Array<Record<string, unknown>> {
+      return knobs.sent.filter((message) => (
+        message.type === 'extension_ui_response' && message.id === id
+      ));
+    }
+
+    it('does not release a turn-change capture whose snapshot outlived the account', async () => {
+      let openSnapshot!: () => void;
+      let releaseSnapshot!: () => void;
+      const snapshotStarted = new Promise<void>((resolve) => { openSnapshot = resolve; });
+      const snapshotGate = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+      vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+      const handle = await new PiAgent(buildDeps({
+        turnChangeCapture: {
+          beforeKnownFileWrite: vi.fn(async () => {
+            openSnapshot();
+            await snapshotGate;
+          }),
+          noteOpaqueWrite: vi.fn(),
+        },
+      })).startSession(opts());
+
+      knobs.onEvent?.({
+        type: 'extension_ui_request',
+        id: 'capture-live',
+        method: 'confirm',
+        title: 'cindy:turn-change-capture',
+        message: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }),
+      });
+      await snapshotStarted;
+
+      // close() raises the fence before its first await, so it is up while the
+      // workspace snapshot is still running.
+      const closing = handle.close({ reason: 'account-boundary' });
+      releaseSnapshot();
+      await closing;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // Parked, not denied: nothing at all goes back for this request. The
+      // process it belongs to is being closed by the same teardown.
+      expect(responsesFor('capture-live')).toEqual([]);
+    });
+
+    it('does not release a permission answer decided before the boundary', async () => {
+      // The longest await this bridge has is a human at a card. Every exit
+      // funnels through one send, which is where the fence sits.
+      let openPrompt!: () => void;
+      let releasePrompt!: () => void;
+      const promptShown = new Promise<void>((resolve) => { openPrompt = resolve; });
+      const promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+      vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+      const handle = await new PiAgent(buildDeps()).startSession(opts());
+      handle.setInteractionResolver((async () => {
+        openPrompt();
+        await promptGate;
+        return { kind: 'permission', behavior: 'allow' } as const;
+      }) as never);
+
+      knobs.onEvent?.({
+        type: 'extension_ui_request',
+        id: 'permission-live',
+        method: 'confirm',
+        title: 'cindy:permission',
+        message: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }),
+      });
+      await promptShown;
+
+      const closing = handle.close({ reason: 'account-boundary' });
+      releasePrompt();
+      await closing;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(responsesFor('permission-live')).toEqual([]);
+    });
+
+    it('still answers when no boundary is crossed', async () => {
+      // The fence must not become a general mute: an ordinary capture on a live
+      // session releases exactly as before.
+      const handle = await new PiAgent(buildDeps({
+        turnChangeCapture: {
+          beforeKnownFileWrite: vi.fn(async () => undefined),
+          noteOpaqueWrite: vi.fn(),
+        },
+      })).startSession(opts());
+
+      knobs.onEvent?.({
+        type: 'extension_ui_request',
+        id: 'capture-normal',
+        method: 'confirm',
+        title: 'cindy:turn-change-capture',
+        message: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }),
+      });
+      await vi.waitFor(() => expect(responsesFor('capture-normal')).toHaveLength(1));
+
+      expect(responsesFor('capture-normal')[0]).toMatchObject({ confirmed: true });
+      await handle.close({ reason: 'navigation' });
     });
   });
 

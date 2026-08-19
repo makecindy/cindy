@@ -3746,6 +3746,7 @@ export class PiAgent extends BaseAgent {
               notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
+              isAccountBoundaryTornDown: () => accountBoundaryTeardown,
               turnPermissionPolicy: activeTurnPermissionPolicy,
               sessionId: opts.sessionId ?? '',
               workingDir: opts.workingDir ?? '',
@@ -5795,6 +5796,16 @@ export class PiAgent extends BaseAgent {
       notifyAutoReviewConfirmUndelivered: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
       registeredMcpServerNames: ReadonlySet<string>;
+      /**
+       * Has this session's account-boundary teardown started?
+       *
+       * A *function*, not a boolean: the branches below read it after awaits
+       * that can outlast the boundary (a workspace snapshot, a human at a
+       * permission card), and the whole point is to see a flag raised while
+       * they were waiting. A field on this object would be the snapshot taken
+       * before the await.
+       */
+      isAccountBoundaryTornDown: () => boolean;
       sessionId: string;
       workingDir: string;
       remote: boolean;
@@ -5999,6 +6010,18 @@ export class PiAgent extends BaseAgent {
           });
         })
         .finally(() => {
+          // `beforeKnownFileWrite` snapshots the workspace, so this await is as
+          // long as the workspace is large — long enough for the user to switch
+          // accounts inside it. Releasing afterwards would let the outgoing
+          // account's surface tell a still-running Pi to go ahead and write.
+          //
+          // Fail closed means *park*, not deny: nothing is sent at all. The
+          // same reasoning as the durable mailbox path, and here it is even more
+          // direct — the boundary is closing this very process, so the request
+          // the extension is blocked on dies with it. Answering `false` instead
+          // would fabricate a refusal the user never gave and surface it to the
+          // model as one.
+          if (context.isAccountBoundaryTornDown()) return;
           proc.send({ type: 'extension_ui_response', id, confirmed: true });
         });
       return;
@@ -6006,6 +6029,17 @@ export class PiAgent extends BaseAgent {
 
     if ((method === 'input' || method === 'confirm') && event.title === 'cindy:permission') {
       const sendPermissionResolution = (resolution: PiPermissionResolution): void => {
+        // Same fence as the capture branch, at the one place every exit below
+        // funnels through. Waiting for a human is the longest await this bridge
+        // has, so an answer decided under the outgoing account can easily be
+        // ready after the boundary — and `allow` here is a live Pi process
+        // writing files with credentials that have stopped being its own.
+        //
+        // Parked rather than denied, and parked for every resolution, not just
+        // `allow`: a deny sent now would read to the model as the user's
+        // refusal of a call the boundary cancelled. The process is being closed
+        // by that same teardown, so the extension's pending request goes with it.
+        if (getPermissionCtx().isAccountBoundaryTornDown()) return;
         if (method === 'input') {
           proc.send({ type: 'extension_ui_response', id, value: resolution });
           return;
