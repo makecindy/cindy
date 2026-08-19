@@ -46,6 +46,9 @@ import {
   resolveSubagentModelDefault,
   type ResolveSubagentModelDefaultResult,
 } from './subagent-model-default.js';
+import {
+  buildClaudeSubagentModelGuardHooks,
+} from './subagent-model-access.js';
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
 import {
@@ -1164,6 +1167,16 @@ export class ClaudeCodeAgent extends BaseAgent {
     }
     // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
     applySubagentModelEnv(env, subagentDefault.envSubagentModel ?? null);
+    // 每次 Agent/Task 调用都重新读取 host 的当前账号与路由事实。静态 capabilities
+    // 只负责展示，不参与 deny；账号切换时 resolver 会立即看到新快照或 unknown。
+    const resolveSubagentModelAccess = this.deps.resolveClaudeSubagentModelAccess
+      ? (model: string) => this.deps.resolveClaudeSubagentModelAccess!({
+          providerId: opts.providerId ?? null,
+          parentModel: opts.model,
+          credentialMode: effectiveCredentialMode,
+          model,
+        })
+      : undefined;
     // 远端单独一份 env:用 'remote' 模式从空字典起(不继承 desktop OS env),否则
     // Windows HOME=C:\Users\Lizi 之类污染远端 cc CLI 的 ~ 展开(session/memory
     // 落怪路径)。详见 env-builder.ts buildClaudeEnv 文档。
@@ -1530,6 +1543,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     const localClaudeHooks = reviewMode
       ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
       : mergeClaudeHookSets(
+          // 账号/模型准入是执行前提，不是用户工具权限。放在 PreToolUse，确保
+          // Full access 也无法绕过。
+          buildClaudeSubagentModelGuardHooks(
+            resolveSubagentModelAccess,
+            subagentDefault.envSubagentModel,
+            (model) => {
+              log.warn('subagent model denied by account access preflight', { model });
+            },
+          ),
           buildClaudeLocalToolGuardHooks(
             this.deps.capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -3123,6 +3145,18 @@ export class ClaudeCodeAgent extends BaseAgent {
               permissionUpdates: remoteForcePrompt ? undefined : decision.permissionUpdates,
               reason: decision.reason,
             };
+          },
+          onSubagentModelAccessRequest: async (rawParams: unknown) => {
+            const params = typeof rawParams === 'object' && rawParams !== null
+              ? rawParams as Record<string, unknown>
+              : {};
+            const model = typeof params.model === 'string' ? params.model : '';
+            if (!model || !resolveSubagentModelAccess) return { status: 'unknown' };
+            try {
+              return await resolveSubagentModelAccess(model);
+            } catch {
+              return { status: 'unknown' };
+            }
           },
           // 订阅 token 到期续命(远端版,对齐本地 SDK options 的 getOAuthToken 回调,
           // 见 buildQuery 本地分支):远端 cc 中途 401 → daemon 发 oauth/refresh 反向
@@ -5854,6 +5888,22 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(info.toolUseId ? { toolUseId: info.toolUseId } : {}),
           ...(info.title ? { title: info.title } : {}),
         }));
+      },
+
+      countPendingWakeContinuations() {
+        // 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+        // runningBackgroundTasks 在任务终态时立即出表(noteBackgroundTaskEvent),
+        // 因此 listBackgroundTasks() 的空快照**不能**证明后续没有 wake turn ——
+        // renderer 的唤醒桥接对账必须以本计数为权威依据(为 0 才允许收口),
+        // 而不是把「没有仍在运行的任务」当成「没有待启动的 continuation」。
+        // cancelled 不计(不会再有 wake turn 跟进);awaiting / active 都计
+        // (active 期间主 turn isRunning 本就为 true,双重保护)。
+        if (closed) return 0;
+        let n = 0;
+        for (const claim of continuationClaims.values()) {
+          if (claim.state === 'awaiting' || claim.state === 'active') n += 1;
+        }
+        return n;
       },
 
       beginTurnContinuationWait(continuationId?: number) {
