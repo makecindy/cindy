@@ -149,7 +149,7 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
-  it('inherits Registry efforts only for a unique route of the target agent', () => {
+  it('inherits Registry efforts for a unique route of the target agent', () => {
     const provider = buildUserProvider(
       {
         id: 'relay',
@@ -200,6 +200,36 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
+  it.each(['gpt-5.6-sol', 'gpt-5.6-terra'])(
+    'inherits equivalent Registry effort metadata across matching entries for %s',
+    (modelId) => {
+      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+      if (!registry) throw new Error('missing bundled model registry');
+      const baseEntry = registry.models.find((entry) => entry.id === `openai/${modelId}`);
+      if (!baseEntry) throw new Error(`missing ${modelId} registry entry`);
+      registry.models.push({ ...structuredClone(baseEntry), id: `alternate/${modelId}` });
+
+      const provider = buildUserProvider(
+        {
+          id: 'relay',
+          name: 'Relay',
+          runtimes: {
+            codex: {
+              baseUrl: 'https://relay.example/v1',
+              models: [{ id: modelId, name: modelId }],
+            },
+          },
+        },
+        { modelRegistry: registry },
+      );
+
+      expect(provider.models.codex?.[0]).toMatchObject({
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultEffort: 'high',
+      });
+    },
+  );
+
   it('falls back safely for ambiguous matches, missing target routes and invalid defaults', () => {
     const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
     if (!registry) throw new Error('missing bundled model registry');
@@ -212,6 +242,10 @@ describe('buildUserProvider (per-runtime)', () => {
     registry.models.push({
       ...structuredClone(baseEntry),
       id: 'alternate/gpt-5.6-sol',
+      perAgent: {
+        ...baseEntry.perAgent,
+        codex: { efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+      },
     });
 
     const ambiguous = buildUserProvider(
