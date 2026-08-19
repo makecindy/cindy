@@ -1284,7 +1284,10 @@ function handleAssistant(
     // 看不到失败任务、也没有终态通知（#2967）。这里把它规范化为父会话可见的 failed
     // 任务。已有 taskId 的执行期失败由 task_notification:failed 收口，不重复上报。
     // 可重试的 tag（rate_limit / server_error / unknown）SDK 会自己退避重试并可能
-    // 自愈，立即投影 failed 会把自愈任务锁死成失败，所以只对非重试类 tag 投影。
+    // 自愈，立即投影 failed 会把自愈任务锁死成失败；但重试**耗尽**后 SDK 不再有
+    // task_id 可补，不投影会退回 #2967 的「No task found」。SDK 的 api_retry 事件把
+    // attempt/max_retries 暂存进 turn 级 pendingApiError（api_retry 不带
+    // parent_tool_use_id，只能按 turn 近似归属），据此区分「仍在重试」与「已耗尽」。
     if (sidechainParentToolUseId) {
       let knownTaskId: string | undefined;
       for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
@@ -1292,7 +1295,12 @@ function handleAssistant(
         knownTaskId = candidateTaskId;
         break;
       }
-      if (!knownTaskId && !RETRYABLE_SDK_ERROR_TAGS.has(msg.error ?? '')) {
+      const retryable = RETRYABLE_SDK_ERROR_TAGS.has(msg.error ?? '');
+      const retriesExhausted =
+        typeof ctx.turn.pendingApiError?.retryAttempt === 'number' &&
+        typeof ctx.turn.pendingApiError?.maxRetries === 'number' &&
+        ctx.turn.pendingApiError.retryAttempt >= ctx.turn.pendingApiError.maxRetries;
+      if (!knownTaskId && (!retryable || retriesExhausted)) {
         emitSubagentLaunchFailure(queue, sidechainParentToolUseId, {
           errorMessage: redactSensitiveText(errorMessage),
           model:
