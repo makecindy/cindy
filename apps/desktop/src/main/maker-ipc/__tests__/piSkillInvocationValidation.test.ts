@@ -9,6 +9,7 @@ import type {
 } from '@cindy/maker-core';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { capturePiRuntimeCapabilityManifest } from '../../../../../../packages/maker-core/src/agents/pi/runtime-capabilities.js';
 import {
   assertCurrentPiSkillInvocationSession,
   isCurrentPiSkillInvocation,
@@ -329,21 +330,29 @@ describe('Pi Skill invocation validation', () => {
         linkedSource,
         process.platform === 'win32' ? 'junction' : 'dir',
       );
-      const pathlessRuntimeManifest = manifest({
-        commands: [{
-          name: 'skill:demo',
-          source: 'skill',
-          sourceInfo: {
-            scope: 'user',
-            source: 'auto',
-            baseDir: userBaseDir,
-          },
-        }],
-      });
-      Object.defineProperty(
-        pathlessRuntimeManifest.commands[0]!,
-        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
-        { value: await fs.promises.realpath(linkedSource), enumerable: false },
+      const pathlessRuntimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: {
+                  scope: 'user',
+                  source: 'auto',
+                  baseDir: userBaseDir,
+                },
+              }],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [userBaseDir] },
       );
 
       expect(await isCurrentPiSkillInvocation(
@@ -368,6 +377,59 @@ describe('Pi Skill invocation validation', () => {
       fs.rmSync(linkedSource, { recursive: true, force: true });
       fs.rmSync(firstTarget, { recursive: true, force: true });
       fs.rmSync(secondTarget, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a pathless user Skill directory is replaced at the same path', async () => {
+    const userBaseDir = path.join(repoRoot, 'replaced-user-skill', '.agents');
+    const userSource = path.join(userBaseDir, 'skills', 'demo');
+    const replacement = path.join(repoRoot, 'replaced-user-skill-next');
+    const original = path.join(repoRoot, 'replaced-user-skill-original');
+    try {
+      fs.mkdirSync(userSource, { recursive: true });
+      fs.mkdirSync(replacement, { recursive: true });
+      fs.writeFileSync(path.join(userSource, 'SKILL.md'), '# original user skill\n');
+      fs.writeFileSync(path.join(replacement, 'SKILL.md'), '# replacement user skill\n');
+      const runtimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: { scope: 'user', source: 'auto', baseDir: userBaseDir },
+              }],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [userBaseDir] },
+      );
+      const invocation = item({ scope: 'user', sourcePath: userSource });
+      const currentSkills = skills({ scope: 'user', path: userSource, runtimeStatus: undefined });
+
+      await expect(isCurrentPiSkillInvocation(
+        invocation,
+        runtimeManifest,
+        currentSkills,
+      )).resolves.toBe(true);
+
+      fs.renameSync(userSource, original);
+      fs.renameSync(replacement, userSource);
+      await expect(isCurrentPiSkillInvocation(
+        invocation,
+        runtimeManifest,
+        currentSkills,
+      )).resolves.toBe(false);
+    } finally {
+      fs.rmSync(userSource, { recursive: true, force: true });
+      fs.rmSync(original, { recursive: true, force: true });
+      fs.rmSync(replacement, { recursive: true, force: true });
     }
   });
 

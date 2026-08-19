@@ -16,6 +16,7 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import type { BigIntStats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
@@ -185,6 +186,48 @@ const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
   'cindy.pi.runtime-user-skill-canonical-source',
 );
 
+interface FrozenUserSkillFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+interface FrozenUserSkillSourceProof {
+  readonly canonicalSourcePath: string;
+  readonly entry: FrozenUserSkillFileIdentity;
+  readonly target: FrozenUserSkillFileIdentity;
+  readonly entrypointPath: string;
+  readonly entrypoint: FrozenUserSkillFileIdentity;
+}
+
+function isFrozenUserSkillFileIdentity(value: unknown): value is FrozenUserSkillFileIdentity {
+  if (typeof value !== 'object' || value === null || !Object.isFrozen(value)) return false;
+  const identity = value as Record<string, unknown>;
+  return ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs']
+    .every((key) => typeof identity[key] === 'bigint')
+    && identity.ino !== 0n;
+}
+
+function frozenUserSkillSourceProof(value: unknown): FrozenUserSkillSourceProof | null {
+  if (typeof value !== 'object' || value === null || !Object.isFrozen(value)) return null;
+  const proof = value as Partial<FrozenUserSkillSourceProof>;
+  if (
+    typeof proof.canonicalSourcePath !== 'string'
+    || !path.isAbsolute(proof.canonicalSourcePath)
+    || proof.canonicalSourcePath.includes('\0')
+    || typeof proof.entrypointPath !== 'string'
+    || !path.isAbsolute(proof.entrypointPath)
+    || proof.entrypointPath.includes('\0')
+    || !isFrozenUserSkillFileIdentity(proof.entry)
+    || !isFrozenUserSkillFileIdentity(proof.target)
+    || !isFrozenUserSkillFileIdentity(proof.entrypoint)
+  ) return null;
+  return proof as FrozenUserSkillSourceProof;
+}
+
 function piSkillCatalogTimeoutError(): Error & { code: string } {
   return Object.assign(new Error('Pi skill catalog validation deadline expired'), {
     code: PI_SKILL_CATALOG_TIMEOUT,
@@ -194,6 +237,89 @@ function piSkillCatalogTimeoutError(): Error & { code: string } {
 function isPiSkillCatalogTimeout(error: unknown): boolean {
   return !!error && typeof error === 'object'
     && (error as { code?: unknown }).code === PI_SKILL_CATALOG_TIMEOUT;
+}
+
+async function awaitPiSkillCatalogStep<T>(
+  operation: () => Promise<T>,
+  deadlineAtMs: number,
+): Promise<T> {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) throw piSkillCatalogTimeoutError();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(piSkillCatalogTimeoutError()), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function frozenUserSkillFileIdentity(stat: BigIntStats): FrozenUserSkillFileIdentity {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+
+function sameFrozenUserSkillFileIdentity(
+  first: FrozenUserSkillFileIdentity,
+  second: FrozenUserSkillFileIdentity,
+): boolean {
+  return first.ino !== 0n
+    && first.dev === second.dev
+    && first.ino === second.ino
+    && first.mode === second.mode
+    && first.size === second.size
+    && first.mtimeNs === second.mtimeNs
+    && first.ctimeNs === second.ctimeNs;
+}
+
+async function currentFrozenUserSkillSourcePath(
+  value: unknown,
+  deadlineAtMs: number,
+): Promise<string | null> {
+  const proof = frozenUserSkillSourceProof(value);
+  if (!proof) return null;
+  const sourceEntry = path.dirname(proof.entrypointPath);
+  if (
+    path.resolve(proof.entrypointPath) !== proof.entrypointPath
+    || !['SKILL.md', 'skill.md'].includes(path.basename(proof.entrypointPath))
+  ) return null;
+  try {
+    const [entryBefore, targetBefore, entrypointBefore] = await Promise.all([
+      awaitPiSkillCatalogStep(() => fs.lstat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(proof.entrypointPath, { bigint: true }), deadlineAtMs),
+    ]);
+    const [entryAfter, targetAfter, entrypointAfter, canonicalAfter] = await Promise.all([
+      awaitPiSkillCatalogStep(() => fs.lstat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.stat(proof.entrypointPath, { bigint: true }), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.realpath(sourceEntry), deadlineAtMs),
+    ]);
+    return canonicalAfter === proof.canonicalSourcePath
+      && (entryBefore.isDirectory() || entryBefore.isSymbolicLink())
+      && targetBefore.isDirectory()
+      && entrypointBefore.isFile()
+      && sameFrozenUserSkillFileIdentity(proof.entry, frozenUserSkillFileIdentity(entryBefore))
+      && sameFrozenUserSkillFileIdentity(proof.entry, frozenUserSkillFileIdentity(entryAfter))
+      && sameFrozenUserSkillFileIdentity(proof.target, frozenUserSkillFileIdentity(targetBefore))
+      && sameFrozenUserSkillFileIdentity(proof.target, frozenUserSkillFileIdentity(targetAfter))
+      && sameFrozenUserSkillFileIdentity(proof.entrypoint, frozenUserSkillFileIdentity(entrypointBefore))
+      && sameFrozenUserSkillFileIdentity(proof.entrypoint, frozenUserSkillFileIdentity(entrypointAfter))
+      ? canonicalAfter
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function canonicalPiRuntimePath(value: string, deadlineAtMs: number): Promise<string> {
@@ -329,15 +455,17 @@ async function mergePiRuntimeSkillStatuses(
       command,
       PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE,
     );
+    const frozenUserSourcePath = await currentFrozenUserSkillSourcePath(
+      frozenUserSource,
+      deadlineAtMs,
+    );
     if (
       command.sourceInfo.scope === 'user'
       && command.sourceInfo.source === 'auto'
       && command.sourceInfo.path === undefined
-      && typeof frozenUserSource === 'string'
-      && path.isAbsolute(frozenUserSource)
-      && !frozenUserSource.includes('\0')
+      && frozenUserSourcePath
     ) {
-      const canonicalSource = path.resolve(frozenUserSource);
+      const canonicalSource = path.resolve(frozenUserSourcePath);
       loadedUserSkills.set(
         canonicalSource,
         loadedUserSkills.has(canonicalSource) ? null : command.name,

@@ -64,6 +64,24 @@ export interface PiRuntimeUserSkillSource {
   readonly sourcePath: string;
   readonly canonicalSourcePath: string;
   readonly runtimeCommandName: string;
+  readonly proof: PiRuntimeUserSkillSourceProof;
+}
+
+export interface PiRuntimeUserSkillFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+export interface PiRuntimeUserSkillSourceProof {
+  readonly canonicalSourcePath: string;
+  readonly entry: PiRuntimeUserSkillFileIdentity;
+  readonly target: PiRuntimeUserSkillFileIdentity;
+  readonly entrypointPath: string;
+  readonly entrypoint: PiRuntimeUserSkillFileIdentity;
 }
 
 function scanTimeoutError(): Error & { code: string } {
@@ -165,10 +183,36 @@ function sameFileSnapshot(first: fs.Stats, second: fs.Stats): boolean {
     && first.ctimeMs === second.ctimeMs;
 }
 
+function runtimeUserSkillFileIdentity(stat: fs.BigIntStats): PiRuntimeUserSkillFileIdentity {
+  return Object.freeze({
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  });
+}
+
+function sameRuntimeUserSkillFileIdentity(
+  first: PiRuntimeUserSkillFileIdentity,
+  second: PiRuntimeUserSkillFileIdentity,
+): boolean {
+  return first.ino !== 0n
+    && second.ino !== 0n
+    && first.dev === second.dev
+    && first.ino === second.ino
+    && first.mode === second.mode
+    && first.size === second.size
+    && first.mtimeNs === second.mtimeNs
+    && first.ctimeNs === second.ctimeNs;
+}
+
 async function readBoundedSkillFile(
   mdPath: string,
   dependencies: PiCustomizationScanDeps,
   budget: PiCustomizationScanBudget,
+  captureIdentity?: (identity: PiRuntimeUserSkillFileIdentity) => void,
 ): Promise<string> {
   const pathBefore = await awaitScanStep(() => dependencies.stat(mdPath), budget);
   if (!pathBefore.isFile() || pathBefore.size > MAX_PI_CUSTOMIZATION_SKILL_MD_BYTES) {
@@ -185,6 +229,12 @@ async function readBoundedSkillFile(
     if (!sameFileSnapshot(pathBefore, handleBefore)) {
       throw unsafeSkillFileError('Pi Skill entrypoint changed before reading');
     }
+    const identityBefore = captureIdentity
+      ? runtimeUserSkillFileIdentity(await awaitScanStep(
+          () => handle.stat({ bigint: true }),
+          budget,
+        ))
+      : undefined;
 
     const chunks: Buffer[] = [];
     let byteLength = 0;
@@ -223,6 +273,25 @@ async function readBoundedSkillFile(
       || !sameFileSnapshot(handleBefore, pathAfter)
     ) {
       throw unsafeSkillFileError('Pi Skill entrypoint changed while reading');
+    }
+    if (identityBefore) {
+      const [handleIdentityAfter, pathIdentityAfter] = await Promise.all([
+        awaitScanStep(() => handle.stat({ bigint: true }), budget),
+        awaitScanStep(() => fsp.stat(mdPath, { bigint: true }), budget),
+      ]);
+      const stableIdentity = runtimeUserSkillFileIdentity(handleIdentityAfter);
+      if (
+        !handleIdentityAfter.isFile()
+        || !pathIdentityAfter.isFile()
+        || !sameRuntimeUserSkillFileIdentity(identityBefore, stableIdentity)
+        || !sameRuntimeUserSkillFileIdentity(
+          stableIdentity,
+          runtimeUserSkillFileIdentity(pathIdentityAfter),
+        )
+      ) {
+        throw unsafeSkillFileError('Pi Skill entrypoint changed while reading');
+      }
+      captureIdentity?.(stableIdentity);
     }
     return Buffer.concat(chunks, byteLength).toString('utf8');
   } finally {
@@ -407,12 +476,18 @@ async function readFolderSkillAsync(
   mdPath: string,
   dependencies: PiCustomizationScanDeps,
   budget: PiCustomizationScanBudget,
+  captureEntrypointIdentity?: (identity: PiRuntimeUserSkillFileIdentity) => void,
 ): Promise<AgentCustomization> {
   let description: string | undefined;
   let frontmatter: Record<string, unknown> | undefined;
   let parseError: string | undefined;
   try {
-    const raw = await readBoundedSkillFile(mdPath, dependencies, budget);
+    const raw = await readBoundedSkillFile(
+      mdPath,
+      dependencies,
+      budget,
+      captureEntrypointIdentity,
+    );
     ({ description, frontmatter, parseError } = parseFrontmatter(raw));
   } catch (error) {
     if (isScanFatal(error) || (source.scope === 'repo' && isUnsafeSkillFile(error))) {
@@ -594,23 +669,36 @@ export async function scanPiRuntimeUserSkillSources(
           actualMd = lowerMd;
         }
 
-        const canonicalBefore = await awaitScanStep(
-          () => dependencies.realpath(folder),
-          budget,
-        );
+        const [entryBefore, targetBefore, canonicalBefore] = await Promise.all([
+          awaitScanStep(() => fsp.lstat(folder, { bigint: true }), budget),
+          awaitScanStep(() => fsp.stat(folder, { bigint: true }), budget),
+          awaitScanStep(() => dependencies.realpath(folder), budget),
+        ]);
+        let entrypointIdentity: PiRuntimeUserSkillFileIdentity | undefined;
         const item = await readFolderSkillAsync(
           source,
           folder,
           actualMd,
           dependencies,
           budget,
+          (identity) => { entrypointIdentity = identity; },
         );
-        const canonicalAfter = await awaitScanStep(
-          () => dependencies.realpath(folder),
-          budget,
-        );
+        const [entryAfter, targetAfter, canonicalAfter] = await Promise.all([
+          awaitScanStep(() => fsp.lstat(folder, { bigint: true }), budget),
+          awaitScanStep(() => fsp.stat(folder, { bigint: true }), budget),
+          awaitScanStep(() => dependencies.realpath(folder), budget),
+        ]);
+        const entryIdentityBefore = runtimeUserSkillFileIdentity(entryBefore);
+        const entryIdentityAfter = runtimeUserSkillFileIdentity(entryAfter);
+        const targetIdentityBefore = runtimeUserSkillFileIdentity(targetBefore);
+        const targetIdentityAfter = runtimeUserSkillFileIdentity(targetAfter);
         if (
           item.parseError
+          || !entrypointIdentity
+          || (!entryBefore.isDirectory() && !entryBefore.isSymbolicLink())
+          || !targetBefore.isDirectory()
+          || !sameRuntimeUserSkillFileIdentity(entryIdentityBefore, entryIdentityAfter)
+          || !sameRuntimeUserSkillFileIdentity(targetIdentityBefore, targetIdentityAfter)
           || canonicalBefore !== canonicalAfter
           || !path.isAbsolute(canonicalBefore)
           || canonicalBefore.includes('\0')
@@ -622,15 +710,23 @@ export async function scanPiRuntimeUserSkillSources(
           : item.name;
         const runtimeCommandName = `skill:${runtimeName}`;
         if (!/^skill:[^\s/\\\0]+$/.test(runtimeCommandName)) continue;
+        const proof = Object.freeze({
+          canonicalSourcePath: canonicalBefore,
+          entry: entryIdentityAfter,
+          target: targetIdentityAfter,
+          entrypointPath: actualMd,
+          entrypoint: entrypointIdentity,
+        } satisfies PiRuntimeUserSkillSourceProof);
         sources.push({
           baseDir,
           sourcePath: item.absolutePath,
           canonicalSourcePath: canonicalBefore,
           runtimeCommandName,
+          proof,
         });
       }
     } catch (error) {
-      if (isScanFatal(error)) return [];
+      if (isScanFatal(error)) throw error;
       // Catalog discovery is diagnostic; missing or unstable proof fails closed per Skill.
     }
   }

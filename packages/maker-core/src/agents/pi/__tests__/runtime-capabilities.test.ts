@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
 import {
@@ -83,8 +83,17 @@ describe('Pi runtime capability parsing', () => {
         runtimeCommand,
         Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
       );
-      expect(provenance).toBe(await fs.promises.realpath(firstTarget));
-      expect(JSON.stringify(manifest)).not.toContain(String(provenance));
+      expect(provenance).toMatchObject({
+        canonicalSourcePath: await fs.promises.realpath(firstTarget),
+        entrypointPath: path.join(
+          await fs.promises.realpath(baseDir),
+          'skills',
+          'directory-name',
+          'SKILL.md',
+        ),
+      });
+      expect(Object.isFrozen(provenance)).toBe(true);
+      expect(JSON.stringify(manifest)).not.toContain(firstTarget);
 
       fs.unlinkSync(linkedSource);
       fs.symlinkSync(
@@ -95,9 +104,61 @@ describe('Pi runtime capability parsing', () => {
       expect(Reflect.get(
         runtimeCommand,
         Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
-      )).toBe(await fs.promises.realpath(firstTarget));
+      )).toBe(provenance);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an unknown manifest when pathless user Skill provenance times out after RPC', async () => {
+    const baseDir = path.resolve(os.tmpdir(), 'pi-runtime-provenance-timeout');
+    const realpath = vi.spyOn(fs.promises, 'realpath').mockImplementation(async (candidate) => {
+      if (path.resolve(String(candidate)) === baseDir) {
+        return new Promise<string>(() => {});
+      }
+      return path.resolve(String(candidate));
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => {
+            vi.setSystemTime(Date.now() + 4_999);
+            return {
+              type: 'response',
+              command: 'get_commands',
+              success: true,
+              data: {
+                commands: [{
+                  name: 'skill:demo',
+                  source: 'skill',
+                  sourceInfo: { source: 'auto', scope: 'user', baseDir },
+                }],
+              },
+            };
+          },
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [baseDir] },
+      );
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toMatchObject({
+        status: 'unknown',
+        commands: [],
+        error: { code: 'timeout' },
+      });
+    } finally {
+      vi.useRealTimers();
+      realpath.mockRestore();
     }
   });
 

@@ -24,6 +24,7 @@ const PI_RPC_RESPONSE_KEYS = new Set(['type', 'id', 'command', 'success', 'data'
 const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
   'cindy.pi.runtime-user-skill-canonical-source',
 );
+const PI_RUNTIME_USER_SKILL_PROVENANCE_TIMEOUT_MS = PI_RUNTIME_CAPABILITY_TIMEOUT_MS;
 
 interface PiRuntimeCapabilityCaptureOptions {
   /** Local roots Cindy permits Pi to report as auto-loaded user Skill homes. */
@@ -61,51 +62,19 @@ async function awaitRuntimeCapabilityStep<T>(
   }
 }
 
-async function stableCanonicalUserSkillSource(
-  entryPath: string,
-  deadlineAtMs: number,
-): Promise<string | null> {
-  try {
-    const [entryBefore, canonicalBefore] = await Promise.all([
-      awaitRuntimeCapabilityStep(() => fsp.lstat(entryPath, { bigint: true }), deadlineAtMs),
-      awaitRuntimeCapabilityStep(() => fsp.realpath(entryPath), deadlineAtMs),
-    ]);
-    const [entryAfter, canonicalAfter, targetAfter] = await Promise.all([
-      awaitRuntimeCapabilityStep(() => fsp.lstat(entryPath, { bigint: true }), deadlineAtMs),
-      awaitRuntimeCapabilityStep(() => fsp.realpath(entryPath), deadlineAtMs),
-      awaitRuntimeCapabilityStep(() => fsp.stat(entryPath, { bigint: true }), deadlineAtMs),
-    ]);
-    if (
-      (!entryBefore.isDirectory() && !entryBefore.isSymbolicLink())
-      || !targetAfter.isDirectory()
-      || entryBefore.dev === 0n
-      || entryBefore.ino === 0n
-      || entryBefore.dev !== entryAfter.dev
-      || entryBefore.ino !== entryAfter.ino
-      || entryBefore.mode !== entryAfter.mode
-      || canonicalBefore !== canonicalAfter
-      || !path.isAbsolute(canonicalBefore)
-      || canonicalBefore.includes('\0')
-    ) return null;
-    return canonicalBefore;
-  } catch {
-    return null;
-  }
-}
-
 async function capturePathlessUserSkillSources(
   commands: readonly PiRuntimeCommand[],
   options: PiRuntimeCapabilityCaptureOptions,
   deadlineAtMs: number,
-): Promise<void> {
-  if (!options.userSkillBaseDirs?.length) return;
+): Promise<boolean> {
+  if (!options.userSkillBaseDirs?.length) return true;
   const pathlessCommands = commands.filter((command) => (
     command.source === 'skill'
     && command.sourceInfo.scope === 'user'
     && command.sourceInfo.source === 'auto'
     && command.sourceInfo.path === undefined
   ));
-  if (pathlessCommands.length === 0) return;
+  if (pathlessCommands.length === 0) return true;
   const allowedBaseDirs = new Set<string>();
   for (const rawBaseDir of options.userSkillBaseDirs) {
     if (!path.isAbsolute(rawBaseDir) || rawBaseDir.includes('\0')) continue;
@@ -122,10 +91,16 @@ async function capturePathlessUserSkillSources(
   const candidatesByCommand = new Map<string, Awaited<
     ReturnType<typeof scanPiRuntimeUserSkillSources>
   >>();
-  const candidates = await scanPiRuntimeUserSkillSources(
-    [...allowedBaseDirs],
-    deadlineAtMs,
-  );
+  let candidates: Awaited<ReturnType<typeof scanPiRuntimeUserSkillSources>>;
+  try {
+    candidates = await scanPiRuntimeUserSkillSources(
+      [...allowedBaseDirs],
+      deadlineAtMs,
+    );
+  } catch {
+    return false;
+  }
+  if (Date.now() >= deadlineAtMs) return false;
   for (const candidate of candidates) {
     const key = [candidate.baseDir, candidate.runtimeCommandName].join('\0');
     const matches = candidatesByCommand.get(key);
@@ -152,13 +127,8 @@ async function capturePathlessUserSkillSources(
       );
       if (matches?.length !== 1) continue;
       const candidate = matches[0]!;
-      const canonicalSource = await stableCanonicalUserSkillSource(
-        candidate.sourcePath,
-        deadlineAtMs,
-      );
-      if (!canonicalSource || canonicalSource !== candidate.canonicalSourcePath) continue;
       Object.defineProperty(command, PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE, {
-        value: canonicalSource,
+        value: candidate.proof,
         enumerable: false,
         configurable: false,
         writable: false,
@@ -167,6 +137,7 @@ async function capturePathlessUserSkillSources(
       // Keep the command visible for diagnostics; final invocation fails closed.
     }
   }
+  return Date.now() < deadlineAtMs;
 }
 
 function parseSourceInfo(value: unknown): PiRuntimeCommandSourceInfo | undefined {
@@ -388,7 +359,6 @@ export async function capturePiRuntimeCapabilityManifest(
   stage: PiRuntimeCapabilityErrorStage,
   options: PiRuntimeCapabilityCaptureOptions = {},
 ): Promise<PiRuntimeCapabilityManifest> {
-  const deadlineAtMs = Date.now() + PI_RUNTIME_CAPABILITY_TIMEOUT_MS;
   try {
     const response = await requester.request(
       { type: 'get_commands' },
@@ -431,7 +401,18 @@ export async function capturePiRuntimeCapabilityManifest(
         message: 'Pi returned an invalid runtime command catalog',
       }, 'failed');
     }
-    await capturePathlessUserSkillSources(parsed.commands, options, deadlineAtMs);
+    const provenanceDeadlineAtMs = Date.now() + PI_RUNTIME_USER_SKILL_PROVENANCE_TIMEOUT_MS;
+    const provenanceComplete = await capturePathlessUserSkillSources(
+      parsed.commands,
+      options,
+      provenanceDeadlineAtMs,
+    );
+    if (!provenanceComplete) {
+      return errorManifest(identity, generation, stage, {
+        code: 'timeout',
+        message: 'Pi runtime Skill provenance capture timed out',
+      }, 'unknown');
+    }
     return {
       ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
       ...(identity.sdkSessionId ? { sdkSessionId: identity.sdkSessionId } : {}),

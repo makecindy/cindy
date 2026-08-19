@@ -1,3 +1,4 @@
+import type { BigIntStats } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
@@ -29,6 +30,112 @@ const PI_SKILL_INVOCATION_VALIDATION_TIMEOUT = 'PI_SKILL_INVOCATION_VALIDATION_T
 const PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE = Symbol.for(
   'cindy.pi.runtime-user-skill-canonical-source',
 );
+
+interface FrozenUserSkillFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+
+interface FrozenUserSkillSourceProof {
+  readonly canonicalSourcePath: string;
+  readonly entry: FrozenUserSkillFileIdentity;
+  readonly target: FrozenUserSkillFileIdentity;
+  readonly entrypointPath: string;
+  readonly entrypoint: FrozenUserSkillFileIdentity;
+}
+
+function isFrozenUserSkillFileIdentity(value: unknown): value is FrozenUserSkillFileIdentity {
+  if (typeof value !== 'object' || value === null || !Object.isFrozen(value)) return false;
+  const identity = value as Record<string, unknown>;
+  return ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs']
+    .every((key) => typeof identity[key] === 'bigint')
+    && identity.ino !== 0n;
+}
+
+function frozenUserSkillSourceProof(value: unknown): FrozenUserSkillSourceProof | null {
+  if (typeof value !== 'object' || value === null || !Object.isFrozen(value)) return null;
+  const proof = value as Partial<FrozenUserSkillSourceProof>;
+  if (
+    typeof proof.canonicalSourcePath !== 'string'
+    || !path.isAbsolute(proof.canonicalSourcePath)
+    || proof.canonicalSourcePath.includes('\0')
+    || typeof proof.entrypointPath !== 'string'
+    || !path.isAbsolute(proof.entrypointPath)
+    || proof.entrypointPath.includes('\0')
+    || !isFrozenUserSkillFileIdentity(proof.entry)
+    || !isFrozenUserSkillFileIdentity(proof.target)
+    || !isFrozenUserSkillFileIdentity(proof.entrypoint)
+  ) return null;
+  return proof as FrozenUserSkillSourceProof;
+}
+
+function fileIdentity(stat: BigIntStats): FrozenUserSkillFileIdentity {
+  return Object.freeze({
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  });
+}
+
+function sameFileIdentity(
+  first: FrozenUserSkillFileIdentity,
+  second: FrozenUserSkillFileIdentity,
+): boolean {
+  return first.ino !== 0n
+    && first.dev === second.dev
+    && first.ino === second.ino
+    && first.mode === second.mode
+    && first.size === second.size
+    && first.mtimeNs === second.mtimeNs
+    && first.ctimeNs === second.ctimeNs;
+}
+
+async function frozenUserSkillSourceMatches(
+  selectedCanonicalPath: string,
+  command: PiRuntimeCapabilityManifest['commands'][number],
+  deadlineAtMs: number,
+): Promise<boolean> {
+  const proof = frozenUserSkillSourceProof(Reflect.get(
+    command,
+    PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE,
+  ));
+  const sourceEntry = proof ? path.dirname(proof.entrypointPath) : '';
+  if (
+    !proof
+    || path.resolve(proof.entrypointPath) !== proof.entrypointPath
+    || !['SKILL.md', 'skill.md'].includes(path.basename(proof.entrypointPath))
+  ) return false;
+  try {
+    const [entryBefore, targetBefore, entrypointBefore] = await Promise.all([
+      awaitValidationStep(() => fsp.lstat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitValidationStep(() => fsp.stat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitValidationStep(() => fsp.stat(proof.entrypointPath, { bigint: true }), deadlineAtMs),
+    ]);
+    const [entryAfter, targetAfter, entrypointAfter, canonicalAfter] = await Promise.all([
+      awaitValidationStep(() => fsp.lstat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitValidationStep(() => fsp.stat(sourceEntry, { bigint: true }), deadlineAtMs),
+      awaitValidationStep(() => fsp.stat(proof.entrypointPath, { bigint: true }), deadlineAtMs),
+      awaitValidationStep(() => fsp.realpath(sourceEntry), deadlineAtMs),
+    ]);
+    return canonicalAfter === selectedCanonicalPath
+      && canonicalAfter === proof.canonicalSourcePath
+      && sameFileIdentity(proof.entry, fileIdentity(entryBefore))
+      && sameFileIdentity(proof.entry, fileIdentity(entryAfter))
+      && sameFileIdentity(proof.target, fileIdentity(targetBefore))
+      && sameFileIdentity(proof.target, fileIdentity(targetAfter))
+      && sameFileIdentity(proof.entrypoint, fileIdentity(entrypointBefore))
+      && sameFileIdentity(proof.entrypoint, fileIdentity(entrypointAfter));
+  } catch {
+    return false;
+  }
+}
 
 function localPathContains(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
@@ -180,9 +287,14 @@ async function runtimeUserSkillMatchesSource(
 
   if (command.sourceInfo.path === undefined) {
     // Pinned Pi v0.83 normally omits path for auto-loaded user Skills. Catalog
-    // capture freezes the canonical target in a non-enumerable Symbol; using
-    // only the re-resolved baseDir here would accept a post-catalog retarget.
-    return Reflect.get(command, PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE) === selected;
+    // capture freezes the directory entry, canonical target, and entrypoint
+    // identities in a non-enumerable Symbol. Revalidate all three so a symlink
+    // retarget or same-path directory replacement fails closed.
+    return frozenUserSkillSourceMatches(
+      selected,
+      command,
+      deadlineAtMs,
+    );
   }
   const runtimePath = await canonicalLocalPath(
     command.sourceInfo.path,

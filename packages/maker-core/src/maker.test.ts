@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -25,6 +26,7 @@ import {
   fingerprintPiProjectSkillEntrypoint,
   PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS,
 } from './agents/pi/project-resource-assembly.js';
+import { capturePiRuntimeCapabilityManifest } from './agents/pi/runtime-capabilities.js';
 
 const nativePathComparisonIdentity = process.platform === 'win32'
   ? { platform: 'win32' as const, windowsCaseComparison: 'ordinal-insensitive' as const }
@@ -1279,36 +1281,46 @@ describe('Maker Pi runtime skill status', () => {
   it('maps a user Skill directory to its frontmatter runtime command by frozen source', async () => {
     const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-user-skill-')));
     const sourcePath = path.join(root, 'pi-home', 'skills', 'directory-name');
+    const replacementPath = path.join(root, 'replacement');
+    const oldSourcePath = path.join(root, 'old-source');
     try {
       mkdirSync(sourcePath, { recursive: true });
+      mkdirSync(replacementPath, { recursive: true });
       writeFileSync(
         path.join(sourcePath, 'SKILL.md'),
         '---\nname: frontmatter-name\n---\n# User Skill\n',
       );
-      const command = {
-        name: 'skill:frontmatter-name',
-        source: 'skill',
-        sourceInfo: {
-          source: 'auto',
-          scope: 'user',
-          baseDir: path.join(root, 'pi-home'),
+      writeFileSync(
+        path.join(replacementPath, 'SKILL.md'),
+        '---\nname: frontmatter-name\n---\n# Replacement Skill\n',
+      );
+      const runtimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:frontmatter-name',
+                source: 'skill',
+                sourceInfo: {
+                  source: 'auto',
+                  scope: 'user',
+                  baseDir: path.join(root, 'pi-home'),
+                },
+              }],
+            },
+          }),
         },
-      };
-      Object.defineProperty(
-        command,
-        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
-        { value: realpathSync.native(sourcePath), enumerable: false },
+        { sessionId: 'user-frontmatter' },
+        1,
+        'ready',
+        { userSkillBaseDirs: [path.join(root, 'pi-home')] },
       );
       const agent = createAgent(async () => {
         const handle = createHandle({ id: 'pi-user-frontmatter', agentKind: 'pi' });
-        handle.getRuntimeCapabilities = () => ({
-          sessionId: 'user-frontmatter',
-          capturedAt: '2026-08-18T00:00:00.000Z',
-          generation: 1,
-          status: 'loaded',
-          source: 'pi:get_commands',
-          commands: [command],
-        });
+        handle.getRuntimeCapabilities = () => runtimeManifest;
         return handle;
       }, 'pi');
       agent.listAgentSkills = vi.fn(async () => ({
@@ -1318,7 +1330,6 @@ describe('Maker Pi runtime skill status', () => {
           source: 'skill' as const,
           scope: 'user' as const,
           path: sourcePath,
-          runtimeCommandName: 'skill:directory-name',
         }],
       }));
       const maker = new Maker({
@@ -1343,6 +1354,17 @@ describe('Maker Pi runtime skill status', () => {
           runtimeCommandName: 'skill:frontmatter-name',
         }],
       });
+
+      renameSync(sourcePath, oldSourcePath);
+      renameSync(replacementPath, sourcePath);
+      const replacedResult = await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-frontmatter',
+      });
+      expect(replacedResult.skills).toHaveLength(1);
+      expect(replacedResult.skills[0]).toMatchObject({ name: 'directory-name' });
+      expect(replacedResult.skills[0]).not.toHaveProperty('runtimeStatus');
+      expect(replacedResult.skills[0]).not.toHaveProperty('runtimeCommandName');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
