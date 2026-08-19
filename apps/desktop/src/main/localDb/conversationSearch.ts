@@ -181,10 +181,7 @@ async function searchContentUntilUniqueSessions({
     targetUniqueSessions,
     fetchPage: ({ limit: pageLimit, offset }) => searchChatHistoryHybrid({
       query,
-      sessionIds:
-        filters.sessionIds !== null || filters.workingDirs !== null
-          ? allowedSessionIds
-          : null,
+      sessionIds: allowedSessionIds,
       workdir: null,
       fromMs: null,
       toMs: null,

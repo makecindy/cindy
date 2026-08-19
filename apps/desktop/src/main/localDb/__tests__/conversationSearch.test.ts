@@ -39,8 +39,9 @@ describe('conversationSearch source invariants', () => {
     expect(conversationSearchSource).toContain("ne(sessions.orcaRole, 'worker')");
   });
 
-  it('scopes content retrieval to workingDir-filtered session ids', () => {
-    expect(conversationSearchSource).toContain(
+  it('scopes content retrieval to searchable session ids including global search', () => {
+    expect(conversationSearchSource).toContain('sessionIds: allowedSessionIds');
+    expect(conversationSearchSource).not.toContain(
       'filters.sessionIds !== null || filters.workingDirs !== null',
     );
   });
