@@ -87,6 +87,7 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
   private var completed = false
   private var timeoutWorkItem: DispatchWorkItem?
   private var webView: WKWebView?
+  private var hostingWindow: UIWindow?
 
   init(
     html: String,
@@ -101,13 +102,40 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
   }
 
   func start() {
+    guard let windowScene = UIApplication.shared.connectedScenes
+      .compactMap({ $0 as? UIWindowScene })
+      .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive })
+    else {
+      finish(.failure(ConversationShareRenderError("Conversation share renderer has no active window scene.")))
+      return
+    }
+
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
     let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: width, height: 1), configuration: configuration)
-    webView.navigationDelegate = self
     webView.isOpaque = false
     webView.scrollView.isScrollEnabled = false
+    webView.backgroundColor = .clear
+
+    // WKWebView 的离屏 snapshot 仍需要挂在可见的 UIKit window 层级中。
+    // 不把它挂到业务页面，避免导出期间改变用户当前页面的布局或焦点。
+    let hostingWindow = UIWindow(windowScene: windowScene)
+    hostingWindow.frame = windowScene.coordinateSpace.bounds
+    hostingWindow.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue - 1)
+    hostingWindow.backgroundColor = .clear
+    hostingWindow.alpha = 1
+    hostingWindow.isUserInteractionEnabled = false
+    let viewController = UIViewController()
+    viewController.view.backgroundColor = .clear
+    viewController.view.frame = hostingWindow.bounds
+    webView.frame = viewController.view.bounds
+    viewController.view.addSubview(webView)
+    hostingWindow.rootViewController = viewController
+    hostingWindow.isHidden = false
+
+    webView.navigationDelegate = self
     self.webView = webView
+    self.hostingWindow = hostingWindow
 
     let timeout = DispatchWorkItem { [weak self] in
       self?.finish(.failure(ConversationShareRenderError("Conversation share rendering timed out.")))
@@ -188,6 +216,7 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
         return
       }
       webView.frame = CGRect(x: 0, y: 0, width: captureWidth, height: captureHeight)
+      self.hostingWindow?.rootViewController?.view.frame = self.hostingWindow?.bounds ?? .zero
       webView.setNeedsLayout()
       webView.layoutIfNeeded()
       let requestedScale = max(0.25, self.scale)
@@ -236,6 +265,10 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
     timeoutWorkItem = nil
     webView?.stopLoading()
     webView?.navigationDelegate = nil
+    webView?.removeFromSuperview()
+    hostingWindow?.isHidden = true
+    hostingWindow?.rootViewController = nil
+    hostingWindow = nil
     webView = nil
     completion(result)
   }

@@ -167,6 +167,10 @@ describe('buildConversationShareHtml 富内容导出', () => {
     );
 
     expect(nativeSource).toContain('conversationShareMaxSourcePixels');
+    expect(nativeSource).toContain('UIWindow(windowScene: windowScene)');
+    expect(nativeSource).toContain('hostingWindow.rootViewController = viewController');
+    expect(nativeSource).toContain('hostingWindow?.isHidden = true');
+    expect(nativeSource).toContain('no active window scene');
     expect(nativeSource).toContain(
       'captureWidth * captureHeight <= conversationShareMaxSourcePixels',
     );
@@ -179,6 +183,8 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
     expect(sessionSource).toContain('nativeShareAssetsReady');
     expect(sessionSource).toContain('falling back to svg');
+    expect(sessionSource).toContain('OTA webview export failed; falling back to svg');
+    expect(sessionSource).toContain('<ConversationShareWebView');
     expect(sessionSource).toContain('return svg.exportPng();');
   });
 
