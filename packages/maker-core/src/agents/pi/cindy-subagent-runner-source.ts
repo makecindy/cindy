@@ -44,6 +44,9 @@ const CHILD_EXIT_GRACE_MS = 2000;
 const MAX_PROCESSED_CONTROL_IDS = 256;
 const MAX_CONTROL_RECEIPTS = 512;
 const CONTROL_RECEIPT_TTL_MS = 5 * 60 * 1000;
+// How often the retention scan may run when the bound is not exceeded. Half the
+// TTL keeps expiry timely without paying for a directory walk per poll cycle.
+const RECEIPT_TTL_SWEEP_MS = 150 * 1000;
 const SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 // Windows has no atomic replace of a file someone else has open: while the Host
 // polls status.json (or an AV scanner opens it), rename fails with EPERM /
@@ -289,7 +292,8 @@ function main() {
     lastControlSeq: 0,
     lastLegacyControlRequestId: '',
     processedControlIds: new Map(),
-    receiptWritesSincePrune: 0,
+    receiptCount: 0,
+    lastReceiptSweepAt: 0,
     statusTimer: undefined,
     heartbeatTimer: undefined,
     controlTimer: undefined,
@@ -539,10 +543,19 @@ function main() {
     return complete({ accepted: false, reason: 'unsupported-control' });
   }
 
+  // The scan is a readdir plus one statSync per retained receipt. Running it at
+  // the end of every poll cycle made each control acknowledgement cost
+  // O(receipts), so a deep backlog got slower the longer it ran: a Windows CI
+  // disk went from ~4 acks/s to under 0.5/s (366 receipts after 90s, 414 after
+  // 240s) with a healthy runner. The count is kept in memory instead, and the
+  // directory is only walked when it can actually change something — the bound
+  // is exceeded, or the TTL sweep is due. The force flag is the startup
+  // calibration, which is also what anchors the count to what is on disk.
   function pruneControlReceipts(force) {
-    state.receiptWritesSincePrune += force ? 0 : 1;
-    if (!force && state.receiptWritesSincePrune < 64) return;
-    state.receiptWritesSincePrune = 0;
+    const now = Date.now();
+    const ttlDue = now - state.lastReceiptSweepAt >= RECEIPT_TTL_SWEEP_MS;
+    if (!force && state.receiptCount <= MAX_CONTROL_RECEIPTS && !ttlDue) return;
+    state.lastReceiptSweepAt = now;
     let receipts = [];
     try {
       receipts = fs.readdirSync(controlReceiptDir).filter(function (file) {
@@ -553,11 +566,18 @@ function main() {
         catch (_) { return []; }
       }).sort(function (left, right) { return right.modifiedAt - left.modifiedAt; });
     } catch (_) { return; }
-    const cutoff = Date.now() - CONTROL_RECEIPT_TTL_MS;
+    const cutoff = now - CONTROL_RECEIPT_TTL_MS;
+    let retained = 0;
     for (let index = 0; index < receipts.length; index += 1) {
-      if (index < MAX_CONTROL_RECEIPTS && receipts[index].modifiedAt >= cutoff) continue;
+      if (index < MAX_CONTROL_RECEIPTS && receipts[index].modifiedAt >= cutoff) {
+        retained += 1;
+        continue;
+      }
       try { fs.unlinkSync(receipts[index].filePath); } catch (_) {}
     }
+    // Re-anchor on what the scan actually saw, so a failed unlink or an outside
+    // deletion cannot make the in-memory count drift away from the directory.
+    state.receiptCount = retained;
   }
 
   function pollControl() {
@@ -623,14 +643,14 @@ function main() {
             reason: outcome && outcome.reason,
             handledAt: Date.now(),
           });
-          state.receiptWritesSincePrune += 1;
+          state.receiptCount += 1;
         }
         fs.unlinkSync(entry.filePath);
       } catch (error) {
         safeAppendTranscript(state, { type: 'cindy.subagent.control_error', at: Date.now(), message: String(error) });
       }
     }
-    if (state.receiptWritesSincePrune > 0) pruneControlReceipts(true);
+    pruneControlReceipts(false);
   }
 
   function launchTask(task) {

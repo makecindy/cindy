@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
@@ -10,6 +10,7 @@ import {
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import { promisify } from 'node:util';
 
 import type {
   SubagentControlAction,
@@ -222,6 +223,44 @@ function readProcessCommandLine(pid: number): string | null {
   }
 }
 
+const execFileAsync = promisify(execFile);
+
+/**
+ * Non-blocking twin of `readProcessCommandLine`, for the reclaim path.
+ *
+ * `spawnSync` blocks the event loop, so reclaiming several runners with it is
+ * strictly serial no matter how the callers are composed — the exact opposite of
+ * what a bounded quit needs. The timeout is a second rather than five: a process
+ * probe that has not answered by then is not going to rescue a quit budget, and
+ * an unanswered probe is already handled conservatively (`unverifiable` never
+ * claims a reclaim). The synchronous version keeps its longer timeout, because
+ * its callers (stale detection on the force-quit path) treat a failed probe as
+ * evidence rather than as "unknown".
+ */
+const KILL_PROBE_TIMEOUT_MS = 1_000;
+
+async function readProcessCommandLineAsync(pid: number): Promise<string | null> {
+  try {
+    const { stdout } = process.platform === 'win32'
+      ? await execFileAsync(
+          'powershell.exe',
+          [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+          ],
+          { encoding: 'utf8', timeout: KILL_PROBE_TIMEOUT_MS, windowsHide: true },
+        )
+      : await execFileAsync('ps', ['-p', String(pid), '-o', 'args='], {
+          encoding: 'utf8',
+          timeout: KILL_PROBE_TIMEOUT_MS,
+        });
+    const text = typeof stdout === 'string' ? stdout.trim() : '';
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Is the process at `status.runnerPid` really this run's runner?
  *
@@ -254,13 +293,14 @@ export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boo
  */
 type PiSubagentRunnerPresence = 'gone' | 'running' | 'unverifiable';
 
-function classifyRunnerPresence(status: PiSubagentRunStatus): PiSubagentRunnerPresence {
+async function classifyRunnerPresence(status: PiSubagentRunStatus): Promise<PiSubagentRunnerPresence> {
   const pid = status.runnerPid;
   if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return 'gone';
+  // Free, and it settles the common case without spawning anything.
   if (isProcessAlive(pid!) === false) return 'gone';
   const script = status.runnerScript;
   if (typeof script !== 'string' || script.length === 0) return 'unverifiable';
-  const commandLine = readProcessCommandLine(pid!);
+  const commandLine = await readProcessCommandLineAsync(pid!);
   if (commandLine === null) return 'unverifiable';
   return commandLine.includes(script) ? 'running' : 'gone';
 }
@@ -288,7 +328,7 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
   // stale check had cached "still the runner", the runner then exited on its
   // own, and this refused to report a reclaim for a process that no longer
   // existed. Nothing to reclaim *is* a reclaim.
-  const presence = classifyRunnerPresence(status);
+  const presence = await classifyRunnerPresence(status);
   if (presence === 'gone') return true;
   // Unverifiable and still live: we may not signal a pid we cannot prove is
   // ours, and we may not claim it was reclaimed either.
@@ -325,7 +365,7 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
     // Same predicate as the entry check, and it must be a *positive* `gone`:
     // after the signal, a probe that simply stopped answering is not proof the
     // process died.
-    if (classifyRunnerPresence(status) === 'gone') return true;
+    if (await classifyRunnerPresence(status) === 'gone') return true;
     if (attempt >= KILL_CONFIRM_ATTEMPTS - 1) return false;
     await new Promise<void>((resolve) => setTimeout(resolve, KILL_CONFIRM_INTERVAL_MS));
   }
@@ -1871,7 +1911,19 @@ export interface PiSubagentSweepScope {
    * anyway, and a mailbox timeout is not a credential-safety problem.
    */
   killUnresponsiveRunners?: boolean;
+  /**
+   * Ceiling for the whole escalation, not per runner. Reclaims run in parallel
+   * (the identity probe is async, so several really do overlap), but a wedged
+   * probe must not be able to push the caller past its own deadline — quit gets
+   * one bounded async phase and then the process exits regardless. Anything
+   * still unfinished when this expires is reported as unreclaimed, which is the
+   * truth: we did not confirm it stopped.
+   */
+  killBudgetMs?: number;
 }
+
+/** Wide enough for a handful of runners at ~0.8s of exit confirmation each. */
+const DEFAULT_KILL_BUDGET_MS = 8_000;
 
 /**
  * Runs under `root` that this sweep still owns, as one universe.
@@ -1922,6 +1974,19 @@ async function sweepableRunsUnderRoot(
   return sweepable;
 }
 
+/** Resolve false if `work` has not settled within `ms`, without leaking a timer. */
+async function raceWithDeadline(work: Promise<boolean>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Request stop for every non-terminal run under `roots` and wait until they are
  * all terminal (or the deadline passes). An unreadable status stays in scope so
@@ -1955,21 +2020,28 @@ async function stopPiSubagentRunsUnderRoots(
       // spending the outgoing account and editing the workspace. Escalate to a
       // verified kill; anything we cannot positively identify is left alone.
       if (!scope.killUnresponsiveRunners) return false;
+      const killDeadline = Date.now() + (scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS);
       let killedAll = true;
       for (const root of roots) {
         // Re-derived, so a run whose directory vanished in the meantime is gone
         // from the set and counts as reclaimed.
-        for (const { status } of await sweepableRunsUnderRoot(root, scope)) {
+        const work = await sweepableRunsUnderRoot(root, scope);
+        // In parallel: each reclaim is mostly waiting on its own process probe,
+        // and serialising them multiplied the worst case by the number of
+        // runners — enough to overrun a quit budget with only a few of them.
+        const outcomes = await Promise.all(work.map(async ({ status }) => {
           if (!status) {
             // No readable status means no runner identity to verify, and the
             // header forbids signalling a pid we cannot prove. So we cannot
             // reclaim it — but the caller must not hear that the boundary is
             // clean, or an account switch proceeds with this child still live.
-            killedAll = false;
-            continue;
+            return false;
           }
-          if (!await killVerifiedPiSubagentRunner(status)) killedAll = false;
-        }
+          const remaining = killDeadline - Date.now();
+          if (remaining <= 0) return false;
+          return raceWithDeadline(killVerifiedPiSubagentRunner(status), remaining);
+        }));
+        if (outcomes.some((reclaimed) => !reclaimed)) killedAll = false;
       }
       return killedAll;
     }

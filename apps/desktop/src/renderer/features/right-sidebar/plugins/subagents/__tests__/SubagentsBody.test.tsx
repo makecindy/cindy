@@ -695,8 +695,13 @@ describe('SubagentsBody', () => {
     );
 
     // The tool card is still on screen, and so is the result the record kept.
+    // Both waits are `findBy`: the durable result comes straight from the detail
+    // record, the transcript items arrive from a separate async page load, and a
+    // synchronous read of the second one only happened to pass while that load
+    // resolved inside the first tick. Under CI load it did not, and the case
+    // failed on timing rather than on what it is testing.
     expect(await screen.findByText('durable completed result')).toBeTruthy();
-    expect(screen.getByText('go and research')).toBeTruthy();
+    expect(await screen.findByText('go and research')).toBeTruthy();
     // A reply is visible, so the "no reply" notice must stay away.
     expect(screen.queryByText('rightSidebar.subagents.completedNoReply')).toBeNull();
   });

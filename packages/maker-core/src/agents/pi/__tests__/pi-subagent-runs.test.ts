@@ -43,6 +43,36 @@ const childProcess = vi.hoisted(() => ({
     stdout?: string;
     error?: Error;
   })),
+  /**
+   * The reclaim path probes asynchronously so several runners can be confirmed
+   * at once. Route it through the same stub the synchronous probe uses, so a
+   * case only has to describe the process once — `execFile` is consumed through
+   * `promisify`, hence the callback shape.
+   */
+  /** Delay every async probe by this much; tests raise it to expose ordering. */
+  probeDelayMs: 0,
+  execFile: Object.assign(
+    vi.fn(),
+    {
+      // `promisify` reads this symbol *once*, when the module under test is
+      // imported, and the real `execFile` uses it to resolve `{ stdout, stderr }`
+      // rather than a bare string. So the shape has to be right here, and any
+      // per-case behaviour has to come from state this closure reads later.
+      [Symbol.for('nodejs.util.promisify.custom')]: async (file: string, args: string[]) => {
+        if (childProcess.probeDelayMs > 0) {
+          await new Promise((resolve) => { setTimeout(resolve, childProcess.probeDelayMs); });
+        }
+        const result = childProcess.spawnSync(file, args) as {
+          status?: number | null;
+          stdout?: string;
+          error?: Error;
+        };
+        if (result.error) throw result.error;
+        if ((result.status ?? 0) !== 0) throw new Error(`probe exited ${result.status}`);
+        return { stdout: result.stdout ?? '', stderr: '' };
+      },
+    },
+  ),
 }));
 vi.mock('node:child_process', () => childProcess);
 
@@ -699,6 +729,7 @@ describe('PI durable subagent run store', () => {
 
     afterEach(() => {
       restores.splice(0).forEach((restore) => restore());
+      childProcess.probeDelayMs = 0;
       childProcess.spawnSync.mockReset();
       childProcess.spawnSync.mockImplementation((..._args: unknown[]) => ({ status: 0, stdout: '' }));
     });
@@ -755,6 +786,93 @@ describe('PI durable subagent run store', () => {
 
       await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
         .resolves.toBe(false);
+    });
+
+    /**
+     * Quit gets one bounded async phase and then the process exits regardless,
+     * so the escalation has to fit inside it. Serialising the reclaims made the
+     * worst case scale with the number of runners; the probe is async now, so
+     * they overlap, and a total budget caps whatever is left.
+     */
+    describe('reclaim budget', () => {
+      const pids = [940_001, 940_002, 940_003, 940_004];
+
+      /** Those pids are live; a real signal reaps them if `reaped` is set. */
+      function stubRunnerLiveness(reapedByKill: boolean): void {
+        const real = process.kill.bind(process);
+        const dead = new Set<number>();
+        const spy = vi.spyOn(process, 'kill').mockImplementation(
+          ((pid: number, signal?: NodeJS.Signals | number) => {
+            const target = Math.abs(pid);
+            if (!pids.includes(target)) return real(pid, signal);
+            if (signal === 0) {
+              if (dead.has(target)) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+              return true;
+            }
+            if (reapedByKill) dead.add(target);
+            return true;
+          }) as typeof process.kill,
+        );
+        restores.push(() => spy.mockRestore());
+      }
+
+      /** Every probe answers after `delayMs`, so serial vs parallel is visible. */
+      function stubSlowProbes(delayMs: number): void {
+        childProcess.probeDelayMs = delayMs;
+        restores.push(() => { childProcess.probeDelayMs = 0; });
+        childProcess.spawnSync.mockImplementation((...args: unknown[]) => {
+          // POSIX passes ['-p', '<pid>', '-o', 'args=']; Windows embeds the pid
+          // in the CIM filter. Either way it is the only all-digit fragment.
+          const flat = (args[1] as string[] | undefined) ?? [];
+          const pid = flat
+            .map((arg) => (/^\d+$/.test(arg) ? arg : (/ProcessId=(\d+)/.exec(arg)?.[1] ?? '')))
+            .find((value) => value.length > 0) ?? '';
+          return { status: 0, stdout: `node /runs/runner-${pid}.cjs config.json` };
+        });
+      }
+
+      async function homeWithRunners(count: number): Promise<string> {
+        const agentHome = await makeRoot();
+        const root = piSubagentRunRoot(agentHome, 'session-1');
+        for (let index = 0; index < count; index += 1) {
+          const pid = pids[index]!;
+          await writeStatus(root, status(`123e4567-e89b-42d3-a456-42661417${4200 + index}`, {
+            runnerPid: pid,
+            runnerScript: `/runs/runner-${pid}.cjs`,
+            updatedAt: Date.now(),
+          }));
+        }
+        return agentHome;
+      }
+
+      it('reclaims several runners concurrently rather than one after another', async () => {
+        usePlatform('linux');
+        stubRunnerLiveness(true);
+        // 150ms per probe. Serial would be at least one probe per runner before
+        // any of them can be confirmed; overlapped, they share the wait.
+        stubSlowProbes(150);
+        const agentHome = await homeWithRunners(4);
+
+        const startedAt = Date.now();
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, {
+          killUnresponsiveRunners: true,
+          killBudgetMs: 5_000,
+        })).resolves.toBe(true);
+        expect(Date.now() - startedAt).toBeLessThan(150 * 4);
+      });
+
+      it('reports the runners it could not finish inside the budget', async () => {
+        usePlatform('linux');
+        // Nothing is ever reaped and every probe is slower than the budget.
+        stubRunnerLiveness(false);
+        stubSlowProbes(5_000);
+        const agentHome = await homeWithRunners(2);
+
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, {
+          killUnresponsiveRunners: true,
+          killBudgetMs: 200,
+        })).resolves.toBe(false);
+      });
     });
 
     /**

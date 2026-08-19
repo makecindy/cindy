@@ -27,6 +27,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 
 import {
+  hasActivePiSubagentRunsSync,
   requestStopAllPiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
@@ -1340,10 +1341,11 @@ function forceQuit(): void {
   // build_app uses detached process groups, so parent exit does not reliably
   // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
   abortIOSSimulatorOperationsForExit();
-  // Residual window only: `executeRelaunch` already reclaimed this runtime's
-  // runners (and refused to get here otherwise). This covers a run that started
-  // in the moments since. Stays synchronous by necessity — awaiting anything
-  // here can pop a dialog and stall the updater's pid poll.
+  // Residual window only, and now a millisecond-scale one: `executeRelaunch`
+  // reclaimed this runtime's runners and then confirmed the agent home was
+  // still quiet, refusing to get here otherwise. What is left is the gap
+  // between that confirmation and this exit. Stays synchronous by necessity —
+  // awaiting anything here can pop a dialog and stall the updater's pid poll.
   requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
     hostPid: process.pid,
   });
@@ -1395,17 +1397,20 @@ function executeUpdateMacOS(zipPath: string): void {
   forceQuit();
 }
 
+/** Total ceiling for the reclaim, including every re-check round. */
+const SUBAGENT_RECLAIM_TOTAL_MS = 6_000;
+/** Rounds before we stop trying and cancel the relaunch instead. */
+const SUBAGENT_RECLAIM_MAX_ROUNDS = 3;
+
 /**
- * Bounded reclaim of this runtime's durable Subagent runners before an update
- * relaunch. Returns false when any of them could not be confirmed stopped.
+ * One reclaim pass over this runtime's durable Subagent runners.
  *
- * Budget: 2s for the stop mailbox plus ~0.8s of exit confirmation per surviving
- * runner (5 identity probes x 200ms, run one after another), with a 4s race as
- * the hard ceiling so a wedged probe can never hold the update — and never pops
- * a dialog, which is the whole reason this path bypasses the graceful chain.
+ * Budget: 2s for the stop mailbox plus a 1.5s ceiling on the escalation (the
+ * reclaims run concurrently), with a 4s race as the hard stop so a wedged probe
+ * can never hold the update — and never pops a dialog, which is the whole
+ * reason this path bypasses the graceful chain.
  */
-async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
-  const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+async function reclaimSubagentRunnersOnce(agentHome: string): Promise<boolean> {
   try {
     return await Promise.race([
       stopAllPiSubagentRunsForExit(agentHome, 2_000, {
@@ -1413,6 +1418,8 @@ async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
         // instance's Subagents out of the shared agent home.
         hostPid: process.pid,
         killUnresponsiveRunners: true,
+        // Inside the 4s ceiling below, leaving the 2s stop wait its own room.
+        killBudgetMs: 1_500,
       }),
       new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), 4_000); }),
     ]);
@@ -1420,6 +1427,37 @@ async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
     log.error('Subagent reclaim before update relaunch failed: %s', String(err));
     return false;
   }
+}
+
+/**
+ * Reclaim until the agent home is *stable*, not merely until one pass says so.
+ *
+ * A single pass proves nothing about the moment after it: the parent task is
+ * still running while we work, so it can launch another durable runner between
+ * the last scan and `process.exit(0)` — and that one would survive the update
+ * with credentials nobody is left holding. Stability here means a pass returned
+ * true and a fresh scan afterwards finds nothing active; anything else gets
+ * another round, up to a hard ceiling. Failing to reach it cancels the
+ * relaunch, which is the same verdict as failing to reclaim.
+ */
+async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
+  const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+  const deadline = Date.now() + SUBAGENT_RECLAIM_TOTAL_MS;
+  for (let round = 1; round <= SUBAGENT_RECLAIM_MAX_ROUNDS; round += 1) {
+    if (!await reclaimSubagentRunnersOnce(agentHome)) return false;
+    let stillActive: boolean;
+    try {
+      stillActive = hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid });
+    } catch (err) {
+      // An unreadable agent home cannot be called stable.
+      log.error('Subagent stability re-check failed: %s', String(err));
+      return false;
+    }
+    if (!stillActive) return true;
+    log.warn('A durable Subagent run appeared after reclaim round %d; retrying', round);
+    if (Date.now() >= deadline) break;
+  }
+  return false;
 }
 
 /**

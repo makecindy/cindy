@@ -26,8 +26,8 @@ const macScript = readSourceNormalized('../updateScriptMacOS.ts');
 describe('PI Subagent reclaim before an update relaunch', () => {
   it('reclaims with the escalation scope on a bounded budget', () => {
     const reclaim = source.slice(
+      source.indexOf('async function reclaimSubagentRunnersOnce('),
       source.indexOf('async function reclaimSubagentRunnersForRelaunch()'),
-      source.indexOf('async function executeRelaunch('),
     );
     expect(reclaim).toContain('killUnresponsiveRunners: true');
     expect(reclaim).toContain('hostPid: process.pid');
@@ -37,6 +37,25 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     expect(reclaim).toContain('Promise.race([');
     expect(reclaim).toContain('setTimeout(() => resolve(false), 4_000)');
     expect(reclaim).toContain('catch (err)');
+  });
+
+  it('reclaims until the agent home is stable, not just until one pass succeeds', () => {
+    // The parent task keeps running while the gate works, so it can launch
+    // another durable runner between the last scan and process.exit — that one
+    // would survive the update holding credentials nobody is left to revoke.
+    const loop = source.slice(
+      source.indexOf('async function reclaimSubagentRunnersForRelaunch()'),
+      source.indexOf('async function executeRelaunch('),
+    );
+    expect(loop).toContain('SUBAGENT_RECLAIM_MAX_ROUNDS');
+    // A pass that succeeds is not the verdict; the re-scan after it is.
+    expect(loop).toMatch(/if \(!await reclaimSubagentRunnersOnce\(agentHome\)\) return false;/);
+    expect(loop).toContain('hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid })');
+    expect(loop).toMatch(/if \(!stillActive\) return true;/);
+    // Out of rounds or out of time is a refusal, never a silent pass.
+    const tail = loop.slice(loop.lastIndexOf('if (Date.now() >= deadline) break;'));
+    expect(tail).toContain('return false;');
+    expect(source).toContain('const SUBAGENT_RECLAIM_TOTAL_MS = 6_000;');
   });
 
   it('gates before the updater is spawned, because a later refusal is not one', () => {

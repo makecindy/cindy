@@ -25,14 +25,15 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
  * site. The case carries a matching per-test override, since the file-level 60s
  * cannot contain a wait that is allowed to run for this long.
  *
- * Windows gets a much larger one because it is measurably slower, not because
- * anything is wrong: the runner reported 366 of 512 receipts after 90s on the
- * CI runner (~4/s), which puts the real completion around 126s. 240s is ~2x
- * that measurement. The runner was healthy throughout — stderr empty, the
- * control backlog fully drained — so this is throughput, not a wedge.
+ * Windows keeps a modest extra margin because its disk is genuinely slower,
+ * but no longer a huge one: the 366-after-90s / 414-after-240s decay this case
+ * used to show was a real product pathology, not slow hardware — the runner
+ * rescanned the whole receipts directory at the end of every poll cycle, so each
+ * acknowledgement cost O(receipts). That is fixed in the runner; see
+ * `pruneControlReceipts`.
  */
-const CONTROL_BACKLOG_WAIT_MS = process.platform === 'win32' ? 240_000 : 90_000;
-const CONTROL_BACKLOG_TEST_TIMEOUT_MS = process.platform === 'win32' ? 300_000 : 120_000;
+const CONTROL_BACKLOG_WAIT_MS = process.platform === 'win32' ? 120_000 : 90_000;
+const CONTROL_BACKLOG_TEST_TIMEOUT_MS = process.platform === 'win32' ? 180_000 : 120_000;
 import {
   controlPiSubagentRuns,
   isPiSubagentTerminal,

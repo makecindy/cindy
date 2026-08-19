@@ -7678,12 +7678,15 @@ onQuit(
   async () => {
     const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
     // Budget arithmetic against the 6s async phase: 2.5s waiting for the stop
-    // mailbox, then a verified kill per surviving runner whose exit
-    // confirmation costs up to ~0.8s (5 identity probes x 200ms), run one after
-    // another. 2.5s + 4 runners still lands under 6s; past that the phase's own
-    // timeout cuts us off, which is why the failure log below has to stay true
-    // rather than assume the escalation finished.
+    // mailbox, then at most 3s of escalation. The reclaims run concurrently and
+    // their identity probe is async, so that 3s is a ceiling for the whole set
+    // rather than a per-runner cost — the old serial shape multiplied ~0.8s of
+    // exit confirmation by the number of runners and could overrun the phase on
+    // its own. 2.5 + 3 leaves half a second of headroom; anything still
+    // unconfirmed when the budget expires is reported as unreclaimed, which is
+    // why the failure log below has to stay true.
     const stopped = await stopAllPiSubagentRunsForExit(agentHome, 2_500, {
+      killBudgetMs: 3_000,
       // Only our own children (plus unattributable / dead-owner orphans). A
       // concurrent instance sharing this agent home keeps running.
       hostPid: process.pid,
