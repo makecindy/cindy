@@ -84,6 +84,23 @@ describe("CindyAuthClient", () => {
     await expect(client(fetch).getProviders()).resolves.toMatchObject({
       captcha: { provider: "turnstile", requiredFor: ["email_request_code"] },
     });
+    // 新 server append-only 增加动作时，旧客户端忽略未知值但保留已知闸门。
+    const extendedFetch = vi.fn(async () =>
+      response(200, {
+        region: "cn",
+        attribution: "phone",
+        email: true,
+        phone: true,
+        social: [],
+        captcha: {
+          provider: "turnstile",
+          siteKey: "scenario-captcha-sitekey",
+          requiredFor: ["email_request_code", "phone_request_code"],
+        },
+      }),
+    );
+    const extended = await client(extendedFetch).getProviders();
+    expect(extended.captcha?.requiredFor).toEqual(["email_request_code"]);
     // 旧 server 缺字段 → undefined(可选字段,不整份拒绝)
     const legacyFetch = vi.fn(async () =>
       response(200, {

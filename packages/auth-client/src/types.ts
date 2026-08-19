@@ -32,7 +32,13 @@ export type AuthMembership = z.infer<typeof membershipSchema>;
 export const captchaConfigSchema = z.object({
   provider: z.literal("turnstile"),
   siteKey: z.string().min(1),
-  requiredFor: z.array(z.enum(["email_request_code"])),
+  // 服务端可 append-only 扩展动作；旧客户端只保留自己认识的闸门，
+  // 避免一个未知动作让整份 providers 响应解析失败。
+  requiredFor: z.array(z.string()).transform((actions) =>
+    actions.filter(
+      (action): action is "email_request_code" => action === "email_request_code",
+    ),
+  ),
 });
 export type CaptchaConfig = z.infer<typeof captchaConfigSchema>;
 
