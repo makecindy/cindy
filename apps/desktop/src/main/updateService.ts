@@ -1230,6 +1230,24 @@ function handleApplyFailure(reason: string): void {
   readyChannelEpoch = undefined;
   isRelaunching = false;
   autoRelaunchInProgress = false;
+  // Every failure exit converges here, including the two that fire *after*
+  // `executeRelaunch` has already returned: the Windows updater registers its
+  // `error` and 5s spawn-timeout callbacks and returns immediately, so
+  // `isRelaunching` was still true when the outer `finally` checked it and the
+  // fence was skipped. It then stood for the rest of the process's life, and
+  // every durable Subagent launch this host attempted was refused as "Cindy is
+  // restarting". Releasing here covers the synchronous refusals too, where it
+  // is simply redundant — `clearSubagentLaunchFence` nulls the handle first, so
+  // the outer `finally` finds nothing left to do.
+  //
+  // Not awaited, because nothing here can: this is a `void` handler called from
+  // a child-process event. Nothing reads the outcome — the only consumer is the
+  // next launch attempt — and the release itself is serialised behind the
+  // fence's per-file work chain. The success path never reaches this function:
+  // a spawned updater ends in `forceQuit()`, and the fence is meant to stand.
+  void clearSubagentLaunchFence().catch((err: unknown) => {
+    log.error('clearing the Subagent launch fence after a failed apply failed: %s', String(err));
+  });
   setStatus('error', { errorCode: 'updater_spawn_failed' });
 }
 

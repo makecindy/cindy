@@ -80,6 +80,35 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     expect(wrapper).toMatch(/finally \{[\s\S]*clearSubagentLaunchFence\(\)/);
   });
 
+  it('drops the fence on the failures that land after the executor returned', () => {
+    // The Windows executor registers its `error` and 5s spawn-timeout callbacks
+    // and returns immediately, so `isRelaunching` was still true when the outer
+    // `finally` tested it and the fence was skipped. It then stood for the rest
+    // of the process's life and every durable Subagent launch was refused as
+    // "Cindy is restarting". Both callbacks — and every synchronous refusal —
+    // converge on `handleApplyFailure`, which is where the release belongs.
+    const handler = source.slice(
+      source.indexOf('function handleApplyFailure(reason: string): void {'),
+    );
+    const body = handler.slice(0, handler.indexOf("setStatus('error'"));
+    expect(body).toContain('clearSubagentLaunchFence()');
+    // The two asynchronous exits really do route here.
+    const windows = source.slice(
+      source.indexOf('function executeUpdateWindows('),
+      source.indexOf('function executeUpdateMacOS('),
+    );
+    expect(windows).toContain("handleApplyFailure('spawn_timeout');");
+    expect(windows).toContain("handleApplyFailure(err.code ?? 'unknown');");
+    // And the success path does not: a spawned updater force-quits, and the
+    // fence is meant to stand until the process is gone.
+    const spawned = windows.slice(windows.indexOf("child.on('spawn'"), windows.indexOf("child.on('error'"));
+    expect(spawned).toContain('forceQuit();');
+    expect(spawned).not.toContain('handleApplyFailure');
+    // Still released through the lease-aware entry point, never a bare unlink.
+    expect(body).not.toContain('fs.rm');
+    expect(source).toContain('async function clearSubagentLaunchFence(): Promise<void> {');
+  });
+
   it('gates before the updater is spawned, because a later refusal is not one', () => {
     // The spawned updater polls our pid and SIGKILLs it; deciding not to exit
     // after that point does not keep this process alive.

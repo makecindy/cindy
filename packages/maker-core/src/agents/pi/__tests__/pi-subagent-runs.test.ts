@@ -2385,6 +2385,92 @@ describe('PI durable subagent run store', () => {
     });
   });
 
+  describe('paging past a generation that cannot be read', () => {
+    const line = (at: number, text: string): string => `${JSON.stringify({
+      type: 'cindy.subagent.child_event',
+      at,
+      childId: 'child-1',
+      event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } },
+    })}\n`;
+
+    /** Read the whole thing one entry at a time, the cadence that exposes this. */
+    async function pageThrough(
+      root: string,
+      generations: readonly string[],
+    ): Promise<{ contents: string[]; pages: number }> {
+      const contents: string[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      for (; pages < 20; pages += 1) {
+        const page = await readPiSubagentTranscriptPage(root, generations, { cursor, limit: 1 });
+        contents.push(...page.entries.map((entry) => entry.content));
+        cursor = page.nextCursor;
+        if (!cursor) break;
+      }
+      return { contents, pages };
+    }
+
+    it('advances past the placeholder instead of repeating it', async () => {
+      // The marker is that generation's entire contribution, so a cursor still
+      // naming it makes the next page re-emit the same marker and get no
+      // further. `limit: 1` puts the marker exactly on the page bound every
+      // time, which is what turned it into an unbounded repeat — the resumed
+      // generations behind it were unreachable.
+      const root = await makeRoot();
+      const missing = '123e4567-e89b-42d3-a456-426614174070';
+      const later = '123e4567-e89b-42d3-a456-426614174071';
+      await writeStatus(root, status(missing, { state: 'completed' }));
+      await writeStatus(root, status(later));
+      await writeFile(path.join(root, later, 'transcript.jsonl'), line(200, 'after the gap'));
+
+      const { contents } = await pageThrough(root, [missing, later]);
+
+      expect(contents).toEqual([
+        'An earlier part of this conversation could not be read.',
+        'after the gap',
+      ]);
+    });
+
+    it('walks a run of unreadable generations one at a time', async () => {
+      const root = await makeRoot();
+      const first = '123e4567-e89b-42d3-a456-426614174072';
+      const second = '123e4567-e89b-42d3-a456-426614174073';
+      const later = '123e4567-e89b-42d3-a456-426614174074';
+      await writeStatus(root, status(first, { state: 'completed' }));
+      await writeStatus(root, status(second, { state: 'completed' }));
+      await writeStatus(root, status(later));
+      await writeFile(path.join(root, later, 'transcript.jsonl'), line(300, 'the survivor'));
+
+      const { contents } = await pageThrough(root, [first, second, later]);
+
+      // One marker per damaged generation, then the readable one.
+      expect(contents).toEqual([
+        'An earlier part of this conversation could not be read.',
+        'An earlier part of this conversation could not be read.',
+        'the survivor',
+      ]);
+    });
+
+    it('ends the transcript when the newest generation is the unreadable one', async () => {
+      const root = await makeRoot();
+      const readable = '123e4567-e89b-42d3-a456-426614174075';
+      const missing = '123e4567-e89b-42d3-a456-426614174076';
+      await writeStatus(root, status(readable, { state: 'completed' }));
+      await writeStatus(root, status(missing));
+      await writeFile(path.join(root, readable, 'transcript.jsonl'), line(100, 'the only reply'));
+
+      const { contents } = await pageThrough(root, [readable, missing]);
+
+      expect(contents).toEqual([
+        'the only reply',
+        'An earlier part of this conversation could not be read.',
+      ]);
+      // Nothing beyond it: the last page has no continuation.
+      const last = await readPiSubagentTranscriptPage(root, [readable, missing], { limit: 200 });
+      expect(last.nextCursor).toBeUndefined();
+    });
+  });
+
   it('keeps skipping unparsable and unknown transcript lines', async () => {
     const root = await makeRoot();
     const runId = '123e4567-e89b-42d3-a456-426614174023';

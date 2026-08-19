@@ -1665,7 +1665,17 @@ export async function readPiSubagentTranscriptPage(
         occurredAt: 0,
         systemEvent: { kind: 'generation-unreadable' },
       });
-      cursorIndex = index;
+      // Point past this generation, not at it. The marker *is* this
+      // generation's whole contribution — there is nothing left in it to read —
+      // so a cursor still naming it means the next page re-emits the same
+      // marker and gets no further. That only shows when the marker lands on
+      // the page bound, which `limit: 1` hits every time: the reader then
+      // repeated one placeholder for ever and never reached the resumed
+      // generations behind it.
+      //
+      // With no next generation there is nothing to point at; the loop is about
+      // to end and `more` stays false, so the page correctly reads as EOF.
+      cursorIndex = index + 1 < generations.length ? index + 1 : index;
       cursorOffset = 0;
       continue;
     }
