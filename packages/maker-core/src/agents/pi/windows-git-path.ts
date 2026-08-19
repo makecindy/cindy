@@ -197,18 +197,17 @@ export function probePartitionedWindowsPathKinds(
 ): Map<string, WindowsPathKind> {
   const { local, network } = partitionWindowsProbeCandidates(candidates, networkDriveLetters);
   const kinds = new Map<string, WindowsPathKind>();
-  for (const partition of [local, network]) {
-    const batches = new Map<string, string[]>();
-    for (const candidate of partition) {
-      const root = normalizedWindowsPath(path.win32.parse(candidate).root);
-      const batch = batches.get(root);
-      if (batch) batch.push(candidate);
-      else batches.set(root, [candidate]);
-    }
-    for (const batch of batches.values()) {
-      for (const [candidate, kind] of probeBatch(batch)) {
-        kinds.set(candidate, kind);
-      }
+  const localBatches = new Map<string, string[]>();
+  for (const candidate of local) {
+    const root = normalizedWindowsPath(path.win32.parse(candidate).root);
+    const batch = localBatches.get(root);
+    if (batch) batch.push(candidate);
+    else localBatches.set(root, [candidate]);
+  }
+  for (const batch of [...localBatches.values(), network]) {
+    if (batch.length === 0) continue;
+    for (const [candidate, kind] of probeBatch(batch)) {
+      kinds.set(candidate, kind);
     }
   }
   return kinds;

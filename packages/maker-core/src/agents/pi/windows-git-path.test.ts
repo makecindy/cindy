@@ -122,6 +122,28 @@ describe('Windows Git/PATH helpers', () => {
     ]));
   });
 
+  it('uses one total network batch across UNC shares and mapped drives', () => {
+    const localGit = 'C:\\PortableGit\\cmd\\git.exe';
+    const firstUnc = '\\\\offline-one\\Git\\cmd\\git.exe';
+    const secondUnc = '\\\\offline-two\\Git\\cmd\\git.exe';
+    const mappedGit = 'Z:\\Git\\cmd\\git.exe';
+    const batches: string[][] = [];
+
+    probePartitionedWindowsPathKinds(
+      [firstUnc, localGit, secondUnc, mappedGit],
+      new Set(['Z']),
+      (batch) => {
+        batches.push([...batch]);
+        return new Map();
+      },
+    );
+
+    expect(batches).toEqual([
+      [localGit],
+      [firstUnc, secondUnc, mappedGit],
+    ]);
+  });
+
   it('keeps a valid HKLM Git root after an earlier offline HKCU root', () => {
     const offlineRoot = '\\\\offline-server\\Git';
     const localRoot = 'C:\\Program Files\\Git';
