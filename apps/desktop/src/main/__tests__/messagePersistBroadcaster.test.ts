@@ -112,6 +112,13 @@ const SUMMARY = 'tool finished';
 // 落库走 writeChain microtask,断言前 flush 一个宏任务边界把队列排空。
 const flushWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
 const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.any(Function) });
+const terminalSubagentObservation = (taskId: string, parentToolUseId?: string) => ({
+  subagentObservation: {
+    kind: 'terminal',
+    logicalSubagentId: taskId,
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+  },
+});
 
 describe('Codex done completion boundary', () => {
   it('only treats successful terminal data as a completed turn', () => {
@@ -731,6 +738,7 @@ describe('agent task terminal persistence', () => {
         taskId: 'agent-1',
         parentToolUseId: 'toolu-agent-1',
         status,
+        ...terminalSubagentObservation('agent-1', 'toolu-agent-1'),
       })).toBe(true);
 
       await flushWrites();
@@ -762,6 +770,90 @@ describe('agent task terminal persistence', () => {
 
     await flushWrites();
     expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+    expect(findVisibleToolUseMessageByAliases).not.toHaveBeenCalled();
+  });
+
+  it('waits for a terminal observation before persisting Codex completion', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'codex-spawn-control', toolName: 'collab:spawn', input: {} },
+      null,
+    );
+    await flushWrites();
+    vi.clearAllMocks();
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-spawn-control',
+      parentToolUseId: 'codex-spawn-control',
+      status: 'completed',
+      summary: 'Spawn control item completed',
+    })).toBe(false);
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-spawn-control',
+      parentToolUseId: 'codex-spawn-control',
+      status: 'running',
+      subagentObservation: {
+        kind: 'progress',
+        logicalSubagentId: 'codex-spawn-control',
+        parentToolUseId: 'codex-spawn-control',
+      },
+    })).toBe(false);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+    expect(findVisibleToolUseMessageByAliases).not.toHaveBeenCalled();
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-spawn-control',
+      parentToolUseId: 'codex-spawn-control',
+      status: 'completed',
+      ...terminalSubagentObservation('codex-spawn-control', 'codex-spawn-control'),
+    })).toBe(true);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      { agentTaskStatus: 'completed' },
+    );
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledTimes(1);
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not carry an unmarked Codex completion into a later tool row', async () => {
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'codex',
+      taskId: 'codex-completion-before-tool',
+      parentToolUseId: 'codex-completion-before-tool',
+      status: 'completed',
+      summary: 'Spawn control item completed',
+    })).toBe(false);
+
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'codex-completion-before-tool',
+        toolName: 'collab:spawn',
+        input: {},
+      },
+      null,
+    );
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        agentMeta: null,
+      }),
+      broadcastGuard(),
+    );
+    expect(findVisibleToolUseMessageByAliases).not.toHaveBeenCalled();
   });
 
   it('learns a taskId alias from running progress for a later terminal-only update', async () => {
@@ -779,6 +871,7 @@ describe('agent task terminal persistence', () => {
     expect(onAgentTaskUpdateEvent(SESSION, {
       taskId: 'agent-alias',
       status: 'failed',
+      ...terminalSubagentObservation('agent-alias'),
     })).toBe(true);
 
     await flushWrites();
@@ -804,6 +897,7 @@ describe('agent task terminal persistence', () => {
       taskId: 'agent-rehydrated',
       parentToolUseId: 'toolu-agent-rehydrated',
       status: 'stopped',
+      ...terminalSubagentObservation('agent-rehydrated', 'toolu-agent-rehydrated'),
     })).toBe(true);
 
     await flushWrites();
@@ -840,6 +934,7 @@ describe('agent task terminal persistence', () => {
       provider: 'claude-code',
       taskId: 'agent-runtime-id-only',
       status: 'failed',
+      ...terminalSubagentObservation('agent-runtime-id-only'),
     })).toBe(true);
 
     await flushWrites();
@@ -877,6 +972,10 @@ describe('agent task terminal persistence', () => {
       taskId: 'agent-rehydrate-clear-race',
       parentToolUseId: 'toolu-agent-rehydrate-clear-race',
       status: 'completed',
+      ...terminalSubagentObservation(
+        'agent-rehydrate-clear-race',
+        'toolu-agent-rehydrate-clear-race',
+      ),
     })).toBe(true);
     await lookupStarted;
     noteSessionClearBoundary(SESSION, Date.now());
@@ -892,6 +991,7 @@ describe('agent task terminal persistence', () => {
       taskId: 'agent-early',
       parentToolUseId: 'toolu-agent-early',
       status: 'stopped',
+      ...terminalSubagentObservation('agent-early', 'toolu-agent-early'),
     })).toBe(true);
 
     const persistId = onToolUseEvent(
@@ -928,6 +1028,7 @@ describe('agent task terminal persistence', () => {
       taskId: 'agent-before-clear',
       parentToolUseId: 'toolu-agent-before-clear',
       status: 'completed',
+      ...terminalSubagentObservation('agent-before-clear', 'toolu-agent-before-clear'),
     });
 
     await flushWrites();
@@ -952,6 +1053,10 @@ describe('agent task terminal persistence', () => {
       taskId: 'agent-queued-before-clear',
       parentToolUseId: 'toolu-agent-queued-before-clear',
       status: 'failed',
+      ...terminalSubagentObservation(
+        'agent-queued-before-clear',
+        'toolu-agent-queued-before-clear',
+      ),
     })).toBe(true);
     noteSessionClearBoundary(SESSION, Date.now());
 
@@ -988,6 +1093,10 @@ describe('agent task terminal persistence', () => {
       taskId: 'agent-patching-at-clear',
       parentToolUseId: 'toolu-agent-patching-at-clear',
       status: 'stopped',
+      ...terminalSubagentObservation(
+        'agent-patching-at-clear',
+        'toolu-agent-patching-at-clear',
+      ),
     })).toBe(true);
     await patchStarted;
     noteSessionClearBoundary(SESSION, Date.now());

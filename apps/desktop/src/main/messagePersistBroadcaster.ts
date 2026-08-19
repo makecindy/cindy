@@ -61,6 +61,7 @@ import {
   normalizeAgentTaskUpdate,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
+import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
@@ -664,7 +665,18 @@ export function onAgentTaskUpdateEvent(sessionId: string, data: unknown): boolea
   // any one of them resolves; running progress remains live-only.
   if (link) rememberAgentTaskAliases(sessionId, aliases, link.persistId);
 
-  const status = normalizeAgentTaskTerminalStatus(update.status);
+  const observation = data && typeof data === 'object' && !Array.isArray(data)
+    ? normalizeSubagentObservation(
+        (data as Record<string, unknown>).subagentObservation,
+      )
+    : null;
+  // Codex spawn/control items can report `completed` while their descendants
+  // are still running. Only the harness-neutral terminal marker is lifecycle
+  // authority; status-only summaries remain live progress and must not win
+  // over later running updates during history replay.
+  const status = observation?.kind === 'terminal'
+    ? normalizeAgentTaskTerminalStatus(update.status)
+    : undefined;
   if (!status) return false;
   if (!link) {
     const pending = getOrCreateSessionMap(pendingAgentTaskStatusBySession, sessionId);
