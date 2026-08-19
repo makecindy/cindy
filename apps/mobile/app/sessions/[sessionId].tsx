@@ -611,6 +611,7 @@ const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // 覆盖 settling 窗口上限(10s)之后仍无任何在途证据的场景。
 const TAIL_RETRY_HIDE_TIMEOUT_MS = 15_000;
 const SCREENSHOT_SHARE_ACTIVATION_DEBOUNCE_MS = 1_200;
+const nativeConversationShareAvailable = Platform.OS === 'ios';
 
 // 原生 WKWebView 只能稳定读取 data URI；SVG 兜底直接使用同一组 bundle asset。
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1096,7 +1097,7 @@ export default function SessionScreen() {
     }, [sessionId]),
   );
   useEffect(() => {
-    if (!shareSelectionActive) return undefined;
+    if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;
     let cancelled = false;
     const logoNeedsLoad = shareLogoModeRef.current !== mode || !shareLogoSrc;
     void Promise.all([
@@ -6038,7 +6039,11 @@ export default function SessionScreen() {
     dark: mode === 'dark',
   }), [colors, mode]);
   const conversationShareHtml = useMemo(() => {
-    if (!shareSelectionActive || selectedShareMessages.length === 0) return '';
+    if (
+      !nativeConversationShareAvailable
+      || !shareSelectionActive
+      || selectedShareMessages.length === 0
+    ) return '';
     return buildConversationShareHtml({
       allShareableIds,
       characterSrc: shareCharacterSrc ?? undefined,
@@ -6070,7 +6075,8 @@ export default function SessionScreen() {
   }, []);
   const exportConversationSharePng = useCallback(async () => {
     const nativeShareAssetsReady = Boolean(
-      shareCharacterSrc
+      nativeConversationShareAvailable
+      && shareCharacterSrc
       && shareLogoSrc
       && shareLogoModeRef.current === mode,
     );

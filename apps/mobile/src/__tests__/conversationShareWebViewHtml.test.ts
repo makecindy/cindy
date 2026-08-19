@@ -195,6 +195,18 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(sessionSource).toContain('cache 目录交给下一次有界清理');
     expect(sessionSource).toContain('if (!shareCompleted && localUri)');
     expect(sessionSource).toContain('<ConversationShareSvg');
+    expect(sessionSource).toContain(
+      "nativeConversationShareAvailable = Platform.OS === 'ios'",
+    );
+    expect(sessionSource).toContain(
+      'if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;',
+    );
+    expect(sessionSource).toContain(
+      '!nativeConversationShareAvailable\n      || !shareSelectionActive',
+    );
+    expect(sessionSource).toContain(
+      'nativeConversationShareAvailable\n      && shareCharacterSrc',
+    );
     expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
     expect(sessionSource).toContain('nativeShareAssetsReady');
     expect(sessionSource).toContain('native webview export succeeded');
