@@ -1116,12 +1116,18 @@ export class PiSubagentResumeClaimedError extends Error {
   }
 }
 
+/** Filesystems without hard links; the claim falls back to a plain `wx` write. */
+const LINK_UNSUPPORTED_CODES = new Set(['EPERM', 'ENOSYS', 'EOPNOTSUPP', 'EXDEV']);
+/** Budget for a claim whose payload has not landed yet — see `readSettledClaim`. */
+const RESUME_CLAIM_READ_ATTEMPTS = 5;
+const RESUME_CLAIM_READ_INTERVAL_MS = 100;
+
 /**
  * Take the claim for `sourceDir`, or explain why not.
  *
  * Returns a release function on success. A claim left behind by a dead process
  * is taken over by renaming it aside first: `rename` is atomic, so exactly one
- * racer can move a given path and the losers fall through to the `wx` retry.
+ * racer can move a given path and the losers fall through to the retry.
  * No TTL — a slow but live resume must never have its claim stolen.
  */
 async function acquirePiSubagentResumeClaim(
@@ -1139,9 +1145,52 @@ async function acquirePiSubagentResumeClaim(
   const release = async (): Promise<void> => {
     await fs.rm(claimPath, { force: true }).catch(() => undefined);
   };
+
+  /**
+   * Create the claim with its payload already complete, or throw EEXIST.
+   *
+   * `link` is O_EXCL *with content*: the path appears atomically and whole, so a
+   * racer can never read a partial claim. A bare `wx` write leaves the file
+   * existing-but-empty for a moment, and a racer reading it there cannot tell
+   * "still being written" from "corrupt" — it would take the claim over, and two
+   * live instances would drive the same PI child session.
+   */
+  const publishClaim = async (): Promise<void> => {
+    const staging = `${claimPath}.pub-${process.pid}-${randomUUID()}`;
+    await fs.writeFile(staging, payload, { mode: 0o600 });
+    try {
+      await fs.link(staging, claimPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!LINK_UNSUPPORTED_CODES.has(code ?? '')) throw error;
+      // No hard links here. The historical write comes back, and with it the
+      // empty window that `readSettledClaim` below is bounded to absorb.
+      await fs.writeFile(claimPath, payload, { mode: 0o600, flag: 'wx' });
+    } finally {
+      await fs.rm(staging, { force: true }).catch(() => undefined);
+    }
+  };
+
+  /**
+   * Read the claim, allowing a racer that created the file to finish writing it.
+   *
+   * Unreadable is retried rather than trusted: taking over on the first failed
+   * parse is what lets a mid-write claim be stolen. Null only after the budget,
+   * where the record is genuinely corrupt or from an older build — refusing
+   * forever would wedge resume instead.
+   */
+  const readSettledClaim = async (): Promise<PiSubagentResumeClaim | null> => {
+    for (let attempt = 0; ; attempt += 1) {
+      const claim = parseResumeClaim(await readSmallJson(claimPath).catch(() => null));
+      if (claim) return claim;
+      if (attempt >= RESUME_CLAIM_READ_ATTEMPTS - 1) return null;
+      await new Promise<void>((resolve) => setTimeout(resolve, RESUME_CLAIM_READ_INTERVAL_MS));
+    }
+  };
+
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await fs.writeFile(claimPath, payload, { mode: 0o600, flag: 'wx' });
+      await publishClaim();
       return release;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -1149,9 +1198,7 @@ async function acquirePiSubagentResumeClaim(
       if (code === 'ENOENT') return null;
       if (code !== 'EEXIST') throw error;
     }
-    const holder = parseResumeClaim(await readSmallJson(claimPath).catch(() => null));
-    // An unreadable or malformed claim cannot prove a live owner, but it also
-    // must not wedge resume forever; treat it like a dead holder and take over.
+    const holder = await readSettledClaim();
     if (holder && isProcessAlive(holder.hostPid) !== false) {
       throw new PiSubagentResumeClaimedError(
         'Another running Cindy instance is already resuming this Subagent generation.',
@@ -1556,6 +1603,55 @@ export interface PiSubagentSweepScope {
 }
 
 /**
+ * Runs under `root` that this sweep still owns, as one universe.
+ *
+ * `status` is undefined when status.json is missing, corrupt, oversized or
+ * unreadable. Those runs stay in the set deliberately, and every pass of the
+ * sweep derives its work from *this* function: when the stop pass and the kill
+ * pass disagree about which runs exist, a record we cannot read drops out of the
+ * escalation and the boundary reports itself clean.
+ *
+ * Skipping a stale run is not "assumed handled" — it is that there is nothing
+ * left to handle *and* nothing to signal. Stale means the runner process is
+ * provably gone (dead pid or expired heartbeat), so no one will consume a stop
+ * control written here; the run is also already hidden from
+ * `listPiSubagentRuns`. Its Pi children are reaped by the runner's death closing
+ * their stdin (see the stdin-EOF regression in
+ * `cindySubagentParentWatchdog.test.ts`). The only other option would be
+ * signalling child pids read off disk, which the runner header forbids because
+ * of pid reuse.
+ */
+async function sweepableRunsUnderRoot(
+  root: string,
+  scope: PiSubagentSweepScope,
+): Promise<Array<{ runId: string; status: PiSubagentRunStatus | undefined }>> {
+  const runIds = await listRunDirectoryIds(root);
+  const [listedStatuses, diagnostics] = await Promise.all([
+    listPiSubagentRuns(root),
+    listPiSubagentRunDiagnostics(root),
+  ]);
+  const statuses = new Map(listedStatuses.map((status) => [status.runId, status]));
+  const staleRunIds = new Set(
+    diagnostics.filter((diagnostic) => diagnostic.kind === 'stale').map((diagnostic) => diagnostic.runId),
+  );
+  const sweepable: Array<{ runId: string; status: PiSubagentRunStatus | undefined }> = [];
+  for (const runId of runIds) {
+    const status = statuses.get(runId);
+    if ((status && isPiSubagentTerminal(status.state)) || staleRunIds.has(runId)) continue;
+    if (
+      scope.runtimeOwnerId !== undefined
+      && status?.runtimeOwnerId !== undefined
+      && status.runtimeOwnerId !== scope.runtimeOwnerId
+    ) {
+      continue;
+    }
+    if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
+    sweepable.push({ runId, status });
+  }
+  return sweepable;
+}
+
+/**
  * Request stop for every non-terminal run under `roots` and wait until they are
  * all terminal (or the deadline passes). An unreadable status stays in scope so
  * a corrupt record can never keep a child alive past its boundary.
@@ -1570,35 +1666,7 @@ async function stopPiSubagentRunsUnderRoots(
   for (;;) {
     let activeCount = 0;
     for (const root of roots) {
-      const runIds = await listRunDirectoryIds(root);
-      const [listedStatuses, diagnostics] = await Promise.all([
-        listPiSubagentRuns(root),
-        listPiSubagentRunDiagnostics(root),
-      ]);
-      const statuses = new Map(listedStatuses.map((status) => [status.runId, status]));
-      const staleRunIds = new Set(
-        diagnostics.filter((diagnostic) => diagnostic.kind === 'stale').map((diagnostic) => diagnostic.runId),
-      );
-      for (const runId of runIds) {
-        const status = statuses.get(runId);
-        // Skipping a stale run is not "assumed handled" — it is that there is
-        // nothing left to handle *and* nothing to signal. Stale means the
-        // runner process is provably gone (dead pid or expired heartbeat), so
-        // no one will consume a stop control written here; the run is also
-        // already hidden from `listPiSubagentRuns`. Its Pi children are reaped
-        // by the runner's death closing their stdin (see the stdin-EOF
-        // regression in `cindySubagentParentWatchdog.test.ts`). The only other
-        // option would be signalling child pids read off disk, which the runner
-        // header forbids because of pid reuse.
-        if ((status && isPiSubagentTerminal(status.state)) || staleRunIds.has(runId)) continue;
-        if (
-          scope.runtimeOwnerId !== undefined
-          && status?.runtimeOwnerId !== undefined
-          && status.runtimeOwnerId !== scope.runtimeOwnerId
-        ) {
-          continue;
-        }
-        if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
+      for (const { runId } of await sweepableRunsUnderRoot(root, scope)) {
         activeCount += 1;
         const key = `${root}:${runId}`;
         if (requested.has(key)) continue;
@@ -1618,14 +1686,17 @@ async function stopPiSubagentRunsUnderRoots(
       if (!scope.killUnresponsiveRunners) return false;
       let killedAll = true;
       for (const root of roots) {
-        for (const status of await listPiSubagentRuns(root)) {
-          if (isPiSubagentTerminal(status.state)) continue;
-          if (
-            scope.runtimeOwnerId !== undefined
-            && status.runtimeOwnerId !== undefined
-            && status.runtimeOwnerId !== scope.runtimeOwnerId
-          ) continue;
-          if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
+        // Re-derived, so a run whose directory vanished in the meantime is gone
+        // from the set and counts as reclaimed.
+        for (const { status } of await sweepableRunsUnderRoot(root, scope)) {
+          if (!status) {
+            // No readable status means no runner identity to verify, and the
+            // header forbids signalling a pid we cannot prove. So we cannot
+            // reclaim it — but the caller must not hear that the boundary is
+            // clean, or an account switch proceeds with this child still live.
+            killedAll = false;
+            continue;
+          }
           if (!await killVerifiedPiSubagentRunner(status)) killedAll = false;
         }
       }

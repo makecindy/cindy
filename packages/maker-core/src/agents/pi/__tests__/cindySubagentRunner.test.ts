@@ -589,6 +589,59 @@ describe('Cindy durable PI Subagent runner', () => {
       await expect(readFile(claimPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
+    /**
+     * The state a racer leaves behind between creating the claim and writing its
+     * payload. An empty claim is indistinguishable from a corrupt one by reading
+     * alone, so taking over on the first failed parse hands two live instances
+     * the same PI child session — duplicate follow-ups on one conversation.
+     */
+    it('does not take over a claim that has been created but not written yet', async () => {
+      const { fixture, first } = await resumableFixture();
+      const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
+      await writeFile(claimPath, '', { mode: 0o600 });
+
+      const attempt = resumePiSubagentRun(
+        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
+      );
+      // The racer completes its write inside the re-read budget. Late enough
+      // that a single-read implementation has certainly already given up on it,
+      // early enough to land before the budget expires.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await writeFile(
+        claimPath,
+        // process.ppid is certainly alive and is not us.
+        `${JSON.stringify({ version: 1, hostPid: process.ppid, claimedAt: Date.now() })}\n`,
+        { mode: 0o600 },
+      );
+
+      await expect(attempt).rejects.toThrow(/already resuming this Subagent generation/i);
+      // The decisive part: no second generation was launched over that session.
+      const runs = await listPiSubagentRuns(fixture.root);
+      expect(runs.filter((run) => run.taskId === first.taskId)).toHaveLength(1);
+    });
+
+    it('takes over a claim that stays unreadable past the budget', async () => {
+      // The other half of the contract: waiting must not become a wedge for a
+      // record that is genuinely corrupt or left by an older build.
+      const { fixture, first } = await resumableFixture();
+      const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
+      await writeFile(claimPath, '', { mode: 0o600 });
+
+      const resumedRunId = await resumePiSubagentRun(
+        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
+      );
+      expect(typeof resumedRunId).toBe('string');
+      await waitFor(
+        async () => {
+          const runs = await listPiSubagentRuns(fixture.root);
+          return runs.find((run) => run.runId === resumedRunId && isPiSubagentTerminal(run.state)) ?? null;
+        },
+        undefined,
+        'the resumed generation to settle',
+      );
+      await expect(readFile(claimPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('lets exactly one of two concurrent instances resume a generation', async () => {
       // The resumed child hangs on the follow-up, so the winner's generation is
       // still non-terminal when the loser re-checks under the claim. Without

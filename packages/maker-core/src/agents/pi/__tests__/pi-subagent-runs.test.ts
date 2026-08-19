@@ -439,6 +439,59 @@ describe('PI durable subagent run store', () => {
       await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
         .resolves.toBe(false);
     });
+
+    /**
+     * The stop pass counts every run *directory*, so an unreadable status keeps
+     * the sweep waiting; the kill pass used to walk only parsed statuses, so the
+     * very same run silently left the escalation and the boundary reported
+     * itself complete. That is the worst possible direction for this failure:
+     * the runs we cannot read are exactly the ones most likely to be wedged.
+     */
+    describe('runs whose status cannot be read', () => {
+      async function homeWithUnreadableRun(write: (dir: string) => Promise<void>): Promise<string> {
+        const agentHome = await makeRoot();
+        const dir = path.join(piSubagentRunRoot(agentHome, 'session-1'), runId);
+        await mkdir(dir, { recursive: true });
+        await write(dir);
+        return agentHome;
+      }
+
+      const cases: Array<[string, (dir: string) => Promise<void>]> = [
+        ['is missing entirely', async () => {}],
+        ['is not valid JSON', async (dir) => writeFile(path.join(dir, 'status.json'), '{broken')],
+        [
+          'exceeds the readable size bound',
+          async (dir) => writeFile(path.join(dir, 'status.json'), 'x'.repeat(3 * 1024 * 1024)),
+        ],
+      ];
+
+      it.each(cases)('reports the boundary as incomplete when status %s', async (_label, write) => {
+        usePlatform('linux');
+        stubKill();
+        // Nothing should be signalled: an unverifiable run must not be killed by
+        // a pid read off disk — only reported.
+        stubProbes({ aliveProbes: 0 });
+        const agentHome = await homeWithUnreadableRun(write);
+
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+      });
+
+      it('still reports success once every run is readable and reclaimed', async () => {
+        usePlatform('linux');
+        stubKill();
+        // Verifiable once, then gone: a confirmed reclaim.
+        stubProbes({ aliveProbes: 1 });
+        const agentHome = await makeRoot();
+        await writeStatus(
+          piSubagentRunRoot(agentHome, 'session-1'),
+          runner({ updatedAt: Date.now() }),
+        );
+
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(true);
+      });
+    });
   });
 
   it('hot-syncs permission snapshots into every active durable run', async () => {
