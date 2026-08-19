@@ -414,19 +414,18 @@ export function buildUnifiedListSections(args: {
     // 连回来就该回来,静默删掉用户存过的配置是不可逆的。
     if (!entry) continue;
     if (rail.kind === 'provider' && entry.providerId !== rail.providerId) continue;
-    // 同引擎视图:收藏也按引擎过滤(规格 §1.6「只显示 引擎匹配的收藏 + 同引擎模型」)。
-    // 判据是**这条收藏自己存的引擎**,不是模型能不能跑在该引擎上 —— 收藏是配置副本,
-    // 一条 Codex 配置在 Claude 会话里点下去仍然是跨引擎切换,不该混进「无损」视图。
-    if (rail.kind === 'engine' && item.agent !== engineOfAgentKind(rail.agent)) continue;
-    // 再按**生效引擎**兜一道(注入解析器时):条目存的引擎掉出候选后,解析会回落到别家
-    // (resolveFavoriteRowConfig 的 recommended 分支)—— 那一行画出来是外引擎形态、点下去
-    // 也是跨引擎切换,与模型行同一条规则,不能只在模型行上做。
-    if (
-      rail.kind === 'engine' &&
-      effectiveEngineOf &&
-      effectiveEngineOf(entry, item) !== engineOfAgentKind(rail.agent)
-    ) {
-      continue;
+    // 同引擎视图:收藏按**解析后的生效引擎**过滤(与模型行同一条判据 —— 规格 §1.6
+    // 「只显示生效引擎 = 当前引擎的行」)。判据只有这一个,不再先按条目自存的 item.agent
+    // 硬排除(2026-08-19 review P2):两者在「条目引擎掉出候选」时会分叉 ——
+    //   · 存的引擎还在候选里:解析结果 == item.agent,两种判法等价;
+    //   · 存的引擎掉出候选、解析回落到**当前引擎**:点它无损、画出来也是当前引擎,
+    //     先比 item.agent 会把它错杀出「无损」视图;
+    //   · 掉出候选、回落到**别家**:解析判据照样把它滤掉。
+    // 没注入解析器的调用方(草稿 all 视图等不带 engine rail 的入口用不到;防御旧调用)
+    // 才回退按 item.agent 比。
+    if (rail.kind === 'engine') {
+      const favoriteEngine = effectiveEngineOf ? effectiveEngineOf(entry, item) : item.agent;
+      if (favoriteEngine !== engineOfAgentKind(rail.agent)) continue;
     }
     if (!matchesQuery(entry, q)) continue;
     favRows.push({

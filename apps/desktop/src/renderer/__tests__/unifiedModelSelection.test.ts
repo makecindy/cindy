@@ -554,6 +554,35 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
       expect(withoutResolver[0]?.kind).toBe('favorites');
     });
 
+    it('收藏解析回落到**当前引擎**(条目存的引擎掉出候选)→ 该收藏行必须显示', () => {
+      // 2026-08-19 review P2:此前先按 item.agent 硬排除,会把这条错杀出「无损」视图 ——
+      // 它存的 codex 已不在候选里,解析回落到 cc(= 当前会话引擎),点它无损、画出来也是
+      // cc。注入解析器时判据只有「解析后的生效引擎」这一个,与模型行同构。
+      const ccOnly = entryOf({
+        providerId: 'xd',
+        modelId: 'claude-opus-5',
+        candidates: ['claude-code'],
+        recommended: 'claude-code',
+        nativeAgent: 'claude-code',
+        capabilities: { 'claude-code': capability('claude-code') },
+      });
+      const staleCodexFav = favoriteOf({
+        uid: 'fav-10',
+        providerId: 'xd',
+        modelId: 'claude-opus-5',
+        agent: 'codex',
+      });
+      const sections = buildUnifiedListSections({
+        entries: [ccOnly],
+        favorites: [staleCodexFav],
+        query: '',
+        rail: { kind: 'engine', agent: 'claude-code' },
+        effectiveEngineOf: engineOfRow(),
+      });
+      expect(sections[0]?.kind).toBe('favorites');
+      expect(sections[0]?.rows.map((row) => row.favorite?.uid)).toEqual(['fav-10']);
+    });
+
     it('「全部」视图不受生效引擎影响(跨引擎是显式入口)', () => {
       const sections = buildUnifiedListSections({
         entries: [dual, codexOnly],
