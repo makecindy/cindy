@@ -998,7 +998,7 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     expect(viewSource).toContain('if (!begun) return;');
     expect(viewSource).toContain('compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)');
     expect(viewSource).toContain('begun.release();');
-    // 真实 reject 必须 catch 并显示 compactFailed(与 SessionContentHeader 一致)。
+    // 真实 reject 必须 catch 并显示 compactFailed。
     expect(viewSource).toContain("toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'))");
   });
 

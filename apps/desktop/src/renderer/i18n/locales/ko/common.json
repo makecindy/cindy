@@ -6586,7 +6586,16 @@
   "chat": {
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
-      "skippedAnswer": "건너뜀"
+      "skippedAnswer": "건너뜀",
+      "pendingTitle": "답변 대기 중",
+      "restoreAriaLabel": "질문 카드 펼치기",
+      "minimizeAriaLabel": "질문 카드 접기",
+      "back": "뒤로",
+      "skip": "건너뛰기",
+      "next": "다음",
+      "submit": "제출",
+      "customAnswer": "다른 답변 입력…",
+      "answerPlaceholder": "답변을 입력하세요…"
     },
     "planReviewBubble": {
       "title": "계획 검토",

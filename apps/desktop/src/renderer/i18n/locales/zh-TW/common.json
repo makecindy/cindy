@@ -6585,7 +6585,16 @@
   },
   "chat": {
     "askUserQuestion": {
-      "skippedAnswer": "已跳過"
+      "skippedAnswer": "已跳過",
+      "pendingTitle": "等待回答",
+      "restoreAriaLabel": "展開問題卡片",
+      "minimizeAriaLabel": "收起問題卡片",
+      "back": "返回",
+      "skip": "跳過",
+      "next": "下一題",
+      "submit": "提交",
+      "customAnswer": "輸入其他回答…",
+      "answerPlaceholder": "請輸入回答…"
     },
     "planReviewBubble": {
       "title": "計劃審閱",

@@ -6586,7 +6586,16 @@
   "chat": {
     "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
-      "skippedAnswer": "スキップ済み"
+      "skippedAnswer": "スキップ済み",
+      "pendingTitle": "回答待ち",
+      "restoreAriaLabel": "質問カードを展開",
+      "minimizeAriaLabel": "質問カードを折りたたむ",
+      "back": "戻る",
+      "skip": "スキップ",
+      "next": "次へ",
+      "submit": "送信",
+      "customAnswer": "別の回答を入力…",
+      "answerPlaceholder": "回答を入力…"
     },
     "planReviewBubble": {
       "title": "計画レビュー",
