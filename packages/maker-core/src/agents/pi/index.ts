@@ -1705,6 +1705,9 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
+          // Bot 会话的 scope key 必须随 ctx 走 — prompt 注入用的是同一个 key
+          // (见上方 memoryScopeKey), 丢掉会让 cindy_memory 工具写进 workdir 记忆。
+          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           vendorOptions: mutableVendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,

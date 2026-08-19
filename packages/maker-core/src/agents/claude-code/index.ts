@@ -2986,6 +2986,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // per-session Maker Memory 开关 — host 据此决定是否把 cindy_memory
           // 以 http 形态注进远端 startParams.mcpServers (cc-remote-mcp.ts)。
           makerMemoryEnabled,
+          // 同一个 scope key 也必须随注册的 session ctx 走: prompt 段用它读索引
+          // (上方 memoryScopeKey), 远端工具侧不给就会回落到 workdir 键。
+          ...(opts.makerMemoryScopeKey ? { makerMemoryScopeKey: opts.makerMemoryScopeKey } : {}),
           onApprovalRequest: async (rawParams: unknown) => {
             // 110s timeout — must respond before daemon's 120s server-request timeout.
             // On timeout, dismiss the pending interaction (clears UI) and reject to

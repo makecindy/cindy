@@ -370,6 +370,32 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(proxyDisposed).toBe(1);
   });
 
+  /**
+   * Cindy Bot 会话的 Maker Memory scope key(`bot:<botId>`,由主进程
+   * botProfileRuntime 派生)必须随 MCP 桥 ctx 下发。prompt 段的记忆索引读的就是
+   * 这个 key;ctx 上丢掉它,cindy_memory 的 withStore 会回落到 workingDir 键,
+   * 于是「读伙伴记忆、写项目记忆」——伙伴记忆终验实测到的两张皮。
+   */
+  it('threads makerMemoryScopeKey into the MCP bridge session ctx', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession({
+      ...opts(),
+      makerMemoryScopeKey: 'bot:bot-release-helper',
+    });
+    expect(preparedMcpContext).toMatchObject({
+      workingDir: cwd,
+      memoryScopeKey: 'bot:bot-release-helper',
+    });
+    await handle.close();
+  });
+
+  it('omits memoryScopeKey for ordinary tasks (workdir memory keeps its own key rule)', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    expect(preparedMcpContext).not.toHaveProperty('memoryScopeKey');
+    await handle.close();
+  });
+
   it('graceful stop uses only the Pi abort RPC and keeps the process alive', async () => {
     const handle = await new PiAgent(buildDeps()).startSession(opts());
     knobs.onEvent?.({ type: 'message_start' });

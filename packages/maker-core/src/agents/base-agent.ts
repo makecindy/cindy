@@ -315,6 +315,15 @@ export interface PiExtraSpawnConfigContext {
   /** 当前 Maker Session 实例代号；用于阻断旧 bridge 请求借用新实例权限。 */
   sessionInstanceId?: string;
   workingDir: string;
+  /**
+   * 本会话的 Maker Memory 作用域键 (startSession opts.makerMemoryScopeKey)。
+   *
+   * 必须透到 bridge 注册的 session ctx 上:cindy_memory 的 withStore 优先用
+   * ctx.memoryScopeKey 定位 store, 缺失时才回落 buildMemoryScopeKey(workingDir)。
+   * Cindy Bot 会话的注入索引来自 `bot:<botId>` store —— 这里丢掉就会出现
+   * 「prompt 读伙伴记忆、工具写项目记忆」的两张皮。
+   */
+  memoryScopeKey?: string;
   vendorOptions?: Record<string, unknown>;
   mcpCallerKind?: 'root' | 'descendant' | 'unknown';
   mcpCallerAttested?: boolean;
@@ -1084,6 +1093,15 @@ export interface AgentDeps {
      * 调不存在的工具。缺省视为 false。
      */
     makerMemoryEnabled?: boolean;
+    /**
+     * 本 session 的 Maker Memory 作用域键 (startSession opts.makerMemoryScopeKey)。
+     *
+     * host 必须把它注册到远端 bridge 的 per-session ctx 上 —— cindy_memory 的
+     * withStore 优先用 ctx.memoryScopeKey 定位 store, 缺失时回落
+     * buildMemoryScopeKey(workingDir, remoteHostId)。Cindy Bot 会话的 prompt
+     * 索引来自 `bot:<botId>` store, 丢掉这个键就会「读伙伴记忆、写远端项目记忆」。
+     */
+    makerMemoryScopeKey?: string;
     /**
      * Callback for daemon-side subscription OAuth refresh (remote cc hit 401
      * mid-turn). ClaudeCodeAgent wires it to auth.getFreshSubscriptionToken —

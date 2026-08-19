@@ -230,6 +230,10 @@ export async function getPiExtraSpawnConfig(
     sessionId,
     ...(sessionCtx?.sessionInstanceId ? { sessionInstanceId: sessionCtx.sessionInstanceId } : {}),
     workingDir: sessionCtx?.workingDir ?? '',
+    // Maker Memory 作用域键 (Cindy Bot 会话恒为 `bot:<botId>`): cindy_memory 的
+    // withStore 优先用它定位 store。不透传的话工具侧只剩 workingDir 回落 ——
+    // 模型读到的是伙伴记忆索引、写进去的却是项目记忆 (两张皮)。
+    ...(sessionCtx?.memoryScopeKey ? { memoryScopeKey: sessionCtx.memoryScopeKey } : {}),
     vendorOptions,
     mcpCallerKind: sessionCtx?.mcpCallerKind ?? 'unknown',
     mcpCallerAttested: sessionCtx?.mcpCallerAttested === true,

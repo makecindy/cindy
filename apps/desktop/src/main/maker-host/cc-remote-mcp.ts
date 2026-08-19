@@ -117,6 +117,13 @@ export async function buildCcRemoteHttpMcpServers(
      * 的工具。缺省 false。
      */
     makerMemoryEnabled?: boolean;
+    /**
+     * per-session Maker Memory 作用域键 (maker-core startSession 透传)。
+     * Cindy Bot 会话恒为 `bot:<botId>` —— 必须写进注册的 session ctx,
+     * 否则远端 cindy_memory 的 withStore 只能回落 workdir 键, 与本地
+     * prompt 注入读的伙伴记忆分家。
+     */
+    makerMemoryScopeKey?: string;
   },
   deps: CcRemoteHttpMcpDeps,
 ): Promise<{
@@ -188,6 +195,7 @@ export async function buildCcRemoteHttpMcpServers(
     ...(args.sessionInstanceId ? { sessionInstanceId: args.sessionInstanceId } : {}),
     workingDir: args.workingDir,
     // remote ctx: scope key 语义见 maker-core buildMemoryScopeKey。
+    ...(args.makerMemoryScopeKey ? { memoryScopeKey: args.makerMemoryScopeKey } : {}),
     remoteHostId: args.host.id,
     vendorOptions,
   };

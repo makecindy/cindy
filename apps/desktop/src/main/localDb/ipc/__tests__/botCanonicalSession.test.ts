@@ -810,7 +810,11 @@ describe('Bot canonical Session lifecycle', () => {
     ]);
     expect(opts.makerMemoryIndexSnapshot).toContain('## Bot Memory');
     expect(opts.makerMemoryIndexSnapshot).toContain('Durable fact');
-    expect(opts.makerMemoryIndexSnapshot).toContain('## Project Memory (read-only)');
+    expect(opts.makerMemoryIndexSnapshot).toContain('## Project Memory (read-only excerpt)');
+    // 项目索引只是上下文,伙伴的 memory_read / memory_search 打不开它(store 由
+    // ctx.memoryScopeKey 定位,恒为 `bot:<botId>`)。不标注模型会照着索引去 read。
+    expect(opts.makerMemoryIndexSnapshot).toContain('NOT in your memory store');
+    expect(opts.makerMemoryIndexSnapshot).toContain('This is your own durable memory');
     expect(opts.botUserProfilePrompt).toContain('## User Profile');
     expect(opts.botUserProfilePrompt).toContain('Call the user Chris');
     const row = h
@@ -837,7 +841,9 @@ describe('Bot canonical Session lifecycle', () => {
         remote: false,
       },
       memory: true,
-      automation: false,
+      // 2026-08-19 裁决:「定时干活」是标配, `normalizeBotAutomation` 在读取
+      // 投影层一律归一为 true(见 shared/botAutomationCapability.ts)。
+      automation: true,
     });
     expect(resolved.memoryRefs).toHaveLength(3);
     expect(row.resolvedJson).not.toContain('Durable fact');
@@ -912,6 +918,50 @@ describe('Bot canonical Session lifecycle', () => {
         expect.objectContaining({ kind: 'project', status: 'captured' }),
       ]),
     );
+  });
+
+  /**
+   * 伙伴记忆终验:Bot 的 memory 能力位只能**收窄**到引擎现状。
+   * 全局 Maker Memory 关着时 `cindy_memory` MCP server 根本不注册
+   * (mcp-providers 的 isEnabled)、store 也打不开 —— 此时若仍按 Bot 的
+   * `memory: true` 注入记忆 prompt, 就是让伙伴去调一个不存在的工具。
+   */
+  it('narrows the Bot memory capability to what the memory engine can actually serve', async () => {
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { memory: true } });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 2,
+    });
+    const makeOpts = (): MakerSessionCreateOpts => ({
+      id: created.session.id,
+      agentKind: 'pi',
+      workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue',
+      model: 'grok-4.5',
+      permissionMode: 'bypassPermissions',
+    });
+
+    const engineOff = makeOpts();
+    await hydrateBotProfileRuntime(engineOff, {
+      isMemoryEngineEnabled: () => false,
+      readMemoryIndex: async () => {
+        throw new Error('maker memory disabled');
+      },
+    }, { persistSnapshot: false });
+    expect(engineOff.makerMemoryEnabled).toBe(false);
+    // 用户自己关了全局记忆开关不是「运行时解析降级」:不去读注定抛错的索引,
+    // 也不把每次会话标成 degraded。
+    expect(engineOff.makerMemoryIndexSnapshot).toBeUndefined();
+
+    const engineOn = makeOpts();
+    await hydrateBotProfileRuntime(engineOn, {
+      isMemoryEngineEnabled: () => true,
+      readMemoryIndex: async () => '# Bot facts\n- Durable fact',
+    }, { persistSnapshot: false });
+    expect(engineOn.makerMemoryEnabled).toBe(true);
+    // 收窄不影响 scope key: 引擎回来后仍指向同一个伙伴记忆空间。
+    expect(engineOff.makerMemoryScopeKey).toBe(engineOn.makerMemoryScopeKey);
   });
 
   it('refuses to start a remote Bot when its native Skill catalog is unavailable', async () => {

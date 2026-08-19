@@ -117,6 +117,38 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(registered.size).toBe(0);
   });
 
+  /**
+   * 远端 Bot 会话的 Maker Memory scope key 必须写进注册的 session ctx。
+   * 不写的话 cindy_memory 的 withStore 只剩 buildMemoryScopeKey(workingDir,
+   * remoteHostId) 回落 —— 本地 prompt 段注入的是 `bot:<botId>` 索引,工具却写
+   * 远端项目记忆(伙伴记忆终验发现的两张皮)。
+   */
+  it('registers the Bot Maker Memory scope key on the remote session ctx', async () => {
+    const { bridge, registered } = fakeBridge();
+    await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-remote-1',
+        workingDir: '/remote/repo',
+        makerMemoryEnabled: true,
+        makerMemoryScopeKey: 'bot:bot-release-helper',
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge', 'cindy_memory'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+    expect(registered.get('bot-remote-1')).toMatchObject({
+      memoryScopeKey: 'bot:bot-release-helper',
+    });
+  });
+
   it('flags needsFreshStart when the bridge token is unavailable (R21 P2)', async () => {
     // token 失效但本要注入:调用方必须 forceFresh — 否则 attach 回带旧
     // Authorization header 的 alive query, 协同 MCP 持续 401。

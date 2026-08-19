@@ -98,6 +98,16 @@ export interface BotProfileRuntimeDeps {
     remoteHostId?: string;
   }) => Promise<BotToolsetCatalogItem[]>;
   readMemoryIndex?: (scopeKey: string) => Promise<string>;
+  /**
+   * 全局 Maker Memory 引擎是否可用(host 注入 `makerMemory.isEnabled()`)。
+   *
+   * Bot 的 `memory` 能力位只能**收窄**注入,不能放大:`cindy_memory` MCP server
+   * 的注册(mcp-providers 的 `isEnabled`)与 store 的打开(manager.getStore 的
+   * disabled 检查)都由全局开关决定。全局关着时若仍把 `makerMemoryEnabled` 抬成
+   * true, prompt 会告诉伙伴「你有持久记忆,去调 cindy_memory」,而工具面根本没有
+   * 那个 server —— 典型的空头支票。缺省(未注入)按既有行为不收窄。
+   */
+  isMemoryEngineEnabled?: () => boolean;
   readSkillSource?: (input: {
     path: string;
     remoteHostId?: string;
@@ -260,9 +270,10 @@ function memoryRef(
   };
 }
 
-function formatMemorySnapshot(title: string, content: string): string {
+function formatMemorySnapshot(title: string, content: string, note?: string): string {
   const body = content.trim();
-  return body ? `## ${title}\n${body}` : '';
+  if (!body) return '';
+  return note ? `## ${title}\n${note}\n\n${body}` : `## ${title}\n${body}`;
 }
 
 export function resolveBotSkillReferences(
@@ -432,13 +443,22 @@ export async function hydrateBotProfileRuntime(
         : configuredToolsets.length > 0
           ? 'allowlist'
           : 'inherit';
-  if (typeof config.memory === 'boolean') opts.makerMemoryEnabled = config.memory;
+  // 只收窄不放大 —— 理由见 BotProfileRuntimeDeps.isMemoryEngineEnabled。
+  const memoryEngineEnabled = deps.isMemoryEngineEnabled?.() ?? true;
+  if (typeof config.memory === 'boolean') {
+    opts.makerMemoryEnabled = config.memory && memoryEngineEnabled;
+  } else if (!memoryEngineEnabled) {
+    opts.makerMemoryEnabled = false;
+  }
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
   if (config.memory !== false) opts.makerMemoryScopeKey = botMemoryScopeKey;
   const projectMemoryScopeKey = buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+  // 引擎关着时不去读索引:getStore 会因 disabled 检查抛错,把每一次 Bot 会话都
+  // 标成 degraded —— 那不是运行时解析降级,只是用户自己关了全局记忆开关。
+  const memoryActive = config.memory !== false && memoryEngineEnabled;
   let botMemoryIndex: string | null = '';
   let projectMemoryIndex: string | null = '';
-  if (config.memory !== false && deps.readMemoryIndex) {
+  if (memoryActive && deps.readMemoryIndex) {
     const [botMemory, projectMemory] = await Promise.allSettled([
       deps.readMemoryIndex(botMemoryScopeKey),
       deps.readMemoryIndex(projectMemoryScopeKey),
@@ -446,15 +466,26 @@ export async function hydrateBotProfileRuntime(
     botMemoryIndex = botMemory.status === 'fulfilled' ? botMemory.value : null;
     projectMemoryIndex = projectMemory.status === 'fulfilled' ? projectMemory.value : null;
     opts.makerMemoryIndexSnapshot = [
-      formatMemorySnapshot('Bot Memory', botMemoryIndex ?? ''),
-      formatMemorySnapshot('Project Memory (read-only)', projectMemoryIndex ?? ''),
+      formatMemorySnapshot(
+        'Bot Memory',
+        botMemoryIndex ?? '',
+        'This is your own durable memory. `memory_read` / `memory_search` / `memory_write` all operate on it.',
+      ),
+      formatMemorySnapshot(
+        'Project Memory (read-only excerpt)',
+        projectMemoryIndex ?? '',
+        // 诚实标注:cindy_memory 的 store 由 ctx.memoryScopeKey 定位, Bot 会话恒为
+        // 自己的记忆空间 —— 下面这些条目**打不开**(memory_read 会 NOT_FOUND)。
+        // 不写清楚的话模型会照着索引去 read, 拿到一串 NOT_FOUND(空头支票)。
+        'Context only, from this project workdir. These entries are NOT in your memory store: `memory_read` / `memory_search` cannot open them, and you cannot write here.',
+      ),
     ].filter(Boolean).join('\n\n');
   }
   const userContextSource = typeof config.userContextSource === 'string'
     ? config.userContextSource
     : '';
   opts.botUserProfilePrompt = buildBotUserProfilePrompt(userContextSource);
-  const memoryRefs: BotMemoryRuntimeRef[] = config.memory === false
+  const memoryRefs: BotMemoryRuntimeRef[] = !memoryActive
     ? []
     : [
         memoryRef('bot', botMemoryScopeKey, 'read-write', botMemoryIndex),

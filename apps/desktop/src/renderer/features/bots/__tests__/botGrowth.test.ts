@@ -297,6 +297,43 @@ describe('partitionBotMemoryRecords — 两个列表的切分', () => {
   it('空输入给空列表,而不是编造条目', () => {
     expect(partitionBotMemoryRecords([])).toEqual({ memories: [], learned: [] });
   });
+
+  /**
+   * 同源判据:引擎(maker-core storage.parseFilename)对 `memory_write({type:'project',
+   * name:'learned-weekly-report-shape'})` 产出的就是这条 filename / slug —— 由
+   * packages/lizi-mcps/src/__tests__/botMemoryChain.test.ts 用真存储钉住。
+   * 两边任一侧改了命名规则,这里和那边会同时红。
+   */
+  it('吃得下引擎真实产出的 filename / slug 形状', () => {
+    const { memories, learned } = partitionBotMemoryRecords([
+      {
+        filename: 'project_learned-weekly-report-shape.md',
+        slug: 'learned-weekly-report-shape',
+        frontmatter: {
+          title: '周报的写法',
+          description: '先结论后依据,三条封顶',
+          type: 'project',
+          updatedAt: '2026-08-19T00:00:00.000Z',
+        },
+        body: '固定用「结论 / 依据 / 下一步」三段。',
+        sizeBytes: 120,
+      } as MemoryRecord,
+      {
+        filename: 'user_chris-cadence.md',
+        slug: 'chris-cadence',
+        frontmatter: {
+          title: 'Chris 的节奏偏好',
+          description: '周报只要三条',
+          type: 'user',
+          updatedAt: '2026-08-19T00:00:00.000Z',
+        },
+        body: '周报只要三条要点。',
+        sizeBytes: 90,
+      } as MemoryRecord,
+    ]);
+    expect(learned.map((item) => item.frontmatter.title)).toEqual(['周报的写法']);
+    expect(memories.map((item) => item.frontmatter.title)).toEqual(['Chris 的节奏偏好']);
+  });
 });
 
 describe('尾注跳转 —— 设置页高亮参数', () => {

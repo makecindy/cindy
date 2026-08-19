@@ -1053,6 +1053,7 @@ export function getMaker(): Maker {
         onApprovalRequest,
         onOAuthRefresh,
         makerMemoryEnabled,
+        makerMemoryScopeKey,
       }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
@@ -1087,6 +1088,9 @@ export function getMaker(): Maker {
               vendorOptions,
               // per-session Maker Memory 开关 (maker-core 归一后透传)。
               makerMemoryEnabled,
+              // 同源的 scope key: Bot 会话恒为 `bot:<botId>`, 缺失时远端工具
+              // 会回落 workdir 键, 与本地 prompt 注入的伙伴记忆分家。
+              ...(makerMemoryScopeKey ? { makerMemoryScopeKey } : {}),
             },
             {
               ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
@@ -2124,6 +2128,8 @@ export function getMaker(): Maker {
       },
       readMemoryIndex: async (scopeKey) =>
         (await makerMemoryManager.getStore(scopeKey)).getIndex(),
+      // Bot 的 memory 能力位只能收窄到引擎现状 (见 BotProfileRuntimeDeps)。
+      isMemoryEngineEnabled: () => makerMemoryManager.isEnabled(),
       readSkillSource: async ({ path: skillPath, remoteHostId }) => {
         if (!remoteHostId) return fs.readFile(skillPath, 'utf8');
         const remoteHost = getRemoteSshPool().get(remoteHostId);

@@ -88,6 +88,19 @@ function createTestServer(name: string): McpServer {
     }),
   );
   server.tool(
+    'current_memory_scope',
+    'Return the active Maker Memory scope key.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: getLiziMcpSessionContext()?.memoryScopeKey ?? 'no-scope',
+        },
+      ],
+    }),
+  );
+  server.tool(
     'current_vendor_options',
     'Return the active lizi MCP vendor options.',
     {},
@@ -205,6 +218,46 @@ describe('piEnvironment per-session identity', () => {
     const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(4) });
     expect(after.status).toBe(401);
     await after.text();
+  });
+
+  /**
+   * Cindy Bot 会话的 Maker Memory scope key(`bot:<botId>`)必须随注册的 ctx
+   * 走到工具侧:cindy_memory 的 withStore 优先用 ctx.memoryScopeKey 定位 store,
+   * 拿不到就回落 buildMemoryScopeKey(workingDir) —— 那会造成「prompt 段注入
+   * 伙伴记忆索引、memory_write 却写进项目记忆」的两张皮(伙伴记忆终验发现)。
+   */
+  it('threads the Bot Maker Memory scope key into the tool-side session ctx', async () => {
+    const config = await getPiExtraSpawnConfig([makeProvider('custom_probe')], noopLogger(), {
+      sessionId: 'pi-bot-memory',
+      workingDir: '/repo',
+      memoryScopeKey: 'bot:bot-release-helper',
+      vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
+    });
+    const server = config!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${config!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(1) });
+    const mcpSessionId = initResp.headers.get('mcp-session-id');
+    await initResp.text();
+    const scopeResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'current_memory_scope', arguments: {} },
+      }),
+    });
+    expect(await readRpcText(scopeResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'bot:bot-release-helper' }] },
+    });
+    config!.disposeSessionCtx!();
   });
 
   it('omits a stable built-in server when the frozen Bot Toolset disables it', async () => {
