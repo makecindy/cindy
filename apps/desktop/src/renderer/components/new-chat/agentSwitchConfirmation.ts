@@ -115,6 +115,48 @@ export type AgentSwitchAckAction =
  *   `supportsSessionAgentSwitchCas` 门控，不会向缺 token 的旧 host 开放；这里的无 token
  *   分支只作本地 harness / 防御性兼容，修订号变化时仍 fail-closed。
  */
+/**
+ * 回声匹配路径的**完整配置一致性**判据(2026-08-19 review P2 收口)。
+ *
+ * `registeredIntentMatchesCurrent` 刻意只比 target / model / providerId 三项(见下方字段
+ * 说明):effort / fastMode 可能被 main 归一化,比它们会把合法回声误判成不匹配。但这留下
+ * 一个缺口 —— device-link 往返期间,另一控制端**只改同一意图的 effort 或 Fast**(三元组
+ * 不变)时,回声照样匹配,切换事务若据此报「完整成功」,面板会执行「成功才做」的持久化
+ * 收尾(清 override / 提交・删除收藏编辑 / 写收藏锚点),把一份**并未实际应用**的本端配置
+ * 当成了正在跑的那一份。
+ *
+ * 所以回声匹配之后还要补这一问:**权威快照里的 effort / Fast 是不是就是本端这次请求的
+ * 值**。不一致 = 登记本身可能成功了,但本端的完整配置没有原样落地,调用方必须按
+ * 「未完整应用」处理(不做任何破坏性收尾;意图展示与偏好同步照用权威值,那是另一条
+ * 已收口的链路)。
+ *
+ * 宽严取向逐维写明(与偏好同步的「缺字段不写」同族,方向相反 —— 这里缺字段**放行**):
+ * - 权威快照缺该维(`undefined`):main 对无档位模型不投影 effort、旧 host 不带 fastMode。
+ *   缺 ≠ 被改,判不一致会把这类模型的每一次正常切换都误伤成失败 → 视为一致。
+ * - 本端没请求 effort(空值):语义同 providerId 传 null —— 「跟随默认解析」,main 归一化
+ *   出什么都是本次意图的一部分 → 视为一致。
+ * - 两边都有值:逐字相等才一致。归一化分叉与外部超车在这里不可区分,也**不必**区分:
+ *   两种情况下「本端请求的那份配置」都不是会话将要采用的配置,收尾都不该做。
+ */
+export function isAgentSwitchEchoConfigConsistent(args: {
+  /** 回声匹配时 store 里的权威意图快照;非回声路径(常规新鲜 ack)传 null,恒一致。 */
+  authoritative: { effort?: string; fastMode?: boolean } | null;
+  /** 本次请求解析后发出的 effort(空串 / undefined = 本端没指定,跟随默认解析)。 */
+  requestedEffort: string | undefined;
+  /** 本次请求解析后发出的 Fast。 */
+  requestedFastMode: boolean;
+}): boolean {
+  const { authoritative, requestedEffort, requestedFastMode } = args;
+  if (!authoritative) return true;
+  const effortConsistent =
+    authoritative.effort === undefined ||
+    !requestedEffort ||
+    authoritative.effort === requestedEffort;
+  const fastConsistent =
+    authoritative.fastMode === undefined || authoritative.fastMode === requestedFastMode;
+  return effortConsistent && fastConsistent;
+}
+
 export function resolveAgentSwitchAckAction(args: {
   deferred: boolean;
   switched: boolean;
@@ -141,6 +183,10 @@ export function resolveAgentSwitchAckAction(args: {
    * 会把合法回声误判成不匹配,退回本次要修的那个 bug。providerId 还要再让一步:调用方传
    * `null` = 「我没指定来源,跟随默认路由」,main 可能解析出具体来源再投影回来,那一路只认
    * target + model(判据的构造见 ChatInput 的调用点)。
+   *
+   * effort / Fast 不进这条匹配判据 ≠ 不管:三元组放行只回答「该不该应用这份权威值」,
+   * 「本端请求的完整配置有没有原样落地」由 isAgentSwitchEchoConfigConsistent 单独回答,
+   * 切换事务的成功返回值挂在后者上(见其头注)。
    */
   registeredIntentMatchesCurrent?: boolean;
   freshness: AgentSwitchResponseFreshness;

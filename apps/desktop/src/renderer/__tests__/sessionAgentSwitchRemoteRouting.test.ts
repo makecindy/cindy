@@ -370,6 +370,111 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
   });
 });
 
+describe('isAgentSwitchEchoConfigConsistent(回声匹配后的完整配置一致性,2026-08-19 review P2 收口)', () => {
+  const load = () => import('@/components/new-chat/agentSwitchConfirmation');
+
+  it('非回声路径(authoritative=null)恒一致 —— 常规新鲜 ack 不受影响', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: null,
+        requestedEffort: 'high',
+        requestedFastMode: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('权威快照与本端请求逐字相等 → 一致(本端自己的回声 / 重复回声)', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'high', fastMode: true },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('另一控制端只改 effort → 不一致(三元组匹配也不算完整成功)', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'low', fastMode: true },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('另一控制端只改 Fast → 不一致', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'high', fastMode: false },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('effort 与 Fast 均被改 → 不一致', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { effort: 'low', fastMode: false },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('缺字段模型:权威快照没投影 effort / fastMode → 该维不可判,放行(不误伤无档位模型)', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    // main 的 projectPendingAgentSwitchIntent 只在有值时带上 effort / fastMode:不可调深度的
+    // 模型与旧 host 的快照天然缺维。缺 ≠ 被改,判不一致会把这类模型的每次正常切换都判失败。
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: {},
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { fastMode: true },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('本端没指定 effort(空值)→ 跟随默认解析,main 归一化出什么都算本次意图', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    // 语义与 providerId 传 null 同族:没请求的维不构成「被改」。
+    for (const requestedEffort of [undefined, '']) {
+      expect(
+        isAgentSwitchEchoConfigConsistent({
+          authoritative: { effort: 'medium', fastMode: false },
+          requestedEffort,
+          requestedFastMode: false,
+        }),
+        `requestedEffort=${JSON.stringify(requestedEffort)}`,
+      ).toBe(true);
+    }
+  });
+
+  it('缺维放行与有维严判互不越界:effort 缺维 + Fast 被改 → 仍不一致', async () => {
+    const { isAgentSwitchEchoConfigConsistent } = await load();
+    expect(
+      isAgentSwitchEchoConfigConsistent({
+        authoritative: { fastMode: false },
+        requestedEffort: 'high',
+        requestedFastMode: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件实例存活）', () => {
   const load = async () => {
     const mod = await import('@/lib/agentSwitchCoordinator');
@@ -1001,8 +1106,16 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(body).toContain('if (applied === false) return false;');
     // 事务抛错(toast 之外)也必须让调用方知道「没切」。
     expect(body).toMatch(/\} catch \(err\) \{[\s\S]*?return false;\s*\} finally \{/);
-    // 登记意图 / 同引擎重选成功 / 立即切换三条成功路径才返 true。
-    expect(body.match(/return true;/g)?.length).toBe(3);
+    // 无条件 `return true;` 只剩同引擎重选成功 / 立即切换两条;apply-intent 的成功出口
+    // 经完整配置一致性判据返回(2026-08-19 review P2 收口,见下一条锁)。
+    expect(body.match(/return true;/g)?.length).toBe(2);
+    // 登记成功 ≠ 完整配置落地:回声匹配路径的返回值必须过 effort / Fast 一致性判据 ——
+    // 另一控制端在往返期间只改同一意图的档位 / Fast 时,本端请求没有原样落地,按 false
+    // 上报,调用方挂在成功上的持久化收尾(onApplied 清 override / 提交・删除收藏编辑 /
+    // 写收藏锚点)一律不做。
+    expect(body).toContain('return isAgentSwitchEchoConfigConsistent({');
+    expect(body).toContain('requestedEffort: newEffort,');
+    expect(body).toContain('requestedFastMode: targetFast,');
   });
 
   it('统一面板的跨引擎回调 await 并透传事务结果,不再返回「确认框过了」', () => {

@@ -128,6 +128,7 @@ import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteS
 
 import {
   confirmAgentSwitchRisk,
+  isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
@@ -6099,11 +6100,15 @@ export function ChatInput({
         fastMode?: boolean;
       },
     ): Promise<boolean> => {
-      // ★ 返回值 = **这次切换到底登记成功了没有**(2026-08-17 review)。此前本函数只返回
-      // void,调用方(统一面板的跨引擎链路)拿不到结果,只能在「确认框过了」这一刻就返回
+      // ★ 返回值 = **本端请求的完整配置真的落到会话上了没有**(2026-08-17 review 确立
+      // 「登记成功才 true」;2026-08-19 review P2 再收紧一档)。此前本函数只返回 void,
+      // 调用方(统一面板的跨引擎链路)拿不到结果,只能在「确认框过了」这一刻就返回
       // true —— 面板据此做的清理动作(恢复推荐清 override / 删收藏)会在事务其实失败或
       // 被拒时照样执行,把用户原来的配置抹掉。凡是「没把这次选择落到会话上」的出口一律
-      // 返 false,只有真正登记 / 应用了才返 true。
+      // 返 false;登记成功但**权威回声显示 effort / Fast 已被别处改动**(见 apply-intent
+      // 分支末尾的 isAgentSwitchEchoConfigConsistent)同样返 false —— 三元组落了不等于
+      // 这份完整配置落了,调用方挂在 true 上的持久化收尾(清 override / 提交・删除收藏
+      // 编辑 / 写收藏锚点)一律不做。只有完整配置原样成为权威意图 / 已应用才返 true。
       if (!sessionId) return false;
       // 发送的引用水合 / 预检也可能 await。以同步登记的 session 级发送 token 为准，
       // 防止「先点发送、后选引擎」被异步准备反转成先登记切换再 maker:send。
@@ -6291,8 +6296,20 @@ export function ChatInput({
               { duration: 4000 },
             );
           }
-          // 意图已登记 = 这次选择真的落到会话上了(真切换在下一条消息执行)。
-          return true;
+          // ★ 完整配置权威性(2026-08-19 review P2 的最后一环):三元组回声匹配放行的是
+          // 「这份变化来自本次登记」,但 effort / Fast 刻意不进匹配判据 —— 于是另一控制端
+          // 在往返期间只改同一意图的档位 / Fast 时,走到这里的仍是「登记成功」。上面的
+          // note-skip 与权威快照同步已保证**展示与偏好**不被本端旧值污染;这里再保证
+          // **返回值**不撒谎:权威 effort / Fast 与本端这次请求不一致 = 本端的完整配置
+          // 并没有成为会话将要采用的配置,按「未完整应用」返 false,调用方挂在成功上的
+          // 持久化收尾(统一面板 onApplied 的清 override / 提交・删除收藏编辑,以及
+          // onCrossEngineSelect 的收藏锚点写入)一律不做 —— 旧锚点由派生校验自然失效,
+          // 不会出现「面板勾着一条配置早已不同的收藏」。
+          return isAgentSwitchEchoConfigConsistent({
+            authoritative,
+            requestedEffort: newEffort,
+            requestedFastMode: targetFast,
+          });
         }
         if (ackAction === 'same-engine-reselect') {
           // 同引擎 no-op = 用户选回当前引擎:撤销展示意图(幂等,被控端可能已清并回流),
@@ -6445,6 +6462,10 @@ export function ChatInput({
         // 收藏锚点只在事务**真成功**后才记(G4):确认框被取消 / 登记失败时这次选择根本没
         // 发生,记下来会让面板在一条没被采用的收藏上打勾。选普通模型行 → favoriteUid 为
         // null → 顺带把上一条锚点清掉。
+        // 「真成功」自 2026-08-19 review P2 起含**完整配置一致**:登记成功但权威回声里的
+        // effort / Fast 已被另一控制端改走时 applied 为 false —— 锚点不写(那份收藏副本
+        // 不再是会话将要采用的配置),旧锚点因 model / 引擎已变而被派生校验自然判失效,
+        // 面板不会勾住任何一条配置对不上的收藏。
         if (applied) {
           setSessionFavoriteAnchor(
             favoriteUid
