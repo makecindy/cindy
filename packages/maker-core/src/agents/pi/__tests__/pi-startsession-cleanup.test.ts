@@ -1127,12 +1127,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect.any(String),
       'tool-turn-change',
       'approval',
-      {
+      // `objectContaining`, not an exact match: the publish also passes the
+      // fence callbacks the helper consults next to each write. They are
+      // functions the helper calls, never fields it serialises — the mailbox
+      // payload's own shape is pinned in `pi-subagent-runs.test.ts`.
+      expect.objectContaining({
         childId: `${runId}-1`,
         approvalId: 'capture-1',
         confirmed: true,
         runtimeOwnerId: ownerId(),
-      },
+      }),
     ));
     expect(noteOpaqueWrite).toHaveBeenCalledWith({
       sessionId: 's1',
@@ -1141,6 +1145,93 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     });
 
     await handle.close();
+  });
+
+  /**
+   * The caller-side fence check is not the write. Between them
+   * `controlPiSubagentRuns` discovers runs and guards the run directory —
+   * several awaits, long enough for a teardown to start *and finish its stop
+   * sweep*. The answer then landed anyway, and the child could act on an
+   * `allow` using the account that had already gone away.
+   *
+   * The check that closes that is inside the helper, next to the write (pinned
+   * in `pi-subagent-runs.test.ts`). What these two pin is the wiring: that this
+   * session hands the helper a predicate reading the *live* flag, and that the
+   * teardown waits for a publish already inside the helper before it sweeps.
+   */
+  describe('an account boundary that rises inside an approval publish', () => {
+    function pendingPublishFixture(): {
+      publishStarted: Promise<void>;
+      releasePublish: () => void;
+      gate: () => (() => boolean) | undefined;
+      resolver: ReturnType<typeof vi.fn>;
+    } {
+      const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+      vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
+      vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+      let openPublish!: () => void;
+      let releasePublish!: () => void;
+      const publishStarted = new Promise<void>((resolve) => { openPublish = resolve; });
+      const publishGate = new Promise<void>((resolve) => { releasePublish = resolve; });
+      let captured: (() => boolean) | undefined;
+      // Stands in for the helper's own multi-await stretch between the caller's
+      // check and the mailbox write.
+      vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockImplementation(
+        async (_root, _taskId, _action, options) => {
+          captured = (options as { beforeMailboxWrite?: () => boolean } | undefined)
+            ?.beforeMailboxWrite;
+          openPublish();
+          await publishGate;
+          return 1;
+        },
+      );
+      return {
+        publishStarted,
+        releasePublish,
+        gate: () => captured,
+        resolver: vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const),
+      };
+    }
+
+    it('hands the helper a predicate that reads the live fence, not a snapshot', async () => {
+      const fixture = pendingPublishFixture();
+      vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+      const handle = await new PiAgent(buildDeps()).startSession(opts());
+      handle.setInteractionResolver(fixture.resolver as never);
+
+      await fixture.publishStarted;
+      // Captured while the boundary is still down: it must answer "write".
+      expect(fixture.gate()?.()).toBe(true);
+
+      const closing = handle.close({ reason: 'account-boundary' });
+      // Same closure, after the flag went up. A snapshot would still say true,
+      // and the answer would land in a child's mailbox behind the sweep.
+      expect(fixture.gate()?.()).toBe(false);
+      fixture.releasePublish();
+      await closing;
+    });
+
+    it('does not start the stop sweep until the publish has left the write phase', async () => {
+      // Ordering, not just refusal: a publish that passed the gate is an fs
+      // write in flight, and letting it land after the sweep is the hole the
+      // gate alone cannot close. The teardown drains the write phase first —
+      // that phase only, since acknowledgement waits on the very runner it is
+      // about to stop.
+      const fixture = pendingPublishFixture();
+      const sweep = vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary')
+        .mockResolvedValue(true);
+      const handle = await new PiAgent(buildDeps()).startSession(opts());
+      handle.setInteractionResolver(fixture.resolver as never);
+
+      await fixture.publishStarted;
+      const closing = handle.close({ reason: 'account-boundary' });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(sweep).not.toHaveBeenCalled();
+
+      fixture.releasePublish();
+      await closing;
+      expect(sweep).toHaveBeenCalled();
+    });
   });
 
   it('does not acknowledge a turn-change capture that finished after the account boundary', async () => {
@@ -1226,12 +1317,12 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect.any(String),
       run.taskId,
       'approval',
-      {
+      expect.objectContaining({
         childId: run.tasks[0]!.childId,
         approvalId: 'approval-1',
         confirmed,
         runtimeOwnerId: ownerId(),
-      },
+      }),
     ));
     expect(resolver).toHaveBeenCalledOnce();
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({

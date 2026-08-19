@@ -83,6 +83,26 @@ const childProcess = vi.hoisted(() => ({
 }));
 vi.mock('node:child_process', () => childProcess);
 
+/**
+ * One-shot `writeFile` failure, for the paths that have to survive a write that
+ * fails mid-way (a Windows sharing conflict is the real one). Injected here
+ * rather than by removing a directory's write bit, because the rollback under
+ * test has to be able to *delete* a file — a read-only directory would block
+ * that too, and the test would be measuring the environment.
+ */
+const fsKnobs = vi.hoisted(() => ({ failWriteFileOnce: false }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const writeFile: typeof actual.writeFile = async (...args) => {
+    if (fsKnobs.failWriteFileOnce) {
+      fsKnobs.failWriteFileOnce = false;
+      throw Object.assign(new Error('EPERM: simulated sharing conflict'), { code: 'EPERM' });
+    }
+    return actual.writeFile(...args);
+  };
+  return { ...actual, default: { ...actual, writeFile }, writeFile };
+});
+
 const roots: string[] = [];
 
 async function makeRoot(): Promise<string> {
@@ -1345,6 +1365,35 @@ describe('PI durable subagent run store', () => {
         },
       );
 
+      it('takes the file down when the failing acquire was the last holder', async () => {
+        // The reservation is taken before the write, so the *last* holder can be
+        // one whose own write failed while an earlier holder had already
+        // published the file and released. Dropping only the Map entry left a
+        // fence naming a live pid with nobody behind it — every durable launch
+        // refused for the rest of the process's life, and the stale sweep will
+        // not touch it because it only clears dead owners.
+        //
+        // The failure is injected at `fs.writeFile` rather than by taking the
+        // directory's write bit away: the rollback has to be able to delete the
+        // file, and a read-only directory would block that too, testing the
+        // environment instead of the code.
+        const agentHome = await makeRoot();
+        const releaseFirst = await acquirePiSubagentLaunchFence(agentHome);
+        const file = piSubagentLaunchFencePath(agentHome, process.pid);
+        expect(existsSync(file)).toBe(true);
+
+        // Second boundary reserves synchronously, so its holder is counted
+        // before the first one lets go.
+        fsKnobs.failWriteFileOnce = true;
+        const second = acquirePiSubagentLaunchFence(agentHome);
+        await releaseFirst();
+        await expect(second).rejects.toThrow(/EPERM/);
+        expect(fsKnobs.failWriteFileOnce).toBe(false);
+
+        expect(existsSync(file)).toBe(false);
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+      });
+
       it('refuses to delete a fence file it did not write', async () => {
         // Defence in depth for what the counter cannot see: the payload was
         // replaced after this holder acquired, so the file on disk belongs to
@@ -1642,6 +1691,98 @@ describe('PI durable subagent run store', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readdir(path.join(root, legacyId, 'controls')))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  /**
+   * A caller that checks an account fence before calling this has already lost
+   * the window: discovery and the run-directory guard are several awaits, and a
+   * teardown can start *and finish its stop sweep* inside them. The answer then
+   * lands anyway, and the child may act on an `allow` with credentials that
+   * belong to the account that just went away. The check has to sit next to the
+   * write, which is what `beforeMailboxWrite` is.
+   */
+  describe('mailbox write gate', () => {
+    const gateRunId = '123e4567-e89b-42d3-a456-426614174090';
+
+    async function runAwaitingApproval(root: string): Promise<void> {
+      await writeStatus(root, status(gateRunId, {
+        tasks: [{
+          childId: `${gateRunId}-1`,
+          sessionId: `${gateRunId}-1`,
+          agent: 'worker',
+          status: 'running',
+          pendingApproval: { id: 'approval-gate', method: 'confirm', title: 'cindy:permission' },
+        }],
+      }));
+    }
+
+    it('does not write the answer when the gate has closed by write time', async () => {
+      const root = await makeRoot();
+      await runAwaitingApproval(root);
+      const gate = vi.fn(() => false);
+
+      await expect(controlPiSubagentRuns(root, 'tool-1', 'approval', {
+        childId: `${gateRunId}-1`,
+        approvalId: 'approval-gate',
+        confirmed: true,
+        beforeMailboxWrite: gate,
+      })).resolves.toBe(0);
+
+      // Consulted — so this is a run the helper had already matched, not a
+      // no-op — and nothing reached the mailbox.
+      expect(gate).toHaveBeenCalled();
+      await expect(readdir(path.join(root, gateRunId, 'controls')))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('is consulted per matched run, after discovery, not once up front', async () => {
+      // A task that matches nothing never reaches a write, so the gate is never
+      // asked. That is what places the check *after* the awaits rather than
+      // beside the caller's own pre-call check.
+      const root = await makeRoot();
+      await runAwaitingApproval(root);
+      const gate = vi.fn(() => true);
+
+      await expect(controlPiSubagentRuns(root, 'no-such-task', 'approval', {
+        approvalId: 'approval-gate',
+        confirmed: true,
+        beforeMailboxWrite: gate,
+      })).resolves.toBe(0);
+
+      expect(gate).not.toHaveBeenCalled();
+    });
+
+    it('writes exactly as before when the gate stays open', async () => {
+      const root = await makeRoot();
+      await runAwaitingApproval(root);
+      const settled: string[] = [];
+
+      await controlPiSubagentRuns(root, 'tool-1', 'approval', {
+        childId: `${gateRunId}-1`,
+        approvalId: 'approval-gate',
+        confirmed: true,
+        beforeMailboxWrite: () => true,
+        onMailboxWritesSettled: () => settled.push('writes'),
+      });
+
+      await expect(readControls(root, gateRunId)).resolves.toEqual([
+        expect.objectContaining({ action: 'approval', confirmed: true }),
+      ]);
+      // The write phase reports separately from acknowledgement, so a teardown
+      // can wait for the bounded half without waiting on the runner.
+      expect(settled).toEqual(['writes']);
+    });
+
+    it('leaves other actions untouched when no gate is supplied', async () => {
+      const root = await makeRoot();
+      await writeStatus(root, status(gateRunId));
+
+      await controlPiSubagentRuns(root, 'tool-1', 'stop');
+
+      await expect(readControls(root, gateRunId)).resolves.toEqual([
+        expect.objectContaining({ action: 'stop' }),
+      ]);
+    });
   });
 
   it('leaves corrupt run directories untouched instead of guessing their lifecycle', async () => {

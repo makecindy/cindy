@@ -375,12 +375,26 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
   const existing = launchFenceLeases.get(file);
   const leaseId = existing?.leaseId ?? randomUUID();
   launchFenceLeases.set(file, { leaseId, holders: (existing?.holders ?? 0) + 1 });
-  /** Undo this acquisition's reservation, leaving any concurrent one intact. */
-  const dropReservation = (): void => {
+  /**
+   * Undo this acquisition's reservation, leaving any concurrent one intact.
+   *
+   * Dropping the last holder also takes the file down. The reservation is taken
+   * before the write, so the last holder can be one whose own write failed
+   * while an earlier holder had already published the file and released —
+   * leaving a fence naming a live pid with nobody behind it, which refuses
+   * every durable launch for the rest of the process's life and which the stale
+   * sweep will not touch (it only clears dead owners).
+   */
+  const dropReservation = async (): Promise<void> => {
     const lease = launchFenceLeases.get(file);
     if (!lease || lease.leaseId !== leaseId) return;
-    if (lease.holders > 1) launchFenceLeases.set(file, { leaseId, holders: lease.holders - 1 });
-    else launchFenceLeases.delete(file);
+    if (lease.holders > 1) {
+      // Somebody else is still inside their window; the file stays up.
+      launchFenceLeases.set(file, { leaseId, holders: lease.holders - 1 });
+      return;
+    }
+    launchFenceLeases.delete(file);
+    await removeOwnedLaunchFenceFile(file, leaseId);
   };
   try {
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -399,7 +413,7 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
     // or a failed acquire would pin the fence up for the process's life. A
     // concurrent holder that incremented in between keeps its count: this only
     // takes back the one increment it made.
-    dropReservation();
+    await dropReservation();
     throw error;
   }
   let released = false;
@@ -415,13 +429,22 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
       }
       launchFenceLeases.delete(file);
     }
-    const onDisk = readLaunchFence(file);
-    // Someone else's fence (a leaseId that is not ours) is not ours to drop.
-    // A pre-`leaseId` file has no owner to compare against and keeps the old
-    // unconditional delete, which is what an upgrade in place leaves behind.
-    if (onDisk?.leaseId !== undefined && onDisk.leaseId !== leaseId) return;
-    await fs.rm(file, { force: true }).catch(() => undefined);
+    await removeOwnedLaunchFenceFile(file, leaseId);
   };
+}
+
+/**
+ * Remove a fence file this lease owns, and only that.
+ *
+ * Shared by the release closure and by the reservation rollback so the two can
+ * never drift: someone else's fence (a `leaseId` that is not ours) is not ours
+ * to drop, and a pre-`leaseId` file has no owner to compare against and keeps
+ * the old unconditional delete, which is what an upgrade in place leaves.
+ */
+async function removeOwnedLaunchFenceFile(file: string, leaseId: string): Promise<void> {
+  const onDisk = readLaunchFence(file);
+  if (onDisk?.leaseId !== undefined && onDisk.leaseId !== leaseId) return;
+  await fs.rm(file, { force: true }).catch(() => undefined);
 }
 
 /**
@@ -1740,6 +1763,19 @@ export async function controlPiSubagentRuns(
     confirmed?: boolean;
     value?: string;
     runtimeOwnerId?: string;
+    /**
+     * Consulted immediately before each run's mailbox write, after every await
+     * this function makes. `false` skips that write and reports no delivery.
+     *
+     * A caller that checked a fence *before* calling this had already lost the
+     * window: discovery and the directory guard below are several awaits long,
+     * and an account teardown can start and finish its stop sweep inside them —
+     * after which an `allow` still lands, and the child may act on it with the
+     * outgoing account's credentials. The check has to sit next to the write.
+     */
+    beforeMailboxWrite?: () => boolean;
+    /** Fired once every mailbox write has settled, before the receipt wait. */
+    onMailboxWritesSettled?: () => void;
   } = {},
 ): Promise<number> {
   const id = taskId.trim();
@@ -1773,13 +1809,21 @@ export async function controlPiSubagentRuns(
       return task.status === 'queued' || task.status === 'running';
     },
   );
-  const outcomes = await Promise.all(runs.map(async (run) => {
-    const request = await writeRunControl(root, run.runId, action, options);
+  // Two phases, so "the mailbox is written" is observable separately from "the
+  // runner acknowledged". A teardown has to wait for the first — a bounded fs
+  // write — and must not be held up by the second, which waits on the runner.
+  const written = await Promise.all(runs.map(async (run) => {
+    if (options.beforeMailboxWrite && !options.beforeMailboxWrite()) return null;
+    return { run, request: await writeRunControl(root, run.runId, action, options) };
+  }));
+  options.onMailboxWritesSettled?.();
+  const outcomes = await Promise.all(written.map(async (entry) => {
+    if (!entry) return false;
     // A status without a live runner identity is disk metadata, not proof that
     // anyone can consume the mailbox. Keep the request for diagnosis but do
     // not report successful delivery.
-    if (isProcessAlive(run.runnerPid) !== true) return false;
-    return waitForControlReceipt(root, run.runId, request.receiptFile);
+    if (isProcessAlive(entry.run.runnerPid) !== true) return false;
+    return waitForControlReceipt(root, entry.run.runId, entry.request.receiptFile);
   }));
   return outcomes.filter(Boolean).length;
 }

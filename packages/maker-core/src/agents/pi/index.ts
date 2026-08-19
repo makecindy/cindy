@@ -2587,6 +2587,47 @@ export class PiAgent extends BaseAgent {
      * `void dispatch()` gave it none.
      */
     const piSubagentApprovalDispatches = new Set<Promise<void>>();
+    /**
+     * Approval publishes that are inside `controlPiSubagentRuns` and have not
+     * finished writing their mailbox entries yet.
+     *
+     * Narrower than `piSubagentApprovalDispatches` on purpose. That set settles
+     * only once the runner has acknowledged, and an account teardown that waited
+     * for acknowledgements would be held up by the very children it is trying to
+     * stop. This one settles at the end of the *write* phase — bounded fs work —
+     * which is exactly what has to be over before the stop sweep runs.
+     */
+    const piSubagentApprovalWrites = new Set<Promise<void>>();
+    /**
+     * Publish an approval answer, keeping its mailbox-write phase awaitable and
+     * refusing the write itself if the account boundary went up in the meantime.
+     *
+     * The fence is read *inside* the helper, immediately before each write: the
+     * caller-side check a few lines up still leaves discovery and the directory
+     * guard between the check and the write, and a teardown can start and finish
+     * its sweep in there.
+     */
+    const publishPiSubagentApproval = async (
+      taskId: string,
+      options: Parameters<typeof controlPiSubagentRuns>[3],
+    ): Promise<number> => {
+      let settleWrites!: () => void;
+      const writesSettled = new Promise<void>((resolve) => { settleWrites = resolve; });
+      piSubagentApprovalWrites.add(writesSettled);
+      try {
+        return await controlPiSubagentRuns(subagentRunRoot, taskId, 'approval', {
+          ...options,
+          // Read through the live variable, never a snapshot: the whole point is
+          // to see a flag that was raised after this publish started.
+          beforeMailboxWrite: () => !accountBoundaryTeardown,
+          onMailboxWritesSettled: settleWrites,
+        });
+      } finally {
+        // Also on the throw path, or a failed publish would pin the teardown.
+        settleWrites();
+        piSubagentApprovalWrites.delete(writesSettled);
+      }
+    };
     let piSubagentRefreshInFlight = false;
     // Approval delivery belongs to the *detached run* lifecycle, not to the
     // parent handle. After a navigation close the foreground refresh timer is
@@ -2835,7 +2876,7 @@ export class PiAgent extends BaseAgent {
           return;
         }
         try {
-          const controlled = await controlPiSubagentRuns(subagentRunRoot, status.taskId, 'approval', {
+          const controlled = await publishPiSubagentApproval(status.taskId, {
             childId: task.childId,
             approvalId: approval.id,
             confirmed: true,
@@ -3071,7 +3112,7 @@ export class PiAgent extends BaseAgent {
         return;
       }
       try {
-        const controlled = await controlPiSubagentRuns(subagentRunRoot, status.taskId, 'approval', {
+        const controlled = await publishPiSubagentApproval(status.taskId, {
           childId: task.childId,
           approvalId: approval.id,
           ...(approval.method === 'input'
@@ -3352,6 +3393,31 @@ export class PiAgent extends BaseAgent {
     const stopDetachedSubagentRunsForAccountBoundary = async (): Promise<void> => {
       accountBoundaryTeardown = true;
       if (!localSubagentSupported) return;
+      // One budget for the whole teardown, shared by the pre-sweep drain and
+      // the convergence barrier below, so this function's worst-case latency is
+      // what it was before the drain existed.
+      let expired: ReturnType<typeof setTimeout> | undefined;
+      const budget = new Promise<'timed-out'>((resolve) => {
+        expired = setTimeout(() => resolve('timed-out'), 2_000);
+      });
+      let converged = true;
+      try {
+      // Before the sweep, not after. The fence now also gates each mailbox
+      // write from inside `controlPiSubagentRuns`, so no publish that has not
+      // reached its write can still land — but one that already passed that
+      // gate is an fs write in flight, and letting it complete *after* the
+      // sweep is exactly the ordering this has to rule out. Only the write
+      // phase is waited on: acknowledgement waits on the runner, and a teardown
+      // that waited for those would be held up by the children it is stopping.
+      while (converged && piSubagentApprovalWrites.size > 0) {
+        const writes = Promise.allSettled([...piSubagentApprovalWrites]).then(() => 'done' as const);
+        converged = await Promise.race([writes, budget]) === 'done';
+      }
+      if (!converged) {
+        this.deps.logger.warn('pi detached Subagent approval writes did not settle before the account boundary deadline', {
+          sessionId: opts.sessionId,
+        });
+      }
       try {
         const stopped = await stopPiSubagentRunsForAccountBoundary(subagentRunRoot, {
           runtimeOwnerId: subagentRuntimeOwnerId,
@@ -3389,25 +3455,20 @@ export class PiAgent extends BaseAgent {
       //     the shutdown report and the account-boundary sweep are what refuse
       //     the handover. This function converges the common case and hands
       //     anything left upwards.
-      let expired: ReturnType<typeof setTimeout> | undefined;
-      const budget = new Promise<'timed-out'>((resolve) => {
-        expired = setTimeout(() => resolve('timed-out'), 2_000);
-      });
-      let converged = true;
-      try {
-        // The supervisor first: it is the thing that could still open an offer.
-        converged = await Promise.race([supervisorExited.then(() => 'done' as const), budget]) === 'done';
-        while (converged && piSubagentApprovalDispatches.size > 0) {
-          const round = Promise.allSettled([...piSubagentApprovalDispatches]).then(() => 'done' as const);
-          converged = await Promise.race([round, budget]) === 'done';
-        }
-      } finally {
-        if (expired) clearTimeout(expired);
+      // The supervisor first: it is the thing that could still open an offer.
+      converged = converged
+        && await Promise.race([supervisorExited.then(() => 'done' as const), budget]) === 'done';
+      while (converged && piSubagentApprovalDispatches.size > 0) {
+        const round = Promise.allSettled([...piSubagentApprovalDispatches]).then(() => 'done' as const);
+        converged = await Promise.race([round, budget]) === 'done';
       }
       if (!converged) {
         this.deps.logger.warn('pi detached Subagent approvals did not converge before the account boundary deadline', {
           sessionId: opts.sessionId,
         });
+      }
+      } finally {
+        if (expired) clearTimeout(expired);
       }
     };
     let proxyLeaseInitialInspection: Promise<void> | null = null;
