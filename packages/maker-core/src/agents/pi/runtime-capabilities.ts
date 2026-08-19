@@ -75,11 +75,14 @@ async function captureUserSkillSources(
   ));
   if (userCommands.length === 0) return true;
   const allowedBaseDirs = new Set<string>();
+  const configuredBaseDirs = new Set<string>();
   for (const rawBaseDir of options.userSkillBaseDirs) {
     if (!path.isAbsolute(rawBaseDir) || rawBaseDir.includes('\0')) continue;
+    const resolvedBaseDir = path.resolve(rawBaseDir);
+    configuredBaseDirs.add(resolvedBaseDir);
     try {
       allowedBaseDirs.add(await awaitRuntimeCapabilityStep(
-        () => fsp.realpath(path.resolve(rawBaseDir)),
+        () => fsp.realpath(resolvedBaseDir),
         deadlineAtMs,
       ));
     } catch {
@@ -116,12 +119,19 @@ async function captureUserSkillSources(
       || !path.isAbsolute(rawBaseDir)
       || rawBaseDir.includes('\0')
     ) continue;
+    const resolvedRawBaseDir = path.resolve(rawBaseDir);
+    let commandMayUseAllowedBaseDir = configuredBaseDirs.has(resolvedRawBaseDir)
+      || allowedBaseDirs.has(resolvedRawBaseDir);
     try {
       const canonicalBaseDir = await awaitRuntimeCapabilityStep(
-        () => fsp.realpath(path.resolve(rawBaseDir)),
+        () => fsp.realpath(resolvedRawBaseDir),
         deadlineAtMs,
       );
-      if (!allowedBaseDirs.has(canonicalBaseDir)) continue;
+      if (!allowedBaseDirs.has(canonicalBaseDir)) {
+        if (commandMayUseAllowedBaseDir) return false;
+        continue;
+      }
+      commandMayUseAllowedBaseDir = true;
       let matches = candidatesByCommand.get(
         [canonicalBaseDir, command.name].join('\0'),
       );
@@ -142,7 +152,7 @@ async function captureUserSkillSources(
                 deadlineAtMs,
               );
             } catch {
-              canonicalEntrypoint = null;
+              return false;
             }
             canonicalEntrypoints.set(candidate.proof.entrypointPath, canonicalEntrypoint);
           }
@@ -162,6 +172,7 @@ async function captureUserSkillSources(
         writable: false,
       });
     } catch {
+      if (commandMayUseAllowedBaseDir) return false;
       // Keep the command visible for diagnostics; final invocation fails closed.
     }
   }
