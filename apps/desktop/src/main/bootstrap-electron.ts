@@ -1266,308 +1266,327 @@ class PiSubagentAccountBoundaryError extends Error {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const blockingFailures: unknown[] = [];
-  // Hardware must stop before the long async drain. Otherwise a held stick or
-  // microphone keeps acting on the outgoing account while caches and IM stop.
-  suspendInputDeviceTaskSlots();
-  // The boundary is already marked pending by every caller. New actions now
-  // fail closed; drain an action that crossed the boundary before closing its DB.
-  try {
-    await withAuthBoundaryTimeout('wait for turn change-set actions', waitForTurnChangeSetActions);
-  } catch (error) {
-    blockingFailures.push(error);
-    authBoundaryLog.error(`waitForTurnChangeSetActions on ${reason} failed`, error);
-  }
-  skillhubAutoSyncService.cancelInFlight();
-  // Custom provider routes are owner-scoped but the active catalog is process-global.
-  // Clear synchronously at the boundary; the next owner's tracked readiness reloads them
-  // before any Agent route can start. A failed DB read therefore stays fail-closed (empty)
-  // instead of retaining the previous owner's endpoint or model entries.
-  setCustomProviders([]);
-  accountProviderReadinessArm.clear();
-  startPendingAccountProviderReadiness = null;
-  accountProviderReadinessBarrier.invalidateAdoption();
-  clearModelVisibilityMirror();
-  // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
-  // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
-  // teardown 之后才切),正是唯一能清准的时机。
+  // Raised before anything else in this function, because everything below
+  // it is destructive: input device slots are suspended, the custom provider
+  // catalog is cleared, IM, the scheduler, embedding and the Ghost projection
+  // are stopped. Failing to raise it aborts the handover — and it used to do
+  // that *after* those services were already down, leaving the user on a
+  // half-dismantled old account with no way back except a restart. From here
+  // the abort costs nothing: nothing has been taken apart yet.
   //
-  // 删不掉时(Windows 文件锁 / 权限 / 并发写)**不阻断登出** —— 卡住登出比缓存残留更糟 ——
-  // 但也不能只记一行日志了事:把待清目录持久化进重试队列,下次启动与下次账号边界各消化
-  // 一次,直到真正删掉(review: codex P1)。顺手先消化一次历史遗留。
-  try {
-    await drainPurgeQueue();
-  } catch (err) {
-    authBoundaryPurgeLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
-  }
-  try {
-    await getMirrorCache().clearAll();
-  } catch (err) {
-    authBoundaryPurgeLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
-    if (err instanceof MirrorCachePurgeError) {
-      // remaining / barriers / tombstones 三样都要带上(同 IPC 侧的 queuePurgeRetry):
-      // 只传 root 的话,补删成功后队列既不知道该补自增哪个作废计数,也不会退役 `_account`
-      // 墓碑 —— 墓碑一直挂着就等于这个 owner 的缓存读被永久压住(review: codex P1)。
-      await enqueuePurge(err.root, err.remaining, err.barriers, err.tombstones).catch(
-        (enqueueErr: unknown) => {
-          authBoundaryPurgeLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
-        },
-      );
-    }
-  }
-  // Cindy relay owns long-lived transports plus account-scoped task/binding
-  // state. Drain ingress before discarding the owner-scoped store; otherwise a
-  // late Telegram/Slack callback could write through the next account boundary.
-  try {
-    await stopHookControlAccount();
-  } catch (err) {
-    authBoundaryLog.error(`stopHookControlAccount on ${reason} failed (non-fatal):`, err);
-  } finally {
-    // Auth/runtime boundaries keep durable group cursors for a later relogin;
-    // only explicit account deletion is a data-removal boundary.
-    resetHookControlOwnerBoundary({ clearPersisted: reason === 'account-deletion' });
-  }
-  // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
-  // state. Stop them before changing owners; resident Ghosts are recreated by
-  // the auth-change activation pass after the new boundary is committed.
-  try {
-    await teardownGhostProjectionBoundary(reason);
-  } catch (error) {
-    blockingFailures.push(error);
-  }
-  // Personal IM channels have the same DB boundary. Relogin restarts them from
-  // the next owner DB-ready callback; app:ready-for-bot remains a compatibility
-  // retry after the new DbClient is ready.
-  try {
-    await stopImConnection(reason);
-  } catch (err) {
-    authBoundaryLog.error(`stopImConnection on ${reason} failed (non-fatal):`, err);
-  }
-  // Phase 4 切账号:teardown 顺序很关键,分两步 ① readiness holder → ② scheduler。
-  // ① 先清 readiness holder,**必须在 await resetScheduler() 之前**。
-  // resetScheduler() 内部 await _scheduler.stop() 是异步的;若先 await 它,在
-  // stop 进行中的那段窗口里 _current 仍指向正在停的旧实例,期间任何新的
-  // withScheduler 调用会 awaitReady → 立即 resolve 到这个 stopping 实例 → 业务
-  // cb 在已停 scheduler 上跑。先同步清掉 _current,让窗口内的新调用转为 pending,
-  // 等 relogin 后的 setSchedulerReady 喂入**新实例**(与 worker bug #1 的 relogin
-  // 路径同构,这里关掉 teardown 路径的对偶窗口)。
-  // 不 reject _pending — 让在途请求继续等下次 setSchedulerReady,30s 超时兜底。
-  resetSchedulerReady();
-  const agentIslandService = getAgentIslandService();
-  agentIslandService?.resetRuntimeState();
-  // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
-  // closeLocalDb 之前先 stop;否则下一秒 tick 会撞 'localDb not ready'。
-  // resetScheduler 把 scheduler-host 的 _scheduler 单例置 null,下一次
-  // attemptStartScheduler(onReady 触发)会用新 user 的 drizzle 重新启动。
-  // 见 Phase 3 changelog «scheduler 不监听 localDb.closeDb(切账号)» 遗留。
-  try {
-    await resetScheduler();
-  } catch (err) {
-    authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
-  }
-  // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
-  // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
-  // attempt 时会重新 attach。这里无需手动操作 WeakSet。
-  // embedding-host 也持有旧 user 的 db 引用, 切账号前先 stop, 下次 ensureReady
-  // 触发的 onReady 会用新 db 重新启动 (attemptStartEmbeddingHost 单例幂等)。
-  try {
-    await stopEmbeddingHost();
-  } catch (err) {
-    authBoundaryLog.error(`stopEmbeddingHost on ${reason} failed (non-fatal):`, err);
-  }
-  // chat-history-embedder 模块级 state (cutoff cache / enabled / deps) 也跟旧 user
-  // 的 DB 绑定; 重置后下一次 attemptStartEmbeddingHost → setupChatHistoryEmbedder
-  // 会按新 user 的 DB 重新初始化, 切账号无串库风险。
-  try {
-    resetChatEmbedderCache();
-  } catch (err) {
-    authBoundaryLog.error(
-      `[bootstrap-electron] resetChatEmbedderCache on ${reason} failed (non-fatal):`,
-      err,
-    );
-  }
-  // learn-host 单例持有旧 user 的 maker/db 注入依赖与内存 run store;不重置的话
-  // relogin 后 startLearnHost 幂等早退,新账号会继续用旧依赖、看到旧账号的
-  // in-memory run(Codex review)。dispose 中止活跃蒸馏、解绑 watcher,下次
-  // 就绪点用新依赖重建。
-  try {
-    await resetLearnController();
-  } catch (err) {
-    authBoundaryLog.error(`resetLearnController on ${reason} failed (non-fatal):`, err);
-  }
-  try {
-    disposeDesktopContactsManager();
-  } catch (err) {
-    authBoundaryLog.error(`dispose contacts manager on ${reason} failed (non-fatal):`, err);
-  }
-  // Maker session storage resolves the current DbClient lazily. A late callback
-  // from the previous owner must not survive long enough to write into the next
-  // owner's database, so shut down and discard the entire runtime before DB swap.
-  // 先丢弃旧 owner 的延迟 Codex 重启登记 —— holder 随进程存活,不清会在新 owner
-  // 的 Maker 上兑现旧 owner 的记忆设置重启(shutdown 触发的会话关闭事件也会
-  // 撞上它,先清再关)。
-  clearDeferredCodexRestartForOwnerBoundary();
-  // interrupted-turn-resume:shutdown 批量 close 会话会触发 close teardown 的
-  // markSessionTurnEnded,把"边界时还在飞的 turn"伪装成正常收尾 —— 被切换打断的
-  // 任务从此既无中断横幅也无红点,呈现为"卡住且无报错"(与 ⌘Q 的 quit freeze 同款
-  // 问题,quit freeze 只保护退出编排,不覆盖这里)。shutdown 到 DB dispose 期间抑制
-  // ended 写,保住 startedAt > endedAt 的中断痕迹;不覆盖 teardown 前段,边界早段
-  // 自然完成的 turn 照常收尾。释放放 finally:抑制器是进程级计数,泄漏一次就把
-  // 后续 owner 的正常收尾写全部吞掉,中断横幅会在每个正常完成的任务上误弹。
-  const releaseEndedSuppression = beginSessionTurnEndedSuppression();
-  // Same fence, same ordering argument, as quit and the update relaunch: raised
-  // before `maker.shutdown` so it covers the shutdown *and* the sweep below.
-  // `Maker.shutdown` reports per-session detach failures rather than throwing,
-  // so a parent Pi can survive it — and a survivor could publish a fresh run
-  // after the one-shot sweep had already scanned, handing the next owner a
-  // runner holding the previous account's credentials.
-  //
-  // Unlike quit, this must come down on *every* path. An account boundary swaps
-  // the owner inside a live process: a fence left standing would refuse the
-  // incoming owner's own durable launches for the rest of this process's life.
-  // Raised inside the suppression `try` so that finally releases both.
+  // Holding it for the whole teardown rather than only the shutdown+sweep is
+  // the intended widening: a durable launch is exactly what must not start
+  // while an account boundary is in progress.
+  // Declared out here because the fence's try/finally now spans the whole
+  // teardown, and the DB-close finally below still has to reach it.
+  let agentIslandService: ReturnType<typeof getAgentIslandService> | undefined;
   let releaseBoundaryLaunchFence: (() => Promise<void>) | null = null;
   try {
+    releaseBoundaryLaunchFence = await acquirePiSubagentLaunchFence(
+      path.join(app.getPath('userData'), 'pi-agent-home'),
+    );
+  } catch (err) {
+    // Fail closed, unlike quit and the relaunch. Those two are allowed to
+    // continue without a fence because the process is about to disappear
+    // (quit) or the operation is cancelled outright (relaunch). Here the
+    // process keeps running and hands its runtime to a different owner, so
+    // the window the fence exists to close is precisely the one still open —
+    // degrading to "warn and continue" would silently reintroduce it. A
+    // logout that fails can be retried, and at this point there is nothing
+    // to undo.
+    throw new PiSubagentAccountBoundaryError(
+      reason,
+      err,
+      'the PI Subagent launch fence could not be raised',
+    );
+  }
+  try {
+    // Hardware must stop before the long async drain. Otherwise a held stick or
+    // microphone keeps acting on the outgoing account while caches and IM stop.
+    suspendInputDeviceTaskSlots();
+    // The boundary is already marked pending by every caller. New actions now
+    // fail closed; drain an action that crossed the boundary before closing its DB.
     try {
-      releaseBoundaryLaunchFence = await acquirePiSubagentLaunchFence(
-        path.join(app.getPath('userData'), 'pi-agent-home'),
-      );
-    } catch (err) {
-      // Fail closed, unlike quit and the relaunch. Those two are allowed to
-      // continue without a fence because the process is about to disappear
-      // (quit) or the operation is cancelled outright (relaunch). Here the
-      // process keeps running and hands its runtime to a different owner, so
-      // the window the fence exists to close is precisely the one still open —
-      // degrading to "warn and continue" would silently reintroduce it. A
-      // logout that fails can be retried.
-      throw new PiSubagentAccountBoundaryError(
-        reason,
-        err,
-        'the PI Subagent launch fence could not be raised',
-      );
+      await withAuthBoundaryTimeout('wait for turn change-set actions', waitForTurnChangeSetActions);
+    } catch (error) {
+      blockingFailures.push(error);
+      authBoundaryLog.error(`waitForTurnChangeSetActions on ${reason} failed`, error);
     }
-    // Did the Maker singleton get poisoned, and is it still holding anything?
+    skillhubAutoSyncService.cancelInFlight();
+    // Custom provider routes are owner-scoped but the active catalog is process-global.
+    // Clear synchronously at the boundary; the next owner's tracked readiness reloads them
+    // before any Agent route can start. A failed DB read therefore stays fail-closed (empty)
+    // instead of retaining the previous owner's endpoint or model entries.
+    setCustomProviders([]);
+    accountProviderReadinessArm.clear();
+    startPendingAccountProviderReadiness = null;
+    accountProviderReadinessBarrier.invalidateAdoption();
+    clearModelVisibilityMirror();
+    // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
+    // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
+    // teardown 之后才切),正是唯一能清准的时机。
     //
-    // `Maker.shutdown` sets `shutdownStarted` on entry and never clears it, so
-    // once it has run every later `createSession` is refused with "Maker is
-    // shutting down". That is fine when the handover completes — the Maker is
-    // replaced — but an aborted handover leaves the user on the old account
-    // with a singleton that can no longer start a task until the app restarts.
-    let shutdownRan = false;
-    let retainedPiSessions = 0;
+    // 删不掉时(Windows 文件锁 / 权限 / 并发写)**不阻断登出** —— 卡住登出比缓存残留更糟 ——
+    // 但也不能只记一行日志了事:把待清目录持久化进重试队列,下次启动与下次账号边界各消化
+    // 一次,直到真正删掉(review: codex P1)。顺手先消化一次历史遗留。
     try {
-      const maker = getMakerIfReady();
-      // Logout / account switch: the owner DbClient is disposed a few lines
-      // below and the gateway credentials behind every proxy token are being
-      // replaced. Adapters that keep parent-independent children alive across an
-      // ordinary close (PI durable Subagents) must stop them here instead.
-      // Marked before the await: `shutdownStarted` is set on entry, so the
-      // singleton is poisoned even if this rejects.
-      if (maker) shutdownRan = true;
-      const shutdownReport = maker
-        ? await maker.shutdown({ reason: 'account-boundary' })
-        : undefined;
-      // A PI session whose detach threw may still have a live process, and that
-      // process owns durable children holding BYOM credentials this account
-      // cannot revoke. Recorded now, acted on after the sweep — the sweep is
-      // still worth running, but it cannot make this failure disappear.
-      //
-      // Only PI is escalated. Other agents' detach failures stay logged and
-      // non-fatal exactly as before: their children die with the parent, so a
-      // failed teardown does not leave revocation-proof credentials in use.
-      const piSessionFailures = (shutdownReport?.sessionFailures ?? [])
-        .filter((failure) => failure.agentKind === 'pi');
-      // A session whose detach failed is *kept*: `Session.detach` leaves it in
-      // `error`, not `closed`, so the Maker keeps its status listener and its
-      // active-session slot deliberately, and a later `shutdown()` retries it.
-      // That makes this Maker the only remaining supervision surface for a PI
-      // process that may still be alive — which decides whether the abort path
-      // below may discard it.
-      retainedPiSessions = piSessionFailures.length;
-      for (const failure of piSessionFailures) {
-        authBoundaryLog.error(
-          `PI session ${failure.sessionId} failed to detach on ${reason}:`,
-          failure.error,
-        );
-      }
-      // maker.shutdown only reaches tasks that still have a live handle. A
-      // detached PI Subagent whose parent task was closed earlier has no handle
-      // left, but it is still holding a transferred proxy lease and still
-      // writing the workspace — sweep the whole agent home so no child of the
-      // outgoing owner survives into the next one. Same call the quit path uses;
-      // idempotent with the per-handle stop above.
-      // This one is *not* non-fatal. Everything below hands the runtime to the
-      // next owner: the Maker is discarded, the outgoing database is disposed
-      // and the app session is committed to a new account. A runner we could
-      // not confirm as stopped keeps running against direct BYOM credentials
-      // from the outgoing account — credentials no token revocation can reach —
-      // so completing the handover would leave the previous account paying for,
-      // and the previous workspace being edited by, a process nobody is left to
-      // supervise. Abort instead and let the logout / switch fail and be
-      // retried. Scope is unchanged: only runs attributable to this runtime are
-      // waited on or killed, so another instance's runners never block us.
-      const stopped = await stopAllPiSubagentRunsForExit(
-        path.join(app.getPath('userData'), 'pi-agent-home'),
-        undefined,
-        // A runner that never consumes its mailbox still holds direct BYOM
-        // credentials from the outgoing account, and those cannot be revoked
-        // the way the proxy token can. Escalate to a verified kill rather than
-        // logging and handing the account over.
-        { hostPid: process.pid, killUnresponsiveRunners: true },
-      ).catch((err: unknown) => {
-        throw new PiSubagentAccountBoundaryError(reason, err);
-      });
-      if (!stopped) throw new PiSubagentAccountBoundaryError(reason);
-      if (piSessionFailures.length > 0) {
-        throw new PiSubagentAccountBoundaryError(
-          reason,
-          piSessionFailures[0]?.error,
-          `${piSessionFailures.length} PI session(s) could not be torn down`,
-        );
-      }
-      resetMaker();
+      await drainPurgeQueue();
     } catch (err) {
-      // The abort above must not be laundered into "non-fatal": it is the one
-      // failure in this block that has to stop the handover.
-      if (err instanceof PiSubagentAccountBoundaryError) {
-        authBoundaryLog.error(`${err.message} (cause:`, err.cause, ')');
-        // The handover is aborted and the user stays on the old account — with
-        // a Maker that has already been shut down and now refuses every new
-        // task. Replace it, exactly as the non-fatal path below does, so the
-        // account the user is still on remains usable and a retried logout
-        // starts from a clean instance.
-        //
-        // Only when nothing is still attached to it. Survivors of a *sweep*
-        // failure are detached runners: their ownership lives in durable files,
-        // their pid, and the `runtimeOwnerId` stamped into their status — none
-        // of it on this object, and the retried logout sweeps the whole agent
-        // home again. A session whose *detach* failed is the opposite: the
-        // Maker is holding its handle on purpose so the next `shutdown()` can
-        // retry it, and discarding the instance would orphan a live PI process
-        // still spending this account's credentials. Staying poisoned is the
-        // lesser harm there, and the log above is what says so.
-        if (shutdownRan && retainedPiSessions === 0) resetMaker();
-        throw err;
-      }
-      authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
-      resetMaker();
+      authBoundaryPurgeLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
     }
-    // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
-    // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
-    // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
     try {
-      await releaseDeviceLinkOwnershipBeforeLogout();
+      await getMirrorCache().clearAll();
+    } catch (err) {
+      authBoundaryPurgeLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
+      if (err instanceof MirrorCachePurgeError) {
+        // remaining / barriers / tombstones 三样都要带上(同 IPC 侧的 queuePurgeRetry):
+        // 只传 root 的话,补删成功后队列既不知道该补自增哪个作废计数,也不会退役 `_account`
+        // 墓碑 —— 墓碑一直挂着就等于这个 owner 的缓存读被永久压住(review: codex P1)。
+        await enqueuePurge(err.root, err.remaining, err.barriers, err.tombstones).catch(
+          (enqueueErr: unknown) => {
+            authBoundaryPurgeLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
+          },
+        );
+      }
+    }
+    // Cindy relay owns long-lived transports plus account-scoped task/binding
+    // state. Drain ingress before discarding the owner-scoped store; otherwise a
+    // late Telegram/Slack callback could write through the next account boundary.
+    try {
+      await stopHookControlAccount();
+    } catch (err) {
+      authBoundaryLog.error(`stopHookControlAccount on ${reason} failed (non-fatal):`, err);
+    } finally {
+      // Auth/runtime boundaries keep durable group cursors for a later relogin;
+      // only explicit account deletion is a data-removal boundary.
+      resetHookControlOwnerBoundary({ clearPersisted: reason === 'account-deletion' });
+    }
+    // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
+    // state. Stop them before changing owners; resident Ghosts are recreated by
+    // the auth-change activation pass after the new boundary is committed.
+    try {
+      await teardownGhostProjectionBoundary(reason);
+    } catch (error) {
+      blockingFailures.push(error);
+    }
+    // Personal IM channels have the same DB boundary. Relogin restarts them from
+    // the next owner DB-ready callback; app:ready-for-bot remains a compatibility
+    // retry after the new DbClient is ready.
+    try {
+      await stopImConnection(reason);
+    } catch (err) {
+      authBoundaryLog.error(`stopImConnection on ${reason} failed (non-fatal):`, err);
+    }
+    // Phase 4 切账号:teardown 顺序很关键,分两步 ① readiness holder → ② scheduler。
+    // ① 先清 readiness holder,**必须在 await resetScheduler() 之前**。
+    // resetScheduler() 内部 await _scheduler.stop() 是异步的;若先 await 它,在
+    // stop 进行中的那段窗口里 _current 仍指向正在停的旧实例,期间任何新的
+    // withScheduler 调用会 awaitReady → 立即 resolve 到这个 stopping 实例 → 业务
+    // cb 在已停 scheduler 上跑。先同步清掉 _current,让窗口内的新调用转为 pending,
+    // 等 relogin 后的 setSchedulerReady 喂入**新实例**(与 worker bug #1 的 relogin
+    // 路径同构,这里关掉 teardown 路径的对偶窗口)。
+    // 不 reject _pending — 让在途请求继续等下次 setSchedulerReady,30s 超时兜底。
+    resetSchedulerReady();
+    agentIslandService = getAgentIslandService();
+    agentIslandService?.resetRuntimeState();
+    // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
+    // closeLocalDb 之前先 stop;否则下一秒 tick 会撞 'localDb not ready'。
+    // resetScheduler 把 scheduler-host 的 _scheduler 单例置 null,下一次
+    // attemptStartScheduler(onReady 触发)会用新 user 的 drizzle 重新启动。
+    // 见 Phase 3 changelog «scheduler 不监听 localDb.closeDb(切账号)» 遗留。
+    try {
+      await resetScheduler();
+    } catch (err) {
+      authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
+    }
+    // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
+    // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
+    // attempt 时会重新 attach。这里无需手动操作 WeakSet。
+    // embedding-host 也持有旧 user 的 db 引用, 切账号前先 stop, 下次 ensureReady
+    // 触发的 onReady 会用新 db 重新启动 (attemptStartEmbeddingHost 单例幂等)。
+    try {
+      await stopEmbeddingHost();
+    } catch (err) {
+      authBoundaryLog.error(`stopEmbeddingHost on ${reason} failed (non-fatal):`, err);
+    }
+    // chat-history-embedder 模块级 state (cutoff cache / enabled / deps) 也跟旧 user
+    // 的 DB 绑定; 重置后下一次 attemptStartEmbeddingHost → setupChatHistoryEmbedder
+    // 会按新 user 的 DB 重新初始化, 切账号无串库风险。
+    try {
+      resetChatEmbedderCache();
     } catch (err) {
       authBoundaryLog.error(
-        `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
+        `[bootstrap-electron] resetChatEmbedderCache on ${reason} failed (non-fatal):`,
         err,
       );
     }
-    await lifecycleDbClientManager.dispose(reason);
+    // learn-host 单例持有旧 user 的 maker/db 注入依赖与内存 run store;不重置的话
+    // relogin 后 startLearnHost 幂等早退,新账号会继续用旧依赖、看到旧账号的
+    // in-memory run(Codex review)。dispose 中止活跃蒸馏、解绑 watcher,下次
+    // 就绪点用新依赖重建。
+    try {
+      await resetLearnController();
+    } catch (err) {
+      authBoundaryLog.error(`resetLearnController on ${reason} failed (non-fatal):`, err);
+    }
+    try {
+      disposeDesktopContactsManager();
+    } catch (err) {
+      authBoundaryLog.error(`dispose contacts manager on ${reason} failed (non-fatal):`, err);
+    }
+    // Maker session storage resolves the current DbClient lazily. A late callback
+    // from the previous owner must not survive long enough to write into the next
+    // owner's database, so shut down and discard the entire runtime before DB swap.
+    // 先丢弃旧 owner 的延迟 Codex 重启登记 —— holder 随进程存活,不清会在新 owner
+    // 的 Maker 上兑现旧 owner 的记忆设置重启(shutdown 触发的会话关闭事件也会
+    // 撞上它,先清再关)。
+    clearDeferredCodexRestartForOwnerBoundary();
+    // interrupted-turn-resume:shutdown 批量 close 会话会触发 close teardown 的
+    // markSessionTurnEnded,把"边界时还在飞的 turn"伪装成正常收尾 —— 被切换打断的
+    // 任务从此既无中断横幅也无红点,呈现为"卡住且无报错"(与 ⌘Q 的 quit freeze 同款
+    // 问题,quit freeze 只保护退出编排,不覆盖这里)。shutdown 到 DB dispose 期间抑制
+    // ended 写,保住 startedAt > endedAt 的中断痕迹;不覆盖 teardown 前段,边界早段
+    // 自然完成的 turn 照常收尾。释放放 finally:抑制器是进程级计数,泄漏一次就把
+    // 后续 owner 的正常收尾写全部吞掉,中断横幅会在每个正常完成的任务上误弹。
+    const releaseEndedSuppression = beginSessionTurnEndedSuppression();
+    try {
+    // Same fence, same ordering argument, as quit and the update relaunch: raised
+    // before `maker.shutdown` so it covers the shutdown *and* the sweep below.
+    // `Maker.shutdown` reports per-session detach failures rather than throwing,
+    // so a parent Pi can survive it — and a survivor could publish a fresh run
+    // after the one-shot sweep had already scanned, handing the next owner a
+    // runner holding the previous account's credentials.
+    //
+    // Unlike quit, this must come down on *every* path. An account boundary swaps
+    // the owner inside a live process: a fence left standing would refuse the
+    // incoming owner's own durable launches for the rest of this process's life.
+    // Raised inside the suppression `try` so that finally releases both.
+        // Did the Maker singleton get poisoned, and is it still holding anything?
+        //
+        // `Maker.shutdown` sets `shutdownStarted` on entry and never clears it, so
+        // once it has run every later `createSession` is refused with "Maker is
+        // shutting down". That is fine when the handover completes — the Maker is
+        // replaced — but an aborted handover leaves the user on the old account
+        // with a singleton that can no longer start a task until the app restarts.
+        let shutdownRan = false;
+        let retainedPiSessions = 0;
+        try {
+          const maker = getMakerIfReady();
+          // Logout / account switch: the owner DbClient is disposed a few lines
+          // below and the gateway credentials behind every proxy token are being
+          // replaced. Adapters that keep parent-independent children alive across an
+          // ordinary close (PI durable Subagents) must stop them here instead.
+          // Marked before the await: `shutdownStarted` is set on entry, so the
+          // singleton is poisoned even if this rejects.
+          if (maker) shutdownRan = true;
+          const shutdownReport = maker
+            ? await maker.shutdown({ reason: 'account-boundary' })
+            : undefined;
+          // A PI session whose detach threw may still have a live process, and that
+          // process owns durable children holding BYOM credentials this account
+          // cannot revoke. Recorded now, acted on after the sweep — the sweep is
+          // still worth running, but it cannot make this failure disappear.
+          //
+          // Only PI is escalated. Other agents' detach failures stay logged and
+          // non-fatal exactly as before: their children die with the parent, so a
+          // failed teardown does not leave revocation-proof credentials in use.
+          const piSessionFailures = (shutdownReport?.sessionFailures ?? [])
+            .filter((failure) => failure.agentKind === 'pi');
+          // A session whose detach failed is *kept*: `Session.detach` leaves it in
+          // `error`, not `closed`, so the Maker keeps its status listener and its
+          // active-session slot deliberately, and a later `shutdown()` retries it.
+          // That makes this Maker the only remaining supervision surface for a PI
+          // process that may still be alive — which decides whether the abort path
+          // below may discard it.
+          retainedPiSessions = piSessionFailures.length;
+          for (const failure of piSessionFailures) {
+            authBoundaryLog.error(
+              `PI session ${failure.sessionId} failed to detach on ${reason}:`,
+              failure.error,
+            );
+          }
+          // maker.shutdown only reaches tasks that still have a live handle. A
+          // detached PI Subagent whose parent task was closed earlier has no handle
+          // left, but it is still holding a transferred proxy lease and still
+          // writing the workspace — sweep the whole agent home so no child of the
+          // outgoing owner survives into the next one. Same call the quit path uses;
+          // idempotent with the per-handle stop above.
+          // This one is *not* non-fatal. Everything below hands the runtime to the
+          // next owner: the Maker is discarded, the outgoing database is disposed
+          // and the app session is committed to a new account. A runner we could
+          // not confirm as stopped keeps running against direct BYOM credentials
+          // from the outgoing account — credentials no token revocation can reach —
+          // so completing the handover would leave the previous account paying for,
+          // and the previous workspace being edited by, a process nobody is left to
+          // supervise. Abort instead and let the logout / switch fail and be
+          // retried. Scope is unchanged: only runs attributable to this runtime are
+          // waited on or killed, so another instance's runners never block us.
+          const stopped = await stopAllPiSubagentRunsForExit(
+            path.join(app.getPath('userData'), 'pi-agent-home'),
+            undefined,
+            // A runner that never consumes its mailbox still holds direct BYOM
+            // credentials from the outgoing account, and those cannot be revoked
+            // the way the proxy token can. Escalate to a verified kill rather than
+            // logging and handing the account over.
+            { hostPid: process.pid, killUnresponsiveRunners: true },
+          ).catch((err: unknown) => {
+            throw new PiSubagentAccountBoundaryError(reason, err);
+          });
+          if (!stopped) throw new PiSubagentAccountBoundaryError(reason);
+          if (piSessionFailures.length > 0) {
+            throw new PiSubagentAccountBoundaryError(
+              reason,
+              piSessionFailures[0]?.error,
+              `${piSessionFailures.length} PI session(s) could not be torn down`,
+            );
+          }
+          resetMaker();
+        } catch (err) {
+          // The abort above must not be laundered into "non-fatal": it is the one
+          // failure in this block that has to stop the handover.
+          if (err instanceof PiSubagentAccountBoundaryError) {
+            authBoundaryLog.error(`${err.message} (cause:`, err.cause, ')');
+            // The handover is aborted and the user stays on the old account — with
+            // a Maker that has already been shut down and now refuses every new
+            // task. Replace it, exactly as the non-fatal path below does, so the
+            // account the user is still on remains usable and a retried logout
+            // starts from a clean instance.
+            //
+            // Only when nothing is still attached to it. Survivors of a *sweep*
+            // failure are detached runners: their ownership lives in durable files,
+            // their pid, and the `runtimeOwnerId` stamped into their status — none
+            // of it on this object, and the retried logout sweeps the whole agent
+            // home again. A session whose *detach* failed is the opposite: the
+            // Maker is holding its handle on purpose so the next `shutdown()` can
+            // retry it, and discarding the instance would orphan a live PI process
+            // still spending this account's credentials. Staying poisoned is the
+            // lesser harm there, and the log above is what says so.
+            if (shutdownRan && retainedPiSessions === 0) resetMaker();
+            throw err;
+          }
+          authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
+          resetMaker();
+        }
+        // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
+        // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
+        // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
+        try {
+          await releaseDeviceLinkOwnershipBeforeLogout();
+        } catch (err) {
+          authBoundaryLog.error(
+            `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
+            err,
+          );
+        }
+        await lifecycleDbClientManager.dispose(reason);
+    } finally {
+      releaseEndedSuppression();
+    }
   } finally {
-    releaseEndedSuppression();
-    // Both outcomes release it: the handover completed (the incoming owner must
-    // be able to launch), or it was aborted (this owner stays and must be able
-    // to launch). Either way the window this fence covers is over.
+    // Both outcomes release it: the handover completed (the incoming owner
+    // must be able to launch), or it was aborted (this owner stays and must
+    // be able to launch). Either way the window this fence covers is over,
+    // and every exit from the body above — including the abort — lands here.
     const releaseFence = releaseBoundaryLaunchFence;
     releaseBoundaryLaunchFence = null;
     await releaseFence?.().catch(() => undefined);

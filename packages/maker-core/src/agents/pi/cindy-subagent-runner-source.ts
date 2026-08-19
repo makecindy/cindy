@@ -632,7 +632,26 @@ function main() {
       }
       return;
     }
-    for (const entry of files) {
+    // Stop first, whatever the write order was. The Host cannot control it: an
+    // approval that already passed its account-boundary gate is an fs write in
+    // flight, and the teardown's drain waits for it precisely so the sweep can
+    // see it — which means the stop it appends lands *after* that approval.
+    // Consuming in write order then executed the pending tool call and only
+    // afterwards honoured the stop. Ordering is therefore decided here, on the
+    // consuming side, where it can actually be enforced.
+    //
+    // Only the partition is new: each group keeps the deterministic order the
+    // sort above gave it. Once a stop is applied, applyControl already refuses
+    // every later approval, steer and follow_up for the stopped scope
+    // (state.stopRequested / task.stopRequested), so the rest of the batch is
+    // inert without any further change. A stop scoped to one child still leaves
+    // its siblings' controls alone, for the same reason.
+    const stopFirst = files.filter(function (entry) {
+      return entry.control && entry.control.action === 'stop';
+    }).concat(files.filter(function (entry) {
+      return !(entry.control && entry.control.action === 'stop');
+    }));
+    for (const entry of stopFirst) {
       try {
         const outcome = applyControl(entry.control);
         if (entry.control && entry.control.acknowledge === true && typeof entry.control.requestId === 'string') {

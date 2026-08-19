@@ -252,6 +252,39 @@ describe('PI Subagent quit sweep', () => {
     expect(teardown.indexOf('lifecycleDbClientManager.dispose(reason)', sweep)).toBeGreaterThan(sweep);
   });
 
+  it('raises the account-boundary fence before anything destructive runs', () => {
+    // Failing to raise it aborts the handover. It used to do that from the
+    // middle of the teardown: input device slots suspended, the custom provider
+    // catalog cleared, IM / scheduler / embedding / Ghost projection already
+    // stopped — and the abort path rebuilds none of them, so the user was left
+    // on a half-dismantled account until a restart. Raised first, the abort
+    // costs nothing because nothing has been taken apart yet.
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+      source.indexOf('authManager.setAccountSwitchTeardown('),
+    );
+    const acquire = teardown.indexOf('acquirePiSubagentLaunchFence(');
+    expect(acquire).toBeGreaterThan(-1);
+    for (const destructive of [
+      'suspendInputDeviceTaskSlots();',
+      'skillhubAutoSyncService.cancelInFlight();',
+      'setCustomProviders([]);',
+      'clearModelVisibilityMirror();',
+      'await getMirrorCache().clearAll();',
+      'stopImConnection(reason)',
+      'resetSchedulerReady();',
+      'lifecycleDbClientManager.dispose(reason)',
+    ]) {
+      expect(teardown.indexOf(destructive)).toBeGreaterThan(acquire);
+    }
+    // Still fail-closed, and still released on every exit — the abort throws
+    // from inside the try whose finally lowers it.
+    expect(teardown.slice(acquire)).toContain("'the PI Subagent launch fence could not be raised'");
+    const release = teardown.indexOf('const releaseFence = releaseBoundaryLaunchFence;');
+    expect(release).toBeGreaterThan(teardown.indexOf('lifecycleDbClientManager.dispose(reason)'));
+    expect(teardown.lastIndexOf('} finally {', release)).toBeGreaterThan(acquire);
+  });
+
   it('replaces the shut-down Maker when it aborts the handover with nothing attached', () => {
     // `Maker.shutdown` sets `shutdownStarted` on entry and never clears it, so
     // after it runs every `createSession` is refused. Completing the handover
@@ -311,12 +344,13 @@ describe('PI Subagent quit sweep', () => {
     // Before the shutdown, so it covers the shutdown *and* the sweep.
     expect(shutdown).toBeGreaterThan(raise);
     expect(sweep).toBeGreaterThan(shutdown);
+    expect(raise).toBeLessThan(teardown.indexOf('suspendInputDeviceTaskSlots();'));
     // Failing to raise it aborts the handover instead of warning and carrying
     // on. Quit and the update relaunch are allowed to continue fenceless — the
     // process is about to disappear, or the operation is cancelled outright.
     // Here the process keeps running and changes owner, so the window the fence
     // closes is exactly the one still open. A logout can be retried.
-    const acquire = teardown.slice(raise, shutdown);
+    const acquire = teardown.slice(raise, teardown.indexOf('suspendInputDeviceTaskSlots();'));
     expect(acquire).not.toMatch(/authBoundaryLog\.warn/);
     expect(acquire).toContain('throw new PiSubagentAccountBoundaryError(');
     expect(acquire).toContain("'the PI Subagent launch fence could not be raised'");
@@ -328,18 +362,25 @@ describe('PI Subagent quit sweep', () => {
     const finallyBlock = teardown.lastIndexOf('} finally {', release);
     expect(finallyBlock).toBeGreaterThan(-1);
     expect(finallyBlock).toBeLessThan(release);
-    // The abort path throws from inside that try, so the same finally covers it.
+    // The abort path throws from inside that try, so the same finally covers
+    // it. The acquisition now sits above the whole teardown, so its own
+    // fail-closed throw is checked by the ordering case instead.
     expect(teardown.indexOf('throw new PiSubagentAccountBoundaryError(reason);'))
       .toBeLessThan(finallyBlock);
-    // Including the acquisition failure. It has to be raised inside the try
-    // that the finally guards, or the throw skips `releaseEndedSuppression()`
-    // and leaks the process-global turn-ended suppression counter — every later
-    // owner's completion writes would be swallowed for the rest of this run.
+    // The suppression counter is process-global, so a throw must never skip its
+    // release. That used to require the acquisition to sit inside the
+    // suppression's try; now the acquisition happens before the suppression
+    // exists at all, and its own try/finally is the outer one — so an
+    // acquisition failure cannot leak a counter it has not taken yet, and every
+    // later throw is inside both.
     const suppression = teardown.indexOf('const releaseEndedSuppression = beginSessionTurnEndedSuppression();');
-    const tryStart = teardown.indexOf('try {', suppression);
-    expect(suppression).toBeGreaterThan(-1);
-    expect(tryStart).toBeLessThan(raise);
-    expect(teardown.slice(tryStart, raise)).not.toContain('} catch');
+    expect(suppression).toBeGreaterThan(raise);
+    const suppressionTry = teardown.indexOf('try {', suppression);
+    const suppressionRelease = teardown.indexOf('releaseEndedSuppression();');
+    expect(suppressionTry).toBeLessThan(suppressionRelease);
+    expect(teardown.lastIndexOf('} finally {', suppressionRelease)).toBeGreaterThan(suppressionTry);
+    // And the fence's own finally wraps that one.
+    expect(finallyBlock).toBeGreaterThan(suppressionRelease);
   });
 
   it('treats a PI session that would not detach as a failed reclaim', () => {

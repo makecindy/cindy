@@ -1084,6 +1084,58 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitForClose(fixture.child, fixture.stderr);
   });
 
+  it('honours a stop that shares a batch with an earlier approval', async () => {
+    // The Host cannot decide this ordering. An approval that already passed its
+    // account-boundary gate is an fs write in flight, and the teardown's drain
+    // waits for it *so that* the sweep can see it — which puts the stop after
+    // it on disk. Consumed in write order, the child executed the pending tool
+    // call and only then honoured the stop.
+    //
+    // Written straight into the mailbox rather than through
+    // `controlPiSubagentRuns`, because the point is one poll round seeing both:
+    // two separate calls let the runner consume the approval in between.
+    const fixture = await makeFixture({ approval: true });
+    const pending = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.tasks[0]?.pendingApproval ? run : null;
+    });
+    const controlsDir = path.join(fixture.runDir, 'controls');
+    await mkdir(controlsDir, { recursive: true });
+    const write = async (control: Record<string, unknown>): Promise<void> => {
+      const requestId = randomUUID();
+      await writeFile(
+        path.join(controlsDir, `${requestId}.json`),
+        `${JSON.stringify({ version: 1, requestId, ...control })}\n`,
+        { mode: 0o600 },
+      );
+    };
+    // Approval first by every ordering key the runner sorts on.
+    await write({
+      seq: 1,
+      requestedAt: 1,
+      action: 'approval',
+      childId: pending.tasks[0]?.childId,
+      approvalId: 'approval-1',
+      confirmed: true,
+    });
+    await write({ seq: 2, requestedAt: 2, action: 'stop' });
+
+    const stopped = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'stopped' ? run : null;
+    });
+
+    // The child never got the go-ahead, so it never produced its result. Same
+    // guard covers steer and follow_up: once a stop is applied, every later
+    // control for that scope is refused.
+    expect(stopped.tasks[0]?.output ?? '').toBe('');
+    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    expect(commands).not.toContainEqual(
+      expect.objectContaining({ type: 'extension_ui_response', id: 'approval-1' }),
+    );
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
   it('forwards a source-aware child approval value through the durable mailbox', async () => {
     const fixture = await makeFixture({ approval: true, approvalMethod: 'input' });
     const pending = await waitFor(async () => {
